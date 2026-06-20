@@ -777,10 +777,31 @@ impl RestPlugin {
         // Cap recursion so a self-referential FK that got `?include=`'d
         // (or a pathological hydration) can't loop forever. 5 hops is
         // comfortably past `?include=`'s own MAX_DEPTH of 3.
-        self.apply_overrides_depth(table, row, 0);
+        self.apply_overrides_depth(table, None, row, 0);
     }
 
-    fn apply_overrides_depth(&self, table: &str, row: &mut Map<String, Value>, depth: usize) {
+    /// Batch-list variant: the caller resolves the `ModelMeta` for
+    /// `table` ONCE before the loop and passes a reference in.  Eliminates
+    /// the per-row `model_meta_for_table` clone that `apply_overrides`
+    /// would otherwise issue on every iteration.  For nested FK depths
+    /// (depth > 0) the recursion falls back to `model_meta_for_table` as
+    /// usual — those paths are rare and not on the hot N-row critical path.
+    pub(crate) fn apply_overrides_with_meta(
+        &self,
+        table: &str,
+        meta: &ModelMeta,
+        row: &mut Map<String, Value>,
+    ) {
+        self.apply_overrides_depth(table, Some(meta), row, 0);
+    }
+
+    fn apply_overrides_depth(
+        &self,
+        table: &str,
+        meta_hint: Option<&ModelMeta>,
+        row: &mut Map<String, Value>,
+        depth: usize,
+    ) {
         const MAX_DEPTH: usize = 5;
 
         // --- Recurse into hydrated nested relations FIRST, so the
@@ -789,39 +810,54 @@ impl RestPlugin {
         // (now-clean) parent row. Only FK columns whose value is a JSON
         // object were `?include=`-hydrated; everything else (raw integer
         // FKs, scalar columns) is left untouched. ---
-        if depth < MAX_DEPTH
-            && let Some(meta) = umbra::migrate::model_meta_for_table(table)
-        {
-            for col in &meta.fields {
-                // File/image columns store a bare storage KEY in a TEXT
-                // column. REST consumers want the resolved public URL, not
-                // the opaque key, so swap a non-empty string value for
-                // `storage().url(key)`. A nullable field with no upload is
-                // `Value::Null` and stays null; an empty string stays empty
-                // (never turned into a bare `/media/`). Resolved through the
-                // ambient Storage backend, falling back to the raw key when
-                // no backend is wired.
-                if matches!(col.widget.as_deref(), Some("file") | Some("image")) {
-                    // Compute the owned resolved URL while only borrowing
-                    // `row` immutably (via `row.get`); let that borrow end
-                    // before the `row.insert` below (borrow-checker dance).
-                    let resolved: Option<String> = match row.get(&col.name) {
-                        Some(Value::String(key)) if !key.is_empty() => Some(
-                            umbra::storage::storage_opt()
-                                .map(|s| s.url(key))
-                                .unwrap_or_else(|| key.clone()),
-                        ),
-                        _ => None,
-                    };
-                    if let Some(url) = resolved {
-                        row.insert(col.name.clone(), Value::String(url));
+        //
+        // At depth 0, the caller may supply a pre-resolved `meta_hint`
+        // so the list-row loop pays only one `model_meta_for_table`
+        // clone across all N rows instead of N clones.  At depth > 0
+        // (nested FK tables) we fall back to the cached lookup.
+        if depth < MAX_DEPTH {
+            let owned: Option<ModelMeta>;
+            let meta_opt: Option<&ModelMeta> = if let Some(m) = meta_hint {
+                Some(m)
+            } else {
+                owned = umbra::migrate::model_meta_for_table(table);
+                owned.as_ref()
+            };
+            if let Some(meta) = meta_opt {
+                for col in &meta.fields {
+                    // File/image columns store a bare storage KEY in a TEXT
+                    // column. REST consumers want the resolved public URL, not
+                    // the opaque key, so swap a non-empty string value for
+                    // `storage().url(key)`. A nullable field with no upload is
+                    // `Value::Null` and stays null; an empty string stays empty
+                    // (never turned into a bare `/media/`). Resolved through the
+                    // ambient Storage backend, falling back to the raw key when
+                    // no backend is wired.
+                    if matches!(col.widget.as_deref(), Some("file") | Some("image")) {
+                        // Compute the owned resolved URL while only borrowing
+                        // `row` immutably (via `row.get`); let that borrow end
+                        // before the `row.insert` below (borrow-checker dance).
+                        let resolved: Option<String> = match row.get(&col.name) {
+                            Some(Value::String(key)) if !key.is_empty() => Some(
+                                umbra::storage::storage_opt()
+                                    .map(|s| s.url(key))
+                                    .unwrap_or_else(|| key.clone()),
+                            ),
+                            _ => None,
+                        };
+                        if let Some(url) = resolved {
+                            row.insert(col.name.clone(), Value::String(url));
+                        }
                     }
-                }
-                let Some(fk_target) = col.fk_target.as_deref() else {
-                    continue;
-                };
-                if let Some(Value::Object(nested)) = row.get_mut(&col.name) {
-                    self.apply_overrides_depth(fk_target, nested, depth + 1);
+                    let Some(fk_target) = col.fk_target.as_deref() else {
+                        continue;
+                    };
+                    if let Some(Value::Object(nested)) = row.get_mut(&col.name) {
+                        // Nested FK targets are looked up fresh — `None` hint
+                        // means `apply_overrides_depth` falls back to
+                        // `model_meta_for_table` for that FK's table.
+                        self.apply_overrides_depth(fk_target, None, nested, depth + 1);
+                    }
                 }
             }
         }
@@ -1807,6 +1843,12 @@ async fn list(
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
     let fields_param = params.get("fields").map(|s| s.as_str());
 
+    // Resolve the ModelMeta once for the whole response — shared by both
+    // the CSV and JSON paths below.  `apply_overrides_with_meta` accepts a
+    // `&ModelMeta` reference so the per-row loop pays only one clone for
+    // the entire list instead of one clone per row (gaps2 #72).
+    let list_meta = umbra::migrate::model_meta_for_table(&table);
+
     // `?format=csv` — export the filtered set with the same hard ceiling
     // as JSON list responses. This endpoint buffers rows before writing
     // CSV, so it must never bypass MAX_LIST_ROWS.
@@ -1818,7 +1860,11 @@ async fn list(
         };
         let mut rows = fetch_rows(&model, None, Some(csv_page), &filter, &include, &ordering).await?;
         for row in &mut rows {
-            cfg.apply_overrides(&table, row);
+            if let Some(ref meta) = list_meta {
+                cfg.apply_overrides_with_meta(&table, meta, row);
+            } else {
+                cfg.apply_overrides(&table, row);
+            }
             RestPlugin::apply_sparse_fields(row, fields_param);
         }
         return csv_response(&table, &model, &rows);
@@ -1827,7 +1873,11 @@ async fn list(
     let page_req = cfg.pagination.extract_request(&params);
     let mut rows = fetch_rows(&model, None, Some(page_req), &filter, &include, &ordering).await?;
     for row in &mut rows {
-        cfg.apply_overrides(&table, row);
+        if let Some(ref meta) = list_meta {
+            cfg.apply_overrides_with_meta(&table, meta, row);
+        } else {
+            cfg.apply_overrides(&table, row);
+        }
         RestPlugin::apply_sparse_fields(row, fields_param);
     }
     // Skip the extra COUNT round-trip for NoPagination — it would
