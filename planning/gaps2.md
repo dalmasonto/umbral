@@ -8,18 +8,7 @@
 
 3. [x] Change-password dialog extracted to an HTML `<template>` — SHIPPED in commit `5b22cc5`. — archived
 
-4. [~] **wrapper.html growing too large — JS extraction shipped, CSS already external, widget-specific splits deferred.** Commit `e7747fa` extracted ~1080 lines of inline `<script>` IIFE blocks (lines 500-1178, 1229-1491, 1493-1634 pre-fix) to a single external `plugins/umbra-admin/src/assets/admin.js`, served via the existing `Plugin::static_files()` hook at `/admin/static/admin.js`. wrapper.html shrunk 1636 → 563 lines (66% smaller). One `umbraAdminBase` bootstrap inlined to carry the Jinja-substituted `{{ admin_base }}` into the external file; the 6 prior `{{ admin_base }}` JS call sites became `umbraAdminBase + '/...'` concat. Live-verified: `/admin/static/admin.js` HTTP 200, 43,420 bytes, `application/javascript`. `plugins/umbra-admin/tests/phase4_dashboard.rs::admin_js_served_as_external_asset_not_inline` pins all four (asset served, bootstrap in wrapper, external script tag in wrapper, old IIFE comments absent).
-
-    What stays inline (correctly): pre-paint theme bootstrap (must run before paint to avoid theme flash), the `window.umbra` stub (must run before child-template inline scripts), the `<script id="tailwind-config">` block (read by the Tailwind CDN runtime), the third-party CDN tags (htmx, lucide, apexcharts).
-
-    CSS side is also addressed — the admin's compiled stylesheet has lived at `/admin/static/admin.css` since the `StaticFile` mechanism landed (see `plugins/umbra-admin/build.rs`). There's no remaining `<style>` block to extract — only the inline `:root { color-scheme: light; }` + `body { font-family: Inter, ... }` early-paint rules in wrapper.html.
-
-    What's deferred to separate follow-up commits:
-    - Splitting admin.js into per-feature bundles (sheets, palette, charts, ...) — would benefit from measurement first (perf optimization, not the original gap symptom).
-    - Self-hosting the third-party CDN deps (htmx, lucide, apexcharts) — separate decision; the gap mentions them but they're a different category of cleanup.
-    - Per-widget `<script>` bundles — only relevant once users register many custom widgets; today the framework's widget catalog is small enough that one file is the right shape.
-
-    Original directive preserved below:
+4. [x] wrapper.html growing too large — SYMPTOM RESOLVED (2026-06-20): inline JS extracted to external admin.js (e7747fa, 1636->563 lines), CSS already external. Per-feature bundles (perf) + CDN self-host (offline, see #36b) deferred as separate enhancements. — archived
 
 5. [ ] Ability to register custom widgets, ie with full html, js, and css. Its like self contained widgets or widgets that extend on top of the current setup ie tailwind widgets with apex charts.
 
