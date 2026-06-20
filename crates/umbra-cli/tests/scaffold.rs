@@ -8,7 +8,7 @@
 use std::fs;
 
 use tempfile::TempDir;
-use umbra_cli::scaffold::{ScaffoldError, scaffold_app, scaffold_project};
+use umbra_cli::scaffold::{ScaffoldError, register_dep_in_cargo_toml, scaffold_app, scaffold_project, scaffold_plugin};
 
 #[test]
 fn scaffold_project_writes_expected_files() {
@@ -346,5 +346,169 @@ fn scaffold_app_writes_models_rs_stub() {
     assert!(
         lib.contains("Plugin::models()") || lib.contains("fn models("),
         "lib.rs should reference Plugin::models() so the user sees where to register; got:\n{lib}",
+    );
+}
+
+// =========================================================================
+// gaps2 #67: startapp auto-registers plugin in project Cargo.toml
+// =========================================================================
+
+/// After `startapp`, the project's Cargo.toml must contain a path dep
+/// for the new plugin. `cargo_toml_registered` must be `Some(true)`.
+#[test]
+fn scaffold_app_registers_path_dep_in_project_cargo_toml() {
+    let tmp = TempDir::new().unwrap();
+    scaffold_project("blog", tmp.path(), None).unwrap();
+    let project_root = tmp.path().join("blog");
+
+    let report = scaffold_app("posts", &project_root, None).unwrap();
+
+    // The function must report that it added the dep.
+    assert_eq!(
+        report.cargo_toml_registered,
+        Some(true),
+        "cargo_toml_registered should be Some(true) when the dep was freshly added"
+    );
+
+    // The project's Cargo.toml must contain the path dep line.
+    let cargo = fs::read_to_string(project_root.join("Cargo.toml")).unwrap();
+    assert!(
+        cargo.contains("posts = { path = \"plugins/posts\" }"),
+        "project Cargo.toml must list the new plugin as a path dep; got:\n{cargo}"
+    );
+}
+
+/// Running `startapp` a second time on a *different* name must not
+/// duplicate the first dep, and must still register the second.
+#[test]
+fn scaffold_app_second_plugin_gets_registered_independently() {
+    let tmp = TempDir::new().unwrap();
+    scaffold_project("blog", tmp.path(), None).unwrap();
+    let project_root = tmp.path().join("blog");
+
+    scaffold_app("posts", &project_root, None).unwrap();
+    let report2 = scaffold_app("comments", &project_root, None).unwrap();
+
+    assert_eq!(report2.cargo_toml_registered, Some(true));
+
+    let cargo = fs::read_to_string(project_root.join("Cargo.toml")).unwrap();
+    // Count only non-comment lines (the template has a hint comment that
+    // contains "posts = { path = ..." as a substring).
+    let non_comment_lines: Vec<&str> = cargo
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
+    let posts_count = non_comment_lines
+        .iter()
+        .filter(|l| l.contains("posts = { path = \"plugins/posts\" }"))
+        .count();
+    let comments_count = non_comment_lines
+        .iter()
+        .filter(|l| l.contains("comments = { path = \"plugins/comments\" }"))
+        .count();
+    assert_eq!(posts_count, 1, "posts dep should appear exactly once");
+    assert_eq!(comments_count, 1, "comments dep should appear exactly once");
+}
+
+/// `register_dep_in_cargo_toml` is idempotent: calling it twice with the
+/// same name must not write a duplicate line and must return `Ok(false)`
+/// on the second call.
+#[test]
+fn register_dep_idempotent_no_duplicate() {
+    let tmp = TempDir::new().unwrap();
+    scaffold_project("blog", tmp.path(), None).unwrap();
+    let cargo_path = tmp.path().join("blog").join("Cargo.toml");
+
+    let added_first = register_dep_in_cargo_toml(&cargo_path, "posts").unwrap();
+    assert!(added_first, "first call should return true (dep was added)");
+
+    let added_second = register_dep_in_cargo_toml(&cargo_path, "posts").unwrap();
+    assert!(!added_second, "second call should return false (already present)");
+
+    let cargo = fs::read_to_string(&cargo_path).unwrap();
+    // Count only non-comment lines that declare the dep (the project
+    // Cargo.toml template has `# blog-posts = { path = "plugins/posts" }`
+    // as a hint comment which also contains the substring — exclude it).
+    let count = cargo
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter(|l| l.contains("posts = { path = \"plugins/posts\" }"))
+        .count();
+    assert_eq!(count, 1, "dep line must appear exactly once; got:\n{cargo}");
+}
+
+/// When `scaffold_app` is called without a project `Cargo.toml` present
+/// (bare temp dir), `cargo_toml_registered` must be `None` (soft failure)
+/// and the scaffold files must still be written.
+#[test]
+fn scaffold_app_succeeds_without_project_cargo_toml() {
+    let tmp = TempDir::new().unwrap();
+    // No scaffold_project call — project_root has no Cargo.toml.
+    let report = scaffold_app("widgets", tmp.path(), None).unwrap();
+
+    assert_eq!(
+        report.cargo_toml_registered,
+        None,
+        "should be None when no project Cargo.toml is present"
+    );
+
+    // Files must have been written regardless.
+    assert!(
+        report.root.join("Cargo.toml").is_file(),
+        "plugin Cargo.toml must be written even when project Cargo.toml is absent"
+    );
+    assert!(
+        report.root.join("src/lib.rs").is_file(),
+        "plugin src/lib.rs must be written even when project Cargo.toml is absent"
+    );
+}
+
+/// `startplugin` (the richer scaffold) must also auto-register the
+/// path dep — same contract as startapp.
+#[test]
+fn scaffold_plugin_registers_path_dep_in_project_cargo_toml() {
+    let tmp = TempDir::new().unwrap();
+    scaffold_project("blog", tmp.path(), None).unwrap();
+    let project_root = tmp.path().join("blog");
+
+    let report = scaffold_plugin("widgets", &project_root, None).unwrap();
+
+    assert_eq!(
+        report.cargo_toml_registered,
+        Some(true),
+        "scaffold_plugin should register the dep in Cargo.toml"
+    );
+
+    let cargo = fs::read_to_string(project_root.join("Cargo.toml")).unwrap();
+    assert!(
+        cargo.contains("widgets = { path = \"plugins/widgets\" }"),
+        "project Cargo.toml must list widgets as a path dep; got:\n{cargo}"
+    );
+}
+
+/// The next_steps for startapp must NOT include the manual
+/// "add to Cargo.toml" instruction — we do it automatically now.
+#[test]
+fn scaffold_app_next_steps_no_longer_mention_manual_cargo_toml_edit() {
+    let tmp = TempDir::new().unwrap();
+    scaffold_project("blog", tmp.path(), None).unwrap();
+    let project_root = tmp.path().join("blog");
+
+    let report = scaffold_app("posts", &project_root, None).unwrap();
+
+    // None of the next_steps lines should tell the user to manually edit
+    // Cargo.toml — that step is done automatically.
+    for step in &report.next_steps {
+        assert!(
+            !step.contains("Cargo.toml"),
+            "next_steps should not ask user to edit Cargo.toml manually \
+             (auto-registered); offending step: {step:?}"
+        );
+    }
+    // But the builder wiring step must still be present.
+    let has_builder_step = report.next_steps.iter().any(|s| s.contains("App::builder") || s.contains(".plugin("));
+    assert!(
+        has_builder_step,
+        "next_steps must still tell the user to wire .plugin(...) in main.rs"
     );
 }

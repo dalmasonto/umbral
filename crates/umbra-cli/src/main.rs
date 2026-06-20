@@ -116,7 +116,20 @@ fn main() -> ExitCode {
                     println!("  {}", f.display());
                 }
                 println!();
-                println!("Next steps:");
+                match r.cargo_toml_registered {
+                    Some(true) => println!(
+                        "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
+                    ),
+                    Some(false) => println!(
+                        "Cargo.toml already lists `{name}` — no duplicate added."
+                    ),
+                    None => println!(
+                        "Note: could not find a Cargo.toml to update. \
+                         Add `{name} = {{ path = \"plugins/{name}\" }}` manually."
+                    ),
+                }
+                println!();
+                println!("Next step:");
                 for step in &r.next_steps {
                     println!("  {step}");
                 }
@@ -127,6 +140,19 @@ fn main() -> ExitCode {
                 println!("Created `{}`:", r.root.display());
                 for f in &r.files {
                     println!("  {}", f.display());
+                }
+                println!();
+                match r.cargo_toml_registered {
+                    Some(true) => println!(
+                        "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
+                    ),
+                    Some(false) => println!(
+                        "Cargo.toml already lists `{name}` — no duplicate added."
+                    ),
+                    None => println!(
+                        "Note: could not find a Cargo.toml to update. \
+                         Add `{name} = {{ path = \"plugins/{name}\" }}` manually."
+                    ),
                 }
                 println!();
                 println!("Next steps:");
