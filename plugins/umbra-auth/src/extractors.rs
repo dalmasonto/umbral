@@ -1,5 +1,5 @@
 //! Axum extractors that resolve a request to an
-//! `umbra_rest::Identity`.
+//! `umbra::auth::Identity`.
 //!
 //! Companion to the built-in [`crate::SessionAuthentication`] and
 //! [`crate::BearerAuthentication`] classes — those run inside
@@ -41,7 +41,7 @@ use axum_core::extract::FromRequestParts;
 use axum_core::response::{IntoResponse, Response};
 use http::request::Parts;
 use http::{HeaderMap, StatusCode};
-use umbra_rest::Identity;
+use umbra::auth::Identity;
 
 /// `OptionalIdentity(Option<Identity>)` — never rejects. Returns
 /// the identity if either the session cookie or the bearer token

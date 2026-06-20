@@ -4111,7 +4111,6 @@ dependencies = [
  "tower",
  "tracing",
  "umbra",
- "umbra-rest",
  "umbra-sessions",
  "uuid",
 ]

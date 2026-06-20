@@ -167,8 +167,8 @@ pub trait UserModel: Model + Send + Sync + 'static {
     fn id(&self) -> <Self as Model>::PrimaryKey;
 
     /// The PK as a string. Used by [`umbra_sessions`] (which stores
-    /// `user_id` as text) and by `umbra-rest`'s
-    /// [`Identity::user_id`](umbra_rest::Identity) (which is
+    /// `user_id` as text) and by the REST identity contract's
+    /// [`Identity::user_id`](umbra::auth::Identity) (which is
     /// uniform across user models).
     ///
     /// Default uses the typed PK's `Display` impl — override only

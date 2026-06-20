@@ -107,6 +107,20 @@ pub use sqlx as _sqlx;
 pub use umbra_core::app::{App, AppBuilder, BuildError};
 pub use umbra_core::settings::{Environment, Settings};
 
+/// The authentication identity contract (gaps2 #76).
+///
+/// [`Identity`] and [`Authentication`] live in `umbra-core` so that
+/// `umbra-auth` and `umbra-rest` both depend *inward* on core.
+/// Re-exported here so plugin authors and app code reach them via
+/// `umbra::auth::Identity` / `umbra::auth::Authentication`, and so
+/// `umbra-auth` can drop its `umbra-rest` dependency entirely.
+pub mod auth {
+    pub use umbra_core::auth_contract::{
+        Authentication, ChainAuthentication, FnAuthentication, Identity, NoAuthentication,
+        parse_basic_credentials,
+    };
+}
+
 /// CORS configuration for [`AppBuilder::cors`]. See
 /// [`umbra_core::cors`] for the full surface.
 pub mod cors {

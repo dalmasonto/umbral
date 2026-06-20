@@ -43,7 +43,7 @@ use axum_core::extract::FromRequestParts;
 use http::StatusCode;
 use http::request::Parts;
 use umbra::web::HeaderMap;
-use umbra_rest::{Authentication, Identity};
+use umbra::auth::{Authentication, Identity};
 use umbra_sessions::SessionError;
 
 // =========================================================================

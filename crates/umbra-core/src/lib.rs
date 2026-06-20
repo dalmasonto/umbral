@@ -5,6 +5,7 @@
 //! Status: M0 shipped — Settings, db pool, web re-exports, App builder.
 
 pub mod app;
+pub mod auth_contract;
 pub mod backend;
 pub mod backup;
 pub mod check;

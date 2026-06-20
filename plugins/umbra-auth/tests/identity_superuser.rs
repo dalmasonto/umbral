@@ -14,7 +14,7 @@
 //!    the job of `tests/integration.rs`; here we verify the field plumbing
 //!    is correct without a live database.
 
-use umbra_rest::Identity;
+use umbra::auth::Identity;
 
 // ── 1. Default is false ──────────────────────────────────────────────────────
 
