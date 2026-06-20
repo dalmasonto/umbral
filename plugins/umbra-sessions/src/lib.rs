@@ -46,8 +46,10 @@
 //!   `umbra-tasks` periodic job, or a `clearsessions` management
 //!   command, lands when one or the other is real.
 
+pub mod request_session;
 pub mod store;
 
+pub use request_session::{RequestSession, current, current_mut};
 pub use store::{DbStore, SessionRecord, SessionStore, active_store, install_store};
 
 use chrono::{DateTime, Duration, Utc};
@@ -899,23 +901,30 @@ pub struct SessionToken(pub String);
 #[derive(Debug, Clone, Copy)]
 struct SessionFresh;
 
-/// axum middleware that gives every request a session TOKEN, and lets
-/// the session ROW be created lazily on first write (Django-style).
+/// axum middleware that gives every request a request-scoped session, and
+/// lets the session ROW be created lazily on first write (Django-style).
 ///
 /// On entry:
 /// 1. Read the session cookie from the request.
-/// 2. If it resolves to a live row, reuse it (`fresh = false`). If it's
-///    absent OR stale/expired/destroyed, mint a candidate token IN
-///    MEMORY only (`fresh = true`) — **no DB row is inserted here**.
-/// 3. Inject the resolved [`SessionToken`] into request extensions so
-///    extractors and handlers find it. The first write through that
-///    token (`set_data`, `Messages`, login) materialises the row.
+/// 2. `load` the record from the ambient [`SessionStore`]. If it resolves
+///    to a live row, reuse the token (`fresh = false`). If it's absent OR
+///    stale/expired/destroyed, mint a candidate token IN MEMORY only
+///    (`fresh = true`) — **no DB row is inserted here**.
+/// 3. Park a [`RequestSession`] in the `CURRENT_SESSION` task-local for the
+///    duration of the handler so [`current`] / [`current_mut`] reach it.
+///    The [`SessionToken`] (+ [`SessionFresh`]) extensions are still
+///    inserted for back-compat with extractors and the `set_data` /
+///    `Messages` helpers that resolve the token from extensions.
 ///
-/// On exit:
-/// 4. For a `fresh` request that didn't set its own cookie, emit
-///    `Set-Cookie` **only if a row now exists** for the token (a write
-///    during the request materialised it). If nothing wrote the
-///    session, no cookie is set and no row is left behind.
+/// On exit (after the handler future resolves):
+/// 4. Recover the (possibly mutated) `RequestSession`. If it's `dirty`,
+///    `save` it through the store (this is the lazy materialisation — the
+///    row is written here, never on entry).
+/// 5. For a `fresh` request that didn't set its own cookie, emit
+///    `Set-Cookie` **only if a row now exists** for the token — i.e. the
+///    in-memory `dirty` flag is set, OR a side-channel write (`set_data` /
+///    `Messages`) materialised the row. If nothing wrote the session, no
+///    cookie is set and no row is left behind.
 ///
 /// Apply to your router with `axum::middleware::from_fn`:
 ///
@@ -933,73 +942,106 @@ pub async fn session_layer(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use axum::http::header;
-    let cookie_token = cookie_from_headers(req.headers());
+    use request_session::{CURRENT_SESSION, RequestSession};
+    use std::cell::RefCell;
 
-    let (token, fresh) = match cookie_token {
-        Some(t) => match read_session(&t).await {
-            // A live row exists and the client already holds the
-            // cookie — reuse it, nothing to persist or set.
-            Ok(Some(_)) => {
+    let cookie_token = cookie_from_headers(req.headers());
+    let store = active_store();
+
+    // Load via the store at entry. `fresh = record.is_none()`.
+    let (token, fresh, record) = match cookie_token {
+        Some(t) => match store.load(&t).await {
+            Ok(Some(rec)) => {
                 // Sliding expiry: when enabled, extend expires_at to
                 // now + TTL so an actively-used session never hard-expires
-                // mid-use. This is the one extra write per request that
-                // the default-off flag avoids for everyone who doesn't
-                // need rolling windows.
+                // mid-use. Preserved as an on-entry write (matching the
+                // pre-refactor behaviour) so it fires for EVERY live
+                // session, including requests that mutate the session only
+                // via the side-channel helpers (`set_data` / `Messages`),
+                // which never flip the RequestSession `dirty` flag. This is
+                // the one extra write per request that the default-off flag
+                // avoids for everyone who doesn't need rolling windows.
                 if *SLIDING_EXPIRY_ENABLED.get().unwrap_or(&false) {
                     let stored_id = hash_token(&t);
                     let new_expires = Utc::now() + Duration::seconds(DEFAULT_TTL_SECONDS);
                     let mut patch = serde_json::Map::new();
                     patch.insert(
                         "expires_at".to_string(),
-                        serde_json::to_value(new_expires)
-                            .unwrap_or(serde_json::Value::Null),
+                        serde_json::to_value(new_expires).unwrap_or(serde_json::Value::Null),
                     );
                     let _ = Session::objects()
                         .filter(session::ID.eq(&stored_id))
                         .update_values(patch)
                         .await;
                 }
-                (t, false)
+                (t, false, Some(rec))
             }
-            // Cookie present but stale/expired/destroyed. Mint a
-            // candidate token IN MEMORY only — no DB row yet. A row
-            // materialises lazily iff the handler writes the session
-            // (Django-style). Until then this request leaves no trace.
-            _ => (Uuid::new_v4().to_string(), true),
+            // Cookie present but stale/expired/destroyed (or a load
+            // error). Mint a candidate token IN MEMORY only — no DB row
+            // yet. A row materialises lazily iff the handler writes the
+            // session (Django-style). Until then this request leaves no
+            // trace.
+            _ => (Uuid::new_v4().to_string(), true, None),
         },
-        // No cookie. Same lazy treatment: candidate token in memory,
-        // no INSERT on entry. Favicon / asset / anonymous-read requests
-        // that never write the session leave zero rows behind.
-        None => (Uuid::new_v4().to_string(), true),
+        // No cookie. Same lazy treatment: candidate token in memory, no
+        // INSERT on entry. Favicon / asset / anonymous-read requests that
+        // never write the session leave zero rows behind.
+        None => (Uuid::new_v4().to_string(), true, None),
     };
 
+    // Back-compat: extractors, `set_data`, and `Messages` resolve the
+    // token from these extensions. Keep them so the side-channel write
+    // paths keep working untouched.
     req.extensions_mut().insert(SessionToken(token.clone()));
     if fresh {
         req.extensions_mut().insert(SessionFresh);
     }
 
-    let mut response = next.run(req).await;
+    let rs = RefCell::new(RequestSession::new(token.clone(), fresh, record));
 
-    // Set-Cookie on the way out only for FRESH sessions that the
-    // handler actually wrote (i.e. a row now exists for this token).
+    // Scope the session task-local around the handler future, then recover
+    // the (possibly mutated) RequestSession after it resolves.
+    let (mut response, rs) = CURRENT_SESSION
+        .scope(rs, async move {
+            let response = next.run(req).await;
+            (response, CURRENT_SESSION.with(|cell| cell.borrow().clone()))
+        })
+        .await;
+
+    // Lazy materialisation: persist the record only if a handler mutated
+    // it through `current_mut`. This is the ONLY DB write on the
+    // RequestSession path — nothing was written on entry.
+    if rs.is_dirty() {
+        if let Some(rec) = rs.record() {
+            if let Err(e) = store.save(rs.token(), rec).await {
+                tracing::warn!("session_layer: store.save failed: {e}");
+            }
+        }
+    }
+
+    // Set-Cookie on the way out only for FRESH sessions that the request
+    // actually wrote a row for.
     //
-    // The handler-set-cookie guard stays: `login_with_request` sets
-    // its own Set-Cookie to rotate the token after the credential
-    // check (session-fixation defense). Without this guard the layer
-    // would clobber the authenticated cookie with the anonymous one,
-    // breaking every cookie-based login.
+    // "A row now exists" is signalled by EITHER the in-memory `dirty` flag
+    // (the RequestSession path just `save`d above) OR a side-channel write
+    // (`set_data` / `Messages`) that materialised the row without touching
+    // the RequestSession — caught by the `read_session` probe. The probe
+    // runs only for fresh requests that didn't already set their own
+    // cookie, so it's minimal overhead.
     //
-    // The `read_session` here runs only for fresh requests that didn't
-    // set their own cookie — minimal overhead. If no row materialised
-    // (favicon / asset / anonymous page with no session write), we set
-    // NO cookie and leave NO row.
-    if fresh
-        && !response.headers().contains_key(header::SET_COOKIE)
-        && matches!(read_session(&token).await, Ok(Some(_)))
-    {
-        let cookie = set_cookie_header(&token, None);
-        if let Ok(value) = cookie.parse() {
-            response.headers_mut().insert(header::SET_COOKIE, value);
+    // The handler-set-cookie guard stays: `login_with_request` sets its
+    // own Set-Cookie to rotate the token after the credential check
+    // (session-fixation defense). Without this guard the layer would
+    // clobber the authenticated cookie with the anonymous one, breaking
+    // every cookie-based login.
+    if fresh && !response.headers().contains_key(header::SET_COOKIE) {
+        let row_exists =
+            rs.is_dirty() || matches!(read_session(&token).await, Ok(Some(_)));
+        if row_exists {
+            let cookie = set_cookie_header(&token, None);
+            if let Ok(value) = cookie.parse() {
+                response.headers_mut().insert(header::SET_COOKIE, value);
+            }
         }
     }
     response

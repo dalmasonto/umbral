@@ -41,6 +41,10 @@ tracing = "0.1"
 # `clearsessions` management command — Plugin::commands() contributes a
 # clap subcommand; same pattern as umbra-auth's `createsuperuser`.
 clap = "4"
+# `tokio::task_local!` backs the request-scoped `RequestSession`
+# (CURRENT_SESSION) that `session_layer` scopes around each handler. Only
+# the `rt` feature is needed for the LocalKey/scope machinery.
+tokio = { version = "1", features = ["rt"] }
 
 [dev-dependencies]
 # umbra-auth as a DEV-dep only: integration tests exercise the
