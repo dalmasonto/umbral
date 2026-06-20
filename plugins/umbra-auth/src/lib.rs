@@ -628,8 +628,14 @@ pub enum AuthError {
     /// The plaintext password failed one or more password-strength
     /// validators (see [`crate::password_validation`]). Carries every
     /// human-readable reason so the route / form can show the full list.
-    /// Returned by `create_user` / `create_user_with_flags` / `set_password`
-    /// BEFORE the password is hashed. The route layer maps this to 400.
+    ///
+    /// This is NOT produced by the low-level creation helpers anymore
+    /// (`create_user` / `create_user_with_flags` / `create_superuser` /
+    /// `set_password` are all Django-parity and do not validate). It is
+    /// constructed at the **registration boundary** — the `register` route
+    /// calls [`crate::validate_password`] up front and wraps any failure in
+    /// this variant, which the route layer then maps to 400. A custom signup
+    /// flow that wants the same behaviour follows the same pattern.
     WeakPassword(Vec<String>),
 }
 
@@ -736,15 +742,14 @@ pub async fn create_superuser(
     email: &str,
     plaintext: &str,
 ) -> Result<AuthUser, AuthError> {
-    // A superuser is created by a trusted operator path — the
-    // `createsuperuser` command, a seed script, a test — where the
-    // password is chosen deliberately, not submitted by an untrusted
-    // client. So it BYPASSES the password-strength policy, matching
-    // Django's programmatic `create_superuser` (only the interactive
-    // command + the public `register` route validate). The untrusted
-    // surface stays fully protected; an app that wants its superusers
-    // held to the policy can call `validate_password` before this.
-    insert_user(username, email, plaintext, true, true, false).await
+    // Low-level, like every other creation helper: it inserts a row and
+    // does NOT run the password-strength policy. This is Django parity —
+    // `User.objects.create_superuser()` doesn't validate either; only the
+    // registration boundary (the `register` route) and any custom signup
+    // form do. A trusted operator path (the `createsuperuser` command, a
+    // seed script, a test) chooses the password deliberately, so there's
+    // nothing to gate here.
+    insert_user(username, email, plaintext, true, true).await
 }
 
 /// Insert a new user with arbitrary `is_staff` / `is_superuser`
@@ -759,31 +764,28 @@ pub async fn create_user_with_flags(
     is_staff: bool,
     is_superuser: bool,
 ) -> Result<AuthUser, AuthError> {
-    insert_user(username, email, plaintext, is_staff, is_superuser, true).await
+    insert_user(username, email, plaintext, is_staff, is_superuser).await
 }
 
 /// The shared insert path behind [`create_user`], [`create_user_with_flags`]
-/// and [`create_superuser`]. `validate` gates the password-strength policy:
-/// the untrusted registration paths pass `true` (secure by default), while
-/// the trusted operator path ([`create_superuser`]) passes `false`. The
-/// username + email feed the similarity validator. Fails closed
-/// (`WeakPassword`) on any rule miss when validating.
+/// and [`create_superuser`].
+///
+/// This is the **low-level** creation primitive: it hashes the plaintext and
+/// writes the row, but it does NOT run the password-strength policy. That's
+/// deliberate Django parity — `User.objects.create_user()` doesn't validate;
+/// the registration boundary does (in umbra, the `register` route, which calls
+/// [`validate_password`] itself before reaching here). Keeping validation out
+/// of the insert path means seed scripts, bulk imports, and the workspace test
+/// suite can create users with deliberately-chosen passwords without tripping
+/// the policy. An untrusted signup surface must gate on `validate_password`
+/// up front; the helper trusts its caller.
 async fn insert_user(
     username: &str,
     email: &str,
     plaintext: &str,
     is_staff: bool,
     is_superuser: bool,
-    validate: bool,
 ) -> Result<AuthUser, AuthError> {
-    if validate {
-        validate_password(
-            plaintext,
-            &PasswordContext::new(Some(username), Some(email)),
-        )
-        .map_err(AuthError::WeakPassword)?;
-    }
-
     let now = chrono::Utc::now();
     let hash = hash_password(plaintext)?;
     let row = AuthUser::objects()
@@ -861,14 +863,13 @@ pub async fn set_password<U>(user: &mut U, plaintext: &str) -> Result<(), AuthEr
 where
     U: UserModel,
 {
-    // Secure by default: validate before hashing. The `UserModel` trait
-    // exposes `username()` (used by the similarity validator) but no email
-    // accessor, so the context carries the username only — a custom user
-    // model with an email column can still call `validate_password`
-    // directly with a fuller context before invoking `set_password`.
-    validate_password(plaintext, &PasswordContext::for_username(user.username()))
-        .map_err(AuthError::WeakPassword)?;
-
+    // Low-level, like `create_user`: this rotates the stored hash and does
+    // NOT run the password-strength policy. Validation belongs at the
+    // boundary — a password-change route or form should call
+    // `validate_password` (with whatever user context it has) BEFORE invoking
+    // `set_password`, exactly as the `register` route gates `create_user`.
+    // Keeping the helper non-validating matches Django's `set_password`, which
+    // is a pure setter; the form is what validates.
     let hash = hash_password(plaintext)?;
     let mut patch = serde_json::Map::new();
     patch.insert(

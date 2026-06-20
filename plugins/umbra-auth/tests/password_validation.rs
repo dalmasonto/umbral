@@ -1,24 +1,32 @@
 //! End-to-end coverage for the secure-by-default password-strength
 //! validators (umbra's `AUTH_PASSWORD_VALIDATORS` equivalent).
 //!
-//! Two layers:
+//! Enforcement lives at the **registration boundary** (the `register`
+//! route), matching Django: `User.objects.create_user()` does NOT validate;
+//! forms / views do. So this file covers two layers:
 //!
 //! 1. **Validator-level** — each of the four default validators rejects
 //!    the canonical weak input and accepts a strong one, and
 //!    `validate_password` aggregates multiple failures.
-//! 2. **Helper-level (real ORM + test DB)** — `create_user` rejects a weak
-//!    password with `AuthError::WeakPassword` and accepts a strong one,
-//!    writing a real row. Mirrors the boot harness in `integration.rs`.
+//! 2. **Route-level (real ORM + test DB)** — `POST <prefix>/register` with a
+//!    weak password returns 400 carrying the reasons; with a strong password
+//!    it creates the user (201). The low-level `create_user` helper, by
+//!    contrast, accepts a weak password directly (it does NOT validate) — we
+//!    assert that too, to document the Django-parity split.
 //!
 //! See `plugins/umbra-auth/src/password_validation.rs` for the surface and
 //! `CLAUDE.md` "secure-by-default" for why this is on with no opt-in.
 
+use axum::body::Body;
+use axum::http::Request;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
+use tower::ServiceExt;
+use umbra::prelude::Plugin;
 use umbra_auth::{
-    AuthError, AuthPlugin, AuthUser, CommonPasswordValidator, MinLengthValidator,
-    NumericPasswordValidator, PasswordContext, PasswordPolicy, PasswordValidator,
-    UserAttributeSimilarityValidator, create_superuser, create_user, validate_password,
+    AuthPlugin, AuthUser, CommonPasswordValidator, MinLengthValidator, NumericPasswordValidator,
+    PasswordContext, PasswordPolicy, PasswordValidator, UserAttributeSimilarityValidator,
+    create_user, validate_password,
 };
 
 // --------------------------------------------------------------------- //
@@ -128,8 +136,13 @@ impl<T: umbra_auth::PasswordValidator> ValidateVia for T {
 }
 
 // --------------------------------------------------------------------- //
-// Helper-level tests — real ORM + tempfile SQLite, mirrors integration.rs //
+// Route-level + helper-level tests — real ORM + tempfile SQLite.          //
+// Mirrors the boot harness in integration.rs; the router comes from the   //
+// public `AuthPlugin::with_default_routes().routes()` surface and is      //
+// driven with tower `oneshot`, exactly as `user_context_lazy.rs` does.    //
 // --------------------------------------------------------------------- //
+
+const PREFIX: &str = "/api/auth";
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
 
@@ -153,8 +166,15 @@ async fn boot() {
         umbra::App::builder()
             .settings(settings)
             .database("default", pool)
-            // Default plugin → secure-by-default policy installed in on_ready.
-            .plugin(AuthPlugin::<AuthUser>::default())
+            // Default plugin → secure-by-default policy installed in on_ready,
+            // and the built-in /api/auth routes mounted for the route tests.
+            .plugin(
+                AuthPlugin::<AuthUser>::default()
+                    .with_default_routes()
+                    // Disable register throttling so the route tests can hammer
+                    // /register from one (sentinel) IP without hitting a 429.
+                    .disable_throttle(),
+            )
             .build()
             .expect("App::build should succeed with AuthPlugin");
 
@@ -179,76 +199,126 @@ async fn boot() {
     .await;
 }
 
-/// `create_user` with a weak password is rejected BEFORE any row is
-/// written, surfacing `AuthError::WeakPassword` with the failure reasons.
-/// This is the load-bearing secure-by-default test: registration accepting
-/// `"a"` is exactly the bug this feature closes.
-#[tokio::test]
-async fn create_user_rejects_weak_password() {
-    boot().await;
-
-    let result = create_user("weakling", "weak@example.com", "a").await;
-    match result {
-        Err(AuthError::WeakPassword(reasons)) => {
-            assert!(
-                !reasons.is_empty(),
-                "WeakPassword must carry at least one reason"
-            );
-        }
-        other => panic!("expected AuthError::WeakPassword for password `a`; got {other:?}"),
-    }
-
-    // And no row leaked into the DB.
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM auth_user WHERE username = 'weakling'")
-        .fetch_one(&umbra::db::pool())
-        .await
-        .expect("count query");
-    assert_eq!(count, 0, "a rejected create_user must not write a row");
+/// Build the auth router from the public plugin surface. Each call returns a
+/// fresh `axum::Router`, so a `oneshot` (which consumes the service) doesn't
+/// disturb later requests.
+fn auth_router() -> axum::Router {
+    AuthPlugin::<AuthUser>::default()
+        .with_default_routes()
+        .routes()
 }
 
-/// `create_user` with a strong password succeeds and writes a row — proving
-/// the validator doesn't block legitimate registrations.
+/// `POST <prefix>/register` with a JSON body, returning `(status, body_bytes)`.
+async fn post_register(json: &str) -> (http::StatusCode, Vec<u8>) {
+    let resp = auth_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("{PREFIX}/register"))
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("register request must not panic");
+    let status = resp.status();
+    let body = http_body_util::BodyExt::collect(resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes()
+        .to_vec();
+    (status, body)
+}
+
+/// The load-bearing secure-by-default test, now at the right layer: the
+/// `register` ROUTE rejects the weak password `"a"` with 400 and surfaces the
+/// failure reasons. Registration accepting `"a"` is exactly the bug the
+/// password policy closes — and the route is where Django enforces it.
 #[tokio::test]
-async fn create_user_accepts_strong_password() {
+async fn register_route_rejects_weak_password() {
     boot().await;
 
-    // create_superuser is a trusted operator/seed path and BYPASSES the
-    // policy: a deliberately-chosen weak/username-matching password (the
-    // shape a seed script uses, e.g. "shopadmin"/"shopadmin") is accepted,
-    // even though create_user would reject it via the similarity validator.
-    {
-        boot().await;
-        let su = create_superuser("shopadmin", "shopadmin@example.com", "shopadmin")
-            .await
-            .expect("create_superuser must bypass the password policy (trusted seed path)");
-        assert!(su.is_superuser, "create_superuser sets is_superuser");
-        // The same password through the untrusted create_user path is rejected.
-        let rejected = create_user("shopadmin2", "s2@example.com", "shopadmin2").await;
-        assert!(
-            matches!(rejected, Err(AuthError::WeakPassword(_))),
-            "create_user must still reject a username-matching password"
-        );
-    }
+    let (status, body) = post_register(
+        r#"{"username":"weakling","email":"weak@example.com","password":"a"}"#,
+    )
+    .await;
+    assert_eq!(
+        status,
+        http::StatusCode::BAD_REQUEST,
+        "register with password `a` must be 400; body={}",
+        String::from_utf8_lossy(&body),
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&body).expect("error body is JSON");
+    assert_eq!(parsed["error"], "weak_password");
+    assert!(
+        parsed["detail"].as_str().is_some_and(|d| !d.is_empty()),
+        "the 400 must carry at least one human-readable reason; body={parsed}"
+    );
 
-    let user = create_user("stronguser", "strong@example.com", "Tr0ub4dour&3xpl")
-        .await
-        .expect("a strong password must be accepted by create_user");
-    assert_eq!(user.username, "stronguser");
+    // And no row leaked into the DB — the route rejects BEFORE create_user.
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM auth_user WHERE username = 'weakling'")
+            .fetch_one(&umbra::db::pool())
+            .await
+            .expect("count query");
+    assert_eq!(count, 0, "a rejected register must not write a row");
+}
+
+/// `POST <prefix>/register` with a strong password creates the user (201) and
+/// writes a real row — proving the validator doesn't block legitimate
+/// registrations.
+#[tokio::test]
+async fn register_route_accepts_strong_password() {
+    boot().await;
+
+    let (status, body) = post_register(
+        r#"{"username":"stronguser","email":"strong@example.com","password":"Tr0ub4dour&3xpl"}"#,
+    )
+    .await;
+    assert_eq!(
+        status,
+        http::StatusCode::CREATED,
+        "register with a strong password must be 201; body={}",
+        String::from_utf8_lossy(&body),
+    );
+
+    let row: (String, String) =
+        sqlx::query_as("SELECT username, password_hash FROM auth_user WHERE username = ?")
+            .bind("stronguser")
+            .fetch_one(&umbra::db::pool())
+            .await
+            .expect("the stronguser row should exist after a successful register");
+    assert_eq!(row.0, "stronguser");
     assert_ne!(
-        user.password_hash, "Tr0ub4dour&3xpl",
+        row.1, "Tr0ub4dour&3xpl",
         "the stored value must be the hash, not the plaintext"
     );
 }
 
-/// A password too similar to the username is rejected through the real
-/// `create_user` path (the username flows into the similarity context).
+/// The Django-parity split, asserted directly: the low-level `create_user`
+/// helper is NON-validating. The same weak password the route rejects above
+/// sails straight through `create_user` and persists a row. This is what lets
+/// seed scripts / bulk imports / the workspace test suite create users with
+/// deliberately-chosen passwords without tripping the policy.
 #[tokio::test]
-async fn create_user_rejects_password_similar_to_username() {
+async fn create_user_helper_does_not_validate() {
     boot().await;
 
-    let result = create_user("bobby", "bobby@example.com", "bobby1234").await;
-    assert!(
-        matches!(result, Err(AuthError::WeakPassword(_))),
-        "a password containing the username must be rejected; got {result:?}"
+    // "a" is rejected by every default validator — yet create_user accepts it,
+    // because validation lives at the register boundary, not in the helper.
+    let user = create_user("lowlevel", "lowlevel@example.com", "a")
+        .await
+        .expect("create_user is low-level and must NOT validate the password");
+    assert_eq!(user.username, "lowlevel");
+    assert_ne!(
+        user.password_hash, "a",
+        "create_user must still hash, just not validate"
     );
+
+    // A username-matching password (the kind the similarity validator flags)
+    // also goes through, confirming no policy runs in the helper.
+    let similar = create_user("bobby", "bobby@example.com", "bobby1234")
+        .await
+        .expect("create_user must not run the similarity validator");
+    assert_eq!(similar.username, "bobby");
 }

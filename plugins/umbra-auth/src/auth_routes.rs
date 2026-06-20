@@ -308,16 +308,24 @@ async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response 
             "username, email and password are required",
         );
     }
+    // Enforce the password-strength policy HERE, at the registration boundary —
+    // this is the untrusted surface (a client submitting a password) and the
+    // single point Django validates (forms / views, not `create_user`). The
+    // low-level `create_user` is intentionally non-validating so seed scripts
+    // and the test suite aren't broken by it. `validate_password` reads the
+    // ambiently-installed policy, so `AuthPlugin::disable_password_validation`
+    // (which installs an empty policy) makes this a no-op automatically — no
+    // separate flag to thread through.
+    if let Err(reasons) = crate::validate_password(
+        &body.password,
+        &crate::PasswordContext::new(Some(&body.username), Some(&body.email)),
+    ) {
+        // A weak password is a client error, not a server error: 400 with the
+        // full list of reasons so a form can render each one.
+        return err(StatusCode::BAD_REQUEST, "weak_password", reasons.join(" "));
+    }
     match crate::create_user(&body.username, &body.email, &body.password).await {
         Ok(user) => (StatusCode::CREATED, Json(UserOut::from(&user))).into_response(),
-        // A weak password is a client error, not a server error: 400 with
-        // the full list of reasons so a form can render each one. Must NOT
-        // fall through to the generic 500-ish path.
-        Err(crate::AuthError::WeakPassword(reasons)) => err(
-            StatusCode::BAD_REQUEST,
-            "weak_password",
-            reasons.join(" "),
-        ),
         Err(e) => {
             let msg = format!("{e}");
             let status = if msg.to_lowercase().contains("unique") {
