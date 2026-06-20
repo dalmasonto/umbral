@@ -204,7 +204,7 @@
 
 24. [x] Multi-DB / database routing docs — SHIPPED (2026-06-20): database-routing.mdx expanded with read/write split (#23) + cross-DB FK (#22); Phase-2 multitenancy items flagged under #69 (78863e8). — archived
 
-25. [ ] **`umbra startproject` should auto-mount `SecurityPlugin` (CSRF + hardening headers) in the scaffolded app builder.** Per the round-one audit (`bugs/review/security-auth-session.md` AUTH-1/AUTH-2), the flagship `examples/shop` runs with no CSRF + no security headers because `SecurityPlugin` is opt-in and easy to forget. The scaffold (gap #8) should wire `.plugin(SecurityPlugin::new())` by default (and `.with_hsts(true)` behind a prod profile); consider a boot-time `check.rs` warning when auth/sessions are mounted without security. Necessary but not sufficient for "secure by default" — see #26 and the XSS fixes (`bugs/review/security-web-surface.md` WEB-3/WEB-4) which `SecurityPlugin` does not cover.
+25. [~] **startproject should auto-mount SecurityPlugin.** _BOOT-WARN DONE (2026-06-20): a `Severity::Warning` boot system-check (`plugin.security_missing`) fires when `auth`/`sessions` is registered without `security` — clear message to add `.plugin(SecurityPlugin::new())` (warning, not fail). `CheckContext` gained `registered_plugin_names`; 8 tests (373729c). REMAINING: the `umbra startproject` scaffold auto-mounting `.plugin(SecurityPlugin::new())` by default — depends on the #8 startproject scaffold (deferred)._
 
 26. [x] Signed/session-bound CSRF (`SecurityConfig::signed_csrf`) is now the default — archived
 
