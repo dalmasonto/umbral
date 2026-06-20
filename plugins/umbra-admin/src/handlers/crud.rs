@@ -140,8 +140,13 @@ async fn apply_m2m_selections(
             }
         }
         let junction_table = format!("{}_{}", parent.table, rel.field_name);
-        umbra::orm::set_junction_dynamic(&junction_table, parent_value.clone(), child_values)
-            .await?;
+        umbra::orm::set_junction_dynamic(
+            &junction_table,
+            parent_value.clone(),
+            child_values,
+            Some(parent.name.as_str()),
+        )
+        .await?;
     }
     Ok(())
 }

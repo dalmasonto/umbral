@@ -1582,6 +1582,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                                 junction,
                                 ::core::convert::Into::into(parent_id),
                                 pending,
+                                ::core::option::Option::Some(
+                                    <Self as ::umbra::orm::Model>::NAME,
+                                ),
                             )
                             .await
                             .map_err(::umbra::orm::write::WriteError::Sqlx)?;

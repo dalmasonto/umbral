@@ -2974,9 +2974,14 @@ async fn write_m2m_junctions(
             }
         }
         let junction_table = format!("{}_{}", meta.table, rel.field_name);
-        crate::orm::m2m::set_junction_dynamic(&junction_table, parent_pk_value.clone(), child_ids)
-            .await
-            .map_err(crate::orm::write::WriteError::Sqlx)?;
+        crate::orm::m2m::set_junction_dynamic(
+            &junction_table,
+            parent_pk_value.clone(),
+            child_ids,
+            Some(&meta.name),
+        )
+        .await
+        .map_err(crate::orm::write::WriteError::Sqlx)?;
     }
     Ok(())
 }

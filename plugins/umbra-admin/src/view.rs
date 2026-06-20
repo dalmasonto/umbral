@@ -602,6 +602,7 @@ pub(crate) async fn form_m2m_fields_for(
                     &junction_table,
                     parent_value,
                     child_pk_col.ty,
+                    Some(parent.name.as_str()),
                 )
                 .await
                 {
