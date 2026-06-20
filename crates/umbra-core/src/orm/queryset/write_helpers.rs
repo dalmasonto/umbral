@@ -62,17 +62,17 @@ fn reject_unset_fk_placeholder(
     Ok(())
 }
 
-/// Convert a `T: Serialize` instance to a `Map<String, Value>` for
-/// the insert path. Errors out if the instance doesn't serialize to a
-/// JSON object (only flat structs and HashMap-like shapes do).
-pub(super) fn serialize_to_map<T: serde::Serialize>(
+/// Convert a model instance to a `Map<String, Value>` for the insert
+/// path. Calls `T::to_db_row()` rather than bare `serde_json::to_value`
+/// so that models with `#[serde(skip_serializing)]` fields (e.g.
+/// `AuthUser::password_hash`) can override `to_db_row` to include those
+/// fields in the DB write even though they are hidden from public serde
+/// output. The default `Model::to_db_row` delegates to `to_value`, so
+/// all models that don't override it behave exactly as before.
+pub(super) fn serialize_to_map<T: crate::orm::Model + serde::Serialize>(
     instance: &T,
 ) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
-    let value = serde_json::to_value(instance)?;
-    match value {
-        serde_json::Value::Object(map) => Ok(map),
-        _ => Err(crate::orm::write::WriteError::NotAnObject),
-    }
+    Ok(instance.to_db_row())
 }
 
 /// Build a single-row INSERT statement for one map of column values.

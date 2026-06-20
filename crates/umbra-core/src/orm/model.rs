@@ -328,6 +328,30 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
 
     /// Return the primary key of this instance.
     fn primary_key(&self) -> Self::PrimaryKey;
+
+    /// Build the column map used by the ORM write path (INSERT / UPDATE).
+    ///
+    /// The default implementation calls `serde_json::to_value(self)` and
+    /// unwraps the resulting object map — which is correct for every model
+    /// whose `Serialize` impl includes all database columns.
+    ///
+    /// Override this method when a field carries `#[serde(skip_serializing)]`
+    /// for security (e.g. `AuthUser::password_hash`) but still needs to reach
+    /// the database on writes. The override should build a map from all
+    /// columns, including the ones serde skips.
+    ///
+    /// The default requires `Self: serde::Serialize`; models without that
+    /// impl must override explicitly.
+    fn to_db_row(&self) -> serde_json::Map<String, serde_json::Value>
+    where
+        Self: serde::Serialize,
+    {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::Object(map)) => map,
+            Ok(_) => serde_json::Map::new(),
+            Err(_) => serde_json::Map::new(),
+        }
+    }
 }
 
 /// Static metadata for one many-to-many relation declared on a model.

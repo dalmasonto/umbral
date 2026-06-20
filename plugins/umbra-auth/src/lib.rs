@@ -230,7 +230,11 @@ pub struct AuthUser {
     pub email: String,
     /// Never shown on any form — password management goes through the
     /// dedicated Change Password flow in the admin.
+    /// Never serialized: the argon2 hash must never appear in API
+    /// responses or template contexts. Block-list in umbra-rest is a
+    /// second line of defence; this attribute is the type-level guarantee.
     #[umbra(noform)]
+    #[serde(skip_serializing)]
     pub password_hash: String,
     pub is_active: bool,
     pub is_staff: bool,
