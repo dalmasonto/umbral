@@ -208,7 +208,7 @@
 
 26. [x] Signed/session-bound CSRF (`SecurityConfig::signed_csrf`) is now the default — archived
 
-27. [ ] **Cache plugin should expose axum/tower-http caching + compression layers as opt-in config.** Mirror the new `umbra-security` config-struct shape: surface `tower_http::compression::CompressionLayer` (gzip/br negotiation) and HTTP cache-control header management (e.g. `SetResponseHeaderLayer` for `Cache-Control`/`ETag`/`Vary`) through `umbra-cache` so an app gets response compression + cache headers declaratively, instead of the page-cache (`cache_page`) being the only knob. Note: tower-http has no full response-cache layer; this is header + compression management, distinct from the server-side `cache_page` store. Pairs with the cache gaps already noted in `bugs/review/broken-features.md` (BROKEN-10/12).
+27. [x] Cache plugin opt-in compression + Cache-Control/Vary header layers — SHIPPED (2026-06-20): .with_compression()/.cache_control()/.vary() via wrap_router, default-off (0419fcf). — archived
 
 28. [x] `allowed_hosts` request-time enforcement — SHIPPED. — archived
 
