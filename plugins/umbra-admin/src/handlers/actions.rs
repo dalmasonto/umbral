@@ -59,6 +59,14 @@ pub(crate) async fn run_action(
             .into_response();
     };
 
+    // gaps2 #79: enforce Action::permission before running the handler.
+    // Superusers bypass the check; non-superusers need the exact codename.
+    if let Some(ref required_perm) = action.permission {
+        if let Err(r) = check_action_perm(&who, required_perm).await {
+            return r;
+        }
+    }
+
     let inv = ActionInvocation {
         ids: selected_ids.clone(),
         username: who.username.clone(),
@@ -177,6 +185,14 @@ pub(crate) async fn dispatch_action(
         return AdminError::NotFound(format!("no action `{key}` for `{table}`")).into_response();
     };
 
+    // gaps2 #79: enforce Action::permission before running the handler.
+    // Superusers bypass the check; non-superusers need the exact codename.
+    if let Some(ref required_perm) = action.permission {
+        if let Err(r) = crate::handlers::actions::check_action_perm(&who, required_perm).await {
+            return r;
+        }
+    }
+
     let inv = ActionInvocation {
         ids: ids.clone(),
         username: who.username.clone(),
@@ -259,5 +275,47 @@ pub(crate) async fn dispatch_action(
                 .body(axum::body::Body::empty())
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
+    }
+}
+
+/// Check that `who` holds the required action permission codename.
+///
+/// Mirrors `permcheck::check` but operates on a raw codename string
+/// (as stored in `Action::permission`) rather than deriving one from
+/// (plugin, table, verb).  Superusers always pass; the check is a
+/// no-op when `umbra-permissions` is not installed.
+pub(crate) async fn check_action_perm(
+    who: &umbra_auth::AuthUser,
+    required_perm: &str,
+) -> Result<(), Response> {
+    // No-op when the permissions plugin isn't installed (matches the
+    // rest of the admin's graceful-fallback behaviour from permcheck.rs).
+    if !crate::permcheck::permissions_installed() {
+        return Ok(());
+    }
+    let user_id = who.id.to_string();
+    let allowed = umbra_permissions::has_perm_for_superuser(
+        &user_id,
+        who.is_superuser,
+        required_perm,
+    )
+    .await
+    .unwrap_or_else(|err| {
+        tracing::warn!(
+            user_id = user_id.as_str(),
+            perm = required_perm,
+            error = %err,
+            "action permission check failed; denying by default"
+        );
+        false
+    });
+    if allowed {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            "umbra-admin: permission denied for this action",
+        )
+            .into_response())
     }
 }

@@ -52,7 +52,7 @@ fn codename(plugin: &str, table: &str, action: Action) -> String {
 /// Returns `true` when the permissions plugin is registered with the
 /// framework. Read once per request from the in-memory plugin list, so
 /// the cost is a single Vec scan with no I/O.
-fn permissions_installed() -> bool {
+pub(crate) fn permissions_installed() -> bool {
     umbra::migrate::registered_plugins()
         .iter()
         .any(|p| p == "permissions")
