@@ -172,7 +172,7 @@ async fn boot() -> &'static axum::Router {
             .await
             .expect("seed post");
 
-        let staff = create_user("bp_admin", "bp@example.com", "pass123")
+        let staff = create_user("bp_admin", "bp@example.com", "Xq7vBramble42x")
             .await
             .expect("user");
         sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
@@ -252,7 +252,7 @@ async fn login(router: axum::Router) -> String {
 
     let form = serde_urlencoded::to_string([
         ("username", "bp_admin"),
-        ("password", "pass123"),
+        ("password", "Xq7vBramble42x"),
         ("csrf_token", csrf.as_str()),
         ("next", "/backoffice/"),
     ])
