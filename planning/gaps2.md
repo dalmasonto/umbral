@@ -117,7 +117,7 @@
 
 11. [x] Persist all admin UI state into `AdminUserPref` — filters, sort orders, page sizes, search, per-table preferences. — archived
 
-12. [~] **Admin form errors — DynError enum landed; per-field template rendering still to do.**
+12. [x] Admin form errors — per-field rendering SHIPPED (2026-06-20): apply_write_error_to_fields merges WriteError::field_errors() into the per-field FormField.error slot; non_field_errors stay in the top banner (d1bdccb). — archived
 
     **Part 1 (shipped):** `DynError` in `crates/umbra-core/src/orm/dynamic.rs` lifted from `pub type DynError = sqlx::Error;` alias to a real enum `pub enum DynError { Write(WriteError), Sqlx(sqlx::Error) }` with `From<sqlx::Error>` + `From<WriteError>` + `Display` + `Error` impls. Form-coercion failures in `insert_form` / `update_form` / `update_one` now emit `DynError::Write(WriteError::Validator { field, message })` carrying the offending column name, replacing the pre-fix `sqlx::Error::Protocol("umbra::orm::write: <message>")` string-flatten that lost the per-field hint.
 
