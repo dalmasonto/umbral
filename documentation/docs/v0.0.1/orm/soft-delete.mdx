@@ -35,12 +35,12 @@ let visible = Post::objects().fetch().await?;
 let everything = Post::objects().with_deleted().fetch().await?;   // live + trashed
 let trash      = Post::objects().only_deleted().fetch().await?;   // trashed only
 
-// Restore: clear the timestamp on the trashed row. Updates are not
-// auto-filtered (only reads and delete() are), so the predicate alone
-// identifies the row.
+// Restore: clear the timestamp on the trashed row.
+// .only_deleted() scopes the UPDATE to trashed rows only, so no live
+// rows are touched even if you omit the ID filter.
 let mut patch = serde_json::Map::new();
 patch.insert("deleted_at".into(), serde_json::Value::Null);
-Post::objects().filter(post::ID.eq(id)).update_values(patch).await?;
+Post::objects().only_deleted().filter(post::ID.eq(id)).update_values(patch).await?;
 
 // True purge ("empty the trash"): opt-in, two explicit steps.
 Post::objects()
@@ -61,8 +61,8 @@ Adding soft delete to an existing model is the normal migration loop: add the at
 Soft-deleted rows still exist: they count toward UNIQUE constraints, foreign keys keep pointing at them, and they occupy the table. If a unique column (say `email`) must be reusable after deletion, that's a schema design decision soft delete doesn't make for you.
 </Callout>
 
-<Callout type="warning">
-`update_values` is **not** auto-scoped. Only reads (`fetch` / `first` / `get` / `count` / `exists`) and `delete()` inject the `deleted_at IS NULL` filter. A bulk `Post::objects().update_values(...)` with no predicate mutates trashed rows too, and `.with_deleted()` / `.only_deleted()` are currently silent no-ops on the update path (tracked as `gaps2 #34`). Always pin the rows you mean to touch with an explicit `.filter(...)` predicate (as the restore example above does) rather than relying on the auto-filter to spare the trash.
+<Callout type="info">
+`update_values` and `update_expr` honour the same soft-delete scope as reads: the default queryset only updates live rows (`deleted_at IS NULL`); `.with_deleted()` lifts the filter (live + trashed); `.only_deleted()` restricts to trashed rows only. This is what makes the restore pattern above safe — no explicit `filter(post::ID.eq(id))` is strictly required when `.only_deleted()` is in play, though adding one is good practice for targeted restores.
 </Callout>
 
-Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.
+Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72, gaps2 #34); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.
