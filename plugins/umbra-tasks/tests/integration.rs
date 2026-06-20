@@ -13,10 +13,24 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 
 use umbra_tasks::{
-    DEFAULT_VISIBILITY_TIMEOUT, EnqueueOptions, STATUS_FAILED, STATUS_PENDING, STATUS_RUNNING,
-    STATUS_SUCCEEDED, TaskRow, TasksPlugin, _clear_handlers_for_tests, enqueue,
-    reclaim_orphaned_tasks, register_handler, run_worker_once, DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_VISIBILITY_TIMEOUT, EnqueueOptions, RetryPolicy, STATUS_FAILED, STATUS_PENDING,
+    STATUS_RUNNING, STATUS_SUCCEEDED, TaskRow, TasksPlugin, _clear_handlers_for_tests, enqueue,
+    reclaim_orphaned_tasks, reclaim_orphaned_tasks_with, register_handler, run_worker_once,
+    run_worker_once_with, DEFAULT_MAX_ATTEMPTS,
 };
+
+/// A backoff-free policy for tests that drive several retries back-to-back
+/// without simulating elapsed time. With `backoff_base = 0` a retriable
+/// failure leaves `run_at = now`, so the very next `run_worker_once_with`
+/// re-claims the row immediately — the pre-backoff behaviour these tests
+/// were written against, now opted into explicitly.
+fn no_backoff() -> RetryPolicy {
+    RetryPolicy {
+        backoff_base: Duration::from_secs(0),
+        backoff_max: Duration::from_secs(0),
+        task_timeout: None,
+    }
+}
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
 
@@ -54,6 +68,7 @@ async fn boot() {
                 attempts INTEGER NOT NULL,\
                 max_attempts INTEGER NOT NULL,\
                 scheduled_for TEXT NOT NULL,\
+                run_at TEXT,\
                 started_at TEXT,\
                 completed_at TEXT,\
                 error TEXT,\
@@ -181,14 +196,16 @@ async fn failed_handler_retries_until_max_attempts() {
     .expect("enqueue");
 
     // First iteration: handler fails, retries left -> pending again.
-    assert!(run_worker_once().await.expect("step 1"));
+    // Drive with a zero backoff so the retry stays immediately eligible
+    // (otherwise `run_at` is pushed ~2s out and step 2 wouldn't claim it).
+    assert!(run_worker_once_with(no_backoff()).await.expect("step 1"));
     let row = fetch(id).await;
     assert_eq!(row.status, STATUS_PENDING, "should reset to pending");
     assert_eq!(row.attempts, 1, "one attempt counted");
     assert_eq!(row.error.as_deref(), Some("kaboom"));
 
     // Second iteration: handler fails again, attempts reaches max -> failed.
-    assert!(run_worker_once().await.expect("step 2"));
+    assert!(run_worker_once_with(no_backoff()).await.expect("step 2"));
     let row = fetch(id).await;
     assert_eq!(row.status, STATUS_FAILED, "should be terminal failed");
     assert_eq!(row.attempts, 2, "exactly max_attempts attempts");
@@ -561,8 +578,10 @@ async fn orphaned_running_task_is_reclaimed_and_completes() {
     .await
     .expect("insert stuck running row");
 
-    // Reclaim with a tiny timeout so the row qualifies immediately.
-    let reclaimed = reclaim_orphaned_tasks(Duration::from_millis(1))
+    // Reclaim with a tiny timeout so the row qualifies immediately, and a
+    // zero backoff so the reclaimed row's `run_at` stays at `now` (the
+    // default policy would push it ~2s out and the claim below would miss).
+    let reclaimed = reclaim_orphaned_tasks_with(Duration::from_millis(1), no_backoff())
         .await
         .expect("reclaim");
     assert_eq!(reclaimed, 1, "exactly one orphaned task should be reclaimed");

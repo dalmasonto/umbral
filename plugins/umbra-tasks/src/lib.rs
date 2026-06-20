@@ -32,7 +32,17 @@
 //! - `#[task]` macro shipped: use `#[umbra::task]` on an `async fn` to
 //!   generate typed registration helpers. See `umbra-macros` and the
 //!   tasks docs page.
-//! - No periodic scheduling ("beat"). Deferred to the deep spec.
+//! - Reliability & scheduling (this revision): every task carries a
+//!   `run_at` instant. Enqueue can set it in the future (`eta` / `delay`)
+//!   so the task runs later. A retriable failure pushes `run_at` forward
+//!   by an exponential backoff (`retry_backoff_base * 2^(attempts-1)`,
+//!   capped at `retry_backoff_max`) instead of re-queuing immediately. The
+//!   worker wraps each handler in a [`WorkerOptions::task_timeout`]; a
+//!   handler that overruns is recorded as a retriable failure (backed off
+//!   or abandoned) rather than holding its claim until the visibility
+//!   timeout.
+//! - No periodic/cron scheduling ("beat"), no result backend, no priority
+//!   queues. Deferred to the deep spec (planning/features.md #82).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -79,6 +89,19 @@ pub struct TaskRow {
     pub attempts: i64,
     pub max_attempts: i64,
     pub scheduled_for: DateTime<Utc>,
+    /// The instant this task becomes eligible to run. The dequeue query
+    /// only claims rows whose `run_at <= now()` (a `NULL` `run_at` counts
+    /// as "immediately eligible"). Set on enqueue from `EnqueueOptions`
+    /// (`eta` / `delay`, default = now). On a retriable failure the worker
+    /// pushes it into the future by the exponential backoff so the row
+    /// isn't re-claimed until the delay elapses.
+    ///
+    /// Nullable rather than `DateTime<Utc>` because the migration engine
+    /// can't yet emit `ADD COLUMN ... NOT NULL DEFAULT <now>` (see
+    /// `migrate.rs` `Operation::AddColumn`); a nullable add applies cleanly
+    /// against existing rows, which then read as immediately-runnable
+    /// (`NULL = run now`). Enqueue always writes `Some`.
+    pub run_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
@@ -208,6 +231,22 @@ pub struct EnqueueOptions {
     /// whose `scheduled_for` is in the future stay invisible to the
     /// claim query. Defaults to `Utc::now()`.
     pub scheduled_for: Option<DateTime<Utc>>,
+    /// Absolute instant the task becomes eligible to run (Celery's `eta`).
+    /// Mutually exclusive with [`Self::delay`]; if both are set, `eta`
+    /// wins. When neither is set the task is eligible immediately.
+    pub eta: Option<DateTime<Utc>>,
+    /// Run the task after this much delay from enqueue time (`run_at =
+    /// now + delay`). A convenience over [`Self::eta`]; `eta` takes
+    /// precedence if both are given.
+    pub delay: Option<Duration>,
+    /// Per-task timeout override (v1: API surface only). Reaching the
+    /// worker with a per-row timeout needs a persisted column; to keep
+    /// this revision to the single additive `run_at` column, the worker
+    /// currently applies the worker-level [`WorkerOptions::task_timeout`]
+    /// to every task. Persisting per-task `timeout` / backoff overrides as
+    /// columns is the documented follow-up (planning/features.md #82). The
+    /// field is accepted now so callers don't have to change later.
+    pub timeout: Option<Duration>,
 }
 
 /// Default retry count when [`EnqueueOptions::max_attempts`] is `None`.
@@ -225,6 +264,12 @@ pub async fn enqueue<P: Serialize>(
     let now = Utc::now();
     let scheduled_for = opts.scheduled_for.unwrap_or(now);
     let max_attempts = opts.max_attempts.unwrap_or(DEFAULT_MAX_ATTEMPTS);
+    // `eta` (absolute) wins over `delay` (relative); neither => run now.
+    let run_at = opts.eta.or_else(|| {
+        opts.delay.map(|d| {
+            now + chrono::Duration::from_std(d).unwrap_or_else(|_| chrono::Duration::zero())
+        })
+    });
 
     let row = TaskRow::objects()
         .create(TaskRow {
@@ -235,6 +280,7 @@ pub async fn enqueue<P: Serialize>(
             attempts: 0,
             max_attempts,
             scheduled_for,
+            run_at: Some(run_at.unwrap_or(now)),
             started_at: None,
             completed_at: None,
             error: None,
@@ -297,8 +343,64 @@ pub fn _clear_handlers_for_tests() {
 /// this are reclaimed and re-queued (or failed if at `max_attempts`).
 pub const DEFAULT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(5 * 60); // 5 minutes
 
+/// Default base delay for exponential-backoff retries. The nth retry waits
+/// `base * 2^(attempts-1)`, capped at [`DEFAULT_RETRY_BACKOFF_MAX`].
+pub const DEFAULT_RETRY_BACKOFF_BASE: Duration = Duration::from_secs(2);
+/// Default ceiling for the exponential-backoff retry delay.
+pub const DEFAULT_RETRY_BACKOFF_MAX: Duration = Duration::from_secs(5 * 60); // 5 minutes
+/// Default per-task timeout the worker wraps each handler in.
+pub const DEFAULT_TASK_TIMEOUT: Duration = Duration::from_secs(5 * 60); // 5 minutes
+
+/// The retry/timeout knobs the worker applies to a single task. Carved
+/// out of [`WorkerOptions`] so the per-iteration helpers ([`process_one`],
+/// [`reclaim_orphaned_tasks`]) can take a small `Copy` policy without the
+/// non-`Copy` `shutdown` channel.
+#[derive(Debug, Clone, Copy)]
+pub struct RetryPolicy {
+    /// Base delay for exponential backoff. See
+    /// [`WorkerOptions::retry_backoff_base`].
+    pub backoff_base: Duration,
+    /// Backoff ceiling. See [`WorkerOptions::retry_backoff_max`].
+    pub backoff_max: Duration,
+    /// Per-task handler timeout. See [`WorkerOptions::task_timeout`].
+    pub task_timeout: Option<Duration>,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            backoff_base: DEFAULT_RETRY_BACKOFF_BASE,
+            backoff_max: DEFAULT_RETRY_BACKOFF_MAX,
+            task_timeout: Some(DEFAULT_TASK_TIMEOUT),
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// `run_at` for a row that just failed retriably: `now + backoff`.
+    fn next_run_at(&self, attempts: i64, now: DateTime<Utc>) -> DateTime<Utc> {
+        let delay = backoff_delay(attempts, self.backoff_base, self.backoff_max);
+        now + chrono::Duration::from_std(delay).unwrap_or_else(|_| chrono::Duration::zero())
+    }
+}
+
+/// Compute the exponential backoff delay for a retry, given how many
+/// attempts have already been made. The first retry (`attempts == 1`)
+/// waits `base`, the next `base * 2`, then `base * 4`, … each capped at
+/// `max`. `attempts <= 0` is treated as the first retry.
+fn backoff_delay(attempts: i64, base: Duration, max: Duration) -> Duration {
+    // `attempts` is the post-increment count from `claim_one`, so the
+    // first failure arrives with `attempts == 1` => shift 0 => `base`.
+    let shift = attempts.saturating_sub(1).clamp(0, 32) as u32;
+    let scaled = base
+        .checked_mul(1u32.checked_shl(shift).unwrap_or(u32::MAX))
+        .unwrap_or(max);
+    scaled.min(max)
+}
+
 /// Options for [`run_worker`]. Carries the poll interval, shutdown signal,
-/// and visibility timeout for orphan-task reclaim.
+/// visibility timeout for orphan-task reclaim, the retry-backoff knobs, and
+/// the per-task handler timeout.
 pub struct WorkerOptions {
     /// How long to sleep when the queue is empty. Defaults to 1 second.
     pub poll_interval: Duration,
@@ -312,6 +414,22 @@ pub struct WorkerOptions {
     /// already exhausted `max_attempts`, in which case they are marked
     /// `failed`. Defaults to [`DEFAULT_VISIBILITY_TIMEOUT`] (5 minutes).
     pub visibility_timeout: Duration,
+    /// Base delay for exponential-backoff retries. On a retriable failure
+    /// the worker sets `run_at = now + min(base * 2^(attempts-1), max)` so
+    /// the row isn't re-claimed until the backoff elapses. Defaults to
+    /// [`DEFAULT_RETRY_BACKOFF_BASE`] (2s).
+    pub retry_backoff_base: Duration,
+    /// Ceiling for the exponential-backoff retry delay. Defaults to
+    /// [`DEFAULT_RETRY_BACKOFF_MAX`] (5 minutes).
+    pub retry_backoff_max: Duration,
+    /// How long a single handler invocation may run before the worker
+    /// cancels it and records a retriable failure (backed off via `run_at`,
+    /// or abandoned if `max_attempts` is exhausted). `None` disables the
+    /// timeout. Defaults to [`DEFAULT_TASK_TIMEOUT`] (5 minutes). This is
+    /// distinct from `visibility_timeout`: the timeout fails a *running*
+    /// handler promptly, whereas the visibility timeout only reclaims a row
+    /// after a *crashed* worker stops renewing its lease.
+    pub task_timeout: Option<Duration>,
 }
 
 impl Default for WorkerOptions {
@@ -327,6 +445,9 @@ impl Default for WorkerOptions {
             poll_interval: Duration::from_secs(1),
             shutdown: rx,
             visibility_timeout: DEFAULT_VISIBILITY_TIMEOUT,
+            retry_backoff_base: DEFAULT_RETRY_BACKOFF_BASE,
+            retry_backoff_max: DEFAULT_RETRY_BACKOFF_MAX,
+            task_timeout: Some(DEFAULT_TASK_TIMEOUT),
         }
     }
 }
@@ -343,6 +464,11 @@ impl Default for WorkerOptions {
 /// function must never call `process::exit`; it returns and lets the
 /// caller decide what happens next.
 pub async fn run_worker(mut opts: WorkerOptions) {
+    let policy = RetryPolicy {
+        backoff_base: opts.retry_backoff_base,
+        backoff_max: opts.retry_backoff_max,
+        task_timeout: opts.task_timeout,
+    };
     loop {
         if *opts.shutdown.borrow() {
             // Cooperative shutdown — hand control back to the caller
@@ -351,10 +477,10 @@ pub async fn run_worker(mut opts: WorkerOptions) {
         }
         // Reclaim orphaned tasks before claiming a new one so that a
         // crashed-worker's row becomes visible in the same iteration.
-        if let Err(e) = reclaim_orphaned_tasks(opts.visibility_timeout).await {
+        if let Err(e) = reclaim_orphaned_tasks_with(opts.visibility_timeout, policy).await {
             tracing::error!(error = %e, "umbra-tasks: orphan reclaim failed");
         }
-        match run_worker_once().await {
+        match run_worker_once_with(policy).await {
             Ok(true) => {}
             Ok(false) => {
                 // Queue empty: sleep before polling again. Cancellable
@@ -385,7 +511,21 @@ pub async fn run_worker(mut opts: WorkerOptions) {
 ///
 /// This is the at-least-once guarantee: work is never silently dropped
 /// because the worker that claimed it died mid-flight.
+///
+/// Uses the default [`RetryPolicy`] for backoff. The worker loop calls
+/// [`reclaim_orphaned_tasks_with`] to honour the configured knobs.
 pub async fn reclaim_orphaned_tasks(visibility_timeout: Duration) -> Result<u64, TaskError> {
+    reclaim_orphaned_tasks_with(visibility_timeout, RetryPolicy::default()).await
+}
+
+/// [`reclaim_orphaned_tasks`] with an explicit backoff [`RetryPolicy`]. A
+/// reclaimed-but-not-exhausted row is pushed forward by the same
+/// exponential backoff a handler failure uses, so a flaky task that keeps
+/// crashing its worker doesn't get retried in a tight loop.
+pub async fn reclaim_orphaned_tasks_with(
+    visibility_timeout: Duration,
+    policy: RetryPolicy,
+) -> Result<u64, TaskError> {
     let cutoff = Utc::now()
         - chrono::Duration::from_std(visibility_timeout)
             .unwrap_or(chrono::Duration::seconds(300));
@@ -422,12 +562,16 @@ pub async fn reclaim_orphaned_tasks(visibility_timeout: Duration) -> Result<u64,
             );
         } else {
             // Still has retries — reset to pending so the next claim
-            // picks it up. Clear `started_at` so the lease is fresh.
+            // picks it up. Clear `started_at` so the lease is fresh, and
+            // push `run_at` forward by the backoff so a task that keeps
+            // crashing its worker doesn't get re-claimed instantly.
+            let run_at = policy.next_run_at(row.attempts, now);
             patch.insert(
                 "status".to_string(),
                 serde_json::Value::String(STATUS_PENDING.to_string()),
             );
             patch.insert("started_at".to_string(), serde_json::Value::Null);
+            patch.insert("run_at".to_string(), serde_json::to_value(run_at)?);
             patch.insert(
                 "error".to_string(),
                 serde_json::Value::String(
@@ -461,12 +605,21 @@ pub async fn reclaim_orphaned_tasks(visibility_timeout: Duration) -> Result<u64,
 /// if the queue had no due rows.
 ///
 /// Test-driver entry point: integration tests can drive deterministic
-/// scenarios without spawning the polling loop.
+/// scenarios without spawning the polling loop. Uses the default
+/// [`RetryPolicy`]; call [`run_worker_once_with`] to override the backoff
+/// or timeout.
 pub async fn run_worker_once() -> Result<bool, TaskError> {
+    run_worker_once_with(RetryPolicy::default()).await
+}
+
+/// [`run_worker_once`] with an explicit [`RetryPolicy`] (backoff + per-task
+/// timeout). The worker loop threads its [`WorkerOptions`] knobs through
+/// here.
+pub async fn run_worker_once_with(policy: RetryPolicy) -> Result<bool, TaskError> {
     let Some(row) = claim_one().await? else {
         return Ok(false);
     };
-    process_one(row).await?;
+    process_one(row, policy).await?;
     Ok(true)
 }
 
@@ -490,7 +643,14 @@ async fn claim_one() -> Result<Option<TaskRow>, TaskError> {
     umbra::transaction(|tx| {
         Box::pin(async move {
             let candidate = TaskRow::objects()
-                .filter(task_row::STATUS.eq(STATUS_PENDING) & task_row::SCHEDULED_FOR.le(now))
+                .filter(
+                    task_row::STATUS.eq(STATUS_PENDING)
+                        & task_row::SCHEDULED_FOR.le(now)
+                        // Only claim rows whose `run_at` is due. A NULL
+                        // `run_at` (legacy rows, or rows from before this
+                        // column existed) counts as immediately eligible.
+                        & (task_row::RUN_AT.is_null() | task_row::RUN_AT.le(now)),
+                )
                 .order_by(task_row::SCHEDULED_FOR.asc())
                 .order_by(task_row::ID.asc())
                 .limit(1)
@@ -533,7 +693,7 @@ async fn claim_one() -> Result<Option<TaskRow>, TaskError> {
 }
 
 /// Run the handler for a claimed row and write back the terminal state.
-async fn process_one(row: TaskRow) -> Result<(), TaskError> {
+async fn process_one(row: TaskRow, policy: RetryPolicy) -> Result<(), TaskError> {
     let handler = {
         let guard = handlers()
             .read()
@@ -553,17 +713,36 @@ async fn process_one(row: TaskRow) -> Result<(), TaskError> {
         Some((fut,)) => {
             // Catch panics so one bad handler doesn't take the worker
             // down. `tokio::task::spawn` gives us the JoinHandle whose
-            // join error carries panic payloads we can stringify.
-            let outcome = tokio::task::spawn(fut).await;
+            // join error carries panic payloads we can stringify. Wrap the
+            // spawned handle in `tokio::time::timeout` so an overrunning
+            // handler is cancelled (its task dropped) and recorded as a
+            // retriable failure rather than pinning the worker.
+            let join = tokio::task::spawn(fut);
+            let outcome = match policy.task_timeout {
+                Some(limit) => tokio::time::timeout(limit, join).await,
+                None => Ok(join.await),
+            };
             match outcome {
-                Ok(Ok(())) => Ok(()),
-                Ok(Err(msg)) => Err((TaskError::Other(msg.clone()), msg)),
-                Err(join) if join.is_panic() => {
+                Ok(Ok(Ok(()))) => Ok(()),
+                Ok(Ok(Err(msg))) => Err((TaskError::Other(msg.clone()), msg)),
+                Ok(Err(join)) if join.is_panic() => {
                     let msg = format!("handler panicked: {:?}", join.into_panic());
                     Err((TaskError::HandlerPanicked(msg.clone()), msg))
                 }
-                Err(join) => {
+                Ok(Err(join)) => {
                     let msg = format!("handler join error: {join}");
+                    Err((TaskError::Other(msg.clone()), msg))
+                }
+                Err(_elapsed) => {
+                    // Timed out. The `JoinHandle` is dropped here, which
+                    // aborts the still-running handler task. Treat as a
+                    // retriable failure (backed off below).
+                    let secs = policy
+                        .task_timeout
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or_default();
+                    let msg = format!("umbra-tasks: handler timed out after {secs:.3}s");
+                    tracing::warn!(task = %row.name, id = row.id, timeout_s = secs, "umbra-tasks: handler timed out");
                     Err((TaskError::Other(msg.clone()), msg))
                 }
             }
@@ -607,15 +786,20 @@ async fn process_one(row: TaskRow) -> Result<(), TaskError> {
                 patch.insert("completed_at".to_string(), serde_json::to_value(now)?);
                 patch.insert("error".to_string(), serde_json::Value::String(err_msg));
             } else {
-                // Reset to pending so the next worker iteration retries.
+                // Reset to pending so a later worker iteration retries.
                 // `attempts` already incremented in `claim_one`, so the
-                // count is accurate. Clear `started_at` so the next
-                // claim stamps a fresh timestamp.
+                // count is accurate. Clear `started_at` so the next claim
+                // stamps a fresh timestamp, and push `run_at` into the
+                // future by the exponential backoff so the row isn't
+                // re-claimed until the delay elapses (Celery-style retry
+                // backoff instead of the old immediate re-queue).
+                let run_at = policy.next_run_at(row.attempts, now);
                 patch.insert(
                     "status".to_string(),
                     serde_json::Value::String(STATUS_PENDING.to_string()),
                 );
                 patch.insert("started_at".to_string(), serde_json::Value::Null);
+                patch.insert("run_at".to_string(), serde_json::to_value(run_at)?);
                 patch.insert("error".to_string(), serde_json::Value::String(err_msg));
             }
             TaskRow::objects()

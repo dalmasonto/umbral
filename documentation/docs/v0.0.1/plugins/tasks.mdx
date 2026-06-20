@@ -147,8 +147,101 @@ The worker claims one pending row at a time inside a transaction, dispatches the
 handler, and writes back `succeeded` or `failed`. Panicking handlers are caught
 via `tokio::task::spawn` so one bad job cannot take the worker down.
 
-`EnqueueOptions` lets you set `max_attempts` (default 3) and `scheduled_for`
-(default `Utc::now()`) to delay execution.
+`EnqueueOptions` lets you set `max_attempts` (default 3), `scheduled_for`
+(default `Utc::now()`), and the scheduling/timeout knobs below.
+
+## Delayed and scheduled execution (`eta` / `delay`)
+
+Every task carries a `run_at` instant: the earliest moment the worker is
+allowed to claim it. The dequeue query only claims rows whose `run_at <=
+now()`, so a task with a future `run_at` stays invisible until its time
+comes. By default `run_at` is set to enqueue time, so tasks run as soon as
+a worker is free.
+
+Two `EnqueueOptions` fields push a task into the future:
+
+- `delay: Option<Duration>` — run after a relative delay (`run_at = now +
+  delay`).
+- `eta: Option<DateTime<Utc>>` — run at an absolute instant. `eta` takes
+  precedence over `delay` if both are set.
+
+```rust
+use std::time::Duration;
+use chrono::Utc;
+use umbra_tasks::{EnqueueOptions, enqueue};
+
+// Run in ~60 seconds.
+enqueue("send_welcome", payload.clone(), EnqueueOptions {
+    delay: Some(Duration::from_secs(60)),
+    ..EnqueueOptions::default()
+}).await?;
+
+// Run at a specific time.
+enqueue("send_welcome", payload, EnqueueOptions {
+    eta: Some(Utc::now() + chrono::Duration::hours(2)),
+    ..EnqueueOptions::default()
+}).await?;
+```
+
+## Exponential-backoff retries
+
+When a handler fails *retriably* (returns `Err`, panics, or times out — anything
+other than a missing handler), the worker no longer re-queues it immediately.
+Instead it pushes `run_at` into the future by an exponential backoff:
+
+```
+run_at = now + min(retry_backoff_base * 2^(attempts - 1), retry_backoff_max)
+```
+
+So the first retry waits `retry_backoff_base`, the next twice that, and so on,
+capped at `retry_backoff_max`. Once `attempts` reaches `max_attempts` the task is
+abandoned (`failed`) rather than retried. A missing handler is non-retriable and
+fails on the first attempt regardless of `max_attempts`.
+
+The backoff knobs are worker-level defaults on `WorkerOptions`:
+
+```rust
+use std::time::Duration;
+use umbra_tasks::{run_worker, WorkerOptions};
+
+run_worker(WorkerOptions {
+    retry_backoff_base: Duration::from_secs(2),     // default
+    retry_backoff_max:  Duration::from_secs(5 * 60), // default
+    ..WorkerOptions::default()
+}).await;
+```
+
+The orphan-reclaim path applies the same backoff: a reclaimed-but-not-exhausted
+task is pushed forward by `run_at` too, so a job that keeps crashing its worker
+doesn't get retried in a tight loop.
+
+<Callout type="info">
+Per-task backoff overrides (and a per-task `timeout`, see below) are accepted on
+`EnqueueOptions` as a forward-compatible surface but are not yet persisted to the
+row in v1 — the worker applies its worker-level defaults to every task. Persisting
+per-task overrides as columns is a tracked follow-up (`planning/features.md` #82).
+</Callout>
+
+## Per-task timeout
+
+The worker wraps each handler invocation in `tokio::time::timeout`. A handler
+that overruns `WorkerOptions::task_timeout` is cancelled and recorded as a
+retriable failure (backed off via `run_at`, or abandoned if `max_attempts` is
+exhausted) — it never holds its claim until the visibility timeout fires.
+
+```rust
+use std::time::Duration;
+use umbra_tasks::{run_worker, WorkerOptions};
+
+run_worker(WorkerOptions {
+    task_timeout: Some(Duration::from_secs(30)), // default: 5 minutes; None disables
+    ..WorkerOptions::default()
+}).await;
+```
+
+This is distinct from the visibility timeout below: `task_timeout` fails a
+*running* handler promptly, whereas the visibility timeout only reclaims a row
+after a *crashed* worker stops renewing its lease.
 
 ## Visibility timeout and at-least-once delivery
 
@@ -218,8 +311,13 @@ The signals docs page is at [`/docs/v0.0.1/plugins/signals`](/docs/v0.0.1/plugin
   (a concurrent worker whose UPDATE matches zero rows loses the race
   cleanly). `SELECT … FOR UPDATE SKIP LOCKED` is a future optimization
   that avoids the wasted candidate SELECT, not a correctness fix.
-- **Periodic scheduling ("beat").** There is no cron-like repeat mechanism yet.
-  Deferred to the deep spec.
+- **Periodic/cron scheduling ("beat").** One-shot `eta`/`delay` scheduling ships
+  now (see above), but there is no recurring/cron repeat mechanism yet. Deferred
+  to the deep spec (`planning/features.md` #82).
+- **Result backend and priority queues.** No place to read a task's return value
+  back, and no priority ordering beyond `run_at` then id. Also #82.
+- **Per-task backoff / timeout persistence.** `EnqueueOptions` accepts the fields
+  but the worker applies worker-level defaults in v1 (see the callout above). #82.
 - **Status enum.** Status is stored as a plain string (`pending`, `running`,
   `succeeded`, `failed`) because the M3 derive doesn't support enum `SqlType` yet.
 
