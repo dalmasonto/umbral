@@ -1242,6 +1242,49 @@
     return out;
   }
 
+  // Registry of mounted editor instances keyed by the backing textarea
+  // element. Used by the per-form submit flush below so every editor on
+  // the form is guaranteed to have written its content back before HTMX
+  // serialises the fields. (gaps2 #41)
+  var _mountedEditors = [];
+
+  // Flush all editors whose backing textarea lives inside `form` into
+  // their textarea.value immediately before the form is serialised.
+  // Registered once per form the first time any editor mounts onto it.
+  var _flushRegisteredForms = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
+  function registerSubmitFlush(form) {
+    if (!form) return;
+    // WeakSet is available in every browser that also has EasyMDE/Quill/CM;
+    // fall back to a data attribute on the form element for older envs.
+    var alreadyRegistered = _flushRegisteredForms
+      ? _flushRegisteredForms.has(form)
+      : form.hasAttribute('data-umbra-flush-registered');
+    if (alreadyRegistered) return;
+    if (_flushRegisteredForms) _flushRegisteredForms.add(form);
+    else form.setAttribute('data-umbra-flush-registered', '1');
+
+    // htmx:beforeRequest fires synchronously before HTMX serialises the
+    // form — use it so the flush runs even when the submit event fires
+    // after htmx has already captured field values (a known edge-case in
+    // some htmx versions when hx-boost is active on an ancestor).
+    form.addEventListener('htmx:beforeRequest', flushEditorsOnForm);
+    // Retain the native submit handler as a belt-and-suspenders guarantee
+    // for any non-HTMX form posts.
+    form.addEventListener('submit', flushEditorsOnForm);
+  }
+
+  function flushEditorsOnForm(event) {
+    var form = event.currentTarget || event.target;
+    _mountedEditors.forEach(function(entry) {
+      try {
+        // Only flush editors whose textarea is inside this specific form.
+        if (form.contains(entry.ta)) entry.flush();
+      } catch (e) {
+        if (window.console) console.error('umbra: editor flush failed', e);
+      }
+    });
+  }
+
   function mountMarkdown(ta) {
     var mde = new EasyMDE({
       element: ta,
@@ -1256,10 +1299,15 @@
                 'ordered-list', '|', 'link', 'code', 'table', '|',
                 'preview', 'side-by-side', 'guide']
     });
-    // EasyMDE keeps the underlying textarea in sync; force a final flush
-    // on submit so the posted value can't lag the last keystroke.
-    var form = ta.closest('form');
-    if (form) form.addEventListener('submit', function() { mde.codemirror.save(); });
+    // EasyMDE constructed with `element: ta` wraps that textarea and
+    // keeps its CodeMirror content in sync with ta.value on `cm.save()`.
+    // We push a continuous sync on every editor change so the textarea
+    // value is always current even if the submit flush somehow doesn't
+    // run (e.g. a programmatic HTMX trigger that skips the submit event).
+    mde.codemirror.on('change', function() { mde.codemirror.save(); });
+    var flush = function() { mde.codemirror.save(); };
+    _mountedEditors.push({ ta: ta, flush: flush });
+    registerSubmitFlush(ta.closest('form'));
   }
 
   function mountRte(ta) {
@@ -1292,9 +1340,10 @@
       var html = quill.root.innerHTML;
       ta.value = (html === '<p><br></p>') ? '' : html;
     }
+    // Sync on every keystroke/paste so ta.value is always current.
     quill.on('text-change', sync);
-    var form = ta.closest('form');
-    if (form) form.addEventListener('submit', sync);
+    _mountedEditors.push({ ta: ta, flush: sync });
+    registerSubmitFlush(ta.closest('form'));
   }
 
   function mountCode(ta) {
@@ -1306,9 +1355,11 @@
       viewportMargin: Infinity
     });
     cm.getWrapperElement().classList.add('umbra-code');
-    // CodeMirror writes back to the textarea on save(); flush on submit.
-    var form = ta.closest('form');
-    if (form) form.addEventListener('submit', function() { cm.save(); });
+    // Sync on every keystroke so ta.value is always current.
+    cm.on('change', function() { cm.save(); });
+    var flush = function() { cm.save(); };
+    _mountedEditors.push({ ta: ta, flush: flush });
+    registerSubmitFlush(ta.closest('form'));
   }
 
   function mountAll(list, fn, label) {
