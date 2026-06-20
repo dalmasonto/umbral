@@ -38,6 +38,9 @@ axum = "0.8"
 # fails (the login itself still succeeded; we just log the secondary
 # failure).
 tracing = "0.1"
+# `clearsessions` management command — Plugin::commands() contributes a
+# clap subcommand; same pattern as umbra-auth's `createsuperuser`.
+clap = "4"
 
 [dev-dependencies]
 # umbra-auth as a DEV-dep only: integration tests exercise the

@@ -86,12 +86,33 @@ let session = umbra_sessions::read_session(&token).await?.unwrap();
 let count: Option<u32> = umbra_sessions::get_data(&session, "cart_count")?;
 ```
 
+## Sliding (rolling) expiry
+
+By default a session's `expires_at` is fixed at creation time. A session started on Monday with a 14-day TTL expires on Monday two weeks later, regardless of activity. Call `.sliding_expiry()` to enable Django's `SESSION_SAVE_EVERY_REQUEST = True` equivalent: every request that resolves a live session extends `expires_at` to `now + 14 days`, so an actively-used session never hard-expires mid-use.
+
+```rust
+App::builder()
+    .plugin(SessionsPlugin::default().sliding_expiry())
+    .build()?;
+```
+
+Default is **off** — the default path incurs zero extra writes per request.
+
+## Purging expired rows: `clearsessions`
+
+Expired rows are deleted lazily when `read_session` encounters one. For long-running apps this means stale rows accumulate. The `clearsessions` management command bulk-deletes every row whose `expires_at < now()` and prints the count removed. Run it periodically via cron or `umbra-tasks`:
+
+```sh
+cargo run -p umbra-cli -- clearsessions
+# Deleted 312 expired session(s).
+```
+
+The command is registered by `SessionsPlugin` via `Plugin::commands()` — no extra wiring required.
+
 ## What is NOT in v1
 
 - **Cookie-only signed store.** All sessions are DB rows. A stateless signed-cookie
   alternative is deferred until a real low-traffic use case asks for it.
-- **Automatic cleanup.** Expired rows are deleted lazily on read. A `clearsessions`
-  management command or a `umbra-tasks` periodic job lands in a later milestone.
 
 The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-sessions/src/lib.rs`.
 

@@ -48,9 +48,15 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use umbra::prelude::*;
 use umbra::web::{HeaderMap, header};
 use uuid::Uuid;
+
+/// Ambient flag: true when the operator has called `.sliding_expiry()` on
+/// `SessionsPlugin`. Set once in `on_ready`; read by `session_layer` on
+/// every request. Default OFF — no extra write per request unless opted in.
+static SLIDING_EXPIRY_ENABLED: OnceLock<bool> = OnceLock::new();
 
 /// Default cookie name. Users override via `set_cookie_header_named`
 /// when they need a project-specific name.
@@ -91,14 +97,37 @@ pub struct Session {
 /// lazily on the first write (Django-style — see `session_layer`).
 /// Opt out with [`Self::without_auto_layer`] if you want to control
 /// session creation by hand (rare).
+///
+/// ## Sliding expiry (Django `SESSION_SAVE_EVERY_REQUEST` parity)
+///
+/// By default a session's `expires_at` is fixed at creation time:
+/// a session started at noon on Monday with a 14-day TTL expires at
+/// noon on Monday two weeks later, regardless of how many requests the
+/// user made in between. Call `.sliding_expiry()` to enable the
+/// rolling-window behaviour: each request that finds a live session
+/// extends `expires_at` to `now + DEFAULT_TTL_SECONDS`, so an
+/// actively-used session never hard-expires mid-use.
+///
+/// Default is OFF so the simpler fixed-expiry path stays cost-free
+/// (zero extra writes per request). Toggle globally:
+///
+/// ```ignore
+/// App::builder()
+///     .plugin(SessionsPlugin::default().sliding_expiry())
+///     .build()
+/// ```
 #[derive(Debug, Clone)]
 pub struct SessionsPlugin {
     auto_layer: bool,
+    sliding_expiry: bool,
 }
 
 impl Default for SessionsPlugin {
     fn default() -> Self {
-        Self { auto_layer: true }
+        Self {
+            auto_layer: true,
+            sliding_expiry: false,
+        }
     }
 }
 
@@ -109,6 +138,17 @@ impl SessionsPlugin {
     /// don't get a session DB row on every health check).
     pub fn without_auto_layer(mut self) -> Self {
         self.auto_layer = false;
+        self
+    }
+
+    /// Enable sliding (rolling) session expiry: each request that
+    /// resolves a live session extends `expires_at` to
+    /// `now + DEFAULT_TTL_SECONDS`. Off by default — the default
+    /// fixed-expiry path incurs no extra write per request.
+    ///
+    /// Django parity: equivalent to `SESSION_SAVE_EVERY_REQUEST = True`.
+    pub fn sliding_expiry(mut self) -> Self {
+        self.sliding_expiry = true;
         self
     }
 }
@@ -135,6 +175,49 @@ impl Plugin for SessionsPlugin {
             router = router.layer(axum::middleware::from_fn(session_layer));
         }
         router
+    }
+
+    fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
+        // Seal the sliding-expiry flag into the ambient OnceLock so
+        // session_layer can read it without carrying a reference to Self.
+        // `set` is a no-op if another test already initialised the cell;
+        // production binaries build once so the first (and only) call wins.
+        let _ = SLIDING_EXPIRY_ENABLED.set(self.sliding_expiry);
+        Ok(())
+    }
+
+    fn commands(&self) -> Vec<Box<dyn umbra::cli::PluginCommand>> {
+        vec![Box::new(ClearSessionsCommand)]
+    }
+}
+
+// =========================================================================
+// `clearsessions` management command — Django parity.
+//
+// Deletes all session rows whose `expires_at < now()`. Rows accumulate
+// forever without this; the lazy-cleanup in `read_session` only fires
+// when an expired session is actively looked up. Run this periodically
+// (cron / umbra-tasks) or on demand to keep the table lean.
+// =========================================================================
+
+struct ClearSessionsCommand;
+
+#[async_trait::async_trait]
+impl umbra::cli::PluginCommand for ClearSessionsCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("clearsessions")
+            .about("Delete all expired session rows from the database (Django parity).")
+    }
+
+    async fn run(&self, _matches: &clap::ArgMatches) -> Result<(), umbra::cli::CliError> {
+        let now = Utc::now();
+        let deleted = Session::objects()
+            .filter(session::EXPIRES_AT.lt(now))
+            .delete()
+            .await
+            .map_err(|e| format!("clearsessions: {e:?}"))?;
+        println!("Deleted {deleted} expired session(s).");
+        Ok(())
     }
 }
 
@@ -852,7 +935,28 @@ pub async fn session_layer(
         Some(t) => match read_session(&t).await {
             // A live row exists and the client already holds the
             // cookie — reuse it, nothing to persist or set.
-            Ok(Some(_)) => (t, false),
+            Ok(Some(_)) => {
+                // Sliding expiry: when enabled, extend expires_at to
+                // now + TTL so an actively-used session never hard-expires
+                // mid-use. This is the one extra write per request that
+                // the default-off flag avoids for everyone who doesn't
+                // need rolling windows.
+                if *SLIDING_EXPIRY_ENABLED.get().unwrap_or(&false) {
+                    let stored_id = hash_token(&t);
+                    let new_expires = Utc::now() + Duration::seconds(DEFAULT_TTL_SECONDS);
+                    let mut patch = serde_json::Map::new();
+                    patch.insert(
+                        "expires_at".to_string(),
+                        serde_json::to_value(new_expires)
+                            .unwrap_or(serde_json::Value::Null),
+                    );
+                    let _ = Session::objects()
+                        .filter(session::ID.eq(&stored_id))
+                        .update_values(patch)
+                        .await;
+                }
+                (t, false)
+            }
             // Cookie present but stale/expired/destroyed. Mint a
             // candidate token IN MEMORY only — no DB row yet. A row
             // materialises lazily iff the handler writes the session
