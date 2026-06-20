@@ -22,7 +22,8 @@ use crate::engine::render;
 use crate::error::AdminError;
 use crate::handlers::sheet::edit_sheet_handler;
 use crate::rows::{fetch_rows_filtered, insert_row, update_row};
-use crate::util::{is_htmx, sanitise_form_error};
+use crate::util::{apply_write_error_to_fields, is_htmx, parse_unique_violation_column,
+    sanitise_form_error};
 use crate::view::{
     form_fields_for, form_m2m_fields_for, model_for_template, sidebar_apps, validate_form,
 };
@@ -358,7 +359,31 @@ pub(crate) async fn create(
             .into_response()
         }
         Err(e) => {
-            let fields = form_fields_for(&model, Some(&form), cfg);
+            // gaps2 #12 part 2: for WriteError, merge per-field messages
+            // into each field's `.error` slot; non-field errors go to the
+            // top banner. For Sqlx UNIQUE violations we also attribute to
+            // the field when we can parse the column name.
+            let mut fields = form_fields_for(&model, Some(&form), cfg);
+            let banner_error = match &e {
+                AdminError::Write(we) => {
+                    sanitise_form_error(&e); // fires the tracing::error! log
+                    apply_write_error_to_fields(we, &mut fields)
+                }
+                AdminError::Sqlx(sqlx_err) => {
+                    let msg = sqlx_err.to_string();
+                    if let Some(col) = parse_unique_violation_column(&msg) {
+                        if let Some(f) = fields.iter_mut().find(|f| f.name == col) {
+                            f.error = format!("A record with this `{col}` already exists.");
+                            String::new()
+                        } else {
+                            sanitise_form_error(&e)
+                        }
+                    } else {
+                        sanitise_form_error(&e)
+                    }
+                }
+                _ => sanitise_form_error(&e),
+            };
             let m2m_fields = form_m2m_fields_for(&model, None).await;
             let apps = sidebar_apps(&state, &user).await;
             let breadcrumbs = vec![
@@ -375,7 +400,7 @@ pub(crate) async fn create(
                     m2m_fields    => m2m_fields,
                     verb          => "Create",
                     action        => format!("{}/{}/new", crate::branding::current().base_path, model.table),
-                    error         => sanitise_form_error(&e),
+                    error         => banner_error,
                     apps          => apps,
                     active_table  => table,
                     breadcrumbs   => breadcrumbs,
@@ -603,7 +628,28 @@ pub(crate) async fn update(
             .into_response()
         }
         Err(e) => {
-            let fields = form_fields_for(&model, Some(&form), cfg);
+            // gaps2 #12 part 2: same per-field attribution as `create`.
+            let mut fields = form_fields_for(&model, Some(&form), cfg);
+            let banner_error = match &e {
+                AdminError::Write(we) => {
+                    sanitise_form_error(&e); // fires the tracing::error! log
+                    apply_write_error_to_fields(we, &mut fields)
+                }
+                AdminError::Sqlx(sqlx_err) => {
+                    let msg = sqlx_err.to_string();
+                    if let Some(col) = parse_unique_violation_column(&msg) {
+                        if let Some(f) = fields.iter_mut().find(|f| f.name == col) {
+                            f.error = format!("A record with this `{col}` already exists.");
+                            String::new()
+                        } else {
+                            sanitise_form_error(&e)
+                        }
+                    } else {
+                        sanitise_form_error(&e)
+                    }
+                }
+                _ => sanitise_form_error(&e),
+            };
             let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
             let apps = sidebar_apps(&state, &user).await;
             let breadcrumbs = vec![
@@ -621,7 +667,7 @@ pub(crate) async fn update(
                     m2m_fields    => m2m_fields,
                     verb          => "Edit",
                     action        => format!("{}/{}/{}/edit", crate::branding::current().base_path, model.table, id),
-                    error         => sanitise_form_error(&e),
+                    error         => banner_error,
                     apps          => apps,
                     active_table  => table,
                     breadcrumbs   => breadcrumbs,
