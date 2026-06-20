@@ -4,7 +4,6 @@
 //! developer's `AdminModel::actions(...)` config; this module just
 //! resolves the right `Action` and invokes its handler.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -41,15 +40,19 @@ pub(crate) async fn run_action(
     {
         return r;
     }
-    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
+    let pairs: Vec<(String, String)> = match serde_urlencoded::from_str(&body) {
         Ok(m) => m,
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
     };
-    let action_key = form.get("action").cloned().unwrap_or_default();
-    let selected_ids: Vec<i64> = form
+    let action_key = pairs
+        .iter()
+        .find(|(k, _)| k == "action")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let selected_ids: Vec<String> = pairs
         .iter()
         .filter(|(k, _)| k.as_str() == "selected")
-        .filter_map(|(_, v)| v.parse::<i64>().ok())
+        .map(|(_, v)| v.clone())
         .collect();
 
     let cfg = state.config_for(&table);
@@ -87,7 +90,7 @@ pub(crate) async fn run_action(
         who.id,
         &format!("action:{action_key}"),
         &table,
-        selected_ids.first().copied(),
+        selected_ids.first().and_then(|s| s.parse::<i64>().ok()),
         &summary,
     )
     .await;
@@ -163,19 +166,31 @@ pub(crate) async fn dispatch_action(
         return r;
     }
 
-    let ids: Vec<i64> = if body.trim_start().starts_with('{') {
+    let ids: Vec<String> = if body.trim_start().starts_with('{') {
         match serde_json::from_str::<serde_json::Value>(&body) {
             Ok(v) => v["ids"]
                 .as_array()
-                .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| {
+                            // Accept both JSON numbers and JSON strings so callers
+                            // can send either `{"ids":[1,2]}` or `{"ids":["a","b"]}`.
+                            x.as_str()
+                                .map(|s| s.to_string())
+                                .or_else(|| x.as_i64().map(|n| n.to_string()))
+                        })
+                        .collect()
+                })
                 .unwrap_or_default(),
             Err(e) => return AdminError::BadInput(format!("bad JSON: {e}")).into_response(),
         }
     } else {
-        let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
-        form.iter()
+        let pairs: Vec<(String, String)> =
+            serde_urlencoded::from_str(&body).unwrap_or_default();
+        pairs
+            .into_iter()
             .filter(|(k, _)| k.as_str() == "ids" || k.as_str() == "selected")
-            .filter_map(|(_, v)| v.parse::<i64>().ok())
+            .map(|(_, v)| v)
             .collect()
     };
 
@@ -215,7 +230,7 @@ pub(crate) async fn dispatch_action(
         who.id,
         &format!("action:{key}"),
         &table,
-        ids.first().copied(),
+        ids.first().and_then(|s| s.parse::<i64>().ok()),
         &summary,
     )
     .await;

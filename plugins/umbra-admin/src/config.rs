@@ -96,8 +96,9 @@ pub enum ActionScope {
 /// Context available to action handlers.
 #[derive(Debug, Clone)]
 pub struct ActionInvocation {
-    /// Selected primary keys.
-    pub ids: Vec<i64>,
+    /// Selected primary keys as raw strings (matches the model's actual PK
+    /// type — i64, String, or Uuid — without forcing a parse to i64).
+    pub ids: Vec<String>,
     /// Username of the currently-logged-in staff user.
     pub username: String,
     /// SQL table the action was invoked on.
@@ -238,14 +239,13 @@ impl Action {
                 let pk_name = crate::discovery::pk_column(&meta)
                     .map(|c| c.name.clone())
                     .unwrap_or_else(|| "id".to_string());
-                let count = inv.ids.len();
                 match umbra::orm::DynQuerySet::for_meta(&meta)
-                    .filter_in_i64(&pk_name, &inv.ids)
+                    .filter_in_strings(&pk_name, &inv.ids)
                     .delete()
                     .await
                 {
-                    Ok(_) => Ok(ActionResult::Toast {
-                        message: format!("Deleted {count} row(s)."),
+                    Ok(deleted) => Ok(ActionResult::Toast {
+                        message: format!("Deleted {deleted} row(s)."),
                         level: ToastLevel::Success,
                     }),
                     Err(e) => {
