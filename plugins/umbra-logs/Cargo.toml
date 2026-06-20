@@ -1,0 +1,37 @@
+[package]
+name = "umbra-logs"
+description = "Django-request-style request logging for umbra. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin."
+workspace = "../../crates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbra = { path = "../../crates/umbra", version = "0.0.1" }
+# Direct dep on the built-in admin: admin_model() returns an AdminModel for
+# RequestLog so the app can register it. Feature-gated so a logs-only app
+# (no admin) compiles without pulling the admin in.
+umbra-admin = { path = "../umbra-admin", version = "0.0.1", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+axum = "0.8"
+
+[features]
+default = ["admin"]
+# Pull in umbra-admin so `admin_model()` is available. On by default since
+# admin is a built-in; turn it off (`default-features = false`) for a slim
+# logs-only build.
+admin = ["dep:umbra-admin"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+axum = "0.8"

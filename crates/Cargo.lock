@@ -4664,6 +4664,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-logs"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "umbra",
+ "umbra-admin",
+]
+
+[[package]]
 name = "umbra-macros"
 version = "0.0.1"
 dependencies = [

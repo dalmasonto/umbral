@@ -1,0 +1,59 @@
+---
+title: Request logs
+description: Django-request-style request logging for umbra. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin.
+sidebar_position: 20
+tags: [logs, requests, middleware, admin, plugin]
+---
+
+# Request logs
+
+`umbra-logs` records every HTTP request to a `RequestLog` row, browsable in the admin — the umbra take on Django's `django.request` logging. Capture is **fire-and-forget**: the response returns to the client immediately and the row is inserted on a background task, so logging never blocks a request and a DB error is swallowed (logged at `warn`, never propagated).
+
+Each row carries `method`, `path`, `status`, `duration_ms`, plus best-effort `user_id`, `ip` (from `X-Forwarded-For` / `X-Real-IP`), `user_agent`, and a `created_at` timestamp. The model lives in the `logs_requestlog` table — `migrate` creates it the same way the built-in auth and sessions tables are created (from the plugin's `models()`).
+
+<Callout type="info">
+Capture is non-blocking by design. The layer stamps the request duration, runs the handler, and spawns the insert — the client never waits on the database write.
+</Callout>
+
+## Wiring
+
+```rust
+use umbra::prelude::*;
+use umbra_logs::LogsPlugin;
+use umbra_admin::AdminPlugin;
+
+App::builder()
+    .plugin(LogsPlugin::default())
+    // Browse captured requests in the admin (read-only).
+    .plugin(AdminPlugin::default().register(umbra_logs::admin_model()))
+    .build()?;
+```
+
+Then run the usual migration loop so the table is created:
+
+```bash
+cargo run -- makemigrations
+cargo run -- migrate
+```
+
+`admin_model()` returns a **read-only** `AdminModel`: operators browse logs, they don't author them. Every column is marked readonly.
+
+## Exclusions and sampling
+
+By default the logger skips its own/asset traffic — the static mounts (`/static`, `/admin/static`), `/health`, and `/favicon.ico` — and logs every other request. Tune it with the builder:
+
+```rust
+LogsPlugin::default()
+    .exclude_prefix("/metrics")  // skip an extra path prefix (repeatable)
+    .sample_rate(0.1)            // log ~1 in 10 requests, deterministically
+    .min_status(400)             // …and only error responses
+```
+
+- **`exclude_prefix(p)`** — skip any request whose path starts with `p`, on top of the built-in exclusions.
+- **`sample_rate(f)`** — fraction of requests to log, in `[0.0, 1.0]` (default `1.0` = all). Sampling is **deterministic**, not random: every Nth candidate request by an atomic counter, so it's reproducible in tests. Out-of-range values clamp to the nearest bound.
+- **`min_status(s)`** — only log responses with status `>= s` (default `0` = all). Set `400` for errors-only, `500` for server-errors-only.
+
+## See also
+
+- The plugin contract and the model-owning-plugin migration pattern: [`arch.md`](https://github.com/dalmasonto/umbra/blob/main/arch.md) §7.
+- [Admin](./admin) for customizing the list view.

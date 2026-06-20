@@ -28,6 +28,7 @@ members = [
     "../plugins/umbra-realtime",
     "../plugins/umbra-livereload",
     "../plugins/umbra-analytics",
+    "../plugins/umbra-logs",
 ]
 
 [workspace.package]
