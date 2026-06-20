@@ -446,6 +446,19 @@ fn valid_datetime_local(value: &str) -> bool {
 // M2M form context
 // =========================================================================
 
+/// Maximum number of selectable-option rows loaded for an M2M picker.
+///
+/// Matches the FK picker's default `page_size` (20 per page, up to
+/// ~10 pages shown before HTMX search kicks in) at the same order of
+/// magnitude. Selected items that fall outside this window are fetched
+/// separately and appended so they always render as pre-checked.
+///
+/// Raise this if the typical catalogue is larger and the HTMX
+/// chip-picker (gaps2 follow-up) hasn't landed yet. Do NOT remove the
+/// cap: without it, a 100k-row target table materialises the whole
+/// table into memory on every form render.
+pub(crate) const M2M_OPTION_CAP: u64 = 200;
+
 /// Template-facing description of one M2M field on the parent form.
 ///
 /// The admin's form template loops over `m2m_fields` after the
@@ -473,10 +486,13 @@ pub(crate) struct M2MFormField {
     /// The string is internal — application code reaches it via
     /// the macro-emitted `<Parent>::<field>_junction_table()`.
     pub junction_table: String,
-    /// Candidate child rows for the picker. One entry per existing
-    /// row in the target table. v1 loads every row — fine for the
-    /// permissions-app scale; large catalogues should switch to the
-    /// HTMX chip-picker variant when it lands.
+    /// Candidate child rows for the picker.
+    ///
+    /// Bounded to [`M2M_OPTION_CAP`] rows so a large target table
+    /// does not materialise into memory on every form render.
+    /// Currently-selected items that fall outside the cap window are
+    /// fetched separately and appended so they always appear as
+    /// pre-checked entries in the list.
     pub candidates: Vec<M2MCandidate>,
     /// Currently-selected child PKs, in string form. The template
     /// pre-checks any candidate whose `value` matches an entry here.
@@ -529,7 +545,10 @@ pub(crate) async fn form_m2m_fields_for(
         let Some(child_pk_col) = target.fields.iter().find(|c| c.primary_key) else {
             continue;
         };
-        // 2) Fetch every candidate child row, projected to (PK, str).
+        // 2) Fetch up to M2M_OPTION_CAP candidate child rows, projected
+        //    to (PK, str).  A second pass below appends any currently-
+        //    selected items that fall outside the cap so they always
+        //    render as pre-checked even when the target table is large.
         let label_col_name = target
             .fields
             .iter()
@@ -543,14 +562,14 @@ pub(crate) async fn form_m2m_fields_for(
         };
         let candidate_rows = match umbra::orm::DynQuerySet::for_meta(&target)
             .select_cols(&select_cols)
-            .limit(200)
+            .limit(M2M_OPTION_CAP)
             .fetch_as_strings()
             .await
         {
             Ok(rows) => rows,
             Err(_) => Vec::new(),
         };
-        let candidates: Vec<M2MCandidate> = candidate_rows
+        let mut candidates: Vec<M2MCandidate> = candidate_rows
             .into_iter()
             .filter_map(|row| {
                 let value = row.get(&child_pk_col.name).cloned()?;
@@ -592,6 +611,37 @@ pub(crate) async fn form_m2m_fields_for(
             }
             _ => Vec::new(),
         };
+        // 4) Ensure every currently-selected item appears in the
+        //    candidates list even if it falls beyond M2M_OPTION_CAP.
+        //    Build a set of PKs already in candidates; fetch any
+        //    missing selected rows by their PKs and append them.
+        if !selected_values.is_empty() {
+            let in_candidates: std::collections::HashSet<&str> =
+                candidates.iter().map(|c| c.value.as_str()).collect();
+            let missing: Vec<String> = selected_values
+                .iter()
+                .filter(|v| !in_candidates.contains(v.as_str()))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                let extra_rows = umbra::orm::DynQuerySet::for_meta(&target)
+                    .select_cols(&select_cols)
+                    .filter_in_strings(&child_pk_col.name, &missing)
+                    .fetch_as_strings()
+                    .await
+                    .unwrap_or_default();
+                for row in extra_rows {
+                    let Some(value) = row.get(&child_pk_col.name).cloned() else {
+                        continue;
+                    };
+                    let label = row
+                        .get(&label_col_name)
+                        .cloned()
+                        .unwrap_or_else(|| value.clone());
+                    candidates.push(M2MCandidate { value, label });
+                }
+            }
+        }
         out.push(M2MFormField {
             name: rel.field_name.clone(),
             label: rel.field_name.clone(),
