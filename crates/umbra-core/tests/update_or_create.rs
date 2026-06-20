@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::{Barrier, Mutex, OnceCell};
 use umbra::orm::Predicate;
 
 static SERIALISE: Mutex<()> = Mutex::const_new(());
@@ -166,4 +166,79 @@ async fn update_or_create_does_not_change_pk() {
         .expect("uoc");
     assert_eq!(row.id, seed.id, "PK in defaults must be ignored");
     assert_eq!(row.title, "Updated");
+}
+
+/// Convergence test: two concurrent `update_or_create` callers race on the same
+/// slug. Without the UniqueViolation-convergence fix the loser would surface a
+/// `UniqueViolation` error. With the fix both callers converge: one creates,
+/// the other re-fetches and updates; exactly one row exists and no error is
+/// returned to either caller.
+///
+/// Approach: a `Barrier` synchronises both tasks so they complete their initial
+/// SELECT before either proceeds to the INSERT, maximising the window for the
+/// UniqueViolation→re-fetch→update path in `update_or_create`.
+///
+/// We still hold `SERIALISE` so other tests in this binary cannot truncate
+/// the table while the two internal tasks are racing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn update_or_create_converges_under_concurrent_insert() {
+    boot().await;
+    let _g = SERIALISE.lock().await;
+    truncate().await;
+
+    let barrier = std::sync::Arc::new(Barrier::new(2));
+
+    let b1 = barrier.clone();
+    let t1 = tokio::spawn(async move {
+        b1.wait().await;
+        Post::objects()
+            .update_or_create(
+                Predicate::col_eq("slug", "race-uoc"),
+                Post {
+                    id: 0,
+                    slug: "race-uoc".into(),
+                    title: "Task 1 Title".into(),
+                    views: 10,
+                },
+            )
+            .await
+    });
+
+    let b2 = barrier.clone();
+    let t2 = tokio::spawn(async move {
+        b2.wait().await;
+        Post::objects()
+            .update_or_create(
+                Predicate::col_eq("slug", "race-uoc"),
+                Post {
+                    id: 0,
+                    slug: "race-uoc".into(),
+                    title: "Task 2 Title".into(),
+                    views: 20,
+                },
+            )
+            .await
+    });
+
+    let r1 = t1.await.expect("task1 panicked").expect("task1 update_or_create");
+    let r2 = t2.await.expect("task2 panicked").expect("task2 update_or_create");
+
+    let (p1, c1) = r1;
+    let (p2, c2) = r2;
+
+    // Exactly one caller created the row; the other found/updated it.
+    assert_eq!(
+        c1 as u8 + c2 as u8,
+        1,
+        "exactly one task should have created=true"
+    );
+    // Both callers got back a row with the correct slug.
+    assert_eq!(p1.slug, "race-uoc");
+    assert_eq!(p2.slug, "race-uoc");
+    // Both see the same PK.
+    assert_eq!(p1.id, p2.id, "both callers must converge on the same row");
+
+    // Only one row was inserted.
+    let count = Post::objects().count().await.expect("count");
+    assert_eq!(count, 1, "only one row must exist after concurrent update_or_create");
 }

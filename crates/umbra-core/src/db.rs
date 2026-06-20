@@ -531,6 +531,7 @@ pub async fn begin_pg(pool: &sqlx::PgPool) -> Result<Transaction, sqlx::Error> {
     })
 }
 
+
 /// Pinned, boxed `Future` with a lifetime parameter.
 ///
 /// This is the required shape for the closure argument to

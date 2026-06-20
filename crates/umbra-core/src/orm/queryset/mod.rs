@@ -3900,11 +3900,15 @@ impl<T: Model> Manager<T> {
     /// happened. Two queries on the miss path (filter+first then create),
     /// one query on the hit path.
     ///
-    /// Race condition: a concurrent inserter can win between the two
-    /// calls. The DB's UNIQUE constraint on the `predicate` columns is
-    /// the backstop; without one, two callers can both create rows and
-    /// the second's `create` won't see the first. Pair with a UNIQUE
-    /// constraint for true at-most-one semantics.
+    /// ## Concurrency
+    ///
+    /// Convergent under concurrent callers: if two callers both miss the
+    /// SELECT and race to INSERT, the one that loses gets a
+    /// `UniqueViolation`; that error is caught here and the existing row
+    /// is re-fetched, so both callers return the same row with
+    /// `created = false` for the loser. A UNIQUE constraint on the
+    /// predicate columns is required for true at-most-one semantics — the
+    /// constraint is what makes the convergence deterministic.
     pub async fn get_or_create(
         &self,
         predicate: Predicate<T>,
@@ -3916,20 +3920,53 @@ impl<T: Model> Manager<T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
     {
+        use crate::orm::write::WriteError;
+
         // Read-your-writes: probe for the existing row on the WRITE database,
         // not a (possibly lagging) read replica — otherwise a read/write-split
         // router could miss a just-written row and insert a duplicate. The
         // following `create()` already resolves the same write target.
         let write_pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
-        if let Some(existing) = pin_to_pool(self.filter(predicate), &write_pool)
+        if let Some(existing) = pin_to_pool(self.filter(predicate.clone()), &write_pool)
             .first()
             .await
-            .map_err(crate::orm::write::WriteError::Sqlx)?
+            .map_err(WriteError::Sqlx)?
         {
             return Ok((existing, false));
         }
-        let created = self.create(defaults).await?;
-        Ok((created, true))
+
+        // Attempt the INSERT. On a UNIQUE violation (concurrent writer won the
+        // race between our SELECT and this INSERT), catch the error and
+        // re-SELECT to return the now-existing row with created=false.
+        // This is the standard try-insert-then-fetch convergence pattern.
+        //
+        // Note on transaction semantics: a plain INSERT is atomic at the
+        // statement level. Wrapping SELECT+INSERT in a serialisable transaction
+        // would be stricter but requires SAVEPOINT support to recover from the
+        // Postgres "aborted transaction" state after a constraint violation —
+        // a per-operation SAVEPOINT would add two extra round-trips on every
+        // write for marginal gain. The UNIQUE-constraint backstop plus this
+        // re-fetch gives the same observable guarantee: callers always converge
+        // on the same row and never see a spurious UniqueViolation.
+        match self.create(defaults).await {
+            Ok(created) => Ok((created, true)),
+            Err(WriteError::UniqueViolation { .. }) => {
+                // A concurrent writer inserted the row between our SELECT and
+                // our INSERT. Re-fetch the now-existing row.
+                let existing = pin_to_pool(self.filter(predicate), &write_pool)
+                    .first()
+                    .await
+                    .map_err(WriteError::Sqlx)?
+                    .ok_or_else(|| {
+                        WriteError::Sqlx(sqlx::Error::Protocol(
+                            "get_or_create: row vanished after UniqueViolation re-fetch"
+                                .to_string(),
+                        ))
+                    })?;
+                Ok((existing, false))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Django's `update_or_create`: fetch the first row matching
@@ -3943,13 +3980,19 @@ impl<T: Model> Manager<T> {
     /// defaults' PK is honoured (autoincrement sentinel `0` → DB
     /// assigns; explicit value → DB uses it).
     ///
-    /// Race condition mirrors `get_or_create`: a concurrent writer
-    /// can win between the SELECT and the UPDATE / INSERT. Pair the
-    /// match columns with a UNIQUE constraint for true at-most-one
-    /// semantics.
+    /// ## Concurrency
     ///
-    /// Implementation: 2 queries on the hit path (`first` + `save`),
-    /// 2 queries on the miss path (`first` + `create`).
+    /// Convergent under concurrent callers: if two callers both miss the
+    /// SELECT and race to INSERT, the loser gets a `UniqueViolation`; that
+    /// error is caught here and the existing row is re-fetched, then the
+    /// update is applied to it. Both callers converge on the same row, with
+    /// `created = false` for the loser. A UNIQUE constraint on the predicate
+    /// columns is required for deterministic convergence.
+    ///
+    /// Implementation: 2 queries on the hit path (`first` + UPDATE + re-fetch),
+    /// 2 queries on the miss+create path (`first` + `create`), or
+    /// 4 queries on the miss+race path (`first` + failed-INSERT + `first`
+    /// + UPDATE + re-fetch).
     pub async fn update_or_create(
         &self,
         predicate: Predicate<T>,
@@ -3957,6 +4000,7 @@ impl<T: Model> Manager<T> {
     ) -> Result<(T, bool), crate::orm::write::WriteError>
     where
         T: serde::Serialize
+            + Clone
             + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
@@ -3974,54 +4018,101 @@ impl<T: Model> Manager<T> {
         // a just-written row (duplicate insert) or read a stale row back. The
         // intervening UPDATE already routes to the same write target.
         let write_pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
-        if let Some(existing) = pin_to_pool(self.filter(predicate), &write_pool)
+
+        // Shared helper: given the existing row (already fetched) and the
+        // defaults instance, apply the non-PK column update and return the
+        // re-fetched row. Used by both the direct-hit path and the
+        // UniqueViolation-convergence path so the update logic is in one place.
+        macro_rules! do_update {
+            ($existing:expr, $defaults:expr) => {{
+                let existing: T = $existing;
+                let defaults: T = $defaults;
+
+                // Serialize defaults, drop the PK so the matched row's PK is
+                // preserved, then UPDATE WHERE <pk_col> = <existing_pk>.
+                let mut update_map = serialize_to_map(&defaults)?;
+                update_map.remove(pk_name);
+
+                // Build a PK predicate from the existing row's serialized PK
+                // value. Goes through serde_json so any PK type (i64, String,
+                // Uuid) round-trips correctly through sea-query.
+                let existing_json =
+                    serde_json::to_value(&existing).map_err(WriteError::SerializeFailed)?;
+                let pk_value_json = existing_json
+                    .get(pk_name)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let pk_sea = crate::orm::write::json_to_sea_value(
+                    pk.ty,
+                    &pk_value_json,
+                    false,
+                    pk_name,
+                    None,
+                )?;
+                let pk_pred: Predicate<T> = Predicate::new(
+                    sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea),
+                );
+
+                // Run the UPDATE.
+                self.filter(pk_pred).update_values(update_map).await?;
+
+                // Re-fetch to return the populated row.
+                let pk_sea2 = crate::orm::write::json_to_sea_value(
+                    pk.ty,
+                    &pk_value_json,
+                    false,
+                    pk_name,
+                    None,
+                )?;
+                let refetch_pred: Predicate<T> = Predicate::new(
+                    sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea2),
+                );
+                pin_to_pool(self.filter(refetch_pred), &write_pool)
+                    .first()
+                    .await
+                    .map_err(WriteError::Sqlx)?
+                    .ok_or_else(|| {
+                        WriteError::Sqlx(sqlx::Error::Protocol(
+                            "update_or_create: row vanished between UPDATE and re-fetch"
+                                .to_string(),
+                        ))
+                    })?
+            }};
+        }
+
+        if let Some(existing) = pin_to_pool(self.filter(predicate.clone()), &write_pool)
             .first()
             .await
             .map_err(WriteError::Sqlx)?
         {
-            // Serialize defaults to a JSON map, drop the PK so the
-            // existing row's PK is preserved, then UPDATE WHERE
-            // <pk_col> = <existing_pk>. Re-fetch to return the
-            // populated row.
-            let mut update_map = serialize_to_map(&defaults)?;
-            update_map.remove(pk_name);
-            // Build a PK predicate from the existing row's serialized
-            // PK value. Goes through serde_json so any built-in PK
-            // type (i64, String, Uuid) round-trips through sea-query.
-            let existing_json =
-                serde_json::to_value(&existing).map_err(WriteError::SerializeFailed)?;
-            let pk_value_json = existing_json
-                .get(pk_name)
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let pk_sea =
-                crate::orm::write::json_to_sea_value(pk.ty, &pk_value_json, false, pk_name, None)?;
-            let pk_pred: Predicate<T> =
-                Predicate::new(sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea));
-            // Run the UPDATE.
-            self.filter(pk_pred).update_values(update_map).await?;
-            // Re-fetch to return the populated row. The PK predicate
-            // is rebuilt because Predicate isn't Clone and the prior
-            // one was moved into update_values.
-            let pk_value_json2 = pk_value_json.clone();
-            let pk_sea2 =
-                crate::orm::write::json_to_sea_value(pk.ty, &pk_value_json2, false, pk_name, None)?;
-            let refetch_pred: Predicate<T> =
-                Predicate::new(sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea2));
-            let updated = pin_to_pool(self.filter(refetch_pred), &write_pool)
-                .first()
-                .await
-                .map_err(WriteError::Sqlx)?
-                .ok_or_else(|| {
-                    WriteError::Sqlx(sqlx::Error::Protocol(
-                        "update_or_create: row vanished between UPDATE and re-fetch".to_string(),
-                    ))
-                })?;
+            let updated = do_update!(existing, defaults);
             return Ok((updated, false));
         }
 
-        let created = self.create(defaults).await?;
-        Ok((created, true))
+        // Attempt the INSERT. On a UNIQUE violation (concurrent writer won the
+        // race between our SELECT and this INSERT), catch the error, re-fetch
+        // the now-existing row, and apply the update to it — same convergence
+        // as get_or_create but with an extra UPDATE step.
+        match self.create(defaults.clone()).await {
+            Ok(created) => Ok((created, true)),
+            Err(WriteError::UniqueViolation { .. }) => {
+                // A concurrent writer inserted the row between our SELECT and
+                // our INSERT. Re-fetch then update, same as the direct-hit path.
+                let existing = pin_to_pool(self.filter(predicate), &write_pool)
+                    .first()
+                    .await
+                    .map_err(WriteError::Sqlx)?
+                    .ok_or_else(|| {
+                        WriteError::Sqlx(sqlx::Error::Protocol(
+                            "update_or_create: row vanished after UniqueViolation re-fetch"
+                                .to_string(),
+                        ))
+                    })?;
+                let updated = do_update!(existing, defaults);
+                Ok((updated, false))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// INSERT-or-UPDATE keyed on the primary key. The row's PK column
