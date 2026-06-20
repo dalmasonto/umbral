@@ -1,0 +1,78 @@
+{#
+  Reusable pagination nav partial (features #65).
+
+  Renders a minimal, framework-agnostic (no Bootstrap/Tailwind class
+  assumptions) <nav> from two context variables a view supplies:
+
+    page        the serialized Page context — `page.context()` in Rust, i.e.
+                a PageContext with `number`, `num_pages`, `has_next`,
+                `has_previous`, `next_page_number`, `previous_page_number`,
+                `start_index`, `end_index`, `total_count`, and `page_range`
+                (the elided window: each item is `{n}` or `{ellipsis: true}`).
+    base_query  the current request querystring (no leading `?`), so filters
+                like `sort=name` survive every page link. Pass `""` when the
+                list view has no other params.
+
+  A handler wires it up like:
+
+    let page = Paginator::new(Post::objects().order_by(post::ID.asc()), 10)
+        .page_clamped(n)
+        .await?;
+    render("posts/list.html", context! {
+        page => page.context(),
+        base_query => request.query_string(),  // "sort=name&..." or ""
+    })
+
+  and the list template drops it in with:
+
+    {% include "_pagination.html" %}
+
+  Copy this file into your project `templates/` dir (or `{% include %}` it
+  from there). The `querystring_with(base_query, "page", n)` global is
+  registered by the core engine, so links preserve every other param.
+#}
+{% if page.num_pages > 1 %}
+<nav class="pagination" aria-label="Pagination">
+  <ul class="pagination-list">
+    {% if page.has_previous %}
+    <li class="pagination-prev">
+      <a href="?{{ querystring_with(base_query, "page", page.previous_page_number) }}"
+         rel="prev" aria-label="Previous page">&laquo; Previous</a>
+    </li>
+    {% else %}
+    <li class="pagination-prev is-disabled" aria-hidden="true">
+      <span>&laquo; Previous</span>
+    </li>
+    {% endif %}
+
+    {% for item in page.page_range %}
+      {% if item.ellipsis %}
+      <li class="pagination-ellipsis" aria-hidden="true"><span>&hellip;</span></li>
+      {% elif item.n == page.number %}
+      <li class="pagination-page is-current">
+        <span aria-current="page">{{ item.n }}</span>
+      </li>
+      {% else %}
+      <li class="pagination-page">
+        <a href="?{{ querystring_with(base_query, "page", item.n) }}"
+           aria-label="Page {{ item.n }}">{{ item.n }}</a>
+      </li>
+      {% endif %}
+    {% endfor %}
+
+    {% if page.has_next %}
+    <li class="pagination-next">
+      <a href="?{{ querystring_with(base_query, "page", page.next_page_number) }}"
+         rel="next" aria-label="Next page">Next &raquo;</a>
+    </li>
+    {% else %}
+    <li class="pagination-next is-disabled" aria-hidden="true">
+      <span>Next &raquo;</span>
+    </li>
+    {% endif %}
+  </ul>
+  <p class="pagination-status" aria-live="polite">
+    Showing {{ page.start_index }}&ndash;{{ page.end_index }} of {{ page.total_count }}
+  </p>
+</nav>
+{% endif %}

@@ -506,6 +506,27 @@ fn register_media_url_function(env: &mut Environment<'static>) {
     });
 }
 
+/// Register the `{{ querystring_with(current_query, key, value) }}` global
+/// (gaps/features #65 — template pagination). Rebuilds a querystring
+/// replacing one key while preserving every other parameter, the fiddly bit
+/// behind a pagination nav that has to carry `?sort=name` across every
+/// `?page=N` link. Backed by [`crate::pagination::querystring_with`] so the
+/// encode/replace logic stays in one place and is unit-tested there. The
+/// returned string has no leading `?`; the template prepends one.
+fn register_querystring_with_function(env: &mut Environment<'static>) {
+    env.add_function(
+        "querystring_with",
+        // `value` is a `minijinja::Value`, not a `String`: the nav passes
+        // `page.next_page_number` / `item.n`, which are integers, and
+        // minijinja does NOT auto-coerce an int arg into a `String`
+        // parameter — it'd raise a type error at render. Accepting `Value`
+        // and stringifying covers ints, strings, and bools uniformly.
+        |current_query: String, key: String, value: minijinja::Value| -> String {
+            crate::pagination::querystring_with(&current_query, &key, &value.to_string())
+        },
+    );
+}
+
 fn register_markdown_filter(env: &mut Environment<'static>) {
     env.add_filter("markdown", |input: String| -> minijinja::Value {
         minijinja::Value::from_safe_string(render_markdown(&input))
@@ -976,6 +997,12 @@ fn build_env(dirs: &[PathBuf]) -> Result<(Environment<'static>, Vec<String>), Te
     // add their own via `Plugin::template_registrars` (applied below).
     register_now_function(&mut env);
     register_currency_filter(&mut env);
+
+    // features #65 — `{{ querystring_with(base_query, "page", item.n) }}`
+    // rebuilds the current querystring replacing one key, so the bundled
+    // `_pagination.html` nav carries `?sort=...` filters across every
+    // `?page=N` link. See `register_querystring_with_function`.
+    register_querystring_with_function(&mut env);
 
     // features.md #67 — plugin-contributed filters/functions. Applied
     // AFTER the built-ins so a plugin can deliberately override one by

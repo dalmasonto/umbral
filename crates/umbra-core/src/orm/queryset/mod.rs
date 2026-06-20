@@ -227,6 +227,62 @@ pub struct QuerySet<T> {
     _phantom: PhantomData<T>,
 }
 
+// Manual `Clone` — NOT `#[derive(Clone)]`, because the derive would force a
+// spurious `T: Clone` bound (every field is `T`-independent or carries its
+// own `T`-free `Clone`: `Predicate<T>` has a manual `impl<T> Clone`, and
+// `PhantomData<T>` clones for any `T`). The doc comment above already
+// promised cheap cloning; this is what makes `Paginator` (and any
+// requery-without-consume caller) slice the same query per page.
+impl<T> Clone for QuerySet<T> {
+    fn clone(&self) -> Self {
+        Self {
+            query: self.query.clone(),
+            predicates: self.predicates.clone(),
+            explicit_pool: self.explicit_pool.clone(),
+            select_related: self.select_related.clone(),
+            prefetch_related: self.prefetch_related.clone(),
+            default_ordering: self.default_ordering.clone(),
+            explicit_order: self.explicit_order,
+            atomic: self.atomic,
+            soft_delete_active: self.soft_delete_active,
+            with_deleted: self.with_deleted,
+            only_deleted: self.only_deleted,
+            hard_delete: self.hard_delete,
+            only_cols: self.only_cols.clone(),
+            join_related: self.join_related.clone(),
+            annotations: self.annotations.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+// Manual `Debug` for the same `T: Debug`-free reason; `Predicate<T>`'s own
+// `Debug` is likewise `T`-free.
+impl<T> std::fmt::Debug for QuerySet<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `Predicate<T>` is intentionally not `Debug` (its `SimpleExpr`
+        // carries no `T`), so report the predicate count rather than the
+        // opaque expressions.
+        f.debug_struct("QuerySet")
+            .field("query", &self.query)
+            .field("predicates", &format_args!("[{} predicate(s)]", self.predicates.len()))
+            .field("explicit_pool", &self.explicit_pool)
+            .field("select_related", &self.select_related)
+            .field("prefetch_related", &self.prefetch_related)
+            .field("default_ordering", &self.default_ordering)
+            .field("explicit_order", &self.explicit_order)
+            .field("atomic", &self.atomic)
+            .field("soft_delete_active", &self.soft_delete_active)
+            .field("with_deleted", &self.with_deleted)
+            .field("only_deleted", &self.only_deleted)
+            .field("hard_delete", &self.hard_delete)
+            .field("only_cols", &self.only_cols)
+            .field("join_related", &self.join_related)
+            .field("annotations", &self.annotations)
+            .finish()
+    }
+}
+
 /// One related-aggregate annotation on a [`QuerySet`] —
 /// `(alias, relation, aggregate)` resolved against the model's
 /// `REVERSE_FK_RELATIONS` at builder time. A name that fails to

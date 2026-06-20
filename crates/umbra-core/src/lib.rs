@@ -20,6 +20,7 @@ pub mod inspect;
 pub mod middleware;
 pub mod migrate;
 pub mod orm;
+pub mod pagination;
 pub mod plugin;
 pub mod routes;
 pub mod settings;

@@ -463,6 +463,25 @@ pub mod templates {
     };
 }
 
+pub mod pagination {
+    //! Template-rendered list-view pagination (Django `core.paginator`
+    //! parity).
+    //!
+    //! A [`Paginator`] counts a [`QuerySet`](crate::orm::QuerySet) once and
+    //! slices it into fixed-size [`Page`]s for server-rendered (Jinja) list
+    //! views — distinct from REST's JSON pagination. No plugin to register:
+    //! `Paginator::new(Post::objects().order_by(..), 10).page(n).await?`,
+    //! then pass `page.context()` into a template that `{% include %}`s the
+    //! bundled `_pagination.html` partial. The `{{ querystring_with(..) }}`
+    //! template global (registered by the core engine) rebuilds the
+    //! querystring so a `?sort=` filter survives every `?page=N` link.
+
+    pub use umbra_core::pagination::{
+        Page, PageContext, PageError, PageItem, PageItemContext, PaginationError, Paginator,
+        querystring_with,
+    };
+}
+
 pub mod signals {
     //! In-process signal registry.
     //!
