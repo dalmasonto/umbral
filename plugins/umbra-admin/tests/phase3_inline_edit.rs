@@ -330,3 +330,87 @@ async fn test_cell_edit_post_nonexistent_row_returns_ok_or_404() {
         "status: {status}"
     );
 }
+
+/// gaps2 #73 — inline-edit must return 400 (not 200) when the submitted
+/// value cannot be parsed for the target column type, and must NOT write
+/// anything to the database.
+///
+/// Regression: the old raw-SQL path called `bind_form_value` which
+/// (before `DynQuerySet::update_one` landed) fell through to an
+/// `unwrap_or_default()` and wrote `""` on a parse failure, updating
+/// the row silently. The ORM path returns `Err(DynError::Write(
+/// WriteError::TypeMismatch))` which `cell_edit_post` maps to a 400
+/// HTML error span — no row is touched.
+#[tokio::test]
+async fn test_cell_edit_post_parse_failure_returns_400_without_writing() {
+    let _g = LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login(router.clone()).await;
+    let pool = umbra::db::pool();
+
+    // Read the current `published` value so we can assert it is unchanged.
+    let before: i64 = sqlx::query_scalar("SELECT published FROM cell_note WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .expect("before-query");
+
+    // Submit a value that cannot be coerced to bool ("definitely_not_a_bool"
+    // matches none of the accepted strings: true/1/yes/on/false/0/no/off/"").
+    let (status, _h, body) = send(
+        router,
+        Request::builder()
+            .method("POST")
+            .uri("/admin/cell_note/1/cell/published")
+            .header(header::COOKIE, format!("umbra_session={session}"))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from("published=definitely_not_a_bool"))
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "unparseable value must return 400, got {status}: {body}"
+    );
+
+    // The row must be untouched — the bad parse must not persist anything.
+    let after: i64 = sqlx::query_scalar("SELECT published FROM cell_note WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .expect("after-query");
+    assert_eq!(
+        before, after,
+        "published changed from {before} to {after} — inline-edit wrote on parse failure"
+    );
+}
+
+/// gaps2 #73 (success path) — a valid value for a typed field still saves
+/// and returns 200 with the rendered cell fragment.
+#[tokio::test]
+async fn test_cell_edit_post_valid_bool_saves_and_returns_200() {
+    let _g = LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login(router.clone()).await;
+    let pool = umbra::db::pool();
+
+    let (status, _h, body) = send(
+        router,
+        Request::builder()
+            .method("POST")
+            .uri("/admin/cell_note/1/cell/published")
+            .header(header::COOKIE, format!("umbra_session={session}"))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from("published=true"))
+            .unwrap(),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "valid bool save must be 200: {body}");
+
+    let stored: i64 = sqlx::query_scalar("SELECT published FROM cell_note WHERE id = 1")
+        .fetch_one(&pool)
+        .await
+        .expect("after-query");
+    assert_eq!(stored, 1, "published should be 1 (true) after saving");
+}
