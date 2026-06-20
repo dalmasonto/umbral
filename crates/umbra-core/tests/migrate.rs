@@ -737,6 +737,7 @@ fn post_model(fields: Vec<Column>) -> ModelMeta {
         ordering: Vec::new(),
         m2m_relations: Vec::new(),
         soft_delete: false,
+        app_label: "app".to_string(),
     }
 }
 
@@ -1448,6 +1449,7 @@ fn tag_model() -> ModelMeta {
         ordering: Vec::new(),
         m2m_relations: Vec::new(),
         soft_delete: false,
+        app_label: "app".to_string(),
     }
 }
 

@@ -209,10 +209,14 @@ async fn ensure_standard_permissions(_pool: &umbra::db::DbPool) -> Result<(), sq
         //                 Post, "blogpost" for BlogPost)
         //
         // We mirror this: `model` is `meta.name.to_lowercase()`. The
-        // `app_label` comes from the table's first segment before `_`
-        // (`"blog_post"` → `"blog"`); bare tables use `"app"`.
+        // `app_label` is the authoritative value carried on the model's
+        // `#[umbra(plugin = "...")]` attribute (gaps2 #80g), surfaced via
+        // `Model::APP_LABEL` → `ModelMeta::app_label`; bare models default
+        // to `"app"`. This replaces the old table-name-split heuristic,
+        // which collided distinct models (a bare `post` and a plugin
+        // `app_post` both produced `app.add_post`).
         let model_name = meta.name.to_lowercase();
-        let app_label = table_app_label(&meta.table);
+        let app_label = meta.app_label.clone();
 
         let (ct, _created) = ContentType::objects()
             .get_or_create(
@@ -258,39 +262,82 @@ async fn ensure_standard_permissions(_pool: &umbra::db::DbPool) -> Result<(), sq
     Ok(())
 }
 
-/// Derive the app_label from a table name by taking the first segment
-/// before the first underscore.
-///
-/// Examples:
-/// - `"blog_post"` → `"blog"`
-/// - `"blog_blog_post"` → `"blog"`
-/// - `"permissions_contenttype"` → `"permissions"`
-/// - `"post"` → `"app"` (no prefix, treated as the implicit "app" plugin)
-///
-/// This function is used only for ContentType population. The `model` field
-/// comes from `ModelMeta::name.to_lowercase()`, NOT from the table suffix.
-fn table_app_label(table: &str) -> String {
-    if let Some(pos) = table.find('_') {
-        table[..pos].to_string()
-    } else {
-        "app".to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use umbra::migrate::ModelMeta;
 
+    /// gaps2 #80g: the app_label used for permission codenames now comes
+    /// straight off `ModelMeta::app_label` (sourced from
+    /// `#[umbra(plugin = "...")]`), NOT from splitting the table name at
+    /// the first `_`. Two models whose tables would split to the same
+    /// prefix under the old heuristic must no longer collide.
     #[test]
-    fn table_app_label_extracts_first_segment() {
-        assert_eq!(table_app_label("blog_post"), "blog");
-        assert_eq!(table_app_label("blog_blog_post"), "blog");
-        assert_eq!(table_app_label("permissions_contenttype"), "permissions");
+    fn app_label_comes_from_model_meta_not_table_split() {
+        // A plugin-tagged model: table is namespaced `blog_post`, but the
+        // authoritative app_label is the plugin name "blog".
+        let plugin_model = ModelMeta {
+            name: "Post".to_string(),
+            table: "blog_post".to_string(),
+            app_label: "blog".to_string(),
+            ..ModelMeta::default()
+        };
+        // A bare app model whose table happens to start with "blog_": the
+        // OLD table-split heuristic would have read "blog" here too, but the
+        // model never set a plugin, so its app_label is the default "app".
+        let bare_model = ModelMeta {
+            name: "BlogEntry".to_string(),
+            table: "blog_entry".to_string(),
+            app_label: "app".to_string(),
+            ..ModelMeta::default()
+        };
+
+        // The codename is `<app_label>.<verb>_<model>`. The two distinct
+        // models get DISTINCT app_labels and therefore distinct codenames.
+        let plugin_codename = format!(
+            "{}.add_{}",
+            plugin_model.app_label,
+            plugin_model.name.to_lowercase()
+        );
+        let bare_codename = format!(
+            "{}.add_{}",
+            bare_model.app_label,
+            bare_model.name.to_lowercase()
+        );
+        assert_eq!(plugin_codename, "blog.add_post");
+        assert_eq!(bare_codename, "app.add_blogentry");
+        assert_ne!(
+            plugin_codename, bare_codename,
+            "distinct models must not collide on permission codename"
+        );
     }
 
+    /// The old heuristic split BOTH `post` and `app_post` to a shared
+    /// `app` prefix, colliding their codenames. With `app_label` carried
+    /// on the meta, a plugin model and a bare model keep separate labels.
     #[test]
-    fn table_app_label_bare_table_returns_app() {
-        assert_eq!(table_app_label("post"), "app");
+    fn previously_colliding_models_now_diverge() {
+        let bare = ModelMeta {
+            name: "Post".to_string(),
+            table: "post".to_string(),
+            app_label: "app".to_string(),
+            ..ModelMeta::default()
+        };
+        // A plugin shipping its own `Post` model, table namespaced to
+        // `app_post`. Old code: `table_app_label("app_post") == "app"`,
+        // same as the bare `post` → both `app.add_post`. New code: the
+        // plugin sets `#[umbra(plugin = "shop")]`, so app_label == "shop".
+        let plugin = ModelMeta {
+            name: "Post".to_string(),
+            table: "app_post".to_string(),
+            app_label: "shop".to_string(),
+            ..ModelMeta::default()
+        };
+        let bare_cn = format!("{}.add_{}", bare.app_label, bare.name.to_lowercase());
+        let plugin_cn = format!("{}.add_{}", plugin.app_label, plugin.name.to_lowercase());
+        assert_eq!(bare_cn, "app.add_post");
+        assert_eq!(plugin_cn, "shop.add_post");
+        assert_ne!(bare_cn, plugin_cn, "collision must be gone");
     }
 
     #[test]

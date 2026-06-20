@@ -384,6 +384,37 @@ pub struct ModelMeta {
     /// typed trait. Shared enabler for gaps2 #35 + #39a.
     #[serde(default, skip_serializing_if = "is_false")]
     pub soft_delete: bool,
+    /// The app label (Django's app name), mirrors `Model::APP_LABEL`.
+    /// Sourced from `#[umbra(plugin = "...")]`; `"app"` when absent.
+    /// Authoritative for permission codenames (gaps2 #80g): replaces the
+    /// old table-name-split heuristic that collided distinct models. The
+    /// `#[serde(default)]` keeps pre-#80g snapshot JSON round-tripping.
+    #[serde(default = "default_app_label")]
+    pub app_label: String,
+}
+
+fn default_app_label() -> String {
+    "app".to_string()
+}
+
+impl Default for ModelMeta {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            table: String::new(),
+            fields: Vec::new(),
+            display: String::new(),
+            icon: default_icon(),
+            database: None,
+            singleton: false,
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
+            ordering: Vec::new(),
+            m2m_relations: Vec::new(),
+            soft_delete: false,
+            app_label: default_app_label(),
+        }
+    }
 }
 
 /// Owned mirror of `orm::M2MRelationSpec` so `ModelMeta` can be
@@ -449,6 +480,7 @@ impl ModelMeta {
                 })
                 .collect(),
             soft_delete: T::SOFT_DELETE,
+            app_label: T::APP_LABEL.to_string(),
         }
     }
 }
@@ -3948,6 +3980,7 @@ mod tests {
                 ordering: Vec::new(),
                 m2m_relations: Vec::new(),
                 soft_delete: false,
+                app_label: "app".to_string(),
             }],
         );
         per_plugin.insert(
@@ -3965,6 +3998,7 @@ mod tests {
                 ordering: Vec::new(),
                 m2m_relations: Vec::new(),
                 soft_delete: false,
+                app_label: "app".to_string(),
             }],
         );
         init_plugins(per_plugin);
@@ -4314,6 +4348,7 @@ mod tests {
                 ordering: Vec::new(),
                 m2m_relations: Vec::new(),
                 soft_delete: false,
+                app_label: "app".into(),
             }
         }
         let prev = meta_with(baseline());

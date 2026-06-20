@@ -19,10 +19,15 @@
 //! `ContentType.model` stores `meta.name.to_lowercase()`, i.e. the Rust struct
 //! name lowercased — same as Django's `ContentType.model` which is the
 //! lowercase class name. So `BlogPost` → model `"blogpost"`, `Post` → `"post"`.
-//! `app_label` is the first segment of the table name: `blog_blog_post` → `"blog"`.
+//! `app_label` is the authoritative `#[umbra(plugin = "...")]` value carried on
+//! the model and surfaced via `Model::APP_LABEL` → `ModelMeta::app_label`
+//! (gaps2 #80g). A model with no `plugin` attribute defaults to `"app"`. This
+//! replaced the old heuristic of splitting the table name at the first `_`,
+//! which collided distinct models.
 //!
-//! Standard permissions for `BlogPost` therefore have codenames
-//! `add_blogpost`, `change_blogpost`, `delete_blogpost`, `view_blogpost`.
+//! Standard permissions for `BlogPost` (`#[umbra(plugin = "blog")]`) therefore
+//! have codenames `blog.add_blogpost`, `blog.change_blogpost`, etc., while a
+//! plugin-less `Memo` lands under `app.add_memo`.
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
@@ -38,6 +43,17 @@ use umbra_permissions::{
 pub struct BlogPost {
     pub id: i64,
     pub title: String,
+}
+
+// A second model with NO `#[umbra(plugin)]` attribute. Its app_label
+// defaults to "app", so its codenames are `app.add_memo` etc. — distinct
+// from BlogPost's `blog.add_blogpost`. Under the old table-name-split
+// heuristic both a bare model and a plugin model could collide; this model
+// proves the app_label now comes from the attribute, not the table.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+pub struct Memo {
+    pub id: i64,
+    pub body: String,
 }
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
@@ -85,6 +101,7 @@ async fn boot() {
             .settings(settings)
             .database("default", pool)
             .model::<BlogPost>()
+            .model::<Memo>()
             .plugin(PermissionsPlugin)
             .build()
             .expect("App::build with PermissionsPlugin should succeed");
@@ -140,6 +157,60 @@ async fn standard_perms_auto_created_for_registered_models() {
         count, 4,
         "expected 4 standard permissions for blogpost, got {count}"
     );
+}
+
+/// gaps2 #80g: two distinct registered models that the OLD heuristic could
+/// have collided now get DISTINCT app_labels (and therefore distinct
+/// codenames). `BlogPost` is `#[umbra(plugin = "blog")]` → `blog.add_blogpost`;
+/// `Memo` has no plugin attribute → `app.add_memo`. The two never collide.
+#[tokio::test(flavor = "multi_thread")]
+async fn distinct_models_get_distinct_app_labels() {
+    boot().await;
+    let pool = pool();
+
+    // The plugin-less Memo model is seeded under app_label "app".
+    let memo_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM permissions_permission \
+         WHERE codename IN ('app.add_memo','app.change_memo', \
+                            'app.delete_memo','app.view_memo')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("memo count query");
+    assert_eq!(memo_count, 4, "expected 4 standard perms for memo under the 'app' label");
+
+    // The Memo model must NOT have been seeded under the 'blog' label, and
+    // BlogPost must NOT appear under the 'app' label — the app_labels are
+    // taken from `#[umbra(plugin)]`, not from any shared table-name prefix.
+    let crossed: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM permissions_permission \
+         WHERE codename IN ('blog.add_memo','app.add_blogpost')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("cross-label query");
+    assert_eq!(
+        crossed, 0,
+        "models must not bleed across app_labels: no blog.add_memo / app.add_blogpost"
+    );
+
+    // The two distinct content types carry distinct app_labels.
+    let blog_ct: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permissions_contenttype \
+         WHERE app_label = 'blog' AND model = 'blogpost')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("blog ct");
+    let memo_ct: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM permissions_contenttype \
+         WHERE app_label = 'app' AND model = 'memo')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("memo ct");
+    assert!(blog_ct, "BlogPost content type under app_label 'blog'");
+    assert!(memo_ct, "Memo content type under app_label 'app'");
 }
 
 /// The ContentType row for BlogPost exists after boot.

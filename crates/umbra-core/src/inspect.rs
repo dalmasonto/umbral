@@ -709,6 +709,8 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             ordering: Vec::new(),
             m2m_relations: Vec::new(),
             soft_delete: false,
+            // inspectdb has no plugin attribute to read; default to "app".
+            app_label: "app".to_string(),
         })
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));

@@ -31,6 +31,9 @@ App::builder()
 |---|---|
 | `ContentType` | One row per registered Model. Holds `app_label` (plugin name) and `model` (lowercased struct name). |
 | `Permission` | One row per (ContentType, codename). The four standard ones auto-create; custom ones land via direct INSERT or future `Meta.permissions` declarations. |
+
+The standard codename is `<app_label>.<verb>_<model>` (e.g. `blog.add_post`). The `app_label` is the model's `#[umbra(plugin = "...")]` value, surfaced via `Model::APP_LABEL`; a model with no `plugin` attribute defaults to `"app"`. Because the label comes from the attribute rather than from splitting the table name, two distinct models never collide on a codename.
+
 | `Group` | Named permission bundle. Users in a group inherit every permission the group holds. |
 | `UserGroup` | M2M: which users belong to which groups. `user_id: String` (PK-agnostic). |
 | `UserPermission` | M2M: direct grants that bypass groups. `user_id: String`. Use sparingly. |

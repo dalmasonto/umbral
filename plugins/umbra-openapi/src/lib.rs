@@ -1392,6 +1392,7 @@ mod tests {
             ordering: Vec::new(),
             m2m_relations: Vec::new(),
             soft_delete: false,
+            app_label: "app".to_string(),
         }
     }
 

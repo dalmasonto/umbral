@@ -206,6 +206,15 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// overrides it.
     const TABLE: &'static str;
 
+    /// The app label (Django's app name) this model belongs to.
+    ///
+    /// Sourced from `#[umbra(plugin = "...")]`; defaults to `"app"` (the
+    /// registry's default key) when the attribute is absent. Authoritative
+    /// for permission codenames (gaps2 #80g): `umbra-permissions` reads this
+    /// to build `<app_label>.<verb>_<model>` codenames, instead of splitting
+    /// the table name at the first `_` (which collided distinct models).
+    const APP_LABEL: &'static str = "app";
+
     /// Static metadata for every field on the model.
     ///
     /// One [`FieldSpec`] per field, in declaration order. Read by the

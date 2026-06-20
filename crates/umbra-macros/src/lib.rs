@@ -837,6 +837,13 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // stable DB identifiers that existing users must not have renamed.
     let struct_attr = parse_umbra_struct_attr(&input.attrs)?;
     let bare_name = to_snake_case(&struct_name.to_string());
+    // gaps2 #80g: the `#[umbra(plugin = "...")]` value is the authoritative
+    // app_label (Django's app name). Capture it BEFORE `struct_attr.plugin`
+    // is moved into the table-name computation below. Absent attribute →
+    // `"app"`, the registry's default key. umbra-permissions reads this off
+    // `Model::APP_LABEL` to build collision-free permission codenames rather
+    // than splitting the table name at the first `_`.
+    let app_label_lit = struct_attr.plugin.clone().unwrap_or_else(|| "app".to_string());
     let table_name = if let Some(explicit) = struct_attr.table {
         // Explicit table always wins over the plugin prefix.
         explicit
@@ -1906,6 +1913,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             type PrimaryKey = #pk_ty_tokens;
             const NAME: &'static str = #struct_name_str;
             const TABLE: &'static str = #table_name;
+            const APP_LABEL: &'static str = #app_label_lit;
             const FIELDS: &'static [::umbra::orm::FieldSpec] = &[
                 #(#field_specs),*
             ];
