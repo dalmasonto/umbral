@@ -4102,6 +4102,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-analytics"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "umbra",
+]
+
+[[package]]
 name = "umbra-auth"
 version = "0.0.1"
 dependencies = [
