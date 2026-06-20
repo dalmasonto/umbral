@@ -1467,6 +1467,10 @@ enum ApiError {
     /// action. Returned when a Permission produced
     /// `PermissionError::Forbidden` on an authenticated identity.
     Forbidden,
+    /// 500 — a non-database internal error (e.g. CSV serialization
+    /// failure). The message is logged server-side; the client sees
+    /// an opaque "internal server error" response.
+    Internal(String),
 }
 
 impl From<sqlx::Error> for ApiError {
@@ -1570,6 +1574,14 @@ impl umbra::web::IntoResponse for ApiError {
                 "authentication required".to_string(),
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "forbidden".to_string()),
+            ApiError::Internal(m) => {
+                tracing::error!(error = %m, "REST handler hit an internal error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "internal server error".to_string(),
+                )
+            }
         };
 
         let body = if status == StatusCode::NOT_FOUND {
@@ -1784,7 +1796,7 @@ async fn list(
             cfg.apply_overrides(&table, row);
             RestPlugin::apply_sparse_fields(row, fields_param);
         }
-        return Ok(csv_response(&table, &model, &rows));
+        return csv_response(&table, &model, &rows);
     }
 
     let page_req = cfg.pagination.extract_request(&params);
@@ -1806,9 +1818,13 @@ async fn list(
 }
 
 /// Build a CSV download response from the fetched rows.
-fn csv_response(table: &str, model: &ModelMeta, rows: &[Map<String, Value>]) -> Response {
-    let csv = rows_to_csv(model, rows);
-    (
+///
+/// Returns `Err(ApiError::Internal(...))` if the CSV writer or UTF-8
+/// conversion fails, so the caller can return a 500 instead of a
+/// silently-truncated or empty 200.
+fn csv_response(table: &str, model: &ModelMeta, rows: &[Map<String, Value>]) -> Result<Response, ApiError> {
+    let csv = rows_to_csv(model, rows).map_err(ApiError::Internal)?;
+    Ok((
         StatusCode::OK,
         [
             (
@@ -1822,14 +1838,30 @@ fn csv_response(table: &str, model: &ModelMeta, rows: &[Map<String, Value>]) -> 
         ],
         csv,
     )
-        .into_response()
+        .into_response())
 }
 
 /// Serialize rows to CSV. Columns follow the model's field order (only
 /// those present after hide / sparse-field filtering), with any extra keys
 /// (computed fields) appended in first-seen order. Object / array cells
 /// render as compact JSON. The `csv` writer handles quoting + escaping.
-fn rows_to_csv(model: &ModelMeta, rows: &[Map<String, Value>]) -> String {
+///
+/// Returns `Err(msg)` if the underlying writer or UTF-8 conversion fails,
+/// so callers can surface a 500 instead of returning a silently-truncated
+/// or empty 200.
+fn rows_to_csv(model: &ModelMeta, rows: &[Map<String, Value>]) -> Result<String, String> {
+    let bytes = rows_to_csv_into(Vec::new(), model, rows)?;
+    String::from_utf8(bytes).map_err(|e| format!("csv utf-8 conversion failed: {e}"))
+}
+
+/// Inner helper: writes CSV into any `std::io::Write`. Separated so
+/// tests can inject a failing writer to exercise the error path without
+/// spinning up the full HTTP stack.
+fn rows_to_csv_into<W: std::io::Write>(
+    sink: W,
+    model: &ModelMeta,
+    rows: &[Map<String, Value>],
+) -> Result<W, String> {
     let mut cols: Vec<String> = Vec::new();
     for f in &model.fields {
         if rows.iter().any(|r| r.contains_key(&f.name)) {
@@ -1843,16 +1875,16 @@ fn rows_to_csv(model: &ModelMeta, rows: &[Map<String, Value>]) -> String {
             }
         }
     }
-    let mut wtr = csv::Writer::from_writer(Vec::new());
-    let _ = wtr.write_record(&cols);
+    let mut wtr = csv::Writer::from_writer(sink);
+    wtr.write_record(&cols)
+        .map_err(|e| format!("csv header write failed: {e}"))?;
     for r in rows {
         let record: Vec<String> = cols.iter().map(|c| csv_cell(r.get(c))).collect();
-        let _ = wtr.write_record(&record);
+        wtr.write_record(&record)
+            .map_err(|e| format!("csv row write failed: {e}"))?;
     }
     wtr.into_inner()
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
-        .unwrap_or_default()
+        .map_err(|e| format!("csv flush failed: {e}"))
 }
 
 /// One CSV cell from a JSON value: scalars verbatim, null → empty,
@@ -2709,5 +2741,120 @@ mod sparse_fields_unit {
         // `other` (sibling of c under b) was pruned away
         let b = m["a"]["b"].as_object().unwrap();
         assert_eq!(b.keys().cloned().collect::<Vec<_>>(), vec!["c".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod csv_writer_unit {
+    //! Unit tests for `rows_to_csv` / `rows_to_csv_into`.
+    //!
+    //! The happy-path test verifies header order + cell quoting without
+    //! spinning up the HTTP stack.  The error-path test injects a `Write`
+    //! implementation that always returns an `io::Error` and asserts that
+    //! `rows_to_csv_into` surfaces the error rather than swallowing it.
+
+    use super::{rows_to_csv, rows_to_csv_into};
+    use serde_json::{Map, Value, json};
+    use umbra::migrate::ModelMeta;
+    use umbra::orm::SqlType;
+
+    fn make_meta(fields: &[(&str, SqlType)]) -> ModelMeta {
+        // Build via JSON round-trip so we stay insulated from new
+        // `#[serde(default)]` fields added in the future. We must
+        // supply the three non-defaulted `Column` fields explicitly:
+        // `name`, `ty`, `primary_key`, and `nullable`.
+        let cols: Vec<serde_json::Value> = fields
+            .iter()
+            .map(|(n, ty)| serde_json::json!({
+                "name": n,
+                "ty": ty,
+                "primary_key": false,
+                "nullable": false,
+            }))
+            .collect();
+        let json = serde_json::json!({
+            "name": "Test",
+            "table": "test",
+            "fields": cols,
+        });
+        serde_json::from_value(json).expect("ModelMeta round-trip")
+    }
+
+    fn row(pairs: &[(&str, Value)]) -> Map<String, Value> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    /// Happy path: header follows model field order; a value containing a
+    /// comma is quoted by the csv crate; `rows_to_csv` returns `Ok`.
+    #[test]
+    fn happy_path_header_and_quoting() {
+        let meta = make_meta(&[("id", SqlType::BigInt), ("name", SqlType::Text)]);
+        let rows = vec![
+            row(&[("id", json!(1)), ("name", json!("Anvil"))]),
+            row(&[("id", json!(2)), ("name", json!("Rope, sturdy"))]),
+        ];
+        let csv = rows_to_csv(&meta, &rows).expect("rows_to_csv should succeed");
+        let mut lines = csv.lines();
+        assert_eq!(lines.next(), Some("id,name"), "header row");
+        let body: Vec<&str> = lines.collect();
+        assert!(body.iter().any(|l| l.contains("Anvil")), "first row present");
+        assert!(
+            body.iter().any(|l| l.contains("\"Rope, sturdy\"")),
+            "comma value is quoted: {body:?}",
+        );
+    }
+
+    /// Empty rows: the function succeeds (no panic / no Err), produces
+    /// valid UTF-8, and the output terminates with a newline. Column
+    /// detection requires at least one row to confirm a field is
+    /// present, so the zero-row case emits an empty header — that's the
+    /// documented behaviour and not a bug; this test just guards that we
+    /// don't crash or return an Err.
+    #[test]
+    fn empty_rows_does_not_error() {
+        let meta = make_meta(&[("id", SqlType::BigInt), ("name", SqlType::Text)]);
+        let result = rows_to_csv(&meta, &[]);
+        assert!(result.is_ok(), "zero rows must not return Err: {result:?}");
+    }
+
+    /// Error path: a `Write` impl that always fails causes `rows_to_csv_into`
+    /// to return `Err(...)` rather than swallowing the failure and returning
+    /// an empty/truncated result.
+    #[test]
+    fn write_error_is_surfaced_not_swallowed() {
+        /// A `Write` that always returns an IO error on the first write.
+        #[derive(Debug)]
+        struct AlwaysError;
+        impl std::io::Write for AlwaysError {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected write failure",
+                ))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected flush failure",
+                ))
+            }
+        }
+
+        let meta = make_meta(&[("id", SqlType::BigInt), ("name", SqlType::Text)]);
+        let rows = vec![row(&[("id", json!(1)), ("name", json!("x"))])];
+
+        let result = rows_to_csv_into(AlwaysError, &meta, &rows);
+        assert!(
+            result.is_err(),
+            "a failing writer must propagate Err, not return truncated data"
+        );
+        let msg = result.unwrap_err();
+        // The csv crate buffers writes internally; the injected IO error
+        // surfaces when `into_inner()` flushes the buffer, so the message
+        // identifies the flush stage rather than the record-write stage.
+        assert!(
+            msg.contains("csv header write failed") || msg.contains("csv flush failed"),
+            "error message identifies a write or flush stage: {msg:?}",
+        );
     }
 }
