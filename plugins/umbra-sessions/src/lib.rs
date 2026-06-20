@@ -46,10 +46,12 @@
 //!   `umbra-tasks` periodic job, or a `clearsessions` management
 //!   command, lands when one or the other is real.
 
+pub mod cookie_store;
 pub mod request_session;
 pub mod store;
 
 pub use request_session::{RequestSession, current, current_mut};
+pub use cookie_store::CookieStore;
 pub use store::{DbStore, SessionRecord, SessionStore, active_store, install_store};
 
 use chrono::{DateTime, Duration, Utc};
@@ -295,6 +297,11 @@ pub enum SessionError {
     Json(serde_json::Error),
     /// ORM write error — `create`, `update_values`, etc.
     Write(umbra::orm::write::WriteError),
+    /// The encoded session-in-cookie blob exceeded the ~4 KB browser cookie
+    /// limit. Raised by `CookieStore::save` so an oversized session fails
+    /// loudly rather than silently producing a cookie the browser drops.
+    /// Carries the encoded byte length that tripped the limit.
+    CookieTooLarge(usize),
 }
 
 impl std::fmt::Display for SessionError {
@@ -303,6 +310,11 @@ impl std::fmt::Display for SessionError {
             SessionError::Sqlx(e) => write!(f, "umbra-sessions: sqlx: {e}"),
             SessionError::Json(e) => write!(f, "umbra-sessions: json: {e}"),
             SessionError::Write(e) => write!(f, "umbra-sessions: write: {e:?}"),
+            SessionError::CookieTooLarge(n) => write!(
+                f,
+                "umbra-sessions: encoded session cookie is {n} bytes, over the ~4 KB browser \
+                 limit; store less in the session or switch to a server-side store"
+            ),
         }
     }
 }
@@ -1225,12 +1237,21 @@ pub async fn session_layer(
         .await;
 
     // Lazy materialisation: persist the record only if a handler mutated
-    // it through `current_mut`. This is the ONLY DB write on the
+    // it through `current_mut`. This is the ONLY write on the
     // RequestSession path — nothing was written on entry.
+    //
+    // `save` returns the COOKIE VALUE to set: the raw token for `DbStore`
+    // (server holds the row), or the encrypted blob for `CookieStore` (the
+    // cookie carries the whole record, zero DB round-trip). Capture it and
+    // use it for the Set-Cookie below instead of the bare token — that's
+    // what lets a stateless store work without touching the integration
+    // points (fresh guard, login rotation, sliding expiry) at all.
+    let mut cookie_value: Option<String> = None;
     if rs.is_dirty() {
         if let Some(rec) = rs.record() {
-            if let Err(e) = store.save(rs.token(), rec).await {
-                tracing::warn!("session_layer: store.save failed: {e}");
+            match store.save(rs.token(), rec).await {
+                Ok(value) => cookie_value = Some(value),
+                Err(e) => tracing::warn!("session_layer: store.save failed: {e}"),
             }
         }
     }
@@ -1254,9 +1275,32 @@ pub async fn session_layer(
         let row_exists =
             rs.is_dirty() || matches!(read_session(&token).await, Ok(Some(_)));
         if row_exists {
-            let cookie = set_cookie_header(&token, None);
+            // Use the value `save` returned when it ran (the encrypted blob
+            // for `CookieStore`); fall back to the raw token for the
+            // side-channel `set_data` path that materialised a row without
+            // going through the RequestSession `save` (so `cookie_value` is
+            // still `None`). `DbStore::save` returns the token, so this is a
+            // no-op for the DB-backed default.
+            let value_to_set = cookie_value.as_deref().unwrap_or(&token);
+            let cookie = set_cookie_header(value_to_set, None);
             if let Ok(value) = cookie.parse() {
                 response.headers_mut().insert(header::SET_COOKIE, value);
+            }
+        }
+    } else if let Some(value) = cookie_value.as_deref() {
+        // A NON-fresh request mutated a loaded session (sliding expiry, or a
+        // `current_mut` write on a returning session). For a stateless
+        // `CookieStore` the blob now differs from the cookie the browser
+        // sent, so it MUST be re-set — otherwise the mutation is lost on the
+        // next request. For `DbStore`, `save` returned the unchanged raw
+        // token, which equals the cookie already present, so we skip the
+        // redundant Set-Cookie to preserve the existing no-cookie-churn
+        // behaviour. The handler-set-cookie guard still wins (login rotation
+        // owns its own Set-Cookie).
+        if value != token && !response.headers().contains_key(header::SET_COOKIE) {
+            let cookie = set_cookie_header(value, None);
+            if let Ok(parsed) = cookie.parse() {
+                response.headers_mut().insert(header::SET_COOKIE, parsed);
             }
         }
     }

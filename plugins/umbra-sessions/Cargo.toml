@@ -21,6 +21,19 @@ uuid = { version = "1", features = ["serde", "v4", "v7"] }
 # The raw token only ever exists in the cookie and in the response
 # from `create_session`; the column holds only the digest.
 sha2 = "0.10"
+# CookieStore (stateless, AEAD-encrypted session-in-cookie). XChaCha20Poly1305
+# uses a 24-byte RANDOM nonce — no counter state to persist between requests,
+# which is exactly what a stateless cookie store needs (a fresh nonce per save
+# with no risk of reuse). The 32-byte key is derived from `secret_key` via
+# SHA-256 (sha2, above).
+chacha20poly1305 = "0.10"
+# base64url-encode the `nonce || ciphertext` blob so it survives as a cookie
+# value (cookies are ASCII; URL-safe alphabet avoids `+`/`/` quoting issues).
+base64 = "0.22"
+# OS CSPRNG for the per-save random nonce. Depended on directly (rather than
+# via a transitive aead feature) so the nonce source is explicit and stable.
+# 0.2 matches the version already in the tree via sqlx/uuid.
+getrandom = "0.2"
 # axum-core has the FromRequestParts trait we need for the User /
 # OptionalUser extractors. The full axum facade comes through
 # `umbra::web::*` already; we depend on axum-core directly so the

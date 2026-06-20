@@ -51,7 +51,12 @@ pub fn hash_token_pub(raw: &str) -> String {
 /// `id` column because the store derives the stored id from the token
 /// internally (the raw token is hashed before storage so a DB leak doesn't
 /// surrender live session tokens).
-#[derive(Debug, Clone)]
+///
+/// Derives `Serialize`/`Deserialize` so a stateless [`CookieStore`] can
+/// encode the whole record into the encrypted cookie value and decode it
+/// back out — the DB-backed [`DbStore`] never serialises the record (it
+/// writes columns), but the cookie store needs the round-trip.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionRecord {
     /// The user PK serialised as a string (`None` for anonymous sessions).
     pub user_id: Option<String>,

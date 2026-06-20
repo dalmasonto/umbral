@@ -98,6 +98,30 @@ App::builder()
 
 Default is **off** — the default path incurs zero extra writes per request.
 
+## CookieStore (stateless sessions)
+
+By default sessions are DB rows (`DbStore`): the cookie holds an opaque token and every request reads the row from the database. `CookieStore` flips that around — it is a **stateless, AEAD-encrypted session-in-cookie** store. The entire session record (user id, JSON data, timestamps) is encrypted and stuffed into the cookie value itself, so there is **zero DB round-trip** on load or save and **no session table rows are ever created**.
+
+```rust
+use umbra_sessions::{SessionsPlugin, CookieStore};
+
+App::builder()
+    .plugin(SessionsPlugin::default().store(CookieStore::new()))
+    .build()?;
+```
+
+Reach for it when you want sessions without a database hit per request (read-heavy apps, edge deployments, horizontally-scaled stateless nodes). The trade-off is that the session can't be revoked server-side and is capped by the cookie size limit.
+
+How it works:
+
+- **Cipher.** XChaCha20Poly1305 (AEAD) with a fresh 24-byte random nonce per save. The cookie value is `base64url(nonce || ciphertext)`. AEAD means the same key both encrypts *and* authenticates, so a **tampered or forged cookie fails the auth check and is treated as no session** (the request resolves anonymous — it never errors).
+- **Key.** The 256-bit key is `SHA-256(secret_key)`. **`secret_key` is required**: a stateless cookie session derived from an empty key is trivially forgeable. With an empty `secret_key`, `CookieStore` warns in dev/test and error-shouts in production — set `secret_key` in `umbra.toml` or via `UMBRA_SECRET_KEY` before deploying.
+- **Size limit.** Cookies can't exceed browser limits, so the encoded value is capped at **~4 KB**. A `save` that would exceed it returns `SessionError::CookieTooLarge` rather than silently producing a cookie the browser drops — keep the session small.
+
+<Callout type="warning">
+`CookieStore` sessions live entirely in the client's cookie. There is no server row to invalidate, so a logout clears the cookie but a copy captured before logout stays valid until it expires. Rotate `secret_key` to mass-invalidate every outstanding cookie session.
+</Callout>
+
 ## Purging expired rows: `clearsessions`
 
 Expired rows are deleted lazily when `read_session` encounters one. For long-running apps this means stale rows accumulate. The `clearsessions` management command bulk-deletes every row whose `expires_at < now()` and prints the count removed. Run it periodically via cron or `umbra-tasks`:
@@ -111,10 +135,9 @@ The command is registered by `SessionsPlugin` via `Plugin::commands()` — no ex
 
 ## What is NOT in v1
 
-- **Cookie-only signed store.** All sessions are DB rows. A stateless signed-cookie
-  alternative is deferred until a real low-traffic use case asks for it.
+- **Redis / external store.** The pluggable `SessionStore` trait is in place (`DbStore` and `CookieStore` ship), but a Redis-backed store is deferred until a real use case asks for it. Implement `SessionStore` yourself and pass it to `.store(...)` in the meantime.
 
-The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-sessions/src/lib.rs`.
+The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-sessions/src/lib.rs` and `plugins/umbra-sessions/src/cookie_store.rs`.
 
 ## See also
 
