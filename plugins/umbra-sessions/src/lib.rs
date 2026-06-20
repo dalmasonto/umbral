@@ -122,10 +122,47 @@ pub struct Session {
 ///     .plugin(SessionsPlugin::default().sliding_expiry())
 ///     .build()
 /// ```
-#[derive(Debug, Clone)]
+///
+/// ## Custom session store
+///
+/// By default sessions are persisted to the database via [`DbStore`].
+/// Supply any type that implements [`SessionStore`] to swap the backend:
+///
+/// ```ignore
+/// App::builder()
+///     .plugin(SessionsPlugin::default().store(MyRedisStore::new(...)))
+///     .build()
+/// ```
+///
+/// The store is installed into the ambient [`install_store`] slot during
+/// [`Plugin::on_ready`] so every subsequent call to [`active_store`]
+/// returns it. The install is idempotent — if two plugins (or two test
+/// runs in the same process) call it, the first wins and a warning is
+/// logged.
 pub struct SessionsPlugin {
     auto_layer: bool,
     sliding_expiry: bool,
+    store: std::sync::Arc<dyn SessionStore>,
+}
+
+impl std::fmt::Debug for SessionsPlugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionsPlugin")
+            .field("auto_layer", &self.auto_layer)
+            .field("sliding_expiry", &self.sliding_expiry)
+            .field("store", &self.store)
+            .finish()
+    }
+}
+
+impl Clone for SessionsPlugin {
+    fn clone(&self) -> Self {
+        Self {
+            auto_layer: self.auto_layer,
+            sliding_expiry: self.sliding_expiry,
+            store: self.store.clone(),
+        }
+    }
 }
 
 impl Default for SessionsPlugin {
@@ -133,6 +170,7 @@ impl Default for SessionsPlugin {
         Self {
             auto_layer: true,
             sliding_expiry: false,
+            store: std::sync::Arc::new(DbStore::default()),
         }
     }
 }
@@ -155,6 +193,20 @@ impl SessionsPlugin {
     /// Django parity: equivalent to `SESSION_SAVE_EVERY_REQUEST = True`.
     pub fn sliding_expiry(mut self) -> Self {
         self.sliding_expiry = true;
+        self
+    }
+
+    /// Override the session storage back-end. The supplied store is
+    /// installed via [`install_store`] during [`Plugin::on_ready`].
+    ///
+    /// The default is [`DbStore`] (DB-backed, reproduces existing behaviour).
+    /// Pass any type that implements [`SessionStore`] + `'static` to swap it:
+    ///
+    /// ```ignore
+    /// SessionsPlugin::default().store(MyCustomStore::new())
+    /// ```
+    pub fn store(mut self, store: impl SessionStore + 'static) -> Self {
+        self.store = std::sync::Arc::new(store);
         self
     }
 }
@@ -189,6 +241,13 @@ impl Plugin for SessionsPlugin {
         // `set` is a no-op if another test already initialised the cell;
         // production binaries build once so the first (and only) call wins.
         let _ = SLIDING_EXPIRY_ENABLED.set(self.sliding_expiry);
+
+        // Install the configured store so `active_store()` returns it.
+        // Idempotent: if a store was already installed (e.g. a second plugin
+        // or a test that boots twice in the same process), `install_store`
+        // warns and keeps the first. Same "first wins" contract as the
+        // ambient pool.
+        install_store(self.store.clone());
         Ok(())
     }
 
