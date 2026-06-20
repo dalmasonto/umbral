@@ -50,8 +50,15 @@
 //!   due row (an optimistic conditional `UPDATE` advances `next_run` so a
 //!   second beat instance can't double-fire it) and enqueues the underlying
 //!   task. Run it via the `tasks-beat` CLI command.
-//! - No result backend, no task-status query API, no priority queues. Those
-//!   are the remaining Celery gaps, deferred to planning/features.md #82.
+//! - Result backend + task-status API (this revision): a handler can return
+//!   any `R: Serialize`; on success the worker serializes it into the
+//!   additive [`TaskRow::result`] column. [`task_status`] queries a task's
+//!   [`TaskStatus`] (state/result/error) by the id [`enqueue`] returned, and
+//!   [`await_result`] polls until the task reaches a terminal state — the
+//!   Celery `AsyncResult` / `AsyncResult.get()` equivalent. Unit-returning
+//!   handlers (`Ok(())`) stay source-compatible: `()` serializes to `null`.
+//! - No priority queues; no admin visibility into the queue. Those are the
+//!   remaining Celery gaps, deferred to planning/features.md #82.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -114,6 +121,16 @@ pub struct TaskRow {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
+    /// The handler's JSON-serialized return value (the result backend —
+    /// Celery's `AsyncResult` payload). `NULL` until the task succeeds; a
+    /// unit-returning handler stores `"null"`. Left `NULL` on failure (the
+    /// failure reason lives in `error`).
+    ///
+    /// Nullable for the same reason as [`Self::run_at`]: an additive
+    /// `ADD COLUMN` that applies cleanly against existing rows, which then
+    /// read back as "no result recorded yet". The worker only ever writes
+    /// `Some` on a successful completion.
+    pub result: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -289,6 +306,11 @@ pub enum TaskError {
     /// The handler future panicked. Caught via `tokio::task::JoinHandle`
     /// so one bad handler doesn't take the worker down with it.
     HandlerPanicked(String),
+    /// [`await_result`] gave up before the task reached a terminal state.
+    /// Carries the last observed non-terminal [`TaskStatus`] (or `None` if
+    /// the id never resolved to a row) so the caller can still inspect it.
+    /// Boxed to keep the `TaskError` enum small.
+    Timeout(Box<Option<TaskStatus>>),
     /// Anything else, kept narrow so callers can match on the variants
     /// they care about and bucket the rest here.
     Other(String),
@@ -305,6 +327,14 @@ impl std::fmt::Display for TaskError {
             TaskError::HandlerPanicked(msg) => {
                 write!(f, "umbra-tasks: handler panicked: {msg}")
             }
+            TaskError::Timeout(last) => match last.as_ref() {
+                Some(status) => write!(
+                    f,
+                    "umbra-tasks: await_result timed out (task {} still {:?})",
+                    status.id, status.state
+                ),
+                None => write!(f, "umbra-tasks: await_result timed out (no such task)"),
+            },
             TaskError::Other(msg) => write!(f, "umbra-tasks: {msg}"),
         }
     }
@@ -397,17 +427,30 @@ pub async fn enqueue<P: Serialize>(
             started_at: None,
             completed_at: None,
             error: None,
+            result: None,
             created_at: now,
         })
         .await?;
     Ok(row.id)
 }
 
-/// The boxed handler type stored in the per-process registry. Returns
-/// `Result<(), String>` so the error string lands directly in the
-/// `error` column without an intermediate Display/Debug rendering step.
-pub type BoxedHandler =
-    Box<dyn Fn(&str) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync>;
+/// The boxed handler type stored in the per-process registry.
+///
+/// `Ok` carries the handler's JSON-serialized return value as a `String`
+/// (`"null"` for a unit-returning handler), which the worker writes into
+/// the [`TaskRow::result`] column — the result backend. `Err` is the
+/// error string, which lands directly in the `error` column without an
+/// intermediate Display/Debug rendering step.
+///
+/// The boxed signature is monomorphic (no `R` generic) so the registry can
+/// hold handlers with different return types behind one object-safe type:
+/// [`register_handler`] serializes `R` to JSON *inside* the wrapper closure
+/// before boxing, erasing the concrete return type.
+pub type BoxedHandler = Box<
+    dyn Fn(&str) -> Pin<Box<dyn Future<Output = Result<Option<String>, String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Process-wide handler registry. Populated at startup before
 /// [`run_worker`] spawns; queried by name on every claimed task.
@@ -420,20 +463,41 @@ fn handlers() -> &'static std::sync::RwLock<HashMap<&'static str, BoxedHandler>>
 }
 
 /// Register a handler under `name`. The handler takes the JSON-encoded
-/// payload as `&str` and returns a future resolving to `Result<(), String>`.
-/// The String error becomes the row's `error` column on failure.
+/// payload as `&str` and returns a future resolving to `Result<R, String>`,
+/// where `R: Serialize` is the task's return value (the result backend).
+/// On success the wrapper serializes `R` with `serde_json` and the worker
+/// stores it in the row's [`TaskRow::result`] column; on failure the
+/// `String` error becomes the row's `error` column.
+///
+/// Backward-compatible with unit-returning handlers: `()` implements
+/// `Serialize` (it serializes to JSON `null`), so a handler that returns
+/// `Ok(())` infers `R = ()` and compiles unchanged — its result is stored
+/// as `"null"`.
+///
+/// A handler whose return value fails to serialize is treated as a handler
+/// failure (the serde error message lands in `error`), so one un-serializable
+/// result can't take the worker down.
 ///
 /// Idempotent for ergonomics: re-registering the same name replaces the
 /// previous handler. Tests rely on this to swap handlers between cases
 /// without coordinating across the OnceLock.
-pub fn register_handler<F, Fut>(name: &'static str, handler: F)
+pub fn register_handler<F, Fut, R>(name: &'static str, handler: F)
 where
     F: Fn(&str) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Result<(), String>> + Send + 'static,
+    Fut: Future<Output = Result<R, String>> + Send + 'static,
+    R: Serialize + 'static,
 {
     let boxed: BoxedHandler = Box::new(move |payload: &str| {
         let fut = handler(payload);
-        Box::pin(fut)
+        Box::pin(async move {
+            let value = fut.await?;
+            // Serialize the return value to the JSON the result backend
+            // persists. A serialization failure is surfaced as a handler
+            // error (Err arm) so it's recorded like any other failure.
+            serde_json::to_string(&value)
+                .map(Some)
+                .map_err(|e| format!("umbra-tasks: result not serializable: {e}"))
+        })
     });
     handlers()
         .write()
@@ -822,7 +886,7 @@ async fn process_one(row: TaskRow, policy: RetryPolicy) -> Result<(), TaskError>
     // strings are stored verbatim in the `error` column (preserving the
     // original behaviour), while the variant drives the non-retriable
     // check without depending on the Display text.
-    let result: Result<(), (TaskError, String)> = match handler {
+    let result: Result<Option<String>, (TaskError, String)> = match handler {
         Some((fut,)) => {
             // Catch panics so one bad handler doesn't take the worker
             // down. `tokio::task::spawn` gives us the JoinHandle whose
@@ -836,7 +900,7 @@ async fn process_one(row: TaskRow, policy: RetryPolicy) -> Result<(), TaskError>
                 None => Ok(join.await),
             };
             match outcome {
-                Ok(Ok(Ok(()))) => Ok(()),
+                Ok(Ok(Ok(result_json))) => Ok(result_json),
                 Ok(Ok(Err(msg))) => Err((TaskError::Other(msg.clone()), msg)),
                 Ok(Err(join)) if join.is_panic() => {
                     let msg = format!("handler panicked: {:?}", join.into_panic());
@@ -869,7 +933,7 @@ async fn process_one(row: TaskRow, policy: RetryPolicy) -> Result<(), TaskError>
 
     let now = Utc::now();
     match result {
-        Ok(()) => {
+        Ok(result_json) => {
             let mut patch = serde_json::Map::new();
             patch.insert(
                 "status".to_string(),
@@ -877,6 +941,15 @@ async fn process_one(row: TaskRow, policy: RetryPolicy) -> Result<(), TaskError>
             );
             patch.insert("completed_at".to_string(), serde_json::to_value(now)?);
             patch.insert("error".to_string(), serde_json::Value::Null);
+            // Persist the handler's serialized return value into the result
+            // backend. `None` (no result string) is stored as SQL NULL.
+            patch.insert(
+                "result".to_string(),
+                match result_json {
+                    Some(s) => serde_json::Value::String(s),
+                    None => serde_json::Value::Null,
+                },
+            );
             TaskRow::objects()
                 .filter(task_row::ID.eq(row.id))
                 .update_values(patch)
@@ -923,6 +996,161 @@ async fn process_one(row: TaskRow, policy: RetryPolicy) -> Result<(), TaskError>
     }
     Ok(())
 }
+
+// =========================================================================
+// Result backend + task-status API (Celery `AsyncResult` parity).
+// =========================================================================
+
+/// The lifecycle state of a task, derived from its row's `status` plus the
+/// `attempts` / `max_attempts` counters. The Celery `AsyncResult.state`
+/// equivalent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskState {
+    /// Enqueued and waiting to be claimed (or backed off between retries).
+    Pending,
+    /// A worker has claimed the row and is executing the handler.
+    Running,
+    /// The handler returned `Ok`; [`TaskStatus::result`] holds the return
+    /// value.
+    Success,
+    /// The handler's final attempt returned `Err` (or the handler was
+    /// missing); no retries remain. [`TaskStatus::error`] holds the reason.
+    Failed,
+    /// A handler attempt failed but `attempts < max_attempts`, so the row is
+    /// pending again awaiting its backoff. Distinct from a first-time
+    /// [`TaskState::Pending`] in that it has already failed at least once.
+    Retrying,
+}
+
+impl TaskState {
+    /// Map a [`TaskRow`]'s persisted `status` string + attempt counters to a
+    /// state. A `pending` row that has already burned an attempt is
+    /// [`TaskState::Retrying`] (it failed retriably and is backing off);
+    /// a fresh `pending` row is [`TaskState::Pending`].
+    fn from_row(status: &str, attempts: i64, _max_attempts: i64) -> TaskState {
+        match status {
+            STATUS_RUNNING => TaskState::Running,
+            STATUS_SUCCEEDED => TaskState::Success,
+            STATUS_FAILED => TaskState::Failed,
+            // STATUS_PENDING (or any unknown): a pending row that's already
+            // consumed an attempt is mid-retry; an untried one is pending.
+            _ if attempts > 0 => TaskState::Retrying,
+            _ => TaskState::Pending,
+        }
+    }
+
+    /// Whether this state is terminal (the task will not transition further
+    /// on its own). [`await_result`] resolves once a row reaches one of
+    /// these.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, TaskState::Success | TaskState::Failed)
+    }
+}
+
+/// A snapshot of one task's status — the result backend query result. The
+/// Celery `AsyncResult` equivalent: query by the id [`enqueue`] returned to
+/// see whether the task ran, what it returned, or why it failed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskStatus {
+    /// The task id ([`enqueue`]'s return value).
+    pub id: i64,
+    /// The handler name the task fires.
+    pub name: String,
+    /// The derived lifecycle state.
+    pub state: TaskState,
+    /// The handler's return value, parsed back from the stored JSON. `None`
+    /// until the task succeeds; `Some(Value::Null)` for a unit-returning
+    /// handler. Left `None` on failure.
+    pub result: Option<serde_json::Value>,
+    /// The failure reason, if the task failed (or is mid-retry after a
+    /// failed attempt).
+    pub error: Option<String>,
+    /// How many attempts have been made so far.
+    pub attempts: i64,
+    /// The configured retry ceiling.
+    pub max_attempts: i64,
+    /// When the row next becomes eligible to run.
+    pub run_at: Option<DateTime<Utc>>,
+    /// When the current/last attempt started.
+    pub started_at: Option<DateTime<Utc>>,
+    /// When the task reached a terminal state.
+    pub completed_at: Option<DateTime<Utc>>,
+    /// When the task was enqueued.
+    pub created_at: DateTime<Utc>,
+}
+
+impl TaskStatus {
+    /// Build a [`TaskStatus`] from a fetched [`TaskRow`], parsing the stored
+    /// `result` JSON into a [`serde_json::Value`].
+    fn from_row(row: TaskRow) -> TaskStatus {
+        let state = TaskState::from_row(&row.status, row.attempts, row.max_attempts);
+        // The stored result is JSON the worker wrote via `serde_json`, so it
+        // round-trips. If a row somehow holds non-JSON (hand-edited DB), fall
+        // back to a JSON string so the caller still sees the raw value rather
+        // than silently losing it.
+        let result = row.result.as_deref().map(|s| {
+            serde_json::from_str::<serde_json::Value>(s)
+                .unwrap_or_else(|_| serde_json::Value::String(s.to_string()))
+        });
+        TaskStatus {
+            id: row.id,
+            name: row.name,
+            state,
+            result,
+            error: row.error,
+            attempts: row.attempts,
+            max_attempts: row.max_attempts,
+            run_at: row.run_at,
+            started_at: row.started_at,
+            completed_at: row.completed_at,
+            created_at: row.created_at,
+        }
+    }
+}
+
+/// Query a task's status by the id [`enqueue`] returned (Celery's
+/// `AsyncResult(id)`). Loads the row via the ORM and maps it to a
+/// [`TaskStatus`], parsing the stored result JSON. Returns `Ok(None)` if no
+/// row with that id exists (e.g. it was drained).
+pub async fn task_status(id: i64) -> Result<Option<TaskStatus>, TaskError> {
+    let row = TaskRow::objects()
+        .filter(task_row::ID.eq(id))
+        .first()
+        .await?;
+    Ok(row.map(TaskStatus::from_row))
+}
+
+/// Poll [`task_status`] until the task reaches a terminal state
+/// ([`TaskState::is_terminal`]) or `timeout` elapses — Celery's
+/// `AsyncResult.get(timeout=...)`. Polls on a short fixed interval
+/// ([`AWAIT_POLL_INTERVAL`]).
+///
+/// On a terminal state, returns the final [`TaskStatus`]. On timeout,
+/// returns [`TaskError::Timeout`] carrying the last observed (non-terminal)
+/// status so the caller can still inspect where the task got stuck. If the
+/// id never resolves to a row, returns [`TaskError::Timeout`] with `None`.
+pub async fn await_result(id: i64, timeout: Duration) -> Result<TaskStatus, TaskError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut last: Option<TaskStatus> = None;
+    loop {
+        if let Some(status) = task_status(id).await? {
+            if status.state.is_terminal() {
+                return Ok(status);
+            }
+            last = Some(status);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(TaskError::Timeout(Box::new(last)));
+        }
+        // Sleep the poll interval, but never past the deadline.
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        tokio::time::sleep(AWAIT_POLL_INTERVAL.min(remaining)).await;
+    }
+}
+
+/// How often [`await_result`] re-queries the result backend while waiting
+/// for a task to reach a terminal state.
+pub const AWAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // =========================================================================
 // Periodic / cron scheduling — the "beat" (Celery beat parity).
@@ -1296,6 +1524,7 @@ async fn enqueue_periodic(row: &PeriodicTask) -> Result<(), TaskError> {
             started_at: None,
             completed_at: None,
             error: None,
+            result: None,
             created_at: now,
         })
         .await?;

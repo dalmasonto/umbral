@@ -61,6 +61,7 @@ async fn boot() {
                 started_at TEXT,\
                 completed_at TEXT,\
                 error TEXT,\
+                result TEXT,\
                 created_at TEXT NOT NULL\
              )",
         )
@@ -227,7 +228,7 @@ async fn retry_backs_off_then_abandons() {
     _clear_handlers_for_tests();
 
     register_handler("always_fails", |_payload: &str| async move {
-        Err("boom".to_string())
+        Err::<(), String>("boom".to_string())
     });
 
     // base=10s, max=1h: attempt 1 -> ~10s, attempt 2 -> ~20s.
@@ -324,7 +325,7 @@ async fn backoff_is_capped_at_max() {
     _clear_handlers_for_tests();
 
     register_handler("always_fails_capped", |_payload: &str| async move {
-        Err("boom".to_string())
+        Err::<(), String>("boom".to_string())
     });
 
     // base huge, max tiny: first retry must clamp to max (~5s).

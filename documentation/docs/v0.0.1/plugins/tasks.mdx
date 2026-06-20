@@ -362,6 +362,51 @@ UPDATE matches nothing, and it enqueues nothing. The same conditional-claim guar
 the worker uses.
 </Callout>
 
+## Task results & status
+
+A handler can return any serializable value, not just `Ok(())`. On success the
+worker serializes the return value to JSON and stores it in the task row's
+`result` column — the **result backend**, Celery's `AsyncResult` payload. Query
+a task's outcome by the id `enqueue` returned:
+
+```rust
+use umbra_tasks::{enqueue, register_handler, task_status, await_result, TaskState, EnqueueOptions};
+use std::time::Duration;
+
+// A handler that returns a value (any `R: Serialize`):
+register_handler("sum", |payload: &str| async move {
+    let nums: Vec<i64> = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+    Ok::<i64, String>(nums.iter().sum())
+});
+
+let id = enqueue("sum", vec![1, 2, 3], EnqueueOptions::default()).await?;
+
+// Non-blocking: snapshot the current state (None if the row was drained).
+let status = task_status(id).await?.expect("task exists");
+assert_eq!(status.state, TaskState::Pending); // not run yet
+
+// Blocking with a timeout: poll until terminal (Celery's AsyncResult.get()).
+let status = await_result(id, Duration::from_secs(5)).await?;
+assert_eq!(status.state, TaskState::Success);
+assert_eq!(status.result, Some(serde_json::json!(6)));
+```
+
+`task_status` returns a `TaskStatus { id, name, state, result, error, attempts,
+max_attempts, run_at, started_at, completed_at, created_at }`. `state` is a
+`TaskState` — `Pending`, `Running`, `Success`, `Failed`, or `Retrying` (a row
+that failed an attempt but still has retries left). `await_result` polls every
+50ms until the state is terminal (`Success`/`Failed`) or `timeout` elapses, in
+which case it returns `TaskError::Timeout` carrying the last observed status.
+
+<Callout type="info">
+Unit-returning handlers stay source-compatible: `()` implements `Serialize` (it
+serializes to JSON `null`), so an existing `Ok(())` handler compiles unchanged
+and its result reads back as `Some(Value::Null)`. A failing handler leaves
+`result` empty and records the message in `error`.
+</Callout>
+
+See `arch.md` and `plugins/umbra-tasks/src/lib.rs` for the design rationale.
+
 ## Combining with signals
 
 <Callout type="info">
@@ -385,10 +430,12 @@ The signals docs page is at [`/docs/v0.0.1/plugins/signals`](/docs/v0.0.1/plugin
   (a concurrent worker whose UPDATE matches zero rows loses the race
   cleanly). `SELECT … FOR UPDATE SKIP LOCKED` is a future optimization
   that avoids the wasted candidate SELECT, not a correctness fix.
-- **Result backend.** No place to read a task's return value back, and no
-  task-status query API beyond inspecting the `task_row` row directly. The
+- **Priority queues.** No priority ordering beyond `run_at` then id. The
   remaining Celery gap, deferred to the deep spec (`planning/features.md` #82).
-- **Priority queues.** No priority ordering beyond `run_at` then id. Also #82.
+- **Admin visibility.** No admin UI into the queue (pending/failed counts,
+  retrying a failed task). Also #82. (The **result backend** and **task-status
+  API** — `task_status` / `await_result` — are done; see "Task results &
+  status" above.)
 - **Per-task backoff / timeout persistence.** `EnqueueOptions` accepts the fields
   but the worker applies worker-level defaults in v1 (see the callout above). #82.
 - **Status enum.** Status is stored as a plain string (`pending`, `running`,

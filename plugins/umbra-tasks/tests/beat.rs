@@ -62,6 +62,7 @@ async fn boot() {
                 started_at TEXT,\
                 completed_at TEXT,\
                 error TEXT,\
+                result TEXT,\
                 created_at TEXT NOT NULL\
              )",
         )

@@ -72,6 +72,7 @@ async fn boot() {
                 started_at TEXT,\
                 completed_at TEXT,\
                 error TEXT,\
+                result TEXT,\
                 created_at TEXT NOT NULL\
              )",
         )
@@ -181,7 +182,7 @@ async fn failed_handler_retries_until_max_attempts() {
 
     register_handler("always_fails", |_payload: &str| async move {
         CALLS.get().unwrap().fetch_add(1, Ordering::SeqCst);
-        Err("kaboom".to_string())
+        Err::<(), String>("kaboom".to_string())
     });
 
     let id = enqueue(
