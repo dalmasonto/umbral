@@ -2546,6 +2546,88 @@ impl<T> DecimalCol<T> {
     }
 }
 
+// =============================================================================
+// NullableDecimalCol — Option<rust_decimal::Decimal> / nullable NUMERIC(19,4).
+// =============================================================================
+
+/// A nullable fixed-point `NUMERIC(19, 4)` column. Mirrors [`DecimalCol`] with
+/// `is_null` / `is_not_null` and `Option<Decimal>`-flavoured eq/ne predicates.
+/// Decimal is Postgres-only at v1 (rust_decimal only implements the sqlx encode
+/// / decode traits for Postgres). Closes the nullable half of gaps2 #70.
+pub struct NullableDecimalCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableDecimalCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// Django-style alias for [`Self::le`].
+    pub fn lte(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        self.le(val)
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Django-style alias for [`Self::ge`].
+    pub fn gte(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        self.ge(val)
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
 // =========================================================================
 // Gap #24 + #36 — DB-function helpers (`ColExpr<T>`)
 //
