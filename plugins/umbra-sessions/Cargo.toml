@@ -9,6 +9,13 @@ repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# Enable the Redis-backed session store (`RedisStore`). Requires a Redis server
+# reachable at the configured URL. Adds the `redis` crate with tokio-comp (async
+# connection manager support). Activate with `--features redis`.
+redis = ["dep:redis"]
+
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
 serde = { version = "1", features = ["derive"] }
@@ -58,6 +65,15 @@ clap = "4"
 # (CURRENT_SESSION) that `session_layer` scopes around each handler. Only
 # the `rt` feature is needed for the LocalKey/scope machinery.
 tokio = { version = "1", features = ["rt"] }
+
+# Optional Redis backend dep. Only compiled when the `redis` feature is
+# enabled. Connection manager handles reconnect transparently and avoids
+# the overhead of a new connection per command. Mirrors the exact setup in
+# umbra-cache and umbra-realtime.
+[dependencies.redis]
+version = "0.27"
+features = ["tokio-comp", "connection-manager"]
+optional = true
 
 [dev-dependencies]
 # umbra-auth as a DEV-dep only: integration tests exercise the

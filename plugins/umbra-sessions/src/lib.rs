@@ -49,10 +49,14 @@
 pub mod cookie_store;
 pub mod request_session;
 pub mod store;
+#[cfg(feature = "redis")]
+pub mod redis_store;
 
 pub use request_session::{RequestSession, current, current_mut};
 pub use cookie_store::CookieStore;
 pub use store::{DbStore, SessionRecord, SessionStore, active_store, install_store};
+#[cfg(feature = "redis")]
+pub use redis_store::RedisStore;
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -302,6 +306,10 @@ pub enum SessionError {
     /// loudly rather than silently producing a cookie the browser drops.
     /// Carries the encoded byte length that tripped the limit.
     CookieTooLarge(usize),
+    /// A Redis-level error (connection, protocol, server). Only produced by
+    /// [`RedisStore`] when the `redis` feature is active.
+    #[cfg(feature = "redis")]
+    Redis(String),
 }
 
 impl std::fmt::Display for SessionError {
@@ -315,6 +323,8 @@ impl std::fmt::Display for SessionError {
                 "umbra-sessions: encoded session cookie is {n} bytes, over the ~4 KB browser \
                  limit; store less in the session or switch to a server-side store"
             ),
+            #[cfg(feature = "redis")]
+            SessionError::Redis(e) => write!(f, "umbra-sessions: redis: {e}"),
         }
     }
 }

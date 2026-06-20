@@ -133,11 +133,53 @@ cargo run -p umbra-cli -- clearsessions
 
 The command is registered by `SessionsPlugin` via `Plugin::commands()` — no extra wiring required.
 
-## What is NOT in v1
+## RedisStore (feature-gated)
 
-- **Redis / external store.** The pluggable `SessionStore` trait is in place (`DbStore` and `CookieStore` ship), but a Redis-backed store is deferred until a real use case asks for it. Implement `SessionStore` yourself and pass it to `.store(...)` in the meantime.
+`RedisStore` is a **server-side, Redis-backed** session store — a keyed store like `DbStore` (the raw token stays in the cookie; the record lives on the server) but with µs-latency lookups, horizontal scalability, and **server-side TTL eviction**: Redis auto-expires keys when the session's TTL fires, so no `clearsessions` job is needed.
 
-The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-sessions/src/lib.rs` and `plugins/umbra-sessions/src/cookie_store.rs`.
+Enable the `redis` cargo feature in your app's `Cargo.toml`:
+
+```toml
+umbra-sessions = { path = "…", features = ["redis"] }
+```
+
+Then connect at boot:
+
+```rust
+use umbra_sessions::{SessionsPlugin, RedisStore};
+
+let store = RedisStore::connect("redis://localhost:6379/0").await?;
+App::builder()
+    .plugin(SessionsPlugin::default().store(store))
+    .build()?;
+```
+
+Or read the URL from the environment (`UMBRA_REDIS_URL`):
+
+```rust
+let store = RedisStore::from_env().await?;
+```
+
+How it works:
+
+- **Key format.** `umbra:session:<sha256hex(token)>` — same hash-before-storage invariant as `DbStore`. The raw token never leaves the cookie.
+- **Server-side TTL.** `save` calls `SET … EX <seconds>` where the TTL is `record.expires_at - now()`. Redis evicts the key automatically when the TTL fires — no sweep job, no `clearsessions` cron.
+- **Lazy expiry double-check.** `load` still compares `expires_at` against the current time after deserialising the record, and issues a `DEL` if the record is past its time even though Redis hasn't evicted it yet (clock skew between processes).
+- **Idempotent destroy.** `DEL` on a non-existent key is a no-op in Redis, so `destroy` is always safe to call regardless of session state.
+
+**When to choose `RedisStore` over `DbStore` / `CookieStore`:**
+
+| | `DbStore` | `CookieStore` | `RedisStore` |
+|---|---|---|---|
+| Latency | SQL round-trip | Zero (cookie) | µs (Redis) |
+| Server-side revocation | Yes | No | Yes |
+| Scales horizontally | Via DB | Yes | Yes |
+| Needs extra service | No | No | Yes (Redis) |
+| Cookie size limit | No | ~4 KB | No |
+
+Reach for `RedisStore` when you want instant server-side revocation (force-logout, security events), sub-millisecond session reads, or horizontal scale without a shared SQL pool.
+
+The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-sessions/src/lib.rs`, `plugins/umbra-sessions/src/cookie_store.rs`, and `plugins/umbra-sessions/src/redis_store.rs`.
 
 ## See also
 
