@@ -66,8 +66,14 @@ pub mod auth_routes;
 pub mod bearer_auth;
 pub mod extractors;
 pub mod login_required;
+pub mod password_validation;
 pub mod session_user;
 pub mod token;
+
+pub use password_validation::{
+    CommonPasswordValidator, MinLengthValidator, NumericPasswordValidator, PasswordContext,
+    PasswordPolicy, PasswordValidator, UserAttributeSimilarityValidator, validate_password,
+};
 
 pub use bearer_auth::{BearerAuthentication, parse_bearer_header};
 pub use extractors::{CurrentIdentity, OptionalIdentity, resolve_identity};
@@ -318,6 +324,18 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// REST-only service has nothing to gain from it. Set via
     /// [`AuthPlugin::with_user_in_templates`].
     pub user_in_templates: bool,
+    /// The password-strength policy this plugin installs at boot. `None`
+    /// here is NOT "no validation" — `on_ready` installs
+    /// [`PasswordPolicy::default`] (the full secure set) when this is left
+    /// unset, so the plugin is secure by default. The only way to get an
+    /// empty policy is to call [`AuthPlugin::disable_password_validation`],
+    /// which stores an explicit [`PasswordPolicy::empty`].
+    ///
+    /// Wrapped in a `Mutex` because `Plugin::on_ready` only borrows `&self`
+    /// yet needs to MOVE the policy into the ambient `OnceLock`
+    /// ([`PasswordPolicy`] is not `Clone` — it holds boxed trait objects).
+    /// The mutex lets `on_ready` `.take()` it; the first boot wins.
+    password_policy: std::sync::Mutex<Option<PasswordPolicy>>,
     _u: PhantomData<U>,
 }
 
@@ -327,6 +345,10 @@ impl<U: UserModel> Default for AuthPlugin<U> {
             user_model_name: None,
             default_routes_prefix: None,
             user_in_templates: false,
+            // SECURE BY DEFAULT: an unconfigured AuthPlugin enforces the
+            // full validator set. `None` defers to PasswordPolicy::default()
+            // (the secure set) at install time; it does NOT mean "off".
+            password_policy: std::sync::Mutex::new(None),
             _u: PhantomData,
         }
     }
@@ -364,6 +386,47 @@ impl<U: UserModel> AuthPlugin<U> {
     /// populated context with one builder call.
     pub fn with_user_in_templates(mut self) -> Self {
         self.user_in_templates = true;
+        self
+    }
+
+    /// Replace the default password-strength policy with a custom one.
+    /// The full [`PasswordPolicy`] you pass becomes the active set at boot;
+    /// the Django-default validators are NOT merged in. Build the policy
+    /// you want from scratch:
+    ///
+    /// ```ignore
+    /// use umbra_auth::{AuthPlugin, PasswordPolicy, MinLengthValidator, CommonPasswordValidator};
+    /// AuthPlugin::<AuthUser>::default().password_validators(
+    ///     PasswordPolicy::empty()
+    ///         .with(Box::new(MinLengthValidator(12)))
+    ///         .with(Box::new(CommonPasswordValidator)),
+    /// )
+    /// ```
+    pub fn password_validators(mut self, policy: PasswordPolicy) -> Self {
+        self.password_policy = std::sync::Mutex::new(Some(policy));
+        self
+    }
+
+    /// Convenience: keep the four default validators but change the minimum
+    /// password length. Equivalent to building a [`PasswordPolicy`] with a
+    /// [`MinLengthValidator`] of `n` plus the other three defaults.
+    pub fn min_password_length(self, n: usize) -> Self {
+        self.password_validators(PasswordPolicy::new(vec![
+            Box::new(MinLengthValidator(n)),
+            Box::new(CommonPasswordValidator),
+            Box::new(NumericPasswordValidator),
+            Box::new(UserAttributeSimilarityValidator::default()),
+        ]))
+    }
+
+    /// Explicit opt-OUT: install an empty policy so NO password validation
+    /// runs. Secure-by-default means an app that genuinely wants to accept
+    /// any password — a throwaway demo, a migration importing legacy hashes
+    /// with externally-validated plaintext — has to ask for it by name.
+    /// Don't reach for this to silence a failing test; fix the fixture's
+    /// password instead.
+    pub fn disable_password_validation(mut self) -> Self {
+        self.password_policy = std::sync::Mutex::new(Some(PasswordPolicy::empty()));
         self
     }
 }
@@ -463,6 +526,27 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
             router
         }
     }
+
+    /// Seal the password-strength policy into the ambient `OnceLock` so the
+    /// free-function helpers (`create_user`, `set_password`) can read it
+    /// without a handle to `Self`. Mirrors the sessions plugin's
+    /// `SLIDING_EXPIRY_ENABLED` install.
+    ///
+    /// A `None` configured policy means "use the secure default" — NOT
+    /// "off" — so we install [`PasswordPolicy::default`] in that case.
+    /// `disable_password_validation` is the only path that installs an
+    /// empty policy. The install is idempotent (first boot wins), matching
+    /// the ambient-pool contract.
+    fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
+        let policy = self
+            .password_policy
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
+            .unwrap_or_default();
+        password_validation::install_policy(policy);
+        Ok(())
+    }
 }
 
 // =========================================================================
@@ -484,6 +568,12 @@ pub enum AuthError {
     /// active user. Returned for both "no such user" and "wrong
     /// password" so a caller can't tell which from the error alone.
     InvalidCredentials,
+    /// The plaintext password failed one or more password-strength
+    /// validators (see [`crate::password_validation`]). Carries every
+    /// human-readable reason so the route / form can show the full list.
+    /// Returned by `create_user` / `create_user_with_flags` / `set_password`
+    /// BEFORE the password is hashed. The route layer maps this to 400.
+    WeakPassword(Vec<String>),
 }
 
 impl std::fmt::Display for AuthError {
@@ -493,6 +583,9 @@ impl std::fmt::Display for AuthError {
             AuthError::Sqlx(e) => write!(f, "umbra-auth: sqlx: {e}"),
             AuthError::Write(e) => write!(f, "umbra-auth: write: {e:?}"),
             AuthError::InvalidCredentials => write!(f, "umbra-auth: invalid credentials"),
+            AuthError::WeakPassword(reasons) => {
+                write!(f, "umbra-auth: password rejected: {}", reasons.join(" "))
+            }
         }
     }
 }
@@ -586,7 +679,15 @@ pub async fn create_superuser(
     email: &str,
     plaintext: &str,
 ) -> Result<AuthUser, AuthError> {
-    create_user_with_flags(username, email, plaintext, true, true).await
+    // A superuser is created by a trusted operator path — the
+    // `createsuperuser` command, a seed script, a test — where the
+    // password is chosen deliberately, not submitted by an untrusted
+    // client. So it BYPASSES the password-strength policy, matching
+    // Django's programmatic `create_superuser` (only the interactive
+    // command + the public `register` route validate). The untrusted
+    // surface stays fully protected; an app that wants its superusers
+    // held to the policy can call `validate_password` before this.
+    insert_user(username, email, plaintext, true, true, false).await
 }
 
 /// Insert a new user with arbitrary `is_staff` / `is_superuser`
@@ -601,6 +702,31 @@ pub async fn create_user_with_flags(
     is_staff: bool,
     is_superuser: bool,
 ) -> Result<AuthUser, AuthError> {
+    insert_user(username, email, plaintext, is_staff, is_superuser, true).await
+}
+
+/// The shared insert path behind [`create_user`], [`create_user_with_flags`]
+/// and [`create_superuser`]. `validate` gates the password-strength policy:
+/// the untrusted registration paths pass `true` (secure by default), while
+/// the trusted operator path ([`create_superuser`]) passes `false`. The
+/// username + email feed the similarity validator. Fails closed
+/// (`WeakPassword`) on any rule miss when validating.
+async fn insert_user(
+    username: &str,
+    email: &str,
+    plaintext: &str,
+    is_staff: bool,
+    is_superuser: bool,
+    validate: bool,
+) -> Result<AuthUser, AuthError> {
+    if validate {
+        validate_password(
+            plaintext,
+            &PasswordContext::new(Some(username), Some(email)),
+        )
+        .map_err(AuthError::WeakPassword)?;
+    }
+
     let now = chrono::Utc::now();
     let hash = hash_password(plaintext)?;
     let row = AuthUser::objects()
@@ -678,6 +804,14 @@ pub async fn set_password<U>(user: &mut U, plaintext: &str) -> Result<(), AuthEr
 where
     U: UserModel,
 {
+    // Secure by default: validate before hashing. The `UserModel` trait
+    // exposes `username()` (used by the similarity validator) but no email
+    // accessor, so the context carries the username only — a custom user
+    // model with an email column can still call `validate_password`
+    // directly with a fuller context before invoking `set_password`.
+    validate_password(plaintext, &PasswordContext::for_username(user.username()))
+        .map_err(AuthError::WeakPassword)?;
+
     let hash = hash_password(plaintext)?;
     let mut patch = serde_json::Map::new();
     patch.insert(

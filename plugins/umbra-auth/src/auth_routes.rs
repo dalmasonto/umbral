@@ -273,6 +273,14 @@ async fn register(Json(body): Json<RegisterIn>) -> Response {
     }
     match crate::create_user(&body.username, &body.email, &body.password).await {
         Ok(user) => (StatusCode::CREATED, Json(UserOut::from(&user))).into_response(),
+        // A weak password is a client error, not a server error: 400 with
+        // the full list of reasons so a form can render each one. Must NOT
+        // fall through to the generic 500-ish path.
+        Err(crate::AuthError::WeakPassword(reasons)) => err(
+            StatusCode::BAD_REQUEST,
+            "weak_password",
+            reasons.join(" "),
+        ),
         Err(e) => {
             let msg = format!("{e}");
             let status = if msg.to_lowercase().contains("unique") {

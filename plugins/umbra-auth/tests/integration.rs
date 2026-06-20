@@ -154,7 +154,7 @@ fn verify_password_round_trip() {
 async fn create_user_writes_to_the_database() {
     boot().await;
 
-    let user = create_user("alice", "alice@example.com", "hunter2")
+    let user = create_user("alice", "alice@example.com", "Tr0ub4dour&3xpl")
         .await
         .expect("create_user should succeed against the fresh auth_user table");
 
@@ -197,11 +197,11 @@ async fn create_user_writes_to_the_database() {
 async fn authenticate_returns_the_user_for_valid_credentials() {
     boot().await;
 
-    let created = create_user("bob", "bob@example.com", "secret123")
+    let created = create_user("bob", "bob@example.com", "Zephyr!Qu14-Knight")
         .await
         .expect("create_user should succeed for bob");
 
-    let found = authenticate::<AuthUser>("bob", "secret123")
+    let found = authenticate::<AuthUser>("bob", "Zephyr!Qu14-Knight")
         .await
         .expect("authenticate should succeed for matching credentials");
 
@@ -253,7 +253,7 @@ async fn authenticate_rejects_unknown_username() {
 async fn authenticate_rejects_inactive_user() {
     boot().await;
 
-    create_user("dave", "dave@example.com", "hunter2")
+    create_user("dave", "dave@example.com", "Br1ghtMoon#0723")
         .await
         .expect("create_user should succeed for dave");
 
@@ -265,7 +265,7 @@ async fn authenticate_rejects_inactive_user() {
         .await
         .expect("deactivation update should succeed");
 
-    let result = authenticate::<AuthUser>("dave", "hunter2").await;
+    let result = authenticate::<AuthUser>("dave", "Br1ghtMoon#0723").await;
     assert!(
         matches!(result, Err(AuthError::InvalidCredentials)),
         "an inactive user must not authenticate; got {result:?}",
@@ -280,12 +280,12 @@ async fn authenticate_rejects_inactive_user() {
 async fn set_password_updates_the_hash() {
     boot().await;
 
-    let mut user = create_user("erin", "erin@example.com", "oldpass")
+    let mut user = create_user("erin", "erin@example.com", "Stout$Wombat-58")
         .await
         .expect("create_user should succeed for erin");
     let original_hash = user.password_hash.clone();
 
-    set_password(&mut user, "newpass")
+    set_password(&mut user, "Clay#Harbor-90")
         .await
         .expect("set_password should rotate the hash");
 
@@ -294,11 +294,11 @@ async fn set_password_updates_the_hash() {
         "set_password must update the in-place hash, but it stayed {original_hash}",
     );
 
-    authenticate::<AuthUser>("erin", "newpass")
+    authenticate::<AuthUser>("erin", "Clay#Harbor-90")
         .await
         .expect("the new password must authenticate after set_password");
 
-    let stale = authenticate::<AuthUser>("erin", "oldpass").await;
+    let stale = authenticate::<AuthUser>("erin", "Stout$Wombat-58").await;
     assert!(
         matches!(stale, Err(AuthError::InvalidCredentials)),
         "the old password must stop working after set_password; got {stale:?}",
