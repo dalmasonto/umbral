@@ -251,6 +251,9 @@ async fn ensure_tables(pool: &sqlx::SqlitePool) {
                 umbra_version TEXT,
                 database_backend TEXT,
                 operating_system TEXT,
+                is_issue INTEGER NOT NULL DEFAULT 0,
+                is_public INTEGER NOT NULL DEFAULT 1,
+                is_resolved INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 deleted_at TEXT
@@ -884,7 +887,7 @@ async fn listing_and_detail_render_real_db_rows() {
             "## Webhooks\n\nSign, queue and deliver outbound webhooks the Umbra way.",
         ),
         ("installation_commands", "umbra add umbra-webhooks"),
-    ]))
+    ]), None)
     .await
     .expect("valid submission creates a row");
 
@@ -926,7 +929,7 @@ async fn listing_and_detail_render_real_db_rows() {
             "Enough body content to satisfy the minimum length.",
         ),
         ("installation_commands", "umbra add umbra-x"),
-    ]))
+    ]), None)
     .await
     .expect_err("blank name is rejected");
     assert!(

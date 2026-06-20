@@ -23,7 +23,7 @@ pub mod seed;
 
 pub use models::{
     AuditStatus, CommentKind, CommentModeration, PluginCompatibility, PluginFeature,
-    PluginMaturity, PluginModeration, PluginSource, PluginStatus, SecurityStatus,
+    PluginMaturity, PluginModeration, PluginModerator, PluginSource, PluginStatus, SecurityStatus,
 };
 
 use std::collections::HashMap;
@@ -44,6 +44,7 @@ use umbra::web::{
 
 use models::{
     self as pd, Plugin as PluginModel, plugin, plugin_comment, plugin_compatibility, plugin_feature,
+    plugin_moderator,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -60,6 +61,7 @@ impl Plugin for PluginDirectoryPlugin {
             ModelMeta::for_::<models::PluginFeature>(),
             ModelMeta::for_::<models::PluginCompatibility>(),
             ModelMeta::for_::<models::PluginComment>(),
+            ModelMeta::for_::<models::PluginModerator>(),
         ]
     }
 
@@ -1248,9 +1250,13 @@ async fn submit_page(Query(q): Query<SubmitQuery>) -> Result<Html<String>, (Stat
 /// `/plugins/submit?submitted=1`. On failure the form re-renders with the
 /// per-field errors and the typed values kept.
 async fn post_submission(
+    OptionalUser(maybe_user): OptionalUser,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, (StatusCode, String)> {
-    match create_submission(&form).await {
+    // A logged-in submitter OWNS the plugin (`created_by`); an anonymous
+    // submission stays unowned (`None`) exactly as before.
+    let owner_id = maybe_user.map(|u| u.id);
+    match create_submission(&form, owner_id).await {
         Ok(_id) => Ok(Redirect::to("/plugins/submit?submitted=1").into_response()),
         Err(errs) => {
             let html = render_submit(false, Some(&errs), &form)
@@ -1263,12 +1269,18 @@ async fn post_submission(
 
 /// Validate a public plugin submission through the `Plugin` Form derive,
 /// set the server-managed fields (`source = Community`,
-/// `moderation = Pending`, `created_by = None`), persist it through the
-/// ORM, and return the new row's id. A UNIQUE clash (name / slug /
-/// crate_name already taken) surfaces as a friendly field-keyed
-/// [`ValidationErrors`], never a 500. Public so the render smoke-test can
-/// drive the validate → create path without an axum runtime.
-pub async fn create_submission(data: &HashMap<String, String>) -> Result<i64, ValidationErrors> {
+/// `moderation = Pending`), persist it through the ORM, and return the
+/// new row's id. `owner_id` is the logged-in submitter's user id: when
+/// present the row's `created_by` is set so the submitter OWNS (and can
+/// moderate) the plugin; `None` keeps it unowned (an anonymous
+/// submission, as before). A UNIQUE clash (name / slug / crate_name
+/// already taken) surfaces as a friendly field-keyed [`ValidationErrors`],
+/// never a 500. Public so the render smoke-test can drive the validate →
+/// create path without an axum runtime.
+pub async fn create_submission(
+    data: &HashMap<String, String>,
+    owner_id: Option<i64>,
+) -> Result<i64, ValidationErrors> {
     // `featured` / `display_order` carry a SQL `default` but no
     // `#[umbra(noform)]`, so the Form derive treats them as submittable
     // and required. They're not on the public form (a visitor must not
@@ -1287,16 +1299,40 @@ pub async fn create_submission(data: &HashMap<String, String>) -> Result<i64, Va
     let mut plugin = PluginModel::validate(&data).await?;
 
     // Server-managed: a public submission is always a pending community
-    // row, never authored by an arbitrary user.
+    // row. Ownership comes from the authenticated session, not a
+    // spoofable form field — a logged-in submitter owns the plugin (and
+    // thus can moderate it); an anonymous submission stays unowned.
     plugin.source = PluginSource::Community;
     plugin.moderation = PluginModeration::Pending;
-    plugin.created_by = None;
+    plugin.created_by = owner_id.map(ForeignKey::new);
 
     let created = PluginModel::objects()
         .create(plugin)
         .await
         .map_err(write_to_validation)?;
     Ok(created.id)
+}
+
+/// Whether `user_id` may moderate `plugin`'s Notes and Issues.
+///
+/// Two roles can moderate: the plugin's owner (its `created_by`) and any
+/// user with a [`PluginModerator`] grant for the plugin. This is the
+/// single authorization check Tasks B/C gate every moderation action
+/// behind. Reads go through the ORM — no raw SQL — so the check works on
+/// every backend.
+pub async fn can_moderate(plugin: &PluginModel, user_id: i64) -> bool {
+    // Owner: the submitter who created the plugin moderates implicitly.
+    if plugin.created_by.as_ref().map(|fk| fk.id()) == Some(user_id) {
+        return true;
+    }
+
+    // Granted moderator: a `(plugin, user)` row in the moderator table.
+    PluginModerator::objects()
+        .filter(plugin_moderator::PLUGIN.eq(plugin.id))
+        .filter(plugin_moderator::USER.eq(user_id))
+        .exists()
+        .await
+        .unwrap_or(false)
 }
 
 /// Render the submit page. `errors` carries a failed submission's field

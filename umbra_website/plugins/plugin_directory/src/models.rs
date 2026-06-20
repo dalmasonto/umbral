@@ -449,6 +449,25 @@ pub struct PluginComment {
     #[form(optional, length(max = 40))]
     pub operating_system: Option<String>,
 
+    /// Whether this comment is an issue (a bug / problem report) rather
+    /// than a plain discussion note. Issues are moderatable and
+    /// resolvable; notes are not. Server-managed (the report path sets
+    /// it, the note path leaves it false).
+    #[umbra(noform, default = "false", index)]
+    pub is_issue: bool,
+
+    /// Whether this comment is publicly visible in the thread. Defaults
+    /// to true; a moderator can flip it to hide an issue/note without a
+    /// hard delete. Distinct from `moderation` (the queue status).
+    #[umbra(noform, default = "true", index)]
+    pub is_public: bool,
+
+    /// Whether this issue has been resolved. Only meaningful when
+    /// `is_issue` is true; a moderator marks an issue resolved once the
+    /// underlying problem is fixed.
+    #[umbra(noform, default = "false", index)]
+    pub is_resolved: bool,
+
     #[umbra(auto_now_add)]
     pub created_at: DateTime<Utc>,
 
@@ -457,6 +476,42 @@ pub struct PluginComment {
 
     #[umbra(noform, index)]
     pub deleted_at: Option<DateTime<Utc>>,
+}
+
+// ---------------------------------------------------------------------------
+// PluginModerator (per-plugin moderation grant)
+// ---------------------------------------------------------------------------
+
+/// A user granted moderation rights over a single `Plugin`'s Notes and
+/// Issues. The plugin's `created_by` owner moderates implicitly; this
+/// table lists the *additional* users the owner has added as
+/// moderators. `(plugin, user)` is unique so a user can't be added
+/// twice. Admin / owner-managed only — no public form.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+#[umbra(
+    plugin = "plugin_directory",
+    display = "Plugin moderators",
+    icon = "shield-check",
+    unique_together = [["plugin", "user"]]
+)]
+pub struct PluginModerator {
+    #[umbra(primary_key)]
+    pub id: i64,
+
+    #[umbra(on_delete = "cascade")]
+    pub plugin: ForeignKey<Plugin>,
+
+    #[umbra(on_delete = "cascade")]
+    pub user: ForeignKey<AuthUser>,
+
+    /// The user who granted this moderation right (the plugin owner or
+    /// another moderator). `set_null` so removing the granter's account
+    /// doesn't revoke the grant.
+    #[umbra(on_delete = "set_null")]
+    pub added_by: Option<ForeignKey<AuthUser>>,
+
+    #[umbra(auto_now_add)]
+    pub created_at: DateTime<Utc>,
 }
 
 #[cfg(test)]
@@ -479,6 +534,56 @@ mod form_tests {
     // the ambient pool) sees the seeded `plugin` row. Seed id=1; the
     // reject test points at a nonexistent id (9999) so it doesn't need
     // its own DB.
+    // No-op storage so the boot-time `field.storage_backend` system check
+    // passes — `Plugin` declares `logo` / `cover_image` image fields,
+    // which require a registered Storage. These form tests never upload;
+    // this only satisfies the check (same pattern as render_pages.rs's
+    // TestStorage).
+    struct NoopStorage;
+
+    #[umbra::storage::async_trait]
+    impl umbra::storage::Storage for NoopStorage {
+        async fn store(
+            &self,
+            filename: &str,
+            _content_type: &str,
+            _bytes: &[u8],
+        ) -> Result<umbra::storage::StoredFile, umbra::storage::StorageError> {
+            let key = filename.to_string();
+            let url = self.url(&key);
+            Ok(umbra::storage::StoredFile { key, url })
+        }
+        async fn retrieve(&self, _key: &str) -> Result<Vec<u8>, umbra::storage::StorageError> {
+            Err(umbra::storage::StorageError::NotFound)
+        }
+        async fn delete(&self, _key: &str) -> Result<(), umbra::storage::StorageError> {
+            Ok(())
+        }
+        fn url(&self, key: &str) -> String {
+            format!("/media/{key}")
+        }
+    }
+
+    // A storage-declaring plugin: the `field.storage_backend` system
+    // check reads the registered plugins' `provides_storage()` flag (not
+    // the ambient global), so satisfying the check for `Plugin`'s image
+    // fields needs a plugin returning `true` here — registering the
+    // backend alone isn't enough.
+    #[derive(Debug, Default, Clone)]
+    struct StorageOnly;
+
+    impl umbra::plugin::Plugin for StorageOnly {
+        fn name(&self) -> &'static str {
+            "plugin_directory_form_test"
+        }
+        fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
+            Vec::new()
+        }
+        fn provides_storage(&self) -> bool {
+            true
+        }
+    }
+
     static BOOT: OnceCell<()> = OnceCell::const_new();
     async fn boot() {
         BOOT.get_or_init(|| async {
@@ -487,19 +592,28 @@ mod form_tests {
             // pool — the ambient umbra.toml / env may default to postgres.
             let mut settings = umbra::Settings::from_env().unwrap();
             settings.database_url = "sqlite::memory:".to_string();
+            // Register a real storage backend (resolves `url(key)`) AND a
+            // plugin that declares the capability, so the image-field
+            // system check for `Plugin.logo` / `cover_image` passes.
+            let _ = umbra::storage::set_storage(std::sync::Arc::new(NoopStorage));
             umbra::App::builder()
                 .settings(settings)
                 .database("default", pool.clone())
                 .model::<Plugin>()
                 .model::<PluginComment>()
+                .plugin(StorageOnly::default())
                 .build()
                 .unwrap();
             // Minimal table for the FK existence probe — only the `id`
             // column matters for validate(). The table name is
             // Plugin::TABLE (plugin-name-prefixed by the derive), so the
             // probe's DynQuerySet::for_meta targets the right table.
+            // `Plugin` is `#[umbra(soft_delete)]`, so the FK existence
+            // probe scopes its lookup with `WHERE deleted_at IS NULL`.
+            // The probe table therefore needs a `deleted_at` column (left
+            // NULL on the seed row) or the lookup finds no live record.
             let create = format!(
-                "CREATE TABLE {t} (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)",
+                "CREATE TABLE {t} (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, deleted_at TEXT)",
                 t = Plugin::TABLE
             );
             sqlx::query(&create).execute(&pool).await.unwrap();
