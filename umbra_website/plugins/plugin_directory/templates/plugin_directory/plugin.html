@@ -115,6 +115,19 @@
   .pd-field { width: 100%; border: 1px solid var(--hairline); background: var(--surface); border-radius: 10px; padding: 9px 12px; font-size: 14px; color: var(--ink); font-family: inherit; }
   .pd-field:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
   textarea.pd-field { min-height: 110px; resize: vertical; }
+
+  /* ---- Moderation controls (owner roster + per-note actions + issues) ---- */
+  .pd-mod-actions form { display: inline; margin: 0; }
+  .pd-mod-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink-2); border: 1px solid var(--hairline); background: var(--surface); border-radius: 8px; padding: 4px 10px; cursor: pointer; transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease; }
+  .pd-mod-btn:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline)); color: var(--accent-2); }
+  .pd-mod-btn[data-mod-action="flag"]:hover { border-color: color-mix(in srgb, var(--warn) 40%, var(--hairline)); color: var(--warn); }
+  .pd-mod-card { border: 1px solid var(--hairline); border-radius: 14px; background: var(--surface); padding: 16px 18px; }
+  .pd-mod-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--paper); padding: 9px 12px; }
+  .pd-mod-row form { display: inline; margin: 0; }
+  .pd-issue { border: 1px solid var(--hairline); border-radius: 14px; background: var(--paper); padding: 16px 18px; }
+  .pd-status-ok { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 700; background: var(--ok-soft); color: var(--ok); }
+  .pd-status-open { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 700; background: var(--warn-soft); color: var(--warn); }
+  .pd-status-private { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 700; background: var(--surface-2); color: var(--faint); }
 </style>
 {% endblock %}
 
@@ -459,25 +472,135 @@
         </section>
 
         {# ===== Issues ===== #}
+        {# Issues are a distinct set from discussion notes (recon/#68): bug /
+           abuse reports a moderator resolves. Each shows an open/resolved
+           status; a moderator additionally gets Resolve / Reopen controls
+           (HTMX POST to the Task B resolve/reopen routes). Non-moderators
+           see the issues + status but no action buttons. #}
         <section class="pd-tabpanel" id="panel-issues" role="tabpanel" aria-labelledby="tab-issues">
-          <div class="card rounded-[20px] p-6 sm:p-7 text-center">
-            <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Reported issues</h2>
+                <p class="text-[14px] text-muted">Bugs and abuse reports filed against this plugin.</p>
+              </div>
+              <a href="/report?plugin={{ plugin.slug }}" class="btn-ghost whitespace-nowrap">Report an issue</a>
             </div>
-            <h2 class="mb-2 text-[22px] font-extrabold tracking-[-0.02em]">Issues live with the maintainer</h2>
-            <p class="mx-auto mb-5 pd-maxw440 text-[14px] leading-[1.55] text-muted">There's no live issue feed here yet. Track and file bugs on the plugin's tracker, or flag a directory problem to the Umbra team.</p>
-            <div class="flex flex-wrap justify-center gap-2.5">
-              {% if plugin.links.issues %}
-              <a href="{{ plugin.links.issues }}" class="btn-accent" rel="noopener">Open issue tracker</a>
-              {% endif %}
-              <a href="/report?plugin={{ plugin.slug }}" class="btn-ghost">Report an issue</a>
+            {% if issues %}
+            <div class="space-y-3" data-issue-list>
+              {% for issue in issues %}
+              <div class="pd-issue" data-issue-id="{{ issue.id }}">
+                <div class="mb-2 flex flex-wrap items-center gap-2.5">
+                  {% if issue.resolved %}
+                  <span class="pd-status-ok" data-issue-status="resolved">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+                    Resolved
+                  </span>
+                  {% else %}
+                  <span class="pd-status-open" data-issue-status="open">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+                    Open
+                  </span>
+                  {% endif %}
+                  {% if not issue.public %}
+                  <span class="pd-status-private">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    Private
+                  </span>
+                  {% endif %}
+                  <span class="text-[12px] text-faint">{{ issue.reporter }} · {{ issue.created }}</span>
+                  {% if can_moderate %}
+                  <div class="ml-auto flex gap-2">
+                    {% if issue.resolved %}
+                    <form method="post" action="/plugins/{{ plugin.slug }}/issues/{{ issue.id }}/reopen"
+                          hx-post="/plugins/{{ plugin.slug }}/issues/{{ issue.id }}/reopen" hx-target="body" hx-swap="outerHTML">
+                      {{ csrf_input }}
+                      <button type="submit" class="pd-mod-btn" data-issue-action="reopen">Reopen</button>
+                    </form>
+                    {% else %}
+                    <form method="post" action="/plugins/{{ plugin.slug }}/issues/{{ issue.id }}/resolve"
+                          hx-post="/plugins/{{ plugin.slug }}/issues/{{ issue.id }}/resolve" hx-target="body" hx-swap="outerHTML">
+                      {{ csrf_input }}
+                      <button type="submit" class="pd-mod-btn" data-issue-action="resolve">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>
+                        Resolve
+                      </button>
+                    </form>
+                    {% endif %}
+                  </div>
+                  {% endif %}
+                </div>
+                <div class="pd-prose text-[14px]" data-md>{{ issue.body | markdown }}</div>
+              </div>
+              {% endfor %}
             </div>
+            {% else %}
+            <div class="text-center">
+              <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+              </div>
+              <h2 class="mb-2 text-[20px] font-extrabold tracking-[-0.02em]">No open issues</h2>
+              <p class="mx-auto mb-5 pd-maxw440 text-[14px] leading-[1.55] text-muted">No issues have been reported against this plugin. Track upstream bugs on the maintainer's tracker, or report a directory problem to the Umbra team.</p>
+              <div class="flex flex-wrap justify-center gap-2.5">
+                {% if plugin.links.issues %}
+                <a href="{{ plugin.links.issues }}" class="btn-accent" rel="noopener">Open issue tracker</a>
+                {% endif %}
+              </div>
+            </div>
+            {% endif %}
           </div>
         </section>
       </div>
     </div>
 
     <aside class="space-y-5 lg:sticky lg:top-[84px] lg:self-start">
+      {# ---- Moderator roster (owner-only management) ----
+         Only the plugin owner (`is_owner`) sees this. Lists current
+         moderators with a remove button each, plus an add-moderator form.
+         POSTs to the Task B owner-only routes via HTMX (csrf carried by the
+         form), swapping the page so the roster updates in place. #}
+      {% if is_owner %}
+      <div class="pd-mod-card pd-rise" style="--i: 3" data-moderator-panel>
+        <div class="mb-3 flex items-center gap-2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+          <span class="text-[13px] font-bold uppercase tracking-[0.04em] text-ink-2">Moderators</span>
+        </div>
+        <p class="mb-3 text-[12.5px] leading-[1.5] text-muted">People you trust to hide notes and resolve issues on this plugin.</p>
+        <div class="space-y-2" data-moderator-list>
+          {% for mod in moderators %}
+          <div class="pd-mod-row" data-moderator-id="{{ mod.user_id }}">
+            <span class="flex h-7 w-7 items-center justify-center rounded-full bg-accent-line text-[11px] font-bold text-accent-2">{{ mod.username | first | upper }}</span>
+            <div class="min-w-0">
+              <div class="truncate text-[13px] font-semibold text-ink-2">@{{ mod.username }}</div>
+              <div class="text-[11px] text-faint">added {{ mod.added }}</div>
+            </div>
+            <form method="post" action="/plugins/{{ plugin.slug }}/moderators/{{ mod.user_id }}/remove"
+                  hx-post="/plugins/{{ plugin.slug }}/moderators/{{ mod.user_id }}/remove" hx-target="body" hx-swap="outerHTML"
+                  class="ml-auto">
+              {{ csrf_input }}
+              <button type="submit" class="pd-mod-btn" aria-label="Remove @{{ mod.username }}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                Remove
+              </button>
+            </form>
+          </div>
+          {% else %}
+          <p class="m-0 rounded-[10px] border border-hairline bg-paper px-3 py-3 text-[12.5px] text-muted" data-moderator-empty>No moderators yet — add one below.</p>
+          {% endfor %}
+        </div>
+        <form method="post" action="/plugins/{{ plugin.slug }}/moderators"
+              hx-post="/plugins/{{ plugin.slug }}/moderators" hx-target="body" hx-swap="outerHTML"
+              class="mt-3 flex gap-2" data-add-moderator-form>
+          {{ csrf_input }}
+          <input class="pd-field" type="text" name="username" required placeholder="username" aria-label="Username to add as a moderator">
+          <button type="submit" class="btn-accent inline-flex items-center gap-1.5 whitespace-nowrap">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+            Add
+          </button>
+        </form>
+      </div>
+      {% endif %}
+
       <div class="card pd-rise rounded-[18px] p-5" style="--i: 3">
         <div class="mb-4 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Health</div>
         <div class="space-y-3">
@@ -752,4 +875,11 @@
 </template>
 {% endif %}
 
+{% endblock %}
+
+{% block extra_scripts %}
+{# HTMX powers the moderation actions (note hide/unhide/flag, issue
+   resolve/reopen): each is a real <form> carrying {{ csrf_input }}, so it
+   degrades to a native POST/redirect when JS / HTMX is unavailable. #}
+<script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
 {% endblock %}

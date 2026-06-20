@@ -764,12 +764,14 @@ struct DetailQuery {
 async fn plugin_detail(
     Path(slug): Path<String>,
     Query(q): Query<DetailQuery>,
+    OptionalUser(maybe_user): OptionalUser,
 ) -> Result<Html<String>, (StatusCode, String)> {
     // `/plugins/submit` is served by its own static route (registered
     // before this `/plugins/{slug}` matcher), so the submit page never
     // reaches here — this is the canonical plugin-detail path only.
     let submitted = q.submitted.as_deref() == Some("1");
-    match render_detail_with(&slug, submitted)
+    let viewer = maybe_user.map(|u| u.id);
+    match render_detail_for(&slug, submitted, viewer)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
     {
@@ -1834,12 +1836,24 @@ fn write_to_validation_str(e: sqlx::Error) -> ValidationErrors {
 /// smoke-test drives the full reverse-relation → view-model → template
 /// path directly.
 pub async fn render_detail(slug: &str) -> Result<Option<String>, String> {
-    render_detail_with(slug, false).await
+    render_detail_for(slug, false, None).await
 }
 
 /// `render_detail`, with the `?submitted=1` success-banner flag threaded
-/// through to the template.
+/// through to the template. The viewer is anonymous (no moderation UI).
 pub async fn render_detail_with(slug: &str, submitted: bool) -> Result<Option<String>, String> {
+    render_detail_for(slug, submitted, None).await
+}
+
+/// `render_detail_with`, with the current viewer's user id threaded through
+/// so the moderation UI (the moderator roster, per-note actions, issue
+/// resolve/reopen) renders only for an owner / moderator. `viewer = None`
+/// is an anonymous (or logged-out) visitor — none of the controls render.
+pub async fn render_detail_for(
+    slug: &str,
+    submitted: bool,
+    viewer: Option<i64>,
+) -> Result<Option<String>, String> {
     let Some(plugin) = PluginModel::objects()
         .filter(plugin::SLUG.eq(slug))
         .filter(plugin::MODERATION.eq("approved"))
@@ -1849,6 +1863,79 @@ pub async fn render_detail_with(slug: &str, submitted: bool) -> Result<Option<St
     else {
         return Ok(None);
     };
+
+    // Authorization for the moderation UI: the owner gets the moderator
+    // roster (add/remove); the owner OR a granted moderator gets the
+    // per-note actions + issue resolve/reopen. Both compute through the
+    // Task A/B fns (ORM-only, every backend). An anonymous viewer is
+    // neither, so nothing renders.
+    let (is_owner_view, can_moderate_view) = match viewer {
+        Some(uid) => (is_owner(&plugin, uid), can_moderate(&plugin, uid).await),
+        None => (false, false),
+    };
+
+    // The moderator roster (owner-only UI): every `PluginModerator` grant
+    // for this plugin joined to the granted user's `AuthUser` for the
+    // username. Loaded only when the owner is viewing (the roster is hidden
+    // otherwise) so a stranger's render does no extra work. One grants
+    // query + one batched user lookup — no N+1.
+    let mut moderators: Vec<ModeratorRow> = Vec::new();
+    if is_owner_view {
+        let grants = PluginModerator::objects()
+            .filter(plugin_moderator::PLUGIN.eq(plugin.id))
+            .order_by(plugin_moderator::CREATED_AT.asc())
+            .fetch()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !grants.is_empty() {
+            let user_ids: Vec<i64> = grants.iter().map(|g| g.user.id()).collect();
+            let mut name_by_id: std::collections::HashMap<i64, String> =
+                std::collections::HashMap::new();
+            let users = AuthUser::objects()
+                .filter(umbra_auth::auth_user::ID.in_(&user_ids))
+                .fetch()
+                .await
+                .map_err(|e| e.to_string())?;
+            for u in users {
+                name_by_id.insert(u.id, u.username);
+            }
+            for g in grants {
+                let uid = g.user.id();
+                moderators.push(ModeratorRow {
+                    user_id: uid,
+                    username: name_by_id
+                        .get(&uid)
+                        .cloned()
+                        .unwrap_or_else(|| format!("user #{uid}")),
+                    added: g.created_at.format("%b %-d, %Y").to_string(),
+                });
+            }
+        }
+    }
+
+    // Issues (`is_issue = true`) are a distinct set from discussion notes:
+    // bug/abuse reports a moderator resolves. The public set is the public,
+    // non-issue-private rows (`is_public = true`); a moderator additionally
+    // sees the private (security/malware) reports. Each carries its
+    // resolved/open status for the status badge.
+    let issue_rows = {
+        let mut q = plugin
+            .reverse::<pd::PluginComment>()
+            .map_err(|e| e.to_string())?
+            .filter(plugin_comment::IS_ISSUE.eq(true));
+        if !can_moderate_view {
+            // Non-moderators only see public issues (security/malware reports
+            // stay private to the moderation queue).
+            q = q.filter(plugin_comment::IS_PUBLIC.eq(true));
+        }
+        q.order_by(plugin_comment::IS_RESOLVED.asc())
+            .order_by(plugin_comment::CREATED_AT.desc())
+            .limit(50)
+            .fetch()
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    let issues: Vec<IssueRow> = issue_rows.into_iter().map(IssueRow::from_model).collect();
 
     // Reverse relations — children whose FK points back at this plugin.
     // `plugin.reverse::<Child>()` discovers the FK column from the child's
@@ -1884,17 +1971,31 @@ pub async fn render_detail_with(slug: &str, submitted: bool) -> Result<Option<St
     // Top-level notes (parent IS NULL), pinned first then chronological, capped
     // at 10. The IS NULL predicate and the LIMIT are both pushed to the query
     // layer — the cap is enforced by the DB, not by truncating an in-memory Vec.
-    let top_level = plugin
-        .reverse::<pd::PluginComment>()
-        .map_err(|e| e.to_string())?
-        .filter(plugin_comment::MODERATION.eq("visible"))
-        .filter(plugin_comment::PARENT.is_null())
-        .order_by(plugin_comment::PINNED.desc())
-        .order_by(plugin_comment::CREATED_AT.asc())
-        .limit(10)
-        .fetch()
-        .await
-        .map_err(|e| e.to_string())?;
+    // A moderator additionally sees hidden / flagged notes (so they can
+    // unhide them inline); the public view stays `visible`-only. Discussion
+    // notes are non-issues, so issues never leak into the thread.
+    let top_level = {
+        let q = plugin
+            .reverse::<pd::PluginComment>()
+            .map_err(|e| e.to_string())?
+            .filter(plugin_comment::IS_ISSUE.eq(false))
+            .filter(plugin_comment::PARENT.is_null());
+        let q = if can_moderate_view {
+            q.filter(
+                plugin_comment::MODERATION.eq("visible")
+                    | plugin_comment::MODERATION.eq("hidden")
+                    | plugin_comment::MODERATION.eq("flagged"),
+            )
+        } else {
+            q.filter(plugin_comment::MODERATION.eq("visible"))
+        };
+        q.order_by(plugin_comment::PINNED.desc())
+            .order_by(plugin_comment::CREATED_AT.asc())
+            .limit(10)
+            .fetch()
+            .await
+            .map_err(|e| e.to_string())?
+    };
 
     // Replies for exactly those notes, fetched in one IN query (FK column
     // `parent` IN [note ids]) and grouped by parent id. No N+1; an empty note
@@ -1936,10 +2037,61 @@ pub async fn render_detail_with(slug: &str, submitted: bool) -> Result<Option<St
     let detail = PluginDetail::build(plugin, feature_rows, compat_rows, comment_rows, notes_total);
     umbra::templates::render(
         "plugin_directory/plugin.html",
-        &context!(plugin => detail, submitted => submitted),
+        &context!(
+            plugin => detail,
+            submitted => submitted,
+            is_owner => is_owner_view,
+            can_moderate => can_moderate_view,
+            moderators => moderators,
+            issues => issues,
+        ),
     )
     .map(Some)
     .map_err(|e| e.to_string())
+}
+
+/// One moderator-roster row in the owner-only management section: the
+/// granted user's id (the remove-button target), their username and when
+/// the grant was made.
+#[derive(Debug, Serialize)]
+struct ModeratorRow {
+    user_id: i64,
+    username: String,
+    added: String,
+}
+
+/// One issue (a bug / abuse report, `is_issue = true`) in the Issues tab:
+/// the comment id (resolve/reopen target), the report body, its date, the
+/// reporter label, whether it's resolved, and a moderator-only privacy
+/// flag so the template can mark the private (security/malware) reports.
+#[derive(Debug, Serialize)]
+struct IssueRow {
+    id: i64,
+    body: String,
+    created: String,
+    reporter: String,
+    resolved: bool,
+    /// `false` for the security/malware reports that stay private to the
+    /// moderation queue — surfaced so a moderator sees the "private" mark.
+    public: bool,
+}
+
+impl IssueRow {
+    fn from_model(c: pd::PluginComment) -> Self {
+        let reporter = c
+            .author_label
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "Issue report".to_string());
+        Self {
+            id: c.id,
+            created: c.created_at.format("%b %-d, %Y").to_string(),
+            reporter,
+            resolved: c.is_resolved,
+            public: c.is_public,
+            body: c.body,
+        }
+    }
 }
 
 /// The detail view-model the `plugin.html` template renders.
@@ -2277,6 +2429,14 @@ struct CommentPreview {
     plugin_version: Option<String>,
     /// `database_backend` tag, when the visitor set one.
     backend: Option<String>,
+    /// Moderation state literal ("visible" / "hidden" / "flagged" / …) so a
+    /// moderator sees the current status badge + the right action buttons.
+    moderation: &'static str,
+    /// True when this note is currently hidden (drives the "Hidden" badge +
+    /// the Unhide action).
+    is_hidden: bool,
+    /// True when this note is currently flagged.
+    is_flagged: bool,
 }
 
 impl CommentPreview {
@@ -2302,6 +2462,7 @@ impl CommentPreview {
         } else {
             role.to_string()
         };
+        let moderation = moderation_db_literal(c.moderation);
         Self {
             id: c.id,
             initials: initials(&name),
@@ -2313,6 +2474,9 @@ impl CommentPreview {
             created,
             plugin_version,
             backend,
+            moderation,
+            is_hidden: matches!(c.moderation, CommentModeration::Hidden),
+            is_flagged: matches!(c.moderation, CommentModeration::Flagged),
         }
     }
 }
