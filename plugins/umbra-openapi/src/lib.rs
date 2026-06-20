@@ -16,9 +16,12 @@
 //! ## Scope
 //!
 //! v1 only describes umbra-rest's auto-generated endpoints. Hand-
-//! written routes the user added on the builder are not in scope, and
-//! the spec carries no `securitySchemes` entries. Pagination is also
-//! deferred because umbra-rest does not paginate yet.
+//! written routes the user added on the builder are not in scope.
+//! The spec emits a `components.securitySchemes` block populated from
+//! the REST layer's registered auth schemes (via
+//! `umbra_rest::registered_security_schemes()`), and list endpoints
+//! include `page` / `page_size` query parameters — both are fully
+//! implemented.
 
 use std::sync::OnceLock;
 

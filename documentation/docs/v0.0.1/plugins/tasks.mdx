@@ -168,8 +168,11 @@ The signals docs page is at [`/docs/v0.0.1/plugins/signals`](/docs/v0.0.1/plugin
 
 ## What is NOT in v1
 
-- **Priority queues and distributed locks.** SQLite is single-writer; a brief
-  transaction is sufficient. Postgres-aware locking is a later follow-on.
+- **Priority queues and `FOR UPDATE SKIP LOCKED`.** The worker uses a
+  conditional UPDATE claim that is correct on both SQLite and Postgres
+  (a concurrent worker whose UPDATE matches zero rows loses the race
+  cleanly). `SELECT … FOR UPDATE SKIP LOCKED` is a future optimization
+  that avoids the wasted candidate SELECT, not a correctness fix.
 - **Periodic scheduling ("beat").** There is no cron-like repeat mechanism yet.
   Deferred to the deep spec.
 - **Status enum.** Status is stored as a plain string (`pending`, `running`,

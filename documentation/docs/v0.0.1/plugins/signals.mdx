@@ -109,15 +109,16 @@ on_model::<AuthUser>().post_save(|user, created| async move {
 
 The signal handler's only job is to enqueue a row. The task worker handles retry, backoff, and dead-letter accounting. See [`umbra-tasks`](/docs/v0.0.1/plugins/tasks) for the worker side.
 
-<Callout type="warning" title="Bulk methods do NOT fire signals">
-The following write paths bypass signals entirely - matching Django's own behaviour:
+<Callout type="info" title="Bulk methods fire bulk signals, not per-row signals">
+The following write paths fire **bulk signals** (`bulk_post_save:<table>` or `bulk_post_delete:<table>`), not per-row signals:
 
-- `Manager::create(instance)` - use `Manager::save(instance)` instead if you need signals.
-- `Manager::bulk_create(vec)` - never fires signals; use per-row `save` in a loop if needed.
-- `QuerySet::update_values(map)` - bulk UPDATE, no signals.
-- `QuerySet::delete()` - bulk DELETE, no signals.
+- `Manager::bulk_create(vec)` — fires `bulk_post_save:<table>` once with `{ ids, created: true }`.
+- `QuerySet::update_values(map)` — fires `bulk_post_save:<table>` once with `{ ids, created: false }`.
+- `QuerySet::delete()` — fires `bulk_post_delete:<table>` once with `{ ids }`.
 
-**If you need per-row signals on a bulk path:** fetch the rows first, then iterate calling `delete_instance` per row inside a transaction:
+`Manager::create(instance)` fires `post_save` (per-row). Use it instead of `bulk_create` when you need a per-row signal.
+
+**If you need per-row signals on a bulk delete path:** fetch the rows first, then iterate calling `delete_instance` per row inside a transaction:
 
 ```rust
 umbra::db::transaction(|tx| Box::pin(async move {
@@ -129,7 +130,7 @@ umbra::db::transaction(|tx| Box::pin(async move {
 })).await?;
 ```
 
-This is intentionally verbose - bulk deletes are usually hot paths where the cost of serialising every row to JSON and calling N signal handlers would be a surprise.
+This is intentionally verbose - bulk deletes are usually hot paths where the cost of serialising every row to JSON and calling N signal handlers would be a surprise. Subscribe to `bulk_post_delete:<table>` instead when working from a list of PKs is sufficient.
 </Callout>
 
 ## Generic pub/sub - the escape hatch
@@ -185,9 +186,10 @@ For reference - the `on_model` API deserialises these for you, so you only need 
 ## What's not shipped at v0.0.1
 
 - **Signal disconnect / per-call disable.** Testing a handler today requires `umbra_signals::clear_for_tests()` to wipe all handlers and re-register. Targeted disconnect lands when tests need finer control.
-- **`m2m_changed` signals.** Many-to-many relationships aren't in scope until a later milestone.
 - **Cross-process broadcast.** A Redis or NATS adapter for horizontally-scaled deployments. Use `umbra-tasks` for cross-process work until then.
 - **Typed events.** An `enum AppEvent { ... }` shape with associated types so emitter and subscriber agree at compile time. Lands when a real plugin chain needs the guarantee.
+
+`m2m_changed:<junction_table>` **is shipped.** `M2M::add`/`remove`/`set`/`clear` each fire it automatically. See the [ORM signals page](/docs/v0.0.1/orm/signals) for the payload shape and subscription example.
 
 ## See also
 
