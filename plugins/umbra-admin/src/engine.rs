@@ -302,6 +302,12 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             "admin_base",
             minijinja::Value::from_safe_string(branding.base_path),
         );
+        // gaps2 #33: expose the flag so the "Home" breadcrumb link in
+        // base.html can append `?dashboard=1` when the feature is on.
+        env.add_global(
+            "restore_last_path",
+            minijinja::Value::from(branding.restore_last_path),
+        );
 
         // Unified static pipeline — register the `static()` global so
         // admin templates resolve assets through the same `static_url`

@@ -20,6 +20,14 @@ pub struct AdminBranding {
     /// links and HTMX targets resolve under whatever prefix
     /// `AdminPlugin::at()` configured.
     pub base_path: String,
+    /// gaps2 #33 — whether the "restore last changelist" feature is
+    /// active. When `true` (default), `/admin/` redirects the user to
+    /// the last-visited changelist URL stored in
+    /// `admin_user_pref.preferences.last_path`, and the "Home" breadcrumb
+    /// link carries `?dashboard=1` so the dashboard is reachable in one
+    /// click. When `false`, the index always renders the dashboard and
+    /// the changelist handler stops writing `last_path` (no dead data).
+    pub restore_last_path: bool,
 }
 
 impl Default for AdminBranding {
@@ -29,6 +37,7 @@ impl Default for AdminBranding {
             site_description: String::new(),
             brand_color: String::new(),
             base_path: "/admin".to_string(),
+            restore_last_path: true,
         }
     }
 }
