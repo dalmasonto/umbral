@@ -217,7 +217,7 @@ The lift through `WriteError` is what unifies all surfaces. A custom validator t
 - Content type: `application/x-www-form-urlencoded` only. `multipart/form-data` (file uploads) is a follow-up.
 - Body size: capped at 2 MiB. Larger requests return 413.
 - Field types: `String`, `i8`..`i64` / `u8`..`u64` / `isize` / `usize`, `f32` / `f64`, `bool`, and `Option<T>` of those. Server-managed Model fields (DateTime, choice enums) get skipped via `#[umbra(...)]` markers and need `Default`.
-- Input preservation on validation failure: the failure branch hands back a `FormErrors`, not the user's raw input. Re-rendering the form with the typed input requires either calling `axum::Form<T>` alongside (parses but doesn't validate) or accepting the `Default::default()` template fallback. The latter is what the shop's contact form does.
+- Input preservation on validation failure: the failure branch's `FormErrors` carries the raw submitted pairs (the extractor attaches them via `FormErrors::with_raw`). `render` / `render_with` bind those pairs to the `form` template key, so re-rendering keeps every value the user typed - no `axum::Form<T>` side-parse or `Default::default()` fallback needed.
 
 ## Relation fields on a form
 
