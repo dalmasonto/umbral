@@ -169,7 +169,7 @@ impl Plugin for BlogPlugin {
     /// first; in production you'd guard this behind a feature flag
     /// or move it to a separate `seed` management command.
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        tokio::runtime::Handle::current().block_on(async {
+        umbra::plugin::block_on_ready(async {
             let count = Post::objects().count().await?;
             if count == 0 {
                 Post::objects()
@@ -221,9 +221,12 @@ Four things that matter in this shape:
    customisation is one more line in `main.rs`, not a 30-line builder
    chain.
 4. **`on_ready` bridges sync to async.** The trait method is sync; sqlx
-   is async; `Handle::current().block_on(...)` is the canonical bridge.
-   It works because `App::build()` runs inside `#[tokio::main]`. The
-   `umbra-rls` plugin uses the same pattern.
+   is async; `umbra::plugin::block_on_ready(...)` is the canonical bridge.
+   It works under a multi-thread `#[tokio::main]` runtime, under
+   `#[tokio::test]`'s current-thread runtime, and with no ambient runtime
+   at all — without panicking (a raw `Handle::current().block_on` would
+   panic on the current-thread path). The `umbra-rls` plugin uses the same
+   helper.
 
 ## Next
 

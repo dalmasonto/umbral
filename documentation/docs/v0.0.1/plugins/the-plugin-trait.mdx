@@ -51,28 +51,70 @@ fires `on_ready` in dependency order.
 
 ## What plugins contribute
 
+Every method except `name()` has a default that returns the empty contribution, so a plugin opts in only to what it ships: a pure-route plugin overrides `routes()`, a pure-data plugin overrides `models()`, and the auth plugin overrides almost all of them.
+
 <CardGrid cols={3}>
-  <Card icon="database" title="models" description="Per-plugin model list. The migration engine walks every plugin's migrations/<name>/ directory in dependency order." />
-  <Card icon="route" title="routes" description="An axum-shape Router. Plugins choose their own path prefixes; the App merges them all." />
-  <Card icon="shield" title="system_checks" description="Boot-time invariants. Errors block boot; warnings log and continue." />
-  <Card icon="git-branch" title="dependencies" description="Other plugin names. The topological sort uses this; cycles surface as BuildError::PluginCycle." />
-  <Card icon="zap" title="on_ready" description="Synchronous hook fired after build() succeeds. Spawn background work, wire signals, seal late registrations." />
-  <Card icon="alert-triangle" title="name (required)" description="Unique within the binary. The reserved name 'app' belongs to the implicit plugin that owns .model::<T>() registrations." />
+  <Card icon="alert-triangle" title="name (required)" description="&'static str. Unique within the binary; the migration tracking key. The reserved name 'app' belongs to the implicit plugin that owns .model::<T>() registrations." />
+  <Card icon="git-branch" title="dependencies" description="&'static [&'static str]. Plugins that must load first. The topological sort uses this; cycles surface as BuildError::PluginCycle." />
+  <Card icon="database" title="models" description="Vec<ModelMeta>. Per-plugin model list, in declaration order. The migration engine diffs these for makemigrations." />
+  <Card icon="route" title="routes" description="An axum Router. Plugins choose their own path prefixes; the App merges them all flat." />
+  <Card icon="shield" title="system_checks" description="Vec<SystemCheck>. Boot-time invariants run in phase 4. Severity::Error blocks boot; Severity::Warning logs and continues." />
+  <Card icon="zap" title="on_ready" description="Sync hook fired after system checks pass, in dependency order. Spawn background work, wire signals, seal late registrations." />
 </CardGrid>
 
-## What ships at v0.0.1 vs deferred
+### The full method surface
 
-The trait above is the current shape. Shipped:
+Every method below is a real trait method with a default impl (only `name()` is required). Signatures match `crates/umbra-core/src/plugin.rs` exactly.
 
-- `commands()` - `Plugin::commands()` returns `Vec<Box<dyn PluginCommand>>`. `umbra-auth` ships `createsuperuser` and `umbra-tasks` ships `tasks-worker` through this hook. See [Management commands](/docs/v0.0.1/cli/management-commands#plugin-contributed-subcommands) for the full example.
-- `templates_dirs()` - plugins contribute their own template directories. See [Rendering HTML](/docs/v0.0.1/templates/rendering-html#cross-plugin-templates).
-- `wrap_router(Router) -> Router` - **the middleware seam.** Each plugin wraps the merged router with its own tower / axum layers; `App::build` calls it in topological order, so a plugin's layers wrap everything declared before it. `umbra-security` (CSRF + hardening headers) and `umbra-sessions` (the session layer) both ride this hook. Returning the router shape - rather than a `Vec<Layer>` - sidesteps the trait-object lifetime problem `Layer`'s generics produce, so plugins keep the full axum/tower API at the call site.
-- `static_files() -> Vec<StaticFile>` - embedded assets baked into the binary. Each entry becomes one `GET <url_path>` route serving a `&'static [u8]` body (typically `include_bytes!`) with a fixed `Content-Type` / `Cache-Control`. `umbra-admin` ships its precompiled CSS this way.
+| Method | Signature | Default | What it contributes |
+|---|---|---|---|
+| `name` | `fn name(&self) -> &'static str` | — (required) | Stable identifier; migration-tracking key. |
+| `dependencies` | `fn dependencies(&self) -> &'static [&'static str]` | `&[]` | Plugins that must load first. |
+| `models` | `fn models(&self) -> Vec<ModelMeta>` | empty | The plugin's models, the migration diff target. |
+| `routes` | `fn routes(&self) -> Router` | `Router::new()` | HTTP routes, merged flat into the app router. |
+| `route_paths` | `fn route_paths(&self) -> Vec<RouteSpec>` | empty | Declared paths for the dev-mode 404 page (informational only). |
+| `openapi_paths` | `fn openapi_paths(&self) -> Vec<(String, serde_json::Value)>` | empty | OpenAPI path items `umbra-openapi` merges into the spec. |
+| `system_checks` | `fn system_checks(&self) -> Vec<SystemCheck>` | empty | Boot-time invariants (phase 4). |
+| `provides_storage` | `fn provides_storage(&self) -> bool` | `false` | `true` if `on_ready` registers a `Storage` backend (e.g. `MediaPlugin`). |
+| `database` | `fn database(&self) -> Option<&'static str>` | `None` | DB alias every model this plugin owns reads/writes (umbra's `DATABASE_ROUTERS`). |
+| `templates_dirs` | `fn templates_dirs(&self) -> Vec<PathBuf>` | empty | Template search directories. |
+| `template_registrars` | `fn template_registrars(&self) -> Vec<TemplateRegistrar>` | empty | Custom minijinja filters / functions / globals (Django's `{% load %}`). |
+| `wrap_router` | `fn wrap_router(&self, router: Router) -> Router` | router unchanged | The tower/axum middleware seam (see below). |
+| `middleware` | `fn middleware(&self) -> Vec<Arc<dyn Middleware>>` | empty | Ergonomic `before_request` / `after_response` hooks, stacked in onion order. |
+| `static_files` | `fn static_files(&self) -> Vec<StaticFile>` | empty | Assets baked into the binary (`&'static [u8]` bodies). |
+| `static_dirs` | `fn static_dirs(&self) -> Vec<StaticDir>` | empty | On-disk source dirs served live (dev) under a namespace via the unified static pipeline. |
+| `static_root_dirs` | `fn static_root_dirs(&self) -> Vec<PathBuf>` | empty | On-disk dirs served at the bare root of `static_url` (no namespace). |
+| `commands` | `fn commands(&self) -> Vec<Box<dyn PluginCommand>>` | empty | CLI subcommands. |
+| `api_endpoints` | `fn api_endpoints(&self) -> Vec<ApiEndpoint>` | empty | Endpoints advertised for service discovery (a REST API root, a SPA). |
+| `on_ready` | `fn on_ready(&self, ctx: &AppContext) -> Result<(), PluginError>` | `Ok(())` | Late-init hook. |
 
-Deferred to later milestones:
+### Notable hooks in depth
 
-- A declarative `middleware()` returning ordered `Layer`s. The shipped seam is `wrap_router` above; the open question is only the cross-plugin layer-ordering contract a declarative form would need.
+- `wrap_router(Router) -> Router` — **the middleware seam.** Each plugin wraps the merged router with its own tower / axum layers; `App::build` calls it in topological order, so a plugin's layers wrap everything declared before it. `umbra-security` (CSRF + hardening headers) and `umbra-sessions` (the session layer) both ride this hook. Returning the router shape — rather than a `Vec<Layer>` — sidesteps the trait-object lifetime problem `Layer`'s generics produce, so plugins keep the full axum/tower API at the call site.
+- `middleware() -> Vec<Arc<dyn Middleware>>` — the **ergonomic** alternative to `wrap_router`. Each `Middleware` gets a `before_request` / `after_response` hook and nothing else to wire; all plugins' (plus the app's) are collected into one stack installed at `App::build` in onion order. Reach for `wrap_router` when you need a real tower `Layer` (timeouts, tracing spans, body-limit); reach for `middleware` when you just want to look at the request or response.
+- `commands() -> Vec<Box<dyn PluginCommand>>` — CLI subcommands. `umbra-auth` ships `createsuperuser` and `umbra-tasks` ships `tasks-worker` through this hook. See [Management commands](/docs/v0.0.1/cli/management-commands#plugin-contributed-subcommands).
+- `templates_dirs()` / `template_registrars()` — plugins contribute template directories and custom tags. See [Rendering HTML](/docs/v0.0.1/templates/rendering-html#cross-plugin-templates).
+- `static_files()` — embedded assets baked into the binary; each entry becomes one `GET <url_path>` route serving a `&'static [u8]` body (typically `include_bytes!`). `umbra-admin` ships its precompiled CSS this way. `static_dirs()` / `static_root_dirs()` instead serve assets *off disk* through the unified static pipeline (live in dev); `umbra-playground` ships its Vite bundle via `static_dirs()`.
+
+`on_ready` receives an [`AppContext`](#the-on_ready-context) carrying the default `DbPool` and a `Settings` clone. The hook is **sync** (the trait must be object-safe for `Vec<Box<dyn Plugin>>`); bridge to async work with `umbra::plugin::block_on_ready(fut)`, which is safe under multi-thread, current-thread (`#[tokio::test]`), and no-runtime callers.
+
+## What's deferred
+
+- A *declarative* `middleware()` whose entries are ordered tower `Layer`s. The ergonomic `before_request` / `after_response` form **is** shipped; what's deferred is the cross-plugin layer-ordering contract a fully declarative `Layer`-based form would need. Use `wrap_router` today when you need a raw `Layer`.
 - inventory / linkme auto-registration. Explicit `.plugin(...)` is the default recommendation; auto lands when a built-in opts in.
+
+## The on_ready context
+
+`on_ready` receives an `&AppContext`:
+
+```rust
+pub struct AppContext {
+    pub pool: DbPool,       // the default connection pool, typed by backend
+    pub settings: Settings, // a clone of the active settings
+}
+```
+
+`pool` is the same value `umbra::db::pool_dispatched().clone()` returns. Plugin code that needs the database normally goes through the ORM (`Model::objects()…`); this field is the escape hatch for schema-DDL bootstrap and backend-specific features like Postgres RLS.
 
 ## The proof
 

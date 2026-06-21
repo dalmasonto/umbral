@@ -24,18 +24,22 @@ let app = App::builder()
 
 Open `http://localhost:8000/api/playground/` in a browser.
 
+<Callout type="warning">
+The playground is a request console that fires live REST calls with the visitor's ambient cookies. To avoid exposing that against a production API, the plugin **does not mount under `Environment::Prod`** by default — `routes()` returns an empty router and logs a warning. Opt in explicitly with `PlaygroundPlugin::new("my_app").allow_in_prod()` if you intend to run it in production (e.g. behind your own auth proxy).
+</Callout>
+
 ## Build requirements
 
-The plugin bundles a React + Vite UI at compile time and **embeds** it into the binary via `include_dir`. To produce the bundle, you need Node.js 20+ available so `npm` can install the frontend's dev dependencies once:
+The plugin ships a React + Vite UI. To produce the bundle, you need Node.js 20+ available so `npm` can install the frontend's dev dependencies once:
 
 ```bash
 cd plugins/umbra-playground/frontend
 npm install
 ```
 
-Then a normal `cargo build` of the plugin runs `npm run build` (Vite) automatically through `build.rs` and bakes the output into the binary. There's no `dist/` directory to ship alongside - the assets *are* the binary.
+A normal `cargo build` of the plugin runs `npm run build` (Vite) automatically through `build.rs`, writing the output into the crate's `dist/` directory. The plugin's shell HTML is compiled into the binary, but the JS/CSS bundle itself is served off disk through umbra's **unified static pipeline** — the plugin contributes its `dist/` directory via `Plugin::static_dirs()` under the `playground` namespace, so `dist/assets/index.js` is reachable at `<static_url>playground/assets/index.js` (`/static/playground/assets/…` with the default `static_url`). In `Environment::Dev` the pipeline serves the file live off disk on every request, so dropping a freshly-built bundle into `dist/` is picked up on the next request with no Rust recompile; in prod the collected copy under `<static_root>/playground/…` is served.
 
-Without Node available, the plugin still compiles and serves a placeholder page explaining the recovery steps.
+Without Node available (the bundle couldn't be built), the plugin still compiles and serves a placeholder page explaining the recovery steps — the placeholder HTML is baked into the binary so the route always renders something.
 
 ## What you get
 
