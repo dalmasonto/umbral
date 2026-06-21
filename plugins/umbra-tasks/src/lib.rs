@@ -63,8 +63,13 @@
 //!   [`claim_one`] orders by `priority DESC` before `scheduled_for` / `id`,
 //!   so a high-priority task jumps the queue while ties stay FIFO within a
 //!   band. Set it via [`EnqueueOptions::priority`].
-//! - No admin visibility into the queue. That's the remaining Celery gap,
-//!   deferred to planning/features.md #82.
+//! - Admin visibility (this revision): [`admin_model`] returns a read-only
+//!   [`umbra_admin::AdminModel`] for [`TaskRow`] so operators browse and
+//!   inspect the queue in the admin, plus a "Retry selected" bulk action
+//!   that re-queues failed tasks via [`retry_task`]. Feature-gated behind
+//!   `admin` (on by default); a tasks-only app builds with
+//!   `default-features = false` and never pulls the admin in
+//!   (planning/features.md #82).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -1609,4 +1614,151 @@ async fn disable_periodic(id: i64) -> Result<(), TaskError> {
         .update_values(patch)
         .await?;
     Ok(())
+}
+
+// =========================================================================
+// Retry — re-queue a failed task (admin "Retry selected" + public API).
+// =========================================================================
+
+/// Re-queue a **failed** task so a worker claims it again.
+///
+/// Resets the row identified by `id` back to [`STATUS_PENDING`] with
+/// `run_at = now` (immediately eligible), clears the recorded `error`,
+/// clears `completed_at` / `started_at` (the row is no longer terminal nor
+/// mid-execution), and resets `attempts` to `0`.
+///
+/// **Why reset `attempts`:** a "retry" is the operator deciding the failure
+/// was transient (or that they've fixed the handler) and asking for a fresh
+/// run. Giving the task its full `max_attempts` budget again is the expected
+/// semantics — otherwise a task that already exhausted its attempts would
+/// immediately re-fail on its single remaining (zero) budget. The trade-off
+/// is that `attempts` no longer accumulates across manual retries; the audit
+/// trail of the prior failure lived in the now-cleared `error` and the
+/// worker logs, not in the counter.
+///
+/// The filter is `id = :id AND status = 'failed'`, so this **only** acts on a
+/// terminal/failed row: a `pending`, `running`, or `succeeded` task is left
+/// untouched (you can't disturb a task a worker is mid-flight on). Returns
+/// `true` if a row was re-queued, `false` if no failed row with that id
+/// exists.
+pub async fn retry_task(id: i64) -> Result<bool, TaskError> {
+    let now = Utc::now();
+    let mut patch = serde_json::Map::new();
+    patch.insert(
+        "status".to_string(),
+        serde_json::Value::String(STATUS_PENDING.to_string()),
+    );
+    patch.insert("attempts".to_string(), serde_json::Value::from(0i64));
+    patch.insert("run_at".to_string(), serde_json::to_value(now)?);
+    patch.insert("started_at".to_string(), serde_json::Value::Null);
+    patch.insert("completed_at".to_string(), serde_json::Value::Null);
+    patch.insert("error".to_string(), serde_json::Value::Null);
+
+    let updated = TaskRow::objects()
+        .filter(task_row::ID.eq(id) & task_row::STATUS.eq(STATUS_FAILED))
+        .update_values(patch)
+        .await?;
+    Ok(updated > 0)
+}
+
+// =========================================================================
+// Admin visibility (planning/features.md #82).
+// =========================================================================
+
+/// A **read-only** [`umbra_admin::AdminModel`] for [`TaskRow`] so operators
+/// can browse and inspect the task queue in the admin, with a **"Retry
+/// selected"** bulk action that re-queues failed tasks (see [`retry_task`]).
+///
+/// Register it on the admin:
+///
+/// ```ignore
+/// AdminPlugin::default().register(umbra_tasks::admin_model())
+/// ```
+///
+/// Every column is read-only: a task row is authored by [`enqueue`] / the
+/// worker, never hand-edited in the admin. Retrying is the one mutation an
+/// operator performs, and it goes through the [`retry_task`] action rather
+/// than free-form field edits.
+///
+/// Feature-gated behind `admin` (on by default). Build with
+/// `default-features = false` for a tasks-only app that doesn't pull the
+/// admin into its dependency graph.
+#[cfg(feature = "admin")]
+pub fn admin_model() -> umbra_admin::AdminModel {
+    use umbra_admin::{Action, ActionResult, ActionScope, AdminModel, ToastLevel};
+
+    let retry = Action::new(
+        "retry_failed",
+        "Retry selected",
+        "refresh-cw",
+        |inv: umbra_admin::ActionInvocation| async move {
+            let mut requeued = 0u64;
+            for raw in &inv.ids {
+                // The PK is i64; a non-numeric id can't name a TaskRow, so
+                // skip it (rather than abort the whole batch).
+                let Ok(id) = raw.parse::<i64>() else {
+                    continue;
+                };
+                match retry_task(id).await {
+                    Ok(true) => requeued += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::error!(error = %e, task_id = id, "admin: retry_task failed");
+                        return Err("database error during retry".to_string());
+                    }
+                }
+            }
+            let (message, level) = if requeued == 0 {
+                (
+                    "No failed tasks to retry in the selection.".to_string(),
+                    ToastLevel::Info,
+                )
+            } else {
+                (
+                    format!("Re-queued {requeued} failed task(s)."),
+                    ToastLevel::Success,
+                )
+            };
+            Ok(ActionResult::Toast { message, level })
+        },
+    )
+    .scope(ActionScope::Bulk)
+    .confirm("Re-queue the selected failed task(s)? Each is reset to pending with a fresh attempt budget.");
+
+    AdminModel::new("task_row")
+        .label("Tasks")
+        .list_display(&[
+            "id",
+            "name",
+            "status",
+            "priority",
+            "attempts",
+            "max_attempts",
+            "run_at",
+            "completed_at",
+            "created_at",
+        ])
+        .list_filter(&["status", "priority"])
+        .search_fields(&["name", "status"])
+        .ordering(&["-created_at"])
+        .actions(vec![retry])
+        // Every column is read-only: rows are written by enqueue/the worker,
+        // never hand-authored. Retrying is the one operator mutation and it
+        // goes through the `retry_failed` action above.
+        .readonly_fields(&[
+            "id",
+            "name",
+            "payload",
+            "status",
+            "attempts",
+            "max_attempts",
+            "scheduled_for",
+            "run_at",
+            "started_at",
+            "completed_at",
+            "error",
+            "result",
+            "priority",
+            "created_at",
+        ])
 }

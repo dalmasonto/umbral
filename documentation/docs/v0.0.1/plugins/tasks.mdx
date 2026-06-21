@@ -441,6 +441,38 @@ and its result reads back as `Some(Value::Null)`. A failing handler leaves
 
 See `arch.md` and `plugins/umbra-tasks/src/lib.rs` for the design rationale.
 
+## Admin visibility
+
+Operators browse and inspect the task queue in the admin. `umbra_tasks::admin_model()` returns a **read-only** `AdminModel` for the `task_row` table — register it on the admin alongside your own models:
+
+```rust
+use umbra_admin::AdminPlugin;
+
+App::builder()
+    .plugin(TasksPlugin::default())
+    .plugin(AdminPlugin::default().register(umbra_tasks::admin_model()))
+    .build()?;
+```
+
+The list shows the columns an operator wants at a glance — `id`, `name`, `status`, `priority`, `attempts` / `max_attempts`, `run_at`, `completed_at`, `created_at` — with `status` / `priority` filters and a `name` / `status` search box. Every column is read-only: rows are written by `enqueue` and the worker, never hand-authored.
+
+### Retrying a failed task
+
+The admin model attaches a **"Retry selected"** bulk action. Select one or more failed rows and run it to re-queue them: each failed task is reset to `pending` with `run_at = now` (immediately eligible), its `error` cleared, and its `attempts` counter reset to `0` so it gets a fresh `max_attempts` budget. The action only touches rows currently in the `failed` state — a `pending`, `running`, or `succeeded` task is left untouched, so you can't disturb a task a worker is mid-flight on.
+
+The same logic is available programmatically:
+
+```rust
+// Re-queue task #42 if (and only if) it is currently failed.
+let requeued: bool = umbra_tasks::retry_task(42).await?;
+```
+
+The `admin_model()` function and the `umbra-admin` dependency are gated behind the `admin` feature (on by default). A tasks-only app that doesn't run the admin builds with `default-features = false` and never pulls the admin into its dependency graph:
+
+```toml
+umbra-tasks = { version = "0.0.1", default-features = false }
+```
+
 ## Combining with signals
 
 <Callout type="info">
@@ -464,10 +496,6 @@ The signals docs page is at [`/docs/v0.0.1/plugins/signals`](/docs/v0.0.1/plugin
   UPDATE matches zero rows loses the race cleanly). `SELECT … FOR UPDATE
   SKIP LOCKED` is a future optimization that avoids the wasted candidate
   SELECT, not a correctness fix.
-- **Admin visibility.** No admin UI into the queue (pending/failed counts,
-  retrying a failed task). Also #82. (The **result backend** and **task-status
-  API** — `task_status` / `await_result` — are done; see "Task results &
-  status" above.)
 - **Per-task backoff / timeout persistence.** `EnqueueOptions` accepts the fields
   but the worker applies worker-level defaults in v1 (see the callout above). #82.
 - **Status enum.** Status is stored as a plain string (`pending`, `running`,
