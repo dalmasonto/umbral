@@ -113,6 +113,23 @@ cargo run -- createsuperuser --username admin --email admin@example.com --noinpu
 # reads password from UMBRA_SUPERUSER_PASSWORD
 ```
 
+## The `AuthPlugin` builder surface
+
+`AuthPlugin::<U>::default()` is secure out of the box; the builder methods are tweaks on top, all chainable:
+
+| Method | Effect |
+|---|---|
+| `user_model_name(name)` | Informational label surfaced in admin / OpenAPI. No effect on dispatch. |
+| `with_user_in_templates()` | Mount the `user_context_layer` so every HTML template render gets `user` in its global context. One DB read per request; off by default (pointless for REST-only apps). |
+| `with_default_routes()` / `with_default_routes_at(prefix)` | Mount `register` / `login` / `logout` / `me` under `/api/auth` (or your prefix). `AuthPlugin<AuthUser>` only. |
+| `password_validators(policy)` | Replace the default password-strength policy with a hand-built `PasswordPolicy`. |
+| `min_password_length(n)` | Keep the four default validators, change only the minimum length. |
+| `disable_password_validation()` | Explicit opt-out: install an empty policy so no validation runs. |
+| `login_throttle(max, window)` / `register_throttle(max, window)` | Tune the login / register rate-limit budgets. |
+| `disable_throttle()` | Explicit opt-out: turn login + register throttling off entirely. |
+
+Password strength and rate limiting are both **on by default** and run at the registration / login boundary, not in the low-level creation helpers. Full coverage of the validators, the throttle budgets, and the opt-outs is on the [Users and passwords](/docs/v0.0.1/auth/users-and-passwords) page.
+
 ## Guarding views
 
 Django has a `@login_required` decorator that gates a view behind authentication. umbra ships the same idea in two complementary shapes: a per-handler extractor and a per-Router layer. Both share one config struct that controls the unauthenticated response.

@@ -143,3 +143,4 @@ If you need row-level data to authorize ("only the author can edit this post"), 
 - The full trait + the built-in source: `plugins/umbra-rest/src/permission.rs`.
 - Wiring permissions onto a resource: [`ResourceConfig::permission`](/docs/v0.0.1/rest/). See the example app at `examples/derive-demo/src/main.rs` for an end-to-end wire-up.
 - The authentication side of the gate: [Authentication](/docs/v0.0.1/rest/authentication).
+- The third request-time gate, run after permission: [Throttling](/docs/v0.0.1/rest/throttling).
