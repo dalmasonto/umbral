@@ -305,7 +305,7 @@ let reviewed = Post::objects()
 
 ## Reading the raw ID and resolving the referenced row
 
-`ForeignKey<T>` exposes `.id()` to read the raw integer and `.resolve(&pool)` to fetch the referenced row:
+`ForeignKey<T>` exposes `.id()` to read the raw primary key (a `T::PrimaryKey` — `i64` for an integer-keyed target, `String`/`Uuid` otherwise) and `.resolve(&pool)` to fetch the referenced row. `.id_ref()` borrows the PK without cloning, and `.set(pk)` replaces the stored value:
 
 ```rust
 let post = Post::objects()
@@ -325,7 +325,7 @@ println!("written by {}", author.name);
 
 ## Serialisation
 
-`ForeignKey<T>` serialises and deserialises as a plain JSON integer. The REST layer and the backup tool see it as an `i64`: no nested object, no special envelope.
+Without `select_related`, `ForeignKey<T>` serialises and deserialises as the target's bare primary key in its native JSON shape — a number for an `i64` PK, a string for a `String`/`Uuid` PK. The REST layer and the backup tool see that scalar: no nested object, no special envelope. After `select_related` has populated the resolved slot, it serialises as the full `T` object instead (see [Eager loading](#eager-loading-with-select_related)).
 
 ```json
 { "id": 1, "title": "Hello", "author": 42 }
@@ -404,7 +404,7 @@ A `NULL` column anywhere in the chain bottoms out cleanly (the deeper hops simpl
 ### Still deferred
 
 - **`ON DELETE` behaviour**: supported (see [`on_delete` / `on_update`](#referential-actions-on_delete--on_update)); only *changing* the action on an already-created table needs a hand-written migration.
-- **FK columns referencing a non-`i64` primary key**: the relation machinery (`select_related`, `prefetch_related`, `reverse::<C>()`) is i64-PK only at v1; a non-i64 PK returns a clean error rather than mis-binding.
+- **Non-`i64` primary keys**: supported. A `ForeignKey<T>` stores `T::PrimaryKey`, so `i64`, `String`, and `Uuid` targets all work end-to-end through `select_related`, `prefetch_related`, and `reverse::<C>()`. The parent PK is bound through the same JSON-to-SQL coercion regardless of shape.
 
 For the design rationale see [`arch.md`](../../../../arch.md) §M9 and the design spec `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md`.
 
@@ -435,6 +435,8 @@ pub struct Post {
 
 The `M2M<T>` type is detected from the Rust type alone; no `#[umbra(m2m)]` marker is required. Add `#[umbra(m2m = "<child_table>")]` only when the child's table name isn't the snake_case default of `T` (e.g. the field's `T` is `Tag2` but the table is `tag`).
 
+`M2M<T, P>` carries a second type parameter `P` for the **parent** model's primary-key type, defaulting to `i64`. Override it when the parent's PK isn't `i64` — `pub tags: M2M<Tag, String>` on a model whose PK is a `String` slug. The child's PK type comes from `T::PrimaryKey` and needs no annotation.
+
 <Callout type="info">
 First-class M2M (the `M2M<T>` field, `prefetch_related`, `join_related`, the form `ModelMultiChoice`, and `annotate_count`) is the shipped path. `examples/shop/plugins/content/src/models.rs` (`Post.tags: M2M<Tag>`) and `umbra_website/plugins/site_content/src/models.rs` (`BlogPost.tags: M2M<ContentTag>`) are real reference uses.
 </Callout>
@@ -455,6 +457,27 @@ for p in &posts {
     }
 }
 ```
+
+### Mutating the related set: `add` / `remove` / `set` / `clear` / `fetch`
+
+On a loaded parent the `M2M<T>` field exposes async CRUD methods that write the junction table directly. Each routes through the ambient pool and works on both SQLite and Postgres:
+
+```rust
+// Lazy fetch through the junction (one round-trip).
+let tags: Vec<Tag> = post.tags.fetch().await?;
+
+// Link / unlink a single child. `add` is idempotent (ON CONFLICT DO NOTHING).
+post.tags.add(&tag).await?;
+post.tags.remove(&tag).await?;
+
+// Replace the entire set in one transaction.
+post.tags.set(&[&tag1, &tag2]).await?;
+
+// Remove every relation for this parent; returns the count removed.
+let n: u64 = post.tags.clear().await?;
+```
+
+Each method is a no-op when the `M2M` slot is unattached (the parent hasn't been persisted, so there's no `parent_id` to filter on) — `fetch` returns an empty vec, the writers return `Ok`. `add` / `remove` / `set` / `clear` also fire an `m2m_changed:<junction>` signal so audit consumers can observe the change.
 
 ### Counting the related set: `annotate_count("tags")`
 
@@ -580,7 +603,7 @@ let n = alice.reverse::<Comment>()?.count().await?;
 let authored = user.reverse_via::<Comment>("author")?.fetch().await?;
 ```
 
-`reverse_via` validates that the named column exists on `C` and is an FK to this parent's table. V1 supports i64 primary keys only (consistent with the rest of the relation machinery); a non-i64 PK returns a clean `ReverseError::NonI64Pk` rather than mis-binding.
+`reverse_via` validates that the named column exists on `C` and is an FK to this parent's table. The parent PK is bound through the same JSON-to-SQL coercion as the rest of the relation machinery, so `i64`, `String`, and `Uuid` PKs all work; a PK that genuinely can't be read or bound surfaces as a clean `ReverseError::NonI64Pk` rather than mis-binding.
 
 ## prefetch_related for M2M batching
 
@@ -606,7 +629,7 @@ Without `.prefetch_related(...)`, `M2M.resolved()` stays `None` and accessing th
 
 `.prefetch_related_many(&["tags", "categories"])` batches several relations at once.
 
-Scope: M2M, `ReverseSet<C>` reverse-FK collections, and `OneToOne<C>` (see [One-to-one relationships](#one-to-one-relationships)). All three flow through the same dispatch in `hydrate_prefetch_related`. i64 parent PK only (matches the rest of the M2M plumbing).
+Scope: M2M, `ReverseSet<C>` reverse-FK collections, and `OneToOne<C>` (see [One-to-one relationships](#one-to-one-relationships)). All three flow through the same dispatch in `hydrate_prefetch_related`. Parents are bucketed by their PK as a JSON value, so `i64`, `String`/slug, and `Uuid` parent PKs all hydrate.
 
 ## M2M via LEFT JOIN: `join_related("<m2m_field>")`
 

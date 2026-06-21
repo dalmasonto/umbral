@@ -16,7 +16,7 @@ tags: [orm, forms, foreign-key, many-to-many, choices, validation]
 | `#[umbra(choices)]` enum | `Select` | membership against the enum's compile-time values (no DB) | `<select>` of the enum's `VALUES`/`LABELS` |
 | `ReverseSet<C>` / reverse `OneToOne<T>` (`#[sqlx(skip)]`) | *skipped* | n/a | absent from `fields()` |
 
-`FormValidate::validate` and `render_html` are `async`: FK/M2M existence checks and `<select>` option fetches resolve through the ambient pool. `validate` is the only place a relation touches the DB before insert; a miss is a field-keyed error and no row is written.
+`FormValidate::validate` and `render_html` are `async`: FK/M2M existence checks and `<select>` option fetches resolve through the ambient pool. `validate` is where a relation is verified before insert — a miss is a field-keyed error and no row is written; `render_html` only reads option rows for display.
 
 <Callout type="info">
 Reverse relations (`ReverseSet<C>`, the `#[sqlx(skip)]` reverse `OneToOne`) are back-pointers, never user-submittable, so the derive skips them automatically. You do **not** need `#[umbra(noform)]` on them.

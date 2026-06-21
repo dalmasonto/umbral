@@ -271,7 +271,7 @@ let users_by_id: HashMap<i64, User> =
     User::objects().in_bulk(vec![1, 2, 3]).await?;
 ```
 
-`into_subquery(col)` clears the SELECT list to just `col` and hands the result to `IntCol::in_subquery` / `ForeignKeyCol::in_subquery`. `union` / `intersect` / `except` work on same-typed QuerySets; column-shape compatibility is enforced by the shared `T` param. `in_bulk` requires an i64-PK model.
+`into_subquery(col)` clears the SELECT list to just `col` and hands the result to `IntCol::in_subquery` / `ForeignKeyCol::in_subquery`. `union` / `intersect` / `except` work on same-typed QuerySets; column-shape compatibility is enforced by the shared `T` param. `in_bulk(pks)` takes a `Vec<T::PrimaryKey>` and returns a `HashMap<T::PrimaryKey, T>`, so i64-, `String`/slug-, and `Uuid`-keyed models all work; missing ids are simply absent from the map.
 
 ## JSON column ops
 

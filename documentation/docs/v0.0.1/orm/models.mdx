@@ -26,8 +26,8 @@ pub struct Post {
 
 The rules the derive enforces:
 
-- Exactly one field named `id` - that is the primary key. Supported PK types: `i32`, `i64` (auto-increment), `uuid::Uuid` (no auto-generation, you supply the value), `String` (no auto-generation, you supply the value).
-- Field types come from the M3 catalogue: signed ints (`i16` / `i32` / `i64`), `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate` / `NaiveTime` / `DateTime<Utc>`, `uuid::Uuid`, `ForeignKey<T>`.
+- One primary-key field. By default that is a field named `id`; alternatively, mark any field with `#[umbra(primary_key)]` (e.g. a string codename). Supported PK types: every Rust integer width (`i8` / `i16` / `i32` / `i64` and `u8` / `u16` / `u32` / `u64`, with `i64` the auto-increment default), `uuid::Uuid` (no auto-generation, you supply the value), and `String` (no auto-generation, you supply the value). A custom newtype works too with one line: `impl umbra::orm::PrimaryKey for MyId {}` (the type must lower to a `sea_query::Value`).
+- Field types come from the M3 catalogue: signed and small-unsigned ints (`i16` / `i32` / `i64`), `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate` / `NaiveTime` / `DateTime<Utc>`, `uuid::Uuid`, `ForeignKey<T>`.
 - `serde_json::Value` for a JSON column; `Option<serde_json::Value>` for a nullable one.
 - `Option<T>` of any of the above is the only path to a nullable column.
 
@@ -153,7 +153,12 @@ Postgres natively stores and indexes IP addresses and MAC addresses. Three **Pos
 | `ipnetwork::IpNetwork` | `Cidr` | `CIDR`: network address, host bits enforced zero by Postgres |
 | `mac_address::MacAddress` | `MacAddr` | `MACADDR`: 6-byte hardware address |
 
-The derive defaults `ipnetwork::IpNetwork` to `Inet`. Opting into `CIDR` semantics is deferred to a future `#[umbra(cidr)]` attribute; until then, edit the generated migration directly if you need the stricter constraint.
+The derive defaults `ipnetwork::IpNetwork` to `Inet`. Opt into the stricter `CIDR` semantics with the field-level `#[umbra(cidr)]` attribute (the Rust type stays `ipnetwork::IpNetwork`; only the column type changes):
+
+```rust
+#[umbra(cidr)]
+pub network: IpNetwork,                  // CIDR instead of INET
+```
 
 ```rust
 use umbra::prelude::*;
@@ -288,7 +293,7 @@ pub struct User {
 }
 ```
 
-The attribute lands at M3.1; per-field attributes for `db_index`, `default`, `on_delete` are scheduled as the plugins that need them ship. (`choices` is shipped: `#[derive(Choices)]` on the enum + `#[umbra(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
+Beyond `table`, the struct-level `#[umbra(...)]` also accepts `plugin`, `display`, `icon`, `database`, `singleton`, `soft_delete`, `unique_together = [[...]]`, `indexes = [[...]]`, and `ordering = ["-col", "col"]`. The field-level `#[umbra(...)]` accepts `primary_key`, `unique`, `index`, `default = "..."`, `on_delete = "..."` / `on_update = "..."`, `auto_now` / `auto_now_add`, `max_length = N`, `min = N` / `max = N`, `string`, `noform`, `noedit`, `help = "..."`, `example = "..."`, `widget = "..."`, `backend = "..."`, `cidr`, `db_constraint = false`, `slug_from = "..."`, `choices`, `reverse_fk = "..."`, and `no_reverse`. (`choices` pairs `#[derive(Choices)]` on the enum with `#[umbra(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
 
 ## Display hints (`string`, `max_length`)
 
@@ -346,14 +351,14 @@ When to reach for `plugin = "..."`: multi-plugin apps where two or more plugins 
 
 ```rust
 let recent = Post::objects()
-    .filter(post::published_at.is_not_null())
-    .order_by(post::published_at.desc())
+    .filter(post::PUBLISHED_AT.is_not_null())
+    .order_by(post::PUBLISHED_AT.desc())
     .limit(20)
     .fetch()
     .await?;
 ```
 
-Each field gets a typed column constant under the snake_case module: `post::id`, `post::title`, `post::body`, `post::published_at`. The comparison methods are checked at compile time.
+Each field gets a typed column constant under the snake_case module, named in `SCREAMING_SNAKE_CASE`: `post::ID`, `post::TITLE`, `post::BODY`, `post::PUBLISHED_AT`. The comparison methods are checked at compile time.
 
 ### Terminals: `.fetch()`, `.first()`, `.get()`, `.count()`, `.exists()`
 
@@ -370,7 +375,7 @@ Each field gets a typed column constant under the snake_case module: `post::id`,
 ```rust
 use umbra::orm::GetError;
 
-match Post::objects().filter(post::id.eq(42)).get().await {
+match Post::objects().filter(post::ID.eq(42)).get().await {
     Ok(p)                                  => render(p),
     Err(GetError::NotFound)                => not_found(),
     Err(GetError::MultipleObjectsReturned) => unreachable!("id is unique"),
@@ -381,7 +386,7 @@ match Post::objects().filter(post::id.eq(42)).get().await {
 `Manager::get(predicate)` is the one-liner sugar:
 
 ```rust
-let user = User::objects().get(user::email.eq(addr)).await?;
+let user = User::objects().get(user::EMAIL.eq(addr)).await?;
 ```
 
 ## Writing rows
