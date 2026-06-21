@@ -64,6 +64,27 @@ For callers that want a typed `SqlitePool` without the `DbPool` enum wrapper (te
 let sqlite_pool: sqlx::SqlitePool = umbra::db::connect_sqlite("sqlite::memory:").await?;
 ```
 
+## Production PRAGMAs
+
+`connect_sqlite` applies a standard set of production PRAGMAs to every connection in the pool — without them a fresh `SqlitePool` lands on SQLite's safe-but-slow defaults (`journal_mode = DELETE` + `synchronous = FULL`), which cost seconds per concurrent INSERT once any other connection touches the file.
+
+| PRAGMA | Value | Why |
+|---|---|---|
+| `journal_mode` | `WAL` | Readers don't block writers; one writer at a time but no full-file lock. Order-of-magnitude faster for concurrent workloads. |
+| `synchronous` | `NORMAL` | Skips the per-commit fsync; safe with WAL since the WAL log is fsynced on checkpoint. |
+| `busy_timeout` | `5000ms` (5 s) | Wait up to 5 s for a contended writer to release the lock before raising `SQLITE_BUSY`. |
+| `foreign_keys` | `ON` | SQLite leaves FK enforcement off by default; the ORM emits `REFERENCES` clauses assuming they're respected. |
+
+Per-statement logging is also turned **off** (sqlx's default INFO-level logger reads every statement before execution, a measurable per-query overhead under load); the `slow statement` WARN at the 1-second threshold stays on.
+
+<Callout type="info">
+**In-memory URLs are backed by a process-unique temp file.** A bare `sqlite::memory:` gives every connection in the pool its OWN private, empty database — a table created on one connection is invisible to a query that lands on another, surfacing as a flaky "no such table". `connect_sqlite` routes in-memory URLs through a small per-process temp file that every connection sees, sidestepping the issue. File-backed (`sqlite://app.db`) URLs are untouched.
+</Callout>
+
+## Pooling
+
+The SQLite pool honours the same `UMBRA_DB_*` settings as Postgres — `max_connections`, `min_connections`, `acquire_timeout`, `idle_timeout`, `max_lifetime`, and `test_before_acquire`. SQLite is effectively single-writer (WAL serialises writers behind one lock), so a large `max_connections` mainly buys concurrent **readers**, but the knobs are honoured uniformly rather than hardcoding a divergent SQLite path. See [Connection pooling](../orm/connection-pooling) for the full list and defaults.
+
 ## Migrations
 
 ```bash

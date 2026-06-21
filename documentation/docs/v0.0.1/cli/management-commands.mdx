@@ -28,9 +28,22 @@ manage your database because it doesn't know about your models.
   <Card icon="archive" title="dumpdata / loaddata" description="Snapshot every model's rows to JSON; replay them into a fresh schema." />
   <Card icon="table" title="importcsv" description="Load a CSV file into one table, coercing each cell to its column type through the validated write path. Inverse of the ?format=csv export." />
   <Card icon="key" title="maskkeygen" description="Generate an X25519 keypair for Masked<T> field encryption and print the two env-var lines to configure it." />
+  <Card icon="refresh-cw" title="dev" description="Auto-reload loop: wraps cargo-watch to rebuild and restart the binary on every Rust-source save." />
 </CardGrid>
 
-Plugin-contributed subcommands (`createsuperuser`, `tasks-worker`, plus any third-party plugin's commands) share the same `cargo run -- <cmd>` form. Each is detailed in its own section below.
+## Plugin-contributed subcommands
+
+Built-in plugins contribute their own subcommands through the `Plugin::commands()` hook — structurally identical to a third-party plugin's. They only appear when the plugin is registered in your `App`.
+
+<CardGrid cols={2}>
+  <Card icon="user-plus" title="createsuperuser" description="umbra-auth. Create an is_staff + is_superuser user with an argon2id-hashed password. --noinput for CI." />
+  <Card icon="cpu" title="tasks-worker" description="umbra-tasks. Drain the task queue. --once runs one batch and exits (cron-friendly)." />
+  <Card icon="clock" title="tasks-beat" description="umbra-tasks. Run the periodic-task scheduler (Celery beat). --once syncs schedules, runs one tick, exits." />
+  <Card icon="trash-2" title="clearsessions" description="umbra-sessions. Delete all expired session rows from the database (Django parity)." />
+  <Card icon="folder-down" title="collectstatic" description="umbra-static. Collect every plugin's static assets into static_root. --clear / --hashed / --storage." />
+</CardGrid>
+
+Each plugin command shares the same `cargo run -- <cmd>` form and is detailed in its own section below.
 
 ## How it works
 
@@ -354,6 +367,59 @@ cargo run -- tasks-worker
 # Single-batch (call from cron every minute)
 cargo run -- tasks-worker --once
 ```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--once` | off (loop forever) | Run one iteration of the claim/dispatch loop and exit. Cron-friendly. |
+
+## tasks-beat - `umbra-tasks`
+
+Run the periodic-task scheduler (the Celery *beat* equivalent). On startup it syncs the registered periodic specs to `PeriodicTask` rows, then each tick claims every due row atomically and enqueues the underlying task. Run it as its **own** process alongside `tasks-worker` — beat fills the queue, the worker drains it.
+
+```bash
+# Long-running scheduler (run under systemd / Docker, one instance)
+cargo run -- tasks-beat
+
+# Single sync + one tick, then exit (tests, cron-driven beats)
+cargo run -- tasks-beat --once
+```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--once` | off (poll forever) | Sync schedules, run one tick, and exit. |
+
+## clearsessions - `umbra-sessions`
+
+Delete every expired session row from the database (Django's `clearsessions`). Run it periodically (cron / a scheduled task) to keep the session table from accumulating dead rows.
+
+```bash
+cargo run -- clearsessions
+# -> Deleted 37 expired session(s).
+```
+
+No flags. Deletes session rows whose `expires_at` is in the past.
+
+## collectstatic - `umbra-static`
+
+Collect every plugin's static assets — namespaced `static_dirs()` plus site-level `static_root_dirs()` — into `settings.static_root`. Django's `collectstatic`.
+
+```bash
+# Everyday: gather all assets into static_root
+cargo run -- collectstatic
+
+# Empty static_root first, dropping stale assets no plugin ships any more
+cargo run -- collectstatic --clear
+
+# PROD: write content-hashed copies (app.<hash>.css) + a staticfiles.json
+# manifest, so assets can carry far-future cache headers without stale-cache risk
+cargo run -- collectstatic --hashed
+```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--clear` | off | Empty `static_root` before collecting (no confirmation prompt), dropping assets no plugin ships any more. |
+| `--hashed` | off | Write content-hashed copies (`app.<hash>.css`) alongside each asset plus a `staticfiles.json` manifest (Django's `ManifestStaticFilesStorage`). Use in production. |
+| `--storage <backend>` | `local` | Where to write: `local` (the on-disk `static_root`) or `s3` (requires the umbra-static `s3` feature and `UMBRA_STATIC_BUCKET` / `UMBRA_STATIC_REGION`). Overrides `UMBRA_STATIC_STORAGE`. |
 
 ## Errors
 
