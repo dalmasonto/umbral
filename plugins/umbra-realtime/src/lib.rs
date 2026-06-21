@@ -27,11 +27,11 @@
 //! relays to whichever instance holds the socket — the [`Realtime`] API is
 //! identical, only the [`Broker`] swaps. Requires the `redis` feature.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
@@ -65,6 +65,12 @@ pub type ConnId = u64;
 /// best-effort delivery, never back-pressure onto a request handler.
 pub const DEFAULT_BUFFER: usize = 64;
 
+/// Default replay-buffer capacity: the number of recent delivered events
+/// the [`Registry`] keeps so a briefly-disconnected SSE client can catch
+/// up on reconnect via `Last-Event-ID`. Override with
+/// [`RealtimePlugin::replay_buffer`].
+pub const DEFAULT_REPLAY_BUFFER: usize = 1024;
+
 static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// One server→client event: a named event plus a JSON payload. The SSE
@@ -76,6 +82,13 @@ pub struct Event {
     pub event: String,
     /// The JSON payload.
     pub data: serde_json::Value,
+    /// Process-global monotonic sequence id, assigned by
+    /// [`Registry::dispatch`] when the event is delivered. The SSE transport
+    /// renders this as the event's `id:` line so a browser's `EventSource`
+    /// echoes it back as `Last-Event-ID` on reconnect, driving the replay
+    /// buffer. Events constructed by hand (tests, the broker before
+    /// dispatch) carry `0` until `dispatch` stamps the real id.
+    pub seq: u64,
 }
 
 /// Who an [`Event`] is addressed to.
@@ -124,25 +137,68 @@ struct RegistryInner {
 /// Tracks every live connection and the user / groups it belongs to, so a
 /// [`TargetKind`] resolves to a set of connections in O(1). Shared behind
 /// an `Arc`; the transports register/deregister, the broker dispatches.
-#[derive(Default)]
+///
+/// Also owns the **monotonic event sequence** and the **replay buffer** (a
+/// bounded ring of the most recent `(seq, Envelope)`), so a reconnecting
+/// SSE client can replay the events it missed during a brief drop, and an
+/// optional **aggregate connection cap**.
 pub struct Registry {
     inner: RwLock<RegistryInner>,
+    /// Process-global monotonic event counter. Each [`dispatch`](Self::dispatch)
+    /// claims the next id and stamps it on every delivered [`Event`].
+    seq: AtomicU64,
+    /// Recent `(seq, Envelope)`, oldest→newest, capped at `replay_cap`. A
+    /// plain `Mutex` (never held across `.await`): pushes/reads are O(1) /
+    /// O(buffer) and synchronous.
+    replay: Mutex<VecDeque<(u64, Envelope)>>,
+    /// Replay-buffer capacity (events retained). `0` disables replay.
+    replay_cap: usize,
+    /// Aggregate live-connection cap. `None` = unlimited; when set,
+    /// [`register`](Self::register) refuses once `connection_count >= max`.
+    max_connections: Option<usize>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self::new(DEFAULT_REPLAY_BUFFER, None)
+    }
 }
 
 impl Registry {
+    /// Build a registry with an explicit replay-buffer capacity and an
+    /// optional aggregate connection cap. [`Registry::default`] uses
+    /// [`DEFAULT_REPLAY_BUFFER`] and no cap.
+    pub fn new(replay_cap: usize, max_connections: Option<usize>) -> Self {
+        Self {
+            inner: RwLock::new(RegistryInner::default()),
+            seq: AtomicU64::new(0),
+            replay: Mutex::new(VecDeque::new()),
+            replay_cap,
+            max_connections,
+        }
+    }
+
     /// Register a new connection. Returns its [`ConnId`] and the receiving
     /// half of its outbound channel (the transport turns this into the
-    /// SSE/WS stream). `user_id` is the authenticated identity (or `None`
-    /// for anonymous); `groups` are the rooms it joined at handshake.
+    /// SSE/WS stream), or `None` when the aggregate connection cap
+    /// ([`max_connections`](RealtimePlugin::max_connections)) is reached —
+    /// the transports turn `None` into a `503 Service Unavailable`. `user_id`
+    /// is the authenticated identity (or `None` for anonymous); `groups` are
+    /// the rooms it joined at handshake.
     pub async fn register(
         &self,
         user_id: Option<i64>,
         groups: HashSet<String>,
         buffer: usize,
-    ) -> (ConnId, mpsc::Receiver<Event>) {
+    ) -> Option<(ConnId, mpsc::Receiver<Event>)> {
+        let mut inner = self.inner.write().await;
+        if let Some(max) = self.max_connections
+            && inner.conns.len() >= max
+        {
+            return None;
+        }
         let id = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(buffer.max(1));
-        let mut inner = self.inner.write().await;
         if let Some(uid) = user_id {
             inner.by_user.entry(uid).or_default().insert(id);
         }
@@ -157,7 +213,7 @@ impl Registry {
                 groups,
             },
         );
-        (id, rx)
+        Some((id, rx))
     }
 
     /// Remove a connection from the registry and every index it appears
@@ -213,7 +269,31 @@ impl Registry {
     /// Deliver `event` to every connection matching `target`. Best-effort:
     /// a connection whose buffer is full or closed is skipped. Returns the
     /// number of connections the event was queued to.
-    pub async fn dispatch(&self, target: &TargetKind, event: Event) -> usize {
+    ///
+    /// Assigns the event a process-global monotonic [`seq`](Event::seq) and
+    /// records `(seq, Envelope)` in the bounded replay buffer so a
+    /// reconnecting SSE client can catch up on what it missed.
+    pub async fn dispatch(&self, target: &TargetKind, mut event: Event) -> usize {
+        // Claim the next monotonic id and stamp it on the event so every
+        // matching connection (and the replay buffer) sees the same seq.
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
+        event.seq = seq;
+
+        // Record in the replay buffer (synchronous; the lock is never held
+        // across an `.await`). Cap 0 disables replay entirely.
+        if self.replay_cap > 0 {
+            let env = Envelope {
+                target: target.clone(),
+                event: event.event.clone(),
+                data: event.data.clone(),
+            };
+            let mut buf = self.replay.lock().expect("replay mutex poisoned");
+            buf.push_back((seq, env));
+            while buf.len() > self.replay_cap {
+                buf.pop_front();
+            }
+        }
+
         let inner = self.inner.read().await;
         let ids: Vec<ConnId> = match target {
             TargetKind::User(uid) => inner
@@ -239,9 +319,47 @@ impl Registry {
         delivered
     }
 
+    /// Replay buffered events with `seq > last_event_id` that a connection
+    /// with this `user_id` / `groups` *would have received*, oldest→newest.
+    /// Called by the SSE transport on a reconnect carrying `Last-Event-ID`,
+    /// before attaching the live receiver, so the client fills the gap with
+    /// no missed events — bounded by the replay buffer (events evicted from
+    /// it are unrecoverable; see the bounded-buffer caveat in the docs).
+    ///
+    /// Each returned [`Event`] carries its **original** `seq` so the stream
+    /// re-stamps the same `id:` line.
+    pub fn replay_since(
+        &self,
+        last_event_id: u64,
+        user_id: Option<i64>,
+        groups: &HashSet<String>,
+    ) -> Vec<Event> {
+        let buf = self.replay.lock().expect("replay mutex poisoned");
+        buf.iter()
+            .filter(|(seq, _)| *seq > last_event_id)
+            .filter(|(_, env)| target_matches(&env.target, user_id, groups))
+            .map(|(seq, env)| Event {
+                event: env.event.clone(),
+                data: env.data.clone(),
+                seq: *seq,
+            })
+            .collect()
+    }
+
     /// Current live connection count (diagnostics / tests).
     pub async fn connection_count(&self) -> usize {
         self.inner.read().await.conns.len()
+    }
+}
+
+/// Whether an [`Envelope`]'s target would deliver to a connection with this
+/// `user_id` / `groups` — the replay-filter predicate, mirroring the
+/// [`Registry::dispatch`] index lookup.
+fn target_matches(target: &TargetKind, user_id: Option<i64>, groups: &HashSet<String>) -> bool {
+    match target {
+        TargetKind::User(uid) => user_id == Some(*uid),
+        TargetKind::Group(g) => groups.contains(g),
+        TargetKind::Broadcast => true,
     }
 }
 
@@ -282,6 +400,7 @@ impl Broker for InProcessBroker {
                 Event {
                     event: env.event,
                     data: env.data,
+                    seq: 0,
                 },
             )
             .await;
@@ -386,7 +505,7 @@ impl RedisBroker {
                         registry
                             .dispatch(
                                 &env.target,
-                                Event { event: env.event, data: env.data },
+                                Event { event: env.event, data: env.data, seq: 0 },
                             )
                             .await;
                     }
@@ -652,6 +771,14 @@ pub struct RealtimePlugin {
     /// instead of the single-instance [`InProcessBroker`]. Configured via
     /// [`redis`](Self::redis).
     redis_url: Option<String>,
+    /// Replay-buffer capacity (recent events retained for `Last-Event-ID`
+    /// reconnect resume). Defaults to [`DEFAULT_REPLAY_BUFFER`]; set via
+    /// [`replay_buffer`](Self::replay_buffer).
+    replay_cap: usize,
+    /// Aggregate live-connection cap across all transports. `None` =
+    /// unlimited (the default); set via
+    /// [`max_connections`](Self::max_connections).
+    max_connections: Option<usize>,
 }
 
 /// The no-op identity resolver: every connection is anonymous (`None`).
@@ -668,6 +795,8 @@ impl Default for RealtimePlugin {
             resolver: anonymous_resolver(),
             subscriptions: Vec::new(),
             redis_url: None,
+            replay_cap: DEFAULT_REPLAY_BUFFER,
+            max_connections: None,
         }
     }
 }
@@ -714,6 +843,30 @@ impl RealtimePlugin {
     /// default ([`NoopMessageHandler`]) ignores client frames (push-only).
     pub fn message_handler<H: MessageHandler + 'static>(mut self, handler: H) -> Self {
         self.handler = Arc::new(handler);
+        self
+    }
+
+    /// Size the **replay buffer** — how many recent delivered events the
+    /// registry retains so a reconnecting SSE client can resume from its
+    /// `Last-Event-ID` with no gap. Defaults to [`DEFAULT_REPLAY_BUFFER`]
+    /// (1024). Set `0` to disable replay (live-only).
+    ///
+    /// The buffer is bounded: an event evicted before a client reconnects
+    /// is unrecoverable, so the client resumes from the oldest *retained*
+    /// event and silently misses anything older. Size it to cover the
+    /// longest drop you want to bridge times your peak event rate.
+    pub fn replay_buffer(mut self, n: usize) -> Self {
+        self.replay_cap = n;
+        self
+    }
+
+    /// Cap the **aggregate** number of live connections across SSE *and*
+    /// WebSocket. Once reached, a new handshake is refused with
+    /// `503 Service Unavailable` instead of opening the stream. `None` (the
+    /// default) is unlimited. A freed slot (a disconnect) immediately admits
+    /// the next connection.
+    pub fn max_connections(mut self, n: usize) -> Self {
+        self.max_connections = Some(n);
         self
     }
 
@@ -813,7 +966,7 @@ impl Plugin for RealtimePlugin {
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        let registry = Arc::new(Registry::default());
+        let registry = Arc::new(Registry::new(self.replay_cap, self.max_connections));
         let broker: Arc<dyn Broker> = self.build_broker(registry.clone());
         let _ = REALTIME.set(Realtime {
             broker,
@@ -846,21 +999,32 @@ mod tests {
         rx.try_recv().ok()
     }
 
+    fn reg_event(event: &str, data: serde_json::Value) -> Event {
+        Event {
+            event: event.into(),
+            data,
+            seq: 0,
+        }
+    }
+
     #[tokio::test]
     async fn to_user_reaches_every_connection_of_that_user() {
         let reg = Registry::default();
-        let (_a, mut rx_a) = reg.register(Some(7), groups(&[]), DEFAULT_BUFFER).await;
-        let (_b, mut rx_b) = reg.register(Some(7), groups(&[]), DEFAULT_BUFFER).await;
-        let (_c, mut rx_c) = reg.register(Some(9), groups(&[]), DEFAULT_BUFFER).await;
+        let (_a, mut rx_a) = reg
+            .register(Some(7), groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        let (_b, mut rx_b) = reg
+            .register(Some(7), groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        let (_c, mut rx_c) = reg
+            .register(Some(9), groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
 
         let n = reg
-            .dispatch(
-                &TargetKind::User(7),
-                Event {
-                    event: "ping".into(),
-                    data: serde_json::json!({"x": 1}),
-                },
-            )
+            .dispatch(&TargetKind::User(7), reg_event("ping", serde_json::json!({"x": 1})))
             .await;
 
         assert_eq!(n, 2, "both of user 7's connections received it");
@@ -874,18 +1038,17 @@ mod tests {
         let reg = Registry::default();
         let (_a, mut rx_a) = reg
             .register(Some(1), groups(&["chat:1"]), DEFAULT_BUFFER)
-            .await;
+            .await
+            .unwrap();
         let (_b, mut rx_b) = reg
             .register(Some(2), groups(&["chat:2"]), DEFAULT_BUFFER)
-            .await;
+            .await
+            .unwrap();
 
         let n = reg
             .dispatch(
                 &TargetKind::Group("chat:1".into()),
-                Event {
-                    event: "message".into(),
-                    data: serde_json::json!("hi"),
-                },
+                reg_event("message", serde_json::json!("hi")),
             )
             .await;
         assert_eq!(n, 1);
@@ -896,18 +1059,18 @@ mod tests {
     #[tokio::test]
     async fn broadcast_reaches_all_and_deregister_cleans_indexes() {
         let reg = Registry::default();
-        let (a, _rx_a) = reg.register(Some(1), groups(&["g"]), DEFAULT_BUFFER).await;
-        let (_b, _rx_b) = reg.register(None, groups(&["g"]), DEFAULT_BUFFER).await;
+        let (a, _rx_a) = reg
+            .register(Some(1), groups(&["g"]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        let (_b, _rx_b) = reg
+            .register(None, groups(&["g"]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
 
         assert_eq!(reg.connection_count().await, 2);
         let n = reg
-            .dispatch(
-                &TargetKind::Broadcast,
-                Event {
-                    event: "e".into(),
-                    data: serde_json::Value::Null,
-                },
-            )
+            .dispatch(&TargetKind::Broadcast, evt())
             .await;
         assert_eq!(n, 2, "broadcast hit both");
 
@@ -915,24 +1078,12 @@ mod tests {
         assert_eq!(reg.connection_count().await, 1);
         // User index for the gone connection is cleaned: to_user(1) → 0.
         let n = reg
-            .dispatch(
-                &TargetKind::User(1),
-                Event {
-                    event: "e".into(),
-                    data: serde_json::Value::Null,
-                },
-            )
+            .dispatch(&TargetKind::User(1), evt())
             .await;
         assert_eq!(n, 0, "deregister removed user 1 from the index");
         // The group still has the anonymous connection.
         let n = reg
-            .dispatch(
-                &TargetKind::Group("g".into()),
-                Event {
-                    event: "e".into(),
-                    data: serde_json::Value::Null,
-                },
-            )
+            .dispatch(&TargetKind::Group("g".into()), evt())
             .await;
         assert_eq!(n, 1);
     }
@@ -940,7 +1091,10 @@ mod tests {
     #[tokio::test]
     async fn join_and_leave_update_group_membership() {
         let reg = Registry::default();
-        let (a, _rx) = reg.register(Some(1), groups(&[]), DEFAULT_BUFFER).await;
+        let (a, _rx) = reg
+            .register(Some(1), groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
 
         reg.join(a, "room:5").await;
         let n = reg
@@ -960,7 +1114,8 @@ mod tests {
         let registry = Arc::new(Registry::default());
         let (_id, mut rx) = registry
             .register(Some(3), groups(&[]), DEFAULT_BUFFER)
-            .await;
+            .await
+            .unwrap();
         let broker = InProcessBroker::new(registry.clone());
 
         broker
@@ -987,6 +1142,7 @@ mod tests {
         Event {
             event: "e".into(),
             data: serde_json::Value::Null,
+            seq: 0,
         }
     }
 }

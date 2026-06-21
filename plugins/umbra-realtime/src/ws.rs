@@ -15,8 +15,9 @@ use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use http::{HeaderMap, StatusCode};
 use serde::Deserialize;
+use tokio::sync::mpsc;
 
-use crate::{ConnId, DEFAULT_BUFFER, MessageContext, MessageHandler, Realtime, Registry};
+use crate::{ConnId, DEFAULT_BUFFER, Event, MessageContext, MessageHandler, Realtime, Registry};
 
 /// `?groups=chat:123,presence` — the rooms a client joins at handshake.
 #[derive(Deserialize)]
@@ -58,20 +59,34 @@ pub(crate) async fn ws_handler(
     let groups: HashSet<String> = requested.into_iter().collect();
     let registry = Realtime::registry();
     let handler = Realtime::message_handler();
-    ws.on_upgrade(move |socket| handle_socket(socket, user_id, groups, registry, handler))
+
+    // Enforce the aggregate connection cap *before* upgrading: a refused
+    // registration returns 503 instead of completing the WS handshake.
+    // (WS has no native Last-Event-ID, so the cap is the relevant gap here.)
+    let Some((conn_id, rx)) = registry.register(user_id, groups, DEFAULT_BUFFER).await else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "realtime: connection limit reached",
+        )
+            .into_response();
+    };
+
+    ws.on_upgrade(move |socket| {
+        handle_socket(socket, conn_id, rx, user_id, registry, handler)
+    })
 }
 
-/// Drive one live socket: register the connection, then run the outbound
-/// (registry → client) and inbound (client → handler) loops until either
-/// side closes. The `WsGuard` deregisters on exit (normal or panic).
+/// Drive one live socket for an already-registered connection: run the
+/// outbound (registry → client) and inbound (client → handler) loops until
+/// either side closes. The `WsGuard` deregisters on exit (normal or panic).
 async fn handle_socket(
     socket: WebSocket,
+    conn_id: ConnId,
+    mut rx: mpsc::Receiver<Event>,
     user_id: Option<i64>,
-    groups: HashSet<String>,
     registry: Arc<Registry>,
     handler: Arc<dyn MessageHandler>,
 ) {
-    let (conn_id, mut rx) = registry.register(user_id, groups, DEFAULT_BUFFER).await;
     let _guard = WsGuard {
         registry: registry.clone(),
         conn_id,

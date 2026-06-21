@@ -39,7 +39,10 @@ async fn on_table_fans_out_post_save_and_post_delete() {
     let registry = Realtime::registry();
     let mut groups = HashSet::new();
     groups.insert("note-watchers".to_string());
-    let (_id, mut rx) = registry.register(None, groups, DEFAULT_BUFFER).await;
+    let (_id, mut rx) = registry
+        .register(None, groups, DEFAULT_BUFFER)
+        .await
+        .expect("registration admitted (no connection cap)");
 
     // 1. A post_save (created) — emitted exactly as Manager::create would.
     umbra::signals::emit(

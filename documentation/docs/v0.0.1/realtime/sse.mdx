@@ -132,6 +132,43 @@ RealtimePlugin::default()
 
 `on_table("name", ...)` is the untyped form (when you don't have the model type handy). The handler runs server-side on every write: no client polling, no glue code.
 
+## Reconnect resume (`Last-Event-ID`)
+
+Networks drop. When a browser's `EventSource` loses its connection it reconnects on its own, and on that reconnect it sends back the `id:` of the last event it saw as the `Last-Event-ID` header. `umbra-realtime` keys off that to fill the gap with no missed events.
+
+Every delivered event is stamped with a process-global, strictly-increasing sequence id, written as the SSE `id:` line. The registry keeps a bounded **replay buffer** of recent events. On a reconnect carrying `Last-Event-ID`, the server replays — *before* attaching the live stream — exactly the buffered events newer than that id **that this connection's target would have received** (its user, its joined groups, and broadcasts; never another user's private events). A first connection with no `Last-Event-ID` behaves as before: live only.
+
+It's automatic — the browser side is just `new EventSource(...)`:
+
+```js
+const es = new EventSource("/realtime/sse?groups=public:lobby");
+// On a network blip the browser reconnects and replays missed events for you;
+// you write no resume logic. Each event's e.lastEventId is the seq.
+es.addEventListener("message", (e) => render(JSON.parse(e.data)));
+```
+
+Size the buffer with `replay_buffer(n)` (default 1024; `0` disables replay, live-only):
+
+```rust
+RealtimePlugin::default().replay_buffer(4096)
+```
+
+<Callout type="warning">
+**Bounded-buffer caveat.** The buffer holds only the most recent `n` events. If a client is offline long enough that the event it missed has already been evicted, it resumes from the oldest *retained* event and silently skips anything older — there's no infinite history. Size `n` to cover the longest drop you want to bridge at your peak event rate. WebSocket has no native `Last-Event-ID`, so reconnect resume is an SSE feature; a WS client re-subscribes and gets the live stream from the moment it reconnects.
+
+With the Redis backplane, the replay buffer is per-instance (local): a reconnect that lands on a *different* instance than before replays only that instance's recent buffer. For seamless cross-instance resume, pin a client to one instance (sticky sessions) or keep `n` small and treat replay as best-effort.
+</Callout>
+
+## Connection limits (`max_connections`)
+
+Cap the total number of live connections across **both** transports so a runaway client (or a load test) can't exhaust file descriptors:
+
+```rust
+RealtimePlugin::default().max_connections(10_000)
+```
+
+The default is unlimited. Once the cap is reached, a new SSE or WebSocket handshake is refused with `503 Service Unavailable` instead of opening the stream; a disconnect frees a slot and the next connection is admitted immediately. `EventSource` treats the 503 as a transient error and retries on its own, so clients drain back in as capacity frees.
+
 ## See also
 
 - [Signals](../orm/signals) for the `post_save`/`post_delete` events this bridges.

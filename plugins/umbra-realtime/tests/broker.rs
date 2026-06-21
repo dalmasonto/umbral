@@ -68,7 +68,7 @@ mod redis_relay {
         let user = std::process::id() as i64;
 
         // A live connection for `user`, on instance B only.
-        let (_id, mut rx) = reg_b.register(Some(user), HashSet::new(), 8).await;
+        let (_id, mut rx) = reg_b.register(Some(user), HashSet::new(), 8).await.expect("test registration should not be refused (no cap here)");
 
         // Let both pumps finish SUBSCRIBE before the publish.
         tokio::time::sleep(Duration::from_millis(400)).await;
