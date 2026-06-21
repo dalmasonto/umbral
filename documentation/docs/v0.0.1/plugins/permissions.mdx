@@ -30,7 +30,7 @@ App::builder()
 | Model | Purpose |
 |---|---|
 | `ContentType` | One row per registered Model. Holds `app_label` (plugin name) and `model` (lowercased struct name). |
-| `Permission` | One row per (ContentType, codename). The four standard ones auto-create; custom ones land via direct INSERT or future `Meta.permissions` declarations. |
+| `Permission` | One row per permission. The **primary key is the composite `codename` string** (`<app_label>.<verb>_<model>`, e.g. `blog.add_post`) - there is no separate integer `id`. Carries `content_type_id` (a `ForeignKey<ContentType>`) and a human-readable `name`. The four standard ones auto-create; custom ones land via direct INSERT or future `Meta.permissions` declarations. |
 
 The standard codename is `<app_label>.<verb>_<model>` (e.g. `blog.add_post`). The `app_label` is the model's `#[umbra(plugin = "...")]` value, surfaced via `Model::APP_LABEL`; a model with no `plugin` attribute defaults to `"app"`. Because the label comes from the attribute rather than from splitting the table name, two distinct models never collide on a codename.
 
@@ -102,6 +102,7 @@ Standard permissions auto-create. Custom ones (e.g., `"blog.feature_post"` for a
 
 ```rust
 use umbra_permissions::{Permission, ContentType};
+use umbra::orm::ForeignKey;
 
 let ct = ContentType::objects()
     .filter(content_type::APP_LABEL.eq("blog"))
@@ -109,9 +110,10 @@ let ct = ContentType::objects()
     .get().await?;
 
 Permission::objects().on(&pool).create(Permission {
-    id: 0,
-    content_type_id: ct.id.into(),
-    codename: "feature_post".to_string(),
+    // The primary key is the composite codename string `<app_label>.<name>`
+    // (there is no separate `id` field — gap #60).
+    codename: "blog.feature_post".to_string(),
+    content_type_id: ForeignKey::new(ct.id),
     name: "Can feature post on homepage".to_string(),
 }).await?;
 ```

@@ -75,8 +75,16 @@ Beyond `type` + `format`, every column's schema carries the metadata the migrati
 | `enum` | `#[umbra(choices)]` - closed-set columns get their valid values inline. (Skipped for `is_multichoice` columns whose wire value is a CSV.) |
 | `maxLength` | `#[umbra(max_length = N)]` |
 | `default` | `#[umbra(default = "...")]` |
-| `readOnly` | `#[umbra(noedit)]` - PUT/PATCH bodies in Swagger render the field grey |
+| `minimum` / `maximum` | `#[umbra(min = N)]` / `#[umbra(max = N)]` |
+| `description` | `#[umbra(help = "...")]` |
+| `example` | `#[umbra(example = "...")]` |
+| `readOnly` | `#[umbra(noform)]` - the field is never accepted in any request body (POST, PUT, or PATCH); the server fills it in |
 | `nullable` | `Option<T>` on the model field |
+
+`#[umbra(noedit)]` is **not** mapped to `readOnly` - `noedit` is an admin edit-form
+hint (the field stays writable on create), so mapping it to OpenAPI `readOnly`
+(which means "never accepted in any body") would wrongly hide required fields from
+client autofill on POST. It surfaces instead as the `x-umbra-noedit` vendor extension below.
 
 ### Vendor extensions
 
@@ -87,6 +95,11 @@ OpenAPI 3.0 reserves `x-*` keys for tool-specific data. The plugin emits these f
 | `x-umbra-choice-labels` | Human labels paired position-for-position with `enum` (from `ChoiceField`). |
 | `x-umbra-multichoice` + `x-umbra-choices` | Flag for multichoice columns whose wire value is a CSV of the choice set. |
 | `x-umbra-fk-target` | Name of the table a foreign-key column points at. |
+| `x-umbra-fk-ref` | JSON pointer (`#/components/schemas/<Target>`) to the FK target's schema, when known. |
+| `x-umbra-m2m` + `x-umbra-m2m-target` | Flags a many-to-many slot and names the child schema (the property is an array of child PKs). |
+| `x-umbra-auto-now` / `x-umbra-auto-now-add` | Server-populated timestamp columns; aware clients skip them on autofill. |
+| `x-umbra-noform` | Companion to `readOnly` - the column the API never accepts in a body. |
+| `x-umbra-noedit` | Admin edit-form hint; the field is still writable in the API contract. |
 | `x-umbra-string-repr` | The model's `__str__`-equivalent display column. |
 | `x-umbra-filter-field` + `x-umbra-filter-lookup` | On filter query parameters (see below) - names the column and lookup the parameter wraps. |
 
@@ -111,6 +124,17 @@ RestPlugin::default()
 ```
 
 Now the GET `/api/article/` operation in the emitted spec carries `title`, `title__contains`, `status`, `status__in`, `id__gte`, etc. as discoverable query parameters.
+
+## Pagination parameters
+
+List operations also advertise the pagination query parameters that match the
+`RestPlugin`'s configured backend, so the spec mirrors what the route actually accepts:
+
+| Configured pagination | Emitted parameters |
+|---|---|
+| `PageNumberPagination` | `page`, `page_size` |
+| `LimitOffsetPagination` | `limit`, `offset` |
+| `NoPagination` (default) / custom | none |
 
 ## Pairing with REST
 

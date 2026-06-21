@@ -76,6 +76,15 @@ let msg = EmailMessage::new("Subject", vec!["a@b.test".into()])
 `text_body` and `html_body` compose as `multipart/alternative` when
 both are present so the recipient's client picks one.
 
+<Callout type="info">
+**Header-injection guard.** Before composing the message, the plugin validates
+every user-supplied header value (`subject`, `from`, `reply_to`, and each `to`
+address) for bare CR (`\r`), LF (`\n`), NUL, and other RFC 5322 control
+characters - the classic SMTP / Bcc-injection vector that `lettre` 0.11 does not
+itself reject. A bad value surfaces as `EmailError::InvalidHeaderValue { field,
+offending_char }` rather than being silently accepted.
+</Callout>
+
 ## File attachments
 
 Pass raw bytes plus the MIME type. For a file on disk, read it

@@ -44,12 +44,20 @@ URL form: `redis://[user:pass@]host:port/[db]`. Uses `redis::aio::ConnectionMana
 
 ## Registering the ambient cache
 
-`cache_page` and `umbra_cache::ambient()` both read the process-wide ambient handle. Initialise it once at boot:
+`cache_page` and `umbra_cache::ambient()` both read the process-wide ambient handle. The idiomatic way to install it is to register `CachePlugin::new(cache)` on the builder - `on_ready` wires the carried cache as the ambient handle at boot:
 
 ```rust
-CachePlugin::init(Cache::memory()); // development
-// or
-CachePlugin::init(Cache::redis("redis://localhost:6379/0").await?); // production
+App::builder()
+    .plugin(CachePlugin::new(Cache::memory()))                              // development
+    // or: CachePlugin::new(Cache::redis("redis://localhost:6379/0").await?) // production
+    .build()
+    .await?;
+```
+
+`CachePlugin::init(cache)` remains for manual or test wiring outside the plugin lifecycle (it panics if called more than once):
+
+```rust
+CachePlugin::init(Cache::memory());
 ```
 
 ## Using the cache in handlers

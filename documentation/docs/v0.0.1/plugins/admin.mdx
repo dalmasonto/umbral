@@ -17,7 +17,7 @@ create, edit, and delete views - no extra code required.
 | `POST /admin/login` | Authenticate, create session, redirect |
 | `GET /admin/logout` | Destroy session, redirect to login |
 | `GET /admin/` | Index - list every registered model |
-| `GET /admin/<table>/` | Row list (up to 200 rows, ordered by PK) |
+| `GET /admin/<table>/` | Row list (paginated, default 25 rows/page, ordered by PK) |
 | `GET /admin/<table>/<id>` | Detail view for one row |
 | `GET /admin/<table>/new` | Create form |
 | `POST /admin/<table>/new` | Insert row |
@@ -32,6 +32,17 @@ App::builder()
     .plugin(AdminPlugin::default())
     .build()?;
 ```
+
+### Mounting under a different base path
+
+The default base is `/admin`. Override it with `.at(...)` - every route, redirect, and template link follows the new base. `"/backoffice"`, `"backoffice"`, and `"/backoffice/"` all normalise to `/backoffice`:
+
+```rust
+AdminPlugin::default().at("/backoffice")
+// → routes mount at /backoffice/login, /backoffice/{table}/, ...
+```
+
+`AdminPlugin::base_path()` returns the normalised value, so other plugins can reference it.
 
 ### Opt-in features (and what makes them visible)
 
@@ -58,7 +69,7 @@ The admin ships a dark-mode shell matching a production back-office aesthetic:
 - **HTMX loaded** via CDN so later phases can target and swap fragments without restructuring the shell.
 
 <Callout type="warning" title="Tailwind CDN is dev-only">
-The shell loads Tailwind from `cdn.tailwindcss.com` in development so the framework works zero-config out of the box. In production (`settings.environment == "prod"`), the wrapper template instead loads `/admin/static/admin.css` - a pre-compiled stylesheet shipped with the admin plugin. Until that file is wired (a phase-4 hardening task), production deployments will see a broken admin until they either set `UMBRA_ENVIRONMENT=dev` or supply their own `admin.css` at the expected route. The CDN script also emits a "do not use in production" warning to the browser console - that's by design.
+The shell loads Tailwind from `cdn.tailwindcss.com` in development so the framework works zero-config out of the box. In production (`settings.environment == "prod"`), the wrapper template instead loads the pre-compiled `admin.css` shipped (embedded) with the admin plugin off the unified static pipeline at `/static/admin/admin.css`. The CSS and JS are embedded in the binary via `Plugin::static_files()`, so this works with zero extra config; `Plugin::static_dirs()` additionally exposes the on-disk source so `collect_static` can gather them for CDN/disk serving. The CDN script also emits a "do not use in production" warning to the browser console - that's by design.
 </Callout>
 - **Lucide icons** throughout (MIT, consistent 24px grid, matches the design PRD §2).
 
@@ -71,7 +82,7 @@ Phase 1 replaces the old HTTP Basic Auth challenge with a proper HTML form flow:
 1. Unauthenticated requests to any admin route redirect to `GET /admin/login?next=<path>`.
 2. `GET /admin/login` renders a login form. If no session cookie is present, a fresh anonymous session is created so the CSRF token has somewhere to live.
 3. The form submits `username`, `password`, `csrf_token`, and `next` to `POST /admin/login`.
-4. The handler verifies the CSRF token against the session, then calls `umbra_auth::authenticate`. On success it calls `umbra_sessions::login_with_request` (which also handles session-fixation defense) and redirects to `next`.
+4. The handler verifies the CSRF token against the session, then calls `umbra_auth::authenticate`. On success it calls `umbra_auth::login_with_request` (which also handles session-fixation defense) and redirects to `next`.
 5. On failure, the form re-renders with a generic error message - the wording never reveals whether the username or the password was wrong.
 6. `GET /admin/logout` destroys the session and redirects to `/admin/login`.
 
@@ -443,12 +454,12 @@ All action results that produce a `Toast` trigger a bottom-right notification vi
 
 ### Admin-owned tables
 
-The admin plugin creates two tables on first boot via `Plugin::on_ready`:
+The admin plugin contributes two models via `Plugin::models()`, so their tables are produced by the migration engine like any other plugin's models (no bootstrap DDL):
 
 - `admin_user_pref` - one row per admin user. Stores theme (`light`/`dark`/`system`), density (`comfortable`/`compact`), sidebar-collapsed state, and the serialized dashboard layout (JSON).
 - `admin_audit_log` - one row per write operation. Records actor, action (`create`/`update`/`delete`/`action:<key>`), model table, object PK, and a short human diff summary.
 
-No migrations are required for these tables. They are created with `CREATE TABLE IF NOT EXISTS` on every boot.
+Run `makemigrations` then `migrate` to create them, the same as for your own models.
 
 ### Server-side user preferences
 
@@ -564,10 +575,18 @@ AdminPlugin::default()
 
 The data endpoint returns JSON for API consumers and an HTML fragment for HTMX requests (swap target is the widget's container div).
 
-**Two built-in widgets** seed the catalog on every boot:
+**Two built-in widgets** ship as public functions you register where you want them (they used to be auto-prepended; now you place and size them yourself):
 
-- `umbra_total_models` (KPI) - count of all registered models.
-- `umbra_recent_users` (Feed) - last 5 `auth_user` signups.
+- `builtin_total_models_widget()` → key `umbra_total_models` (KPI) - count of all registered models.
+- `builtin_recent_users_widget()` → key `umbra_recent_users` (Feed) - last 5 `auth_user` signups.
+
+```rust
+use umbra_admin::{AdminPlugin, builtin_total_models_widget, builtin_recent_users_widget};
+
+AdminPlugin::default()
+    .register_widget(builtin_total_models_widget())
+    .register_widget(builtin_recent_users_widget());
+```
 
 ### File preview infrastructure
 
