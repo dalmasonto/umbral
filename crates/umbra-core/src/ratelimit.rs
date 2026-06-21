@@ -1,8 +1,9 @@
 //! A dependency-light, in-memory **sliding-window rate limiter**.
 //!
-//! The primitive behind umbra-rest's DRF-style API throttles
-//! ([`umbra_rest::throttle`]) and a candidate for future consolidation
-//! with `umbra-auth`'s login/register throttle (see the note below). It
+//! The single sliding-window limiter in the tree: it backs umbra-rest's
+//! DRF-style API throttles ([`umbra_rest::throttle`]) AND umbra-auth's
+//! login/register brute-force throttle (`plugins/umbra-auth/src/throttle.rs`,
+//! consolidated onto this primitive — see the note below). It
 //! tracks per-key timestamps in a `Mutex<HashMap<String, VecDeque<Instant>>>`
 //! and answers one question: *is this key under its rate right now?*
 //!
@@ -42,15 +43,16 @@
 //!   (the same shape `umbra-auth`'s throttle has) — a periodic sweep is a
 //!   future hardening.
 //!
-//! ## Follow-up: consolidate `umbra-auth::throttle`
+//! ## Consolidated: `umbra-auth::throttle` adopts this primitive
 //!
-//! `umbra-auth` ships its own bespoke login/register throttle
+//! `umbra-auth` once shipped its own bespoke login/register throttle
 //! (`plugins/umbra-auth/src/throttle.rs`) written before this primitive
-//! existed. It implements the same sliding-window-per-key idea by hand.
-//! A future consolidation should have `umbra-auth::throttle` adopt
-//! [`RateLimiter`] so there's one limiter implementation in the tree.
-//! Tracked as a one-line follow-up in `planning/gaps2.md` (#90). This is
-//! intentionally NOT done here to keep the throttling change focused.
+//! existed, with a hand-rolled copy of the same sliding-window-per-key idea.
+//! That duplicate is gone: `umbra-auth::throttle::Throttle` is now a thin
+//! wrapper over [`RateLimiter`], so there's a single limiter implementation
+//! in the tree. The "success forgives" path (clear a login counter after a
+//! successful login) drove the [`RateLimiter::clear`] method added here.
+//! Done in `planning/gaps2.md` (#90).
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -223,6 +225,19 @@ impl RateLimiter {
             }
         }
     }
+
+    /// Forget every recorded request for `key`, resetting its window so the
+    /// next [`check`](Self::check) starts from a clean budget.
+    ///
+    /// The "success forgives" primitive: a caller that wants a prior burst of
+    /// denied attempts to stop counting after some positive outcome (e.g.
+    /// umbra-auth clears the login counter on a SUCCESSFUL login so a user who
+    /// fat-fingered their password isn't locked out) calls this to drop the
+    /// key's history. A no-op if the key was never seen.
+    pub fn clear(&self, key: &str) {
+        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        buckets.remove(key);
+    }
 }
 
 #[cfg(test)]
@@ -299,5 +314,19 @@ mod tests {
         assert!(!limiter.check_at("a", t0 + Duration::from_secs(30)).allowed);
         // 61s later the original hit has aged out of the 60s window.
         assert!(limiter.check_at("a", t0 + Duration::from_secs(61)).allowed);
+    }
+
+    #[test]
+    fn clear_forgets_a_key() {
+        let limiter = RateLimiter::new(Rate::parse("1/min").unwrap());
+        let t0 = Instant::now();
+        assert!(limiter.check_at("a", t0).allowed);
+        // Over budget within the window.
+        assert!(!limiter.check_at("a", t0).allowed);
+        // Clearing the key drops its history, so the next check is allowed.
+        limiter.clear("a");
+        assert!(limiter.check_at("a", t0).allowed);
+        // A clear on an unknown key is a harmless no-op.
+        limiter.clear("never-seen");
     }
 }

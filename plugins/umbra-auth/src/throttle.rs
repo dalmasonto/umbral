@@ -17,6 +17,13 @@
 //! so a legitimate user who fat-fingered their password once isn't locked
 //! out by the failures that preceded the success.
 //!
+//! The sliding-window mechanics are NOT implemented here: [`Throttle`] is a
+//! thin wrapper over the core [`umbra::ratelimit::RateLimiter`] primitive,
+//! which owns the single per-key timestamp store in the tree. This module
+//! contributes the auth-specific policy on top: the secure-default budgets,
+//! the IP+username keying, the `enabled` master switch, and the ambient
+//! install. (Consolidated from a former hand-rolled copy — gaps2 #90.)
+//!
 //! Keys are caller-chosen strings:
 //! - **login** keys on `ip + "\0" + username` so one attacker IP can't lock
 //!   out every account, and one targeted account can't be brute-forced from
@@ -52,29 +59,34 @@
 //! a hard global limit should front it with a shared limiter (a future
 //! Redis-backed `Throttle`). Logged as a known limitation in the auth docs.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
+
+use umbra::ratelimit::{Rate, RateLimiter};
 
 /// A sliding-window counter keyed by an arbitrary string.
 ///
-/// `max` attempts are permitted within any trailing `window`. The
-/// `hits` map holds, per key, the `Instant`s of the attempts still inside
-/// the window (older ones are pruned lazily on each `check`).
+/// `max` attempts are permitted within any trailing `window`. This is a thin
+/// wrapper over the core [`RateLimiter`] primitive — it holds one and adapts
+/// its rich [`umbra::ratelimit::RateDecision`] down to the `bool` (allow /
+/// deny) the auth handlers need, plus the clock-injectable `*_at` variants the
+/// tests drive. All the per-key timestamp bookkeeping lives in `RateLimiter`;
+/// this type adds no sliding-window logic of its own.
 #[derive(Debug)]
 pub struct Throttle {
-    hits: Mutex<HashMap<String, Vec<Instant>>>,
-    max: usize,
-    window: Duration,
+    inner: RateLimiter,
 }
 
 impl Throttle {
     /// Build a limiter allowing `max` attempts per trailing `window`.
+    ///
+    /// `max == 0` is treated as "deny everything" (a hard lock); any other
+    /// `max` permits up to `max` attempts in the trailing `window`. (Core
+    /// `RateLimiter` denies when `count < num` is false, so `num == 0` denies
+    /// the very first attempt — the same hard-lock semantics.)
     pub fn new(max: usize, window: Duration) -> Self {
         Self {
-            hits: Mutex::new(HashMap::new()),
-            max,
-            window,
+            inner: RateLimiter::new(Rate::new(max as u32, window)),
         }
     }
 
@@ -84,50 +96,26 @@ impl Throttle {
     /// denies (`false`) when `>= max` remain in-window, otherwise records
     /// `now` and allows (`true`).
     pub fn check(&self, key: &str) -> bool {
-        self.check_at(key, Instant::now())
+        self.inner.check(key).allowed
     }
 
     /// Forget every recorded attempt for `key`. Called on a successful
     /// login so prior failures don't count against a now-authenticated user.
     pub fn clear(&self, key: &str) {
-        self.clear_at(key);
+        self.inner.clear(key);
     }
 
     /// Clock-injectable core of [`check`](Self::check). A `now` of the
     /// caller's choosing lets a test advance time without sleeping.
-    ///
-    /// `max == 0` is treated as "deny everything" (a hard lock); any other
-    /// `max` permits up to `max` attempts in the trailing `window`.
     pub fn check_at(&self, key: &str, now: Instant) -> bool {
-        let mut hits = match self.hits.lock() {
-            Ok(g) => g,
-            // A poisoned mutex means a prior panic while holding the lock.
-            // Fail CLOSED for a security limiter: deny rather than let an
-            // attacker through on a corrupted counter.
-            Err(_) => return false,
-        };
-        let entry = hits.entry(key.to_string()).or_default();
-        // Prune attempts that have aged out of the window. `checked_duration_since`
-        // guards the (impossible-for-real-clocks) case of a stored Instant
-        // somehow later than `now`.
-        entry.retain(|t| match now.checked_duration_since(*t) {
-            Some(elapsed) => elapsed < self.window,
-            None => true,
-        });
-        if entry.len() >= self.max {
-            return false;
-        }
-        entry.push(now);
-        true
+        self.inner.check_at(key, now).allowed
     }
 
     /// Clock-injectable core of [`clear`](Self::clear). No `now` needed —
     /// clearing is unconditional — but named `_at` for symmetry with
     /// [`check_at`](Self::check_at).
     pub fn clear_at(&self, key: &str) {
-        if let Ok(mut hits) = self.hits.lock() {
-            hits.remove(key);
-        }
+        self.inner.clear(key);
     }
 }
 
