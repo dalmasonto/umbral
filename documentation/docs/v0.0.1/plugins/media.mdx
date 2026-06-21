@@ -99,7 +99,7 @@ Every upload is one row:
 
 The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate` and the admin lists it under the **media** sidebar group automatically. Every column is `#[umbra(noedit)]` - the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
 
-To delete a file, write a small handler that removes the row with `MediaFile::objects().filter(media_file::ID.eq(id)).delete().await?` and then `Storage::delete(key)` (or `tokio::fs::remove_file(...)`). v0 does not auto-cleanup on row delete; that's a future enhancement.
+To delete a file, write a small handler that removes the row with `MediaFile::objects().filter(media_file::ID.eq(id)).delete().await?` and then `Storage::delete(key)` (or `tokio::fs::remove_file(...)`). For automatic blob cleanup when a *model* row is deleted, opt that model into [file-lifecycle cleanup](#file-lifecycle--orphan-cleanup) below.
 
 ## Serving from templates
 
