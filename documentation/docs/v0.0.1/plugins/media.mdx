@@ -116,12 +116,54 @@ Files come back at `<mount>/<key>`. Reference them like any other URL:
 
 The plugin sets `X-Content-Type-Options: nosniff` on every response so the browser respects the MIME type the file was uploaded with - a small defence against a user uploading an HTML file disguised as `.png` and getting it interpreted on the same origin.
 
+## File lifecycle / orphan cleanup
+
+A `FileField` / `ImageField` column stores only the storage *key*; the bytes live in the backend. Delete the row and, without help, the blob is orphaned - the backend keeps accumulating files no row points at. `umbra-media` cleans them up the way Django's `FileField` does: **when a row is deleted, the blobs behind its file fields are deleted too.**
+
+Cleanup is **opt-in per model**. Register it on the plugin builder:
+
+```rust
+use umbra_signals::SignalsPlugin;
+use umbra_media::MediaPlugin;
+
+App::builder()
+    // The cleanup hook is a `pre_delete` signal handler, so the
+    // signals registry must be in play. (The ORM fires the signal
+    // regardless of plugin order; the marker just documents the dep.)
+    .plugin(SignalsPlugin)
+    .plugin(
+        MediaPlugin::new("/media", "./media")
+            // Auto-detect every FileField / ImageField column on Post:
+            .cleanup_on_delete::<Post>(),
+    )
+    .build()?;
+```
+
+`cleanup_on_delete::<M>()` reads `M`'s metadata and watches every column declared as a `FileField` / `ImageField`. If you overrode the form widget on a file column (so auto-detection can't recognise it), name the columns explicitly instead:
+
+```rust
+MediaPlugin::new("/media", "./media")
+    .cleanup_files::<Profile>(&["avatar", "cover"])
+```
+
+Semantics:
+
+- **Best-effort, never fails the delete.** A storage delete error - including a blob that's already gone - is logged with `tracing::warn!` and swallowed. The row delete always succeeds; cleanup failure never propagates.
+- **Per-row deletes only.** `M::objects().delete_instance(&row)` fires the `pre_delete` signal the hook listens on. Bulk `QuerySet::delete()` (the filter-chain DELETE) fires only a bulk-PK signal, so it does **not** trigger cleanup - the same limitation Django's bulk `QuerySet.delete()` has for per-row hooks. Loop with `delete_instance` when cleanup matters.
+- **Empty file fields are a no-op.** A row whose `FileField` key is empty has nothing to clean and deletes normally.
+
+### Replace cleanup is deferred
+
+Updating a file field to a *new* key (so the old blob is now orphaned) does **not** yet delete the old blob. The `pre_save` signal only carries the new instance, not the previous row's value, so there's no clean way to read the old key without a fragile extra read-back. Tracked as `gaps2 #92`; until it lands, delete-and-recreate (rather than an in-place key swap) if you need the old blob reclaimed.
+
 ## Configuration knobs
 
 | Method                          | Default | What it does                                                                      |
 |---------------------------------|---------|-----------------------------------------------------------------------------------|
 | `.new(mount, dir)`              | -       | Mount path + on-disk directory.                                                   |
 | `.max_size(bytes)`              | unlimited | Hard cap on upload size. `save` returns `MediaError::TooLarge` when exceeded.   |
+| `.cleanup_on_delete::<M>()`     | off     | Delete a row's `FileField`/`ImageField` blobs when the row is deleted (auto-detected columns). |
+| `.cleanup_files::<M>(&[...])`   | off     | Same, naming the file columns explicitly (for widget-overridden columns).         |
 
 ## What v0 does not ship
 

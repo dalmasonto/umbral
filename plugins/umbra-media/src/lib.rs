@@ -148,6 +148,84 @@ fn neutralise_active_content(name: &str) -> String {
     }
 }
 
+/// The widget tags the `#[derive(Model)]` macro assigns to file columns:
+/// `FileField` → `"file"`, `ImageField` → `"image"`. Used to detect file
+/// columns from a model's metadata for [`MediaPlugin::cleanup_on_delete`].
+const FILE_WIDGETS: &[&str] = &["file", "image"];
+
+/// File-key column names on model `M` — every column whose `#[derive(Model)]`
+/// widget is `"file"` / `"image"` (i.e. a `FileField` / `ImageField`). Read
+/// off `M::FIELDS` so the caller doesn't pass them by hand. Returns an empty
+/// vec when `M` has no file columns (or all of them overrode the widget).
+fn file_columns_of<M: Model>() -> Vec<String> {
+    M::FIELDS
+        .iter()
+        .filter(|f| f.widget.is_some_and(|w| FILE_WIDGETS.contains(&w)))
+        .map(|f| f.name.to_string())
+        .collect()
+}
+
+/// Best-effort blob delete for one storage key. A missing blob
+/// ([`StorageError::NotFound`]) is success — the orphan we wanted gone is
+/// already gone. Any other backend error is `tracing::warn!`-logged and
+/// swallowed: file cleanup must never fail the row delete that triggered it.
+async fn delete_blob_best_effort(storage: &Arc<dyn Storage>, key: &str) {
+    if key.is_empty() {
+        return;
+    }
+    match storage.delete(key).await {
+        Ok(()) => {
+            tracing::debug!(key = %key, "umbra-media: deleted orphaned blob on row delete");
+        }
+        Err(StorageError::NotFound) => {
+            // Already absent — the desired end state. Not an error.
+        }
+        Err(e) => {
+            tracing::warn!(
+                key = %key,
+                "umbra-media: failed to delete blob on row delete (orphan may remain): {e}"
+            );
+        }
+    }
+}
+
+/// Register a `pre_delete:<table>` signal handler that deletes the blobs
+/// behind `columns` on the row about to be deleted. Reads the storage keys
+/// from the signal payload's `"instance"` JSON (the full row), so it works
+/// by table name without naming the concrete model type. Best-effort.
+fn register_cleanup(spec: &CleanupSpec) {
+    let columns = spec.columns.clone();
+    let signal = format!("pre_delete:{}", spec.table);
+    umbra::signals::subscribe_async(&signal, move |payload| {
+        // Read the keys synchronously off the payload, then move only the
+        // owned `Vec<String>` into the async block — the handler closure is
+        // `Fn`, so it can't move `columns` out, and the payload is a borrow.
+        let instance = &payload["instance"];
+        let keys: Vec<String> = columns
+            .iter()
+            .filter_map(|col| instance.get(col).and_then(|v| v.as_str()))
+            .filter(|k| !k.is_empty())
+            .map(|k| k.to_string())
+            .collect();
+        async move {
+            // Resolve the ambient backend lazily, per-delete: it isn't
+            // registered until `on_ready` runs, and a test may swap it.
+            let Some(storage) = umbra::storage::storage_opt() else {
+                if !keys.is_empty() {
+                    tracing::warn!(
+                        "umbra-media: row deleted with file keys but no storage backend \
+                         registered; blobs not cleaned up"
+                    );
+                }
+                return;
+            };
+            for key in keys {
+                delete_blob_best_effort(&storage, &key).await;
+            }
+        }
+    });
+}
+
 #[umbra::storage::async_trait]
 impl Storage for FsStorage {
     async fn store(
@@ -377,6 +455,24 @@ pub struct MediaPlugin {
     /// reverse proxy or axum's own body-size guard remains the
     /// outer defence.
     max_size: Option<u64>,
+    /// Models opted into file-lifecycle cleanup. Each entry names a
+    /// table and the file-key columns on it that hold a [`FileField`] /
+    /// [`ImageField`] storage key; on row delete the blob behind each
+    /// non-empty key is removed from the backend. Populated by
+    /// [`MediaPlugin::cleanup_on_delete`] / [`MediaPlugin::cleanup_files`]
+    /// and consumed in [`MediaPlugin::on_ready`].
+    cleanup: Vec<CleanupSpec>,
+}
+
+/// One model's file-lifecycle cleanup registration: the table whose row
+/// deletes should cascade to blob deletes, and the file-key columns on
+/// that table to read the keys from.
+#[derive(Clone, Debug)]
+struct CleanupSpec {
+    /// `Model::TABLE` — used to subscribe to `pre_delete:<table>`.
+    table: String,
+    /// File-key column names (`FileField` / `ImageField`) on the table.
+    columns: Vec<String>,
 }
 
 impl MediaPlugin {
@@ -391,6 +487,7 @@ impl MediaPlugin {
             dir,
             storage,
             max_size: None,
+            cleanup: Vec::new(),
         }
     }
 
@@ -407,6 +504,7 @@ impl MediaPlugin {
             mount,
             storage,
             max_size: None,
+            cleanup: Vec::new(),
         }
     }
 
@@ -431,6 +529,73 @@ impl MediaPlugin {
     /// longer than this with [`MediaError::TooLarge`].
     pub fn max_size(mut self, bytes: u64) -> Self {
         self.max_size = Some(bytes);
+        self
+    }
+
+    /// Opt model `M` into **file-lifecycle cleanup**, auto-detecting its
+    /// file columns. When a row of `M` is deleted via the per-row delete
+    /// path (`M::objects().delete_instance(&row)`), the blob behind every
+    /// non-empty [`FileField`] / [`ImageField`] key on that row is deleted
+    /// from the storage backend, so the backend doesn't accumulate
+    /// orphaned files — Django's `FileField` cleanup.
+    ///
+    /// File columns are detected from `M`'s metadata: any column the
+    /// `#[derive(Model)]` macro tagged with the `file` / `image` widget
+    /// (i.e. declared as `FileField` / `ImageField`). If you overrode the
+    /// widget on a file column with an explicit `#[umbra(widget = "...")]`,
+    /// auto-detection won't see it — name the columns explicitly with
+    /// [`MediaPlugin::cleanup_files`] instead.
+    ///
+    /// Cleanup is **best-effort**: a storage delete error (including an
+    /// already-absent blob) is `tracing::warn!`-logged and never fails the
+    /// row delete. Registration is wired in [`MediaPlugin::on_ready`] via a
+    /// `pre_delete:<table>` signal handler, so [`umbra_signals::SignalsPlugin`]
+    /// must be registered (the ORM fires the signal regardless of plugin
+    /// order; the marker plugin only documents the dependency).
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .plugin(SignalsPlugin)
+    ///     .plugin(MediaPlugin::new("/media", "./media").cleanup_on_delete::<Post>())
+    ///     .build()?;
+    /// ```
+    ///
+    /// **Bulk deletes don't fire per-row signals.** `QuerySet::delete()`
+    /// (the filter-chain DELETE) fires only `bulk_post_delete` with PKs,
+    /// not `pre_delete`, so a bulk delete will NOT trigger cleanup — same
+    /// limitation Django's bulk `QuerySet.delete()` cascade has for the
+    /// post-row hook. Use `delete_instance` per row when cleanup matters.
+    pub fn cleanup_on_delete<M: Model>(mut self) -> Self {
+        let columns = file_columns_of::<M>();
+        if columns.is_empty() {
+            tracing::warn!(
+                table = M::TABLE,
+                "umbra-media: cleanup_on_delete found no FileField/ImageField columns on \
+                 `{}`; nothing will be cleaned up. Name the columns explicitly with \
+                 `cleanup_files` if you overrode the file widget.",
+                M::TABLE
+            );
+        } else {
+            self.cleanup.push(CleanupSpec {
+                table: M::TABLE.to_string(),
+                columns,
+            });
+        }
+        self
+    }
+
+    /// Opt model `M` into file-lifecycle cleanup for the named file
+    /// columns explicitly. Use this when [`MediaPlugin::cleanup_on_delete`]'s
+    /// widget-based auto-detection can't see a file column (e.g. you
+    /// overrode the `file` / `image` widget on it). Each name must be a
+    /// `FileField` / `ImageField` column on `M` holding a storage key;
+    /// semantics are otherwise identical to
+    /// [`MediaPlugin::cleanup_on_delete`] (best-effort, per-row delete only).
+    pub fn cleanup_files<M: Model>(mut self, fields: &[&str]) -> Self {
+        self.cleanup.push(CleanupSpec {
+            table: M::TABLE.to_string(),
+            columns: fields.iter().map(|s| s.to_string()).collect(),
+        });
         self
     }
 
@@ -555,6 +720,19 @@ impl Plugin for MediaPlugin {
             None => self.storage.clone(),
         };
         umbra::storage::set_storage(Arc::new(MediaTracking::new(storage)));
+
+        // File-lifecycle cleanup: for every model opted in via
+        // `cleanup_on_delete` / `cleanup_files`, subscribe a
+        // `pre_delete:<table>` handler that deletes the blobs behind the
+        // row's file-key columns. Best-effort — see `register_cleanup`.
+        for spec in &self.cleanup {
+            tracing::debug!(
+                table = %spec.table,
+                columns = ?spec.columns,
+                "umbra-media: registering file-lifecycle cleanup on delete"
+            );
+            register_cleanup(spec);
+        }
         Ok(())
     }
 
