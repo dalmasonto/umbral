@@ -98,6 +98,39 @@ fn default_db_acquire_timeout_secs() -> u64 {
     30
 }
 
+/// gaps2 #91: idle-connection floor. `0` means "shrink to zero idle
+/// connections" — sqlx's own default. Raise it on a busy service to keep
+/// warm connections ready (saves the per-request TCP+TLS+auth handshake).
+fn default_db_min_connections() -> u32 {
+    0
+}
+
+/// gaps2 #91: close a connection that's been idle this many seconds.
+/// Default 10 minutes — reclaims connections during quiet periods so the
+/// pool doesn't pin `max_connections` slots on the server forever. `None`
+/// (env `0`/empty) disables idle reaping.
+fn default_db_idle_timeout_secs() -> Option<u64> {
+    Some(600)
+}
+
+/// gaps2 #91: recycle any connection older than this many seconds,
+/// regardless of activity. Default 30 minutes — defends against stale
+/// connections silently dropped by a load balancer or reaped by
+/// Postgres's `idle_in_transaction_session_timeout`. `None` (env
+/// `0`/empty) disables lifetime recycling.
+fn default_db_max_lifetime_secs() -> Option<u64> {
+    Some(1800)
+}
+
+/// gaps2 #91: health-check a pooled connection (a cheap `SELECT`/ping)
+/// before handing it to a caller. Default `true` — a dead connection
+/// (server restarted, network blip) is silently replaced instead of
+/// surfacing as a mid-request error. Set `false` to trade safety for a
+/// few microseconds per acquire on a known-stable network.
+fn default_db_test_before_acquire() -> bool {
+    true
+}
+
 fn default_bind_addr() -> String {
     // 127.0.0.1 only by default — exposing the server on 0.0.0.0
     // is a deliberate keystroke. Override with UMBRA_BIND_ADDR or
@@ -152,6 +185,39 @@ where
 {
     let raw = String::deserialize(de)?;
     Ok(normalize_static_url(&raw))
+}
+
+/// Deserialize an `Option<u64>` where `0` (and an empty/missing string,
+/// as an env var might supply) maps to `None` — the "disabled" sentinel
+/// for the idle/max-lifetime timeouts (gaps2 #91). Accepts an integer
+/// (toml), a numeric string (env/dotenv), or an explicit null.
+fn deserialize_zero_as_none<'de, D>(de: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Int(u64),
+        Str(String),
+        Null,
+    }
+
+    let value = match Option::<Raw>::deserialize(de)? {
+        None | Some(Raw::Null) => return Ok(None),
+        Some(Raw::Int(n)) => n,
+        Some(Raw::Str(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed.parse::<u64>().map_err(D::Error::custom)?
+        }
+    };
+
+    Ok(if value == 0 { None } else { Some(value) })
 }
 
 fn dotenv_key(key: &str) -> Option<String> {
@@ -210,6 +276,37 @@ pub struct Settings {
     /// `UMBRA_DB_ACQUIRE_TIMEOUT_SECS` or `db_acquire_timeout_secs`.
     #[serde(default = "default_db_acquire_timeout_secs")]
     pub db_acquire_timeout_secs: u64,
+
+    /// Idle-connection floor — the pool keeps at least this many warm
+    /// connections (gaps2 #91). Default 0. Set via
+    /// `UMBRA_DB_MIN_CONNECTIONS` or `db_min_connections`.
+    #[serde(default = "default_db_min_connections")]
+    pub db_min_connections: u32,
+
+    /// Close a connection after it's been idle this many seconds (gaps2
+    /// #91). Default 600 (10 min). `0`/empty disables idle reaping. Set
+    /// via `UMBRA_DB_IDLE_TIMEOUT_SECS` or `db_idle_timeout_secs`.
+    #[serde(
+        default = "default_db_idle_timeout_secs",
+        deserialize_with = "deserialize_zero_as_none"
+    )]
+    pub db_idle_timeout_secs: Option<u64>,
+
+    /// Recycle a connection older than this many seconds (gaps2 #91).
+    /// Default 1800 (30 min) — avoids stale connections behind a load
+    /// balancer / Postgres idle-reaping. `0`/empty disables. Set via
+    /// `UMBRA_DB_MAX_LIFETIME_SECS` or `db_max_lifetime_secs`.
+    #[serde(
+        default = "default_db_max_lifetime_secs",
+        deserialize_with = "deserialize_zero_as_none"
+    )]
+    pub db_max_lifetime_secs: Option<u64>,
+
+    /// Health-check a pooled connection before handing it out (gaps2
+    /// #91). Default true. Set via `UMBRA_DB_TEST_BEFORE_ACQUIRE` or
+    /// `db_test_before_acquire`.
+    #[serde(default = "default_db_test_before_acquire")]
+    pub db_test_before_acquire: bool,
 
     #[serde(default = "default_secret_key")]
     pub secret_key: String,
@@ -553,6 +650,62 @@ mod tests {
         Jail::expect_with(|jail| {
             jail.set_env("UMBRA_STATIC_ROOT", "build/assets/");
             assert_eq!(Settings::from_env().unwrap().static_root, "build/assets/");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn db_pool_defaults_apply_when_nothing_is_set() {
+        Jail::expect_with(|_| {
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.db_max_connections, 10);
+            assert_eq!(s.db_min_connections, 0);
+            assert_eq!(s.db_acquire_timeout_secs, 30);
+            assert_eq!(s.db_idle_timeout_secs, Some(600));
+            assert_eq!(s.db_max_lifetime_secs, Some(1800));
+            assert!(s.db_test_before_acquire);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn db_pool_env_overrides_each_knob() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_DB_MAX_CONNECTIONS", "42");
+            jail.set_env("UMBRA_DB_MIN_CONNECTIONS", "4");
+            jail.set_env("UMBRA_DB_ACQUIRE_TIMEOUT_SECS", "7");
+            jail.set_env("UMBRA_DB_IDLE_TIMEOUT_SECS", "120");
+            jail.set_env("UMBRA_DB_MAX_LIFETIME_SECS", "240");
+            jail.set_env("UMBRA_DB_TEST_BEFORE_ACQUIRE", "false");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.db_max_connections, 42);
+            assert_eq!(s.db_min_connections, 4);
+            assert_eq!(s.db_acquire_timeout_secs, 7);
+            assert_eq!(s.db_idle_timeout_secs, Some(120));
+            assert_eq!(s.db_max_lifetime_secs, Some(240));
+            assert!(!s.db_test_before_acquire);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn db_timeout_zero_means_disabled_none() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_DB_IDLE_TIMEOUT_SECS", "0");
+            jail.set_env("UMBRA_DB_MAX_LIFETIME_SECS", "0");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.db_idle_timeout_secs, None);
+            assert_eq!(s.db_max_lifetime_secs, None);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn db_timeout_empty_string_means_disabled_none() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_DB_IDLE_TIMEOUT_SECS", "");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.db_idle_timeout_secs, None);
             Ok(())
         });
     }

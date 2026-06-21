@@ -1,0 +1,58 @@
+---
+title: Connection pooling
+description: Configure the database connection pool — max/min connections, acquire/idle timeouts, max lifetime, and pre-acquire health checks — plus graceful shutdown.
+sidebar_position: 16
+tags: [orm, database, pool, settings, postgres, sqlite, performance]
+---
+
+# Connection pooling
+
+umbra opens one sqlx connection pool per registered database and reuses it for every ORM call. The pool is configured entirely from settings, so the same `UMBRA_DB_*` knobs govern both backends — you tune the pool with environment variables (or `umbra.toml`), never in code.
+
+The pool is built when you call `umbra::db::connect(&url)` (typically `App::builder().database("default", umbra::db::connect(&url).await?)`). At that point umbra emits one boot-log line with the effective configuration so an operator can see exactly what's in force.
+
+## The knobs
+
+| Setting | Env var | Default | Meaning |
+|---|---|---|---|
+| `db_max_connections` | `UMBRA_DB_MAX_CONNECTIONS` | `10` | Upper bound on open connections. |
+| `db_min_connections` | `UMBRA_DB_MIN_CONNECTIONS` | `0` | Idle floor — keep at least this many warm connections (skips the per-request handshake on a busy service). |
+| `db_acquire_timeout_secs` | `UMBRA_DB_ACQUIRE_TIMEOUT_SECS` | `30` | Seconds to wait for a free connection before failing fast (so a saturated pool returns an error instead of blocking forever). |
+| `db_idle_timeout_secs` | `UMBRA_DB_IDLE_TIMEOUT_SECS` | `600` (10 min) | Close a connection idle this long. `0`/empty disables idle reaping. |
+| `db_max_lifetime_secs` | `UMBRA_DB_MAX_LIFETIME_SECS` | `1800` (30 min) | Recycle a connection older than this regardless of activity. Defends against stale connections silently dropped by a load balancer or reaped by Postgres. `0`/empty disables. |
+| `db_test_before_acquire` | `UMBRA_DB_TEST_BEFORE_ACQUIRE` | `true` | Health-check a connection before handing it out; a dead one is replaced instead of surfacing mid-request. |
+
+<Callout type="info">
+The two timeout knobs treat `0` (or an empty env value) as **disabled** — the corresponding recycling is turned off rather than set to "immediately".
+</Callout>
+
+## Production defaults
+
+The defaults are tuned for a real deployment, not just local dev: a 30-minute `max_lifetime` and 10-minute `idle_timeout` keep connections fresh behind a load balancer, and `test_before_acquire` means a Postgres restart or network blip is recovered transparently instead of erroring a request.
+
+## SQLite note
+
+The same settings drive the SQLite pool. SQLite is effectively single-writer (WAL serialises writers behind one lock), so a large `max_connections` mainly helps concurrent **readers** — but the knobs are honoured uniformly rather than hardcoding a divergent SQLite path.
+
+## Boot log
+
+When the pool is built you'll see a line like:
+
+```
+INFO umbra: opening database pool backend="postgres" max_connections=10 min_connections=0 acquire_timeout_secs=30 idle_timeout_secs=Some(600) max_lifetime_secs=Some(1800) test_before_acquire=true
+```
+
+## Graceful shutdown
+
+Call `umbra::db::close()` once during shutdown — after the HTTP server stops accepting connections — to flush in-flight work and close every pooled connection cleanly (a clean WAL checkpoint for SQLite, a clean `Terminate` for Postgres) rather than having them dropped abruptly when the process exits.
+
+```rust,ignore
+// in your shutdown handler, after the server stops accepting:
+umbra::db::close().await;
+```
+
+Closing is terminal: acquiring from the pool afterwards errors, which is the intended post-shutdown behaviour.
+
+## See also
+
+The pool configuration lives in `crate::settings::Settings` (the `db_*` fields) and is applied in `umbra_core::db::connect_postgres` / `connect_sqlite`. Design rationale: `arch.md` and gaps2 #91.

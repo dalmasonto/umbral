@@ -309,24 +309,87 @@ pub async fn connect(url: &str) -> Result<DbPool, sqlx::Error> {
     }
 }
 
+/// The effective pool configuration, resolved from [`crate::settings`]
+/// when installed and falling back to the documented production defaults
+/// otherwise (a pool can be opened before settings are installed). Shared
+/// by [`connect_postgres`] and [`connect_sqlite`] so both backends honour
+/// the same `UMBRA_DB_*` knobs (gaps2 #91).
+struct PoolConfig {
+    max_connections: u32,
+    min_connections: u32,
+    acquire_timeout_secs: u64,
+    idle_timeout_secs: Option<u64>,
+    max_lifetime_secs: Option<u64>,
+    test_before_acquire: bool,
+}
+
+impl PoolConfig {
+    fn resolve() -> Self {
+        match crate::settings::get_opt() {
+            Some(s) => PoolConfig {
+                max_connections: s.db_max_connections,
+                min_connections: s.db_min_connections,
+                acquire_timeout_secs: s.db_acquire_timeout_secs,
+                idle_timeout_secs: s.db_idle_timeout_secs,
+                max_lifetime_secs: s.db_max_lifetime_secs,
+                test_before_acquire: s.db_test_before_acquire,
+            },
+            // Defaults mirror the `default_db_*` fns in `settings`.
+            None => PoolConfig {
+                max_connections: 10,
+                min_connections: 0,
+                acquire_timeout_secs: 30,
+                idle_timeout_secs: Some(600),
+                max_lifetime_secs: Some(1800),
+                test_before_acquire: true,
+            },
+        }
+    }
+
+    /// Emit one operator-facing line describing the pool that's about to
+    /// be built, so the effective config is visible in the boot log.
+    fn log(&self, backend: &str) {
+        tracing::info!(
+            backend,
+            max_connections = self.max_connections.max(1),
+            min_connections = self.min_connections,
+            acquire_timeout_secs = self.acquire_timeout_secs,
+            idle_timeout_secs = ?self.idle_timeout_secs,
+            max_lifetime_secs = ?self.max_lifetime_secs,
+            test_before_acquire = self.test_before_acquire,
+            "umbra: opening database pool"
+        );
+    }
+}
+
 /// Open a Postgres pool from a URL with umbra's pool configuration.
 ///
-/// PERF-5: bare `PgPool::connect` uses sqlx's defaults with **no acquire
-/// timeout**, so a saturated pool blocks request tasks forever. We always
-/// set a bounded `acquire_timeout` (fail fast) and a configurable
-/// `max_connections`, read from [`crate::settings`] when available
-/// (falling back to the documented defaults if the pool is opened before
-/// settings are installed).
+/// PERF-5 / gaps2 #91: bare `PgPool::connect` uses sqlx's defaults with
+/// **no acquire timeout**, so a saturated pool blocks request tasks
+/// forever. We always apply the full set of pool knobs — `max_connections`,
+/// `min_connections`, a bounded `acquire_timeout` (fail fast),
+/// `idle_timeout`, `max_lifetime`, and `test_before_acquire` — read from
+/// [`crate::settings`] when available (falling back to the documented
+/// production defaults if the pool is opened before settings are
+/// installed). `idle_timeout`/`max_lifetime` are only applied when `Some`;
+/// a `None` (env `0`/empty) leaves that recycling disabled.
 pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
     use std::time::Duration;
-    let (max_conn, acquire_secs) = crate::settings::get_opt()
-        .map(|s| (s.db_max_connections, s.db_acquire_timeout_secs))
-        .unwrap_or((10, 30));
-    sqlx::postgres::PgPoolOptions::new()
-        .max_connections(max_conn.max(1))
-        .acquire_timeout(Duration::from_secs(acquire_secs))
-        .connect(url)
-        .await
+    let cfg = PoolConfig::resolve();
+    cfg.log("postgres");
+
+    let mut opts = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(cfg.max_connections.max(1))
+        .min_connections(cfg.min_connections)
+        .acquire_timeout(Duration::from_secs(cfg.acquire_timeout_secs))
+        .test_before_acquire(cfg.test_before_acquire);
+    if let Some(secs) = cfg.idle_timeout_secs {
+        opts = opts.idle_timeout(Duration::from_secs(secs));
+    }
+    if let Some(secs) = cfg.max_lifetime_secs {
+        opts = opts.max_lifetime(Duration::from_secs(secs));
+    }
+    opts.connect(url).await
 }
 
 /// Open a SQLite-backed pool from a URL.
@@ -388,7 +451,55 @@ pub async fn connect_sqlite(url: &str) -> Result<SqlitePool, sqlx::Error> {
         // WARN at the 1-second threshold stays on, since it goes via a
         // separate log target.
         .log_statements(tracing::log::LevelFilter::Off);
-    SqlitePoolOptions::new().connect_with(opts).await
+
+    // gaps2 #91: apply the same settings-driven pool knobs as Postgres so
+    // a single `UMBRA_DB_*` configuration governs every backend. SQLite is
+    // effectively single-writer (WAL serialises writers behind one lock),
+    // so a large `max_connections` mainly buys concurrent *readers*; the
+    // knob is still honoured rather than hardcoding a divergent SQLite path.
+    let cfg = PoolConfig::resolve();
+    cfg.log("sqlite");
+    let mut pool_opts = SqlitePoolOptions::new()
+        .max_connections(cfg.max_connections.max(1))
+        .min_connections(cfg.min_connections)
+        .acquire_timeout(Duration::from_secs(cfg.acquire_timeout_secs))
+        .test_before_acquire(cfg.test_before_acquire);
+    if let Some(secs) = cfg.idle_timeout_secs {
+        pool_opts = pool_opts.idle_timeout(Duration::from_secs(secs));
+    }
+    if let Some(secs) = cfg.max_lifetime_secs {
+        pool_opts = pool_opts.max_lifetime(Duration::from_secs(secs));
+    }
+    pool_opts.connect_with(opts).await
+}
+
+/// Gracefully close the ambient default database pool (gaps2 #91).
+///
+/// Call this once during shutdown — after the HTTP server has stopped
+/// accepting connections — to let sqlx flush in-flight work and close
+/// every pooled connection cleanly rather than having them dropped
+/// abruptly when the process exits. For SQLite this also lets WAL
+/// checkpoint; for Postgres it sends a clean `Terminate` so the server
+/// doesn't log the connections as unexpectedly lost.
+///
+/// Closing is terminal: the ambient [`OnceLock`] is left in place (it
+/// can't be unset), so the pool object remains registered but is closed.
+/// Acquiring from a closed pool errors, which is the intended post-
+/// shutdown behaviour. A no-op if no pool was ever registered.
+///
+/// ```rust,ignore
+/// // in your shutdown handler, after the server stops:
+/// umbra::db::close().await;
+/// ```
+pub async fn close() {
+    if let Some(pools) = POOLS.get() {
+        for db in pools.values() {
+            match db {
+                DbPool::Sqlite(p) => p.close().await,
+                DbPool::Postgres(p) => p.close().await,
+            }
+        }
+    }
 }
 
 // =============================================================================
