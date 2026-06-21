@@ -43,7 +43,7 @@ The full list lives at [docs.rs/minijinja — filters](https://docs.rs/minijinja
   Umbra enables autoescape for every `.html` / `.htm` template. Values piped through `| safe` (or returned as `minijinja::Value::from_safe_string` in Rust) bypass the escaping — all other output is HTML-escaped automatically.
 </Callout>
 
-Date and time formatting uses minijinja's `now()` built-in. Umbra replaces that global with its own `now()` (see below), which accepts a chrono `strftime` format string for consistent, UTC-based rendering.
+For date and time formatting, umbra registers its own `now()` global (see below), which accepts a chrono `strftime` format string for consistent, UTC-based rendering.
 
 ## Umbra filters and template functions
 
@@ -138,6 +138,17 @@ Emit the `base16-ocean.dark` stylesheet for the `| markdown` filter's server-sid
 ```
 
 See [Syntax highlighting](/docs/v0.0.1/web/markdown-syntax-highlighting) for the full setup.
+
+### `querystring_with(query, key, value)` — pagination links
+
+Rebuild the current querystring replacing a single key while preserving every other parameter. This is the fiddly bit behind a pagination nav that has to carry `?sort=name` filters across every `?page=N` link.
+
+```html
+{# current_query is the request's raw querystring, e.g. "sort=name&page=1" #}
+<a href="?{{ querystring_with(current_query, "page", page.next_page_number) }}">Next</a>
+```
+
+The returned string has no leading `?` — the template prepends one. The `value` may be an integer, string, or bool; it's stringified for you (so `page.next_page_number` works without a cast). The bundled `_pagination.html` partial uses this so filters survive page navigation.
 
 ### Ambient context variables
 

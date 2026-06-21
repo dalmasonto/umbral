@@ -170,8 +170,8 @@ This matches Django's `APP_DIRS` loader behaviour. To override a plugin's templa
 ## What ships at v1
 
 <CardGrid cols={2}>
-  <Card icon="folder" title="Shipped" description="App-level templates directory. Per-plugin templates directories via Plugin::templates_dirs(). First-match-wins search with collision warnings. Cross-plugin extends/block inheritance. Autoescape on .html. Forward-slash names on every OS. Core custom filters (img, markdown, sanitize). Ambient user / csrf_token / csrf_input globals. Dev-mode hot reload (env rebuilt per render when settings.environment is Dev)." />
-  <Card icon="clock" title="Deferred" description="Plugin-contributed custom filters and tests through Plugin::on_ready (app-level). Humanize-style filters (naturaltime, intcomma) for app templates." />
+  <Card icon="folder" title="Shipped" description="App-level templates directory. Per-plugin templates directories via Plugin::templates_dirs(). First-match-wins search with collision warnings. Cross-plugin extends/block inheritance. Autoescape on .html. Forward-slash names on every OS. Core custom filters/functions (img, markdown, sanitize, currency, static, media_url, now, querystring_with, highlight_styles). Plugin-contributed filters/functions via Plugin::template_registrars(). Ambient user / csrf_token / csrf_input globals. Dev-mode hot reload (env rebuilt per render when settings.environment is Dev)." />
+  <Card icon="clock" title="Deferred" description="Humanize-style filters (naturaltime, intcomma) for app templates." />
 </CardGrid>
 
 ## Accessing FK fields in templates

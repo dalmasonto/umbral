@@ -37,3 +37,7 @@ That emits the `base16-ocean.dark` token stylesheet inline. The token colors ren
 <Callout type="info">
   The colors come from a fixed theme. To change palettes you regenerate the stylesheet from a different syntect theme — the token classes stay the same, so no template changes are needed.
 </Callout>
+
+<Callout type="warning">
+  The fence info-string (the language token after the opening ` ``` `) is validated before it ever reaches the rendered `class="language-…"` attribute. A token must be a short word of `[A-Za-z0-9+-_./#@]` characters; anything else — a `<script>` payload, an `onmouseover="…"` class-injection attempt — is treated as "no language", producing a plain (inert) code block. Combined with ammonia's pass, a hostile fence can't smuggle markup into the page.
+</Callout>

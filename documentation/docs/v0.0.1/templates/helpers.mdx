@@ -5,7 +5,7 @@ sidebar_position: 2
 tags: [templates, filters, helpers, minijinja]
 ---
 
-umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. On top of that standard library, umbra-core registers a handful of custom filters and functions of its own (`img`, `markdown`, `sanitize`, `now`, `currency`) and injects ambient globals into every render (`csrf_token`, `csrf_input`, plus the anonymous-safe `user`). Plugins can add their own; see [Custom template tags](custom-tags).
+umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. On top of that standard library, umbra-core registers a handful of custom filters and functions of its own (`img`, `markdown`, `sanitize`, `currency`, `static`, `media_url`, `now`, `querystring_with`, `highlight_styles`) and injects ambient globals into every render (`csrf_token`, `csrf_input`, plus the anonymous-safe `user`). Plugins can add their own; see [Custom template tags](custom-tags).
 
 This page catalogues the filters and globals umbra users reach for most, with examples written in the umbra template style.
 
@@ -20,6 +20,10 @@ These are registered by umbra-core's template engine (`crates/umbra-core/src/tem
 | `sanitize` | filter | Clean stored HTML (e.g. the admin RTE widget's output) down to ammonia's safe allowlist and mark it safe. | `{{ body \| sanitize }}` |
 | `now` | function | Current UTC time. No argument → RFC 3339; a chrono `strftime` string → formatted. | `{{ now("%Y-%m-%d") }}` |
 | `currency` | filter | Format a number as money: two decimals, thousands grouping, leading symbol for common ISO codes (USD/EUR/GBP/JPY/…). Unknown code → `1,234.56 CODE`. | `{{ price \| currency("EUR") }}` |
+| `static` | function | Resolve a developer-shipped asset path through the configured `static_url` (and the cache-busting manifest when `collectstatic --hashed` has run). | `{{ static("admin/admin.css") }}` |
+| `media_url` | function | Resolve a stored file/image key through the ambient `Storage` backend's public URL. `ImageField`/`FileField` serialize as the bare key. | `{{ media_url(plugin.logo) }}` |
+| `querystring_with` | function | Rebuild the current querystring replacing one key, preserving the rest — for pagination links that carry filters. No leading `?`. | `?{{ querystring_with(current_query, "page", page.next_page_number) }}` |
+| `highlight_styles` | function | Emit the `base16-ocean.dark` syntect token stylesheet (wrapped in `<style>`) for `\| markdown` server-side code highlighting. Call once in `<head>`. | `{{ highlight_styles() }}` |
 | `csrf_token` | global | The current request's CSRF token string. Injected ambiently when a CSRF middleware scoped a token for the request. | `<input name="csrf_token" value="{{ csrf_token }}">` |
 | `csrf_input` | global | A ready-made `<input type="hidden" name="csrf_token" ...>`, marked safe. Django's `{% csrf_token %}` ergonomic. | `<form method="post">{{ csrf_input }}</form>` |
 | `user` | global | The current user, injected into every render. Authenticated requests get the full serialized user when `AuthPlugin::with_user_in_templates()` is on; otherwise the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }`, so `user.is_authenticated` always resolves. | `{% if user.is_authenticated %}...{% endif %}` |

@@ -58,7 +58,7 @@ App::builder()
 A registrar is a `Box<dyn Fn(&mut Environment<'static>) + Send + Sync>`. It can't borrow `self`, so capture any per-plugin config **by value** into the closure. This is what lets umbra stash the registrar and re-run it on every dev-mode hot-reload rebuild.
 </Step>
 <Step title="Applied after the built-ins">
-Registrars run after the framework's own filters/functions (`img`, `static`, `media_url`, `markdown`, `now`, `currency`, `sanitize`) and in plugin dependency order. Because minijinja's `add_filter` / `add_function` overwrite by name, a plugin *can* deliberately replace a built-in by registering the same name. Do this sparingly and document it.
+Registrars run after the framework's own filters/functions (`img`, `markdown`, `sanitize`, `currency`, `static`, `media_url`, `now`, `querystring_with`, `highlight_styles`) and in plugin dependency order. Because minijinja's `add_filter` / `add_function` overwrite by name, a plugin *can* deliberately replace a built-in by registering the same name. Do this sparingly and document it.
 </Step>
 <Step title="Fn, not FnOnce">
 The engine is rebuilt whenever a template file changes in dev mode, so each registrar may run many times over a process's life. Keep them pure, with no one-shot side effects.
