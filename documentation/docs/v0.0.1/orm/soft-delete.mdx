@@ -7,7 +7,9 @@ tags: [orm, soft-delete, trash]
 
 # Soft delete
 
-Tag a model `#[umbra(soft_delete)]` and the framework stops destroying its rows: `delete()` becomes an `UPDATE ... SET deleted_at = NOW()`, and every normal query automatically excludes rows where `deleted_at` is set. You get a trash can instead of a shredder: undo, audits, and "restore this account" flows all stay possible.
+Tag a model `#[umbra(soft_delete)]` and the framework stops destroying its rows: `delete()` becomes an `UPDATE ... SET deleted_at = <now>` (the current UTC timestamp, bound as a parameter — not a SQL `NOW()` call, so it's identical on SQLite and Postgres), and every normal query automatically excludes rows where `deleted_at` is set. You get a trash can instead of a shredder: undo, audits, and "restore this account" flows all stay possible.
+
+The rewrite is idempotent: it only touches rows where `deleted_at IS NULL`, so re-deleting an already-trashed row never bumps its timestamp.
 
 You declare the timestamp column yourself (the marker doesn't synthesize it):
 

@@ -141,7 +141,7 @@ Object payloads gain an `"actor"` key. Non-object payloads (rare) are wrapped as
 
 **Sync handlers run on the caller's task.** A slow sync handler blocks the write that fired it. Use `subscribe_async` for any handler that awaits I/O.
 
-**Bulk signals fire even when zero rows were affected for INSERT, but skip for UPDATE / DELETE / clear.** `bulk_create([])` short-circuits before the SQL; an `update_values` that matches zero rows stays silent because a "zero-row" event is usually noise.
+**Bulk signals only fire when at least one row was affected.** Every typed bulk emit is guarded by `if !ids.is_empty()`: `bulk_create([])` short-circuits before the SQL, and an `update_values` / `delete` that matches zero rows stays silent (a "zero-row" event is usually noise). Subscribers therefore never see an empty `ids` array.
 
 **The actor task-local is in-process only too.** It does not propagate across `tokio::spawn` boundaries automatically: `tokio::task_local` resets when a new task starts. If you spawn from inside a `with_actor(...)` scope and want the actor to survive, capture `current_actor()` into a `let` and re-establish via `with_actor(actor, ...)` inside the spawned task.
 

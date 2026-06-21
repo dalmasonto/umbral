@@ -48,6 +48,12 @@ App::builder()
 
 Reads now resolve to the `replica` pool, writes to `default`.
 
+Every read terminal (`fetch`, `first`, `count`, `exists`, `get`, `aggregate`, …) calls `db_for_read`; every write terminal (`create`, `bulk_create`, `update_values`, `delete`, …) calls `db_for_write`. `.on(&pool)` is a hard override that bypasses the router entirely.
+
+<Callout type="info">
+**Read-after-write consistency.** `get_or_create` and `update_or_create` run their existence check against the **write** pool, not the read replica, so they can't miss a just-written row on a lagging replica and spuriously insert a duplicate.
+</Callout>
+
 ## Per-request context
 
 To route by a per-request value (a region, a shard key, a tenant id), populate a request-scoped [`RouteContext`] from each request and read it in your router:
@@ -74,3 +80,9 @@ umbra ships **no multitenancy system** — no `Tenant` model, no per-tenant sche
 </Callout>
 
 The trait does carry a `schema_for(ctx) -> Option<Schema>` hook for Django-router parity, but it's a low-level building block, not a supported tenancy feature, and is intentionally undocumented here until the management layer (deferred) lands.
+
+## See also
+
+- [Database routing](./database-routing) — the static, by-name side: named pools, per-model / per-plugin routing, per-database migrations, and the cross-DB FK guard.
+- `examples/read-replica/` — a working read/write split end to end.
+- `DatabaseRouter` foundation spec: `docs/superpowers/specs/2026-06-16-database-router-foundation-design.md`.

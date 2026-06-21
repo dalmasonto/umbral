@@ -48,6 +48,23 @@ On submit, the admin stores each uploaded file through the ambient `Storage` and
 
 File and image columns aren't editable inline from the changelist table (a single-cell text edit can't carry an upload); use the row's change form / sheet to replace a file.
 
+## Cleanup on delete
+
+By default a deleted row's underlying file is left in storage — the key column goes away but the blob stays. Opt a model into orphan cleanup with [`MediaPlugin::cleanup_on_delete::<M>()`](/docs/v0.0.1/plugins/media): when a row is deleted, the framework removes the file behind each of its `FileField` / `ImageField` columns.
+
+```rust
+App::builder()
+    .plugin(SignalsPlugin)   // cleanup hangs off a pre_delete signal
+    .plugin(MediaPlugin::new("/media", "./media").cleanup_on_delete::<Post>())
+    .build()?;
+```
+
+The file columns are auto-detected from `M`'s metadata (any column the macro tagged with the `file` / `image` widget). If you overrode the widget on a file column, name the columns explicitly with `MediaPlugin::cleanup_files::<M>(&["..."])` instead.
+
+<Callout type="warning">
+Cleanup is best-effort (a storage-delete error is logged, never failing the row delete) and is wired to the per-row `pre_delete` signal. A bulk `QuerySet::delete()` fires only `bulk_post_delete` (PKs, no instances), so it does **not** trigger file cleanup — call `delete_instance` per row when the file must go too. This mirrors Django's bulk-delete cascade limitation.
+</Callout>
+
 ## See also
 
 - [Storage and media](/docs/v0.0.1/plugins/media) - the `Storage` trait and `MediaPlugin`.

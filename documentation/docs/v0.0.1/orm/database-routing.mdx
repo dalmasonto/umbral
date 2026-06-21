@@ -121,47 +121,30 @@ pub struct PageView {
 
 ## Read/write (replica) split
 
-The `DatabaseRouter` trait (gaps2 #69 foundation, shipped 2026-06-16) lets you send reads to a replica pool and writes to the primary with a single trait impl — the model, handlers, and the rest of the ORM are untouched.
-
-Implement `DatabaseRouter` and register it with `.router(...)`:
+The static per-model/per-plugin routing above is resolved by name at boot. To take routing decisions over yourself — send reads to a replica and writes to the primary, or route by a per-request key — install a [**`DatabaseRouter`**](./database-router). It's a single trait impl; the models, handlers, and the rest of the ORM are untouched.
 
 ```rust
 use umbra::db::{Alias, DatabaseRouter, RouteContext};
 use umbra::migrate::ModelMeta;
 
 struct ReplicaRouter;
-
 impl DatabaseRouter for ReplicaRouter {
-    fn db_for_read(&self, _model: &ModelMeta, _ctx: &RouteContext) -> Alias {
-        Alias::new("replica")   // reads  → the replica pool
-    }
-    fn db_for_write(&self, _model: &ModelMeta, _ctx: &RouteContext) -> Alias {
-        Alias::new("default")   // writes → the primary pool
-    }
+    fn db_for_read(&self, _m: &ModelMeta, _c: &RouteContext) -> Alias { Alias::new("replica") }
+    fn db_for_write(&self, _m: &ModelMeta, _c: &RouteContext) -> Alias { Alias::new("default") }
 }
 
-let primary = umbra::db::connect(&settings.database_url).await?;
-let replica = umbra::db::connect(&replica_url).await?;
-
 App::builder()
-    .settings(settings)
     .database("default", primary)   // primary / write pool
     .database("replica", replica)   // read-replica pool
     .router(ReplicaRouter)
-    .model::<Note>()
-    // ...routes...
     .build()?;
 ```
 
-Every read terminal (`fetch`, `first`, `count`, `exists`, `get`, `aggregate`) calls `db_for_read`; every write terminal (`create`, `bulk_create`, `update_values`, `delete`, …) calls `db_for_write`. `.on(&pool)` is a hard override that bypasses the router entirely.
+Every read terminal (`fetch`, `first`, `count`, `exists`, `get`, …) calls `db_for_read`; every write terminal (`create`, `bulk_create`, `update_values`, `delete`, …) calls `db_for_write`. `.on(&pool)` is a hard override that bypasses the router entirely.
 
 **Read-after-write consistency.** `get_or_create` and `update_or_create` probe the **write** pool for their existence check (not the replica), so they can't miss a just-written row on a lagging replica and spuriously insert a duplicate.
 
-A working end-to-end example lives in `examples/read-replica/`.
-
-<Callout type="info">
-`DatabaseRouter` is also the hook for more advanced routing: per-tenant db selection, per-request schema qualification (Postgres schema-per-tenant via `schema_for`), and custom `allow_relation` / `allow_migrate` policies. The default implementation — used when you call `.router(...)` with nothing — reproduces today's static per-model behavior exactly.
-</Callout>
+See the [database router page](./database-router) for the full trait, per-request `RouteContext` routing, and the `schema_for` hook. A working end-to-end example lives in `examples/read-replica/`.
 
 ## Not yet supported
 

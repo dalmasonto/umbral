@@ -17,7 +17,7 @@ The full surface lives in `umbra::orm`: `Masked`, `MaskKeyring`, `MaskError`, `s
 
 ## How it works
 
-Encryption is **public-key** (X25519 sealed boxes, the libsodium `crypto_box_seal` construction). The public key encrypts; the private key decrypts. That asymmetry is the whole point:
+Encryption is **public-key** (X25519 + XSalsa20-Poly1305 sealed boxes, via the RustCrypto `crypto_box` crate, in the same anonymous-sender construction as libsodium's `crypto_box_seal`). A fresh ephemeral keypair is generated per value and sealed to the configured public key. The public key encrypts; the private key decrypts. That asymmetry is the whole point:
 
 - **A write-only tier** that holds only the public key can store PII it can never read back. An edge service can capture a phone number that only a separate, locked-down service (holding the private key) can ever decrypt.
 - **Crypto-shredding**: deleting the private key renders every masked column permanently unrecoverable, a fast bulk "right to be forgotten" that doesn't require touching a single row.
@@ -64,6 +64,10 @@ set_mask_keyring(MaskKeyring::from_base64(&public_b64, Some(&private_b64))?);
 ```
 
 A tier configured with **only** the public key can store masked data but not reveal it: `reveal()` returns `MaskError::NoPrivateKey`.
+
+<Callout type="warning">
+If a key env-var **is** set but is malformed (bad base64 or not 32 bytes), every seal/reveal fails with `MaskError::BadKey` — it never silently falls back to storing plaintext. The error is also logged once at first use so a misconfigured key surfaces in the startup logs. (With the public-key env-var simply **absent**, masking is treated as not configured, and a seal returns `NoKeyring`.)
+</Callout>
 
 ## Declaring and using a masked field
 
