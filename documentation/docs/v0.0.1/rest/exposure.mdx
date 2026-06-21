@@ -1,6 +1,6 @@
 ---
 title: Model exposure
-description: Which models become API endpoints, the built-in block-list (auth_user, session, umbra_migrations), and the include_only / exclude / expose controls.
+description: Which models become API endpoints, the built-in block-list (auth_user, session, the permissions/tasks/admin tables), and the include_only / exclude / expose controls.
 sidebar_position: 4
 icon: list-checks
 tags: [rest, security, exposure, api]
@@ -19,15 +19,22 @@ App::builder()
 
 ## The default block-list
 
-Three tables are refused even though every other model is served:
+A set of framework-internal tables is refused even though every other model is served. The list (`DEFAULT_BLOCKED_TABLES` in `plugins/umbra-rest/src/lib.rs`):
 
 | Table | Why it's blocked |
 |---|---|
 | `auth_user` | Serving it would leak **password hashes** and let `PATCH /api/auth_user/1` flip `is_staff` / `is_superuser`. |
 | `session` | Serving it would leak **session identifiers**: anyone reading the table could hijack a live session. |
 | `umbra_migrations` | The migration ledger. Internal bookkeeping, never a public resource. |
+| `permissions_permission`, `permissions_contenttype`, `permissions_group`, `permissions_usergroup`, `permissions_userpermission` | The authorization tables from `umbra-permissions`. Exposing them would let a client read or rewrite who-can-do-what. |
+| `task_row` | The `umbra-tasks` queue rows — internal job state, not a public resource. |
+| `admin_audit_log` | The admin's audit trail. Internal bookkeeping. |
 
-A request to a blocked table 404s; the route is never mounted. This is the backstop that keeps the credential store off the API even though the plugin auto-exposes everything else.
+A request to a blocked table 404s; the route is never mounted. This is the backstop that keeps the credential store (and the framework's own bookkeeping tables) off the API even though the plugin auto-exposes everything else.
+
+<Callout type="info">
+Beyond the table block-list, the field `password_hash` is **always** stripped from every response, on every table, and can never be re-exposed (not even with `.expose(...)`). It's a hard, un-overridable denylist entry — the last line of defence if a custom credential model slips past the table block-list.
+</Callout>
 
 ## Controlling what's exposed
 
@@ -82,7 +89,7 @@ RestPlugin::default()
 
 1. **`include_only`**: if set, only listed tables pass; everything else is denied outright.
 2. **`expose`**: a default-blocked table you've opted into (still subject to `exclude`).
-3. **default block-list**: `auth_user` / `session` / `umbra_migrations` are denied.
+3. **default block-list**: the framework-internal tables above (`auth_user`, `session`, `umbra_migrations`, the `permissions_*` tables, `task_row`, `admin_audit_log`) are denied.
 4. **`exclude`**: your own additions are denied.
 5. otherwise served.
 

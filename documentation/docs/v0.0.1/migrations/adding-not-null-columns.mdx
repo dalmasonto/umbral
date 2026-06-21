@@ -4,11 +4,25 @@ description: How to safely add NOT NULL columns to populated tables without losi
 sidebar_position: 4
 ---
 
-Adding a new NOT NULL column to a table that already has rows is the most common "your migration won't apply" scenario. This page covers the safe paths umbra knows about and the backend differences you'll hit.
+Adding a new NOT NULL column to a table that already has rows is the most common "your migration won't apply" scenario. umbra catches it earlier than most: `makemigrations` itself refuses to write the migration when it would brick a populated table. This page covers the safe paths umbra knows about and the backend differences you'll hit.
 
 ## The constraint, in one paragraph
 
 Both SQLite and Postgres refuse to `ALTER TABLE x ADD COLUMN y NOT NULL` against existing rows unless they're told *what value to put in y for those rows*. SQLite is stricter: it also refuses non-constant defaults like `CURRENT_TIMESTAMP` in `ADD COLUMN`. Postgres allows `DEFAULT now()` and backfills inline. The migration engine handles both transparently for the timestamp columns; for everything else you pick the backfill shape.
+
+## `makemigrations` refuses the unsafe shape
+
+When a model gains a NOT NULL field that is *not* `Option<T>`, *not* `#[umbra(default = "...")]`, and *not* `#[umbra(auto_now)]` / `#[umbra(auto_now_add)]` (and isn't the primary key), the autodetector stops with an `UnsafeAlter` error instead of generating an `AddColumn` op that would fail on every populated row:
+
+```text
+umbra migrate: unsafe column change on `Order.region`: adding NOT NULL column
+`region` without a default to existing table `order` would fail on every
+populated row. Pick one: (a) make the field `Option<T>`, (b) add
+`#[umbra(default = "...")]` so the migration backfills, or (c) add
+`#[umbra(auto_now_add)]` for timestamp columns
+```
+
+The fix is to adjust the model to one of the three safe shapes below, then re-run `makemigrations`. The migration is never written until the shape is safe, so there's nothing to delete and nothing reaches the database in a broken state.
 
 ## The three safe shapes
 
@@ -66,20 +80,20 @@ SQLite's `ALTER TABLE ADD COLUMN` requires a **constant** default. `CURRENT_TIME
 
 - **Don't `rm -f *.db`** to dodge a failing migration. The framework's CLAUDE.md spells this out: the failure IS the test, deleting your DB hides it and destroys real data.
 - **Don't delete migration files** in `migrations/<plugin>/` to "regenerate cleanly." The history is part of the schema's audit trail; older deploys depend on it.
-- **Don't `cargo run -- makemigrations` and ignore the diff**. Read the generated JSON. If you see an `AddColumn` with `nullable: false`, no `default`, and no `auto_now*` flag, the migration will fail to apply on a populated DB.
+- **Don't ignore an `UnsafeAlter` error from `makemigrations`**. It's telling you the column shape would fail on a populated table. Adjust the model to one of the three safe shapes above rather than reaching for a workaround.
 
-## Recovering from a failed ALTER
+## Recovering when `makemigrations` errors
 
-If a migration failed mid-flight:
+Because the autodetector refuses the unsafe shape, the common recovery is at `makemigrations` time, before anything touches the database:
 
-1. **Don't panic.** Failed `ALTER TABLE` is transactional on both backends; your table is unchanged.
-2. **Inspect** the most recent migration file under `migrations/<plugin>/` to understand what was attempted.
-3. **Adjust the model** to one of the three safe shapes above.
-4. **Delete the failed migration file** (it's the last one, never applied). You're not removing history; the migration was never recorded as applied in `umbra_migrations`.
-5. **Re-run** `cargo run -- makemigrations` to regenerate the operation against your fix, then `cargo run -- migrate` to apply.
+1. **Read the error.** It names the model and column and lists the three safe shapes.
+2. **Adjust the model** to one of those shapes (`Option<T>`, `#[umbra(default = "...")]`, or an `auto_now*` timestamp).
+3. **Re-run** `cargo run -- makemigrations` to generate the now-safe operation, then `cargo run -- migrate` to apply it.
 
-<Callout type="warning" title="Step 4 is the exception to 'never delete migration files'">
-The general rule (CLAUDE.md) is "never delete migration files." The exception is a migration that **failed to apply**: it lives on disk but was never recorded in the tracking table. Re-running `makemigrations` after fixing the model would create a *second* migration alongside the broken one; the engine would attempt both. Deleting the broken one first keeps history clean.
+Nothing was written to disk and nothing reached the database, so there's no half-applied migration to clean up.
+
+<Callout type="warning" title="If an ALTER did fail at apply time">
+The NOT-NULL-without-default case is caught at `makemigrations` time. A *different* migration that was written and then failed mid-apply (e.g. a UNIQUE constraint that trips on existing duplicates) is transactional on both backends — your table is unchanged — and the file lives on disk but was never recorded in `umbra_migrations`. In that narrow case, fix the model, delete the never-applied last migration file, and re-run `makemigrations`. This is the one exception to CLAUDE.md's "never delete migration files" rule: it applies only to a file that was never recorded as applied.
 </Callout>
 
 ## Caveats

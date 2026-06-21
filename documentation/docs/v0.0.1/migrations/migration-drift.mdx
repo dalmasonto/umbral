@@ -26,7 +26,7 @@ The tracking table says the migration ran, but the JSON file no longer exists. T
 - A teammate ran a migration that was not pushed and then the migration was squashed or renamed.
 - The `migrations/` directory was wiped and recreated from a partial backup.
 
-**Default behaviour:** `umbra migrate` errors with a clear message listing every missing name and two recovery options.
+**Default behaviour:** `umbra migrate` errors with a clear message listing every missing name and three recovery options (restore the file, `--allow-drift`, or `--fake`).
 
 ### Out of order
 

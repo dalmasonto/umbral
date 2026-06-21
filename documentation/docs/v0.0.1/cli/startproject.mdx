@@ -135,7 +135,7 @@ field. The `#[derive(Model)]` macro generates the `Model` trait impl, the ORM
 manager, and the typed column constants (`post::ID`, `post::TITLE`,
 `post::PUBLISHED`, `post::AUTHOR`).
 
-**App wiring** calls `App::builder()` with every plugin registered in order: `AuthPlugin`, `SessionsPlugin`, `AdminPlugin`, `RestPlugin`, `OpenApiPlugin`, and `SecurityPlugin`. The `RestPlugin` call chains `.resource(ResourceConfig::new("post"))`, which exposes JSON CRUD at the `/api/post/` endpoint. Add `.enable_filters()` to the resource when you want query-string filters (`?published=true`, `?title__icontains=rust`).
+**App wiring** calls `App::builder()` with every plugin registered in order: `AuthPlugin`, `SessionsPlugin`, `AdminPlugin`, `RestPlugin`, `OpenApiPlugin`, and `SecurityPlugin`. The `RestPlugin` call chains `.resource(ResourceConfig::new("post"))`, which exposes JSON CRUD at the `/api/post/` endpoint. Query-string filtering is on by default, so `?published=true` and `?title__icontains=rust` work out of the box; call `.disable_filters()` on the resource to turn it off.
 
 **Handlers** show three patterns: a public HTML page (`home`), a plain JSON
 response (`api_list_posts`), and a login-gated view (`dashboard`) that uses both
