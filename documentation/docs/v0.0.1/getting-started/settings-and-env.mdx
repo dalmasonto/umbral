@@ -21,8 +21,12 @@ After `App::build` runs, `umbra::settings::get()` returns the resolved value fro
 pub struct Settings {
     pub database_url: String,                 // "sqlite::memory:" by default
     pub databases: HashMap<String, String>,   // named secondary pools (optional)
-    pub db_max_connections: u32,              // 10 (Postgres pool size)
-    pub db_acquire_timeout_secs: u64,         // 30 (Postgres acquire timeout)
+    pub db_max_connections: u32,              // 10 (pool size)
+    pub db_acquire_timeout_secs: u64,         // 30 (wait for a free connection)
+    pub db_min_connections: u32,              // 0 (idle-connection floor)
+    pub db_idle_timeout_secs: Option<u64>,    // Some(600); 0/empty disables
+    pub db_max_lifetime_secs: Option<u64>,    // Some(1800); 0/empty disables
+    pub db_test_before_acquire: bool,         // true (health-check on acquire)
     pub secret_key: String,                   // insecure dev default; required for prod
     pub environment: Environment,             // Dev | Test | Prod (default Dev)
     pub allowed_hosts: Vec<String>,           // ["localhost", "127.0.0.1"] by default
@@ -41,8 +45,12 @@ pub struct Settings {
 | `databases` | `UMBRA_DATABASES__<NAME>` (double underscore) | `[databases]` table | empty map |
 | `db_max_connections` | `UMBRA_DB_MAX_CONNECTIONS` | `db_max_connections` | `10` |
 | `db_acquire_timeout_secs` | `UMBRA_DB_ACQUIRE_TIMEOUT_SECS` | `db_acquire_timeout_secs` | `30` |
+| `db_min_connections` | `UMBRA_DB_MIN_CONNECTIONS` | `db_min_connections` | `0` |
+| `db_idle_timeout_secs` | `UMBRA_DB_IDLE_TIMEOUT_SECS` | `db_idle_timeout_secs` | `Some(600)` (`0`/empty disables) |
+| `db_max_lifetime_secs` | `UMBRA_DB_MAX_LIFETIME_SECS` | `db_max_lifetime_secs` | `Some(1800)` (`0`/empty disables) |
+| `db_test_before_acquire` | `UMBRA_DB_TEST_BEFORE_ACQUIRE` | `db_test_before_acquire` | `true` |
 | `secret_key` | `UMBRA_SECRET_KEY` | `secret_key` | `"umbra-insecure-dev-key-change-me"` (rejected in prod) |
-| `environment` | `UMBRA_ENVIRONMENT` | `environment` | `"dev"` |
+| `environment` | `UMBRA_ENVIRONMENT` | `environment` | `Dev` (values: `Dev` / `Test` / `Prod`) |
 | `allowed_hosts` | `UMBRA_ALLOWED_HOSTS` (comma-list) | `allowed_hosts` | `["localhost", "127.0.0.1"]` |
 | `log_level` | `UMBRA_LOG_LEVEL` | `log_level` | `"info"` |
 | `bind_addr` | `UMBRA_BIND_ADDR` | `bind_addr` | `"127.0.0.1:8000"` |
@@ -59,11 +67,12 @@ The closest analogue to Django's `settings.py`. Lives at the project root next t
 database_url = "sqlite://app.db?mode=rwc"
 bind_addr = "0.0.0.0:8000"
 secret_key = "replace-me-with-openssl-rand-hex-32"
-environment = "prod"
+environment = "Prod"
 log_level = "info"
 allowed_hosts = ["example.com", "www.example.com"]
 
-# Named secondary pools, used by `.on(&pool)` or `Manager::on(pool)`
+# Named secondary pools, routed per-model via `#[umbra(database = "alias")]`
+# or per-plugin via `Plugin::database()`
 [databases]
 analytics = "postgres://analytics:pw@db-host/analytics"
 cache = "sqlite://cache.db?mode=rwc"
@@ -77,7 +86,7 @@ Commit `umbra.toml` to git for everything that isn't a secret. Keep secrets (`se
 export UMBRA_DATABASE_URL="postgres://app:pw@db/app"
 export UMBRA_BIND_ADDR="0.0.0.0:8080"
 export UMBRA_SECRET_KEY="$(openssl rand -hex 32)"
-export UMBRA_ENVIRONMENT="prod"
+export UMBRA_ENVIRONMENT="Prod"
 
 cargo run -- serve
 ```
@@ -211,6 +220,7 @@ let settings = umbra::Settings {
 ## See also
 
 - [Management commands](/docs/v0.0.1/cli/management-commands): env vars affect every subcommand the same way.
+- [Connection pooling](/docs/v0.0.1/orm/connection-pooling): the `db_*` knobs above (`db_max_connections`, `db_idle_timeout_secs`, …) in depth.
 - [Backends, Postgres](/docs/v0.0.1/backends/postgres) and [SQLite](/docs/v0.0.1/backends/sqlite): what to put in `database_url` per backend.
 - [`umbra-tasks`](/docs/v0.0.1/plugins/tasks): `settings::get()` works in task handlers too.
 - [`umbra-signals`](/docs/v0.0.1/plugins/signals): same in signal handlers.

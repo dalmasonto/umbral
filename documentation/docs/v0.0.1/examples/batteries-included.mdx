@@ -215,8 +215,8 @@ async fn me(OptionalUser(maybe): OptionalUser) -> Html<String> {
 
 /// Background task - would normally live in a `tasks.rs` module.
 /// `#[umbra::task]` registers the handler by name at startup, so the
-/// worker (`cargo run -- tasks-worker`) can dispatch it. Enqueue work
-/// with `umbra_tasks::enqueue("send_welcome", &payload).await?`.
+/// worker (`cargo run -- tasks-worker`) can dispatch it. Enqueue work with
+/// `umbra_tasks::enqueue("send_welcome", payload, Default::default()).await?`.
 #[umbra::task]
 async fn send_welcome(email: String) -> Result<(), String> {
     let msg = umbra_email::EmailMessage::new("Welcome", vec![email])
@@ -276,7 +276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Background tasks: DB-backed queue. Handlers register
         // themselves via `#[umbra::task]`, so the plugin itself takes
         // no handler list. Drain the queue with `cargo run -- tasks-worker`.
-        .plugin(umbra_tasks::TasksPlugin)
+        .plugin(umbra_tasks::TasksPlugin::default())
         // Email: console backend in dev (prints to stderr). Configure
         // the SMTP transport via settings for prod.
         .plugin(umbra_email::EmailPlugin)
@@ -383,7 +383,7 @@ curl -X POST -d "username=alice&password=secret" http://127.0.0.1:3000/login
 | Users + password hashing | `umbra_auth::AuthPlugin::<AuthUser>::default()` + `authenticate(...)` |
 | Sessions + `request.user` | `umbra_sessions::SessionsPlugin::default()` + `umbra_auth::OptionalUser` / `User` extractors |
 | Login / logout helpers | `umbra_auth::login(...)` / `umbra_auth::logout(...)` |
-| Background tasks | `umbra_tasks::TasksPlugin` + `#[umbra::task]` (self-registering) + `tasks-worker` |
+| Background tasks | `umbra_tasks::TasksPlugin::default()` + `#[umbra::task]` (self-registering) + `tasks-worker` |
 | Email | `umbra_email::EmailPlugin` + `umbra_email::send(&msg)` |
 
 ## Next

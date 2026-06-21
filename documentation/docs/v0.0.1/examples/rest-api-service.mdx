@@ -8,6 +8,10 @@ tags: [examples, rest, api, openapi]
 
 The shape most "Rust web framework" benchmarks compare: an API-only service. No HTML, no templates, no admin. Just `/api/<table>` CRUD with auth, permissions, pagination, and a real OpenAPI document. Postgres-backed for production-style realism.
 
+<Callout type="warning">
+REST is **safe by default**. A resource with no `.permission(...)` defaults to `ReadOnly` — anonymous reads, but writes get `403` until you opt in (`AllowAny`, `IsAuthenticated`, …). Ten framework-internal tables (`auth_user`, `session`, `task_row`, the migration + permissions tables, the admin audit log) are blocked from the API entirely, and `password_hash` is stripped from every response no matter what. List responses are capped at 1000 rows even with no paginator.
+</Callout>
+
 ## Project layout
 
 ```
@@ -53,7 +57,7 @@ The settings loader only reads `UMBRA_`-prefixed keys, so the database URL goes 
 UMBRA_DATABASE_URL=postgres://api:api@localhost:5432/api_service
 UMBRA_BIND_ADDR=0.0.0.0:8000
 UMBRA_SECRET_KEY=replace-me-run-openssl-rand-hex-32
-UMBRA_ENVIRONMENT=dev
+UMBRA_ENVIRONMENT=Dev
 ```
 
 ## `src/models.rs`
@@ -267,8 +271,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .paginate(PageNumberPagination::new(50).with_max_page_size(200))
                 .resource(project_resource())
                 .resource(task_resource())
-                // Block the auth user table from /api/auth_user/ entirely.
-                .exclude(["auth_user"]),
+                // The bearer-token table carries secrets — add it to the
+                // block-list so /api/api_token/ never exists. (`auth_user`,
+                // `session`, `task_row`, the migration + permissions tables,
+                // and the admin audit log are already blocked by default.)
+                .exclude(["api_token"]),
         )
         // OpenAPI schema + Swagger UI. `.at("/")` mounts the UI at the
         // root and serves the schema document at `/openapi.json` (the
@@ -341,7 +348,7 @@ curl http://localhost:8000/openapi.json | jq '.paths | keys'
 | Soft delete via `@action` | `archive` detail action flips `archived = true` |
 | "Mine" filter via `@action` | `mine` collection action reads `ctx.identity.user_id` |
 | Workflow transition | `done` detail action sets `status = "done"` |
-| Hiding internal tables | `RestPlugin::exclude(["auth_user"])` |
+| Hiding internal tables | `RestPlugin::exclude(["api_token"])` — on top of the 10 framework tables blocked by default (`auth_user`, `session`, `task_row`, …) |
 | OpenAPI document | `umbra_openapi::OpenApiPlugin::new().title(...).version(...)` |
 | Per-route security headers + CSRF defaults | On by default. See [Web error pages](../web/error-pages) |
 

@@ -9,7 +9,7 @@ tags: [testing, factories, fixtures, fake]
 
 `umbra-testing`'s `Factory` trait produces *realistic* model instances in tests (one row, an overridden row, or a whole batch) without hand-writing the same struct literal everywhere. It's the [factory_boy](https://factoryboy.readthedocs.io/) / FactoryBot shape in Rust, layered on the [`fake`](https://docs.rs/fake) crate for believable values.
 
-It pairs with [fixtures](../orm/fixtures) (hand-edited JSON seed files) and the [test client](./test-client): factories *generate* the rows, the test client *exercises* the handler against them.
+It pairs with the [test client](./test-client): factories *generate* the rows, the test client *exercises* the handler against them. For hand-edited JSON seed data, `umbra-core`'s `load_fixture` / `dump_fixture` (in `crates/umbra-core/src/fixtures.rs`) round-trip rows through the ORM.
 
 <Callout type="info">
 `umbra-testing` is a **dev-dependency utility crate**, not a plugin. It never ships in a release build. Add it under `[dev-dependencies]`.
@@ -90,5 +90,5 @@ async fn directory_lists_a_factory_built_plugin() {
 ## See also
 
 - [Test client](./test-client): boot the app and assert on responses.
-- [Fixtures](../orm/fixtures): hand-edited JSON seed files (`load_fixture` / `dump_fixture`).
+- JSON seed files: `load_fixture` / `dump_fixture` in `crates/umbra-core/src/fixtures.rs`.
 - Design and rationale: `planning/features.md` #79 / #52.
