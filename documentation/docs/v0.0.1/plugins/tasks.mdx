@@ -183,6 +183,40 @@ enqueue("send_welcome", payload, EnqueueOptions {
 }).await?;
 ```
 
+## Priority
+
+Each task carries a `priority` (an `i32`). **Higher number = claimed first.**
+The worker orders the queue by `priority` descending before anything else, so a
+high-priority task jumps ahead of normal work even if it was enqueued later. The
+default is `0` (normal); a positive value runs sooner, a negative value drains
+behind the defaults.
+
+```rust
+use umbra_tasks::{EnqueueOptions, enqueue};
+
+// Urgent — claimed before any priority-0 work waiting in the queue.
+enqueue("send_password_reset", payload, EnqueueOptions {
+    priority: Some(9),
+    ..EnqueueOptions::default()
+}).await?;
+```
+
+**FIFO within a priority.** Ties on `priority` break by `scheduled_for` then
+`id`, so two tasks at the same priority are claimed in the order they were
+enqueued — priority changes *which band* runs first, never the fairness inside a
+band.
+
+<Callout type="note" title="Nullable column, additive migration">
+`priority` is a nullable `Option<i32>` so that adding it to an existing
+`task_row` table is a clean `ADD COLUMN priority INTEGER` (the migration engine
+can't emit `ADD COLUMN ... NOT NULL DEFAULT` against populated tables). `enqueue`
+always writes `Some(0)` when you don't set a priority, so new rows are never
+NULL; a NULL is only ever a legacy row that predates the column, and it drains at
+the **lowest** priority. (One backend caveat: under `priority DESC`, SQLite sorts
+NULLs last as intended, while Postgres sorts NULLs first — since enqueue never
+writes NULL, this only affects rare pre-column rows until they drain.)
+</Callout>
+
 ## Exponential-backoff retries
 
 When a handler fails *retriably* (returns `Err`, panics, or times out — anything
@@ -425,13 +459,11 @@ The signals docs page is at [`/docs/v0.0.1/plugins/signals`](/docs/v0.0.1/plugin
 
 ## What is NOT in v1
 
-- **Priority queues and `FOR UPDATE SKIP LOCKED`.** The worker uses a
-  conditional UPDATE claim that is correct on both SQLite and Postgres
-  (a concurrent worker whose UPDATE matches zero rows loses the race
-  cleanly). `SELECT … FOR UPDATE SKIP LOCKED` is a future optimization
-  that avoids the wasted candidate SELECT, not a correctness fix.
-- **Priority queues.** No priority ordering beyond `run_at` then id. The
-  remaining Celery gap, deferred to the deep spec (`planning/features.md` #82).
+- **`FOR UPDATE SKIP LOCKED`.** The worker uses a conditional UPDATE claim
+  that is correct on both SQLite and Postgres (a concurrent worker whose
+  UPDATE matches zero rows loses the race cleanly). `SELECT … FOR UPDATE
+  SKIP LOCKED` is a future optimization that avoids the wasted candidate
+  SELECT, not a correctness fix.
 - **Admin visibility.** No admin UI into the queue (pending/failed counts,
   retrying a failed task). Also #82. (The **result backend** and **task-status
   API** — `task_status` / `await_result` — are done; see "Task results &

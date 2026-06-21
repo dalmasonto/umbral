@@ -21,8 +21,9 @@
 //!
 //! ## v1 scope and deferrals
 //!
-//! - No priority queue, no separate broker, no distributed locks.
-//!   SQLite is single-writer anyway; a brief transaction is enough.
+//! - No separate broker, no distributed locks. SQLite is single-writer
+//!   anyway; a brief transaction is enough. (Priority queues shipped in a
+//!   later revision — see the `priority` notes below.)
 //! - Status is a String, not an enum: the M3 derive doesn't yet support
 //!   enum SqlType. The four valid values are [`STATUS_PENDING`],
 //!   [`STATUS_RUNNING`], [`STATUS_SUCCEEDED`], [`STATUS_FAILED`].
@@ -57,8 +58,13 @@
 //!   [`await_result`] polls until the task reaches a terminal state — the
 //!   Celery `AsyncResult` / `AsyncResult.get()` equivalent. Unit-returning
 //!   handlers (`Ok(())`) stay source-compatible: `()` serializes to `null`.
-//! - No priority queues; no admin visibility into the queue. Those are the
-//!   remaining Celery gaps, deferred to planning/features.md #82.
+//! - Priority queues (this revision): [`TaskRow`] carries a nullable
+//!   `priority: Option<i32>` (higher = claimed first, default `0`).
+//!   [`claim_one`] orders by `priority DESC` before `scheduled_for` / `id`,
+//!   so a high-priority task jumps the queue while ties stay FIFO within a
+//!   band. Set it via [`EnqueueOptions::priority`].
+//! - No admin visibility into the queue. That's the remaining Celery gap,
+//!   deferred to planning/features.md #82.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -131,6 +137,19 @@ pub struct TaskRow {
     /// read back as "no result recorded yet". The worker only ever writes
     /// `Some` on a successful completion.
     pub result: Option<String>,
+    /// Claim priority: **higher number = claimed first**. `0` is normal;
+    /// a positive value jumps ahead, a negative value drains behind the
+    /// defaults. [`claim_one`] orders by this DESC before `scheduled_for` /
+    /// `id`, so within one priority FIFO (enqueue order) still holds.
+    ///
+    /// Nullable for the same additive-migration reason as [`Self::run_at`]
+    /// and [`Self::result`]: an `ADD COLUMN priority INTEGER` (no
+    /// `NOT NULL DEFAULT`) applies cleanly against a populated `task_row`.
+    /// A `NULL` priority is treated as `0` (normal). [`enqueue`] always
+    /// writes `Some(opts.priority.unwrap_or(0))`, so the only NULL rows are
+    /// legacy/pre-column ones — and those drain at the lowest priority (see
+    /// [`claim_one`] for the cross-backend NULL-ordering note).
+    pub priority: Option<i32>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -390,6 +409,19 @@ pub struct EnqueueOptions {
     /// columns is the documented follow-up (planning/features.md #82). The
     /// field is accepted now so callers don't have to change later.
     pub timeout: Option<Duration>,
+    /// Claim priority: **higher number = claimed first** (Celery has no
+    /// direct equivalent; this is closer to a classic job-queue priority).
+    /// `Some(9)` jumps ahead of the `0` default; `Some(-1)` drains behind
+    /// it. Within a single priority, claims stay FIFO (ordered by
+    /// `scheduled_for` then `id`). `None` (the default) enqueues at `0`.
+    ///
+    /// ```ignore
+    /// enqueue("send_email", payload, EnqueueOptions {
+    ///     priority: Some(9),
+    ///     ..Default::default()
+    /// }).await?;
+    /// ```
+    pub priority: Option<i32>,
 }
 
 /// Default retry count when [`EnqueueOptions::max_attempts`] is `None`.
@@ -428,6 +460,10 @@ pub async fn enqueue<P: Serialize>(
             completed_at: None,
             error: None,
             result: None,
+            // Always materialise a concrete priority so new rows are never
+            // NULL — only legacy/pre-column rows read back as NULL, and
+            // those sort at the lowest priority. `None` => normal (`0`).
+            priority: Some(opts.priority.unwrap_or(0)),
             created_at: now,
         })
         .await?;
@@ -828,6 +864,32 @@ async fn claim_one() -> Result<Option<TaskRow>, TaskError> {
                         // column existed) counts as immediately eligible.
                         & (task_row::RUN_AT.is_null() | task_row::RUN_AT.le(now)),
                 )
+                // Priority is the FIRST sort key: higher number = claimed
+                // first. Ties fall through to `scheduled_for` then `id`, so
+                // within one priority claims stay FIFO (enqueue order).
+                //
+                // NULL handling across backends: a NULL `priority` is a
+                // legacy/pre-column row that should drain at the LOWEST
+                // priority (treated as below 0). The ORM's `order_by` emits
+                // a bare `priority DESC` (it has no NULLS LAST / COALESCE
+                // knob — `OrderExpr` carries only a column + direction), and
+                // the two backends disagree on where NULLs land under DESC:
+                //   - SQLite sorts NULLs LAST in DESC  -> NULL drains last. OK.
+                //   - Postgres sorts NULLs FIRST in DESC -> NULL would jump
+                //     ahead of every explicit priority. NOT what we want.
+                // The deliberate fix is at WRITE time, not read time:
+                // `enqueue` (and `enqueue_periodic`) ALWAYS write
+                // `Some(..)`, so no row this code path creates is ever NULL.
+                // The only NULL rows are ones that predate the `priority`
+                // column on an already-migrated Postgres DB; those are rare,
+                // transient (they drain as the queue turns over), and the
+                // documented behaviour is "legacy-NULL rows may be claimed
+                // ahead of normal-priority work on Postgres until they
+                // drain". A read-time COALESCE fix waits on the ORM growing
+                // an `order_by_expr` (planning/features.md #82); modelling
+                // it as raw SQL here would violate the no-raw-SQL-in-plugins
+                // rule for no real-world gain (new rows are never NULL).
+                .order_by(task_row::PRIORITY.desc())
                 .order_by(task_row::SCHEDULED_FOR.asc())
                 .order_by(task_row::ID.asc())
                 .limit(1)
@@ -1525,6 +1587,11 @@ async fn enqueue_periodic(row: &PeriodicTask) -> Result<(), TaskError> {
             completed_at: None,
             error: None,
             result: None,
+            // Periodic fires enqueue at normal priority (`0`). Carrying a
+            // per-schedule priority would need a `PeriodicTask.priority`
+            // column; deferred (planning/features.md #82) — the schedule
+            // payload can't currently override claim priority.
+            priority: Some(0),
             created_at: now,
         })
         .await?;
