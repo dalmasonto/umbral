@@ -803,12 +803,14 @@ impl<T> QuerySet<T> {
     /// `.prefetch_related(m2m)` — different fields can take different
     /// paths in the same query.
     ///
-    /// **Constraints at v1**: one-hop only (no `"author__manager"`
-    /// chains), FK fields must live in `model.fields` (M2M routes
-    /// through `prefetch_related`), and the related model must be
-    /// registered with the framework (`App::builder().model::<U>()`
-    /// or contributed by a plugin) so we can resolve its column
-    /// layout for the aliased SELECT.
+    /// Multi-hop FK chains are supported: a `"__"`-separated path like
+    /// `"author__manager"` resolves one JOIN per hop in a single query.
+    ///
+    /// **Constraints**: FK fields must live in `model.fields` (M2M links
+    /// route through `prefetch_related`), and every related model along the
+    /// chain must be registered with the framework
+    /// (`App::builder().model::<U>()` or contributed by a plugin) so we can
+    /// resolve its column layout for the aliased SELECT.
     pub fn join_related(mut self, field_name: impl Into<String>) -> Self {
         self.join_related.push(JoinReq {
             path: field_name.into(),

@@ -18,9 +18,9 @@
 //! - argon2 password hashing via [`hash_password`] / [`verify_password`].
 //! - [`create_user`], [`authenticate`], [`set_password`] helpers.
 //!   `authenticate` and `set_password` are generic over any `U: UserModel`.
-//! - [`AuthPlugin`] registers the user model and contributes one system
-//!   check. The type parameter defaults to [`AuthUser`] so existing apps
-//!   need no changes.
+//! - [`AuthPlugin`] registers the user model (which becomes a migration)
+//!   plus the `/auth` routes and management commands. The type parameter
+//!   defaults to [`AuthUser`] so existing apps need no changes.
 //! - [`login_required`] module: `LoginRequired` config, `LoggedIn<U>`
 //!   extractor, `LoginRequiredLayer` middleware, and the
 //!   `login_required()` / `login_required_html()` convenience
