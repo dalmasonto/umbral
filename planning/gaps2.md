@@ -61,7 +61,7 @@
 
 9. [x] `render_500` swallows secondary template errors silently — archived
 
-10. [~] **Middleware contract — proper plugin + app-level middleware system, not ad-hoc `wrap_router` closures.** Today (commit `bd48bf8`) `AuthPlugin::with_user_in_templates()` mounts `user_context_layer` via `Plugin::wrap_router(router) -> Router`. That works for one middleware but the shape doesn't scale: _UPDATE (2026-06-21): the proper middleware contract SHIPPED — `Middleware` trait (before_request/after_response) in crates/umbra-core/src/middleware.rs + `Plugin::middleware() -> Vec<Arc<dyn Middleware>>` (plugin.rs:355) + `App::builder().middleware()`, replacing the ad-hoc wrap_router-only story. REMAINING: declarative Layer-based ordering + inventory auto-registration._
+10. [x] Middleware contract — CLOSED (2026-06-21): Middleware trait + Plugin::middleware()/App::builder().middleware() + DECLARATIVE ORDERING (Middleware::order, lower=outer, stable-sorted, tested). Raw-tower-Layer declarative form deferred (Layer lifetime problem; wrap_router escape hatch); inventory auto-reg intentionally declined (explicit wiring). — archived
 
     - **Order is invisible.** Each plugin's `wrap_router` runs in topological plugin order and the order they wrap matters (auth must be outside-of CSRF outside-of rate-limit outside-of session, etc.). Today nobody can see the resulting stack without reading every plugin's closure.
     - **No user-side middleware surface.** The user has no `App::builder().middleware(MyMiddleware)` to add their own rate-limit / request-id / cors / auth-shield. The escape hatch is `Routes::layered(method, path, handler.layer(L))` per-route — fine for one route, untenable for "rate-limit every API endpoint."
