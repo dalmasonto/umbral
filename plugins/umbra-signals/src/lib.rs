@@ -27,8 +27,15 @@
 //! |--------|-------|--------------|
 //! | `pre_save`    | before INSERT or UPDATE   | `Manager::save` |
 //! | `post_save`   | after INSERT or UPDATE    | `Manager::save` |
+//! | `pre_update`  | before UPDATE only        | `Manager::save` |
+//! | `post_update` | after UPDATE only         | `Manager::save` |
 //! | `pre_delete`  | before per-row DELETE     | `Manager::delete_instance` |
 //! | `post_delete` | after per-row DELETE      | `Manager::delete_instance` |
+//!
+//! `pre_update` / `post_update` carry BOTH the old (`previous`) and new
+//! (`instance`) row, and fire only on UPDATE. The ORM reads the old-row
+//! snapshot only when an `*_update` subscriber exists, so they cost
+//! nothing when nobody listens.
 //!
 //! **Bulk methods do NOT fire signals.** `Manager::create`,
 //! `Manager::bulk_create`, `QuerySet::update_values`, and
@@ -132,7 +139,15 @@ pub struct ModelSignals<M: Model> {
 /// handlers silently stop firing with nothing in the logs to explain it.
 /// A genuinely-absent instance (non-object) stays a quiet `None`.
 fn decode_instance<M: DeserializeOwned>(payload: &serde_json::Value) -> Option<M> {
-    let raw = &payload["instance"];
+    decode_key::<M>(payload, "instance")
+}
+
+/// Decode the named key (`"instance"` or `"previous"`) of a signal
+/// payload into the model `M`. Shared by [`decode_instance`] and the
+/// `pre_update` / `post_update` helpers (gaps2 #92), which need to decode
+/// BOTH the old (`"previous"`) and new (`"instance"`) rows.
+fn decode_key<M: DeserializeOwned>(payload: &serde_json::Value, key: &str) -> Option<M> {
+    let raw = &payload[key];
     if !raw.is_object() {
         return None;
     }
@@ -141,6 +156,7 @@ fn decode_instance<M: DeserializeOwned>(payload: &serde_json::Value) -> Option<M
         Err(e) => {
             tracing::warn!(
                 model = std::any::type_name::<M>(),
+                key = %key,
                 error = %e,
                 "signal payload could not be decoded into model; typed handler skipped"
             );
@@ -195,6 +211,71 @@ where
             let instance: Option<M> = decode_instance::<M>(payload);
             let created = payload["created"].as_bool().unwrap_or(false);
             let fut = instance.map(|inst| handler(&inst, created));
+            async move {
+                if let Some(f) = fut {
+                    f.await;
+                }
+            }
+        });
+    }
+
+    /// Register a handler called **before** an UPDATE for this model
+    /// (gaps2 #92). Fires ONLY on UPDATE — never INSERT.
+    ///
+    /// `handler(previous, instance)` receives the row as it existed in
+    /// the DB immediately before the UPDATE (`previous`) and the value
+    /// about to be written (`instance`). Use it for audit diffs / change
+    /// tracking that need the old value.
+    ///
+    /// **Note:** the old-row snapshot the ORM reads to feed `previous` is
+    /// only taken when a `pre_update` / `post_update` subscriber exists,
+    /// so registering this handler turns that read on. Fires only for
+    /// `Manager::save` (the typed per-row UPDATE path).
+    ///
+    /// Signal name: `pre_update:<M::TABLE>`.
+    pub fn pre_update<F, Fut>(&self, handler: F)
+    where
+        F: Fn(M, M) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let name = format!("pre_update:{}", M::TABLE);
+        subscribe_async(&name, move |payload| {
+            let previous: Option<M> = decode_key::<M>(payload, "previous");
+            let instance: Option<M> = decode_key::<M>(payload, "instance");
+            let fut = match (previous, instance) {
+                (Some(p), Some(i)) => Some(handler(p, i)),
+                _ => None,
+            };
+            async move {
+                if let Some(f) = fut {
+                    f.await;
+                }
+            }
+        });
+    }
+
+    /// Register a handler called **after** an UPDATE for this model
+    /// (gaps2 #92). Fires ONLY on UPDATE — never INSERT.
+    ///
+    /// `handler(previous, instance)` receives the pre-UPDATE row
+    /// (`previous`) and the row as it now exists after the UPDATE
+    /// (`instance`). umbra-media's replace-cleanup subscribes here to
+    /// delete the OLD blob when a file field is changed to a new key.
+    ///
+    /// Signal name: `post_update:<M::TABLE>`.
+    pub fn post_update<F, Fut>(&self, handler: F)
+    where
+        F: Fn(M, M) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let name = format!("post_update:{}", M::TABLE);
+        subscribe_async(&name, move |payload| {
+            let previous: Option<M> = decode_key::<M>(payload, "previous");
+            let instance: Option<M> = decode_key::<M>(payload, "instance");
+            let fut = match (previous, instance) {
+                (Some(p), Some(i)) => Some(handler(p, i)),
+                _ => None,
+            };
             async move {
                 if let Some(f) = fut {
                     f.await;

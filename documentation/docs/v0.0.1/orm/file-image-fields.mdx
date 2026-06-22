@@ -65,6 +65,10 @@ The file columns are auto-detected from `M`'s metadata (any column the macro tag
 Cleanup is best-effort (a storage-delete error is logged, never failing the row delete) and is wired to the per-row `pre_delete` signal. A bulk `QuerySet::delete()` fires only `bulk_post_delete` (PKs, no instances), so it does **not** trigger file cleanup — call `delete_instance` per row when the file must go too. This mirrors Django's bulk-delete cascade limitation.
 </Callout>
 
+### Replace cleanup
+
+Opting in to `cleanup_on_delete` / `cleanup_files` also reclaims the **old** blob when a file field is changed to a new key. Saving a row whose `FileField` moves from one key to another via `M::objects().save(row)` deletes the previous blob (a same-key save, or any non-file-column save, deletes nothing). This rides the per-row `post_update` signal; the bulk `update_values()` path doesn't trigger it. See [Storage and media](/docs/v0.0.1/plugins/media#replace-cleanup-gaps2-92) for the full contract.
+
 ## See also
 
 - [Storage and media](/docs/v0.0.1/plugins/media) - the `Storage` trait and `MediaPlugin`.

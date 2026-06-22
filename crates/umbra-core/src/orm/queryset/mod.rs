@@ -4643,6 +4643,59 @@ impl<T: Model> Manager<T> {
         } else {
             // UPDATE path: UPDATE ... WHERE <pk> = <value> RETURNING *.
             use sea_query::{Alias, Expr, Query};
+
+            // gaps2 #92 — snapshot the pre-UPDATE row for `pre_update` /
+            // `post_update` subscribers, but ONLY when one exists. The
+            // extra SELECT-by-PK is gated on `has_subscribers` so the
+            // common UPDATE path (no `*_update` listener) pays nothing.
+            // Best-effort TOCTOU: the snapshot reads the row before the
+            // UPDATE; a concurrent writer between the two is accepted.
+            let pre_table = T::TABLE;
+            let want_pre = crate::signals::has_subscribers(&format!("pre_update:{pre_table}"));
+            let want_post = crate::signals::has_subscribers(&format!("post_update:{pre_table}"));
+            let previous: Option<T> = if want_pre || want_post {
+                let mut sel = Query::select();
+                sel.from(crate::db::router::schema_qualified_table(T::TABLE));
+                for field in T::FIELDS {
+                    sel.column(Alias::new(field.name));
+                }
+                let pk_sea_sel = crate::orm::write::json_to_sea_value(
+                    pk_field.ty,
+                    &pk_val,
+                    false,
+                    pk_field.name,
+                    None,
+                )
+                .map_err(SaveError::Write)?;
+                sel.and_where(Expr::col(Alias::new(pk_field.name)).eq(pk_sea_sel));
+                sel.limit(1);
+                match pool {
+                    DbPool::Sqlite(ref pool) => {
+                        let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
+                        sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                            .fetch_optional(pool)
+                            .await
+                            .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                    }
+                    DbPool::Postgres(ref pool) => {
+                        let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
+                        sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                            .fetch_optional(pool)
+                            .await
+                            .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                    }
+                }
+            } else {
+                None
+            };
+            // Fire pre_update before the UPDATE when both a snapshot exists
+            // and a subscriber wants it.
+            if want_pre {
+                if let Some(prev) = &previous {
+                    crate::signals::emit_pre_update::<T>(prev, &instance).await;
+                }
+            }
+
             let mut stmt = Query::update();
             stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
             for field in T::FIELDS {
@@ -4694,6 +4747,14 @@ impl<T: Model> Manager<T> {
             };
             // Fire post_save with created=false.
             crate::signals::emit_post_save::<T>(&row, false).await;
+            // gaps2 #92 — post_update carries the pre-UPDATE snapshot (old)
+            // and the freshly-written row (new). Only when a subscriber
+            // exists and the snapshot was captured.
+            if want_post {
+                if let Some(prev) = &previous {
+                    crate::signals::emit_post_update::<T>(prev, &row).await;
+                }
+            }
             Ok(row)
         }
     }

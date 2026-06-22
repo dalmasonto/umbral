@@ -19,6 +19,8 @@ ORM signals use a `<event>:<table>` shape so the built-in set is namespaced away
 |---|---|---|
 | `pre_save:<table>` | `Manager::save` (typed) **AND** `DynQuerySet::insert_json` (dynamic), before INSERT or UPDATE | `{ instance, created, actor }` |
 | `post_save:<table>` | `Manager::save` (typed) **AND** `DynQuerySet::insert_json` (dynamic), after, with the DB read-back row | `{ instance, created, actor }` |
+| `pre_update:<table>` | `Manager::save` (typed), before UPDATE **only** (never INSERT) | `{ previous, instance, actor }` |
+| `post_update:<table>` | `Manager::save` (typed), after UPDATE **only** (never INSERT) | `{ previous, instance, actor }` |
 | `pre_delete:<table>` | `Manager::delete_instance` (before) | `{ instance, actor }` |
 | `post_delete:<table>` | `Manager::delete_instance` (after) | `{ instance, actor }` |
 | `bulk_post_save:<table>` | `bulk_create`, `update_values`, `update_expr` (typed) **AND** `DynQuerySet::update_json` (dynamic) | `{ ids, created, actor }` |
@@ -101,6 +103,34 @@ subscribe("bulk_post_save:order", |payload| {
 ```
 
 The `created` field on `bulk_post_save` is `true` for INSERT terminals (`bulk_create`) and `false` for UPDATE terminals (`update_values`, `update_expr`). Subscribers that only care about one direction filter on that field.
+
+## Update signals: the old row, snapshotted
+
+`pre_save` / `post_save` fire on **both** INSERT and UPDATE, and carry only the new instance. A whole class of subscribers — audit-log diffs, change tracking, and umbra-media's file replace-cleanup — also need the row as it looked **before** the UPDATE. That's what `pre_update:<table>` / `post_update:<table>` add:
+
+- They fire on **UPDATE only** — never INSERT. (`Manager::create` and the INSERT branch of `Manager::save` never emit them.)
+- Their payload carries **both** rows: `previous` (the pre-UPDATE row read from the DB) and `instance` (the new value, post-UPDATE for `post_update`).
+
+```rust
+use umbra::signals::subscribe_async;
+
+// Audit a price change with the before/after values.
+subscribe_async("post_update:product", |payload| async move {
+    let old = payload["previous"]["price_cents"].as_i64();
+    let new = payload["instance"]["price_cents"].as_i64();
+    if old != new {
+        tracing::info!(?old, ?new, "product price changed");
+    }
+});
+```
+
+### The old-row read is subscriber-gated
+
+Snapshotting `previous` costs an extra `SELECT ... WHERE pk = ?` on every UPDATE. The save path only pays that cost when a `pre_update:<table>` or `post_update:<table>` subscriber actually exists — checked via `umbra::signals::has_subscribers(name)`. With nobody listening (the common case) the read is skipped entirely and the signal fires to zero handlers at no extra cost. Registering a single `*_update` handler turns the read on.
+
+The snapshot is read just before the UPDATE, so a concurrent writer between the snapshot and the UPDATE is a best-effort TOCTOU window — `previous` reflects the row at snapshot time, not necessarily the exact row the UPDATE overwrote. For audit/cleanup use cases this is acceptable.
+
+These signals currently fire from the **typed** `Manager::save` path. The dynamic `DynQuerySet::update_json` path (REST/admin) is a filter-chain bulk update that matches a PK *set* and fires `bulk_post_save` instead; per-row `*_update` on the dynamic path is a planned follow-up.
 
 ## M2M signals
 

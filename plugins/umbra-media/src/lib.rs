@@ -189,11 +189,44 @@ async fn delete_blob_best_effort(storage: &Arc<dyn Storage>, key: &str) {
     }
 }
 
-/// Register a `pre_delete:<table>` signal handler that deletes the blobs
-/// behind `columns` on the row about to be deleted. Reads the storage keys
-/// from the signal payload's `"instance"` JSON (the full row), so it works
-/// by table name without naming the concrete model type. Best-effort.
+/// Register the file-lifecycle cleanup signal handlers for one model:
+///
+/// 1. **`pre_delete:<table>`** — deletes the blobs behind `columns` on the
+///    row about to be deleted (Django's `FileField` delete cleanup).
+/// 2. **`post_update:<table>`** — replace-cleanup (gaps2 #92): when a file
+///    column changes from an old key to a new one, the OLD blob is deleted
+///    so the backend doesn't accumulate orphans on file replace.
+///
+/// Both read storage keys from the signal payload JSON, so they work by
+/// table name without naming the concrete model type. Both are best-effort.
 fn register_cleanup(spec: &CleanupSpec) {
+    register_delete_cleanup(spec);
+    register_replace_cleanup(spec);
+}
+
+/// Resolve the ambient storage backend and delete every key in `keys`
+/// (best-effort). Shared by the delete and replace cleanup handlers.
+async fn delete_keys_best_effort(keys: Vec<String>, context: &str) {
+    if keys.is_empty() {
+        return;
+    }
+    // Resolve the ambient backend lazily: it isn't registered until
+    // `on_ready` runs, and a test may swap it.
+    let Some(storage) = umbra::storage::storage_opt() else {
+        tracing::warn!(
+            "umbra-media: {context} produced file keys but no storage backend \
+             registered; blobs not cleaned up"
+        );
+        return;
+    };
+    for key in keys {
+        delete_blob_best_effort(&storage, &key).await;
+    }
+}
+
+/// `pre_delete:<table>` handler — deletes the blobs behind `columns` on the
+/// row about to be deleted. Reads keys from the payload's `"instance"` JSON.
+fn register_delete_cleanup(spec: &CleanupSpec) {
     let columns = spec.columns.clone();
     let signal = format!("pre_delete:{}", spec.table);
     umbra::signals::subscribe_async(&signal, move |payload| {
@@ -207,22 +240,35 @@ fn register_cleanup(spec: &CleanupSpec) {
             .filter(|k| !k.is_empty())
             .map(|k| k.to_string())
             .collect();
-        async move {
-            // Resolve the ambient backend lazily, per-delete: it isn't
-            // registered until `on_ready` runs, and a test may swap it.
-            let Some(storage) = umbra::storage::storage_opt() else {
-                if !keys.is_empty() {
-                    tracing::warn!(
-                        "umbra-media: row deleted with file keys but no storage backend \
-                         registered; blobs not cleaned up"
-                    );
+        async move { delete_keys_best_effort(keys, "row delete").await }
+    });
+}
+
+/// `post_update:<table>` handler — replace-cleanup (gaps2 #92). For each
+/// file column, compares `previous[col]` vs `instance[col]`; when they
+/// differ and the OLD key is non-empty, deletes the old blob. Same key →
+/// no delete (the file wasn't replaced); a newly-set file → old blob gone.
+fn register_replace_cleanup(spec: &CleanupSpec) {
+    let columns = spec.columns.clone();
+    let signal = format!("post_update:{}", spec.table);
+    umbra::signals::subscribe_async(&signal, move |payload| {
+        let previous = &payload["previous"];
+        let instance = &payload["instance"];
+        let keys: Vec<String> = columns
+            .iter()
+            .filter_map(|col| {
+                let old = previous.get(col).and_then(|v| v.as_str()).unwrap_or("");
+                let new = instance.get(col).and_then(|v| v.as_str()).unwrap_or("");
+                // Only delete the old blob when the key actually changed
+                // AND the old key is non-empty. Same key → file unchanged.
+                if !old.is_empty() && old != new {
+                    Some(old.to_string())
+                } else {
+                    None
                 }
-                return;
-            };
-            for key in keys {
-                delete_blob_best_effort(&storage, &key).await;
-            }
-        }
+            })
+            .collect();
+        async move { delete_keys_best_effort(keys, "file replace").await }
     });
 }
 
@@ -560,11 +606,20 @@ impl MediaPlugin {
     ///     .build()?;
     /// ```
     ///
-    /// **Bulk deletes don't fire per-row signals.** `QuerySet::delete()`
-    /// (the filter-chain DELETE) fires only `bulk_post_delete` with PKs,
-    /// not `pre_delete`, so a bulk delete will NOT trigger cleanup — same
-    /// limitation Django's bulk `QuerySet.delete()` cascade has for the
-    /// post-row hook. Use `delete_instance` per row when cleanup matters.
+    /// **Replace-cleanup (gaps2 #92).** Opting in here ALSO removes the
+    /// OLD blob when a file field is changed to a new key: saving a row
+    /// whose `FileField` moves from key `A` to key `B` via
+    /// `M::objects().save(row)` deletes blob `A`. Saving with the SAME key
+    /// deletes nothing; a non-file-column update deletes nothing. This
+    /// rides a `post_update:<table>` handler.
+    ///
+    /// **Bulk deletes/updates don't fire per-row signals.**
+    /// `QuerySet::delete()` / `QuerySet::update_values()` (the filter-chain
+    /// paths) fire only the `bulk_*` signals with PKs, not `pre_delete` /
+    /// `post_update`, so a bulk delete/update will NOT trigger cleanup —
+    /// same limitation Django's bulk `QuerySet` cascade has for the
+    /// post-row hook. Use `save` / `delete_instance` per row when cleanup
+    /// matters.
     pub fn cleanup_on_delete<M: Model>(mut self) -> Self {
         let columns = file_columns_of::<M>();
         if columns.is_empty() {
@@ -723,8 +778,10 @@ impl Plugin for MediaPlugin {
 
         // File-lifecycle cleanup: for every model opted in via
         // `cleanup_on_delete` / `cleanup_files`, subscribe a
-        // `pre_delete:<table>` handler that deletes the blobs behind the
-        // row's file-key columns. Best-effort — see `register_cleanup`.
+        // `pre_delete:<table>` handler (delete the blobs on row delete) AND
+        // a `post_update:<table>` handler (delete the OLD blob when a file
+        // field is replaced — gaps2 #92). Best-effort — see
+        // `register_cleanup`.
         for spec in &self.cleanup {
             tracing::debug!(
                 table = %spec.table,

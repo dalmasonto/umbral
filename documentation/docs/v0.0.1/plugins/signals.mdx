@@ -37,14 +37,26 @@ on_model::<Post>().post_save(|post, created| async move {
 });
 ```
 
-### The four lifecycle hooks
+### The lifecycle hooks
 
 | Method | Fires | `created` flag |
 |--------|-------|---------------|
 | `pre_save(handler(instance, created))` | before INSERT or UPDATE | `true` = INSERT, `false` = UPDATE |
 | `post_save(handler(instance, created))` | after INSERT or UPDATE (DB row) | same |
+| `pre_update(handler(previous, instance))` | before UPDATE only | - |
+| `post_update(handler(previous, instance))` | after UPDATE only | - |
 | `pre_delete(handler(instance))` | before per-row DELETE | - |
 | `post_delete(handler(instance))` | after per-row DELETE | - |
+
+`pre_update` / `post_update` fire on UPDATE only (never INSERT) and hand the handler **both** the old row (`previous`) and the new one (`instance`) — ideal for audit diffs and change tracking. The ORM reads the old-row snapshot only when an `*_update` subscriber exists, so they cost nothing when nobody listens.
+
+```rust
+on_model::<Product>().post_update(|previous: Product, instance: Product| async move {
+    if previous.price_cents != instance.price_cents {
+        tracing::info!(old = previous.price_cents, new = instance.price_cents, "price changed");
+    }
+});
+```
 
 **Trigger methods:**
 

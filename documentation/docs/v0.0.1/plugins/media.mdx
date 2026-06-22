@@ -152,9 +152,20 @@ Semantics:
 - **Per-row deletes only.** `M::objects().delete_instance(&row)` fires the `pre_delete` signal the hook listens on. Bulk `QuerySet::delete()` (the filter-chain DELETE) fires only a bulk-PK signal, so it does **not** trigger cleanup - the same limitation Django's bulk `QuerySet.delete()` has for per-row hooks. Loop with `delete_instance` when cleanup matters.
 - **Empty file fields are a no-op.** A row whose `FileField` key is empty has nothing to clean and deletes normally.
 
-### Replace cleanup is deferred
+### Replace cleanup (gaps2 #92)
 
-Updating a file field to a *new* key (so the old blob is now orphaned) does **not** yet delete the old blob. The `pre_save` signal only carries the new instance, not the previous row's value, so there's no clean way to read the old key without a fragile extra read-back. Tracked as `gaps2 #92`; until it lands, delete-and-recreate (rather than an in-place key swap) if you need the old blob reclaimed.
+Opting a model into `cleanup_on_delete` / `cleanup_files` **also** removes the old blob when a file field is changed to a new key. Save a row whose `FileField` moves from key `A` to key `B` via `M::objects().save(row)` and blob `A` is deleted, so an in-place file replace no longer leaks an orphan:
+
+```rust
+let mut post = Post::objects().get(post::ID.eq(id)).await?;
+post.banner = FileField::from(new_key);   // was old_key
+Post::objects().save(post).await?;        // old_key's blob is deleted
+```
+
+This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying both the previous and new row). The old-row read it needs is only performed when a subscriber exists, so it costs nothing for models that didn't opt in. Rules:
+
+- **Only the changed key is removed.** Saving with the **same** key deletes nothing (the file wasn't replaced). A non-file-column update deletes nothing. An INSERT (`create`) deletes nothing.
+- **Per-row updates only.** `M::objects().save(row)` fires `post_update`; the filter-chain bulk `QuerySet::update_values()` fires only a bulk-PK signal, so it does **not** trigger replace-cleanup — same per-row-hook limitation as delete cleanup above.
 
 ## Configuration knobs
 

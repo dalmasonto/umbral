@@ -465,6 +465,97 @@ pub async fn emit_m2m_changed(
     emit(&format!("m2m_changed:{junction_table}"), payload).await;
 }
 
+// =============================================================================
+// gaps2 #92 — `pre_update` / `post_update` signals.
+//
+// `pre_save` / `post_save` fire on BOTH insert and update and carry only
+// the NEW instance. A whole class of subscribers (audit-log diffs, change
+// tracking, and umbra-media's replace-cleanup) need the OLD row too — what
+// the row looked like *before* this UPDATE. These two additive signals carry
+// `{ "previous": <old row>, "instance": <new row>, "actor": ... }` and fire
+// ONLY on UPDATE (never INSERT). `pre_save`/`post_save` are untouched.
+//
+// ## Subscriber-gated old-row read
+//
+// Snapshotting the old row costs an extra SELECT-by-PK on every UPDATE. The
+// save path only pays it when a `pre_update:<table>` / `post_update:<table>`
+// subscriber actually exists — [`has_subscribers`] is the gate. With nobody
+// listening (the common case) the read is skipped entirely; the signal still
+// "fires" to zero handlers at no cost. A best-effort TOCTOU window between
+// the snapshot read and the UPDATE is accepted (documented in gaps2 #92).
+// =============================================================================
+
+/// Whether `name` has at least one registered handler (sync OR async).
+///
+/// Cheap (one lock + two `HashMap` lookups with a non-empty check). The
+/// save path calls this to GATE the extra old-row read that
+/// [`emit_pre_update`] / [`emit_post_update`] need: no `*_update`
+/// subscriber → no read, zero overhead on the common UPDATE path.
+pub fn has_subscribers(name: &str) -> bool {
+    let reg = lock_registry();
+    reg.sync.get(name).is_some_and(|h| !h.is_empty())
+        || reg.r#async.get(name).is_some_and(|h| !h.is_empty())
+}
+
+/// Fire the ORM `pre_update` signal for model `M`.
+///
+/// Payload: `{ "previous": <old row JSON>, "instance": <new row JSON>,
+/// "actor": ... }`. Signal name: `pre_update:<M::TABLE>`. Fires ONLY on
+/// UPDATE — never INSERT. `previous` is the row as it existed in the DB
+/// immediately before this UPDATE; `instance` is the about-to-be-written
+/// value.
+pub async fn emit_pre_update<M>(previous: &M, instance: &M)
+where
+    M: crate::orm::Model + serde::Serialize,
+{
+    let (Ok(prev_json), Ok(inst_json)) = (
+        serde_json::to_value(previous),
+        serde_json::to_value(instance),
+    ) else {
+        return;
+    };
+    emit_pre_update_by_table(M::TABLE, prev_json, inst_json).await;
+}
+
+/// Fire the ORM `post_update` signal for model `M`.
+///
+/// Payload: `{ "previous": <old row JSON>, "instance": <new row JSON>,
+/// "actor": ... }`. Signal name: `post_update:<M::TABLE>`. Fires ONLY on
+/// UPDATE — never INSERT. `previous` is the pre-UPDATE row; `instance` is
+/// the row as it now exists after the UPDATE.
+pub async fn emit_post_update<M>(previous: &M, instance: &M)
+where
+    M: crate::orm::Model + serde::Serialize,
+{
+    let (Ok(prev_json), Ok(inst_json)) = (
+        serde_json::to_value(previous),
+        serde_json::to_value(instance),
+    ) else {
+        return;
+    };
+    emit_post_update_by_table(M::TABLE, prev_json, inst_json).await;
+}
+
+/// Table-keyed `pre_update` emit. See [`emit_pre_update`].
+pub async fn emit_pre_update_by_table(
+    table: &str,
+    previous: serde_json::Value,
+    instance: serde_json::Value,
+) {
+    let payload = serde_json::json!({ "previous": previous, "instance": instance });
+    emit(&format!("pre_update:{table}"), payload).await;
+}
+
+/// Table-keyed `post_update` emit. See [`emit_post_update`].
+pub async fn emit_post_update_by_table(
+    table: &str,
+    previous: serde_json::Value,
+    instance: serde_json::Value,
+) {
+    let payload = serde_json::json!({ "previous": previous, "instance": instance });
+    emit(&format!("post_update:{table}"), payload).await;
+}
+
 /// Test-only helper: drop every registered handler.
 ///
 /// The signals registry is process-wide; a `#[tokio::test]` that
