@@ -32,7 +32,8 @@
 //! bytes: `std::fs` / object-store I/O inside a `Storage` impl is the
 //! sanctioned path, not a raw-SQL workaround.
 
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
 
@@ -181,6 +182,71 @@ pub trait Storage: Send + Sync {
         Ok(Box::pin(futures_util::stream::once(async move { chunk })))
     }
 
+    /// Persist `bytes` at the *exact* `key` the caller supplies — the
+    /// deterministic-path sibling of [`store`](Storage::store), which
+    /// generates a collision-resistant key. Static asset collection needs
+    /// this: a CSS file collected to `css/app.css` must land at that key,
+    /// not a `uuid-app.css` one.
+    ///
+    /// **Additive, with a default impl** — but the default *cannot*
+    /// generically write-at-exact-key without backend knowledge (the
+    /// trait has no "write these bytes here" primitive beyond
+    /// [`store`](Storage::store), which owns its own key). So the default
+    /// returns [`StorageError::Unsupported`]. Backends that can honour an
+    /// exact key (the filesystem backend, the future `LocalStorage` /
+    /// `S3Storage`) override it; media's [`store`](Storage::store) stays
+    /// the key-generating path.
+    ///
+    /// `content_type` is recorded by backends that track it (e.g. an S3
+    /// object's `Content-Type`); the filesystem backend derives the
+    /// served type from the key's extension instead.
+    async fn put(
+        &self,
+        key: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        let _ = (key, content_type, bytes);
+        Err(StorageError::Unsupported(
+            "this Storage backend does not implement put(); override it to write at an exact key"
+                .to_string(),
+        ))
+    }
+
+    /// Streaming counterpart of [`put`](Storage::put): persist a `body`
+    /// byte-stream at the exact `key` without buffering the whole payload.
+    ///
+    /// **Additive, with a default impl** that mirrors the
+    /// [`store_stream`](Storage::store_stream)/[`store`](Storage::store)
+    /// relationship: it collects the stream into a `Vec<u8>` (propagating
+    /// any mid-stream IO error) and delegates to [`put`](Storage::put), so
+    /// a backend that overrides `put` gets a working `put_stream` for
+    /// free. Override it to true-stream to the backend.
+    async fn put_stream(
+        &self,
+        key: &str,
+        content_type: &str,
+        body: ByteStream,
+    ) -> Result<StoredFile, StorageError> {
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut body = body;
+        while let Some(chunk) = futures_util::StreamExt::next(&mut body).await {
+            let chunk = chunk.map_err(StorageError::Io)?;
+            bytes.extend_from_slice(&chunk);
+        }
+        self.put(key, content_type, &bytes).await
+    }
+
+    /// Does an object exist under `key`?
+    ///
+    /// **Additive, with a default impl** — `Ok(self.retrieve(key).await.is_ok())`,
+    /// which works for any backend through [`retrieve`](Storage::retrieve).
+    /// Backends with a cheaper presence check (an S3 `HEAD`, a filesystem
+    /// `metadata` stat) override it to avoid reading the whole blob.
+    async fn exists(&self, key: &str) -> Result<bool, StorageError> {
+        Ok(self.retrieve(key).await.is_ok())
+    }
+
     /// Remove the object stored under `key`. Idempotent at the backend's
     /// discretion; deleting a missing key may succeed or return
     /// [`StorageError::NotFound`].
@@ -228,6 +294,10 @@ pub enum StorageError {
     /// A backend-specific failure that doesn't map to the variants above
     /// (e.g. an S3 API error, or a row-insert failure in a wrapper).
     Backend(String),
+    /// The backend doesn't implement the requested operation — returned by
+    /// the default [`Storage::put`] impl for a backend that can't write at
+    /// an exact key. The message names what's missing.
+    Unsupported(String),
 }
 
 impl std::fmt::Display for StorageError {
@@ -244,6 +314,7 @@ impl std::fmt::Display for StorageError {
             ),
             StorageError::Io(e) => write!(f, "storage: io: {e}"),
             StorageError::Backend(s) => write!(f, "storage: backend: {s}"),
+            StorageError::Unsupported(s) => write!(f, "storage: unsupported: {s}"),
         }
     }
 }
@@ -263,13 +334,92 @@ impl From<std::io::Error> for StorageError {
     }
 }
 
-/// The ambient storage backend, published once at boot.
-///
-/// Same `OnceLock` pattern as `crate::db`'s pool registry and the
-/// settings handle — the sanctioned "one intentional global" family.
-static STORAGE: OnceLock<Arc<dyn Storage>> = OnceLock::new();
+/// The conventional name of the **media** (user-upload) storage instance,
+/// Django's `STORAGES["default"]`. The back-compat accessors
+/// ([`storage`], [`set_storage`], …) operate on this name.
+pub const DEFAULT: &str = "default";
 
-/// Register the ambient default storage backend.
+/// The conventional name of the **static-files** storage instance,
+/// Django's `STORAGES["staticfiles"]` — where `collectstatic` writes
+/// collected assets. Resolved independently of [`DEFAULT`].
+pub const STATICFILES: &str = "staticfiles";
+
+/// The ambient, **named** storage registry, published at boot.
+///
+/// Django's `STORAGES` setting, recreated: a small map from a static name
+/// (`"default"` for media, `"staticfiles"` for collected assets) to its
+/// backend. Replaces the former single-global `OnceLock<Arc<dyn Storage>>`
+/// so media and static can resolve independent backends under one
+/// abstraction. Registration is boot-time, so a `Mutex<HashMap>` behind a
+/// `OnceLock` is the right shape; the set-once-*per-name* discipline
+/// (first-wins, warn-and-keep on a re-set) mirrors the old single global.
+///
+/// Same "one intentional global" family as `crate::db`'s pool registry
+/// and the settings handle.
+static STORAGES: OnceLock<Mutex<HashMap<&'static str, Arc<dyn Storage>>>> = OnceLock::new();
+
+/// Access the named registry, initialising the empty map on first use.
+fn registry() -> &'static Mutex<HashMap<&'static str, Arc<dyn Storage>>> {
+    STORAGES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Register the storage backend under `name` (e.g. [`DEFAULT`] for media,
+/// [`STATICFILES`] for collected static assets).
+///
+/// Set-once **per name**, first-wins: a second call for the *same* name
+/// logs a warning and keeps the originally registered backend (different
+/// names register independently). Returns `true` when this call won the
+/// registration for `name`, `false` when that name was already taken.
+pub fn set_storage_named(name: &'static str, s: Arc<dyn Storage>) -> bool {
+    let mut map = registry()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if map.contains_key(name) {
+        tracing::warn!(
+            name,
+            "umbra::storage::set_storage_named called more than once for the same name; \
+             keeping the first-registered backend and ignoring the new one"
+        );
+        false
+    } else {
+        map.insert(name, s);
+        true
+    }
+}
+
+/// Return the storage backend registered under `name`.
+///
+/// # Panics
+///
+/// Panics if no backend has been registered under `name`. Wire one by
+/// adding the plugin that owns that name (`MediaPlugin` for [`DEFAULT`])
+/// or by calling [`set_storage_named`] directly.
+pub fn storage_named(name: &str) -> Arc<dyn Storage> {
+    try_storage_named(name).unwrap_or_else(|_| {
+        panic!(
+            "no Storage backend registered under `{name}`; add the owning plugin \
+             (MediaPlugin for `default`) or call umbra::storage::set_storage_named"
+        )
+    })
+}
+
+/// Return the storage backend registered under `name`, or
+/// [`StorageError::NoBackend`] if none is.
+pub fn try_storage_named(name: &str) -> Result<Arc<dyn Storage>, StorageError> {
+    storage_opt_named(name).ok_or(StorageError::NoBackend)
+}
+
+/// Return the storage backend registered under `name` if one exists, else
+/// `None`. The non-panicking variant of [`storage_named`].
+pub fn storage_opt_named(name: &str) -> Option<Arc<dyn Storage>> {
+    let map = registry()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.get(name).cloned()
+}
+
+/// Register the ambient **default** (media) storage backend — the
+/// back-compat alias for `set_storage_named(`[`DEFAULT`]`, s)`.
 ///
 /// Set-once, first-wins: a second call logs a warning and keeps the
 /// originally registered backend, mirroring `crate::settings::init` and
@@ -281,19 +431,11 @@ static STORAGE: OnceLock<Arc<dyn Storage>> = OnceLock::new();
 /// default is its `FsStorage`; an app can also call it directly to wire a
 /// custom backend before (or instead of) any media plugin.
 pub fn set_storage(s: Arc<dyn Storage>) -> bool {
-    match STORAGE.set(s) {
-        Ok(()) => true,
-        Err(_) => {
-            tracing::warn!(
-                "umbra::storage::set_storage called more than once; keeping the \
-                 first-registered backend and ignoring the new one"
-            );
-            false
-        }
-    }
+    set_storage_named(DEFAULT, s)
 }
 
-/// Return the ambient storage backend.
+/// Return the ambient **default** (media) storage backend — the
+/// back-compat alias for `storage_named(`[`DEFAULT`]`)`.
 ///
 /// # Panics
 ///
@@ -306,19 +448,186 @@ pub fn storage() -> Arc<dyn Storage> {
     )
 }
 
-/// Return the ambient storage backend, or an explicit error if one has
-/// not been registered.
+/// Return the ambient **default** (media) storage backend, or an explicit
+/// error if none is registered. Back-compat alias for
+/// `try_storage_named(`[`DEFAULT`]`)`.
 pub fn try_storage() -> Result<Arc<dyn Storage>, StorageError> {
-    STORAGE.get().cloned().ok_or(StorageError::NoBackend)
+    try_storage_named(DEFAULT)
 }
 
-/// Return the ambient storage backend if one has been registered, else
-/// `None`.
+/// Return the ambient **default** (media) storage backend if registered,
+/// else `None`. Back-compat alias for `storage_opt_named(`[`DEFAULT`]`)`.
 ///
 /// The non-panicking variant of [`storage`]. Useful for boot-time
 /// system checks (a future `FileField` check can warn when a model
 /// declares a file field but no `Storage` backend is wired) and for
 /// plugin code that runs before `on_ready`.
 pub fn storage_opt() -> Option<Arc<dyn Storage>> {
-    STORAGE.get().cloned()
+    storage_opt_named(DEFAULT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap as Map;
+    use std::sync::Mutex as StdMutex;
+
+    /// A minimal in-memory backend. `store` generates a key; `put` is left
+    /// at the trait default (returns `Unsupported`) so we can assert the
+    /// default path; `exists` is left at the trait default (via `retrieve`).
+    struct MemNoPut {
+        objects: StdMutex<Map<String, Vec<u8>>>,
+    }
+
+    impl MemNoPut {
+        fn new() -> Self {
+            Self {
+                objects: StdMutex::new(Map::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Storage for MemNoPut {
+        async fn store(
+            &self,
+            filename: &str,
+            _content_type: &str,
+            bytes: &[u8],
+        ) -> Result<StoredFile, StorageError> {
+            let key = format!("k-{filename}");
+            self.objects
+                .lock()
+                .unwrap()
+                .insert(key.clone(), bytes.to_vec());
+            Ok(StoredFile {
+                url: self.url(&key),
+                key,
+                size: bytes.len() as u64,
+            })
+        }
+
+        async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+            self.objects
+                .lock()
+                .unwrap()
+                .get(key)
+                .cloned()
+                .ok_or(StorageError::NotFound)
+        }
+
+        async fn delete(&self, key: &str) -> Result<(), StorageError> {
+            self.objects.lock().unwrap().remove(key);
+            Ok(())
+        }
+
+        fn url(&self, key: &str) -> String {
+            format!("/mem/{key}")
+        }
+    }
+
+    /// Same backend but overriding `put` to write at the exact key.
+    struct MemWithPut {
+        objects: StdMutex<Map<String, Vec<u8>>>,
+    }
+
+    impl MemWithPut {
+        fn new() -> Self {
+            Self {
+                objects: StdMutex::new(Map::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Storage for MemWithPut {
+        async fn store(
+            &self,
+            filename: &str,
+            ct: &str,
+            bytes: &[u8],
+        ) -> Result<StoredFile, StorageError> {
+            self.put(&format!("k-{filename}"), ct, bytes).await
+        }
+
+        async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+            self.objects
+                .lock()
+                .unwrap()
+                .get(key)
+                .cloned()
+                .ok_or(StorageError::NotFound)
+        }
+
+        async fn put(
+            &self,
+            key: &str,
+            _ct: &str,
+            bytes: &[u8],
+        ) -> Result<StoredFile, StorageError> {
+            self.objects
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), bytes.to_vec());
+            Ok(StoredFile {
+                url: self.url(key),
+                key: key.to_string(),
+                size: bytes.len() as u64,
+            })
+        }
+
+        async fn delete(&self, key: &str) -> Result<(), StorageError> {
+            self.objects.lock().unwrap().remove(key);
+            Ok(())
+        }
+
+        fn url(&self, key: &str) -> String {
+            format!("/mem/{key}")
+        }
+    }
+
+    #[tokio::test]
+    async fn put_default_returns_unsupported() {
+        let s = MemNoPut::new();
+        let err = s.put("css/app.css", "text/css", b"x").await.unwrap_err();
+        match err {
+            StorageError::Unsupported(msg) => {
+                assert!(msg.contains("does not implement put"), "msg = {msg}");
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn put_override_writes_at_exact_key() {
+        let s = MemWithPut::new();
+        let stored = s
+            .put("css/app.css", "text/css", b"body{}")
+            .await
+            .unwrap();
+        // The key is EXACTLY what we asked for — no generation.
+        assert_eq!(stored.key, "css/app.css");
+        assert_eq!(stored.size, 6);
+        // And it round-trips back at that exact key.
+        assert_eq!(s.retrieve("css/app.css").await.unwrap(), b"body{}");
+    }
+
+    #[tokio::test]
+    async fn exists_default_true_after_store_false_when_missing() {
+        let s = MemNoPut::new();
+        let stored = s.store("a.txt", "text/plain", b"hi").await.unwrap();
+        assert!(s.exists(&stored.key).await.unwrap());
+        assert!(!s.exists("nope").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn put_stream_default_delegates_to_put() {
+        let s = MemWithPut::new();
+        let body: ByteStream = Box::pin(futures_util::stream::once(async {
+            Ok(bytes::Bytes::from_static(b"streamed"))
+        }));
+        let stored = s.put_stream("js/app.js", "text/javascript", body).await.unwrap();
+        assert_eq!(stored.key, "js/app.js");
+        assert_eq!(s.retrieve("js/app.js").await.unwrap(), b"streamed");
+    }
 }

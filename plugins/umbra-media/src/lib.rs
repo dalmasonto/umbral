@@ -1063,6 +1063,7 @@ impl From<StorageError> for MediaError {
             StorageError::NoBackend => MediaError::Storage("no storage backend registered".into()),
             StorageError::NotFound => MediaError::Storage("object not found".to_string()),
             StorageError::Backend(s) => MediaError::Storage(s),
+            StorageError::Unsupported(s) => MediaError::Storage(s),
         }
     }
 }
