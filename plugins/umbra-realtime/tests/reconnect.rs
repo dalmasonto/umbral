@@ -93,14 +93,14 @@ async fn replay_resumes_after_last_event_id() {
 async fn replay_is_target_filtered() {
     let reg = Registry::default();
 
-    reg.dispatch(&TargetKind::User(1), evt("for-a")).await; // A only
-    reg.dispatch(&TargetKind::User(2), evt("for-b")).await; // B only
+    reg.dispatch(&TargetKind::User("1".into()), evt("for-a")).await; // A only
+    reg.dispatch(&TargetKind::User("2".into()), evt("for-b")).await; // B only
     reg.dispatch(&TargetKind::Broadcast, evt("for-all")).await; // both
     reg.dispatch(&TargetKind::Group("room:1".into()), evt("for-room"))
         .await; // group members
 
     // User A, member of room:1, reconnecting from the start.
-    let a = reg.replay_since(0, Some(1), &groups(&["room:1"]));
+    let a = reg.replay_since(0, Some("1"), &groups(&["room:1"]));
     let a_names: Vec<&str> = a.iter().map(|e| e.event.as_str()).collect();
     assert_eq!(a_names, ["for-a", "for-all", "for-room"]);
     assert!(
@@ -109,7 +109,7 @@ async fn replay_is_target_filtered() {
     );
 
     // User B, no groups: only its user event + the broadcast.
-    let b = reg.replay_since(0, Some(2), &groups(&[]));
+    let b = reg.replay_since(0, Some("2"), &groups(&[]));
     let b_names: Vec<&str> = b.iter().map(|e| e.event.as_str()).collect();
     assert_eq!(b_names, ["for-b", "for-all"]);
 }

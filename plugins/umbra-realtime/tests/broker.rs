@@ -15,7 +15,7 @@ fn envelope_round_trips_through_json() {
     // variant must survive the trip so `to_user` / `to_group` / `broadcast`
     // all relay across instances.
     for target in [
-        TargetKind::User(42),
+        TargetKind::User("42".to_string()),
         TargetKind::Group("public:plugin-7".to_string()),
         TargetKind::Broadcast,
     ] {
@@ -65,17 +65,17 @@ mod redis_relay {
 
         // Process-unique user id so concurrent test binaries against the same
         // Redis don't cross-deliver (the channel is shared globally).
-        let user = std::process::id() as i64;
+        let user = std::process::id().to_string();
 
         // A live connection for `user`, on instance B only.
-        let (_id, mut rx) = reg_b.register(Some(user), HashSet::new(), 8).await.expect("test registration should not be refused (no cap here)");
+        let (_id, mut rx) = reg_b.register(Some(user.clone()), HashSet::new(), 8).await.expect("test registration should not be refused (no cap here)");
 
         // Let both pumps finish SUBSCRIBE before the publish.
         tokio::time::sleep(Duration::from_millis(400)).await;
 
         broker_a
             .publish(Envelope {
-                target: TargetKind::User(user),
+                target: TargetKind::User(user.clone()),
                 event: "ping".to_string(),
                 data: serde_json::json!({ "hello": "world" }),
             })

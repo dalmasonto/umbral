@@ -49,7 +49,7 @@ async fn custom_resolver_projects_exactly_what_it_returns() {
         .await
         .expect("subscriber admitted");
     let (_id, _rx, transitions) = registry
-        .register_with_presence(Some(5), group_set("room:7"), DEFAULT_BUFFER)
+        .register_with_presence(Some("5".to_string()), group_set("room:7"), DEFAULT_BUFFER)
         .await
         .expect("conn admitted");
     dispatch_presence(transitions).await;
@@ -64,7 +64,7 @@ async fn custom_resolver_projects_exactly_what_it_returns() {
         .expect("a presence:join reached the subscriber");
     let obj = join.data.as_object().expect("member is an object");
     assert_eq!(obj.len(), 2, "resolver output carries exactly {{id, name}}");
-    assert_eq!(obj.get("id").and_then(|v| v.as_i64()), Some(5));
+    assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("5"));
     assert_eq!(obj.get("name").and_then(|v| v.as_str()), Some("user-5"));
     // No key the resolver didn't return.
     assert!(!obj.contains_key("email"), "nothing the resolver didn't return leaks");

@@ -57,7 +57,8 @@ async fn watch(group: &str) -> tokio::sync::mpsc::Receiver<Event> {
 
 /// Register a conn as `user_id` in `group` and dispatch its presence
 /// transitions — exactly the SSE/WS connect path. Returns the conn id.
-async fn connect(registry: &Registry, user_id: Option<i64>, group: &str) -> u64 {
+async fn connect(registry: &Registry, user_id: Option<&str>, group: &str) -> u64 {
+    let user_id = user_id.map(str::to_string);
     let (id, _rx, transitions) = registry
         .register_with_presence(user_id, group_set(group), DEFAULT_BUFFER)
         .await
@@ -106,7 +107,7 @@ async fn presence_gating_default_off_projection_dedup_anonymous() {
     // --- 1. Default OFF: `public:lobby` is not a `room:*` group → silent. ---
     {
         let mut sub = watch("public:lobby").await;
-        let id = connect(&registry, Some(7), "public:lobby").await;
+        let id = connect(&registry, Some("7"), "public:lobby").await;
         disconnect(&registry, id).await;
         let events = drain(&mut sub);
         assert!(
@@ -119,7 +120,7 @@ async fn presence_gating_default_off_projection_dedup_anonymous() {
     {
         let mut sub = watch("room:42").await;
         // user 7's "row" has name+email, but the projection only sees the id.
-        let _id = connect(&registry, Some(7), "room:42").await;
+        let _id = connect(&registry, Some("7"), "room:42").await;
         let events = drain(&mut sub);
         let join = events
             .iter()
@@ -127,7 +128,7 @@ async fn presence_gating_default_off_projection_dedup_anonymous() {
             .expect("a presence:join reached the subscriber");
         let obj = join.1.as_object().expect("member payload is an object");
         assert_eq!(obj.len(), 1, "default projection carries exactly one key");
-        assert_eq!(obj.get("id").and_then(|v| v.as_i64()), Some(7));
+        assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("7"));
         let raw = join.1.to_string();
         assert!(!raw.contains("name"), "no name field on the wire: {raw}");
         assert!(!raw.contains("email"), "no email field on the wire: {raw}");
@@ -137,13 +138,13 @@ async fn presence_gating_default_off_projection_dedup_anonymous() {
     {
         let mut sub = watch("room:dedup").await;
 
-        let c1 = connect(&registry, Some(9), "room:dedup").await;
+        let c1 = connect(&registry, Some("9"), "room:dedup").await;
         let after_first = drain(&mut sub);
         let joins = after_first.iter().filter(|(n, _)| n == "presence:join").count();
         assert_eq!(joins, 1, "first connection of a user fires exactly one join");
 
         // 2nd tab, SAME user → NO second join.
-        let c2 = connect(&registry, Some(9), "room:dedup").await;
+        let c2 = connect(&registry, Some("9"), "room:dedup").await;
         let after_second = drain(&mut sub);
         assert!(
             !names(&after_second).contains(&"presence:join"),
@@ -168,8 +169,8 @@ async fn presence_gating_default_off_projection_dedup_anonymous() {
                 .iter()
                 .find(|(n, _)| n == "presence:leave")
                 .and_then(|(_, d)| d.get("id"))
-                .and_then(|v| v.as_i64()),
-            Some(9),
+                .and_then(|v| v.as_str()),
+            Some("9"),
             "the leave names the user who left"
         );
     }
@@ -202,7 +203,7 @@ fn t5_presence_visibility_is_policy_gated() {
     // policy refuses the join — so the client never registers, never receives
     // its presence:* events. Enabling presence never widens who can subscribe.
     assert!(
-        !policy.can_join(Some(1), "room:42"),
+        !policy.can_join(Some("1"), "room:42"),
         "the default policy denies a non-public group, presence-enabled or not"
     );
     assert!(

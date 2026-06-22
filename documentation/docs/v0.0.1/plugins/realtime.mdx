@@ -14,7 +14,7 @@ tags: [realtime, sse, websocket, push, presence, redis]
 use umbra_realtime::Realtime;
 
 // Fire-and-forget; no-ops when RealtimePlugin isn't installed.
-Realtime::to_user(42).send("notification", &payload).await;
+Realtime::to_user("42").send("notification", &payload).await;  // the user's PK as a string
 Realtime::to_group("public:lobby").send("message", &msg).await;
 ```
 

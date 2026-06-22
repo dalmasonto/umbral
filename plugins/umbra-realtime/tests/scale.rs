@@ -66,7 +66,7 @@ async fn registry_stays_fast_and_non_starving_at_10k() {
             if g == target_group {
                 target_group_count += 1;
             }
-            (Some(i as i64), groups_of(&g))
+            (Some(i.to_string()), groups_of(&g))
         };
         let (id, rx) = reg
             .register(user_id, groups, DEFAULT_BUFFER)
@@ -177,7 +177,7 @@ async fn registry_stays_fast_and_non_starving_at_10k() {
         // register + deregister pair under load.
         let r0 = Instant::now();
         let (tmp_id, _tmp_rx) = reg
-            .register(Some(-1), HashSet::new(), DEFAULT_BUFFER)
+            .register(Some("-1".to_string()), HashSet::new(), DEFAULT_BUFFER)
             .await
             .expect("register under load");
         reg.deregister(tmp_id).await;

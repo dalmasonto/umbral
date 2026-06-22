@@ -70,7 +70,7 @@ pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -
     // so a client can't subscribe to a room it has no claim to.
     let policy = Realtime::policy();
     for g in &requested {
-        if !policy.can_join(user_id, g) {
+        if !policy.can_join(user_id.as_deref(), g) {
             return (
                 StatusCode::FORBIDDEN,
                 format!("not allowed to join group `{g}`"),
@@ -98,7 +98,7 @@ pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -
     // the per-group presence transitions this connect caused (computed under
     // the registry lock), which we dispatch below once the lock is dropped.
     let Some((conn_id, rx, presence)) = registry
-        .register_with_presence(user_id, groups.clone(), DEFAULT_BUFFER)
+        .register_with_presence(user_id.clone(), groups.clone(), DEFAULT_BUFFER)
         .await
     else {
         return (
@@ -114,7 +114,7 @@ pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -
     tokio::spawn(crate::dispatch_presence(presence));
 
     let backlog: VecDeque<Event> = match last_event_id {
-        Some(id) => registry.replay_since(id, user_id, &groups).into(),
+        Some(id) => registry.replay_since(id, user_id.as_deref(), &groups).into(),
         None => VecDeque::new(),
     };
 

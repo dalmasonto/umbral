@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 2. Wire identity (so the framework knows who's connecting)
 
-By default **every connection is anonymous** — the identity resolver returns `None`. That's fine for a fully public feed, but if you want to gate rooms by user or use presence, the framework needs to know who's connecting.
+By default **every connection is anonymous** — the identity resolver returns `None`. That's fine for a fully public feed, but if you want to gate rooms by user or use presence, the framework needs to know who's connecting. The resolved identity is `user_id: Option<String>` — the user's primary key rendered to its canonical string, so it works for any PK type (`i64` → `"42"`, `uuid` → `"550e8400-…"`).
 
 If you use `umbra-auth`, enable the `auth` feature and call `with_auth_sessions()`. It identifies the connecting user from the session cookie at the SSE/WS handshake:
 
@@ -116,7 +116,7 @@ That's the whole loop. Every browser in `public:lobby` logs `got ping { message:
 
 | Call | Reaches |
 |---|---|
-| `Realtime::to_user(id)` | every live connection authenticated as that user |
+| `Realtime::to_user(id.to_string())` | every live connection authenticated as that user (`id` is the PK string) |
 | `Realtime::to_group(group)` | every connection that joined that group/room |
 | `Realtime::broadcast()` | every connection |
 

@@ -178,7 +178,7 @@ fn exposed_private_group_is_not_joinable_under_default_policy() {
         "a non-public exposed group is NOT joinable under the default policy"
     );
     assert!(
-        !policy.can_join(Some(7), "tenant:secret"),
+        !policy.can_join(Some("7"), "tenant:secret"),
         "even an authenticated user is denied a private group by default"
     );
 }

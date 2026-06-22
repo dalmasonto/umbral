@@ -47,7 +47,7 @@ pub(crate) async fn ws_handler(
 
     let policy = Realtime::policy();
     for g in &requested {
-        if !policy.can_join(user_id, g) {
+        if !policy.can_join(user_id.as_deref(), g) {
             return (
                 StatusCode::FORBIDDEN,
                 format!("not allowed to join group `{g}`"),
@@ -64,7 +64,7 @@ pub(crate) async fn ws_handler(
     // registration returns 503 instead of completing the WS handshake.
     // (WS has no native Last-Event-ID, so the cap is the relevant gap here.)
     let Some((conn_id, rx, presence)) = registry
-        .register_with_presence(user_id, groups, DEFAULT_BUFFER)
+        .register_with_presence(user_id.clone(), groups, DEFAULT_BUFFER)
         .await
     else {
         return (
@@ -90,7 +90,7 @@ async fn handle_socket(
     socket: WebSocket,
     conn_id: ConnId,
     mut rx: mpsc::Receiver<Event>,
-    user_id: Option<i64>,
+    user_id: Option<String>,
     registry: Arc<Registry>,
     handler: Arc<dyn MessageHandler>,
 ) {

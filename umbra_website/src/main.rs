@@ -320,7 +320,7 @@ async fn notify_admins(kind: &'static str, title: &'static str, url: &'static st
     };
     let payload = serde_json::json!({ "kind": kind, "title": title, "url": url });
     for id in ids {
-        Realtime::to_user(id)
+        Realtime::to_user(id.to_string())
             .send("admin_notification", &payload)
             .await;
     }

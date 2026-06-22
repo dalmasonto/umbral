@@ -6,7 +6,7 @@
 //! ```ignore
 //! use umbra_realtime::Realtime;
 //!
-//! Realtime::to_user(42).send("notification", &payload).await;
+//! Realtime::to_user("42").send("notification", &payload).await;
 //! Realtime::to_group("chat:123").send("message", &msg).await;
 //! Realtime::broadcast().send("ping", &json!({})).await;
 //! ```
@@ -21,10 +21,16 @@
 //!
 //! ## Why a broker
 //!
-//! `to_user(42)` only reaches user 42 if the message lands on the process
+//! `to_user("42")` only reaches user 42 if the message lands on the process
 //! that owns their socket. One process needs nothing; to scale out, point
 //! [`RealtimePlugin::redis`] at a shared Redis and every targeted send
 //! relays to whichever instance holds the socket — the [`Realtime`] API is
+//!
+//! Connection **identity is an opaque string** — the user's primary key
+//! rendered to its canonical [`Display`](std::fmt::Display) form, so it works
+//! for every PK type (`i64` → `"42"`, `uuid::Uuid` → `"…"`, `String` → itself).
+//! [`to_user`](Realtime::to_user) takes that string; [`with_auth_sessions`] resolves
+//! the session user's PK to the *same* string, so targeting lines up.
 //! identical, only the [`Broker`] swaps. Requires the `redis` feature.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -38,8 +44,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, mpsc};
 use umbra::plugin::{AppContext, Plugin, PluginError};
 
-/// Resolves the authenticated user's `i64` id from request headers. Returns
-/// `None` for anonymous / unauthenticated requests.
+/// Resolves the authenticated user's identity string from request headers.
+/// Returns `None` for anonymous / unauthenticated requests.
+///
+/// The identity is the user's **primary key rendered to its canonical
+/// [`Display`](std::fmt::Display) string** — PK-type-agnostic, so an `i64`,
+/// `String`, or `uuid::Uuid` PK all resolve to the same opaque key the dev
+/// passes to [`Realtime::to_user`].
 ///
 /// The default resolver (set by [`RealtimePlugin::default`]) always returns
 /// `None` — every connection is anonymous — so a push-only feed compiles with
@@ -48,7 +59,7 @@ use umbra::plugin::{AppContext, Plugin, PluginError};
 /// [`RealtimePlugin::with_auth_sessions`] (requires the `auth` feature) to
 /// plug in `umbra-auth`'s session-cookie lookup.
 pub type IdentityResolver =
-    Arc<dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Option<i64>> + Send>> + Send + Sync>;
+    Arc<dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Option<String>> + Send>> + Send + Sync>;
 
 /// Re-export so a `MessageHandler` impl can name the attribute
 /// (`#[umbra_realtime::async_trait]`) without a direct `async-trait` dep.
@@ -106,8 +117,8 @@ pub struct Event {
 /// pub/sub.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetKind {
-    /// Every live connection authenticated as this user id.
-    User(i64),
+    /// Every live connection authenticated as this user id (the PK string).
+    User(String),
     /// Every connection that has joined this group/room.
     Group(String),
     /// Every connection.
@@ -145,14 +156,14 @@ pub struct Envelope {
 
 struct ConnEntry {
     tx: mpsc::Sender<Event>,
-    user_id: Option<i64>,
+    user_id: Option<String>,
     groups: HashSet<String>,
 }
 
 #[derive(Default)]
 struct RegistryInner {
     conns: HashMap<ConnId, ConnEntry>,
-    by_user: HashMap<i64, HashSet<ConnId>>,
+    by_user: HashMap<String, HashSet<ConnId>>,
     by_group: HashMap<String, HashSet<ConnId>>,
 }
 
@@ -168,11 +179,11 @@ struct RegistryInner {
 #[derive(Default, Debug)]
 pub struct PresenceTransitions {
     /// `(group, user_id)` for each group this user FIRST entered via this conn.
-    pub joined: Vec<(String, i64)>,
+    pub joined: Vec<(String, String)>,
     /// `(group, user_id)` for each group this user FULLY LEFT via this conn.
-    pub left: Vec<(String, i64)>,
+    pub left: Vec<(String, String)>,
     /// `(group, present_user_ids)` snapshot per newly-entered group, for sync.
-    pub sync: Vec<(String, Vec<i64>)>,
+    pub sync: Vec<(String, Vec<String>)>,
 }
 
 /// Tracks every live connection and the user / groups it belongs to, so a
@@ -228,7 +239,7 @@ impl Registry {
     /// the rooms it joined at handshake.
     pub async fn register(
         &self,
-        user_id: Option<i64>,
+        user_id: Option<String>,
         groups: HashSet<String>,
         buffer: usize,
     ) -> Option<(ConnId, mpsc::Receiver<Event>)> {
@@ -240,8 +251,8 @@ impl Registry {
         }
         let id = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(buffer.max(1));
-        if let Some(uid) = user_id {
-            inner.by_user.entry(uid).or_default().insert(id);
+        if let Some(uid) = &user_id {
+            inner.by_user.entry(uid.clone()).or_default().insert(id);
         }
         for g in &groups {
             inner.by_group.entry(g.clone()).or_default().insert(id);
@@ -295,7 +306,7 @@ impl Registry {
     /// after this returns (the lock is dropped), keeping sends off the lock.
     pub async fn register_with_presence(
         &self,
-        user_id: Option<i64>,
+        user_id: Option<String>,
         groups: HashSet<String>,
         buffer: usize,
     ) -> Option<(ConnId, mpsc::Receiver<Event>, PresenceTransitions)> {
@@ -311,16 +322,16 @@ impl Registry {
         // First-join per group is computed BEFORE this conn is indexed: the
         // user just entered `group` iff they had no OTHER live conn in it.
         let mut transitions = PresenceTransitions::default();
-        if let Some(uid) = user_id {
+        if let Some(uid) = &user_id {
             for g in &groups {
                 if !user_in_group(&inner, uid, g) {
-                    transitions.joined.push((g.clone(), uid));
+                    transitions.joined.push((g.clone(), uid.clone()));
                 }
             }
         }
 
-        if let Some(uid) = user_id {
-            inner.by_user.entry(uid).or_default().insert(id);
+        if let Some(uid) = &user_id {
+            inner.by_user.entry(uid.clone()).or_default().insert(id);
         }
         for g in &groups {
             inner.by_group.entry(g.clone()).or_default().insert(id);
@@ -355,12 +366,12 @@ impl Registry {
             return transitions;
         };
         let user_id = entry.user_id;
-        if let Some(uid) = user_id
-            && let Some(set) = inner.by_user.get_mut(&uid)
+        if let Some(uid) = &user_id
+            && let Some(set) = inner.by_user.get_mut(uid)
         {
             set.remove(&id);
             if set.is_empty() {
-                inner.by_user.remove(&uid);
+                inner.by_user.remove(uid);
             }
         }
         for g in &entry.groups {
@@ -373,10 +384,10 @@ impl Registry {
         }
         // Last-leave per group: now that this conn is removed, the user fully
         // left `group` iff they have no remaining conn in it.
-        if let Some(uid) = user_id {
+        if let Some(uid) = &user_id {
             for g in &entry.groups {
                 if !user_in_group(&inner, uid, g) {
-                    transitions.left.push((g.clone(), uid));
+                    transitions.left.push((g.clone(), uid.clone()));
                 }
             }
         }
@@ -489,7 +500,7 @@ impl Registry {
     pub fn replay_since(
         &self,
         last_event_id: u64,
-        user_id: Option<i64>,
+        user_id: Option<&str>,
         groups: &HashSet<String>,
     ) -> Vec<Event> {
         let buf = self.replay.lock().expect("replay mutex poisoned");
@@ -513,7 +524,7 @@ impl Registry {
 
 /// Whether `user_id` has at least one live connection currently in `group`.
 /// Drives presence dedup: a user is "present" in a group iff this is `true`.
-fn user_in_group(inner: &RegistryInner, user_id: i64, group: &str) -> bool {
+fn user_in_group(inner: &RegistryInner, user_id: &str, group: &str) -> bool {
     let Some(group_conns) = inner.by_group.get(group) else {
         return false;
     };
@@ -521,19 +532,19 @@ fn user_in_group(inner: &RegistryInner, user_id: i64, group: &str) -> bool {
         inner
             .conns
             .get(cid)
-            .is_some_and(|e| e.user_id == Some(user_id))
+            .is_some_and(|e| e.user_id.as_deref() == Some(user_id))
     })
 }
 
 /// The deduped set of authenticated user ids currently present in `group`
 /// (anonymous conns excluded), ascending. The presence sync snapshot.
-fn present_user_ids(inner: &RegistryInner, group: &str) -> Vec<i64> {
+fn present_user_ids(inner: &RegistryInner, group: &str) -> Vec<String> {
     let Some(group_conns) = inner.by_group.get(group) else {
         return Vec::new();
     };
-    let mut ids: Vec<i64> = group_conns
+    let mut ids: Vec<String> = group_conns
         .iter()
-        .filter_map(|cid| inner.conns.get(cid).and_then(|e| e.user_id))
+        .filter_map(|cid| inner.conns.get(cid).and_then(|e| e.user_id.clone()))
         .collect();
     ids.sort_unstable();
     ids.dedup();
@@ -543,9 +554,9 @@ fn present_user_ids(inner: &RegistryInner, group: &str) -> Vec<i64> {
 /// Whether an [`Envelope`]'s target would deliver to a connection with this
 /// `user_id` / `groups` — the replay-filter predicate, mirroring the
 /// [`Registry::dispatch`] index lookup.
-fn target_matches(target: &TargetKind, user_id: Option<i64>, groups: &HashSet<String>) -> bool {
+fn target_matches(target: &TargetKind, user_id: Option<&str>, groups: &HashSet<String>) -> bool {
     match target {
-        TargetKind::User(uid) => user_id == Some(*uid),
+        TargetKind::User(uid) => user_id == Some(uid.as_str()),
         TargetKind::Group(g) => groups.contains(g),
         TargetKind::Broadcast => true,
     }
@@ -723,9 +734,11 @@ impl Broker for RedisBroker {
 /// `chat:123` it has no claim to — override to grant access from the
 /// authenticated identity (membership tables, tenant id, role).
 pub trait GroupPolicy: Send + Sync {
-    /// `user_id` is the authenticated user (or `None` for anonymous).
-    /// Return `true` to allow the join. Default: only `public:*` groups.
-    fn can_join(&self, user_id: Option<i64>, group: &str) -> bool {
+    /// `user_id` is the authenticated user's PK string (or `None` for
+    /// anonymous) — PK-type-agnostic, so `i64`/`String`/`uuid` PKs all
+    /// arrive as the same canonical string. Return `true` to allow the
+    /// join. Default: only `public:*` groups.
+    fn can_join(&self, user_id: Option<&str>, group: &str) -> bool {
         let _ = user_id;
         group.starts_with("public:")
     }
@@ -744,7 +757,7 @@ impl GroupPolicy for PublicGroupsOnly {}
 /// use umbra_realtime::RealtimePlugin;
 ///
 /// RealtimePlugin::new()
-///     .with_auth_sessions()                       // so `user_id` is the logged-in user
+///     .with_auth_sessions()                       // so `user_id` is the logged-in user's PK string
 ///     .group_policy_fn(|user_id, group| {
 ///         if group.starts_with("public:") { return true; }   // public rooms: anyone
 ///         match user_id {
@@ -758,9 +771,9 @@ pub struct FnGroupPolicy<F>(pub F);
 
 impl<F> GroupPolicy for FnGroupPolicy<F>
 where
-    F: Fn(Option<i64>, &str) -> bool + Send + Sync,
+    F: Fn(Option<&str>, &str) -> bool + Send + Sync,
 {
-    fn can_join(&self, user_id: Option<i64>, group: &str) -> bool {
+    fn can_join(&self, user_id: Option<&str>, group: &str) -> bool {
         (self.0)(user_id, group)
     }
 }
@@ -774,7 +787,8 @@ where
 /// broadcast back to the sender's group via [`Realtime::to_group`]).
 pub struct MessageContext {
     pub conn_id: ConnId,
-    pub user_id: Option<i64>,
+    /// The authenticated user's PK string (or `None` for anonymous).
+    pub user_id: Option<String>,
 }
 
 /// Handles text frames a WebSocket client sends to the server. SSE is
@@ -827,11 +841,40 @@ pub struct ModelEvent {
     pub actor: serde_json::Value,
 }
 
+/// Render a JSON primary-key value to its canonical [`Display`] string, the
+/// same form [`Realtime::to_user`] and the identity resolver use. A JSON
+/// number renders as its digits (`42` → `"42"`), a JSON string yields its
+/// inner text *unquoted* (`"a-uuid"` → `"a-uuid"`); `null` / a JSON object or
+/// array (never a PK) yields `None`. This keeps a model row's PK and a
+/// `to_user(pk.to_string())` target keyed identically across PK types.
+fn json_pk_to_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Null => None,
+        // bool is not a PK but render it deterministically rather than drop it.
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
 impl ModelEvent {
-    /// The row's `id`, if present and integer — the common case for the
-    /// default i64 PK. Returns `None` for a non-`id` PK or a missing id.
+    /// The row's `id`, if present and integer — the convenience accessor for
+    /// the default i64 PK. Returns `None` for a non-integer / non-`id` PK or a
+    /// missing id. For a PK-type-agnostic accessor (`i64`/`String`/`uuid`), use
+    /// [`pk_str`](Self::pk_str).
     pub fn pk(&self) -> Option<i64> {
         self.instance.get("id").and_then(|v| v.as_i64())
+    }
+
+    /// The row's primary key as a **canonical string**, for any PK type
+    /// (`i64` → `"42"`, `String` → itself, `uuid::Uuid` → `"…"`). Pulls the
+    /// `id` field out of `instance` and renders it the same way
+    /// [`Realtime::to_user`] expects, so a per-row group like
+    /// `format!("post:{}", ev.pk_str().unwrap_or_default())` lines up with the
+    /// PK whatever its type. Returns `None` for a missing / null `id`.
+    pub fn pk_str(&self) -> Option<String> {
+        self.instance.get("id").and_then(json_pk_to_string)
     }
 
     fn from_payload(table: &str, payload: &serde_json::Value, is_delete: bool) -> ModelEvent {
@@ -881,7 +924,7 @@ impl ModelEvent {
 enum GroupRoute {
     /// One static group every matching event lands in.
     Static(String),
-    /// A per-row group computed from the event (e.g. `format!("post:{}", ev.pk()…)`),
+    /// A per-row group computed from the event (e.g. `format!("post:{}", ev.pk_str()…)`),
     /// so a client can watch a single row.
     Dynamic(Arc<dyn Fn(&ModelEvent) -> String + Send + Sync>),
 }
@@ -953,7 +996,7 @@ impl Expose {
     }
 
     /// Route each event to a per-row group computed from it, so a client can
-    /// watch a single row: `Expose::to_group_with(|ev| format!("post:{}", ev.pk().unwrap_or(0)))`.
+    /// watch a single row: `Expose::to_group_with(|ev| format!("post:{}", ev.pk_str().unwrap_or_default()))`.
     /// The computed group is still governed by [`GroupPolicy::can_join`].
     pub fn to_group_with<F>(f: F) -> Self
     where
@@ -1042,8 +1085,8 @@ impl Expose {
 ///   excluded entirely — there's nothing to dedupe on, and "an anonymous person
 ///   is here" is itself a leak. Only signed-in users appear.
 /// - **Id-only by default.** Without a [`resolver`](Self::resolver), a present
-///   user is broadcast as `{ "id": <user_id> }` and nothing else — never the
-///   raw user row. A resolver (`Fn(i64) -> serde_json::Value`) is the dev's
+///   user is broadcast as `{ "id": "<user_id>" }` and nothing else — never the
+///   raw user row. A resolver (`Fn(&str) -> serde_json::Value`) is the dev's
 ///   explicit choice of what's safe to broadcast (e.g. `{id, name, avatar}`).
 /// - **Policy-gated visibility.** Presence events go through the normal group
 ///   dispatch, so [`GroupPolicy::can_join`] already governs *who can see* a
@@ -1053,9 +1096,9 @@ pub struct PresenceSpec {
     /// Returns `true` for a group that has presence enabled. Default (no
     /// [`with_presence`]) is the all-`false` predicate.
     enabled: Arc<dyn Fn(&str) -> bool + Send + Sync>,
-    /// Projects a present user's `i64` id to the JSON broadcast for them.
-    /// Default: `{ "id": <user_id> }` only.
-    resolver: Arc<dyn Fn(i64) -> serde_json::Value + Send + Sync>,
+    /// Projects a present user's PK string to the JSON broadcast for them.
+    /// Default: `{ "id": "<user_id>" }` only.
+    resolver: Arc<dyn Fn(&str) -> serde_json::Value + Send + Sync>,
 }
 
 impl PresenceSpec {
@@ -1083,7 +1126,7 @@ impl PresenceSpec {
         Self::matching(move |group| prefixes.iter().any(|p| group.starts_with(p.as_str())))
     }
 
-    /// Supply the identity projection: map a present user's `i64` id to the
+    /// Supply the identity projection: map a present user's PK string to the
     /// JSON broadcast for them. **This is the dev's explicit choice of what's
     /// safe to expose** — the default (no resolver) is id-only.
     ///
@@ -1095,7 +1138,7 @@ impl PresenceSpec {
     /// ```
     pub fn resolver<F>(mut self, f: F) -> Self
     where
-        F: Fn(i64) -> serde_json::Value + Send + Sync + 'static,
+        F: Fn(&str) -> serde_json::Value + Send + Sync + 'static,
     {
         self.resolver = Arc::new(f);
         self
@@ -1106,8 +1149,8 @@ impl PresenceSpec {
         (self.enabled)(group)
     }
 
-    /// The projected presence info for a present `user_id`.
-    pub fn project(&self, user_id: i64) -> serde_json::Value {
+    /// The projected presence info for a present `user_id` (the PK string).
+    pub fn project(&self, user_id: &str) -> serde_json::Value {
         (self.resolver)(user_id)
     }
 }
@@ -1122,9 +1165,9 @@ impl Default for PresenceSpec {
     }
 }
 
-/// The default presence projection: `{ "id": <user_id> }` and nothing else.
+/// The default presence projection: `{ "id": "<user_id>" }` and nothing else.
 /// Never the raw user — the dev opts into more via [`PresenceSpec::resolver`].
-fn default_presence_projection(user_id: i64) -> serde_json::Value {
+fn default_presence_projection(user_id: &str) -> serde_json::Value {
     serde_json::json!({ "id": user_id })
 }
 
@@ -1157,7 +1200,7 @@ pub async fn dispatch_presence(transitions: PresenceTransitions) {
         if !spec.enabled(&group) {
             continue;
         }
-        let member = spec.project(user_id);
+        let member = spec.project(&user_id);
         Realtime::to_group(group.clone())
             .send(PRESENCE_JOIN, &member)
             .await;
@@ -1170,7 +1213,7 @@ pub async fn dispatch_presence(transitions: PresenceTransitions) {
             continue;
         }
         let projected: Vec<serde_json::Value> =
-            members.into_iter().map(|uid| spec.project(uid)).collect();
+            members.iter().map(|uid| spec.project(uid)).collect();
         Realtime::to_group(group).send(PRESENCE_SYNC, &projected).await;
     }
     // Last-leave broadcasts.
@@ -1178,7 +1221,7 @@ pub async fn dispatch_presence(transitions: PresenceTransitions) {
         if !spec.enabled(&group) {
             continue;
         }
-        let member = spec.project(user_id);
+        let member = spec.project(&user_id);
         Realtime::to_group(group).send(PRESENCE_LEAVE, &member).await;
     }
 }
@@ -1232,7 +1275,7 @@ impl Realtime {
     }
 
     /// The identity resolver: maps request headers to an authenticated user's
-    /// `i64` id (or `None` for anonymous). Used by both transports at handshake
+    /// PK string (or `None` for anonymous). Used by both transports at handshake
     /// to populate the registry entry and pass the user id to the group policy.
     pub fn resolver() -> IdentityResolver {
         Self::get().resolver.clone()
@@ -1244,10 +1287,14 @@ impl Realtime {
         Self::get().presence.clone()
     }
 
-    /// Target a single user's every live connection.
-    pub fn to_user(user_id: i64) -> Target {
+    /// Target a single user's every live connection. `user_id` is the user's
+    /// **primary key as a string** (`user.id().to_string()`, `uuid.to_string()`,
+    /// or a literal like `"42"`) — PK-type-agnostic, and the same canonical
+    /// string the [`IdentityResolver`] / [`with_auth_sessions`](RealtimePlugin::with_auth_sessions)
+    /// produces, so the target lines up with the registered connection.
+    pub fn to_user(user_id: impl Into<String>) -> Target {
         Target {
-            target: TargetKind::User(user_id),
+            target: TargetKind::User(user_id.into()),
         }
     }
 
@@ -1371,8 +1418,9 @@ impl RealtimePlugin {
 
     /// Gate room access with a closure — the ergonomic alternative to a named
     /// [`GroupPolicy`] type. `|user_id, group| -> bool` returns `true` to allow
-    /// the join (`user_id` is the authenticated user, or `None` for anonymous).
-    /// Wire [`with_auth_sessions`](Self::with_auth_sessions) (or a custom
+    /// the join (`user_id: Option<&str>` is the authenticated user's PK string,
+    /// or `None` for anonymous — PK-type-agnostic). Wire
+    /// [`with_auth_sessions`](Self::with_auth_sessions) (or a custom
     /// [`identity_resolver`](Self::identity_resolver)) first so `user_id` is
     /// populated. See [`FnGroupPolicy`].
     ///
@@ -1386,13 +1434,13 @@ impl RealtimePlugin {
     /// ```
     pub fn group_policy_fn<F>(self, f: F) -> Self
     where
-        F: Fn(Option<i64>, &str) -> bool + Send + Sync + 'static,
+        F: Fn(Option<&str>, &str) -> bool + Send + Sync + 'static,
     {
         self.group_policy(FnGroupPolicy(f))
     }
 
     /// Supply a custom identity resolver: an async function that maps the
-    /// request headers to the authenticated user's `i64` id (or `None` for
+    /// request headers to the authenticated user's PK string (or `None` for
     /// anonymous). This is the extension point for custom auth schemes (JWT,
     /// API keys, etc.) without pulling in `umbra-auth`.
     ///
@@ -1402,7 +1450,7 @@ impl RealtimePlugin {
     pub fn identity_resolver<F, Fut>(mut self, f: F) -> Self
     where
         F: Fn(HeaderMap) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Option<i64>> + Send + 'static,
+        Fut: Future<Output = Option<String>> + Send + 'static,
     {
         self.resolver = Arc::new(move |h| Box::pin(f(h)));
         self
@@ -1412,11 +1460,20 @@ impl RealtimePlugin {
     /// user at the SSE/WS handshake. This is the standard wiring when
     /// `umbra-auth` is installed.
     ///
+    /// The session user's primary key is rendered to its canonical
+    /// [`Display`](std::fmt::Display) string (via
+    /// [`current_session_user_pk`](umbra_auth::current_session_user_pk) over the
+    /// active [`AuthUser`](umbra_auth::AuthUser)) — `i64`/`String`/`uuid` PKs all
+    /// produce the **same** string the dev passes to [`Realtime::to_user`], so
+    /// targeting and per-user gating line up regardless of PK type.
+    ///
     /// Requires the `auth` cargo feature (`--features auth`).
     #[cfg(feature = "auth")]
     pub fn with_auth_sessions(self) -> Self {
         self.identity_resolver(|headers| async move {
-            umbra_auth::current_session_user_id(&headers).await
+            umbra_auth::current_session_user_pk::<umbra_auth::AuthUser>(&headers)
+                .await
+                .map(|pk| pk.to_string())
         })
     }
 
@@ -1460,7 +1517,7 @@ impl RealtimePlugin {
     /// - **Off unless enabled.** A group not matched by the spec emits nothing.
     /// - **Authenticated only.** Anonymous connections never appear in presence.
     /// - **Id-only projection.** Without a [`resolver`](PresenceSpec::resolver),
-    ///   a present user is broadcast as `{ "id": <user_id> }` — never the raw row.
+    ///   a present user is broadcast as `{ "id": "<user_id>" }` — never the raw row.
     /// - **Policy-gated.** Presence rides the normal group dispatch, so
     ///   [`GroupPolicy::can_join`] governs who can *see* a group's presence.
     ///
@@ -1506,7 +1563,7 @@ impl RealtimePlugin {
     ///
     /// ```ignore
     /// RealtimePlugin::default().on_table("post", |ev| async move {
-    ///     Realtime::to_group(format!("post:{}", ev.pk().unwrap_or(0)))
+    ///     Realtime::to_group(format!("post:{}", ev.pk_str().unwrap_or_default()))
     ///         .send("changed", &ev).await;
     /// })
     /// ```
@@ -1660,6 +1717,12 @@ mod tests {
         gs.iter().map(|s| s.to_string()).collect()
     }
 
+    /// Terse user-id helper: identity is now a PK string, so a test that used
+    /// `Some(7)` becomes `u(7)` → `Some("7".to_string())`.
+    fn u(id: i64) -> Option<String> {
+        Some(id.to_string())
+    }
+
     async fn recv(rx: &mut mpsc::Receiver<Event>) -> Option<Event> {
         // Events dispatch synchronously into the channel, so a try_recv is
         // enough once dispatch has returned.
@@ -1679,20 +1742,20 @@ mod tests {
     async fn to_user_reaches_every_connection_of_that_user() {
         let reg = Registry::default();
         let (_a, mut rx_a) = reg
-            .register(Some(7), groups(&[]), DEFAULT_BUFFER)
+            .register(u(7), groups(&[]), DEFAULT_BUFFER)
             .await
             .unwrap();
         let (_b, mut rx_b) = reg
-            .register(Some(7), groups(&[]), DEFAULT_BUFFER)
+            .register(u(7), groups(&[]), DEFAULT_BUFFER)
             .await
             .unwrap();
         let (_c, mut rx_c) = reg
-            .register(Some(9), groups(&[]), DEFAULT_BUFFER)
+            .register(u(9), groups(&[]), DEFAULT_BUFFER)
             .await
             .unwrap();
 
         let n = reg
-            .dispatch(&TargetKind::User(7), reg_event("ping", serde_json::json!({"x": 1})))
+            .dispatch(&TargetKind::User("7".into()), reg_event("ping", serde_json::json!({"x": 1})))
             .await;
 
         assert_eq!(n, 2, "both of user 7's connections received it");
@@ -1705,11 +1768,11 @@ mod tests {
     async fn to_group_targets_only_joined_connections() {
         let reg = Registry::default();
         let (_a, mut rx_a) = reg
-            .register(Some(1), groups(&["chat:1"]), DEFAULT_BUFFER)
+            .register(u(1), groups(&["chat:1"]), DEFAULT_BUFFER)
             .await
             .unwrap();
         let (_b, mut rx_b) = reg
-            .register(Some(2), groups(&["chat:2"]), DEFAULT_BUFFER)
+            .register(u(2), groups(&["chat:2"]), DEFAULT_BUFFER)
             .await
             .unwrap();
 
@@ -1728,7 +1791,7 @@ mod tests {
     async fn broadcast_reaches_all_and_deregister_cleans_indexes() {
         let reg = Registry::default();
         let (a, _rx_a) = reg
-            .register(Some(1), groups(&["g"]), DEFAULT_BUFFER)
+            .register(u(1), groups(&["g"]), DEFAULT_BUFFER)
             .await
             .unwrap();
         let (_b, _rx_b) = reg
@@ -1746,7 +1809,7 @@ mod tests {
         assert_eq!(reg.connection_count().await, 1);
         // User index for the gone connection is cleaned: to_user(1) → 0.
         let n = reg
-            .dispatch(&TargetKind::User(1), evt())
+            .dispatch(&TargetKind::User("1".into()), evt())
             .await;
         assert_eq!(n, 0, "deregister removed user 1 from the index");
         // The group still has the anonymous connection.
@@ -1761,8 +1824,8 @@ mod tests {
         // Snapshot-then-send must still reach every registered connection:
         // register 3, broadcast once, and read the event off each receiver.
         let reg = Registry::default();
-        let (_a, mut rx_a) = reg.register(Some(1), groups(&[]), DEFAULT_BUFFER).await.unwrap();
-        let (_b, mut rx_b) = reg.register(Some(2), groups(&[]), DEFAULT_BUFFER).await.unwrap();
+        let (_a, mut rx_a) = reg.register(u(1), groups(&[]), DEFAULT_BUFFER).await.unwrap();
+        let (_b, mut rx_b) = reg.register(u(2), groups(&[]), DEFAULT_BUFFER).await.unwrap();
         let (_c, mut rx_c) = reg.register(None, groups(&["g"]), DEFAULT_BUFFER).await.unwrap();
 
         let n = reg
@@ -1778,7 +1841,7 @@ mod tests {
     async fn join_and_leave_update_group_membership() {
         let reg = Registry::default();
         let (a, _rx) = reg
-            .register(Some(1), groups(&[]), DEFAULT_BUFFER)
+            .register(u(1), groups(&[]), DEFAULT_BUFFER)
             .await
             .unwrap();
 
@@ -1799,14 +1862,14 @@ mod tests {
     async fn in_process_broker_publishes_to_the_registry() {
         let registry = Arc::new(Registry::default());
         let (_id, mut rx) = registry
-            .register(Some(3), groups(&[]), DEFAULT_BUFFER)
+            .register(u(3), groups(&[]), DEFAULT_BUFFER)
             .await
             .unwrap();
         let broker = InProcessBroker::new(registry.clone());
 
         broker
             .publish(Envelope {
-                target: TargetKind::User(3),
+                target: TargetKind::User("3".into()),
                 event: "hello".into(),
                 data: serde_json::json!({"ok": true}),
             })
@@ -1819,7 +1882,7 @@ mod tests {
     #[test]
     fn target_channel_stamps_group_user_broadcast() {
         assert_eq!(TargetKind::Group("chat:1".into()).channel(), "chat:1");
-        assert_eq!(TargetKind::User(42).channel(), "@user:42");
+        assert_eq!(TargetKind::User("42".into()).channel(), "@user:42");
         assert_eq!(TargetKind::Broadcast.channel(), "@broadcast");
     }
 
@@ -1827,7 +1890,7 @@ mod tests {
     async fn dispatch_stamps_the_channel_on_delivered_events() {
         let reg = Registry::default();
         let (_g, mut rx_g) = reg
-            .register(Some(5), groups(&["chat:1"]), DEFAULT_BUFFER)
+            .register(u(5), groups(&["chat:1"]), DEFAULT_BUFFER)
             .await
             .unwrap();
         reg.dispatch(
@@ -1838,10 +1901,10 @@ mod tests {
         assert_eq!(recv(&mut rx_g).await.unwrap().channel, "chat:1");
 
         let (_u, mut rx_u) = reg
-            .register(Some(7), groups(&[]), DEFAULT_BUFFER)
+            .register(u(7), groups(&[]), DEFAULT_BUFFER)
             .await
             .unwrap();
-        reg.dispatch(&TargetKind::User(7), reg_event("ping", serde_json::json!({})))
+        reg.dispatch(&TargetKind::User("7".into()), reg_event("ping", serde_json::json!({})))
             .await;
         assert_eq!(recv(&mut rx_u).await.unwrap().channel, "@user:7");
 
@@ -1858,8 +1921,8 @@ mod tests {
     #[test]
     fn default_group_policy_allows_only_public() {
         let p = PublicGroupsOnly;
-        assert!(p.can_join(Some(1), "public:lobby"));
-        assert!(!p.can_join(Some(1), "tenant:99"));
+        assert!(p.can_join(Some("1"), "public:lobby"));
+        assert!(!p.can_join(Some("1"), "tenant:99"));
         assert!(!p.can_join(None, "chat:1"));
     }
 
@@ -1867,14 +1930,98 @@ mod tests {
     fn fn_group_policy_gates_rooms_via_closure() {
         // The ergonomic gate: public rooms for anyone, a private room only for
         // its owning user, everything else denied.
-        let p = FnGroupPolicy(|user_id: Option<i64>, group: &str| {
+        let p = FnGroupPolicy(|user_id: Option<&str>, group: &str| {
             group.starts_with("public:")
                 || matches!(user_id, Some(uid) if group == format!("user:{uid}"))
         });
         assert!(p.can_join(None, "public:lobby"), "public open to anyone");
-        assert!(p.can_join(Some(7), "user:7"), "owner can join their room");
-        assert!(!p.can_join(Some(8), "user:7"), "non-owner denied");
+        assert!(p.can_join(Some("7"), "user:7"), "owner can join their room");
+        assert!(!p.can_join(Some("8"), "user:7"), "non-owner denied");
         assert!(!p.can_join(None, "user:7"), "anonymous denied private");
+    }
+
+    #[test]
+    fn group_policy_is_pk_type_agnostic() {
+        // Identity is an opaque PK STRING, so a numeric-PK user and a UUID-PK
+        // user route through the very same closure with no i64 assumption: each
+        // owns its own `user:<pk>` room, keyed on whatever its PK renders to.
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let p = FnGroupPolicy(|user_id: Option<&str>, group: &str| {
+            matches!(user_id, Some(uid) if group == format!("user:{uid}"))
+        });
+        // Numeric string PK.
+        assert!(p.can_join(Some("42"), "user:42"), "numeric pk owns its room");
+        assert!(!p.can_join(Some("42"), &format!("user:{uuid}")), "not the uuid's room");
+        // UUID string PK.
+        assert!(p.can_join(Some(uuid), &format!("user:{uuid}")), "uuid pk owns its room");
+        assert!(!p.can_join(Some(uuid), "user:42"), "uuid is not user 42");
+    }
+
+    #[tokio::test]
+    async fn to_user_targets_the_matching_string_identity() {
+        // to_user(<pk string>) reaches the connection registered under exactly
+        // that string, and no other — proven for both a UUID and a numeric pk.
+        let reg = Registry::default();
+        let uuid = "550e8400-e29b-41d4-a716-446655440000".to_string();
+        let (_a, mut rx_a) = reg
+            .register(Some(uuid.clone()), groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        let (_b, mut rx_b) = reg
+            .register(Some("42".to_string()), groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+
+        // Target the UUID identity: only conn A receives it.
+        let n = reg
+            .dispatch(
+                &TargetKind::User(uuid.clone()),
+                reg_event("ping", serde_json::json!({})),
+            )
+            .await;
+        assert_eq!(n, 1, "only the uuid-identity connection matched");
+        assert!(recv(&mut rx_a).await.is_some(), "uuid conn received");
+        assert!(recv(&mut rx_b).await.is_none(), "numeric conn did NOT");
+        // A different string (the same digits, but not the uuid) reaches nobody.
+        let n = reg
+            .dispatch(&TargetKind::User("999".into()), reg_event("ping", serde_json::json!({})))
+            .await;
+        assert_eq!(n, 0, "an unknown identity string reaches no one");
+
+        // The channel stamp carries the opaque string verbatim.
+        assert_eq!(TargetKind::User(uuid).channel(), "@user:550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[tokio::test]
+    async fn presence_dedup_and_projection_key_on_string_ids() {
+        // Presence dedup is keyed on the PK STRING: a user with two conns in a
+        // group counts once, and the default projection is `{"id":"<string>"}`.
+        let reg = Registry::default();
+        let uuid = "abc-123".to_string();
+        // First conn for the uuid user → first-join.
+        let (_a, _rx_a, t1) = reg
+            .register_with_presence(Some(uuid.clone()), groups(&["room:1"]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        assert_eq!(t1.joined, vec![("room:1".to_string(), uuid.clone())]);
+        assert_eq!(
+            t1.sync,
+            vec![("room:1".to_string(), vec![uuid.clone()])],
+            "sync snapshot carries the string id"
+        );
+        // Second conn for the SAME uuid user → no new first-join (deduped).
+        let (b, _rx_b, t2) = reg
+            .register_with_presence(Some(uuid.clone()), groups(&["room:1"]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        assert!(t2.joined.is_empty(), "second conn of same user does not re-join");
+
+        // Default projection renders the id as a STRING, not a number.
+        assert_eq!(default_presence_projection(&uuid), serde_json::json!({ "id": "abc-123" }));
+
+        // Dropping the second conn is NOT a last-leave (the first still holds).
+        let t3 = reg.deregister_with_presence(b).await;
+        assert!(t3.left.is_empty(), "user still present via the first conn");
     }
 
     fn evt() -> Event {

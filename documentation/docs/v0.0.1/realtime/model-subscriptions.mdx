@@ -39,10 +39,10 @@ Expose::to_group("public:posts")
 
 ### Per-row group — `to_group_with`
 
-Route each event to a group computed from the row, so a client can watch a single record. The closure receives the `ModelEvent`; `ev.pk()` returns the row's `id` when it's an integer PK:
+Route each event to a group computed from the row, so a client can watch a single record. The closure receives the `ModelEvent`; `ev.pk_str()` returns the row's primary key as a string, for any PK type (`i64`, `String`, `uuid`):
 
 ```rust
-Expose::to_group_with(|ev| format!("post:{}", ev.pk().unwrap_or(0)))
+Expose::to_group_with(|ev| format!("post:{}", ev.pk_str().unwrap_or_default()))
 ```
 
 A client then subscribes to `post:42` to follow just that post. The computed group is still governed by `GroupPolicy::can_join`.
@@ -145,7 +145,7 @@ use umbra_realtime::{ModelAction, ModelEvent, Realtime, RealtimePlugin};
 RealtimePlugin::new()
     .on_model::<Post, _, _>(|ev: ModelEvent| async move {
         if ev.action == ModelAction::Created {
-            Realtime::to_group(format!("post:{}", ev.pk().unwrap_or(0)))
+            Realtime::to_group(format!("post:{}", ev.pk_str().unwrap_or_default()))
                 .send("new", &ev.instance)
                 .await;
         }
@@ -160,7 +160,8 @@ RealtimePlugin::new()
 | `action` | `ModelAction::Created` / `Updated` / `Deleted` |
 | `instance` | the row as `serde_json::Value` |
 | `actor` | who triggered the change (`Null` outside a `with_actor` scope) |
-| `ev.pk()` | the row's `id` as `Option<i64>` (integer PKs only) |
+| `ev.pk_str()` | the row's primary key as `Option<String>`, for any PK type (`i64`/`String`/`uuid`) |
+| `ev.pk()` | the row's `id` as `Option<i64>` (integer-PK convenience accessor) |
 
 <Callout type="info">
 `on_model` gives you the raw row in `instance` — **no field projection**. If you `.send(..., &ev.instance)` you broadcast every column. Use `expose` (with `.fields(...)`) whenever you want the safety rails; reach for `on_model` only when you need the extra control and are projecting the payload yourself.
