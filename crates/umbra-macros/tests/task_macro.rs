@@ -42,9 +42,12 @@ async fn boot() {
                 attempts INTEGER NOT NULL,\
                 max_attempts INTEGER NOT NULL,\
                 scheduled_for TEXT NOT NULL,\
+                run_at TEXT,\
                 started_at TEXT,\
                 completed_at TEXT,\
                 error TEXT,\
+                result TEXT,\
+                priority INTEGER,\
                 created_at TEXT NOT NULL\
              )",
         )
