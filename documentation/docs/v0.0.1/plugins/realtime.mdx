@@ -40,8 +40,8 @@ This is the plugin overview. The full guides — **setup, room gating, model sub
 
 ## At a glance
 
-- **Two transports** — SSE (push-only, auto-reconnect) and WebSocket (bidirectional): `GET /realtime/sse`, `GET /realtime/ws`.
-- **Safe by default** — anonymous connections may join only `public:*` rooms; model exposure and presence are opt-in, and exposed model fields are whitelisted. See [Gating rooms](/docs/v0.0.1/realtime/gating).
+- **Two transports** — SSE (push-only, auto-reconnect) and WebSocket (bidirectional): `GET /realtime/sse`, `GET /realtime/ws` (remount all four routes under any base with `RealtimePlugin::new().at("/rt")`).
+- **Safe by default** — anonymous connections may join only `public:*` rooms; model exposure and presence are opt-in, exposed model fields are whitelisted, and a built-in **Origin guard rejects cross-origin WebSocket upgrades** (CSWSH) in prod with no config. See [Gating rooms](/docs/v0.0.1/realtime/gating) and [Transports](/docs/v0.0.1/realtime/transports#websocket-origin-guard-cswsh).
 - **One connection per browser** — a `SharedWorker` shares a single SSE stream across all tabs and subscriptions, so opening many tabs never exhausts the browser's HTTP/1.1 connection limit.
 - **Fire-and-forget sends** — `Realtime::to_user / to_group / broadcast` publish without blocking on socket I/O and no-op when the plugin isn't installed, so a handler can call them unconditionally (`Realtime::is_installed()` if you need to check).
 

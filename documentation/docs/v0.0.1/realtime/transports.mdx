@@ -121,6 +121,47 @@ The same [`GroupPolicy`](gating) gate applies at the WS handshake (a denied grou
 The umbra `umbra.realtime` client helper uses **SSE** (the one-connection-per-browser model). Use WebSocket directly via the browser's native `WebSocket` when you need inbound frames; for pure push, prefer SSE so you get the shared connection and reconnect replay for free.
 </Callout>
 
+## WebSocket Origin guard (CSWSH)
+
+CORS does **not** cover the WebSocket handshake. Without a guard, a malicious page on `evil.com` can open `wss://your-host/realtime/ws` from the victim's browser — the request carries the victim's session cookie, so it authenticates as them and subscribes to their gated rooms. That's a **cross-site WebSocket hijacking** (CSWSH) attack: the cross-origin page can't read a `fetch()` to your API (CORS blocks that), but a raw `WebSocket` slips past CORS entirely.
+
+`umbra-realtime` rejects cross-origin WebSocket upgrades **by default, in production, with no configuration**. The guard runs before the upgrade and returns `403 cross-origin WebSocket rejected`. Its rules, in order:
+
+| Request | Decision |
+|---|---|
+| No `Origin` header (curl, native apps, server-to-server) | **allow** — not a browser, so not a CSWSH vector |
+| `Environment::Dev` | **allow** — local frontends run on a different port (matches core CORS / host-validation dev pass-through) |
+| `Origin` is in your `allowed_origins([...])` list | **allow** |
+| `Origin` is **same-origin** as the request (its `host[:port]` equals the `Host` header) | **allow** |
+| anything else (cross-origin, prod, not allowlisted) | **deny** → `403` |
+
+So a same-origin app needs nothing — the guard already protects it in prod. To permit a **specific cross-origin frontend** (a separately-deployed SPA on `https://app.example.com` talking to an API host), list it explicitly:
+
+```rust
+RealtimePlugin::new()
+    .with_auth_sessions()
+    .allowed_origins(["https://app.example.com"]);
+```
+
+SSE is deliberately not gated this way — the browser's CORS enforcement already protects a cross-origin `EventSource`, so the guard is WebSocket-specific.
+
+## Remounting under a different base path
+
+The four realtime routes default to `/realtime/...`. Remount them under any base with `.at()` — exactly like `OpenApiPlugin::at` / `AdminPlugin`:
+
+```rust
+RealtimePlugin::new().at("/rt");
+// → /rt/sse, /rt/ws, /rt/worker.js, /rt/client.js
+```
+
+The served `worker.js` and `client.js` follow the base **automatically** — their `EventSource` / `SharedWorker` URLs are templated off it — so you only change the one `<script src>` in your template to match:
+
+```html
+<script src="/rt/client.js"></script>
+```
+
+The path is normalised like `OpenApiPlugin::at`: a leading slash is ensured, a trailing slash is stripped, and an empty path falls back to the default `/realtime`. When you don't call `.at()`, the default `/realtime` behavior is byte-identical to before.
+
 ## See also
 
 - [Getting started](getting-started) — install the plugin and send your first event.

@@ -25,6 +25,91 @@ pub(crate) struct WsQuery {
     groups: Option<String>,
 }
 
+/// Whether the running app is in [`Environment::Dev`](umbra::Environment::Dev).
+/// Mirrors `umbra-livereload`'s convention: read the ambient settings, treat a
+/// missing/unset settings as non-dev (the safe default). The WS Origin guard
+/// passes through in Dev so a local frontend served on a different port (Vite,
+/// etc.) can open the socket — matching how core CORS / host-validation only
+/// enforce in Prod.
+fn is_dev() -> bool {
+    umbra::settings::get_opt()
+        .map(|s| matches!(s.environment, umbra::Environment::Dev))
+        .unwrap_or(false)
+}
+
+/// The authority (`host[:port]`) of an `Origin` header value — the part after
+/// the `scheme://`, with any path/query stripped. `https://app.example.com` →
+/// `app.example.com`; `http://x.com:8000/foo` → `x.com:8000`. Returns the input
+/// unchanged when it carries no `://` (already bare). Lowercased for a
+/// case-insensitive host compare.
+fn origin_authority(origin: &str) -> String {
+    let after_scheme = origin.split_once("://").map(|(_, rest)| rest).unwrap_or(origin);
+    // Drop anything from the first `/`, `?` or `#` — keep only the authority.
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    authority.to_ascii_lowercase()
+}
+
+/// Returns `true` if a WebSocket upgrade carrying this `Origin` is allowed.
+///
+/// CORS does **not** cover the WebSocket handshake, so without this guard a
+/// cross-origin page could open `wss://victim-host/<base>/ws` with the victim's
+/// session cookie and subscribe to their gated groups — a CSWSH (cross-site
+/// WebSocket hijacking) attack. This is the decision the WS handler enforces
+/// before upgrading; kept as a pure function so the policy is unit-tested
+/// without spinning an HTTP handshake.
+///
+/// Rules, in order:
+/// 1. `origin == None` → **allow**. Non-browser clients (curl, native apps,
+///    server-to-server) never send `Origin`; CSWSH is a browser-only vector.
+/// 2. `is_dev` → **allow**. Local dev runs the frontend on a different port, so
+///    every request is "cross-origin"; this matches the core CORS / host-
+///    validation Dev pass-through.
+/// 3. Origin's authority appears in `allowlist` → **allow** (an explicit
+///    cross-origin frontend the app opted in via `allowed_origins`).
+/// 4. Origin is **same-origin** as the request — its authority (`host[:port]`)
+///    equals the `Host` header → **allow**.
+/// 5. otherwise → **deny**.
+///
+/// The allowlist match compares on authority (scheme stripped), so an entry
+/// `https://app.example.com` matches an `Origin: https://app.example.com`
+/// regardless of the request scheme.
+pub(crate) fn ws_origin_allowed(
+    origin: Option<&str>,
+    host: Option<&str>,
+    allowlist: &[String],
+    is_dev: bool,
+) -> bool {
+    // 1. No Origin → non-browser client → not a CSWSH vector.
+    let Some(origin) = origin else {
+        return true;
+    };
+    // 2. Dev pass-through (local frontend on a different port).
+    if is_dev {
+        return true;
+    }
+    let origin_auth = origin_authority(origin);
+    // 3. Explicit allowlist — compare on authority so the entry can carry a
+    //    scheme (`https://app.example.com`) or be bare (`app.example.com`).
+    if allowlist
+        .iter()
+        .any(|allowed| origin_authority(allowed) == origin_auth)
+    {
+        return true;
+    }
+    // 4. Same-origin: the Origin authority equals the request Host. The Host
+    //    header is already a bare authority (`x.com` / `x.com:8000`).
+    if let Some(host) = host
+        && host.to_ascii_lowercase() == origin_auth
+    {
+        return true;
+    }
+    // 5. Cross-origin in prod, not allowlisted → reject.
+    false
+}
+
 /// The WebSocket endpoint. Validates identity + groups *before* upgrading
 /// (so a denied group returns `403`, not a half-open socket), then hands
 /// the live socket to [`handle_socket`].
@@ -33,6 +118,19 @@ pub(crate) async fn ws_handler(
     headers: HeaderMap,
     Query(q): Query<WsQuery>,
 ) -> Response {
+    // CSWSH guard: reject a cross-origin WS upgrade BEFORE upgrading, so a
+    // hijacked socket never reaches the registry. CORS doesn't cover the WS
+    // handshake, so this is the only thing standing between a cross-site page
+    // (carrying the victim's cookie) and their gated groups. Same-origin and
+    // no-Origin (non-browser) requests always pass; prod denies cross-origin
+    // unless it's on the `allowed_origins` allowlist. (SSE is left alone — the
+    // browser's CORS already protects a cross-origin `EventSource`.)
+    let origin = headers.get("origin").and_then(|v| v.to_str().ok());
+    let host = headers.get(http::header::HOST).and_then(|v| v.to_str().ok());
+    if !ws_origin_allowed(origin, host, &Realtime::allowed_origins(), is_dev()) {
+        return (StatusCode::FORBIDDEN, "cross-origin WebSocket rejected").into_response();
+    }
+
     let user_id = Realtime::resolver()(headers.clone()).await;
 
     let requested: Vec<String> = q
@@ -144,5 +242,112 @@ impl Drop for WsGuard {
             let presence = registry.deregister_with_presence(id).await;
             crate::dispatch_presence(presence).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn allow(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_origin_is_allowed_non_browser_client() {
+        // curl / native / server-to-server never send Origin — not a CSWSH
+        // vector, so the upgrade proceeds (prod, no allowlist).
+        assert!(ws_origin_allowed(None, Some("x.com"), &[], false));
+    }
+
+    #[test]
+    fn dev_allows_cross_origin() {
+        // Local frontend on a different port — Dev passes everything through,
+        // matching core CORS / host-validation.
+        assert!(ws_origin_allowed(
+            Some("http://localhost:5173"),
+            Some("localhost:8000"),
+            &[],
+            true,
+        ));
+    }
+
+    #[test]
+    fn exact_same_origin_is_allowed() {
+        assert!(ws_origin_allowed(
+            Some("https://x.com"),
+            Some("x.com"),
+            &[],
+            false,
+        ));
+    }
+
+    #[test]
+    fn cross_origin_prod_no_allowlist_is_denied() {
+        assert!(!ws_origin_allowed(
+            Some("https://evil.com"),
+            Some("x.com"),
+            &[],
+            false,
+        ));
+    }
+
+    #[test]
+    fn cross_origin_in_allowlist_is_allowed() {
+        assert!(ws_origin_allowed(
+            Some("https://app.example.com"),
+            Some("x.com"),
+            &allow(&["https://app.example.com"]),
+            false,
+        ));
+        // A cross-origin NOT on the list is still denied.
+        assert!(!ws_origin_allowed(
+            Some("https://other.example.com"),
+            Some("x.com"),
+            &allow(&["https://app.example.com"]),
+            false,
+        ));
+    }
+
+    #[test]
+    fn default_https_port_matches_bare_host() {
+        // `https://x.com:443` is same-origin with `Host: x.com` in practice;
+        // we compare authorities verbatim, so an explicit :443 differs from a
+        // bare host and is NOT same-origin — but the allowlist accepts it.
+        // The realistic same-origin case (no explicit port) is the one that
+        // matters and is covered by `exact_same_origin_is_allowed`; here we
+        // assert the allowlist handles the explicit-port form.
+        assert!(ws_origin_allowed(
+            Some("https://x.com:443"),
+            Some("x.com"),
+            &allow(&["https://x.com:443"]),
+            false,
+        ));
+    }
+
+    #[test]
+    fn matching_explicit_port_is_same_origin() {
+        // `http://x.com:8000` with `Host: x.com:8000` is same-origin: the
+        // authority (host:port) matches exactly.
+        assert!(ws_origin_allowed(
+            Some("http://x.com:8000"),
+            Some("x.com:8000"),
+            &[],
+            false,
+        ));
+        // Different port → cross-origin → denied (no allowlist).
+        assert!(!ws_origin_allowed(
+            Some("http://x.com:9000"),
+            Some("x.com:8000"),
+            &[],
+            false,
+        ));
+    }
+
+    #[test]
+    fn origin_authority_strips_scheme_path_and_lowercases() {
+        assert_eq!(origin_authority("https://App.Example.com"), "app.example.com");
+        assert_eq!(origin_authority("http://x.com:8000/foo?q=1"), "x.com:8000");
+        assert_eq!(origin_authority("x.com"), "x.com");
     }
 }

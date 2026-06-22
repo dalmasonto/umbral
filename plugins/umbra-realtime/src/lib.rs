@@ -1243,6 +1243,13 @@ pub struct Realtime {
     handler: Arc<dyn MessageHandler>,
     resolver: IdentityResolver,
     presence: Arc<PresenceSpec>,
+    /// Explicit allowlist of permitted WebSocket `Origin` values (the CSWSH
+    /// guard's prod cross-origin allowlist). Empty by default — same-origin
+    /// is always permitted regardless.
+    allowed_origins: Arc<[String]>,
+    /// The configured mount base (default `/realtime`). The served JS and the
+    /// startup log are templated off this.
+    base_path: Arc<str>,
 }
 
 impl Realtime {
@@ -1285,6 +1292,21 @@ impl Realtime {
     /// identity projection). Defaults to presence-off for every group.
     pub fn presence() -> Arc<PresenceSpec> {
         Self::get().presence.clone()
+    }
+
+    /// The explicit allowlist of permitted WebSocket `Origin` values (the
+    /// CSWSH guard's prod cross-origin allowlist). Empty by default; set via
+    /// [`RealtimePlugin::allowed_origins`]. Same-origin requests are always
+    /// permitted regardless of this list.
+    pub fn allowed_origins() -> Arc<[String]> {
+        Self::get().allowed_origins.clone()
+    }
+
+    /// The configured mount base for the realtime endpoints (default
+    /// `/realtime`). The served `worker.js` / `client.js` template their
+    /// `/realtime/...` URLs off this. Set via [`RealtimePlugin::at`].
+    pub fn base_path() -> Arc<str> {
+        Self::get().base_path.clone()
     }
 
     /// Target a single user's every live connection. `user_id` is the user's
@@ -1376,6 +1398,12 @@ pub struct RealtimePlugin {
     /// projection. Defaults to presence-off for every group; opt in via
     /// [`with_presence`](Self::with_presence).
     presence: Arc<PresenceSpec>,
+    /// Explicit allowlist of permitted WebSocket `Origin` values (the CSWSH
+    /// guard). Empty by default; set via [`allowed_origins`](Self::allowed_origins).
+    allowed_origins: Vec<String>,
+    /// Mount base for the realtime endpoints. Default `/realtime`; set via
+    /// [`at`](Self::at). The served JS templates its URLs off this.
+    base_path: String,
 }
 
 /// The no-op identity resolver: every connection is anonymous (`None`).
@@ -1395,6 +1423,8 @@ impl Default for RealtimePlugin {
             replay_cap: DEFAULT_REPLAY_BUFFER,
             max_connections: None,
             presence: Arc::new(PresenceSpec::default()),
+            allowed_origins: Vec::new(),
+            base_path: "/realtime".to_string(),
         }
     }
 }
@@ -1505,6 +1535,53 @@ impl RealtimePlugin {
     /// the next connection.
     pub fn max_connections(mut self, n: usize) -> Self {
         self.max_connections = Some(n);
+        self
+    }
+
+    /// Allowlist of permitted **WebSocket** `Origin` values for the CSWSH
+    /// (cross-site WebSocket hijacking) guard. Each entry is a full origin
+    /// string, e.g. `"https://app.example.com"`.
+    ///
+    /// CORS does **not** cover the WebSocket handshake, so without this guard a
+    /// cross-origin page could open `wss://your-host/realtime/ws` carrying the
+    /// victim's session cookie and receive their gated realtime data. The guard
+    /// is safe-by-default:
+    ///
+    /// - Non-browser clients (no `Origin` header) are allowed (not a CSWSH vector).
+    /// - In `Environment::Dev`, cross-origin is allowed (local Vite-style frontends).
+    /// - In prod, an Origin is allowed iff it is **same-origin** as the request's
+    ///   `Host`, or it appears in this allowlist. Anything else is rejected with
+    ///   `403 Forbidden` before the upgrade.
+    ///
+    /// SSE is deliberately not gated here — the browser's CORS enforcement
+    /// already protects a cross-origin `EventSource`. This guard is WS-specific.
+    pub fn allowed_origins<I, S>(mut self, origins: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.allowed_origins = origins.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Remount the realtime endpoints under a different base path (default
+    /// `/realtime`). `at("/rt")` exposes `/rt/sse`, `/rt/ws`, `/rt/worker.js`,
+    /// `/rt/client.js`. The served `worker.js` / `client.js` follow the base
+    /// automatically (their `EventSource` / `SharedWorker` URLs are templated),
+    /// so an app only needs to point its `<script src>` at `{base}/client.js`.
+    ///
+    /// The path is normalised exactly like [`OpenApiPlugin::at`]: one leading
+    /// slash is ensured, the trailing slash is stripped, and an empty path
+    /// falls back to the default `/realtime`.
+    pub fn at(mut self, path: &str) -> Self {
+        let trimmed = path.trim().trim_end_matches('/');
+        self.base_path = if trimmed.is_empty() {
+            "/realtime".to_string()
+        } else if let Some(stripped) = trimmed.strip_prefix('/') {
+            format!("/{stripped}")
+        } else {
+            format!("/{trimmed}")
+        };
         self
     }
 
@@ -1675,15 +1752,16 @@ impl Plugin for RealtimePlugin {
     }
 
     fn routes(&self) -> umbra::web::Router {
+        let base = &self.base_path;
         umbra::web::Router::new()
-            .route("/realtime/sse", umbra::web::get(sse::sse_handler))
-            .route("/realtime/ws", umbra::web::get(ws::ws_handler))
+            .route(&format!("{base}/sse"), umbra::web::get(sse::sse_handler))
+            .route(&format!("{base}/ws"), umbra::web::get(ws::ws_handler))
             .route(
-                "/realtime/worker.js",
+                &format!("{base}/worker.js"),
                 umbra::web::get(assets::worker_js_handler),
             )
             .route(
-                "/realtime/client.js",
+                &format!("{base}/client.js"),
                 umbra::web::get(assets::client_js_handler),
             )
     }
@@ -1698,13 +1776,16 @@ impl Plugin for RealtimePlugin {
             handler: self.handler.clone(),
             resolver: self.resolver.clone(),
             presence: self.presence.clone(),
+            allowed_origins: self.allowed_origins.clone().into(),
+            base_path: Arc::from(self.base_path.as_str()),
         });
         // Register the model-change subscriptions now that the ambient
         // handle exists (a fired handler calls Realtime::to_group, etc.).
         for register in &self.subscriptions {
             register();
         }
-        tracing::info!("realtime: SSE at /realtime/sse, WS at /realtime/ws");
+        let base = &self.base_path;
+        tracing::info!("realtime: SSE at {base}/sse, WS at {base}/ws");
         Ok(())
     }
 }
@@ -2031,5 +2112,36 @@ mod tests {
             channel: String::new(),
             seq: 0,
         }
+    }
+
+    #[test]
+    fn at_normalizes_the_base_path() {
+        // Default is /realtime.
+        assert_eq!(RealtimePlugin::new().base_path, "/realtime");
+        // A bare segment gains a leading slash.
+        assert_eq!(RealtimePlugin::new().at("rt").base_path, "/rt");
+        // A leading slash is kept (not doubled).
+        assert_eq!(RealtimePlugin::new().at("/rt").base_path, "/rt");
+        // A trailing slash is stripped.
+        assert_eq!(RealtimePlugin::new().at("/rt/").base_path, "/rt");
+        // Nested paths work.
+        assert_eq!(RealtimePlugin::new().at("/api/rt").base_path, "/api/rt");
+        // Empty / whitespace falls back to the default.
+        assert_eq!(RealtimePlugin::new().at("").base_path, "/realtime");
+        assert_eq!(RealtimePlugin::new().at("   ").base_path, "/realtime");
+    }
+
+    #[test]
+    fn allowed_origins_collects_the_allowlist() {
+        let p = RealtimePlugin::new().allowed_origins(["https://app.example.com", "https://b.com"]);
+        assert_eq!(
+            p.allowed_origins,
+            vec![
+                "https://app.example.com".to_string(),
+                "https://b.com".to_string()
+            ]
+        );
+        // Empty by default — same-origin still works without any config.
+        assert!(RealtimePlugin::new().allowed_origins.is_empty());
     }
 }

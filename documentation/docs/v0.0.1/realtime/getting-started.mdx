@@ -59,11 +59,17 @@ Forget this step and **everyone is anonymous**: `user_id` is always `None`, so a
 
 The plugin serves a tiny browser helper at `GET /realtime/client.js`. Add one script tag to your template; it exposes the `umbra.realtime` namespace.
 
-```html
+```html title="index.html"
+<>
 <script src="/realtime/client.js"></script>
+</>
 ```
 
 There is nothing to bundle or import — the script registers `window.umbra.realtime` with `subscribe`, `model`, and `presence`.
+
+<Callout type="info">
+**Remounting.** The realtime routes default to `/realtime/...`. Call `RealtimePlugin::new().at("/rt")` to remount them (`/rt/sse`, `/rt/ws`, `/rt/worker.js`, `/rt/client.js`). The served JS templates its own URLs off the base, so you only update the `<script src="/rt/client.js">` to match — see [Transports](transports#remounting-under-a-different-base-path).
+</Callout>
 
 ## 4. Your first end-to-end event
 
@@ -73,8 +79,9 @@ Here is a full round trip on the public `public:lobby` group — allowed by the 
 
 <Step title="Subscribe in the browser">
 
-```html
-<script src="/realtime/client.js"></script>
+```diff title="index.html" showLineNumbers
+-  <script src="/realtime/client.js"></script>
++  <script src="/realtime/client.js"></script>
 <script>
   const sub = umbra.realtime.subscribe("public:lobby", {
     ping: (data) => console.log("got ping", data),

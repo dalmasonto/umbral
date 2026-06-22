@@ -79,7 +79,7 @@ function reconcile() {
   if (es && union === currentUnion) return; // no change — no needless reconnect
   if (es) { try { es.close(); } catch (_) {} es = null; }
   currentUnion = union;
-  es = new EventSource("/realtime/sse?groups=" + encodeURIComponent(union));
+  es = new EventSource("__UMBRA_RT_BASE__/sse?groups=" + encodeURIComponent(union));
   // Single enveloped event type: one listener catches everything.
   es.addEventListener("u", function (ev) {
     var env;
@@ -187,7 +187,7 @@ pub const REALTIME_CLIENT_JS: &str = r#"// umbra realtime client — share ONE S
 
   function viaWorker(groups, handlers, names) {
     var mine = splitGroups(groups);
-    var worker = new SharedWorker("/realtime/worker.js", "umbra-realtime");
+    var worker = new SharedWorker("__UMBRA_RT_BASE__/worker.js", "umbra-realtime");
     var port = worker.port;
     port.start();
     port.onmessage = function (ev) {
@@ -214,7 +214,7 @@ pub const REALTIME_CLIENT_JS: &str = r#"// umbra realtime client — share ONE S
 
   function viaEventSource(groups, handlers) {
     var mine = splitGroups(groups);
-    var es = new EventSource("/realtime/sse?groups=" + groups);
+    var es = new EventSource("__UMBRA_RT_BASE__/sse?groups=" + groups);
     // Single enveloped event type: listen once, unwrap {c,e,d}, route by `c`.
     es.addEventListener("u", function (e) {
       var env;
@@ -299,25 +299,42 @@ pub const REALTIME_CLIENT_JS: &str = r#"// umbra realtime client — share ONE S
 })();
 "#;
 
-/// `GET /realtime/worker.js` — the `SharedWorker` script.
+/// The configured realtime mount base (default `/realtime`), used to template
+/// the `__UMBRA_RT_BASE__` placeholder in the served JS so a `.at("/rt")`
+/// remount makes the worker/client resolve `/rt/sse`, `/rt/worker.js`, etc.
+/// Falls back to `/realtime` when the ambient handle isn't set (e.g. a unit
+/// test that serves the asset without booting the plugin).
+fn rt_base() -> String {
+    if crate::Realtime::is_installed() {
+        crate::Realtime::base_path().to_string()
+    } else {
+        "/realtime".to_string()
+    }
+}
+
+/// `GET {base}/worker.js` — the `SharedWorker` script, with its
+/// `EventSource` URL templated to the configured base.
 pub async fn worker_js_handler() -> impl axum::response::IntoResponse {
+    let body = REALTIME_WORKER_JS.replace("__UMBRA_RT_BASE__", &rt_base());
     (
         [(
             axum::http::header::CONTENT_TYPE,
             "application/javascript; charset=utf-8",
         )],
-        REALTIME_WORKER_JS,
+        body,
     )
 }
 
-/// `GET /realtime/client.js` — the `umbra.realtime.subscribe` client helper.
+/// `GET {base}/client.js` — the `umbra.realtime.subscribe` client helper, with
+/// its `SharedWorker` / `EventSource` URLs templated to the configured base.
 pub async fn client_js_handler() -> impl axum::response::IntoResponse {
+    let body = REALTIME_CLIENT_JS.replace("__UMBRA_RT_BASE__", &rt_base());
     (
         [(
             axum::http::header::CONTENT_TYPE,
             "application/javascript; charset=utf-8",
         )],
-        REALTIME_CLIENT_JS,
+        body,
     )
 }
 
@@ -335,7 +352,7 @@ mod tests {
             "a single EventSource creation site for the whole browser"
         );
         assert!(
-            REALTIME_WORKER_JS.contains("new EventSource(\"/realtime/sse?groups=\" + encodeURIComponent(union))"),
+            REALTIME_WORKER_JS.contains("new EventSource(\"__UMBRA_RT_BASE__/sse?groups=\" + encodeURIComponent(union))"),
             "the one EventSource is parameterized by the union, not a per-tab key"
         );
         assert!(
@@ -504,6 +521,52 @@ mod tests {
             delegations >= 2,
             "both model() and presence() delegate to subscribe(group, routes)"
         );
+    }
+
+    #[test]
+    fn served_js_templates_the_configured_base() {
+        // With `.at("/rt")` the placeholder resolves to /rt for both assets:
+        // the worker's EventSource and the client's SharedWorker + EventSource.
+        let worker = REALTIME_WORKER_JS.replace("__UMBRA_RT_BASE__", "/rt");
+        let client = REALTIME_CLIENT_JS.replace("__UMBRA_RT_BASE__", "/rt");
+
+        assert!(
+            worker.contains("new EventSource(\"/rt/sse?groups=\""),
+            "worker EventSource follows the base"
+        );
+        assert!(
+            client.contains("new SharedWorker(\"/rt/worker.js\""),
+            "client SharedWorker follows the base"
+        );
+        assert!(
+            client.contains("new EventSource(\"/rt/sse?groups=\""),
+            "client EventSource fallback follows the base"
+        );
+
+        // No placeholder leftover and no stale /realtime in either asset.
+        for (name, js) in [("worker", &worker), ("client", &client)] {
+            assert!(
+                !js.contains("__UMBRA_RT_BASE__"),
+                "{name}: no placeholder should remain after templating"
+            );
+            assert!(
+                !js.contains("/realtime/"),
+                "{name}: no stale /realtime path should remain"
+            );
+        }
+    }
+
+    #[test]
+    fn default_base_is_byte_identical_to_the_legacy_realtime_urls() {
+        // With the default base the served JS resolves the same `/realtime/...`
+        // URLs it always had — so an app not calling `.at()` sees no change.
+        let worker = REALTIME_WORKER_JS.replace("__UMBRA_RT_BASE__", "/realtime");
+        let client = REALTIME_CLIENT_JS.replace("__UMBRA_RT_BASE__", "/realtime");
+        assert!(worker.contains("new EventSource(\"/realtime/sse?groups=\""));
+        assert!(client.contains("new SharedWorker(\"/realtime/worker.js\""));
+        assert!(client.contains("new EventSource(\"/realtime/sse?groups=\""));
+        assert!(!worker.contains("__UMBRA_RT_BASE__"));
+        assert!(!client.contains("__UMBRA_RT_BASE__"));
     }
 
     #[tokio::test]
