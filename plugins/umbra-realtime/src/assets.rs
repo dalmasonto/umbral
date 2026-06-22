@@ -253,6 +253,30 @@ pub const REALTIME_CLIENT_JS: &str = r#"// umbra realtime client — share ONE S
       }
       // Degrade silently — same as the legacy raw-EventSource consumer did.
       return noSub();
+    },
+
+    // model(name, { created: fn(row), updated: fn(row), deleted: fn(row) }, { group })
+    // → { unsubscribe: fn }
+    //
+    // Sugar over subscribe(): the server (RealtimePlugin::expose) sends the
+    // action as the event name ("created"/"updated"/"deleted") to the group
+    // you exposed to. `group` is REQUIRED — name the group you exposed; there
+    // is no magic default. `name` is the model label, for readability only.
+    model: function (name, handlers, opts) {
+      opts = opts || {};
+      handlers = handlers || {};
+      var group = opts.group;
+      if (!group) {
+        if (window.console && console.warn) {
+          console.warn("umbra.realtime.model('" + name + "', …): opts.group is required");
+        }
+        return noSub();
+      }
+      var routes = {};
+      if (handlers.created) routes.created = handlers.created;
+      if (handlers.updated) routes.updated = handlers.updated;
+      if (handlers.deleted) routes.deleted = handlers.deleted;
+      return window.umbra.realtime.subscribe(group, routes);
     }
   };
 })();
@@ -376,6 +400,38 @@ mod tests {
         assert!(
             worker_at < fallback_at,
             "SharedWorker is attempted before the EventSource fallback"
+        );
+    }
+
+    #[test]
+    fn client_defines_model_sugar_delegating_to_subscribe() {
+        assert!(
+            REALTIME_CLIENT_JS.contains("model:"),
+            "defines umbra.realtime.model"
+        );
+        // It routes the action event-names a server `expose` sends.
+        for action in ["created", "updated", "deleted"] {
+            assert!(
+                REALTIME_CLIENT_JS.contains(&format!("handlers.{action}")),
+                "model() wires the {action} handler"
+            );
+        }
+        // The sugar is defined AFTER subscribe and delegates to it (no second
+        // transport path of its own).
+        let subscribe_at = REALTIME_CLIENT_JS.find("subscribe: function").unwrap();
+        let model_at = REALTIME_CLIENT_JS.find("model: function").unwrap();
+        assert!(
+            subscribe_at < model_at,
+            "model() is defined after subscribe()"
+        );
+        assert!(
+            REALTIME_CLIENT_JS.contains("window.umbra.realtime.subscribe(group, routes)"),
+            "model() delegates to subscribe() rather than opening its own connection"
+        );
+        // `group` is required — no magic default.
+        assert!(
+            REALTIME_CLIENT_JS.contains("opts.group"),
+            "model() reads the required group from opts"
         );
     }
 

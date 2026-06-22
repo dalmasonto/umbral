@@ -56,3 +56,7 @@ http-body-util = "0.1"
 # Real WS client for the round-trip integration test.
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+# A test model for the `expose::<T>` security suite uses `#[derive(Model)]`,
+# whose expansion derives `sqlx::FromRow`. Test-only — the plugin itself
+# never touches sqlx (all DB access goes through the ORM facade).
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }

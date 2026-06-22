@@ -683,6 +683,166 @@ impl ModelEvent {
             actor,
         }
     }
+
+    /// Action name as the wire event the client subscribes on:
+    /// `"created" | "updated" | "deleted"`.
+    fn action_name(&self) -> &'static str {
+        match self.action {
+            ModelAction::Created => "created",
+            ModelAction::Updated => "updated",
+            ModelAction::Deleted => "deleted",
+        }
+    }
+}
+
+// =========================================================================
+// Safe model exposure — opt-in, field-whitelisted broadcast.
+// =========================================================================
+
+/// How an [`Expose`] picks the group for a given [`ModelEvent`].
+enum GroupRoute {
+    /// One static group every matching event lands in.
+    Static(String),
+    /// A per-row group computed from the event (e.g. `format!("post:{}", ev.pk()…)`),
+    /// so a client can watch a single row.
+    Dynamic(Arc<dyn Fn(&ModelEvent) -> String + Send + Sync>),
+}
+
+impl GroupRoute {
+    fn group_for(&self, ev: &ModelEvent) -> String {
+        match self {
+            GroupRoute::Static(g) => g.clone(),
+            GroupRoute::Dynamic(f) => f(ev),
+        }
+    }
+}
+
+/// Which fields of the row reach the wire.
+enum Projection {
+    /// Only the primary key (`id`) — the safe default. The payload says
+    /// "row N changed; refetch it through your normal authorized endpoint".
+    IdOnly,
+    /// Exactly these columns, projected out of `instance`. Every other key
+    /// (including secrets the dev never listed) is dropped.
+    Fields(Vec<String>),
+    /// The entire row — the explicit, conspicuous opt-in via
+    /// [`Expose::all_fields`]. The dev knowingly accepts broadcasting every column.
+    AllFields,
+}
+
+/// A safe, opt-in model-change broadcast spec. Build one with
+/// [`Expose::to_group`] (or [`to_group_with`](Expose::to_group_with) for a
+/// per-row group) and hand it to [`RealtimePlugin::expose`].
+///
+/// **Nothing is broadcast unless you `expose` it, and only the fields you
+/// list.** Safety is the default in three layers:
+///
+/// 1. **Default-deny model** — a model with no `expose`/`on_model` never fans out.
+/// 2. **Default id-only projection** — without [`fields`](Self::fields), the
+///    payload carries the PK alone. The client treats it as "something changed,
+///    refetch through your authorized endpoint". [`fields`](Self::fields)
+///    whitelists exactly the columns to include; [`all_fields`](Self::all_fields)
+///    is the explicit, conspicuous opt-in to broadcast the whole row.
+/// 3. **Group + policy** — the group you name is governed by
+///    [`GroupPolicy::can_join`] at the SSE/WS handshake; a private (non-`public:`)
+///    group is unjoinable under the default policy.
+///
+/// ```ignore
+/// RealtimePlugin::new().expose::<Post>(
+///     Expose::to_group("public:posts").fields(&["id", "title", "slug"]),
+/// );
+/// ```
+pub struct Expose {
+    route: GroupRoute,
+    projection: Projection,
+    actions: Vec<ModelAction>,
+}
+
+impl Expose {
+    /// Broadcast matching events to one static `group`. **Required** — the dev
+    /// consciously picks the group whose visibility [`GroupPolicy::can_join`]
+    /// then governs. Defaults to id-only projection and all three actions.
+    pub fn to_group(group: impl Into<String>) -> Self {
+        Self {
+            route: GroupRoute::Static(group.into()),
+            projection: Projection::IdOnly,
+            actions: vec![
+                ModelAction::Created,
+                ModelAction::Updated,
+                ModelAction::Deleted,
+            ],
+        }
+    }
+
+    /// Route each event to a per-row group computed from it, so a client can
+    /// watch a single row: `Expose::to_group_with(|ev| format!("post:{}", ev.pk().unwrap_or(0)))`.
+    /// The computed group is still governed by [`GroupPolicy::can_join`].
+    pub fn to_group_with<F>(f: F) -> Self
+    where
+        F: Fn(&ModelEvent) -> String + Send + Sync + 'static,
+    {
+        Self {
+            route: GroupRoute::Dynamic(Arc::new(f)),
+            projection: Projection::IdOnly,
+            actions: vec![
+                ModelAction::Created,
+                ModelAction::Updated,
+                ModelAction::Deleted,
+            ],
+        }
+    }
+
+    /// Whitelist the columns to include in the broadcast payload. Every other
+    /// key in the row — including secrets you never list — is dropped. This is
+    /// the core safety control: the wire carries *only* what you name here.
+    pub fn fields(mut self, fields: &[&str]) -> Self {
+        self.projection = Projection::Fields(fields.iter().map(|s| s.to_string()).collect());
+        self
+    }
+
+    /// **Explicit opt-in to broadcast the ENTIRE row.** Conspicuously named so
+    /// it can't happen by accident: by calling this you knowingly accept that
+    /// every column (including any you'd otherwise want to hide) reaches every
+    /// subscriber of the group. Prefer [`fields`](Self::fields) (or the id-only
+    /// default) unless you genuinely need the whole row on the wire.
+    pub fn all_fields(mut self) -> Self {
+        self.projection = Projection::AllFields;
+        self
+    }
+
+    /// Restrict which actions fan out. Default: all three
+    /// ([`Created`](ModelAction::Created), [`Updated`](ModelAction::Updated),
+    /// [`Deleted`](ModelAction::Deleted)).
+    pub fn actions(mut self, actions: &[ModelAction]) -> Self {
+        self.actions = actions.to_vec();
+        self
+    }
+
+    /// Project `instance` down to the whitelist (or id-only / all), per the
+    /// projection mode. The returned JSON is exactly what reaches the wire.
+    fn project(&self, instance: &serde_json::Value) -> serde_json::Value {
+        match &self.projection {
+            Projection::AllFields => instance.clone(),
+            Projection::IdOnly => {
+                let mut out = serde_json::Map::new();
+                if let Some(id) = instance.get("id") {
+                    out.insert("id".to_string(), id.clone());
+                }
+                serde_json::Value::Object(out)
+            }
+            Projection::Fields(fields) => {
+                let mut out = serde_json::Map::new();
+                if let Some(obj) = instance.as_object() {
+                    for f in fields {
+                        if let Some(v) = obj.get(f) {
+                            out.insert(f.clone(), v.clone());
+                        }
+                    }
+                }
+                serde_json::Value::Object(out)
+            }
+        }
+    }
 }
 
 // =========================================================================
@@ -843,6 +1003,14 @@ impl Default for RealtimePlugin {
 }
 
 impl RealtimePlugin {
+    /// A fresh plugin with the safe defaults (alias for
+    /// [`default`](Default::default)): anonymous identity, `public:*`-only
+    /// group policy, no model exposed. Chain [`expose`](Self::expose) to
+    /// opt a model into live broadcast.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Override the group-join policy. The default ([`PublicGroupsOnly`])
     /// allows only `public:*` groups; supply your own to grant access to
     /// private rooms from the authenticated identity.
@@ -972,6 +1140,50 @@ impl RealtimePlugin {
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         self.on_table(T::TABLE, handler)
+    }
+
+    /// Safe, opt-in model-change broadcast — the Supabase-style "subscribe to a
+    /// model's live changes", but secure by construction. Wraps
+    /// [`on_model`](Self::on_model) with an [`Expose`] spec that adds field
+    /// projection and group routing on top of the raw signal bridge.
+    ///
+    /// **Nothing is exposed unless you call this, and only the fields you list.**
+    /// The defaults are the safe path:
+    /// - a model with no `expose`/`on_model` is never broadcast (default-deny);
+    /// - without [`Expose::fields`], the payload is **id-only** — "row N changed,
+    ///   refetch through your authorized endpoint";
+    /// - the group you name is governed by [`GroupPolicy::can_join`], so a
+    ///   private group is unjoinable under the default policy;
+    /// - [`Expose::all_fields`] is the explicit opt-in to broadcast the whole row.
+    ///
+    /// Per matching event the bridge: skips actions not in the spec, computes
+    /// the (static or per-row) group, projects `instance` to the whitelist
+    /// (or id-only / all), and sends event-name `"created" | "updated" |
+    /// "deleted"` to that group.
+    ///
+    /// ```ignore
+    /// RealtimePlugin::new().expose::<Post>(
+    ///     Expose::to_group("public:posts").fields(&["id", "title", "slug"]),
+    /// );
+    /// ```
+    pub fn expose<T>(self, spec: Expose) -> Self
+    where
+        T: umbra::orm::Model,
+    {
+        let spec = Arc::new(spec);
+        self.on_model::<T, _, _>(move |ev| {
+            let spec = spec.clone();
+            async move {
+                // Default-deny per action: skip anything not in the whitelist.
+                if !spec.actions.contains(&ev.action) {
+                    return;
+                }
+                let group = spec.route.group_for(&ev);
+                let projected = spec.project(&ev.instance);
+                let action_name = ev.action_name();
+                Realtime::to_group(group).send(action_name, &projected).await;
+            }
+        })
     }
 
     /// Pick the broker at boot: a [`RedisBroker`] when a URL is configured

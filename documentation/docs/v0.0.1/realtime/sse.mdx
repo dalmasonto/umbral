@@ -146,6 +146,10 @@ RealtimePlugin::default()
 
 `on_table("name", ...)` is the untyped form (when you don't have the model type handy). The handler runs server-side on every write: no client polling, no glue code.
 
+<Callout type="warning">
+`on_model` hands your closure the **full row** in `ev.instance`. If you forward that straight to a public group, every column (including secrets) goes on the wire. For the Supabase-style "subscribe to a model's changes" use case, reach for the safe, opt-in [`expose::<T>`](model-subscriptions) instead: it projects to a field whitelist (id-only by default) so nothing leaks.
+</Callout>
+
 ## Reconnect resume (`Last-Event-ID`)
 
 Networks drop. When a browser's `EventSource` loses its connection it reconnects on its own, and on that reconnect it sends back the `id:` of the last event it saw as the `Last-Event-ID` header. `umbra-realtime` keys off that to fill the gap with no missed events.
