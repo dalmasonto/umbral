@@ -18,6 +18,7 @@ members = [
     "../plugins/umbra-signals",
     "../plugins/umbra-static",
     "../plugins/umbra-media",
+    "../plugins/umbra-storage",
     "../plugins/umbra-cache",
     "../plugins/umbra-security",
     "../plugins/umbra-rls",
