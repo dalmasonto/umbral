@@ -657,6 +657,12 @@
 {# The note composer + per-note reply forms are inline in the notes panel
    above (the modal dialog was replaced by the chat-style composer). #}
 
+{# umbra-realtime client: shares ONE SSE connection per subscription across all
+   tabs (via a SharedWorker), so many open plugin tabs don't exhaust the
+   browser's ~6-per-host HTTP/1.1 connection budget. Falls back to a per-tab
+   EventSource where SharedWorker isn't available. #}
+<script src="/realtime/client.js"></script>
+
 <script>
   (function () {
     document.body.classList.add('pd-js');
@@ -840,19 +846,16 @@
     if (plural && next !== null) plural.textContent = next === 1 ? '' : 's';
   }
 
-  // Live note feed (SSE). Subscribes to this plugin's public realtime group;
-  // when anyone posts a note, insert it into the thread. Powered by
-  // umbra-realtime (GET /realtime/sse). Degrades silently if unsupported.
-  (function () {
-    if (!('EventSource' in window)) return;
-    var es = new EventSource('/realtime/sse?groups=public:plugin-{{ plugin.id }}');
-    es.addEventListener('note', function (e) {
-      try {
-        var d = JSON.parse(e.data);
-        if (d && d.html) insertNote(d);
-      } catch (_) {}
+  // Live note feed. Subscribes to this plugin's public realtime group; when
+  // anyone posts a note, insert it into the thread. Powered by umbra-realtime
+  // via umbra.realtime.subscribe, which shares ONE SSE connection across every
+  // tab with this subscription (SharedWorker, EventSource fallback). Degrades
+  // silently if neither is available.
+  if (window.umbra && umbra.realtime) {
+    umbra.realtime.subscribe('public:plugin-{{ plugin.id }}', {
+      note: function (d) { if (d && d.html) insertNote(d); }
     });
-  })();
+  }
 </script>
 
 {# Reply affordances cloned by insertNote() for live-arrived top-level notes,

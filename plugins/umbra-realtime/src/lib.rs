@@ -54,6 +54,7 @@ pub type IdentityResolver =
 /// (`#[umbra_realtime::async_trait]`) without a direct `async-trait` dep.
 pub use async_trait::async_trait;
 
+mod assets;
 mod sse;
 mod ws;
 
@@ -976,6 +977,14 @@ impl Plugin for RealtimePlugin {
         umbra::web::Router::new()
             .route("/realtime/sse", umbra::web::get(sse::sse_handler))
             .route("/realtime/ws", umbra::web::get(ws::ws_handler))
+            .route(
+                "/realtime/worker.js",
+                umbra::web::get(assets::worker_js_handler),
+            )
+            .route(
+                "/realtime/client.js",
+                umbra::web::get(assets::client_js_handler),
+            )
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {

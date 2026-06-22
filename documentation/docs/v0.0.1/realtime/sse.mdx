@@ -63,6 +63,30 @@ es.addEventListener("notification", (e) => {
 
 The connection's user is resolved from the session cookie at handshake, so `to_user(...)` finds it with no extra work.
 
+### Share one connection across tabs: `umbra.realtime.subscribe`
+
+A raw `new EventSource(...)` opens **one connection per tab**. Open the same page in a handful of tabs and you exhaust the browser's ~6-connections-per-host HTTP/1.1 budget — later requests on that origin start hanging as if the server were down.
+
+`umbra-realtime` ships a tiny client helper that collapses N tabs of the same subscription into **one** server connection via a `SharedWorker`. Include it once, then subscribe with a map of event-name handlers:
+
+```html
+<script src="/realtime/client.js"></script>
+<script>
+  umbra.realtime.subscribe("public:plugin-42", {
+    note: function (data, raw) {
+      // data is the parsed JSON payload; raw.id is the SSE event id
+      insertNote(data);
+    },
+  });
+</script>
+```
+
+`subscribe(groups, handlers)` returns `{ unsubscribe }`. Every tab with the same `groups` key shares **one** `EventSource('/realtime/sse?groups=…')` held by the worker, which fans each event out only to the tabs (and handler names) that asked for it. The groups key is normalized (sorted), so `"a,b"` and `"b,a"` share a connection. When the last tab for a subscription closes, the worker closes that `EventSource`.
+
+<Callout type="info">
+**Graceful fallback.** On browsers without `SharedWorker` (or when its construction is blocked by CSP), `subscribe` transparently opens a per-tab `EventSource('/realtime/sse?groups=…')` and wires the same handlers — identical behavior, just not shared across tabs. If `EventSource` is also missing, `subscribe` is a no-op. You never write the fallback yourself.
+</Callout>
+
 ## Group access: `GroupPolicy`
 
 Joining a room is gated. By default only `public:*` groups are allowed, so a client can't subscribe to `tenant:99` or `chat:123` it has no claim to (a rejected group fails the handshake with `403`). Grant access from the authenticated identity by supplying a policy:
