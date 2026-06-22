@@ -40,8 +40,14 @@ use tokio::sync::broadcast;
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::web::{Router, get};
 
-/// SSE endpoint the injected client connects to.
+/// SSE endpoint the injected client (or the shared worker) connects to.
 const SSE_PATH: &str = "/__umbra/livereload";
+
+/// URL the injected client loads as a `SharedWorker`. One worker per origin
+/// holds a SINGLE `EventSource` to [`SSE_PATH`] and fans events out to every
+/// open tab, so N tabs share 1 server connection instead of N — the dev page
+/// never exhausts the browser's ~6-per-host HTTP/1.1 connection budget.
+const WORKER_PATH: &str = "/__umbra/livereload-worker.js";
 
 /// Capacity of the reload broadcast channel. Reload events are coalesced
 /// (one per debounce window), so a handful of slots is plenty.
@@ -116,7 +122,9 @@ impl Plugin for LiveReloadPlugin {
         if !is_dev() {
             return Router::new();
         }
-        Router::new().route(SSE_PATH, get(sse_handler))
+        Router::new()
+            .route(SSE_PATH, get(sse_handler))
+            .route(WORKER_PATH, get(worker_handler))
     }
 
     fn wrap_router(&self, router: Router) -> Router {
@@ -193,48 +201,128 @@ async fn sse_handler() -> impl axum::response::IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Shared worker — one SSE connection for all tabs
+// ---------------------------------------------------------------------------
+
+/// Serve the `SharedWorker` script (one per origin) that owns the single
+/// `EventSource` to [`SSE_PATH`] and fans every event out to all tabs.
+async fn worker_handler() -> impl axum::response::IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        WORKER_JS,
+    )
+}
+
+/// The `SharedWorker` body. It holds ONE `EventSource` to the SSE endpoint
+/// regardless of how many tabs are open, posting each event to every
+/// connected tab's port. A freshly-opened tab is immediately synced to the
+/// current boot id so it still reloads on the next restart. When the last
+/// tab closes, the lone `EventSource` is left to `EventSource`'s own
+/// reconnect; the next opened tab reuses the already-live worker.
+const WORKER_JS: &str = r#"// umbra livereload shared worker — one EventSource for every tab.
+"use strict";
+var ports = [];
+var es = null;
+var lastHello = null;
+function broadcast(msg) {
+  ports = ports.filter(function (p) {
+    try { p.postMessage(msg); return true; } catch (_) { return false; }
+  });
+}
+function connect() {
+  es = new EventSource("/__umbra/livereload");
+  es.addEventListener("hello", function (e) {
+    lastHello = e.data;
+    broadcast({ kind: "hello", data: e.data });
+  });
+  es.addEventListener("change", function (e) {
+    broadcast({ kind: "change", data: e.data });
+  });
+  es.onerror = function () { broadcast({ kind: "error" }); };
+}
+self.onconnect = function (e) {
+  var port = e.ports[0];
+  ports.push(port);
+  port.start();
+  port.onmessage = function (ev) {
+    if (ev.data === "bye") {
+      ports = ports.filter(function (p) { return p !== port; });
+    }
+  };
+  // Sync a newly-opened tab to the current boot id: it otherwise wouldn't see
+  // a "hello" until the next reconnect and would miss the restart reload.
+  if (lastHello !== null) {
+    try { port.postMessage({ kind: "hello", data: lastHello }); } catch (_) {}
+  }
+  if (es === null) connect();
+};
+"#;
+
+// ---------------------------------------------------------------------------
 // HTML-injection middleware
 // ---------------------------------------------------------------------------
 
 /// The client script, injected before `</body>` on every dev HTML response.
+///
+/// Preferred path: a `SharedWorker` ([`WORKER_PATH`]) holds ONE `EventSource`
+/// for every tab of the origin, so opening many dev tabs never exhausts the
+/// browser's ~6-connections-per-host HTTP/1.1 limit (the failure mode where
+/// the page hangs as if the server were down). Falls back to a per-tab
+/// `EventSource` on browsers without `SharedWorker`.
 const CLIENT_SNIPPET: &str = r#"<script data-umbra-livereload>
 (function () {
-  if (!("EventSource" in window)) return;
-  var booted = null, es = null, lostLogged = false;
+  var booted = null, lostLogged = false;
   function bustCss() {
     document.querySelectorAll('link[rel="stylesheet"]').forEach(function (l) {
       var base = (l.href || "").split("?")[0];
       if (base) l.href = base + "?v=" + Date.now();
     });
   }
-  function connect() {
-    es = new EventSource("/__umbra/livereload");
-    es.addEventListener("hello", function (e) {
+  // One handler for events from either the shared worker or a direct stream.
+  function onEvent(kind, data) {
+    if (kind === "hello") {
       lostLogged = false;
-      // First connect records the boot id; a different id after a
-      // reconnect means the server restarted → reload.
-      if (booted === null) booted = e.data;
-      else if (e.data !== booted) location.reload();
-    });
-    es.addEventListener("change", function (e) {
+      // First "hello" records the boot id; a different id later means the
+      // server restarted → reload.
+      if (booted === null) booted = data;
+      else if (data !== booted) location.reload();
+    } else if (kind === "change") {
       var d = {};
-      try { d = JSON.parse(e.data); } catch (_) {}
+      try { d = JSON.parse(data); } catch (_) {}
       if (d.type === "css") bustCss();
       else location.reload();
-    });
-    es.onerror = function () {
-      // Expected while `umbra dev` rebuilds: the server drops the stream
-      // (the browser logs a one-off network error) and EventSource
-      // reconnects on its own — the next 'hello' carrying a new boot id
-      // then reloads the page. Not an app error.
+    } else if (kind === "error") {
+      // Expected while `umbra dev` rebuilds; the stream reconnects on its own.
       if (!lostLogged) {
         lostLogged = true;
         console.debug("[umbra livereload] connection lost — server rebuilding? reconnecting…");
       }
-    };
+    }
   }
-  // Close cleanly on our own reload/navigation so we don't add an extra
-  // incomplete-stream error to the console.
+  // Preferred: share ONE connection across every tab via a SharedWorker.
+  if ("SharedWorker" in window) {
+    try {
+      var w = new SharedWorker("/__umbra/livereload-worker.js", "umbra-livereload");
+      w.port.start();
+      w.port.onmessage = function (ev) { onEvent(ev.data.kind, ev.data.data); };
+      window.addEventListener("beforeunload", function () {
+        try { w.port.postMessage("bye"); } catch (_) {}
+      });
+      return;
+    } catch (_) { /* fall through to a per-tab EventSource */ }
+  }
+  // Fallback: a per-tab EventSource (browsers without SharedWorker).
+  if (!("EventSource" in window)) return;
+  var es = null;
+  function connect() {
+    es = new EventSource("/__umbra/livereload");
+    es.addEventListener("hello", function (e) { onEvent("hello", e.data); });
+    es.addEventListener("change", function (e) { onEvent("change", e.data); });
+    es.onerror = function () { onEvent("error"); };
+  }
   window.addEventListener("beforeunload", function () { if (es) es.close(); });
   connect();
 })();
@@ -451,6 +539,52 @@ mod tests {
         assert!(
             out.starts_with("<html><body><h1>hi</h1>"),
             "original content preserved"
+        );
+    }
+
+    #[test]
+    fn client_prefers_shared_worker_with_eventsource_fallback() {
+        // The shared worker is the primary transport (one connection for all
+        // tabs); a per-tab EventSource remains as the fallback for browsers
+        // without SharedWorker. Both must be present and point at the right URLs.
+        assert!(
+            CLIENT_SNIPPET.contains("SharedWorker"),
+            "client uses a SharedWorker so many tabs share one connection"
+        );
+        assert!(
+            CLIENT_SNIPPET.contains(WORKER_PATH),
+            "client loads the worker at WORKER_PATH ({WORKER_PATH})"
+        );
+        // The SharedWorker branch is tried first and returns before reaching it.
+        let worker_at = CLIENT_SNIPPET.find("SharedWorker").unwrap();
+        let fallback_at = CLIENT_SNIPPET.find("new EventSource").unwrap();
+        assert!(
+            worker_at < fallback_at,
+            "SharedWorker is attempted before the EventSource fallback"
+        );
+    }
+
+    #[test]
+    fn worker_holds_a_single_eventsource_and_fans_out() {
+        // The whole point: ONE EventSource regardless of tab count, broadcast
+        // to every connected port, with new tabs synced to the current boot id.
+        assert_eq!(
+            WORKER_JS.matches("new EventSource").count(),
+            1,
+            "the worker opens exactly one EventSource for all tabs"
+        );
+        assert!(WORKER_JS.contains("onconnect"), "worker accepts tab ports");
+        assert!(
+            WORKER_JS.contains("broadcast"),
+            "worker fans events out to every port"
+        );
+        assert!(
+            WORKER_JS.contains("lastHello"),
+            "worker syncs a newly-opened tab to the current boot id"
+        );
+        assert!(
+            WORKER_JS.contains(SSE_PATH),
+            "worker connects to the SSE endpoint ({SSE_PATH})"
         );
     }
 
