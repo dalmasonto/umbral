@@ -58,6 +58,7 @@ mod auth;
 mod branding;
 mod discovery;
 mod engine;
+mod inlines;
 mod error;
 mod handlers;
 mod pagination;
@@ -77,7 +78,7 @@ pub(crate) use util::q;
 
 pub use config::{
     Action, ActionInvocation, ActionResult, ActionScope, ActionVariant, AdminConfig, AdminContext,
-    AdminModel, InlineModel, ToastLevel,
+    AdminModel, InlineKind, InlineModel, ToastLevel,
 };
 pub use registry::{AdminRegistration, AdminRegistry, App as AdminApp};
 // The two builtin dashboard widgets — `Models by Plugin` (bar)

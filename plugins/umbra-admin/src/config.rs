@@ -398,12 +398,119 @@ fn is_action_key_char(c: char) -> bool {
 // InlineModel (phase 2 stub)
 // =========================================================================
 
+/// How an inline's children are laid out on the parent change form.
+///
+/// `Tabular` (the default) renders the children as a `<table>` — one
+/// column per displayed field, one row per child, like Django's
+/// `TabularInline`. `Stacked` renders each child as a vertical sub-form,
+/// like Django's `StackedInline`, which reads better when a child has
+/// many fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InlineKind {
+    /// Children as table rows (default).
+    #[default]
+    Tabular,
+    /// Each child as a vertical sub-form.
+    Stacked,
+}
+
+impl InlineKind {
+    /// The lowercase template tag (`"tabular"` / `"stacked"`) the form
+    /// template branches on.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            InlineKind::Tabular => "tabular",
+            InlineKind::Stacked => "stacked",
+        }
+    }
+}
+
 /// Data shape for a related-model inline editor.
+///
+/// Declare it on a parent [`AdminModel`] via [`AdminModel::inlines`] to
+/// edit a child model's reverse-FK rows right on the parent's change
+/// form — add new children, edit existing ones, and delete them, all
+/// saved **atomically** with the parent (one transaction; any child
+/// failure rolls the whole save back).
+///
+/// The minimal form — `InlineModel { model, fk_field, list_display }` —
+/// still constructs because the remaining fields carry [`Default`]
+/// values (`kind: Tabular`, `extra: 1`, `can_delete: true`,
+/// `readonly_fields: []`). Prefer the [`InlineModel::new`] constructor
+/// for the common case.
 #[derive(Debug, Clone)]
 pub struct InlineModel {
+    /// Child SQL table name (the model whose rows are edited inline).
     pub model: String,
+    /// FK column on the child that points back at the parent table.
     pub fk_field: String,
+    /// Child columns to surface as editable fields / table columns.
     pub list_display: Vec<String>,
+    /// Tabular (default) vs stacked layout.
+    pub kind: InlineKind,
+    /// Number of blank "add a child" rows to render (default 1).
+    pub extra: usize,
+    /// Whether each child row carries a DELETE checkbox (default true).
+    pub can_delete: bool,
+    /// Child columns rendered read-only (never written back).
+    pub readonly_fields: Vec<String>,
+}
+
+impl Default for InlineModel {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            fk_field: String::new(),
+            list_display: Vec::new(),
+            kind: InlineKind::Tabular,
+            extra: 1,
+            can_delete: true,
+            readonly_fields: Vec::new(),
+        }
+    }
+}
+
+impl InlineModel {
+    /// Build an inline for `model` (the child table) whose `fk_field`
+    /// column points back at the parent, surfacing `list_display` as
+    /// the editable columns. Other knobs default
+    /// (`Tabular` / `extra = 1` / `can_delete = true`).
+    pub fn new(
+        model: impl Into<String>,
+        fk_field: impl Into<String>,
+        list_display: &[&str],
+    ) -> Self {
+        Self {
+            model: model.into(),
+            fk_field: fk_field.into(),
+            list_display: list_display.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Set the layout (tabular vs stacked). Chainable.
+    pub fn kind(mut self, kind: InlineKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Set how many blank add-rows to render. Chainable.
+    pub fn extra(mut self, extra: usize) -> Self {
+        self.extra = extra;
+        self
+    }
+
+    /// Toggle the per-row DELETE checkbox. Chainable.
+    pub fn can_delete(mut self, can_delete: bool) -> Self {
+        self.can_delete = can_delete;
+        self
+    }
+
+    /// Mark child columns read-only on the inline. Chainable.
+    pub fn readonly_fields(mut self, fields: &[&str]) -> Self {
+        self.readonly_fields = fields.iter().map(|s| s.to_string()).collect();
+        self
+    }
 }
 
 // =========================================================================

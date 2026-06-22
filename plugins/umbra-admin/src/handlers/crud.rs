@@ -21,7 +21,7 @@ use crate::discovery::{find_model, pk_column, user_theme};
 use crate::engine::render;
 use crate::error::AdminError;
 use crate::handlers::sheet::edit_sheet_handler;
-use crate::rows::{fetch_rows_filtered, insert_row, update_row};
+use crate::rows::{fetch_rows_filtered, insert_row_in_tx, update_row_in_tx};
 use crate::util::{apply_write_error_to_fields, is_htmx, parse_unique_violation_column,
     sanitise_form_error};
 use crate::view::{
@@ -233,6 +233,11 @@ pub(crate) async fn new_form(
     // parent PK yet — the junction rows get written post-INSERT by
     // the POST handler once the parent has an id).
     let m2m_fields = form_m2m_fields_for(&model, None).await;
+    // Inlines: blank `extra` rows only (no parent PK yet).
+    let inlines = match crate::inlines::build_inline_views(&model, None, cfg).await {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
     let apps = sidebar_apps(&state, &user).await;
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -246,6 +251,7 @@ pub(crate) async fn new_form(
             model         => model_for_template(&model),
             fields        => fields,
             m2m_fields    => m2m_fields,
+            inlines       => inlines,
             verb          => "Create",
             action        => format!("{}/{}/new", crate::branding::current().base_path, model.table),
             error         => "",
@@ -314,6 +320,7 @@ pub(crate) async fn create(
             }
         }
         let m2m_fields = form_m2m_fields_for(&model, None).await;
+        let inlines = crate::inlines::build_inline_views_from_submitted(&model, cfg, &multi_form);
         let apps = sidebar_apps(&state, &user).await;
         let breadcrumbs = vec![
             serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -327,6 +334,7 @@ pub(crate) async fn create(
                 model         => model_for_template(&model),
                 fields        => fields,
                 m2m_fields    => m2m_fields,
+                inlines       => inlines,
                 verb          => "Create",
                 action        => format!("{}/{}/new", crate::branding::current().base_path, model.table),
                 error         => "",
@@ -340,11 +348,15 @@ pub(crate) async fn create(
             Err(e2) => e2.into_response(),
         };
     }
-    match insert_row(&model, &form, cfg).await {
+    // Atomic save: parent INSERT + inline children, one transaction.
+    // Any child failure drops the tx so neither the parent nor any
+    // child persists (the load-bearing rollback guarantee).
+    let saved = save_parent_and_inlines(&model, None, &form, cfg, &multi_form).await;
+    match saved {
         Ok(new_pk) => {
-            // BUG-16 admin: with the parent row written, apply any
-            // M2M selections from the form to each junction table.
-            // `new_pk` is the just-inserted parent's PK as a string.
+            // BUG-16 admin: with the parent committed, apply any M2M
+            // selections from the form. M2M runs in its own
+            // transaction (follow-up: fold it into the parent tx).
             if let Err(e) = apply_m2m_selections(&model, &new_pk, &multi_form).await {
                 return AdminError::Sqlx(e).into_response();
             }
@@ -387,9 +399,13 @@ pub(crate) async fn create(
                         sanitise_form_error(&e)
                     }
                 }
+                // BadInput carries the inline row diagnostic verbatim.
+                AdminError::BadInput(msg) => msg.clone(),
                 _ => sanitise_form_error(&e),
             };
             let m2m_fields = form_m2m_fields_for(&model, None).await;
+            let inlines =
+                crate::inlines::build_inline_views_from_submitted(&model, cfg, &multi_form);
             let apps = sidebar_apps(&state, &user).await;
             let breadcrumbs = vec![
                 serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -403,6 +419,7 @@ pub(crate) async fn create(
                     model         => model_for_template(&model),
                     fields        => fields,
                     m2m_fields    => m2m_fields,
+                    inlines       => inlines,
                     verb          => "Create",
                     action        => format!("{}/{}/new", crate::branding::current().base_path, model.table),
                     error         => banner_error,
@@ -417,6 +434,37 @@ pub(crate) async fn create(
             }
         }
     }
+}
+
+/// Save a parent row plus all its inline children atomically.
+///
+/// `existing_pk` is `Some((pk_col, pk_value))` for an UPDATE, `None` for
+/// an INSERT. Opens one transaction, writes the parent, sets the FK on
+/// each inline child to the (possibly just-allocated) parent PK, then
+/// commits. On any error the transaction is dropped — rolling back the
+/// parent write together with every child write. Returns the parent PK
+/// as a string on success.
+async fn save_parent_and_inlines(
+    model: &umbra::migrate::ModelMeta,
+    existing_pk: Option<(&umbra::migrate::Column, &str)>,
+    form: &HashMap<String, String>,
+    cfg: Option<&crate::config::AdminConfig>,
+    multi_form: &[(String, String)],
+) -> Result<String, AdminError> {
+    let mut tx = umbra::db::begin().await.map_err(AdminError::Sqlx)?;
+
+    let parent_pk = match existing_pk {
+        Some((pk, pk_value)) => {
+            update_row_in_tx(&mut tx, model, pk, pk_value, form, cfg).await?;
+            pk_value.to_string()
+        }
+        None => insert_row_in_tx(&mut tx, model, form, cfg).await?,
+    };
+
+    crate::inlines::save_inlines_in_tx(&mut tx, model, &parent_pk, cfg, multi_form).await?;
+
+    tx.commit().await.map_err(AdminError::Sqlx)?;
+    Ok(parent_pk)
 }
 
 /// `GET /admin/{table}/{id}/edit` — prefilled edit form.
@@ -464,6 +512,11 @@ pub(crate) async fn edit_form(
     // one `SELECT DISTINCT child_id FROM <junction> WHERE parent_id
     // = ?` per M2M field.
     let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
+    // Inlines: existing children (prefilled) + `extra` blank rows.
+    let inlines = match crate::inlines::build_inline_views(&model, Some(&id), cfg).await {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
     let apps = sidebar_apps(&state, &user).await;
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -478,6 +531,7 @@ pub(crate) async fn edit_form(
             model         => model_for_template(&model),
             fields        => fields,
             m2m_fields    => m2m_fields,
+            inlines       => inlines,
             verb          => "Edit",
             action        => format!("{}/{}/{}/edit", crate::branding::current().base_path, model.table, id),
             row           => row,
@@ -556,6 +610,7 @@ pub(crate) async fn update(
             }
         }
         let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
+        let inlines = crate::inlines::build_inline_views_from_submitted(&model, cfg, &multi_form);
         let apps = sidebar_apps(&state, &user).await;
         let breadcrumbs = vec![
             serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -570,6 +625,7 @@ pub(crate) async fn update(
                 model         => model_for_template(&model),
                 fields        => fields,
                 m2m_fields    => m2m_fields,
+                inlines       => inlines,
                 verb          => "Edit",
                 action        => format!("{}/{}/{}/edit", crate::branding::current().base_path, model.table, id),
                 error         => "",
@@ -583,7 +639,9 @@ pub(crate) async fn update(
             Err(e2) => e2.into_response(),
         };
     }
-    match update_row(&model, pk, &id, &form, cfg).await {
+    // Atomic save: parent UPDATE + inline children, one transaction.
+    let saved = save_parent_and_inlines(&model, Some((pk, &id)), &form, cfg, &multi_form).await;
+    match saved {
         Ok(_) => {
             // BUG-16 admin: replace this parent's M2M selections in
             // each auto-generated junction table to match the form.
@@ -653,9 +711,13 @@ pub(crate) async fn update(
                         sanitise_form_error(&e)
                     }
                 }
+                // BadInput carries the inline row diagnostic verbatim.
+                AdminError::BadInput(msg) => msg.clone(),
                 _ => sanitise_form_error(&e),
             };
             let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
+            let inlines =
+                crate::inlines::build_inline_views_from_submitted(&model, cfg, &multi_form);
             let apps = sidebar_apps(&state, &user).await;
             let breadcrumbs = vec![
                 serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -670,6 +732,7 @@ pub(crate) async fn update(
                     model         => model_for_template(&model),
                     fields        => fields,
                     m2m_fields    => m2m_fields,
+                    inlines       => inlines,
                     verb          => "Edit",
                     action        => format!("{}/{}/{}/edit", crate::branding::current().base_path, model.table, id),
                     error         => banner_error,

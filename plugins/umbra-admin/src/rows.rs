@@ -243,9 +243,54 @@ pub(crate) async fn insert_row(
     })
 }
 
-/// UPDATE one row identified by its PK. Same readonly enforcement as
-/// `insert_row` — fields can't be smuggled back in via the form.
-pub(crate) async fn update_row(
+/// Transaction-aware sibling of [`insert_row`]. Same password-hashing +
+/// readonly enforcement, but runs the INSERT on the caller's open `tx`
+/// so the parent write and its inline children commit (or roll back) as
+/// one unit. Returns the new parent PK as a string.
+pub(crate) async fn insert_row_in_tx(
+    tx: &mut umbra::db::Transaction,
+    model: &ModelMeta,
+    form: &HashMap<String, String>,
+    cfg: Option<&AdminConfig>,
+) -> Result<String, AdminError> {
+    let form_owned: HashMap<String, String>;
+    let form = if let Some(pw_col) = cfg.and_then(|c| c.password_field.as_deref()) {
+        if let Some(plaintext) = form.get(pw_col).filter(|v| !v.is_empty()) {
+            let confirm_key = format!("{pw_col}_confirm");
+            let confirm = form.get(&confirm_key).map(|s| s.as_str()).unwrap_or("");
+            if plaintext != confirm {
+                return Err(AdminError::BadInput("Passwords do not match.".to_string()));
+            }
+            let hash = umbra_auth::hash_password_async(plaintext)
+                .await
+                .map_err(|e| AdminError::BadInput(format!("password hashing failed: {e}")))?;
+            let mut owned = form.clone();
+            owned.insert(pw_col.to_string(), hash);
+            form_owned = owned;
+            &form_owned
+        } else {
+            form
+        }
+    } else {
+        form
+    };
+
+    let skip = readonly_set(model, cfg);
+    let new_int_pk = DynQuerySet::for_meta(model)
+        .insert_form_in_tx(tx, form, &skip)
+        .await?;
+    let pk_col = model.fields.iter().find(|c| c.primary_key);
+    Ok(match pk_col {
+        Some(c) if !matches!(c.ty, SqlType::SmallInt | SqlType::Integer | SqlType::BigInt) => {
+            form.get(&c.name).cloned().unwrap_or_default()
+        }
+        _ => new_int_pk.to_string(),
+    })
+}
+
+/// Transaction-aware sibling of [`update_row`].
+pub(crate) async fn update_row_in_tx(
+    tx: &mut umbra::db::Transaction,
     model: &ModelMeta,
     pk: &Column,
     pk_value: &str,
@@ -255,7 +300,7 @@ pub(crate) async fn update_row(
     let skip = readonly_set(model, cfg);
     DynQuerySet::for_meta(model)
         .filter_eq_string(&pk.name, pk_value)
-        .update_form(form, &skip)
+        .update_form_in_tx(tx, form, &skip)
         .await?;
     Ok(())
 }

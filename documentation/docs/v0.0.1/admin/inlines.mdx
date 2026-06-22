@@ -1,0 +1,99 @@
+---
+title: Inlines
+description: Edit a child model's reverse-FK rows right on the parent's change form — add, edit, and delete children, saved atomically with the parent.
+sidebar_position: 2
+icon: rows
+---
+
+An **inline** lets you edit a child model's rows directly on its parent's change form. Open a `Post`, and right below its fields you get its `Comment`s — add new ones, edit existing ones, tick a box to delete. When you hit Save, the parent and all its children are written in **one transaction**: if any child fails to save, the whole thing rolls back and nothing changes. This is umbra's take on Django's `TabularInline` / `StackedInline`.
+
+## When you'd reach for it
+
+A child model whose rows only make sense in the context of one parent — order line-items, post comments, product variants — is tedious to manage as a separate top-level admin section. Declaring it as an inline keeps the parent and its children on one screen and one save.
+
+## Declare an inline
+
+Inlines hang off the parent's `AdminModel` via `.inlines(...)`. Each [`InlineModel`] names the **child table**, the **FK column** on the child that points back at the parent, and which child columns to surface:
+
+```rust
+use umbra_admin::{AdminPlugin, AdminModel, InlineModel, InlineKind};
+
+let post = AdminModel::new("post").inlines(vec![
+    InlineModel::new("comment", "post", &["text", "rating"]),
+]);
+
+AdminPlugin::default().register(post)
+```
+
+`"comment"` is the child SQL table. `"post"` is the FK column on `comment` — note that a `ForeignKey<Post>` field named `post` maps to a column named `post` (umbra does **not** append `_id`). `&["text", "rating"]` are the editable columns shown per row; the FK and primary key are managed for you and never rendered.
+
+The minimal struct form still works for back-compat — `InlineModel { model, fk_field, list_display }` constructs with the other knobs defaulted — but prefer the `::new(...)` constructor plus chainable setters.
+
+<Callout type="info">
+The FK column is set to the parent automatically on every child write. You never put it in `list_display`, and a crafted POST can't reassign it.
+</Callout>
+
+## Tabular vs stacked
+
+Two layouts, like Django:
+
+<Tabs>
+<Tab title="Tabular (default)">
+
+Children render as a table — one column per field, one row per child. Best when a child has a few short fields.
+
+```rust
+InlineModel::new("comment", "post", &["text", "rating"])
+    .kind(InlineKind::Tabular) // the default
+```
+
+</Tab>
+<Tab title="Stacked">
+
+Each child renders as a vertical sub-form. Best when a child has many fields that wouldn't fit a table row.
+
+```rust
+InlineModel::new("comment", "post", &["text", "rating", "body"])
+    .kind(InlineKind::Stacked)
+```
+
+</Tab>
+</Tabs>
+
+## Knobs
+
+```rust
+InlineModel::new("comment", "post", &["text", "rating"])
+    .kind(InlineKind::Tabular)  // Tabular (default) | Stacked
+    .extra(2)                   // blank "add a child" rows (default 1)
+    .can_delete(true)           // per-row DELETE checkbox (default true)
+    .readonly_fields(&["rating"]) // columns rendered, never written
+```
+
+- **`extra`** — how many empty rows to render for adding new children. An "Add another" button clones a blank row for more, with no JS framework dependency.
+- **`can_delete`** — whether each existing child row gets a DELETE checkbox. Tick it and Save to remove that child.
+- **`readonly_fields`** — child columns shown but never written back, even if the submitted body tries.
+
+## Atomic save
+
+The save is the point. When you submit the parent change form:
+
+1. A transaction opens.
+2. The parent row is inserted (or updated), yielding its primary key.
+3. Each inline child is inserted / updated / deleted, with its FK set to that parent key.
+4. The transaction commits.
+
+If **any** child write fails — a missing required field, a bad value for a typed column, a constraint violation — the transaction is dropped. **Neither the parent change nor any child write persists.** The form re-renders with your edits intact and a message naming the offending inline row. There's no half-saved state where the parent changed but a child didn't.
+
+<Callout type="warn">
+The child's FK column must exist and point at the parent table. If the declared `fk_field` isn't a `ForeignKey` column on the child, or points somewhere else, that inline is skipped with a `tracing::warn!` rather than crashing the page — check your logs if an inline doesn't show up.
+</Callout>
+
+## Where it works
+
+Inlines render and save on the admin's **full-page change form** (`/{table}/new` and `/{table}/{id}/edit`) — the path the changelist's "Add" and "Edit" buttons link to. The HTMX sheet variant is a follow-up.
+
+## See also
+
+- The plugin contract and admin design rationale live in [`arch.md`](https://github.com/) and `docs/specs/`.
+- [Dashboard widgets](./widgets) — the other big admin customization surface.
