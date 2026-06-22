@@ -173,7 +173,7 @@ These are the QuerySet features and model-level capabilities that Django develop
 
 These are the cross-cutting capabilities that turn a framework from a neat ORM demo into a platform you can ship a SaaS on.
 
-39. [ ] **Email sending — SMTP and API backends** 🔴 High
+39. [~] **Email sending — SMTP and API backends** 🔴 High — PARTIAL: SMTP (lettre) + console + template-driven transactional email shipped via `umbra-email`; HTTP/API backends (Sendgrid/Mailgun/SES) not yet.
     > Why: Password resets, notifications, and transactional emails are table stakes. Without this, every app re-implements SMTP or pulls in `lettre` directly.
     >
     > How: `umbra-email` plugin with `EmailMessage::builder().to("...").subject("...").body("...").send().await`. Backends: SMTP (lettre), SendGrid, Mailgun, AWS SES. Integrate with the task queue (gap #43) for async sending. The plugin should be small — mostly a typed wrapper around `lettre` plus a backend trait.
@@ -189,12 +189,12 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: Extend `umbra-auth` with `OAuth2Backend` trait and built-in providers (GitHub, Google, Discord). Flow: redirect to provider, callback handler, create-or-link user, issue session. Use `oauth2` crate for the protocol. Keep it behind a cargo feature so OAuth-free apps don't pull the dependency.
 
-43. [ ] **Background task queue (`umbra-tasks`)** 🔴 High
+43. [x] **Background task queue (`umbra-tasks`)** 🔴 High — SHIPPED: `umbra-tasks` is a full DB-backed queue — `#[umbra::task]`, `enqueue`, `run_worker`, priority queues, retries, `task_status`/`await_result`. (Remaining Celery gaps tracked in #82.)
     > Why: Celery equivalent — `@task fn send_email(...)` that serializes to a DB table and is consumed by `cargo run -- worker`. Blocks email (gap #39), image processing, report generation, and webhook delivery.
     >
     > How: The `#[task]` macro already exists (gap #40 in gaps.md). What's missing is the consumer: a `TaskRunner` that polls the tasks table, executes handlers, and manages retries with exponential backoff. Add scheduled tasks (`eta: DateTime<Utc>`) and priority queues. This is a medium-to-large plugin but the macro work is already done.
 
-44. [ ] **Caching layer — Redis and in-memory backends** 🟡 Medium
+44. [x] **Caching layer — Redis and in-memory backends** 🟡 Medium — SHIPPED: `umbra-cache` — `MemoryBackend` (in-memory) + `RedisBackend` (feature `redis`) + SQLite backend + `cache_page`.
     > Why: Redis-backed cache for expensive queries, view fragments, and session stores. The cache plugin exists but needs deeper integration.
     >
     > How: `Cache::redis(url)` already exists. What's missing: cache key invalidation on model saves (via signals, gap #38), cache-aware QuerySet (`Post::objects().cache(300).fetch()`), and distributed cache invalidation across multiple app instances. Start with per-view `cache_page` (already shipped) and expand to low-level cache API.
@@ -202,7 +202,7 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
 45. [x] **WebSockets / SSE — real-time push** 🟡 Medium
        — Shipped end-to-end as `umbra-realtime`. User- AND group/room-targeted delivery (`Realtime::to_user(uid)` / `to_group("chat:123")` / `broadcast()`, `Target::send(event, data)`) over a connection registry (by_user/by_group indexes, O(1) targeting, leak-free deregister) and a `Broker` seam. Two transports: **SSE** (`GET /realtime/sse`, push-only) and **WebSocket** (`GET /realtime/ws`, bidirectional with a `MessageHandler` for inbound frames). Auth-aware `GroupPolicy` gates joins at handshake (default-deny non-`public:` groups → 403). Signals bridge: `RealtimePlugin::on_model::<T>()` / `on_table()` fans `post_save`/`post_delete` (#38) to a real-time send — zero-poll live dashboards. **Multi-instance: `RedisBroker`** (P6 phase 5, behind the `redis` feature) — `RealtimePlugin::redis(url)` relays every targeted send through a shared Redis pub/sub channel so it reaches the socket on whichever instance holds it; one background pump per instance publishes + subscribes + dispatches locally, reconnect-with-backoff; `Envelope`/`TargetKind` are the JSON wire format. Live website demo shipped (e156ad5 — SSE note feed on plugin pages). 11 tests (registry/broker/policy unit + SSE stream + WS round-trip via a bound tungstenite client + signals fan-out + Envelope round-trip + live-Redis cross-instance relay, env-gated). Docs: `realtime/sse.mdx` + `realtime/scaling.mdx`; design spec. **Only the playground "Realtime" tab remains — tracked under the playground feature #12, not here.**
 
-46. [ ] **Rate limiting and throttling** 🟡 Medium
+46. [x] **Rate limiting and throttling** 🟡 Medium — SHIPPED: `umbra::ratelimit::RateLimiter` (sliding-window, `Rate::parse("100/hour")`) backs umbra-rest throttling + umbra-auth login/register throttle.
     > Why: Per-IP, per-user, and per-endpoint limits are essential for public APIs and login brute-force protection.
     >
     > How: Middleware that checks a Redis-backed counter per key (`ip:192.168.1.1`, `user:123`). Return `429 Too Many Requests` with `Retry-After`. Configurable via `App::builder().rate_limit(...)` or per-route decorators. Use `redis::expire` for TTL-based windows.
@@ -271,7 +271,7 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: `umbra-features` plugin. `FeatureFlag` model (`name, enabled, rollout_percent, segments_json`). `is_enabled("flag", user_id)` checks DB + Redis cache. Defer until a real app needs percentage rollouts.
 
-63. [ ] **API versioning** 🟢 Low
+63. [x] **API versioning** 🟢 Low — SHIPPED: umbra-rest DRF-style versioning — `VersioningScheme::UrlPath` + `AcceptHeader`, `RequestContext::version` (opt-in via `.versioning(...)`).
     > Why: `/v1/`, `/v2/` route prefixes for long-lived public APIs. Only needed when mobile clients lag behind server releases.
     >
     > How: `ResourceConfig::new("product").version("v2")` mounts at `/api/v2/product/`. Versioned serializers: `v1` returns `price: String`, `v2` returns `price: Money`. The framework can version at the resource level; per-field versioning is harder and usually not worth it. Defer until a public API is in production.
