@@ -749,6 +749,14 @@ impl Plugin for AdminPlugin {
                 &route("/api/dashboard/widgets/{key}/data", &self.base_path),
                 axum::routing::get(handlers::dashboard::dashboard_widget_data),
             )
+            // gaps2 #36: EasyMDE markdown-editor image upload. Staff-gated
+            // (no `{table}` — a media upload isn't scoped to one model), and
+            // stores through the ambient `umbra::storage` seam. Returns
+            // `{ "url": ... }` for the editor's `imageUploadFunction`.
+            .route(
+                &route("/upload-image", &self.base_path),
+                post(handlers::upload::upload_image),
+            )
             // Phase 4: command palette fragment + global record search
             .route(
                 &route("/api/palette", &self.base_path),
@@ -815,6 +823,7 @@ impl Plugin for AdminPlugin {
                 g(),
             ),
             RouteSpec::new(&route("/api/prefs", &self.base_path), gput()),
+            RouteSpec::new(&route("/upload-image", &self.base_path), p()),
             RouteSpec::new(&route("/api/palette", &self.base_path), g()),
             RouteSpec::new(&route("/api/palette/search", &self.base_path), g()),
             RouteSpec::new(&route("/api/dashboard/catalog", &self.base_path), g()),

@@ -48,6 +48,8 @@ On submit, the admin stores each uploaded file through the ambient `Storage` and
 
 File and image columns aren't editable inline from the changelist table (a single-cell text edit can't carry an upload); use the row's change form / sheet to replace a file.
 
+Separately, a `String`/`Text` field rendered with the `markdown` widget lets a staff user paste, drop, or pick an image directly in the editor; the bytes upload through the same ambient `Storage` and the URL is inlined as markdown. See [Markdown image upload](/docs/v0.0.1/plugins/admin) in the admin docs.
+
 ## Streaming large files
 
 The `Storage` backend behind these fields persists bytes through `store` (buffered) or `store_stream` (true-streaming, chunk-by-chunk, no full buffering), and reads them back through `retrieve` / `retrieve_stream`. For large uploads, [`MediaPlugin::save_stream`](/docs/v0.0.1/plugins/media#streaming-uploads-savestream) writes a streamed body to the backend and records the **actual** byte count in `media_file.size` - and when a `max_size` cap is configured it is enforced **mid-stream**, rejecting an oversize body the instant its real bytes cross the cap (never trusting `Content-Length`). The read/serve path already streams via `tower-http::ServeDir`. The streaming and buffered paths apply the **same** filename guards, so a `FileField` value never loses its stored-XSS or path-traversal defence by going through the streaming API.

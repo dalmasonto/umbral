@@ -1295,8 +1295,39 @@
       // Sandbox the live preview: every rendered-HTML chunk EasyMDE is
       // about to inject goes through DOMPurify first.
       renderingConfig: { sanitizerFunction: previewClean },
+      // gaps2 #36: paste / drop / select an image and upload it to the
+      // admin's staff-gated media endpoint, then insert the returned URL
+      // as markdown. Degrades gracefully — when no storage backend is
+      // installed the route returns an error and EasyMDE shows it.
+      uploadImage: true,
+      imageUploadFunction: function(file, onSuccess, onError) {
+        var fd = new FormData();
+        fd.append('image', file, file.name || 'upload.png');
+        // Carry the CSRF token the same way the admin's other raw fetch()
+        // writes do: read the (deliberately non-HttpOnly) cookie. Don't set
+        // Content-Type — the browser sets the multipart boundary itself.
+        var m = document.cookie.match(/(?:^|;\s*)umbra_csrf_token=([^;]*)/);
+        var headers = m ? { 'X-CSRF-Token': decodeURIComponent(m[1]) } : {};
+        var base = (typeof umbraAdminBase !== 'undefined') ? umbraAdminBase : '/admin';
+        fetch(base + '/upload-image', {
+          method: 'POST',
+          headers: headers,
+          body: fd,
+          credentials: 'same-origin'
+        }).then(function(resp) {
+          return resp.json().then(function(data) {
+            if (resp.ok && data && data.url) {
+              onSuccess(data.url);
+            } else {
+              onError((data && data.error) || ('upload failed (' + resp.status + ')'));
+            }
+          });
+        }).catch(function(err) {
+          onError('upload failed: ' + err);
+        });
+      },
       toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list',
-                'ordered-list', '|', 'link', 'code', 'table', '|',
+                'ordered-list', '|', 'link', 'image', 'code', 'table', '|',
                 'preview', 'side-by-side', 'guide']
     });
     // EasyMDE constructed with `element: ta` wraps that textarea and

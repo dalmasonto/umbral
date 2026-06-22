@@ -14,5 +14,6 @@ pub(crate) mod list;
 pub(crate) mod palette;
 pub(crate) mod prefs;
 pub(crate) mod sheet;
+pub(crate) mod upload;
 
 pub(crate) use actions::descriptors_for;

@@ -227,7 +227,7 @@
 35. [x] **Soft delete on the dynamic path + admin trash UI — archived.** Core (`DynQuerySet` soft-delete scope/toggles) and the admin trash UI (changelist trash filter, restore + delete-permanently actions, default-delete-to-trash) both shipped. See `planning/archive/gaps2-done.md`.
 
 
-36. [~] **Rich field-editor follow-ups.** _PARTIAL: (a) syntax-highlighted fenced code DONE — server-side syntect (7a4ded8) + a real XSS in the fence info-string fixed via fence_lang_is_safe (5188725). REMAINING (deferred, low-urgency): (b) self-host editor CDNs (EasyMDE/Quill/CodeMirror/DOMPurify) via Plugin::static_files [same as #4 CDN self-host], (c) EasyMDE image-upload into a media endpoint._ Original below:
+36. [~] **Rich field-editor follow-ups.** _PARTIAL: (a) syntax-highlighted fenced code DONE — server-side syntect (7a4ded8) + a real XSS in the fence info-string fixed via fence_lang_is_safe (5188725). (c) EasyMDE image-upload DONE — staff-gated `POST {base}/upload-image` parses the multipart part via `umbra::web::multipart::parse_multipart`, validates image MIME + 10 MiB cap, stores through the ambient `umbra::storage::storage_opt()` seam (no umbra-media dep), returns `{url}` for EasyMDE's `imageUploadFunction`; graceful `409` when no backend (handlers/upload.rs + tests/image_upload*.rs). REMAINING (deferred, low-urgency): (b) self-host editor CDNs (EasyMDE/Quill/CodeMirror/DOMPurify) via Plugin::static_files [same as #4 CDN self-host]._ Original below:
 
 37. [x] FileField + ImageField (ImageField = FileField + widget="image") wired through multipart form submission to the ambient Storage backend; MediaPlugin provides it, enforced by a boot system-check — archived
 
