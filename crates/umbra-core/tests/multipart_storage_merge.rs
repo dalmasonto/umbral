@@ -35,7 +35,11 @@ impl Storage for FakeStorage {
         ));
         let key = format!("stored/{filename}");
         let url = format!("https://cdn.example.test/{key}");
-        Ok(StoredFile { key, url })
+        Ok(StoredFile {
+            key,
+            url,
+            size: bytes.len() as u64,
+        })
     }
     async fn retrieve(&self, _key: &str) -> Result<Vec<u8>, StorageError> {
         Err(StorageError::NotFound)

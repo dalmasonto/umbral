@@ -42,6 +42,72 @@ use async_trait::async_trait;
 /// `umbra::storage::async_trait`. Mirrors the forms module's re-export.
 pub use async_trait::async_trait as async_trait_reexport;
 
+/// A boxed, pinned byte-stream — the streaming-upload/download currency of
+/// [`Storage::store_stream`] / [`Storage::retrieve_stream`].
+///
+/// Object-safe (it's a trait object behind a `Box`, so it survives through
+/// `Arc<dyn Storage>` dispatch) and `Send` so it can cross an `.await` on a
+/// multi-threaded runtime. Each item is a `bytes::Bytes` chunk or an
+/// [`std::io::Error`]; an error item aborts the stream.
+pub type ByteStream =
+    std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send>>;
+
+/// The `ErrorKind` a [`cap_stream`] over-limit error carries, so a wrapper
+/// (e.g. `SizeLimitedStorage`) can recognise "the cap tripped" versus a
+/// genuine backend IO failure and map it to [`StorageError::TooLarge`].
+pub const CAP_EXCEEDED_KIND: std::io::ErrorKind = std::io::ErrorKind::Other;
+
+/// Sentinel string carried in a [`cap_stream`] over-limit error's message,
+/// so the cap can be distinguished from any other `ErrorKind::Other`.
+pub const CAP_EXCEEDED_MARKER: &str = "umbra-storage-cap-exceeded";
+
+/// Wrap `body` so it passes bytes through untouched until the cumulative
+/// byte count would exceed `max`, at which point it yields a single
+/// `Err(io::Error)` (kind [`CAP_EXCEEDED_KIND`], message [`CAP_EXCEEDED_MARKER`])
+/// and ends.
+///
+/// **This is the load-bearing security primitive for streaming uploads.**
+/// The cap is enforced *as bytes flow*, never from a declared length: a
+/// client that lies about (or omits) its `Content-Length` is still cut off
+/// the instant the real bytes cross `max`, so an oversized upload can never
+/// be fully written. A wrapper maps the marker error to
+/// [`StorageError::TooLarge`].
+pub fn cap_stream(body: ByteStream, max: u64) -> ByteStream {
+    use futures_util::StreamExt;
+    let mut seen: u64 = 0;
+    let mut tripped = false;
+    let capped = body.flat_map(move |item| {
+        // Once the cap has tripped, end the stream — don't forward more.
+        if tripped {
+            return futures_util::stream::iter(Vec::new());
+        }
+        match item {
+            Ok(chunk) => {
+                seen = seen.saturating_add(chunk.len() as u64);
+                if seen > max {
+                    tripped = true;
+                    let err = std::io::Error::new(CAP_EXCEEDED_KIND, CAP_EXCEEDED_MARKER);
+                    futures_util::stream::iter(vec![Err(err)])
+                } else {
+                    futures_util::stream::iter(vec![Ok(chunk)])
+                }
+            }
+            Err(e) => {
+                tripped = true;
+                futures_util::stream::iter(vec![Err(e)])
+            }
+        }
+    });
+    Box::pin(capped)
+}
+
+/// Is `e` the over-limit error produced by [`cap_stream`]? Used by a
+/// streaming wrapper to map the cap trip onto [`StorageError::TooLarge`]
+/// rather than a generic [`StorageError::Io`].
+pub fn is_cap_exceeded(e: &std::io::Error) -> bool {
+    e.kind() == CAP_EXCEEDED_KIND && e.to_string().contains(CAP_EXCEEDED_MARKER)
+}
+
 /// A storage backend for file bytes.
 ///
 /// Implementors persist opaque byte blobs under a generated *key* and
@@ -74,6 +140,47 @@ pub trait Storage: Send + Sync {
     /// Returns [`StorageError::NotFound`] if no object exists for `key`.
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError>;
 
+    /// Streaming counterpart of [`store`](Storage::store): persist a
+    /// `body` byte-stream without buffering the whole payload in memory.
+    ///
+    /// **Additive, with a default impl** — an existing backend that does
+    /// not override this still works, just buffered: the default collects
+    /// the stream into a `Vec<u8>` (propagating any mid-stream IO error)
+    /// and delegates to [`store`](Storage::store). Override it to true-stream
+    /// to the backend (the filesystem impl writes chunk-by-chunk to disk).
+    ///
+    /// Size enforcement is a *decorator* concern, not this method's: wrap
+    /// `body` with [`cap_stream`] before calling so the cap is applied as
+    /// bytes flow, never trusting a declared `Content-Length`.
+    async fn store_stream(
+        &self,
+        filename: &str,
+        content_type: &str,
+        body: ByteStream,
+    ) -> Result<StoredFile, StorageError> {
+        // Default: buffer the stream, then delegate to the buffered `store`.
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut body = body;
+        while let Some(chunk) = futures_util::StreamExt::next(&mut body).await {
+            let chunk = chunk.map_err(StorageError::Io)?;
+            bytes.extend_from_slice(&chunk);
+        }
+        self.store(filename, content_type, &bytes).await
+    }
+
+    /// Streaming counterpart of [`retrieve`](Storage::retrieve): read the
+    /// object back as a byte-stream without holding the whole blob.
+    ///
+    /// **Additive, with a default impl** — the default calls
+    /// [`retrieve`](Storage::retrieve) and wraps the resulting `Vec<u8>`
+    /// as a single-chunk stream. Override it to true-stream from the
+    /// backend (the filesystem impl streams the file off disk).
+    async fn retrieve_stream(&self, key: &str) -> Result<ByteStream, StorageError> {
+        let bytes = self.retrieve(key).await?;
+        let chunk: Result<bytes::Bytes, std::io::Error> = Ok(bytes::Bytes::from(bytes));
+        Ok(Box::pin(futures_util::stream::once(async move { chunk })))
+    }
+
     /// Remove the object stored under `key`. Idempotent at the backend's
     /// discretion; deleting a missing key may succeed or return
     /// [`StorageError::NotFound`].
@@ -95,6 +202,11 @@ pub struct StoredFile {
     /// The public URL the object is served at. Equal to
     /// `storage.url(&key)`.
     pub url: String,
+    /// The number of bytes actually written. For [`Storage::store`] this
+    /// equals `bytes.len()`; for [`Storage::store_stream`] it is the
+    /// cumulative count streamed to the backend (the truth a `media_file`
+    /// row records, since a stream has no trustworthy up-front length).
+    pub size: u64,
 }
 
 /// Errors a [`Storage`] operation can return.

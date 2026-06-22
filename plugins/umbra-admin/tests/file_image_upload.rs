@@ -68,7 +68,11 @@ impl Storage for MemStorage {
             .unwrap()
             .insert(key.clone(), bytes.to_vec());
         let url = format!("https://cdn.test/{key}");
-        Ok(StoredFile { key, url })
+        Ok(StoredFile {
+            key,
+            url,
+            size: bytes.len() as u64,
+        })
     }
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         self.files

@@ -84,6 +84,33 @@ async fn upload(
 - `file: MediaFile` - the new row, with `id` populated.
 - `url: String` - the public URL (`<mount>/<key>`).
 
+## Streaming uploads (`save_stream`)
+
+`save` takes the whole upload as `&[u8]` - perfect for small bodies you already hold (form fields, generated content). For a **large** body that arrives as a stream (a proxied download, a big multipart part), reach for `save_stream`, which writes to disk chunk-by-chunk **without ever buffering the whole file in memory**:
+
+```rust
+use umbra::storage::ByteStream;
+
+// `body` is a ByteStream: a pinned, boxed stream of
+// Result<bytes::Bytes, std::io::Error> chunks.
+let outcome = media
+    .save_stream(&filename, &content_type, body)
+    .await?;
+```
+
+`max_size` is enforced **mid-stream**, not from a declared length: when a cap is configured the body is rejected the instant its *real* bytes cross the cap, even if the client lies about or omits its `Content-Length`. A rejected stream leaves no oversized blob on disk - the filesystem backend cleans up its partial write. The recorded `MediaFile.size` is the **actual** streamed byte count, the only trustworthy length for a stream.
+
+<Callout type="info">
+The download / serve path already streams: `tower-http::ServeDir` reads the file off disk in chunks, so a large file is never loaded into memory to serve it. `save_stream` brings the same no-buffering guarantee to the *write* side.
+</Callout>
+
+The underlying `Storage` trait gained two **additive** methods with default impls, so every existing backend keeps working unchanged:
+
+- `store_stream(filename, content_type, body)` - true-streams to the backend. `FsStorage` writes chunk-by-chunk to disk; a backend that doesn't override it falls back to buffering then `store`.
+- `retrieve_stream(key)` - streams the object back. `FsStorage` reads off disk via `ReaderStream`; the default wraps `retrieve`'s bytes as a single chunk.
+
+Both `save`/`store` (buffered) and `save_stream`/`store_stream` (streaming) apply the **same** filename guards - path-separator sanitisation and active-content (`.html`/`.svg`/`.js` → `.txt`) neutralisation - so streaming never weakens the stored-XSS defence.
+
 ## The `MediaFile` model
 
 Every upload is one row:
@@ -172,7 +199,7 @@ This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying bo
 | Method                          | Default | What it does                                                                      |
 |---------------------------------|---------|-----------------------------------------------------------------------------------|
 | `.new(mount, dir)`              | -       | Mount path + on-disk directory.                                                   |
-| `.max_size(bytes)`              | unlimited | Hard cap on upload size. `save` returns `MediaError::TooLarge` when exceeded.   |
+| `.max_size(bytes)`              | unlimited | Hard cap on upload size, returned as `MediaError::TooLarge` when exceeded. `save` checks the buffered length; `save_stream` enforces it **mid-stream** (no full buffering, no trusting `Content-Length`). |
 | `.cleanup_on_delete::<M>()`     | off     | Delete a row's `FileField`/`ImageField` blobs when the row is deleted (auto-detected columns). |
 | `.cleanup_files::<M>(&[...])`   | off     | Same, naming the file columns explicitly (for widget-overridden columns).         |
 
