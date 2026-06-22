@@ -37,7 +37,7 @@
 
 {% from "admin/_macros/filter_dialog.html" import filter_dialog %}
 
-{% macro data_table(model, rows, columns, pk, facets, active_filters, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[], column_widths=[]) %}
+{% macro data_table(model, rows, columns, pk, facets, active_filters, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[], column_widths=[], soft_delete=false, trash=false, trashed_count=0) %}
 
 {# `filter_qs` arrives from the handler precomputed as one
    `&filter_<field>=<comma-joined>` per UNIQUE field. Iterating
@@ -99,15 +99,45 @@
 <div class="flex items-end justify-between mb-md">
   <div>
     <div class="flex items-center gap-sm">
-      <h1 class="font-h1 text-h1 text-on-surface">{{ model.name }}</h1>
+      <h1 class="font-h1 text-h1 text-on-surface">{{ model.name }}{% if trash %} <span class="text-on-surface-variant font-body-md text-body-md">— Trash</span>{% endif %}</h1>
       <span class="bg-surface-container-high px-sm py-xs rounded-full font-data-mono text-label-sm text-on-surface-variant tabular-nums">{{ pagination.total }}</span>
     </div>
-    <p class="text-on-surface-variant font-body-sm text-body-sm mt-xs">Manage all {{ model.name | lower }} records.</p>
+    <p class="text-on-surface-variant font-body-sm text-body-sm mt-xs">{% if trash %}Soft-deleted {{ model.name | lower }} records. Restore them or delete permanently.{% else %}Manage all {{ model.name | lower }} records.{% endif %}</p>
   </div>
+  <div class="flex items-center gap-sm">
+  {# gaps2 #35 — Trash / Active toggle. Only rendered for soft-delete
+     models. In the live view it links into the trash (with the trashed-
+     row count); in the trash view it links back to the active list. #}
+  {% if soft_delete %}
+    {% if trash %}
+    <a
+      href="{{ admin_base }}/{{ model.table }}/"
+      class="flex items-center gap-sm px-md py-sm rounded-xl border border-outline-variant text-on-surface hover:bg-surface-container-high transition-colors font-label-md text-label-md"
+      title="Back to the active list"
+    >
+      <i data-lucide="arrow-left" class="w-4 h-4"></i>
+      Active
+    </a>
+    {% else %}
+    <a
+      href="{{ admin_base }}/{{ model.table }}/?trash=1"
+      class="flex items-center gap-sm px-md py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-colors font-label-md text-label-md"
+      title="View soft-deleted records"
+    >
+      <i data-lucide="trash-2" class="w-4 h-4"></i>
+      Trash
+      {% if trashed_count and trashed_count > 0 %}
+      <span class="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-surface-container-highest text-on-surface text-[10px] font-medium tabular-nums">{{ trashed_count }}</span>
+      {% endif %}
+    </a>
+    {% endif %}
+  {% endif %}
   {# Feature #75: hide the Add affordance when the user lacks the
      add_<model> permission. The POST handler still revalidates so
-     hiding the button is a UX nicety, not the security boundary. #}
-  {% if perms is undefined or perms.can_add %}
+     hiding the button is a UX nicety, not the security boundary.
+     gaps2 #35: also hide it in the trash view — you don't create
+     rows there. #}
+  {% if (perms is undefined or perms.can_add) and not trash %}
   <button
     type="button"
     hx-get="{{ admin_base }}/{{ model.table }}/new-sheet"
@@ -120,6 +150,7 @@
     Add {{ model.name }}
   </button>
   {% endif %}
+  </div>
 </div>
 
 {# ================================================================
@@ -409,6 +440,39 @@
               onclick="event.stopPropagation()"
             >
               <div class="flex items-center justify-end gap-xs">
+                {# gaps2 #35: trash view swaps the live-row affordances
+                   (preview / edit / soft-delete) for the two trash
+                   actions — Restore and Delete-permanently. Both POST to
+                   the same action endpoint the bulk toolbar uses, with a
+                   single id. #}
+                {% if trash %}
+                {% if perms is undefined or perms.can_change %}
+                <button
+                  type="button"
+                  hx-post="{{ admin_base }}/{{ model.table }}/actions/restore_selected"
+                  hx-vals='{"ids": ["{{ row[pk] }}"]}'
+                  hx-swap="none"
+                  title="Restore"
+                  class="p-sm text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-high"
+                  onclick="setTimeout(function(){htmx.ajax('GET','{{ admin_base }}/{{ model.table }}/rows?trash=1',{target:'#table-body',swap:'innerHTML'})},150)"
+                >
+                  <i data-lucide="archive-restore" class="w-4 h-4"></i>
+                </button>
+                {% endif %}
+                {% if perms is undefined or perms.can_delete %}
+                <button
+                  type="button"
+                  hx-post="{{ admin_base }}/{{ model.table }}/actions/delete_permanently"
+                  hx-vals='{"ids": ["{{ row[pk] }}"]}'
+                  hx-swap="none"
+                  title="Delete permanently"
+                  onclick="if(!confirm('This will PERMANENTLY delete this row. It cannot be restored. Continue?'))return false;setTimeout(function(){htmx.ajax('GET','{{ admin_base }}/{{ model.table }}/rows?trash=1',{target:'#table-body',swap:'innerHTML'})},150)"
+                  class="p-sm text-on-surface-variant hover:text-error transition-colors rounded-lg hover:bg-surface-container-high"
+                >
+                  <i data-lucide="trash-2" class="w-4 h-4"></i>
+                </button>
+                {% endif %}
+                {% else %}
                 <button
                   type="button"
                   hx-get="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}/sheet"
@@ -444,6 +508,7 @@
                 >
                   <i data-lucide="trash-2" class="w-4 h-4"></i>
                 </button>
+                {% endif %}
                 {% endif %}
 
                 {# Custom actions: up to 2 inline, rest in overflow menu #}

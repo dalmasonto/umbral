@@ -241,6 +241,32 @@ Default sort order for the list view. Each entry is a column name optionally pre
 
 Registers bulk actions. `Action::new(key, label, icon, handler)` takes a Lucide icon name and an async handler receiving an `ActionInvocation` (selected `ids`, plus `username` / `table` / `pool` context) and returning a `Result<ActionResult, String>`. `Action::delete_selected()` is the built-in bulk delete equivalent to Django's default. The full descriptor surface (`.scope(...)`, `.danger()`, `.confirm(...)`, and the `ActionResult` variants) is documented under [Phase 3](#phase-3-actions-async-fk-pickers-sheet-stacking-inline-cell-edit) below.
 
+### Trash UI for soft-delete models
+
+Register a model tagged [`#[umbra(soft_delete)]`](/docs/v0.0.1/orm/soft-delete) and the admin grows a full trash workflow automatically — no extra config on `AdminModel`:
+
+- The changelist header gains a **Trash / Active toggle** (with a trashed-row count badge). `?trash=1` lists only soft-deleted rows; the default view shows the live set, which already excludes trashed rows.
+- The default `Action::delete_selected()` **soft-deletes** on a soft-delete model — it moves rows to the trash (sets `deleted_at`) rather than purging them, because it routes through `DynQuerySet::delete()`.
+- In the trash view, the row and bulk affordances become **Restore selected** (clears `deleted_at` via `DynQuerySet::restore()`) and **Delete permanently** (a real `hard_delete()` behind a confirm dialog — the row leaves the table entirely and cannot be restored).
+
+Restore is gated by the `change_<model>` permission; Delete-permanently by the stronger `delete_<model>`. A model **without** `#[umbra(soft_delete)]` is unchanged: no toggle, no restore, and `delete_selected` hard-deletes as before.
+
+```rust
+#[derive(umbra::orm::Model)]
+#[umbra(soft_delete)]
+struct Note {
+    id: i64,
+    #[umbra(string)]
+    title: String,
+    deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+// Registration needs nothing special — the trash UI is automatic.
+AdminModel::new("note")
+    .list_display(&["title"])
+    .actions(vec![Action::delete_selected()]) // soft-deletes for this model
+```
+
 ### `readonly_fields`
 
 ```rust

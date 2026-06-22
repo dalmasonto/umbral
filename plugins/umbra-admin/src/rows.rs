@@ -69,8 +69,14 @@ pub(crate) async fn count_rows_filtered(
     search_term: Option<&str>,
     cfg: Option<&AdminConfig>,
     active_filters: &[(String, String)],
+    trash: bool,
 ) -> Result<usize, AdminError> {
     let mut qs = DynQuerySet::for_meta(model);
+    // gaps2 #35: in the trash view, count only soft-deleted rows.
+    // `only_deleted()` is a no-op on a non-soft-delete model.
+    if trash {
+        qs = qs.only_deleted();
+    }
     if let Some(term) = search_term {
         // Pass cfg.search_fields when present; empty slice means
         // "search every searchable column" (DynQuerySet::search default).
@@ -100,8 +106,13 @@ pub(crate) async fn fetch_rows_paged(
     active_filters: &[(String, String)],
     limit: usize,
     offset: usize,
+    trash: bool,
 ) -> Result<Vec<HashMap<String, String>>, AdminError> {
     let mut qs = DynQuerySet::for_meta(model).select_cols(display_cols);
+    // gaps2 #35: trash view shows only soft-deleted rows.
+    if trash {
+        qs = qs.only_deleted();
+    }
     if let Some(term) = search_term {
         let restrict: &[String] = cfg.map(|c| c.search_fields.as_slice()).unwrap_or(&[]);
         qs = qs.search(restrict, term);

@@ -260,9 +260,133 @@ impl Action {
         .confirm("This will permanently delete the selected rows. Continue?")
     }
 
+    /// Built-in "Restore selected" for soft-delete models (gaps2 #35).
+    ///
+    /// Clears `deleted_at` for the selected rows via
+    /// [`DynQuerySet::restore`], moving them back out of the trash into
+    /// the live changelist. Auto-injected for `soft_delete` models (see
+    /// [`effective_actions`]); a non-soft-delete model never sees it.
+    pub fn restore_selected() -> Self {
+        Self::new(
+            "restore_selected",
+            "Restore selected",
+            "archive-restore",
+            |inv| async move {
+                if inv.ids.is_empty() {
+                    return Ok(ActionResult::Toast {
+                        message: "No rows selected.".to_string(),
+                        level: ToastLevel::Info,
+                    });
+                }
+                let Some((_, meta)) = crate::discovery::find_model(&inv.table) else {
+                    return Err(format!("unknown table `{}`", inv.table));
+                };
+                let pk_name = crate::discovery::pk_column(&meta)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| "id".to_string());
+                // `with_deleted()` so the PK filter can address the
+                // trashed rows; `restore()` then clears `deleted_at`.
+                match umbra::orm::DynQuerySet::for_meta(&meta)
+                    .with_deleted()
+                    .filter_in_strings(&pk_name, &inv.ids)
+                    .restore()
+                    .await
+                {
+                    Ok(restored) => Ok(ActionResult::Toast {
+                        message: format!("Restored {restored} row(s)."),
+                        level: ToastLevel::Success,
+                    }),
+                    Err(e) => {
+                        tracing::error!(error = %e, "admin: restore_selected failed");
+                        Err("database error during restore".to_string())
+                    }
+                }
+            },
+        )
+        .scope(ActionScope::Bulk)
+    }
+
+    /// Built-in "Delete permanently" for soft-delete models (gaps2 #35).
+    ///
+    /// Issues a real `DELETE` via [`DynQuerySet::hard_delete`], bypassing
+    /// the soft-delete stamp so the row leaves the table entirely (gone
+    /// even from `with_deleted()`). Behind a confirm interstitial.
+    /// Auto-injected for `soft_delete` models; a non-soft-delete model
+    /// never sees it (its `delete_selected` already deletes for real).
+    pub fn delete_permanently() -> Self {
+        Self::new(
+            "delete_permanently",
+            "Delete permanently",
+            "trash-2",
+            |inv| async move {
+                if inv.ids.is_empty() {
+                    return Ok(ActionResult::Toast {
+                        message: "No rows selected.".to_string(),
+                        level: ToastLevel::Info,
+                    });
+                }
+                let Some((_, meta)) = crate::discovery::find_model(&inv.table) else {
+                    return Err(format!("unknown table `{}`", inv.table));
+                };
+                let pk_name = crate::discovery::pk_column(&meta)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| "id".to_string());
+                match umbra::orm::DynQuerySet::for_meta(&meta)
+                    .hard_delete()
+                    .with_deleted()
+                    .filter_in_strings(&pk_name, &inv.ids)
+                    .delete()
+                    .await
+                {
+                    Ok(deleted) => Ok(ActionResult::Toast {
+                        message: format!("Permanently deleted {deleted} row(s)."),
+                        level: ToastLevel::Success,
+                    }),
+                    Err(e) => {
+                        tracing::error!(error = %e, "admin: delete_permanently failed");
+                        Err("database error during permanent delete".to_string())
+                    }
+                }
+            },
+        )
+        .danger()
+        .scope(ActionScope::Bulk)
+        .confirm("This will PERMANENTLY delete the selected rows. They cannot be restored. Continue?")
+    }
+
     /// The action key (URL-safe identifier).
     pub fn key(&self) -> &str {
         &self.key
+    }
+}
+
+/// Compute the effective bulk-action set for a changelist render or
+/// action dispatch (gaps2 #35).
+///
+/// For a soft-delete model, the admin auto-injects the trash workflow
+/// actions on top of whatever the developer configured:
+///   - In the LIVE view (`trash == false`): nothing extra — the
+///     developer's `delete_selected` already soft-deletes (moves rows
+///     to trash) because `DynQuerySet::delete` honours `soft_delete`.
+///   - In the TRASH view (`trash == true`): the per-row edit/delete
+///     affordances don't apply, so we surface **Restore selected** and
+///     **Delete permanently** instead. The developer's own actions are
+///     dropped in trash view to keep the action set unambiguous.
+///
+/// A non-soft-delete model returns its configured actions unchanged, so
+/// existing installs see zero behavioural difference.
+pub(crate) fn effective_actions(
+    configured: &[Action],
+    soft_delete: bool,
+    trash: bool,
+) -> Vec<Action> {
+    if !soft_delete {
+        return configured.to_vec();
+    }
+    if trash {
+        vec![Action::restore_selected(), Action::delete_permanently()]
+    } else {
+        configured.to_vec()
     }
 }
 

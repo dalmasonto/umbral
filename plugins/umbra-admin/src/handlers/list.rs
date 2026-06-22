@@ -475,6 +475,14 @@ pub(crate) async fn list(
     let (search_term, active_filters, sort_col, sort_order, page, page_size) =
         parse_list_params(&params, cfg, pk);
 
+    // gaps2 #35: trash view. `?trash=1` flips the changelist to show
+    // ONLY soft-deleted rows (`only_deleted()`); without it the list
+    // shows the live set (the default, which already excludes
+    // `deleted_at IS NOT NULL`). The toggle only renders for
+    // soft-delete models, so a non-soft-delete model ignores `?trash`.
+    let soft_delete = model.soft_delete;
+    let trash = soft_delete && params.get("trash").map(|v| v == "1").unwrap_or(false);
+
     // gaps2 #11: persist the current shape so the next paramless
     // visit restores it. Fire-and-forget — a write error logs but
     // doesn't fail the page render. `page` is deliberately NOT
@@ -540,7 +548,8 @@ pub(crate) async fn list(
     let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
 
     let total =
-        match count_rows_filtered(&model, search_term.as_deref(), cfg, &active_filters).await {
+        match count_rows_filtered(&model, search_term.as_deref(), cfg, &active_filters, trash).await
+        {
             Ok(t) => t,
             Err(e) => return e.into_response(),
         };
@@ -555,11 +564,25 @@ pub(crate) async fn list(
         &active_filters,
         pagination.page_size,
         pagination.offset(),
+        trash,
     )
     .await
     {
         Ok(r) => r,
         Err(e) => return e.into_response(),
+    };
+
+    // gaps2 #35: trashed-row count drives the "Trash (N)" toggle badge.
+    // Only computed for soft-delete models; everything else skips the
+    // extra COUNT.
+    let trashed_count: i64 = if soft_delete {
+        DynQuerySet::for_meta(&model)
+            .only_deleted()
+            .count()
+            .await
+            .unwrap_or(0)
+    } else {
+        0
     };
 
     let mut facets: Vec<FilterFacet> = Vec::new();
@@ -569,9 +592,14 @@ pub(crate) async fn list(
         }
     }
 
-    let action_names: Vec<serde_json::Value> = cfg
-        .map(handlers::action_descriptors_json)
-        .unwrap_or_default();
+    // gaps2 #35: in trash view, swap the configured actions for the
+    // Restore / Delete-permanently built-ins; in the live view, a
+    // soft-delete model's configured `delete_selected` already soft-
+    // deletes (moves to trash) so no extra action is injected there.
+    let configured_actions: &[crate::config::Action] =
+        cfg.map(|c| c.actions.as_slice()).unwrap_or(&[]);
+    let effective = crate::config::effective_actions(configured_actions, soft_delete, trash);
+    let action_names: Vec<serde_json::Value> = handlers::descriptors_for(&effective);
 
     let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
     let search_val = search_term.unwrap_or_default();
@@ -630,6 +658,9 @@ pub(crate) async fn list(
             inline_edit_fields => inline_edit_fields,
             initial_theme      => initial_theme,
             perms              => perms,
+            soft_delete        => soft_delete,
+            trash              => trash,
+            trashed_count      => trashed_count,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -696,6 +727,12 @@ pub(crate) async fn rows_fragment(
     let (search_term, active_filters, sort_col, sort_order, page, page_size) =
         parse_list_params(&params, cfg, pk);
 
+    // gaps2 #35: keep the fragment in sync with the changelist's trash
+    // toggle so HTMX pagination / refresh within the trash view keeps
+    // showing soft-deleted rows + the Restore / Delete-permanently set.
+    let soft_delete = model.soft_delete;
+    let trash = soft_delete && params.get("trash").map(|v| v == "1").unwrap_or(false);
+
     let display_cols: Vec<String> = if let Some(c) = cfg
         && !c.list_display.is_empty()
     {
@@ -715,7 +752,8 @@ pub(crate) async fn rows_fragment(
     let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
 
     let total =
-        match count_rows_filtered(&model, search_term.as_deref(), cfg, &active_filters).await {
+        match count_rows_filtered(&model, search_term.as_deref(), cfg, &active_filters, trash).await
+        {
             Ok(t) => t,
             Err(e) => return e.into_response(),
         };
@@ -730,6 +768,7 @@ pub(crate) async fn rows_fragment(
         &active_filters,
         pagination.page_size,
         pagination.offset(),
+        trash,
     )
     .await
     {
@@ -743,9 +782,10 @@ pub(crate) async fn rows_fragment(
     let filter_groups = build_filter_groups(&active_filters);
     let search_val = search_term.unwrap_or_default();
 
-    let action_names: Vec<serde_json::Value> = cfg
-        .map(handlers::action_descriptors_json)
-        .unwrap_or_default();
+    let configured_actions: &[crate::config::Action] =
+        cfg.map(|c| c.actions.as_slice()).unwrap_or(&[]);
+    let effective = crate::config::effective_actions(configured_actions, soft_delete, trash);
+    let action_names: Vec<serde_json::Value> = handlers::descriptors_for(&effective);
 
     let inline_edit_fields: Vec<String> = cfg
         .map(|c| c.inline_edit_fields.clone())
@@ -769,6 +809,7 @@ pub(crate) async fn rows_fragment(
             actions            => action_names,
             inline_edit_fields => inline_edit_fields,
             perms              => perms,
+            trash              => trash,
         ),
     ) {
         Ok(html) => {

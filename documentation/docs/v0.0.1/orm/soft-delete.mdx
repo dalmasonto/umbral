@@ -69,8 +69,15 @@ Soft-deleted rows still exist: they count toward UNIQUE constraints, foreign key
 
 ## Admin and REST
 
-The dynamic path (`DynQuerySet`) used by the admin and the REST plugin honours soft-delete identically: list endpoints exclude trashed rows by default, and the DELETE endpoint soft-deletes instead of hard-deleting. The same `with_deleted()` / `only_deleted()` / `hard_delete()` toggles are available on `DynQuerySet` for admin views that need to expose a trash UI.
+The dynamic path (`DynQuerySet`) used by the admin and the REST plugin honours soft-delete identically: list endpoints exclude trashed rows by default, and the DELETE endpoint soft-deletes instead of hard-deleting. The same `with_deleted()` / `only_deleted()` / `hard_delete()` toggles are available on `DynQuerySet`, plus a `restore()` terminal that clears `deleted_at` on the matched trashed rows (the inverse of a soft `delete()`).
 
-A full admin trash affordance (changelist filter, restore action, hard-delete confirm) is planned but not yet shipped.
+The admin ships a full trash UI for any `#[umbra(soft_delete)]` model, with no per-model config:
 
-Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72, gaps2 #34) and `crates/umbra-core/tests/soft_delete_dynamic.rs` (gaps2 #35); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.
+- A **Trash / Active toggle** in the changelist header (with a trashed-row count badge). `?trash=1` lists only soft-deleted rows; the default view shows the live set.
+- A built-in **Restore selected** bulk action (and per-row restore in the trash view) that calls `DynQuerySet::restore()`.
+- A built-in **Delete permanently** bulk action behind a confirm dialog — a real `hard_delete()`, so the row leaves the table entirely.
+- The default **Delete selected** action soft-deletes (moves rows to trash) on a soft-delete model, because it routes through `DynQuerySet::delete()`.
+
+Restore is gated by the `change_<model>` permission; Delete-permanently by `delete_<model>`. See the [Admin plugin docs](/docs/v0.0.1/plugins/admin) for the trash workflow.
+
+Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72, gaps2 #34), `crates/umbra-core/tests/soft_delete_dynamic.rs` (gaps2 #35), and `plugins/umbra-admin/tests/soft_delete_admin.rs` (the admin trash UI); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.

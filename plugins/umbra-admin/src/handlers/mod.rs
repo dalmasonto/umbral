@@ -15,4 +15,4 @@ pub(crate) mod palette;
 pub(crate) mod prefs;
 pub(crate) mod sheet;
 
-pub(crate) use actions::action_descriptors_json;
+pub(crate) use actions::descriptors_for;

@@ -737,6 +737,64 @@ impl<'a> DynQuerySet<'a> {
         Ok(rows_affected)
     }
 
+    /// Terminal: undo a soft-delete — `UPDATE <table> SET deleted_at =
+    /// NULL` for the rows matching the accumulated WHERE that are
+    /// currently soft-deleted (`deleted_at IS NOT NULL`). Returns the
+    /// number of rows restored. A no-op (0 rows) on a model that isn't
+    /// tagged `soft_delete`, since there is no `deleted_at` column to
+    /// clear — the caller should gate on `meta.soft_delete` first.
+    ///
+    /// This is the inverse of [`Self::delete`] on a soft-delete model:
+    /// `delete()` stamps `deleted_at = now()`, `restore()` clears it.
+    /// The admin's "Restore selected" trash action drives this.
+    pub async fn restore(self) -> Result<u64, DynError> {
+        if !self.meta.soft_delete {
+            return Ok(0);
+        }
+        // Restrict to the rows the caller selected AND that are
+        // actually trashed — restoring a live row is a no-op but
+        // narrowing here keeps the affected-count honest.
+        let mut where_clauses = self.where_clauses.clone();
+        where_clauses
+            .push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_not_null()));
+
+        let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
+            Some(pk_col) => collect_parent_pks(self.meta, pk_col, &where_clauses)
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        let mut q = Query::update();
+        q.table(crate::db::router::schema_qualified_table(&self.meta.table));
+        q.value(
+            Alias::new("deleted_at"),
+            sea_query::Value::ChronoDateTimeUtc(None),
+        );
+        for cond in &where_clauses {
+            q.cond_where(cond.clone());
+        }
+
+        let rows_affected = match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
+                res.rows_affected()
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
+                res.rows_affected()
+            }
+        };
+
+        // Restoring a row is a "save" from the data model's POV — the
+        // row re-enters the live set — so emit the bulk-post-save
+        // signal, mirroring how soft-delete emits bulk-post-delete.
+        crate::signals::emit_bulk_post_save_by_table(&self.meta.table, parent_pks, false).await;
+        Ok(rows_affected)
+    }
+
     /// Terminal: `UPDATE <table> SET <col> = <value>` with the
     /// accumulated WHERE. The value is parsed against the column's
     /// `SqlType` so SQLite affinity sees the right operand. Returns

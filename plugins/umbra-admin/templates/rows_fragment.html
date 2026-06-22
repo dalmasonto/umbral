@@ -122,6 +122,31 @@
       onclick="event.stopPropagation()"
     >
       <div class="flex items-center justify-end gap-xs">
+        {# gaps2 #35: trash-view row affordances mirror data_table.html —
+           Restore + Delete-permanently instead of preview / edit / soft-
+           delete. #}
+        {% if trash %}
+        {% if perms is undefined or perms.can_change %}
+        <button type="button"
+          hx-post="{{ admin_base }}/{{ table }}/actions/restore_selected"
+          hx-vals='{"ids": ["{{ row[pk] }}"]}' hx-swap="none"
+          title="Restore"
+          onclick="setTimeout(function(){htmx.ajax('GET','{{ admin_base }}/{{ table }}/rows?trash=1',{target:'#table-body',swap:'innerHTML'})},150)"
+          class="p-sm text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-high">
+          <i data-lucide="archive-restore" class="w-4 h-4"></i>
+        </button>
+        {% endif %}
+        {% if perms is undefined or perms.can_delete %}
+        <button type="button"
+          hx-post="{{ admin_base }}/{{ table }}/actions/delete_permanently"
+          hx-vals='{"ids": ["{{ row[pk] }}"]}' hx-swap="none"
+          title="Delete permanently"
+          onclick="if(!confirm('This will PERMANENTLY delete this row. It cannot be restored. Continue?'))return false;setTimeout(function(){htmx.ajax('GET','{{ admin_base }}/{{ table }}/rows?trash=1',{target:'#table-body',swap:'innerHTML'})},150)"
+          class="p-sm text-on-surface-variant hover:text-error transition-colors rounded-lg hover:bg-surface-container-high">
+          <i data-lucide="trash-2" class="w-4 h-4"></i>
+        </button>
+        {% endif %}
+        {% else %}
         <button type="button"
           hx-get="{{ admin_base }}/{{ table }}/{{ row[pk] }}/sheet"
           hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
@@ -146,6 +171,7 @@
           class="p-sm text-on-surface-variant hover:text-error transition-colors rounded-lg hover:bg-surface-container-high">
           <i data-lucide="trash-2" class="w-4 h-4"></i>
         </button>
+        {% endif %}
         {% endif %}
 
         {# Custom row-scope actions (up to 2 inline, rest in overflow menu) #}

@@ -56,7 +56,12 @@ pub(crate) async fn run_action(
         .collect();
 
     let cfg = state.config_for(&table);
-    let action = cfg.and_then(|c| c.actions.iter().find(|a| a.key == action_key));
+    // gaps2 #35: a soft-delete model resolves the built-in trash actions
+    // (`restore_selected`, `delete_permanently`) in addition to whatever
+    // the developer configured — they're injected into the changelist's
+    // trash view but dispatched through this same endpoint.
+    let actions = resolve_actions(cfg, &table);
+    let action = actions.iter().find(|a| a.key() == action_key);
     let Some(action) = action else {
         return AdminError::NotFound(format!("no action `{action_key}` for table `{table}`"))
             .into_response();
@@ -66,6 +71,21 @@ pub(crate) async fn run_action(
     // Superusers bypass the check; non-superusers need the exact codename.
     if let Some(ref required_perm) = action.permission {
         if let Err(r) = check_action_perm(&who, required_perm).await {
+            return r;
+        }
+    }
+    // gaps2 #35: the built-in "Delete permanently" is a hard delete, so
+    // it needs the stronger `delete_<model>` permission — the broad
+    // Change gate above isn't enough for an irreversible removal.
+    if action.key() == "delete_permanently" {
+        if let Err(r) = crate::permcheck::require(
+            &who,
+            &plugin_name,
+            &table,
+            crate::permcheck::Action::Delete,
+        )
+        .await
+        {
             return r;
         }
     }
@@ -111,11 +131,12 @@ pub(crate) async fn run_action(
     Redirect::to(&location).into_response()
 }
 
-/// Serialise the model's actions for the template's "Actions" menu.
-/// The template renders these into the bulk-action dropdown and the
-/// per-row chip strip.
-pub(crate) fn action_descriptors_json(cfg: &AdminConfig) -> Vec<serde_json::Value> {
-    cfg.actions
+/// Serialise an action slice for the template's "Actions" menu — the
+/// bulk-action toolbar and the per-row chip strip. The changelist passes
+/// the effective set (config + soft-delete trash built-ins) computed via
+/// [`crate::config::effective_actions`].
+pub(crate) fn descriptors_for(actions: &[crate::config::Action]) -> Vec<serde_json::Value> {
+    actions
         .iter()
         .map(|a| {
             serde_json::json!({
@@ -195,7 +216,9 @@ pub(crate) async fn dispatch_action(
     };
 
     let cfg = state.config_for(&table);
-    let action = cfg.and_then(|c| c.actions.iter().find(|a| a.key == key));
+    // gaps2 #35: include the soft-delete trash built-ins (see `run_action`).
+    let actions = resolve_actions(cfg, &table);
+    let action = actions.iter().find(|a| a.key() == key);
     let Some(action) = action else {
         return AdminError::NotFound(format!("no action `{key}` for `{table}`")).into_response();
     };
@@ -204,6 +227,20 @@ pub(crate) async fn dispatch_action(
     // Superusers bypass the check; non-superusers need the exact codename.
     if let Some(ref required_perm) = action.permission {
         if let Err(r) = crate::handlers::actions::check_action_perm(&who, required_perm).await {
+            return r;
+        }
+    }
+    // gaps2 #35: the built-in "Delete permanently" hard-deletes, so it
+    // needs `delete_<model>` — stronger than the broad Change gate above.
+    if action.key() == "delete_permanently" {
+        if let Err(r) = crate::permcheck::require(
+            &who,
+            &plugin_name,
+            &table,
+            crate::permcheck::Action::Delete,
+        )
+        .await
+        {
             return r;
         }
     }
@@ -291,6 +328,36 @@ pub(crate) async fn dispatch_action(
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
     }
+}
+
+/// Resolve the dispatchable action set for `table` (gaps2 #35).
+///
+/// The developer's configured actions, plus — for a `soft_delete`
+/// model — the built-in trash actions (`restore_selected`,
+/// `delete_permanently`). The built-ins are appended only when not
+/// already present so a developer who lists them explicitly doesn't get
+/// duplicates. A non-soft-delete model returns its configured set
+/// verbatim.
+pub(crate) fn resolve_actions(
+    cfg: Option<&AdminConfig>,
+    table: &str,
+) -> Vec<crate::config::Action> {
+    let mut actions: Vec<crate::config::Action> =
+        cfg.map(|c| c.actions.clone()).unwrap_or_default();
+    let soft_delete = crate::discovery::find_model(table)
+        .map(|(_, meta)| meta.soft_delete)
+        .unwrap_or(false);
+    if soft_delete {
+        for builtin in [
+            crate::config::Action::restore_selected(),
+            crate::config::Action::delete_permanently(),
+        ] {
+            if !actions.iter().any(|a| a.key() == builtin.key()) {
+                actions.push(builtin);
+            }
+        }
+    }
+    actions
 }
 
 /// Check that `who` holds the required action permission codename.

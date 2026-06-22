@@ -224,7 +224,7 @@
 
 34. [x] **Soft delete: `update_values`/`update_expr` respect the `deleted_at` scope — archived.**
 
-35. [~] **Soft delete on the dynamic path — core SHIPPED; admin trash UI remaining.** `ModelMeta.soft_delete` is wired from `T::SOFT_DELETE` in `for_::<T>()`; `DynQuerySet` terminals inject `deleted_at IS NULL` by default; `delete()` issues `UPDATE ... SET deleted_at = NOW()` instead of `DELETE`. REST list/delete go through `DynQuerySet` and are correct. `with_deleted()` / `only_deleted()` / `hard_delete()` toggles work on `DynQuerySet`. Pinned by `crates/umbra-core/tests/soft_delete_dynamic.rs`. REMAINING: admin changelist trash filter, restore action, and hard-delete confirm — deferred (new templates + handlers, separate PR).
+35. [x] **Soft delete on the dynamic path + admin trash UI — archived.** Core (`DynQuerySet` soft-delete scope/toggles) and the admin trash UI (changelist trash filter, restore + delete-permanently actions, default-delete-to-trash) both shipped. See `planning/archive/gaps2-done.md`.
 
 
 36. [~] **Rich field-editor follow-ups.** _PARTIAL: (a) syntax-highlighted fenced code DONE — server-side syntect (7a4ded8) + a real XSS in the fence info-string fixed via fence_lang_is_safe (5188725). REMAINING (deferred, low-urgency): (b) self-host editor CDNs (EasyMDE/Quill/CodeMirror/DOMPurify) via Plugin::static_files [same as #4 CDN self-host], (c) EasyMDE image-upload into a media endpoint._ Original below:
