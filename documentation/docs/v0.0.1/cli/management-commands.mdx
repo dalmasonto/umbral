@@ -40,7 +40,7 @@ Built-in plugins contribute their own subcommands through the `Plugin::commands(
   <Card icon="cpu" title="tasks-worker" description="umbra-tasks. Drain the task queue. --once runs one batch and exits (cron-friendly)." />
   <Card icon="clock" title="tasks-beat" description="umbra-tasks. Run the periodic-task scheduler (Celery beat). --once syncs schedules, runs one tick, exits." />
   <Card icon="trash-2" title="clearsessions" description="umbra-sessions. Delete all expired session rows from the database (Django parity)." />
-  <Card icon="folder-down" title="collectstatic" description="umbra-static. Collect every plugin's static assets into static_root. --clear / --hashed / --storage." />
+  <Card icon="folder-down" title="collectstatic" description="umbra-storage. Collect every plugin's static assets into static_root. --clear / --hashed / --storage." />
 </CardGrid>
 
 Each plugin command shares the same `cargo run -- <cmd>` form and is detailed in its own section below.
@@ -399,7 +399,7 @@ cargo run -- clearsessions
 
 No flags. Deletes session rows whose `expires_at` is in the past.
 
-## collectstatic - `umbra-static`
+## collectstatic - `umbra-storage`
 
 Collect every plugin's static assets — namespaced `static_dirs()` plus site-level `static_root_dirs()` — into `settings.static_root`. Django's `collectstatic`.
 
@@ -419,7 +419,7 @@ cargo run -- collectstatic --hashed
 |---|---|---|
 | `--clear` | off | Empty `static_root` before collecting (no confirmation prompt), dropping assets no plugin ships any more. |
 | `--hashed` | off | Write content-hashed copies (`app.<hash>.css`) alongside each asset plus a `staticfiles.json` manifest (Django's `ManifestStaticFilesStorage`). Use in production. |
-| `--storage <backend>` | `local` | Where to write: `local` (the on-disk `static_root`) or `s3` (requires the umbra-static `s3` feature and `UMBRA_STATIC_BUCKET` / `UMBRA_STATIC_REGION`). Overrides `UMBRA_STATIC_STORAGE`. |
+| `--storage <backend>` | `local` | Where to write: `local` (the on-disk `static_root`) or `s3` (requires the umbra-storage `s3` feature and `UMBRA_STATIC_BUCKET` / `UMBRA_STATIC_REGION`). Overrides `UMBRA_STATIC_STORAGE`. |
 
 ## Errors
 

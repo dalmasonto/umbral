@@ -1,6 +1,6 @@
 //! `published_static()` round-trips through a real `App::build`.
 //!
-//! The `collectstatic` plugin command (in `umbra-static`) can't be
+//! The `collectstatic` plugin command (in `umbra-storage`) can't be
 //! handed the plugin list — `PluginCommand::run` doesn't receive it — so
 //! `App::build` publishes every plugin's `static_dirs()` (namespaced)
 //! and `static_root_dirs()` (app/site) into the ambient

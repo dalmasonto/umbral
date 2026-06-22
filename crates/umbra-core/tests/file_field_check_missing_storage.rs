@@ -61,7 +61,7 @@ async fn build_fails_when_image_field_has_no_storage_backend() {
         hit.hint
             .as_deref()
             .unwrap_or_default()
-            .contains("MediaPlugin"),
-        "hint should mention the fix (MediaPlugin / set_storage)"
+            .contains("StoragePlugin"),
+        "hint should mention the fix (StoragePlugin / set_storage)"
     );
 }

@@ -26,9 +26,8 @@ umbra-security = { git = "https://github.com/dalmasonto/umbra" }
 # umbra-rls          = { git = "https://github.com/dalmasonto/umbra" }  # Postgres row-level security policy registration.
 # umbra-cache        = { git = "https://github.com/dalmasonto/umbra" }  # Per-request caching helper.
 # umbra-email        = { git = "https://github.com/dalmasonto/umbra" }  # SMTP + MIME email composer + sender.
-# umbra-media        = { git = "https://github.com/dalmasonto/umbra" }  # Uploaded-file storage abstraction (local FS + S3).
+# umbra-storage      = { git = "https://github.com/dalmasonto/umbra" }  # Unified storage: static-file serving (prod) + uploaded-file storage (local FS + S3).
 # umbra-signals      = { git = "https://github.com/dalmasonto/umbra" }  # Pre/post save/delete signal dispatch.
-# umbra-static       = { git = "https://github.com/dalmasonto/umbra" }  # Static-file serving for prod (whitenoise-equivalent).
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

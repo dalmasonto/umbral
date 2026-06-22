@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 //! gaps2 #36 — graceful degradation when no storage backend is installed.
 //!
-//! Boots an admin router with NO MediaPlugin (and no `set_storage`). A staff
+//! Boots an admin router with NO StoragePlugin (and no `set_storage`). A staff
 //! POST to `/admin/upload-image` must then return the documented `409
 //! Conflict` JSON error rather than panicking — the editor surfaces it
 //! through `onError`. This lives in its own test binary because the ambient

@@ -367,12 +367,12 @@ ForeignKey fields currently render a plain `<input type="number">` showing the F
 
 ### Markdown image upload
 
-A field rendered with the `markdown` widget mounts an [EasyMDE](https://github.com/Ionaru/easy-markdown-editor) editor. When a **storage backend** is mounted (the [`MediaPlugin`](/docs/v0.0.1/plugins/media), or any `umbra::storage::set_storage(...)` backend), the editor's toolbar gains an image button and you can **paste, drop, or pick an image**: it uploads to `POST {base}/upload-image` and the returned URL is inserted into the markdown as `![](...)`.
+A field rendered with the `markdown` widget mounts an [EasyMDE](https://github.com/Ionaru/easy-markdown-editor) editor. When a **storage backend** is mounted (the [`StoragePlugin`](/docs/v0.0.1/plugins/storage) media side, or any `umbra::storage::set_storage(...)` backend), the editor's toolbar gains an image button and you can **paste, drop, or pick an image**: it uploads to `POST {base}/upload-image` and the returned URL is inserted into the markdown as `![](...)`.
 
 The endpoint is **staff-gated** exactly like every other admin route (unauthenticated → login redirect, logged-in-non-staff → 403), validates the part is an image (`png`, `jpeg`, `gif`, `webp`, `svg`) under a 10 MiB cap, and stores the bytes through the ambient storage seam — the admin never names a media crate directly. The fetch carries the shared CSRF token from the `umbra_csrf_token` cookie.
 
 <Callout type="info" title="Degrades gracefully">
-With no storage backend installed the route returns a `409` with a clear JSON error (`"image upload requires a storage backend — add MediaPlugin"`), which EasyMDE surfaces inline. The editor itself still works — only the image-upload affordance needs a backend. See [`arch.md`](https://github.com/) and `gaps2 #36`.
+With no storage backend installed the route returns a `409` with a clear JSON error (`"image upload requires a storage backend — add StoragePlugin"`), which EasyMDE surfaces inline. The editor itself still works — only the image-upload affordance needs a backend. See [`arch.md`](https://github.com/) and `gaps2 #36`.
 </Callout>
 
 ### Confirm dialog

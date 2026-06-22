@@ -23,9 +23,8 @@ umbra-permissions  = { path = "../../plugins/umbra-permissions" }
 # umbra-rls          = { path = "../../plugins/umbra-rls" }
 # umbra-cache        = { path = "../../plugins/umbra-cache" }
 # umbra-email        = { path = "../../plugins/umbra-email" }
-# umbra-media        = { path = "../../plugins/umbra-media" }
 # umbra-signals      = { path = "../../plugins/umbra-signals" }
-umbra-static       = { path = "../../plugins/umbra-static" }
+umbra-storage      = { path = "../../plugins/umbra-storage" }
 umbra-security     = { path = "../../plugins/umbra-security" }
 
 # ----- Third-party + framework runtime deps --------------------------------

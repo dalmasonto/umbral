@@ -2,7 +2,7 @@
 //! the framework's unified static pipeline.
 //!
 //! The plugin no longer serves its bundle out of `plugin.routes()`
-//! (the old embedded `StaticPlugin::embedded` mount is gone). Instead:
+//! (the old embedded `StoragePlugin::embedded` mount is gone). Instead:
 //!
 //! - `plugin.routes()` serves ONLY the HTML shell at `<base>/`.
 //! - The vite bundle under `dist/assets/` is served by the framework's

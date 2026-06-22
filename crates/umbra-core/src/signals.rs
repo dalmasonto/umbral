@@ -470,7 +470,7 @@ pub async fn emit_m2m_changed(
 //
 // `pre_save` / `post_save` fire on BOTH insert and update and carry only
 // the NEW instance. A whole class of subscribers (audit-log diffs, change
-// tracking, and umbra-media's replace-cleanup) need the OLD row too — what
+// tracking, and umbra-storage's replace-cleanup) need the OLD row too — what
 // the row looked like *before* this UPDATE. These two additive signals carry
 // `{ "previous": <old row>, "instance": <new row>, "actor": ... }` and fire
 // ONLY on UPDATE (never INSERT). `pre_save`/`post_save` are untouched.

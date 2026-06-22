@@ -23,7 +23,7 @@ pub struct FileDoc {
 }
 
 /// A do-nothing plugin that reports `provides_storage() == true` so the
-/// boot check is satisfied without pulling in umbra-media (a separate
+/// boot check is satisfied without pulling in umbra-storage (a separate
 /// crate umbra-core can't depend on).
 struct FakeStoragePlugin;
 

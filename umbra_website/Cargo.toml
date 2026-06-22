@@ -18,9 +18,8 @@ umbra-admin    = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-admin" }
 umbra-rest     = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-rest" }
 umbra-openapi  = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-openapi" }
 umbra-security = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-security" }
-umbra-static   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-static" }
+umbra-storage  = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-storage" }  # Unified storage: static-file serving + uploaded-file storage (local FS + S3).
 umbra-playground   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-playground" }  # Interactive API playground UI (think mini-Postman) at /playground/.
-umbra-media        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-media" }  # Uploaded-file storage abstraction (local FS + S3).
 umbra-oauth        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-oauth" }  # OAuth / social login (Google, GitHub) + account connection.
 umbra-realtime     = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-realtime" }  # SSE + WebSocket real-time push (live note feed).
 umbra-livereload   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-livereload" }  # Dev-only browser live-reload (SSE push + file watcher). Opt-in, inert outside Dev.

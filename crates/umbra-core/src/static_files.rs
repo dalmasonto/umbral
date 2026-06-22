@@ -28,7 +28,7 @@
 //! one spot. It is re-exported from the facade
 //! (`umbra::static_files::serve_file`) so a plugin that needs to serve
 //! a single file off disk can reuse it instead of hand-rolling the same
-//! logic; the standalone `umbra-static` `StaticPlugin` keeps its own
+//! logic; the standalone `umbra-storage` `StoragePlugin` static side keeps its own
 //! `ServeDir`/`include_dir` paths (a directory tree and an embedded
 //! tree are different shapes from a single-file serve) and is not
 //! rewired onto this primitive in this slice. The dev `max-age=0` /
@@ -98,7 +98,7 @@ impl std::error::Error for StaticError {
 /// `StaticStorage` rather than calling `std::fs` directly, so the same
 /// collect path targets the local filesystem ([`LocalStorage`], the
 /// default) or a remote object store (the feature-gated S3 backend in
-/// `umbra-static`) without the collect engine knowing which.
+/// `umbra-storage`) without the collect engine knowing which.
 ///
 /// `rel_path` is always the logical path RELATIVE to `static_root`
 /// (`"admin/admin.css"`, `"css/app.css"`), forward-slash separated. The
@@ -479,7 +479,7 @@ pub fn resolve_under_root(root: &Path, rel: &str) -> Option<PathBuf> {
 /// Serve a single on-disk file as an HTTP response, reusing
 /// `tower_http::ServeFile` for Content-Type, ETag, range, and
 /// `If-Modified-Since` handling. This is the framework's ONE
-/// file-serving path — the unified static handler and `umbra-static`
+/// file-serving path — the unified static handler and `umbra-storage`
 /// both route through it.
 ///
 /// `dev` forces `Cache-Control: no-cache` so a rebuilt asset is never
@@ -562,7 +562,7 @@ pub async fn static_handler(
 
     // Step 3 — app/site root dirs (no namespace), the full request path.
     // Real on-disk directories (a project's `./static`), served the same
-    // in dev and prod. This is what a `StaticPlugin` at `static_url`
+    // in dev and prod. This is what a `StoragePlugin` static side at `static_url`
     // contributes, so site CSS / images live at the bare `/static/...`.
     for root in &state.root_dirs {
         if let Some(resolved) = resolve_under_root(root, rel) {
@@ -585,7 +585,7 @@ pub struct StaticHandlerState {
     /// App/site-level static directories served at the bare
     /// `static_url` root (no namespace), from every plugin's
     /// [`Plugin::static_root_dirs`]. Tried after namespaces, with the
-    /// full request path. Typically a `StaticPlugin` pointed at
+    /// full request path. Typically a `StoragePlugin` static side pointed at
     /// `static_url` contributes its directory here so the framework owns
     /// `static_url` as one mount instead of a second catch-all colliding
     /// with the pipeline.

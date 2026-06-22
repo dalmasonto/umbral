@@ -106,7 +106,7 @@ The `created` field on `bulk_post_save` is `true` for INSERT terminals (`bulk_cr
 
 ## Update signals: the old row, snapshotted
 
-`pre_save` / `post_save` fire on **both** INSERT and UPDATE, and carry only the new instance. A whole class of subscribers — audit-log diffs, change tracking, and umbra-media's file replace-cleanup — also need the row as it looked **before** the UPDATE. That's what `pre_update:<table>` / `post_update:<table>` add:
+`pre_save` / `post_save` fire on **both** INSERT and UPDATE, and carry only the new instance. A whole class of subscribers — audit-log diffs, change tracking, and umbra-storage's file replace-cleanup — also need the row as it looked **before** the UPDATE. That's what `pre_update:<table>` / `post_update:<table>` add:
 
 - They fire on **UPDATE only** — never INSERT. (`Manager::create` and the INSERT branch of `Manager::save` never emit them.)
 - Their payload carries **both** rows: `previous` (the pre-UPDATE row read from the DB) and `instance` (the new value, post-UPDATE for `post_update`).

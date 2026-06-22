@@ -1024,14 +1024,14 @@ impl AppBuilder {
             || settings.static_url.starts_with("//");
 
         // App/site-level static dirs served at the bare `static_url` root.
-        // A `StaticPlugin` mounted AT `static_url` contributes its
+        // A `StoragePlugin`'s static side mounted AT `static_url` contributes its
         // directory here (and skips nesting its own catch-all), so the
         // framework owns `static_url` as ONE mount — a second
         // `/static/{*rest}` nest is exactly the conflict this avoids.
         let root_dirs = crate::static_files::StaticContribution::collect_root_dirs(&sorted_plugins);
 
         // Publish the static contributions ambiently for `collectstatic`
-        // (the `StaticPlugin` CLI command). Published UNCONDITIONALLY —
+        // (the `StoragePlugin` CLI command). Published UNCONDITIONALLY —
         // before the serving-mode gate below — because `collectstatic`
         // copies assets to disk regardless of serving mode (a CDN-mode
         // app still needs the disk tree built for upload). Mirrors the

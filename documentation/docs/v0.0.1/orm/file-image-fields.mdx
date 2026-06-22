@@ -6,12 +6,12 @@ icon: image
 tags: [orm, files, images, storage, media]
 ---
 
-`FileField` and `ImageField` are TEXT-backed model fields that hold a *storage key* - the opaque identifier a [`Storage`](/docs/v0.0.1/plugins/media) backend returns when it persists a file. The column stores the bare key; `FileField::url()` resolves it to a public URL at render time, so a template can show an uploaded file without the model author threading a storage handle through every call.
+`FileField` and `ImageField` are TEXT-backed model fields that hold a *storage key* - the opaque identifier a [`Storage`](/docs/v0.0.1/plugins/storage) backend returns when it persists a file. The column stores the bare key; `FileField::url()` resolves it to a public URL at render time, so a template can show an uploaded file without the model author threading a storage handle through every call.
 
 `ImageField` is a `FileField` in everything but its default form widget: the admin renders an image preview for an `ImageField` and a plain file input for a `FileField`. At the storage, serialisation, and SQL layers they behave identically.
 
 <Callout type="info">
-A model that declares a `FileField` / `ImageField` needs a `Storage` backend registered, or the build fails the `field.storage_backend` system check at boot. Add [`MediaPlugin`](/docs/v0.0.1/plugins/media) (it registers a filesystem backend) or call `umbra::storage::set_storage(...)` before `App::build()`.
+A model that declares a `FileField` / `ImageField` needs a `Storage` backend registered, or the build fails the `field.storage_backend` system check at boot. Add [`StoragePlugin`](/docs/v0.0.1/plugins/storage) with a media side (it registers a filesystem backend) or call `umbra::storage::set_storage(...)` before `App::build()`.
 </Callout>
 
 ## Example
@@ -52,20 +52,20 @@ Separately, a `String`/`Text` field rendered with the `markdown` widget lets a s
 
 ## Streaming large files
 
-The `Storage` backend behind these fields persists bytes through `store` (buffered) or `store_stream` (true-streaming, chunk-by-chunk, no full buffering), and reads them back through `retrieve` / `retrieve_stream`. For large uploads, [`MediaPlugin::save_stream`](/docs/v0.0.1/plugins/media#streaming-uploads-savestream) writes a streamed body to the backend and records the **actual** byte count in `media_file.size` - and when a `max_size` cap is configured it is enforced **mid-stream**, rejecting an oversize body the instant its real bytes cross the cap (never trusting `Content-Length`). The read/serve path already streams via `tower-http::ServeDir`. The streaming and buffered paths apply the **same** filename guards, so a `FileField` value never loses its stored-XSS or path-traversal defence by going through the streaming API.
+The `Storage` backend behind these fields persists bytes through `store` (buffered) or `store_stream` (true-streaming, chunk-by-chunk, no full buffering), and reads them back through `retrieve` / `retrieve_stream`. For large uploads, [`StoragePlugin::save_stream`](/docs/v0.0.1/plugins/storage#streaming-uploads-savestream) writes a streamed body to the backend and records the **actual** byte count in `media_file.size` - and when a `max_size` cap is configured it is enforced **mid-stream**, rejecting an oversize body the instant its real bytes cross the cap (never trusting `Content-Length`). The read/serve path already streams via `tower-http::ServeDir`. The streaming and buffered paths apply the **same** filename guards, so a `FileField` value never loses its stored-XSS or path-traversal defence by going through the streaming API.
 
 ## Cleanup on delete
 
-By default a deleted row's underlying file is left in storage — the key column goes away but the blob stays. Opt a model into orphan cleanup with [`MediaPlugin::cleanup_on_delete::<M>()`](/docs/v0.0.1/plugins/media): when a row is deleted, the framework removes the file behind each of its `FileField` / `ImageField` columns.
+By default a deleted row's underlying file is left in storage — the key column goes away but the blob stays. Opt a model into orphan cleanup with [`StoragePlugin::cleanup_on_delete::<M>()`](/docs/v0.0.1/plugins/storage): when a row is deleted, the framework removes the file behind each of its `FileField` / `ImageField` columns.
 
 ```rust
 App::builder()
     .plugin(SignalsPlugin)   // cleanup hangs off a pre_delete signal
-    .plugin(MediaPlugin::new("/media", "./media").cleanup_on_delete::<Post>())
+    .plugin(StoragePlugin::new().media("/media", "./media").cleanup_on_delete::<Post>())
     .build()?;
 ```
 
-The file columns are auto-detected from `M`'s metadata (any column the macro tagged with the `file` / `image` widget). If you overrode the widget on a file column, name the columns explicitly with `MediaPlugin::cleanup_files::<M>(&["..."])` instead.
+The file columns are auto-detected from `M`'s metadata (any column the macro tagged with the `file` / `image` widget). If you overrode the widget on a file column, name the columns explicitly with `StoragePlugin::cleanup_files::<M>(&["..."])` instead.
 
 <Callout type="warning">
 Cleanup is best-effort (a storage-delete error is logged, never failing the row delete) and is wired to the per-row `pre_delete` signal. A bulk `QuerySet::delete()` fires only `bulk_post_delete` (PKs, no instances), so it does **not** trigger file cleanup — call `delete_instance` per row when the file must go too. This mirrors Django's bulk-delete cascade limitation.
@@ -73,9 +73,9 @@ Cleanup is best-effort (a storage-delete error is logged, never failing the row 
 
 ### Replace cleanup
 
-Opting in to `cleanup_on_delete` / `cleanup_files` also reclaims the **old** blob when a file field is changed to a new key. Saving a row whose `FileField` moves from one key to another via `M::objects().save(row)` deletes the previous blob (a same-key save, or any non-file-column save, deletes nothing). This rides the per-row `post_update` signal; the bulk `update_values()` path doesn't trigger it. See [Storage and media](/docs/v0.0.1/plugins/media#replace-cleanup-gaps2-92) for the full contract.
+Opting in to `cleanup_on_delete` / `cleanup_files` also reclaims the **old** blob when a file field is changed to a new key. Saving a row whose `FileField` moves from one key to another via `M::objects().save(row)` deletes the previous blob (a same-key save, or any non-file-column save, deletes nothing). This rides the per-row `post_update` signal; the bulk `update_values()` path doesn't trigger it. See [Storage (Static + Media)](/docs/v0.0.1/plugins/storage#replace-cleanup-gaps2-92) for the full contract.
 
 ## See also
 
-- [Storage and media](/docs/v0.0.1/plugins/media) - the `Storage` trait and `MediaPlugin`.
+- [Storage (Static + Media)](/docs/v0.0.1/plugins/storage) - the `Storage` trait and `StoragePlugin`.
 - `arch.md` and `docs/decisions/2026-06-02-media-and-s3.md` for the design rationale.

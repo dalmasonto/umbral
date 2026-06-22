@@ -19,7 +19,7 @@
 //! ## Storage seam
 //!
 //! Reads the backend through [`umbra::storage::storage_opt`]. When no
-//! backend is installed (no `MediaPlugin`, no `set_storage`) the handler
+//! backend is installed (no `StoragePlugin`, no `set_storage`) the handler
 //! returns a clear `409 Conflict` JSON error rather than panicking — the
 //! editor surfaces it through `onError`. With a backend, the bytes go
 //! through [`Storage::store`] and the returned [`StoredFile::url`] is sent
@@ -144,11 +144,11 @@ pub(crate) async fn upload_image(headers: HeaderMap, body: Bytes) -> Response {
     }
 
     // Resolve the storage backend through the ambient seam. None → the app
-    // has no MediaPlugin / set_storage; report it instead of panicking.
+    // has no StoragePlugin / set_storage; report it instead of panicking.
     let Some(storage) = umbra::storage::storage_opt() else {
         return json_error(
             StatusCode::CONFLICT,
-            "image upload requires a storage backend — add MediaPlugin",
+            "image upload requires a storage backend — add StoragePlugin",
         );
     };
 

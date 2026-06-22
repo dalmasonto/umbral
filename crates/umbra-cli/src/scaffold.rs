@@ -308,9 +308,8 @@ umbra-security = {{ git = "https://github.com/dalmasonto/umbra" }}
 # umbra-rls          = {{ git = "https://github.com/dalmasonto/umbra" }}  # Postgres row-level security policy registration.
 # umbra-cache        = {{ git = "https://github.com/dalmasonto/umbra" }}  # Per-request caching helper.
 # umbra-email        = {{ git = "https://github.com/dalmasonto/umbra" }}  # SMTP + MIME email composer + sender.
-# umbra-media        = {{ git = "https://github.com/dalmasonto/umbra" }}  # Uploaded-file storage abstraction (local FS + S3).
+# umbra-storage      = {{ git = "https://github.com/dalmasonto/umbra" }}  # Unified storage: static-file serving (prod, whitenoise-equivalent) + uploaded-file storage (local FS + S3).
 # umbra-signals      = {{ git = "https://github.com/dalmasonto/umbra" }}  # Pre/post save/delete signal dispatch.
-# umbra-static       = {{ git = "https://github.com/dalmasonto/umbra" }}  # Static-file serving for prod (whitenoise-equivalent).
 # umbra-livereload   = {{ git = "https://github.com/dalmasonto/umbra" }}  # Dev-only browser live-reload (SSE push + file watcher). Add `.plugin(LiveReloadPlugin::new())`.
 
 # ----- Third-party + framework runtime deps --------------------------------
@@ -1654,7 +1653,7 @@ mod tests {
     fn scaffold_app_rejects_reserved_name_with_hyphen_variant() {
         // `static` is reserved; so is `my-static`-anything? No — only
         // exact matches. But hyphens should normalize to underscores so
-        // someone typing `umbra-static` or `umbra_static` doesn't slip
+        // someone typing `umbra-storage` or `umbra_storage` doesn't slip
         // through. We compare on the underscored form.
         let tmp = tempfile::tempdir().expect("tempdir");
         // Pure name check: built-in names contain no hyphens today, but

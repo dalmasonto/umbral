@@ -75,7 +75,7 @@ Every method below is a real trait method with a default impl (only `name()` is 
 | `route_paths` | `fn route_paths(&self) -> Vec<RouteSpec>` | empty | Declared paths for the dev-mode 404 page (informational only). |
 | `openapi_paths` | `fn openapi_paths(&self) -> Vec<(String, serde_json::Value)>` | empty | OpenAPI path items `umbra-openapi` merges into the spec. |
 | `system_checks` | `fn system_checks(&self) -> Vec<SystemCheck>` | empty | Boot-time invariants (phase 4). |
-| `provides_storage` | `fn provides_storage(&self) -> bool` | `false` | `true` if `on_ready` registers a `Storage` backend (e.g. `MediaPlugin`). |
+| `provides_storage` | `fn provides_storage(&self) -> bool` | `false` | `true` if `on_ready` registers a `Storage` backend (e.g. `StoragePlugin`). |
 | `database` | `fn database(&self) -> Option<&'static str>` | `None` | DB alias every model this plugin owns reads/writes (umbra's `DATABASE_ROUTERS`). |
 | `templates_dirs` | `fn templates_dirs(&self) -> Vec<PathBuf>` | empty | Template search directories. |
 | `template_registrars` | `fn template_registrars(&self) -> Vec<TemplateRegistrar>` | empty | Custom minijinja filters / functions / globals (Django's `{% load %}`). |
