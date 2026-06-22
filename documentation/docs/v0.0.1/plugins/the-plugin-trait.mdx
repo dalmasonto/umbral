@@ -100,8 +100,8 @@ Every method below is a real trait method with a default impl (only `name()` is 
 
 ## What's deferred
 
-- A *declarative* `middleware()` whose entries are ordered tower `Layer`s. The ergonomic `before_request` / `after_response` form **is** shipped; what's deferred is the cross-plugin layer-ordering contract a fully declarative `Layer`-based form would need. Use `wrap_router` today when you need a raw `Layer`.
-- inventory / linkme auto-registration. Explicit `.plugin(...)` is the default recommendation; auto lands when a built-in opts in.
+- A *declarative* `middleware()` whose entries are ordered tower `Layer`s. The ergonomic `before_request` / `after_response` form **is** shipped — including **declarative ordering** via `Middleware::order() -> i32` (lower = outer; the stack is stable-sorted before install, so a middleware places itself regardless of registration timing). What's still deferred is a declarative form over *raw tower `Layer`s* — cross-plugin `Layer` ordering runs into the trait-object lifetime problem `Layer`'s generics produce; use `wrap_router` when you need a raw `Layer`.
+- inventory / linkme auto-registration is **intentionally not pursued** — implicit compile-time collection contradicts umbra's explicit `App::builder().plugin(...)` / `.middleware(...)` wiring (the framework keeps exactly one intentional global). Middleware is always contributed explicitly.
 
 ## The on_ready context
 

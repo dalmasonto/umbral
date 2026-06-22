@@ -54,6 +54,18 @@ pub trait Middleware: Send + Sync + 'static {
         std::any::type_name::<Self>()
     }
 
+    /// Declarative position in the chain. **Lower values are OUTER** — the
+    /// middleware's `before_request` runs earlier and its `after_response`
+    /// runs later (onion order). Middleware with equal `order` keep their
+    /// registration order (app-level before plugin-level; plugins in
+    /// dependency order). `MiddlewareStack::apply` stable-sorts by this
+    /// before installing, so a middleware can place itself relative to
+    /// others (e.g. a session loader at `-100`, an auth gate at `-50`)
+    /// without depending on registration timing. Default `0`.
+    fn order(&self) -> i32 {
+        0
+    }
+
     /// Inspect or modify the request before it reaches the handler.
     ///
     /// Return `Ok(req)` to continue (with the possibly-modified request),
@@ -112,10 +124,15 @@ impl MiddlewareStack {
 
     /// Wrap `router` with this stack as a single axum middleware layer.
     /// A no-op (returns the router unchanged) when the stack is empty.
-    pub fn apply(self, router: axum::Router) -> axum::Router {
+    pub fn apply(mut self, router: axum::Router) -> axum::Router {
         if self.middleware.is_empty() {
             return router;
         }
+        // Declarative ordering: stable-sort by `Middleware::order` (lower =
+        // outer) so chain position is controllable independent of
+        // registration timing. `sort_by_key` is stable, so equal-`order`
+        // middleware keep their insertion order (app before plugins).
+        self.middleware.sort_by_key(|mw| mw.order());
         let state = Arc::new(self.middleware);
         router.layer(axum::middleware::from_fn_with_state(state, run_stack))
     }

@@ -163,3 +163,86 @@ async fn pipeline_orders_hooks_and_supports_short_circuit() {
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], b"blocked by gate");
 }
+
+/// A tagger with an explicit `order`, to prove declarative chain ordering.
+struct OrderedTagger {
+    tag: &'static str,
+    order: i32,
+}
+
+#[async_trait]
+impl Middleware for OrderedTagger {
+    fn order(&self) -> i32 {
+        self.order
+    }
+    async fn before_request(&self, mut req: Request) -> Result<Request, Response> {
+        let prev = req.headers().get("x-before").and_then(|v| v.to_str().ok());
+        let next = append(prev, self.tag);
+        req.headers_mut().insert("x-before", next.parse().unwrap());
+        Ok(req)
+    }
+}
+
+async fn echo_before(req: Request) -> Response {
+    let chain = req
+        .headers()
+        .get("x-before")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("none")
+        .to_string();
+    (StatusCode::OK, chain).into_response()
+}
+
+/// `Middleware::order` controls chain position independent of registration
+/// timing: pushed `Z(10), A(-5), M(0)`, they run `A, M, Z` (sorted by
+/// `order`, lower = outer/earlier). Drives `MiddlewareStack::apply`
+/// directly so it needs no `App::build` (settings is one-shot per binary).
+#[tokio::test]
+async fn order_sorts_chain_independent_of_insertion() {
+    let mut stack = umbra::middleware::MiddlewareStack::new();
+    stack.push(Arc::new(OrderedTagger { tag: "Z", order: 10 }));
+    stack.push(Arc::new(OrderedTagger { tag: "A", order: -5 }));
+    stack.push(Arc::new(OrderedTagger { tag: "M", order: 0 }));
+
+    let router = stack.apply(Router::new().route("/ok", get(echo_before)));
+    let resp = router
+        .oneshot(Request::builder().uri("/ok").body(Body::empty()).unwrap())
+        .await
+        .expect("oneshot");
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        &body[..],
+        b"A,M,Z",
+        "before_request runs in order() sequence, not insertion order (Z,A,M)"
+    );
+}
+
+/// Equal `order` keeps insertion order (the sort is stable).
+#[tokio::test]
+async fn equal_order_keeps_insertion_order() {
+    let mut stack = umbra::middleware::MiddlewareStack::new();
+    stack.push(Arc::new(OrderedTagger {
+        tag: "first",
+        order: 0,
+    }));
+    stack.push(Arc::new(OrderedTagger {
+        tag: "second",
+        order: 0,
+    }));
+    stack.push(Arc::new(OrderedTagger {
+        tag: "third",
+        order: 0,
+    }));
+
+    let router = stack.apply(Router::new().route("/ok", get(echo_before)));
+    let resp = router
+        .oneshot(Request::builder().uri("/ok").body(Body::empty()).unwrap())
+        .await
+        .expect("oneshot");
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        &body[..],
+        b"first,second,third",
+        "stable sort preserves insertion order for equal order()"
+    );
+}

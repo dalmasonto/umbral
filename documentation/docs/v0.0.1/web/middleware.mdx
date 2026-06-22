@@ -70,6 +70,24 @@ impl Plugin for MyPlugin {
 
 App-level middleware is added to the stack first, then each plugin's contribution in topological dependency order.
 
+### Controlling order
+
+That insertion order is just the **default**. Override `Middleware::order(&self) -> i32` to place a middleware declaratively — **lower values are outer** (its `before_request` runs earlier and its `after_response` runs later). The stack is stable-sorted by `order` before it's installed, so a middleware lands in the right place regardless of which plugin registered it or when:
+
+```rust
+impl Middleware for SessionLoader {
+    fn order(&self) -> i32 { -100 }   // outermost: runs before auth, unwinds last
+    // before_request / after_response …
+}
+
+impl Middleware for AuthGate {
+    fn order(&self) -> i32 { -50 }    // inside the session, outside the app
+    // …
+}
+```
+
+Middleware with equal `order` keep their registration order (app-level before plugin-level; plugins in dependency order). The default is `0`.
+
 ## Composition: the onion
 
 `before_request` hooks run in **registration order**; `after_response` hooks run in the **reverse** order, so each middleware wraps the ones registered after it. With a stack `[A, B, C]` and a request that reaches the handler:
