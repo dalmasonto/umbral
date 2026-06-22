@@ -250,7 +250,7 @@
 
 49. [x] Facade re-exports with_actor / current_actor from umbra::signals — archived
 
-50. [ ] Admin plugin inline editing of children. This will remain defered since its a large refactoring effort with no direct impact on the core Umbra API.
+50. [x] Admin plugin inline editing of children. This will remain defered since its a large refactoring effort with no direct impact on the core Umbra API. — SHIPPED v1 (2026-06-23): tabular+stacked inlines on the full-page change form; add/edit/delete reverse-FK children saved ATOMICALLY with the parent (DynQuerySet _in_tx); admin/inlines.mdx. Sheet-path inlines are a follow-up.
 
 51. [x] Inline CSS in the umbra-site is the legitimate "custom" case (Tailwind utilities can't express the dropdown component's `::before` hover bridge, `[aria-expanded]`/`:hover` state selectors, `:root` design tokens, or dynamic per-element values like `--i: {{ loop.index }}` / `width: {{ pct }}%`) — explained, not a Tailwind-avoidance to fix — archived
 
