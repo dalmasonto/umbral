@@ -63,13 +63,20 @@ pub(crate) async fn ws_handler(
     // Enforce the aggregate connection cap *before* upgrading: a refused
     // registration returns 503 instead of completing the WS handshake.
     // (WS has no native Last-Event-ID, so the cap is the relevant gap here.)
-    let Some((conn_id, rx)) = registry.register(user_id, groups, DEFAULT_BUFFER).await else {
+    let Some((conn_id, rx, presence)) = registry
+        .register_with_presence(user_id, groups, DEFAULT_BUFFER)
+        .await
+    else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "realtime: connection limit reached",
         )
             .into_response();
     };
+
+    // Fire presence join + sync for any newly-entered presence-enabled group
+    // (gated by the spec; anonymous conns yield nothing).
+    tokio::spawn(crate::dispatch_presence(presence));
 
     ws.on_upgrade(move |socket| {
         handle_socket(socket, conn_id, rx, user_id, registry, handler)
@@ -134,7 +141,8 @@ impl Drop for WsGuard {
         let registry = self.registry.clone();
         let id = self.conn_id;
         tokio::spawn(async move {
-            registry.deregister(id).await;
+            let presence = registry.deregister_with_presence(id).await;
+            crate::dispatch_presence(presence).await;
         });
     }
 }

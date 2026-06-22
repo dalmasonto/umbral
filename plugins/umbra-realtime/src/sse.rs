@@ -94,8 +94,12 @@ pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -
         .and_then(|s| s.trim().parse::<u64>().ok());
 
     // Enforce the aggregate connection cap: a refused registration returns
-    // 503 instead of opening the stream.
-    let Some((conn_id, rx)) = registry.register(user_id, groups.clone(), DEFAULT_BUFFER).await
+    // 503 instead of opening the stream. `register_with_presence` also returns
+    // the per-group presence transitions this connect caused (computed under
+    // the registry lock), which we dispatch below once the lock is dropped.
+    let Some((conn_id, rx, presence)) = registry
+        .register_with_presence(user_id, groups.clone(), DEFAULT_BUFFER)
+        .await
     else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -103,6 +107,11 @@ pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -
         )
             .into_response();
     };
+
+    // Fire presence join + sync for any newly-entered presence-enabled group.
+    // The spec gates which groups emit; an anonymous conn yields no transitions.
+    // Spawned so the handshake response isn't blocked on the broadcast.
+    tokio::spawn(crate::dispatch_presence(presence));
 
     let backlog: VecDeque<Event> = match last_event_id {
         Some(id) => registry.replay_since(id, user_id, &groups).into(),
@@ -137,7 +146,10 @@ impl Drop for ConnGuard {
         let registry = self.registry.clone();
         let id = self.conn_id;
         tokio::spawn(async move {
-            registry.deregister(id).await;
+            // Deregister and dispatch any last-leave presence transitions this
+            // disconnect caused (the user's LAST conn leaving a presence group).
+            let presence = registry.deregister_with_presence(id).await;
+            crate::dispatch_presence(presence).await;
         });
     }
 }

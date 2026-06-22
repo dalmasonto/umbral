@@ -156,6 +156,25 @@ struct RegistryInner {
     by_group: HashMap<String, HashSet<ConnId>>,
 }
 
+/// The per-group presence transitions a single connection's register /
+/// deregister produced, computed atomically under the registry lock so the
+/// caller can dispatch them after dropping the lock.
+///
+/// Dedup is by `user_id`: `joined` lists `(group, user_id)` where this conn was
+/// the user's **first** in that group; `left` lists groups where it was their
+/// **last**; `sync` carries, for each newly-entered presence group, the full
+/// set of present (deduped) user ids — delivered to the joining conn so it sees
+/// who's already there. Anonymous connections produce no transitions.
+#[derive(Default, Debug)]
+pub struct PresenceTransitions {
+    /// `(group, user_id)` for each group this user FIRST entered via this conn.
+    pub joined: Vec<(String, i64)>,
+    /// `(group, user_id)` for each group this user FULLY LEFT via this conn.
+    pub left: Vec<(String, i64)>,
+    /// `(group, present_user_ids)` snapshot per newly-entered group, for sync.
+    pub sync: Vec<(String, Vec<i64>)>,
+}
+
 /// Tracks every live connection and the user / groups it belongs to, so a
 /// [`TargetKind`] resolves to a set of connections in O(1). Shared behind
 /// an `Arc`; the transports register/deregister, the broker dispatches.
@@ -262,6 +281,106 @@ impl Registry {
                 }
             }
         }
+    }
+
+    /// Like [`register`](Self::register), but also returns the per-group
+    /// **presence transitions** this connection caused, computed atomically
+    /// under the same write lock. A `(group, user_id)` lands in
+    /// [`joined`](PresenceTransitions::joined) only when this conn is the user's
+    /// FIRST in `group` (dedup by user); each newly-entered group also yields a
+    /// `sync` snapshot of the present (deduped) user ids in that group.
+    ///
+    /// Anonymous connections (`user_id == None`) produce no transitions — they
+    /// never appear in presence. The caller dispatches the returned transitions
+    /// after this returns (the lock is dropped), keeping sends off the lock.
+    pub async fn register_with_presence(
+        &self,
+        user_id: Option<i64>,
+        groups: HashSet<String>,
+        buffer: usize,
+    ) -> Option<(ConnId, mpsc::Receiver<Event>, PresenceTransitions)> {
+        let mut inner = self.inner.write().await;
+        if let Some(max) = self.max_connections
+            && inner.conns.len() >= max
+        {
+            return None;
+        }
+        let id = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = mpsc::channel(buffer.max(1));
+
+        // First-join per group is computed BEFORE this conn is indexed: the
+        // user just entered `group` iff they had no OTHER live conn in it.
+        let mut transitions = PresenceTransitions::default();
+        if let Some(uid) = user_id {
+            for g in &groups {
+                if !user_in_group(&inner, uid, g) {
+                    transitions.joined.push((g.clone(), uid));
+                }
+            }
+        }
+
+        if let Some(uid) = user_id {
+            inner.by_user.entry(uid).or_default().insert(id);
+        }
+        for g in &groups {
+            inner.by_group.entry(g.clone()).or_default().insert(id);
+        }
+        inner.conns.insert(
+            id,
+            ConnEntry {
+                tx,
+                user_id,
+                groups: groups.clone(),
+            },
+        );
+
+        // Sync snapshot per newly-entered group: the deduped present user ids,
+        // computed AFTER this conn is indexed so the joining user is included.
+        for (g, _uid) in &transitions.joined {
+            transitions.sync.push((g.clone(), present_user_ids(&inner, g)));
+        }
+
+        Some((id, rx, transitions))
+    }
+
+    /// Like [`deregister`](Self::deregister), but also returns the per-group
+    /// presence transitions this disconnect caused: a `(group, user_id)` in
+    /// [`left`](PresenceTransitions::left) for each group this conn was the
+    /// user's LAST in (dedup by user). Anonymous conns produce none. The caller
+    /// dispatches after the lock is dropped.
+    pub async fn deregister_with_presence(&self, id: ConnId) -> PresenceTransitions {
+        let mut inner = self.inner.write().await;
+        let mut transitions = PresenceTransitions::default();
+        let Some(entry) = inner.conns.remove(&id) else {
+            return transitions;
+        };
+        let user_id = entry.user_id;
+        if let Some(uid) = user_id
+            && let Some(set) = inner.by_user.get_mut(&uid)
+        {
+            set.remove(&id);
+            if set.is_empty() {
+                inner.by_user.remove(&uid);
+            }
+        }
+        for g in &entry.groups {
+            if let Some(set) = inner.by_group.get_mut(g) {
+                set.remove(&id);
+                if set.is_empty() {
+                    inner.by_group.remove(g);
+                }
+            }
+        }
+        // Last-leave per group: now that this conn is removed, the user fully
+        // left `group` iff they have no remaining conn in it.
+        if let Some(uid) = user_id {
+            for g in &entry.groups {
+                if !user_in_group(&inner, uid, g) {
+                    transitions.left.push((g.clone(), uid));
+                }
+            }
+        }
+        transitions
     }
 
     /// Add a live connection to a group (server-driven membership).
@@ -390,6 +509,35 @@ impl Registry {
     pub async fn connection_count(&self) -> usize {
         self.inner.read().await.conns.len()
     }
+}
+
+/// Whether `user_id` has at least one live connection currently in `group`.
+/// Drives presence dedup: a user is "present" in a group iff this is `true`.
+fn user_in_group(inner: &RegistryInner, user_id: i64, group: &str) -> bool {
+    let Some(group_conns) = inner.by_group.get(group) else {
+        return false;
+    };
+    group_conns.iter().any(|cid| {
+        inner
+            .conns
+            .get(cid)
+            .is_some_and(|e| e.user_id == Some(user_id))
+    })
+}
+
+/// The deduped set of authenticated user ids currently present in `group`
+/// (anonymous conns excluded), ascending. The presence sync snapshot.
+fn present_user_ids(inner: &RegistryInner, group: &str) -> Vec<i64> {
+    let Some(group_conns) = inner.by_group.get(group) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<i64> = group_conns
+        .iter()
+        .filter_map(|cid| inner.conns.get(cid).and_then(|e| e.user_id))
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 /// Whether an [`Envelope`]'s target would deliver to a connection with this
@@ -846,6 +994,166 @@ impl Expose {
 }
 
 // =========================================================================
+// Presence — gated "who's online in a group".
+// =========================================================================
+
+/// Decides which groups have **presence** ("who's online") enabled, and how a
+/// present user's identity is projected onto the wire.
+///
+/// Presence is **off for every group by default** — a [`RealtimePlugin`] with
+/// no [`with_presence`](RealtimePlugin::with_presence) emits no `presence:*`
+/// events at all. Enabling it is a conscious, per-group opt-in: a group passes
+/// [`enabled`](Self::enabled) iff the dev's predicate (or prefix set) matches
+/// it. A group that isn't presence-enabled fans out nothing on connect/disconnect.
+///
+/// Because presence exposes *user identity*, the projection is locked down:
+///
+/// - **Authenticated only.** Anonymous connections (`user_id == None`) are
+///   excluded entirely — there's nothing to dedupe on, and "an anonymous person
+///   is here" is itself a leak. Only signed-in users appear.
+/// - **Id-only by default.** Without a [`resolver`](Self::resolver), a present
+///   user is broadcast as `{ "id": <user_id> }` and nothing else — never the
+///   raw user row. A resolver (`Fn(i64) -> serde_json::Value`) is the dev's
+///   explicit choice of what's safe to broadcast (e.g. `{id, name, avatar}`).
+/// - **Policy-gated visibility.** Presence events go through the normal group
+///   dispatch, so [`GroupPolicy::can_join`] already governs *who can see* a
+///   group's presence: a client that can't join `room:42` never receives its
+///   `presence:*` events.
+pub struct PresenceSpec {
+    /// Returns `true` for a group that has presence enabled. Default (no
+    /// [`with_presence`]) is the all-`false` predicate.
+    enabled: Arc<dyn Fn(&str) -> bool + Send + Sync>,
+    /// Projects a present user's `i64` id to the JSON broadcast for them.
+    /// Default: `{ "id": <user_id> }` only.
+    resolver: Arc<dyn Fn(i64) -> serde_json::Value + Send + Sync>,
+}
+
+impl PresenceSpec {
+    /// Enable presence for any group matching `predicate`. The default
+    /// projection is **id-only** (`{ "id": <user_id> }`); chain
+    /// [`resolver`](Self::resolver) to broadcast more.
+    pub fn matching<F>(predicate: F) -> Self
+    where
+        F: Fn(&str) -> bool + Send + Sync + 'static,
+    {
+        Self {
+            enabled: Arc::new(predicate),
+            resolver: Arc::new(default_presence_projection),
+        }
+    }
+
+    /// Enable presence for any group whose name starts with one of `prefixes`
+    /// (e.g. `["room:", "public:lobby"]`). Sugar over [`matching`](Self::matching).
+    pub fn prefixes<I, S>(prefixes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let prefixes: Vec<String> = prefixes.into_iter().map(Into::into).collect();
+        Self::matching(move |group| prefixes.iter().any(|p| group.starts_with(p.as_str())))
+    }
+
+    /// Supply the identity projection: map a present user's `i64` id to the
+    /// JSON broadcast for them. **This is the dev's explicit choice of what's
+    /// safe to expose** — the default (no resolver) is id-only.
+    ///
+    /// ```ignore
+    /// PresenceSpec::prefixes(["room:"]).resolver(|uid| serde_json::json!({
+    ///     "id": uid,
+    ///     "name": lookup_name(uid),
+    /// }))
+    /// ```
+    pub fn resolver<F>(mut self, f: F) -> Self
+    where
+        F: Fn(i64) -> serde_json::Value + Send + Sync + 'static,
+    {
+        self.resolver = Arc::new(f);
+        self
+    }
+
+    /// Whether `group` has presence enabled.
+    pub fn enabled(&self, group: &str) -> bool {
+        (self.enabled)(group)
+    }
+
+    /// The projected presence info for a present `user_id`.
+    pub fn project(&self, user_id: i64) -> serde_json::Value {
+        (self.resolver)(user_id)
+    }
+}
+
+impl Default for PresenceSpec {
+    /// Presence **off** for every group, id-only projection.
+    fn default() -> Self {
+        Self {
+            enabled: Arc::new(|_| false),
+            resolver: Arc::new(default_presence_projection),
+        }
+    }
+}
+
+/// The default presence projection: `{ "id": <user_id> }` and nothing else.
+/// Never the raw user — the dev opts into more via [`PresenceSpec::resolver`].
+fn default_presence_projection(user_id: i64) -> serde_json::Value {
+    serde_json::json!({ "id": user_id })
+}
+
+/// Presence event names dispatched to a group (subscribers route on these):
+/// the full member list on join, a single user joining, a single user leaving.
+pub const PRESENCE_SYNC: &str = "presence:sync";
+pub const PRESENCE_JOIN: &str = "presence:join";
+pub const PRESENCE_LEAVE: &str = "presence:leave";
+
+/// Dispatch the presence transitions a connection's register/deregister caused.
+/// Best-effort and policy-gated by the normal group dispatch: a `presence:join`
+/// / `presence:leave` is sent to the group only when this conn was the user's
+/// FIRST / LAST in it. `sync` additionally delivers the joining conn the current
+/// member list of each newly-entered presence group.
+///
+/// Called from the SSE connect path / `ConnGuard` with the transitions the
+/// registry computed under its lock (the lock is already dropped here, so the
+/// async sends never hold it). No-op when presence isn't installed/enabled.
+///
+/// Public so a transport (or a test) holding [`PresenceTransitions`] from
+/// [`Registry::register_with_presence`] / [`deregister_with_presence`] can drive
+/// the same gated, projected dispatch the built-in SSE/WS paths use.
+pub async fn dispatch_presence(transitions: PresenceTransitions) {
+    let Some(rt) = REALTIME.get() else {
+        return;
+    };
+    let spec = &rt.presence;
+    // First-join broadcasts + sync-to-the-joining-conn.
+    for (group, user_id) in transitions.joined {
+        if !spec.enabled(&group) {
+            continue;
+        }
+        let member = spec.project(user_id);
+        Realtime::to_group(group.clone())
+            .send(PRESENCE_JOIN, &member)
+            .await;
+    }
+    // Sync: deliver the current member list of each newly-entered group to the
+    // whole group (the joining conn included). Sent after the join broadcast so
+    // a freshly-joined member is already counted in the snapshot.
+    for (group, members) in transitions.sync {
+        if !spec.enabled(&group) {
+            continue;
+        }
+        let projected: Vec<serde_json::Value> =
+            members.into_iter().map(|uid| spec.project(uid)).collect();
+        Realtime::to_group(group).send(PRESENCE_SYNC, &projected).await;
+    }
+    // Last-leave broadcasts.
+    for (group, user_id) in transitions.left {
+        if !spec.enabled(&group) {
+            continue;
+        }
+        let member = spec.project(user_id);
+        Realtime::to_group(group).send(PRESENCE_LEAVE, &member).await;
+    }
+}
+
+// =========================================================================
 // Ambient handle.
 // =========================================================================
 
@@ -861,6 +1169,7 @@ pub struct Realtime {
     policy: Arc<dyn GroupPolicy>,
     handler: Arc<dyn MessageHandler>,
     resolver: IdentityResolver,
+    presence: Arc<PresenceSpec>,
 }
 
 impl Realtime {
@@ -897,6 +1206,12 @@ impl Realtime {
     /// to populate the registry entry and pass the user id to the group policy.
     pub fn resolver() -> IdentityResolver {
         Self::get().resolver.clone()
+    }
+
+    /// The configured presence spec (which groups have presence enabled + the
+    /// identity projection). Defaults to presence-off for every group.
+    pub fn presence() -> Arc<PresenceSpec> {
+        Self::get().presence.clone()
     }
 
     /// Target a single user's every live connection.
@@ -980,6 +1295,10 @@ pub struct RealtimePlugin {
     /// unlimited (the default); set via
     /// [`max_connections`](Self::max_connections).
     max_connections: Option<usize>,
+    /// Which groups have presence ("who's online") enabled + the identity
+    /// projection. Defaults to presence-off for every group; opt in via
+    /// [`with_presence`](Self::with_presence).
+    presence: Arc<PresenceSpec>,
 }
 
 /// The no-op identity resolver: every connection is anonymous (`None`).
@@ -998,6 +1317,7 @@ impl Default for RealtimePlugin {
             redis_url: None,
             replay_cap: DEFAULT_REPLAY_BUFFER,
             max_connections: None,
+            presence: Arc::new(PresenceSpec::default()),
         }
     }
 }
@@ -1076,6 +1396,39 @@ impl RealtimePlugin {
     /// the next connection.
     pub fn max_connections(mut self, n: usize) -> Self {
         self.max_connections = Some(n);
+        self
+    }
+
+    /// Enable **presence** ("who's online in a group"), opt-in and gated. By
+    /// default presence is OFF for every group and no `presence:*` event is ever
+    /// emitted; this turns it on only for the groups the [`PresenceSpec`]
+    /// matches, and controls how a present user's identity is projected.
+    ///
+    /// Safety is the default:
+    /// - **Off unless enabled.** A group not matched by the spec emits nothing.
+    /// - **Authenticated only.** Anonymous connections never appear in presence.
+    /// - **Id-only projection.** Without a [`resolver`](PresenceSpec::resolver),
+    ///   a present user is broadcast as `{ "id": <user_id> }` — never the raw row.
+    /// - **Policy-gated.** Presence rides the normal group dispatch, so
+    ///   [`GroupPolicy::can_join`] governs who can *see* a group's presence.
+    ///
+    /// Dedup is by user: a user with three tabs in a group is "present" once;
+    /// `presence:join` fires on their FIRST connection into the group and
+    /// `presence:leave` only when their LAST one leaves.
+    ///
+    /// ```ignore
+    /// // Id-only, for any `room:*` group:
+    /// RealtimePlugin::new().with_presence(PresenceSpec::prefixes(["room:"]));
+    ///
+    /// // Custom projection (the dev's choice of what's safe to broadcast):
+    /// RealtimePlugin::new().with_presence(
+    ///     PresenceSpec::prefixes(["room:"]).resolver(|uid| serde_json::json!({
+    ///         "id": uid, "name": name_of(uid),
+    ///     })),
+    /// );
+    /// ```
+    pub fn with_presence(mut self, spec: PresenceSpec) -> Self {
+        self.presence = Arc::new(spec);
         self
     }
 
@@ -1235,6 +1588,7 @@ impl Plugin for RealtimePlugin {
             policy: self.policy.clone(),
             handler: self.handler.clone(),
             resolver: self.resolver.clone(),
+            presence: self.presence.clone(),
         });
         // Register the model-change subscriptions now that the ambient
         // handle exists (a fired handler calls Realtime::to_group, etc.).

@@ -1,0 +1,95 @@
+---
+title: Presence
+description: "Who's online in a group" — opt-in per group, identity projected to id-only by default, deduped by user, and governed by the same GroupPolicy that gates the room.
+sidebar_position: 3
+tags: [realtime, presence, security, sse, online]
+---
+
+# Presence
+
+Show **who's online in a group** ("3 people in this room") with no polling. Presence rides the same SSE/WS connections you already have: when a user connects to or disconnects from a presence-enabled group, the framework broadcasts a small `presence:*` event to that group.
+
+Because presence exposes **user identity**, it is locked down by default. It is **off for every group** until you opt a group in, only **signed-in** users appear, and a present user is broadcast as **`{ "id": <user_id> }` and nothing else** unless you supply a resolver.
+
+```rust
+use umbra_realtime::{PresenceSpec, RealtimePlugin};
+
+RealtimePlugin::new()
+    // Enable presence ONLY for groups named `room:*`. Every other group emits nothing.
+    .with_presence(PresenceSpec::prefixes(["room:"]))
+```
+
+You can match groups with a predicate instead of a prefix set:
+
+```rust
+PresenceSpec::matching(|group| group == "public:lobby" || group.starts_with("room:"))
+```
+
+## The client: `umbra.realtime.presence`
+
+Sugar over [`subscribe`](sse#connecting-the-browser-umbra-realtime-subscribe) that routes a group's `presence:sync` / `presence:join` / `presence:leave` events to handlers. It returns the same `{ unsubscribe }` and shares the one cross-tab connection.
+
+```html
+<script src="/realtime/client.js"></script>
+<script>
+  umbra.realtime.presence('room:42', {
+    sync:  function (members) { /* [{id, ...}] — the current member list, sent on join */ },
+    join:  function (member)  { /* one user became present */ },
+    leave: function (member)  { /* one user fully left */ },
+  });
+</script>
+```
+
+`sync` arrives once when you join (the snapshot of who's already there); `join` / `leave` stream the transitions after that.
+
+## Identity projection
+
+The default payload is **id-only** — never the raw user row:
+
+```json
+{ "id": 7 }
+```
+
+That's deliberate: the client knows *who* is present by id and looks the rest up through its own authorized path. If you want to broadcast more (a display name, an avatar), supply a resolver — **this is your explicit choice of what's safe to put on the wire**:
+
+```rust
+PresenceSpec::prefixes(["room:"]).resolver(|uid| serde_json::json!({
+    "id":   uid,
+    "name": display_name(uid),   // whatever you decide is safe to broadcast
+}))
+```
+
+The resolver's output *is* the member payload for `sync` / `join` / `leave` — exactly those keys, nothing else.
+
+## Dedup by user
+
+Presence is per **user**, not per connection. A user with three tabs open in a room is "present" once:
+
+- `presence:join` fires only on the user's **first** connection into a group.
+- `presence:leave` fires only when their **last** connection leaves it.
+
+Opening a second tab adds no second `join`; closing one of two tabs is not a `leave`. Closing the last one is.
+
+## Security
+
+<CardGrid>
+  <Card title="Off unless enabled">
+    Presence is **off for every group** until <code>with_presence</code> matches it. A group the spec doesn't match emits no <code>presence:*</code> events at all.
+  </Card>
+  <Card title="Authenticated only, id-only">
+    Anonymous connections (no signed-in user) **never** appear in presence — nothing to dedupe on, and "someone anonymous is here" is itself a leak. A present user is <code>{"id": …}</code> only, unless your resolver returns more.
+  </Card>
+  <Card title="GroupPolicy gates visibility">
+    Presence rides the normal group dispatch, so <a href="sse#group-access-grouppolicy"><code>GroupPolicy::can_join</code></a> governs who can *see* it: a client that can't join <code>room:42</code> never receives its presence. Enabling presence never widens who may subscribe.
+  </Card>
+</CardGrid>
+
+<Callout type="warning">
+Presence is **off unless you enable it**, and it only exposes the **id** (or exactly what your `resolver` returns). It never broadcasts the raw user row, and anonymous connections never appear.
+</Callout>
+
+## See also
+
+- [Server-Sent Events](sse) — the transport, `subscribe`, and `GroupPolicy`.
+- [Model subscriptions](model-subscriptions) — the sibling opt-in feature with the same id-only-by-default safety stance.
+- Design: `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.

@@ -277,6 +277,23 @@ pub const REALTIME_CLIENT_JS: &str = r#"// umbra realtime client — share ONE S
       if (handlers.updated) routes.updated = handlers.updated;
       if (handlers.deleted) routes.deleted = handlers.deleted;
       return window.umbra.realtime.subscribe(group, routes);
+    },
+
+    // presence(group, { sync: fn(members), join: fn(member), leave: fn(member) })
+    // → { unsubscribe: fn }
+    //
+    // Sugar over subscribe(): the server (RealtimePlugin::with_presence) sends
+    // "presence:sync" (the full [{id,...}] member list), "presence:join" (one
+    // member entered) and "presence:leave" (one left) to a presence-enabled
+    // group. Presence is OFF unless the server opts the group in, and a member
+    // is only its id (or whatever the server's resolver returns).
+    presence: function (group, handlers) {
+      handlers = handlers || {};
+      var routes = {};
+      if (handlers.sync) routes["presence:sync"] = handlers.sync;
+      if (handlers.join) routes["presence:join"] = handlers.join;
+      if (handlers.leave) routes["presence:leave"] = handlers.leave;
+      return window.umbra.realtime.subscribe(group, routes);
     }
   };
 })();
@@ -453,6 +470,40 @@ mod tests {
         assert!(REALTIME_CLIENT_JS.contains("env.c"), "fallback unwraps the channel `c`");
         assert!(REALTIME_CLIENT_JS.contains("env.e"), "fallback unwraps the event name `e`");
         assert!(REALTIME_CLIENT_JS.contains("env.d"), "fallback unwraps the data `d`");
+    }
+
+    #[test]
+    fn client_defines_presence_sugar_delegating_to_subscribe() {
+        assert!(
+            REALTIME_CLIENT_JS.contains("presence:"),
+            "defines umbra.realtime.presence"
+        );
+        // It wires the three presence event-names the server `with_presence` sends.
+        for ev in ["presence:sync", "presence:join", "presence:leave"] {
+            assert!(
+                REALTIME_CLIENT_JS.contains(&format!("\"{ev}\"")),
+                "presence() wires the {ev} route"
+            );
+        }
+        // The sugar reads sync/join/leave handlers and delegates to subscribe()
+        // (no transport of its own).
+        assert!(REALTIME_CLIENT_JS.contains("handlers.sync"), "reads the sync handler");
+        assert!(REALTIME_CLIENT_JS.contains("handlers.join"), "reads the join handler");
+        assert!(REALTIME_CLIENT_JS.contains("handlers.leave"), "reads the leave handler");
+        let subscribe_at = REALTIME_CLIENT_JS.find("subscribe: function").unwrap();
+        let presence_at = REALTIME_CLIENT_JS.find("presence: function").unwrap();
+        assert!(
+            subscribe_at < presence_at,
+            "presence() is defined after subscribe()"
+        );
+        // It delegates to subscribe() rather than opening its own connection.
+        let delegations = REALTIME_CLIENT_JS
+            .matches("window.umbra.realtime.subscribe(group, routes)")
+            .count();
+        assert!(
+            delegations >= 2,
+            "both model() and presence() delegate to subscribe(group, routes)"
+        );
     }
 
     #[tokio::test]
