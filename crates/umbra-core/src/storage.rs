@@ -5,13 +5,13 @@
 //! [`Storage`] is to file bytes what [`crate::db::DbPool`] is to database
 //! rows: a small, backend-agnostic seam the rest of the framework writes
 //! against without caring whether the bytes land on a local filesystem,
-//! S3, or anything else. A plugin (today `umbra-media` with its
+//! S3, or anything else. A plugin (today `umbra-storage` with its
 //! `FsStorage`) provides the concrete impl and registers it as the
 //! ambient default; future `FileField` / `ImageField` and the admin
 //! resolve uploads through [`storage`] without knowing the backend.
 //!
 //! `umbra-core` defines the trait but never names a concrete impl — the
-//! filesystem backend lives in the `umbra-media` plugin. This is the
+//! filesystem backend lives in the `umbra-storage` plugin. This is the
 //! dependency-inversion rule from `CLAUDE.md`: dependencies point inward
 //! toward core, control flows outward through the trait. Cargo's ban on
 //! circular deps enforces that core can't reach back into the plugin.
@@ -112,7 +112,7 @@ pub fn is_cap_exceeded(e: &std::io::Error) -> bool {
 /// A storage backend for file bytes.
 ///
 /// Implementors persist opaque byte blobs under a generated *key* and
-/// expose them at a public URL. The default impl ships in `umbra-media`
+/// expose them at a public URL. The default impl ships in `umbra-storage`
 /// (`FsStorage`, filesystem-backed); an S3 backend slots in behind the
 /// same trait later (see `docs/decisions/2026-06-02-media-and-s3.md`).
 ///
@@ -305,7 +305,7 @@ impl std::fmt::Display for StorageError {
         match self {
             StorageError::NoBackend => write!(
                 f,
-                "storage: no backend registered; add MediaPlugin or call set_storage"
+                "storage: no backend registered; add StoragePlugin or call set_storage"
             ),
             StorageError::NotFound => write!(f, "storage: object not found"),
             StorageError::TooLarge { limit, actual } => write!(
@@ -392,13 +392,13 @@ pub fn set_storage_named(name: &'static str, s: Arc<dyn Storage>) -> bool {
 /// # Panics
 ///
 /// Panics if no backend has been registered under `name`. Wire one by
-/// adding the plugin that owns that name (`MediaPlugin` for [`DEFAULT`])
+/// adding the plugin that owns that name (`StoragePlugin` for [`DEFAULT`])
 /// or by calling [`set_storage_named`] directly.
 pub fn storage_named(name: &str) -> Arc<dyn Storage> {
     try_storage_named(name).unwrap_or_else(|_| {
         panic!(
             "no Storage backend registered under `{name}`; add the owning plugin \
-             (MediaPlugin for `default`) or call umbra::storage::set_storage_named"
+             (StoragePlugin for `default`) or call umbra::storage::set_storage_named"
         )
     })
 }
@@ -427,9 +427,9 @@ pub fn storage_opt_named(name: &str) -> Option<Arc<dyn Storage>> {
 /// set. Returns `true` when this call won the registration, `false` when
 /// a backend was already registered.
 ///
-/// `umbra-media`'s `MediaPlugin::on_ready` calls this so the ambient
+/// `umbra-storage`'s `StoragePlugin::on_ready` calls this so the ambient
 /// default is its `FsStorage`; an app can also call it directly to wire a
-/// custom backend before (or instead of) any media plugin.
+/// custom backend before (or instead of) any storage plugin.
 pub fn set_storage(s: Arc<dyn Storage>) -> bool {
     set_storage_named(DEFAULT, s)
 }
@@ -440,11 +440,11 @@ pub fn set_storage(s: Arc<dyn Storage>) -> bool {
 /// # Panics
 ///
 /// Panics if no backend has been registered. Wire one by adding
-/// `MediaPlugin` (which registers its `FsStorage` in `on_ready`) or by
+/// `StoragePlugin` (which registers its `FsStorage` in `on_ready`) or by
 /// calling [`set_storage`] directly.
 pub fn storage() -> Arc<dyn Storage> {
     try_storage().expect(
-        "no Storage backend registered; add MediaPlugin or call umbra::storage::set_storage",
+        "no Storage backend registered; add StoragePlugin or call umbra::storage::set_storage",
     )
 }
 

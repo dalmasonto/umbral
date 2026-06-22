@@ -336,7 +336,7 @@ pub mod storage {
     //!
     //! [`Storage`] is the backend-agnostic seam for file uploads — the
     //! file counterpart to the DB pool. The filesystem impl (`FsStorage`)
-    //! ships in the `umbra-media` plugin, which registers it as the
+    //! ships in the `umbra-storage` plugin, which registers it as the
     //! ambient default in `on_ready`; future `FileField` / `ImageField`
     //! and the admin resolve uploads through [`storage`] without naming
     //! a backend.

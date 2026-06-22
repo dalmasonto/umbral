@@ -1,0 +1,423 @@
+---
+title: Storage (Static + Media)
+description: The unified StoragePlugin - serve developer-shipped static assets (the STATIC_URL pipeline, collectstatic, manifest-hash cache-busting, Cache-Control) AND user uploads (the media_file model, streaming saves, file-lifecycle cleanup) through one plugin and one Storage trait, with an optional shared S3 backend.
+sidebar_position: 13
+tags: [storage, static, media, assets, uploads, files, cache, admin]
+---
+
+# Storage (Static + Media)
+
+`umbra-storage` is the framework's one file-bytes plugin. It has **two sides** that you opt into independently on the same builder:
+
+- The **static side** serves developer-shipped assets (your CSS, JS, fonts, favicon) through the unified `STATIC_URL` pipeline, with `collectstatic`, manifest-hash cache-busting, and `Cache-Control` headers. This is Django's `staticfiles`.
+- The **media side** serves *user*-supplied content (avatars, attachments, generated reports), tracks every file in the `media_file` model, enforces an upload-size cap, and runs file-lifecycle cleanup on delete / replace.
+
+Either side is optional. A static-only app omits `.media(...)`; a media-only app omits `.static_files(...)`. An app that needs both wires one plugin:
+
+```rust
+use std::time::Duration;
+use umbra_storage::StoragePlugin;
+
+App::builder()
+    .plugin(
+        StoragePlugin::new()
+            .static_files("/static", "./static")   // the static side
+            .media("/media", "./media")            // the media side
+            .max_size(10 * 1024 * 1024)            // 10 MiB media upload cap
+            .cleanup_on_delete::<Post>(),          // FileField cleanup
+    )
+    .build()?;
+```
+
+The single S3 backend (feature `s3`) can serve *both* sides — the media (`"default"`) and static (`"staticfiles"`) storage instances.
+
+---
+
+# The static side
+
+`StoragePlugin::new().static_files(mount, dir)` serves an asset tree at a URL prefix. Two source shapes ship — pick filesystem for dev / single-binary deployments, embedded for plugins that want their UI to travel with the binary.
+
+## Filesystem mode
+
+`.static_files(mount, dir)` wraps `tower_http::services::ServeDir`. Every file under the directory is reachable at the prefix:
+
+```rust
+App::builder()
+    .plugin(StoragePlugin::new().static_files("/static", "./assets"))
+    .build()?;
+```
+
+`ServeDir` handles MIME sniffing, range requests, `If-Modified-Since`, and ETags out of the box.
+
+## Embedded mode
+
+`.embedded(mount, &Dir)` takes an `include_dir!`-baked asset tree and serves it straight from memory — no filesystem read, no path canonicalisation, no risk of a deleted/renamed file orphaning live browser tabs.
+
+```rust
+use include_dir::{Dir, include_dir};
+use umbra_storage::StoragePlugin;
+
+static ASSETS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/dist");
+
+App::builder()
+    .plugin(StoragePlugin::new().embedded("/widget/assets", &ASSETS))
+    .build()?;
+```
+
+This is what an *embeddable plugin* should use when its UI is small and rarely rebuilt: the assets travel with the plugin's crate, so when a user drops the plugin into their app, the UI comes along. No "remember to deploy a `dist/` directory next to the binary" footgun. The built-in `umbra-admin` uses embedded mode for its small CSS/JS. A plugin with a heavy, frequently-rebuilt bundle (like `umbra-playground`'s Vite output) instead declares a filesystem source via [`Plugin::static_dirs()`](#the-unified-static-pipeline) so a rebuild drops in without recompiling.
+
+Path traversal is structurally impossible against an embedded source: lookups are a tree walk against in-memory keys, not a path join — a `..` segment becomes a literal key that won't match.
+
+## Cache headers
+
+By default no `Cache-Control` header is added and browsers apply their own heuristics. Call `.max_age(duration)` to add `Cache-Control: public, max-age=<seconds>` on every response:
+
+```rust
+use std::time::Duration;
+
+StoragePlugin::new()
+    .static_files("/static", "./assets")
+    .max_age(Duration::from_secs(86400)) // 1 day
+```
+
+### Dev-mode opt-out
+
+When `settings.environment == Dev`, the effective `max-age` is forced to `0` regardless of the configured value. Browsers re-validate every asset on every request in development, preventing stale CSS/JS from masking changes.
+
+```rust
+// In production this sends Cache-Control: public, max-age=604800 (1 week).
+// In development it sends Cache-Control: public, max-age=0.
+StoragePlugin::new()
+    .static_files("/static", "./assets")
+    .max_age(Duration::from_secs(60 * 60 * 24 * 7))
+```
+
+The dev-mode check reads the ambient settings at route-build time (when `Plugin::routes` is called), not at constructor time.
+
+## The unified static pipeline
+
+Beyond serving one directory, the framework runs a single static handler at a configurable base (`STATIC_URL`, default `/static/`) that every plugin can contribute to. This is Django's `staticfiles` model. Two settings drive it:
+
+| Setting | Env | Default | Purpose |
+|---|---|---|---|
+| `static_url` | `UMBRA_STATIC_URL` | `/static/` | URL base every asset is served under. May be an absolute CDN origin (`https://cdn.example.com/s/`). |
+| `static_root` | `UMBRA_STATIC_ROOT` | `staticfiles/` | On-disk dir `collectstatic` writes to and production serves from. |
+
+A plugin contributes assets two ways, both served under `static_url`:
+
+- **`Plugin::static_dirs()`**: namespaced plugin assets, served at `/static/<namespace>/<file>`. In dev the handler serves them **live off the source dir** (rebuild your bundle, drop it in, served next request, no recompile); in prod from the collected `static_root`. This is the filesystem alternative to `.embedded()`.
+- **`Plugin::static_root_dirs()`**: app/site-level dirs served at the bare `/static/<file>` space (your own CSS, images, favicon).
+
+### The static side and the pipeline
+
+When you point the static side **at the configured `static_url`**, it becomes the site's static-dir provider for that one pipeline rather than nesting its own route:
+
+```rust
+App::builder()
+    // Serves ./static/css/app.css at /static/css/app.css, AND coexists
+    // with every plugin's /static/<namespace>/... assets under one mount.
+    .plugin(StoragePlugin::new().static_files("/static", "./static"))
+    .build()?;
+```
+
+Mounted at a *different* path (e.g. `.static_files("/assets", "./assets")`), it nests independently at that prefix as before. This is why a static side at `/static` no longer collides with the framework's own `/static` handler: there is one owner of `static_url`.
+
+## Referencing assets in templates
+
+Use the `static()` template global so URLs follow `static_url` wherever it's configured (including a CDN origin):
+
+```jinja
+{# base.html / wrapper.html #}
+<link rel="stylesheet" href="{{ static('css/app.css') }}"/>
+<script src="{{ static('js/htmx.min.js') }}"></script>
+<link rel="icon" href="{{ static('favicon.svg') }}" type="image/svg+xml"/>
+
+{# Namespaced plugin asset #}
+<script src="{{ static('playground/assets/app.js') }}"></script>
+```
+
+`{{ static('css/app.css') }}` resolves to `<static_url>css/app.css`: `/static/css/app.css` by default, or `https://cdn.example.com/s/css/app.css` when `static_url` points at a CDN. This is umbra's equivalent of Django's `{% static "..." %}` tag.
+
+## collectstatic
+
+`collectstatic` gathers every registered plugin's `static_dirs()` (into `static_root/<namespace>/`) and `static_root_dirs()` (into `static_root/`) so `static_root` is a complete, CDN-servable tree:
+
+```bash
+cargo run -- collectstatic          # collect into static_root/
+cargo run -- collectstatic --clear  # wipe static_root/ first, then collect
+```
+
+The command is **provided by `StoragePlugin` itself** when a static side is configured; it only exists when you register the plugin with `.static_files(...)` / `.embedded(...)`. Point a CDN or nginx at `static_root` and set `static_url` to its origin, or let the framework serve it.
+
+## Cache-busting with `--hashed`
+
+In production, run `collectstatic --hashed` (umbra's `ManifestStaticFilesStorage`). For each collected file it writes a content-hashed copy alongside the original (`css/app.css` → `css/app.<hash>.css`, the hash being the first 12 hex of the SHA-256 of the bytes) and records a `static_root/staticfiles.json` manifest mapping the logical path to the hashed one:
+
+```bash
+cargo run -- collectstatic --hashed   # recommended for prod
+```
+
+```json
+// static_root/staticfiles.json
+{ "css/app.css": "css/app.9f2c1a0b3d4e.css" }
+```
+
+With the manifest present, `{{ static('css/app.css') }}` automatically resolves to the **hashed** URL (`/static/css/app.9f2c1a0b3d4e.css`) — no template change. Because the filename changes whenever the bytes change, you can serve these assets with far-future `Cache-Control: public, max-age=31536000, immutable` headers and never worry about a stale cache masking a new build. The original (un-hashed) copies are kept too, so an old deploy referencing the plain name still resolves.
+
+The manifest is loaded once at `App::build()`; an app that never runs `--hashed` has no manifest and `static()` emits the plain URLs exactly as before.
+
+## Static storage backend (`--storage s3`)
+
+`collectstatic` writes through the unified `Storage` backend's `"staticfiles"` instance (Django's `STATICFILES_STORAGE`). The default is the local filesystem (`static_root/`); pass `--storage s3` to upload the collected tree (and, with `--hashed`, the hashed copies + manifest) straight to an S3 bucket or S3-compatible store (MinIO, Cloudflare R2):
+
+```bash
+# Build umbra-storage with the optional `s3` feature:
+#   umbra-storage = { version = "0.0.1", features = ["s3"] }
+
+export UMBRA_STATIC_BUCKET=my-assets
+export UMBRA_STATIC_REGION=us-east-1
+# Optional: UMBRA_STATIC_ENDPOINT (MinIO/R2), UMBRA_STATIC_PREFIX, plus the
+# standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY credential chain.
+
+cargo run -- collectstatic --hashed --storage s3
+```
+
+The backend can also be selected via `UMBRA_STATIC_STORAGE=s3` (the `--storage` flag overrides it). Design rationale: `planning/gaps2.md` #82 (cache-busting) and #55 (storage backend).
+
+<Callout type="info">
+The `s3` backend is **feature-gated** — `rust-s3` is only compiled when you enable the `s3` feature on `umbra-storage`, so a local-only app never pulls in the AWS client. The same feature powers the media side's S3 backend.
+</Callout>
+
+<Callout type="info">
+**Dev vs prod.** In development the pipeline serves plugin `static_dirs()` live from each source directory (rebuild, drop in, served next request — no recompile) and static-side site dirs straight off disk. In production you run `collectstatic` once and serve the resulting `static_root/` tree from the framework, nginx, or a CDN. Embedded assets (`.embedded(...)`) need neither — they ship in the binary. Design rationale: `arch.md` and `planning/gaps.md` #67.
+</Callout>
+
+### Production note
+
+Behind a reverse proxy (nginx, Caddy, Cloudflare), serve static files from the proxy and skip the static side in prod. It exists for development, single-binary deployments, and apps small enough that the ops overhead of a separate file server is not worth it.
+
+---
+
+# The media side
+
+The media side is the user-upload counterpart to the static side: the same `tower-http::ServeDir` read path, plus a `save(filename, content_type, bytes)` helper that writes user-supplied content to disk and tracks each file in the framework-tracked `media_file` model.
+
+Where the static side is for *developer*-shipped assets (your CSS, your bundled JS), the media side is for *user*-supplied content (avatars, attachments, generated reports).
+
+```rust
+use std::time::Duration;
+use umbra_storage::StoragePlugin;
+
+App::builder()
+    .plugin(
+        StoragePlugin::new()
+            .media("/media", "./media")
+            .max_size(10 * 1024 * 1024)  // 10 MiB cap
+    )
+    .build()?;
+```
+
+`./media/` is the on-disk directory; `/media/<key>` is the public URL.
+
+## Model fields & the `Storage` trait
+
+The easiest way to attach a file to a model is a [`FileField` / `ImageField`](/docs/v0.0.1/orm/file-image-fields) column: you declare `cover: ImageField` and the admin renders an upload widget, stores the file, and writes the returned key for you. No hand-written upload handler.
+
+That works because the media side registers a **`Storage`** backend ambiently when the app boots. `Storage` is the framework's storage abstraction (in `umbra-core`, so the ORM's file fields depend on the trait, never on this plugin):
+
+```rust
+#[async_trait]
+pub trait Storage: Send + Sync {
+    async fn store(&self, filename: &str, content_type: &str, bytes: &[u8])
+        -> Result<StoredFile, StorageError>; // returns { key, url }
+    async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError>;
+    async fn delete(&self, key: &str) -> Result<(), StorageError>;
+    fn url(&self, key: &str) -> String;
+}
+```
+
+`.media(mount, dir)` builds a filesystem `FsStorage` and registers it as the ambient default in `on_ready`, so `FileField::url(key)`, the admin upload path, and `umbra::web::parse_and_store_multipart` all resolve through it. Supply your own backend (an S3 impl, say) with `.media_with_storage(mount, Arc::new(MyStorage))`, or use the built-in `.media_s3(mount, s3)` under the `s3` feature. A model that declares a file field but registers no `Storage` backend fails a boot system-check; the framework won't let the gap reach production.
+
+## Accepting an upload
+
+The plugin doesn't ship its own upload route. For a custom (non-admin) route, write a handler that parses a multipart form and calls `storage.save(...)` once you have the bytes:
+
+```rust
+use axum::extract::Multipart;
+use umbra_storage::{StoragePlugin, MediaSaveOutcome};
+
+async fn upload(
+    State(storage): State<StoragePlugin>,
+    mut multipart: Multipart,
+) -> Result<Json<UploadReply>, AppError> {
+    while let Some(field) = multipart.next_field().await? {
+        if field.name() == Some("file") {
+            let filename = field
+                .file_name()
+                .unwrap_or("upload.bin")
+                .to_string();
+            let content_type = field
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let bytes = field.bytes().await?;
+            let MediaSaveOutcome { file, url } =
+                storage.save(&filename, &content_type, &bytes).await?;
+            return Ok(Json(UploadReply {
+                id: file.id,
+                url,
+            }));
+        }
+    }
+    Err(AppError::NoFileField)
+}
+```
+
+`save` writes the bytes under `<dir>/<uuid>-<safe-filename>`, inserts a row in `media_file`, and returns:
+
+- `file: MediaFile` — the new row, with `id` populated.
+- `url: String` — the public URL (`<mount>/<key>`).
+
+## Streaming uploads (`save_stream`)
+
+`save` takes the whole upload as `&[u8]` — perfect for small bodies you already hold (form fields, generated content). For a **large** body that arrives as a stream (a proxied download, a big multipart part), reach for `save_stream`, which writes to disk chunk-by-chunk **without ever buffering the whole file in memory**:
+
+```rust
+use umbra::storage::ByteStream;
+
+// `body` is a ByteStream: a pinned, boxed stream of
+// Result<bytes::Bytes, std::io::Error> chunks.
+let outcome = storage
+    .save_stream(&filename, &content_type, body)
+    .await?;
+```
+
+`max_size` is enforced **mid-stream**, not from a declared length: when a cap is configured the body is rejected the instant its *real* bytes cross the cap, even if the client lies about or omits its `Content-Length`. A rejected stream leaves no oversized blob on disk — the filesystem backend cleans up its partial write. The recorded `MediaFile.size` is the **actual** streamed byte count, the only trustworthy length for a stream.
+
+<Callout type="info">
+The download / serve path already streams: `tower-http::ServeDir` reads the file off disk in chunks, so a large file is never loaded into memory to serve it. `save_stream` brings the same no-buffering guarantee to the *write* side.
+</Callout>
+
+The underlying `Storage` trait has two additional streaming methods with default impls, so every existing backend keeps working unchanged:
+
+- `store_stream(filename, content_type, body)` — true-streams to the backend. `FsStorage` writes chunk-by-chunk to disk; a backend that doesn't override it falls back to buffering then `store`.
+- `retrieve_stream(key)` — streams the object back. `FsStorage` reads off disk via `ReaderStream`; the default wraps `retrieve`'s bytes as a single chunk.
+
+Both `save`/`store` (buffered) and `save_stream`/`store_stream` (streaming) apply the **same** filename guards — path-separator sanitisation and active-content (`.html`/`.svg`/`.js` → `.txt`) neutralisation — so streaming never weakens the stored-XSS defence.
+
+## The `MediaFile` model
+
+Every upload is one row:
+
+| Column          | Type                            | Notes                                          |
+|-----------------|---------------------------------|------------------------------------------------|
+| `id`            | `i64`                           | Primary key                                    |
+| `key`           | `String`                        | Storage key: `<uuid>-<filename>`               |
+| `filename`      | `String`                        | The original filename the client sent          |
+| `content_type`  | `String`                        | MIME type the client declared                  |
+| `size`          | `i64`                           | Byte count                                     |
+| `uploaded_at`   | `DateTime<Utc>`                 | Time of save                                   |
+
+The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate` and the admin lists it under the **storage** sidebar group automatically. Every column is `#[umbra(noedit)]` — the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
+
+To delete a file, write a small handler that removes the row with `MediaFile::objects().filter(media_file::ID.eq(id)).delete().await?` and then `Storage::delete(key)` (or `tokio::fs::remove_file(...)`). For automatic blob cleanup when a *model* row is deleted, opt that model into [file-lifecycle cleanup](#file-lifecycle--orphan-cleanup) below.
+
+## Serving from templates
+
+Files come back at `<mount>/<key>`. Reference them like any other URL:
+
+```jinja
+{# Profile photo, key persisted in user.avatar_key #}
+<img src="/media/{{ user.avatar_key }}" alt="{{ user.username }}"/>
+
+{# Download with original filename forced by Content-Disposition #}
+<a href="/media/{{ doc.key }}"
+   download="{{ doc.filename }}">Download {{ doc.filename }}</a>
+```
+
+The plugin sets `X-Content-Type-Options: nosniff` on every media response so the browser respects the MIME type the file was uploaded with — a small defence against a user uploading an HTML file disguised as `.png` and getting it interpreted on the same origin.
+
+## File lifecycle / orphan cleanup
+
+A `FileField` / `ImageField` column stores only the storage *key*; the bytes live in the backend. Delete the row and, without help, the blob is orphaned — the backend keeps accumulating files no row points at. The media side cleans them up the way Django's `FileField` does: **when a row is deleted, the blobs behind its file fields are deleted too.**
+
+Cleanup is **opt-in per model**. Register it on the plugin builder:
+
+```rust
+use umbra_signals::SignalsPlugin;
+use umbra_storage::StoragePlugin;
+
+App::builder()
+    // The cleanup hook is a `pre_delete` signal handler, so the
+    // signals registry must be in play. (The ORM fires the signal
+    // regardless of plugin order; the marker just documents the dep.)
+    .plugin(SignalsPlugin)
+    .plugin(
+        StoragePlugin::new()
+            .media("/media", "./media")
+            // Auto-detect every FileField / ImageField column on Post:
+            .cleanup_on_delete::<Post>(),
+    )
+    .build()?;
+```
+
+`cleanup_on_delete::<M>()` reads `M`'s metadata and watches every column declared as a `FileField` / `ImageField`. If you overrode the form widget on a file column (so auto-detection can't recognise it), name the columns explicitly instead:
+
+```rust
+StoragePlugin::new()
+    .media("/media", "./media")
+    .cleanup_files::<Profile>(&["avatar", "cover"])
+```
+
+Semantics:
+
+- **Best-effort, never fails the delete.** A storage delete error — including a blob that's already gone — is logged with `tracing::warn!` and swallowed. The row delete always succeeds; cleanup failure never propagates.
+- **Per-row deletes only.** `M::objects().delete_instance(&row)` fires the `pre_delete` signal the hook listens on. Bulk `QuerySet::delete()` (the filter-chain DELETE) fires only a bulk-PK signal, so it does **not** trigger cleanup — the same limitation Django's bulk `QuerySet.delete()` has for per-row hooks. Loop with `delete_instance` when cleanup matters.
+- **Empty file fields are a no-op.** A row whose `FileField` key is empty has nothing to clean and deletes normally.
+
+### Replace cleanup (gaps2 #92)
+
+Opting a model into `cleanup_on_delete` / `cleanup_files` **also** removes the old blob when a file field is changed to a new key. Save a row whose `FileField` moves from key `A` to key `B` via `M::objects().save(row)` and blob `A` is deleted, so an in-place file replace no longer leaks an orphan:
+
+```rust
+let mut post = Post::objects().get(post::ID.eq(id)).await?;
+post.banner = FileField::from(new_key);   // was old_key
+Post::objects().save(post).await?;        // old_key's blob is deleted
+```
+
+This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying both the previous and new row). The old-row read it needs is only performed when a subscriber exists, so it costs nothing for models that didn't opt in. Rules:
+
+- **Only the changed key is removed.** Saving with the **same** key deletes nothing (the file wasn't replaced). A non-file-column update deletes nothing. An INSERT (`create`) deletes nothing.
+- **Per-row updates only.** `M::objects().save(row)` fires `post_update`; the filter-chain bulk `QuerySet::update_values()` fires only a bulk-PK signal, so it does **not** trigger replace-cleanup — same per-row-hook limitation as delete cleanup above.
+
+## Media configuration knobs
+
+| Method                          | Default | What it does                                                                      |
+|---------------------------------|---------|-----------------------------------------------------------------------------------|
+| `.media(mount, dir)`            | -       | Mount path + on-disk directory, filesystem-backed.                                |
+| `.media_with_storage(mount, s)` | -       | Mount path + a custom `Arc<dyn Storage>` backend.                                 |
+| `.media_s3(mount, s3)`          | -       | Mount path + the built-in `S3Storage` backend (feature `s3`).                     |
+| `.public_base(base)`            | -       | Absolute public base so resolved URLs are fully-qualified (filesystem backend).   |
+| `.max_size(bytes)`              | unlimited | Hard cap on upload size, returned as `MediaError::TooLarge` when exceeded. `save` checks the buffered length; `save_stream` enforces it **mid-stream** (no full buffering, no trusting `Content-Length`). |
+| `.cleanup_on_delete::<M>()`     | off     | Delete a row's `FileField`/`ImageField` blobs when the row is deleted (auto-detected columns). |
+| `.cleanup_files::<M>(&[...])`   | off     | Same, naming the file columns explicitly (for widget-overridden columns).         |
+
+## What v0 does not ship
+
+The storage-backend trait `gaps.md #49` called for **has shipped**: it landed as `Storage` (in `umbra-core`, see above), with the filesystem `FsStorage` impl, the `s3`-gated `S3Storage`, and `.media_with_storage(...)` for swapping backends. Two things still deferred:
+
+1. **Image library.** Thumbnails, EXIF strip, format probing. Behind an `images` cargo feature, later.
+2. **Signed URLs.** Auth-required reads against the S3 backend.
+
+Design rationale and the migration plan live in `docs/decisions/2026-06-02-media-and-s3.md` in the repo. Each step keeps the v0 public surface compatible.
+
+---
+
+## When to use which side
+
+| Concern                                                                       | Use                         |
+|-------------------------------------------------------------------------------|-----------------------------|
+| CSS / JS / fonts shipped with the binary                                      | the **static** side         |
+| Files that change between deploys but are dev-owned (favicon, marketing PDFs)  | the **static** side         |
+| User-uploaded avatars, documents, reports                                     | the **media** side          |
+| Anything the admin should list / delete                                       | the **media** side          |

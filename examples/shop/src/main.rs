@@ -43,7 +43,7 @@ use umbra_rest::{
 };
 use umbra_security::{SecurityConfig, SecurityPlugin};
 use umbra_sessions::SessionsPlugin;
-use umbra_static::StaticPlugin;
+use umbra_storage::StoragePlugin;
 
 use crate::auth::{TokenSchemeAuthentication, session_authentication};
 
@@ -204,7 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // static/css/shop.css via build.rs) instead of the CDN. The
         // wrapper.html template references /static/css/shop.css.
         // Self-hosted Inter woff2 files live alongside the CSS.
-        .plugin(StaticPlugin::new("/static", "./static"))
+        .plugin(StoragePlugin::new().static_files("/static", "./static"))
         // CSRF + hardening headers across the whole app. `/api` is exempt
         // because the REST surface authenticates by bearer token (no session
         // cookie), so the double-submit check doesn't apply there. HSTS stays

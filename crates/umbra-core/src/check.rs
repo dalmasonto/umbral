@@ -462,7 +462,7 @@ fn field_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
 /// `Storage` backend is registered in `Plugin::on_ready`, which runs
 /// *after* the system-check phase (see `App::build`'s phase ordering).
 /// So at check time `crate::storage::storage_opt()` is still `None` even
-/// when `MediaPlugin` is wired and *will* register a backend a moment
+/// when `StoragePlugin` is wired and *will* register a backend a moment
 /// later. Checking the ambient here would false-positive on every app
 /// that uses media. Instead we read `ctx.provides_storage`, which
 /// `App::build` computes from the sorted plugin list's
@@ -510,7 +510,7 @@ fn field_storage_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
                         model.name, field.name,
                     ),
                     hint: Some(
-                        "add `MediaPlugin` to your app (it registers a filesystem Storage \
+                        "add `StoragePlugin` to your app (it registers a filesystem Storage \
                          backend), or call `umbra::storage::set_storage(...)` before \
                          `App::build()` to wire a custom backend."
                             .to_string(),

@@ -21,7 +21,6 @@ use umbra_admin::AdminPlugin;
 use umbra_auth::{AuthPlugin, AuthUser, login_required_html};
 use umbra_cache::{Cache, CachePlugin};
 use umbra_livereload::LiveReloadPlugin;
-use umbra_media::MediaPlugin;
 use umbra_oauth::OAuthPlugin;
 use umbra_oauth::providers::{GitHubProvider, GoogleProvider};
 use umbra_openapi::OpenApiPlugin;
@@ -30,7 +29,7 @@ use umbra_realtime::{ModelAction, ModelEvent, Realtime, RealtimePlugin};
 use umbra_rest::{ResourceConfig, RestPlugin};
 use umbra_security::{SecurityConfig, SecurityPlugin};
 use umbra_sessions::SessionsPlugin;
-use umbra_static::StaticPlugin;
+use umbra_storage::StoragePlugin;
 
 // Admin dashboard widgets, grouped by rendering shape in `src/widgets/`
 // and bound to the plugin-directory data. Mirrors the shop example's
@@ -202,11 +201,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         .plugin(OpenApiPlugin::new())
         .plugin(PlaygroundPlugin::new("Umbra").at("/api/playground/"))
-        .plugin(StaticPlugin::new("/static", "./static"))
-        // Registers the filesystem Storage backend that powers the
-        // Plugin model's `logo` / `cover_image` File/Image fields.
-        // Uploads land in ./media and serve at /media/<key>.
-        .plugin(MediaPlugin::new("/media", "./media"))
+        // One StoragePlugin serves both sides: static assets at /static and
+        // the filesystem Storage backend that powers the Plugin model's
+        // `logo` / `cover_image` File/Image fields. Uploads land in ./media
+        // and serve at /media/<key>.
+        .plugin(
+            StoragePlugin::new()
+                .static_files("/static", "./static")
+                .media("/media", "./media"),
+        )
         .plugin(SecurityPlugin::with_config(SecurityConfig {
             csrf_exempt_paths: vec!["/api".to_string()],
             ..Default::default()

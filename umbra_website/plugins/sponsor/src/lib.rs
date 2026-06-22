@@ -83,7 +83,7 @@ impl From<Partner> for PartnerView {
             website_url: p.website_url,
             tier: p.tier.label().to_string(),
             initial,
-            // MediaPlugin serves uploads at /media/<key> (see main.rs).
+            // StoragePlugin's media side serves uploads at /media/<key> (see main.rs).
             logo: p.logo.map(|f| format!("/media/{}", f.key())),
         }
     }

@@ -259,7 +259,7 @@ where
     ///
     /// `handler(previous, instance)` receives the pre-UPDATE row
     /// (`previous`) and the row as it now exists after the UPDATE
-    /// (`instance`). umbra-media's replace-cleanup subscribes here to
+    /// (`instance`). umbra-storage's replace-cleanup subscribes here to
     /// delete the OLD blob when a file field is changed to a new key.
     ///
     /// Signal name: `post_update:<M::TABLE>`.

@@ -79,9 +79,8 @@ fn scaffold_project_cargo_toml_lists_every_builtin_plugin_at_least_commented() {
         "umbra-rls",
         "umbra-cache",
         "umbra-email",
-        "umbra-media",
+        "umbra-storage",
         "umbra-signals",
-        "umbra-static",
         "umbra-security",
     ] {
         assert!(

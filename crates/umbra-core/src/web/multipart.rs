@@ -154,7 +154,7 @@ impl std::fmt::Display for MultipartUploadError {
             MultipartUploadError::Storage(e) => write!(f, "{e}"),
             MultipartUploadError::NoStorageBackend => write!(
                 f,
-                "multipart upload: no Storage backend registered; add MediaPlugin \
+                "multipart upload: no Storage backend registered; add StoragePlugin \
                  or call umbra::storage::set_storage"
             ),
         }

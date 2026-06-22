@@ -4726,27 +4726,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "umbra-media"
-version = "0.0.1"
-dependencies = [
- "axum",
- "bytes",
- "chrono",
- "futures-util",
- "http 1.4.1",
- "serde",
- "sqlx",
- "tempfile",
- "tokio",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "umbra",
- "uuid",
-]
-
-[[package]]
 name = "umbra-oauth"
 version = "0.0.1"
 dependencies = [
@@ -4941,29 +4920,6 @@ dependencies = [
  "tracing",
  "umbra",
  "umbra-signals",
-]
-
-[[package]]
-name = "umbra-static"
-version = "0.0.1"
-dependencies = [
- "async-trait",
- "axum",
- "bytes",
- "clap",
- "http 1.4.1",
- "http-body-util",
- "include_dir",
- "mime_guess",
- "percent-encoding",
- "rust-s3",
- "sha2",
- "tempfile",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "umbra",
 ]
 
 [[package]]

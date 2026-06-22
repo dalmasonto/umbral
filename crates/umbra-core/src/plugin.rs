@@ -231,7 +231,7 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     /// `true` if this plugin registers a [`Storage`](crate::storage::Storage)
-    /// backend (e.g. `MediaPlugin`, which calls
+    /// backend (e.g. `StoragePlugin`, which calls
     /// [`crate::storage::set_storage`] in [`Plugin::on_ready`]).
     ///
     /// The boot system check `field.storage_backend` reads this flag to
@@ -425,7 +425,7 @@ pub trait Plugin: Send + Sync + 'static {
     /// these root directories with the full request path.
     ///
     /// This is the seam that lets the framework own `static_url` as a
-    /// single mount: a `StaticPlugin` pointed at the configured
+    /// single mount: a `StoragePlugin`'s static side pointed at the configured
     /// `static_url` contributes its directory here instead of nesting its
     /// own (conflicting) catch-all route. A plugin serving its directory
     /// at a *different* mount returns nothing here and nests as usual.
