@@ -238,6 +238,63 @@ pub trait Storage: Send + Sync {
 
 `.media(mount, dir)` builds a filesystem `FsStorage` and registers it as the ambient default in `on_ready`, so `FileField::url(key)`, the admin upload path, and `umbra::web::parse_and_store_multipart` all resolve through it. Supply your own backend (an S3 impl, say) with `.media_with_storage(mount, Arc::new(MyStorage))`, or use the built-in `.media_s3(mount, s3)` under the `s3` feature. A model that declares a file field but registers no `Storage` backend fails a boot system-check; the framework won't let the gap reach production.
 
+## Choosing a backend: local dev vs S3
+
+The media side defaults to **local filesystem storage** — exactly what you want for development and single-binary deployments. Switching to S3 is a backend swap: your models, `FileField`s, and upload handlers don't change, because they all resolve through the ambient `Storage` trait.
+
+### Local dev (the default)
+
+```rust
+StoragePlugin::new().media("/media", "./media")
+```
+
+`.media(mount, dir)` builds an `FsStorage`: uploads land on disk under `dir` and are served back at `mount`. **No `s3` feature, no credentials, no config** — clone the repo and uploads just work. Reach for S3 only when you actually need shared or durable object storage.
+
+### Production: S3 (or MinIO / R2 / B2 / Spaces)
+
+Enable the optional `s3` feature, build an `S3Storage`, and hand it to `.media_s3(...)`:
+
+```toml
+# Cargo.toml
+umbra-storage = { version = "0.0.1", features = ["s3"] }
+```
+
+```rust
+use umbra_storage::{StoragePlugin, S3Storage};
+
+// From the environment (the UMBRA_STATIC_* vars + the AWS credential chain):
+let s3 = S3Storage::from_env()?;
+// …or build it explicitly:
+let s3 = S3Storage::builder("my-bucket")
+    .endpoint("https://minio.example.com")    // omit for real AWS S3
+    .region("us-east-1")
+    .public_base("https://cdn.example.com")   // where objects are publicly served
+    .build()?;
+
+App::builder()
+    .plugin(StoragePlugin::new().media_s3("/media", s3))
+    .build()?;
+```
+
+```bash
+export UMBRA_STATIC_BUCKET=my-bucket
+export UMBRA_STATIC_REGION=us-east-1
+# Optional: UMBRA_STATIC_ENDPOINT (MinIO/R2/B2/Spaces), UMBRA_STATIC_PREFIX, UMBRA_STATIC_PUBLIC_BASE
+export AWS_ACCESS_KEY_ID=…  AWS_SECRET_ACCESS_KEY=…
+```
+
+The **same** `S3Storage` backs both instances — pass it to `.media_s3(...)` for uploads and use `collectstatic --storage s3` for assets, and one bucket serves both. (The env vars are prefixed `UMBRA_STATIC_*` because a single shared S3 backend powers both the media and static sides.)
+
+<Callout type="warning">
+**Enabling S3 safely.**
+- **Credentials** come from the standard AWS chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, an IAM role, `~/.aws/credentials`) — never hard-code keys in source or `settings`.
+- **URLs are public, not signed.** `S3Storage::url()` returns `<public_base>/<key>` (or the bare key when `public_base` is unset) — it does **not** generate presigned URLs. It is built for **public-read** buckets fronted by a CDN; set `UMBRA_STATIC_PUBLIC_BASE` (or `.public_base(...)`) to that origin. Don't put private or sensitive uploads in an S3-backed media side expecting signed access — presigned private-bucket URLs aren't supported yet.
+- **Feature-gated.** The `rust-s3` AWS client compiles only with the `s3` feature, so a local-only app never pulls it in.
+- The **active-content guard** (`.html` / `.svg` / `.js` → `.txt`) applies on every backend, so the stored-XSS defence travels to S3 too.
+</Callout>
+
+To verify a live bucket end-to-end, the crate ships an env-gated integration test (`plugins/umbra-storage/tests/s3_integration.rs`): point `UMBRA_S3_TEST_BUCKET` (+ `UMBRA_S3_TEST_ENDPOINT` and AWS creds) at a throwaway MinIO/S3 bucket and run `cargo test --features s3 -p umbra-storage --test s3_integration`. It skips silently when unset.
+
 ## Accepting an upload
 
 The plugin doesn't ship its own upload route. For a custom (non-admin) route, write a handler that parses a multipart form and calls `storage.save(...)` once you have the bytes:
