@@ -4931,6 +4931,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
+ "futures-executor",
  "futures-util",
  "http 1.4.1",
  "http-body-util",

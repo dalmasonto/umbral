@@ -22,6 +22,11 @@ chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+# tokio's rt for spawn_blocking: the argon2 hash/verify helpers
+# (hash_password_async / verify_password_async) offload their CPU-bound
+# work to the blocking pool so a login burst can't starve the async
+# runtime. Only `rt` is needed here — the app supplies the runtime.
+tokio = { version = "1", features = ["rt"] }
 # clap for the `createsuperuser` management command — Plugin::commands()
 # returns a Vec<Box<dyn PluginCommand>>, and each command exposes a
 # clap::Command for arg parsing.
@@ -60,7 +65,7 @@ tracing = "0.1"
 umbra-sessions = { path = "../umbra-sessions", version = "0.0.1" }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 tempfile = "3"
 # Test helpers for the login_required tests.
 axum = "0.8"

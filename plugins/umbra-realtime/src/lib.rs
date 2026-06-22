@@ -294,25 +294,38 @@ impl Registry {
             }
         }
 
-        let inner = self.inner.read().await;
-        let ids: Vec<ConnId> = match target {
-            TargetKind::User(uid) => inner
-                .by_user
-                .get(uid)
-                .map(|s| s.iter().copied().collect())
-                .unwrap_or_default(),
-            TargetKind::Group(g) => inner
-                .by_group
-                .get(g)
-                .map(|s| s.iter().copied().collect())
-                .unwrap_or_default(),
-            TargetKind::Broadcast => inner.conns.keys().copied().collect(),
+        // Snapshot-then-send: resolve the target to a list of cloned senders
+        // under the read lock, then DROP the lock before any send. Holding the
+        // registry read lock across the `try_send` loop would make every
+        // register/unregister (which take the write lock) wait behind a
+        // broadcast; cloning the `mpsc::Sender`s (cheap — an Arc bump each) and
+        // releasing the guard keeps the registry available throughout the send.
+        let senders: Vec<mpsc::Sender<Event>> = {
+            let inner = self.inner.read().await;
+            let ids: Vec<ConnId> = match target {
+                TargetKind::User(uid) => inner
+                    .by_user
+                    .get(uid)
+                    .map(|s| s.iter().copied().collect())
+                    .unwrap_or_default(),
+                TargetKind::Group(g) => inner
+                    .by_group
+                    .get(g)
+                    .map(|s| s.iter().copied().collect())
+                    .unwrap_or_default(),
+                TargetKind::Broadcast => inner.conns.keys().copied().collect(),
+            };
+            ids.into_iter()
+                .filter_map(|id| inner.conns.get(&id).map(|entry| entry.tx.clone()))
+                .collect()
         };
+
+        // Lock is dropped. `try_send` stays non-blocking: a connection whose
+        // bounded channel is full drops this one message (correct per-conn
+        // backpressure) and never stalls the broadcaster.
         let mut delivered = 0;
-        for id in ids {
-            if let Some(entry) = inner.conns.get(&id)
-                && entry.tx.try_send(event.clone()).is_ok()
-            {
+        for tx in senders {
+            if tx.try_send(event.clone()).is_ok() {
                 delivered += 1;
             }
         }
@@ -1086,6 +1099,24 @@ mod tests {
             .dispatch(&TargetKind::Group("g".into()), evt())
             .await;
         assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn broadcast_delivers_on_every_receiver_after_snapshot_then_send() {
+        // Snapshot-then-send must still reach every registered connection:
+        // register 3, broadcast once, and read the event off each receiver.
+        let reg = Registry::default();
+        let (_a, mut rx_a) = reg.register(Some(1), groups(&[]), DEFAULT_BUFFER).await.unwrap();
+        let (_b, mut rx_b) = reg.register(Some(2), groups(&[]), DEFAULT_BUFFER).await.unwrap();
+        let (_c, mut rx_c) = reg.register(None, groups(&["g"]), DEFAULT_BUFFER).await.unwrap();
+
+        let n = reg
+            .dispatch(&TargetKind::Broadcast, reg_event("hi", serde_json::json!({"x": 1})))
+            .await;
+        assert_eq!(n, 3, "broadcast queued to all three");
+        assert!(recv(&mut rx_a).await.is_some(), "conn a received");
+        assert!(recv(&mut rx_b).await.is_some(), "conn b received");
+        assert!(recv(&mut rx_c).await.is_some(), "conn c received");
     }
 
     #[tokio::test]

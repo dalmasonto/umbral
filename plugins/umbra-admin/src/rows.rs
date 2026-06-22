@@ -210,7 +210,8 @@ pub(crate) async fn insert_row(
             if plaintext != confirm {
                 return Err(AdminError::BadInput("Passwords do not match.".to_string()));
             }
-            let hash = umbra_auth::hash_password(plaintext)
+            let hash = umbra_auth::hash_password_async(plaintext)
+                .await
                 .map_err(|e| AdminError::BadInput(format!("password hashing failed: {e}")))?;
             let mut owned = form.clone();
             owned.insert(pw_col.to_string(), hash);

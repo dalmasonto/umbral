@@ -395,7 +395,7 @@ pub(crate) async fn change_password_handler(
     if new_pw != confirm_pw {
         return AdminError::BadInput("Passwords do not match".to_string()).into_response();
     }
-    let hash = match umbra_auth::hash_password(new_pw) {
+    let hash = match umbra_auth::hash_password_async(new_pw).await {
         Ok(h) => h,
         Err(e) => {
             return AdminError::BadInput(format!("password hashing failed: {e}")).into_response();

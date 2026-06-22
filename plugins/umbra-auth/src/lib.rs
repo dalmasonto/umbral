@@ -637,6 +637,12 @@ pub enum AuthError {
     /// this variant, which the route layer then maps to 400. A custom signup
     /// flow that wants the same behaviour follows the same pattern.
     WeakPassword(Vec<String>),
+    /// A blocking task offloaded to the tokio blocking pool (argon2
+    /// hashing / verification via [`hash_password_async`] /
+    /// [`verify_password_async`]) failed to join — i.e. the task panicked
+    /// or was cancelled. Carries the `JoinError`'s message. A panic in the
+    /// hash worker is a real error, surfaced rather than swallowed.
+    Runtime(String),
 }
 
 impl std::fmt::Display for AuthError {
@@ -649,6 +655,7 @@ impl std::fmt::Display for AuthError {
             AuthError::WeakPassword(reasons) => {
                 write!(f, "umbra-auth: password rejected: {}", reasons.join(" "))
             }
+            AuthError::Runtime(msg) => write!(f, "umbra-auth: blocking task failed: {msg}"),
         }
     }
 }
@@ -701,6 +708,34 @@ pub fn verify_password(plaintext: &str, hash: &str) -> Result<bool, AuthError> {
         Err(argon2::password_hash::Error::Password) => Ok(false),
         Err(e) => Err(AuthError::PasswordHash(e)),
     }
+}
+
+/// Async wrapper around [`hash_password`] that runs the CPU-bound argon2
+/// work on tokio's blocking pool via `spawn_blocking`. argon2id with the
+/// framework parameters takes ~100ms of CPU; calling it directly from a
+/// request handler pins an async worker thread for that whole time, so a
+/// login/registration burst starves the runtime and HTTP/1.1 connections
+/// hang. Offloading keeps the async workers free to drive other tasks.
+/// **Async request handlers must use this**; the sync [`hash_password`]
+/// remains for non-async / CLI / test callers.
+pub async fn hash_password_async(plaintext: &str) -> Result<String, AuthError> {
+    let p = plaintext.to_owned();
+    tokio::task::spawn_blocking(move || hash_password(&p))
+        .await
+        .map_err(|e| AuthError::Runtime(e.to_string()))?
+}
+
+/// Async wrapper around [`verify_password`] that runs the CPU-bound argon2
+/// verification on tokio's blocking pool via `spawn_blocking`. See
+/// [`hash_password_async`] for the starvation rationale. **Async request
+/// handlers must use this**; the sync [`verify_password`] remains for
+/// non-async / CLI / test callers.
+pub async fn verify_password_async(plaintext: &str, hash: &str) -> Result<bool, AuthError> {
+    let p = plaintext.to_owned();
+    let h = hash.to_owned();
+    tokio::task::spawn_blocking(move || verify_password(&p, &h))
+        .await
+        .map_err(|e| AuthError::Runtime(e.to_string()))?
 }
 
 fn password_hasher() -> Argon2<'static> {
@@ -787,7 +822,7 @@ async fn insert_user(
     is_superuser: bool,
 ) -> Result<AuthUser, AuthError> {
     let now = chrono::Utc::now();
-    let hash = hash_password(plaintext)?;
+    let hash = hash_password_async(plaintext).await?;
     let row = AuthUser::objects()
         .create(AuthUser {
             id: 0,
@@ -848,7 +883,7 @@ where
         return Err(AuthError::InvalidCredentials);
     }
 
-    if verify_password(plaintext, user.password_hash())? {
+    if verify_password_async(plaintext, user.password_hash()).await? {
         Ok(user)
     } else {
         Err(AuthError::InvalidCredentials)
@@ -870,7 +905,7 @@ where
     // `set_password`, exactly as the `register` route gates `create_user`.
     // Keeping the helper non-validating matches Django's `set_password`, which
     // is a pure setter; the form is what validates.
-    let hash = hash_password(plaintext)?;
+    let hash = hash_password_async(plaintext).await?;
     let mut patch = serde_json::Map::new();
     patch.insert(
         "password_hash".to_string(),
