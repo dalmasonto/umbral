@@ -29,6 +29,7 @@ impl Storage for DummyStorage {
         Ok(StoredFile {
             key: "k".to_string(),
             url: self.url("k"),
+            size: _bytes.len() as u64,
         })
     }
 

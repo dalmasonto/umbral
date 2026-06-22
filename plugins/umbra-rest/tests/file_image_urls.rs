@@ -57,7 +57,11 @@ impl Storage for MediaUrlStorage {
     ) -> Result<StoredFile, StorageError> {
         let key = filename.to_string();
         let url = format!("/media/{key}");
-        Ok(StoredFile { key, url })
+        Ok(StoredFile {
+            key,
+            url,
+            size: _bytes.len() as u64,
+        })
     }
     async fn retrieve(&self, _key: &str) -> Result<Vec<u8>, StorageError> {
         Err(StorageError::NotFound)

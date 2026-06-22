@@ -61,7 +61,7 @@ use serde::{Deserialize, Serialize};
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use umbra::prelude::*;
-use umbra::storage::{StorageError, StoredFile};
+use umbra::storage::{ByteStream, StorageError, StoredFile, cap_stream, is_cap_exceeded};
 
 /// Filesystem-backed [`Storage`] — the v0 backend, factored out of
 /// `MediaPlugin` so the plugin routes file bytes through the
@@ -303,7 +303,11 @@ impl Storage for FsStorage {
         }
         tokio::fs::write(&path, bytes).await?;
         let url = self.url(&key);
-        Ok(StoredFile { key, url })
+        Ok(StoredFile {
+            key,
+            url,
+            size: bytes.len() as u64,
+        })
     }
 
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
@@ -312,6 +316,83 @@ impl Storage for FsStorage {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StorageError::NotFound),
             Err(e) => Err(StorageError::Io(e)),
         }
+    }
+
+    /// True-streaming store: write `body` to disk chunk-by-chunk via
+    /// `tokio::io::copy` over a `StreamReader`, never buffering the whole
+    /// payload. Applies the SAME `safe_name` sanitise + active-content
+    /// neutralisation as [`store`](Storage::store) — streaming changes
+    /// only *how* the bytes land, never the filename guards.
+    ///
+    /// On any error mid-write the partial file is removed (best-effort) so
+    /// a rejected/aborted upload never leaves an oversized or truncated
+    /// blob on disk — the key contract the `SizeLimitedStorage` cap relies
+    /// on.
+    async fn store_stream(
+        &self,
+        filename: &str,
+        _content_type: &str,
+        body: ByteStream,
+    ) -> Result<StoredFile, StorageError> {
+        let safe_name: String = filename
+            .chars()
+            .filter(|c| !matches!(c, '/' | '\\' | '\0'))
+            .take(120)
+            .collect();
+        let safe_name = neutralise_active_content(&safe_name);
+        let key = format!("{}-{safe_name}", uuid::Uuid::new_v4());
+        let path = self.path_for(&key);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        // Map the stream's `io::Error` items into an `AsyncRead`, then copy
+        // it to the destination file. `tokio::io::copy` pulls chunks and
+        // writes them without ever holding the whole body.
+        let reader = tokio_util::io::StreamReader::new(body);
+        let mut reader = std::pin::pin!(reader);
+        let mut file = tokio::fs::File::create(&path).await?;
+        let written = match tokio::io::copy(&mut reader, &mut file).await {
+            Ok(n) => {
+                // Flush/close so the byte count is durable before we report it.
+                use tokio::io::AsyncWriteExt;
+                if let Err(e) = file.flush().await {
+                    drop(file);
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return Err(StorageError::Io(e));
+                }
+                n
+            }
+            Err(e) => {
+                // Remove the partial write so an aborted/over-cap upload
+                // leaves nothing behind on disk.
+                drop(file);
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(StorageError::Io(e));
+            }
+        };
+
+        let url = self.url(&key);
+        Ok(StoredFile {
+            key,
+            url,
+            size: written,
+        })
+    }
+
+    /// True-streaming retrieve: stream the file off disk via `ReaderStream`,
+    /// never loading the whole blob into memory. Maps a missing key to
+    /// [`StorageError::NotFound`].
+    async fn retrieve_stream(&self, key: &str) -> Result<ByteStream, StorageError> {
+        let file = match tokio::fs::File::open(self.path_for(key)).await {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(StorageError::NotFound);
+            }
+            Err(e) => return Err(StorageError::Io(e)),
+        };
+        let stream = tokio_util::io::ReaderStream::new(file);
+        Ok(Box::pin(stream))
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
@@ -392,8 +473,43 @@ impl Storage for SizeLimitedStorage {
         self.inner.store(filename, content_type, bytes).await
     }
 
+    /// **The load-bearing streaming security change.** Wrap the incoming
+    /// `body` with the mid-stream byte cap BEFORE delegating to the inner
+    /// backend, so an upload is rejected the instant its real bytes cross
+    /// `max_size` — even when it lies about or omits its `Content-Length`.
+    /// The inner `store_stream` writes through the capped stream; the cap's
+    /// over-limit marker error surfaces as `Io(..)` and is mapped here back
+    /// to [`StorageError::TooLarge`]. The inner backend's partial-write
+    /// cleanup (see `FsStorage::store_stream`) ensures no oversized blob is
+    /// left on disk.
+    async fn store_stream(
+        &self,
+        filename: &str,
+        content_type: &str,
+        body: ByteStream,
+    ) -> Result<StoredFile, StorageError> {
+        let capped = cap_stream(body, self.max_size);
+        match self.inner.store_stream(filename, content_type, capped).await {
+            Ok(stored) => Ok(stored),
+            // The inner write aborted because the cap tripped mid-stream:
+            // report it as TooLarge, not a generic IO error. `actual` is at
+            // least max_size + 1 (the cap fires the moment we cross max), but
+            // we don't know the true total since we cut the stream off; report
+            // the cap as the actual floor.
+            Err(StorageError::Io(e)) if is_cap_exceeded(&e) => Err(StorageError::TooLarge {
+                limit: self.max_size,
+                actual: self.max_size.saturating_add(1),
+            }),
+            Err(other) => Err(other),
+        }
+    }
+
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         self.inner.retrieve(key).await
+    }
+
+    async fn retrieve_stream(&self, key: &str) -> Result<ByteStream, StorageError> {
+        self.inner.retrieve_stream(key).await
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
@@ -416,29 +532,31 @@ impl Storage for MediaTracking {
         // Persist the bytes first; the row only makes sense once the
         // object actually exists.
         let stored = self.inner.store(filename, content_type, bytes).await?;
+        record_tracking_row(filename, content_type, &stored).await;
+        Ok(stored)
+    }
 
-        // Best-effort tracking insert. A failure here (no ambient pool,
-        // transient DB error) must NOT fail the upload — log and move on.
-        let row = MediaFile {
-            id: 0,
-            key: stored.key.clone(),
-            filename: filename.to_string(),
-            content_type: content_type.to_string(),
-            size: bytes.len() as i64,
-            uploaded_at: chrono::Utc::now(),
-        };
-        if let Err(e) = MediaFile::objects().create(row).await {
-            tracing::warn!(
-                key = %stored.key,
-                "umbra-media: upload stored but media_file tracking insert failed: {e}"
-            );
-        }
-
+    /// Streaming counterpart: delegate to the inner backend's
+    /// `store_stream` (which true-streams to disk and reports the actual
+    /// written `size`), then record the tracking row from that real byte
+    /// count — best-effort, exactly like the buffered `store`.
+    async fn store_stream(
+        &self,
+        filename: &str,
+        content_type: &str,
+        body: ByteStream,
+    ) -> Result<StoredFile, StorageError> {
+        let stored = self.inner.store_stream(filename, content_type, body).await?;
+        record_tracking_row(filename, content_type, &stored).await;
         Ok(stored)
     }
 
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         self.inner.retrieve(key).await
+    }
+
+    async fn retrieve_stream(&self, key: &str) -> Result<ByteStream, StorageError> {
+        self.inner.retrieve_stream(key).await
     }
 
     async fn delete(&self, key: &str) -> Result<(), StorageError> {
@@ -447,6 +565,28 @@ impl Storage for MediaTracking {
 
     fn url(&self, key: &str) -> String {
         self.inner.url(key)
+    }
+}
+
+/// Best-effort `media_file` tracking insert shared by `MediaTracking::store`
+/// and `store_stream`. The `size` comes from [`StoredFile::size`] — the
+/// ACTUAL byte count the backend wrote, which for a stream is the only
+/// trustworthy length. A failure (no ambient pool, transient DB error) must
+/// NOT fail the upload: it is logged and swallowed.
+async fn record_tracking_row(filename: &str, content_type: &str, stored: &StoredFile) {
+    let row = MediaFile {
+        id: 0,
+        key: stored.key.clone(),
+        filename: filename.to_string(),
+        content_type: content_type.to_string(),
+        size: stored.size as i64,
+        uploaded_at: chrono::Utc::now(),
+    };
+    if let Err(e) = MediaFile::objects().create(row).await {
+        tracing::warn!(
+            key = %stored.key,
+            "umbra-media: upload stored but media_file tracking insert failed: {e}"
+        );
     }
 }
 
@@ -552,6 +692,14 @@ impl MediaPlugin {
             max_size: None,
             cleanup: Vec::new(),
         }
+    }
+
+    /// Test-only: wrap `inner` in the internal `SizeLimitedStorage` decorator
+    /// so the mid-stream cap can be exercised in isolation, exactly as
+    /// `on_ready` wires it for the ambient backend. Not public API.
+    #[doc(hidden)]
+    pub fn size_limited_for_test(inner: Arc<dyn Storage>, max_size: u64) -> Arc<dyn Storage> {
+        Arc::new(SizeLimitedStorage::new(inner, max_size))
     }
 
     /// Configure an absolute public base (scheme + host like
@@ -706,6 +854,73 @@ impl MediaPlugin {
             filename: filename.to_string(),
             content_type: content_type.to_string(),
             size: bytes.len() as i64,
+            uploaded_at: chrono::Utc::now(),
+        };
+        let saved = MediaFile::objects()
+            .save(row)
+            .await
+            .map_err(|e| MediaError::Storage(format!("media_file save failed: {e}")))?;
+
+        Ok(MediaSaveOutcome {
+            file: saved,
+            url: stored.url,
+        })
+    }
+
+    /// Streaming counterpart of [`save`](MediaPlugin::save): persist an
+    /// upload from a byte-stream `body` WITHOUT buffering the whole payload
+    /// in memory, then record it in `media_file`.
+    ///
+    /// **`max_size` is enforced MID-STREAM**, not from a declared length:
+    /// when a cap is configured the `body` is wrapped with [`cap_stream`]
+    /// so the upload is rejected the instant its real bytes cross the cap
+    /// — even if the client lies about or omits its `Content-Length`. A
+    /// rejected stream leaves no oversized blob on disk (the FsStorage
+    /// backend cleans up its partial write).
+    ///
+    /// The recorded `MediaFile.size` is the ACTUAL streamed byte count
+    /// ([`StoredFile::size`]), the only trustworthy length for a stream.
+    ///
+    /// Use [`save`](MediaPlugin::save) for small uploads where you already
+    /// hold the bytes (form fields, generated content); reach for
+    /// `save_stream` when the body is large or arrives as a stream (a
+    /// proxied download, a multipart part) and buffering it would waste
+    /// memory.
+    pub async fn save_stream(
+        &self,
+        filename: &str,
+        content_type: &str,
+        body: ByteStream,
+    ) -> Result<MediaSaveOutcome, MediaError> {
+        // Apply the mid-stream cap here when configured: `self.storage` is
+        // the raw backend (no size decorator), so the cap can't be skipped
+        // by going through `save_stream` instead of the ambient
+        // `SizeLimitedStorage`.
+        let stored = match self.max_size {
+            Some(cap) => {
+                let capped = cap_stream(body, cap);
+                match self.storage.store_stream(filename, content_type, capped).await {
+                    Ok(s) => s,
+                    Err(StorageError::Io(e)) if is_cap_exceeded(&e) => {
+                        return Err(MediaError::TooLarge {
+                            limit: cap,
+                            actual: cap.saturating_add(1),
+                        });
+                    }
+                    Err(other) => return Err(other.into()),
+                }
+            }
+            None => self.storage.store_stream(filename, content_type, body).await?,
+        };
+
+        let row = MediaFile {
+            id: 0,
+            key: stored.key.clone(),
+            filename: filename.to_string(),
+            content_type: content_type.to_string(),
+            // The ACTUAL streamed byte count — a stream has no trustworthy
+            // up-front length, so this is the only correct size.
+            size: stored.size as i64,
             uploaded_at: chrono::Utc::now(),
         };
         let saved = MediaFile::objects()

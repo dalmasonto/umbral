@@ -348,7 +348,8 @@ pub mod storage {
     //! don't pollute the prelude with bare names.
 
     pub use umbra_core::storage::{
-        Storage, StorageError, StoredFile, set_storage, storage, storage_opt, try_storage,
+        ByteStream, Storage, StorageError, StoredFile, cap_stream, is_cap_exceeded, set_storage,
+        storage, storage_opt, try_storage,
     };
 
     /// Re-export of `async-trait` so a plugin author implementing

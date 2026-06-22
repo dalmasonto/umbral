@@ -4730,12 +4730,15 @@ name = "umbra-media"
 version = "0.0.1"
 dependencies = [
  "axum",
+ "bytes",
  "chrono",
+ "futures-util",
  "http 1.4.1",
  "serde",
  "sqlx",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tower",
  "tower-http",
  "tracing",
