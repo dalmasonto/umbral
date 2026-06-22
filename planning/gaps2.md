@@ -16,7 +16,7 @@
 
 7. [x] Wire `AuthPlugin::with_user_in_templates()` — archived
 
-8. [ ] **Bootstrap project layout convention** — `umbra startproject <name>` should scaffold the app with the per-concern layout we landed on in `examples/shop` (commits `32cd1c1` extracted seed + widgets; `2d3693b` extracted views). The shop went from a 1320-line `main.rs` to 243 by following one repeated shape across three sibling modules:
+8. [x] Bootstrap project layout — SHIPPED (2026-06-21, 4b33fe9): startproject per-concern tree (views/seed/widgets/plugins) + startapp Django-style plugin layout (lib/models/views/urls) + Cargo.toml auto-wire; generated project + plugin verified to cargo check. — archived
 
     ```
     src/
@@ -204,7 +204,7 @@
 
 24. [x] Multi-DB / database routing docs — SHIPPED (2026-06-20): database-routing.mdx expanded with read/write split (#23) + cross-DB FK (#22); Phase-2 multitenancy items flagged under #69 (78863e8). — archived
 
-25. [~] **startproject should auto-mount SecurityPlugin.** _BOOT-WARN DONE (2026-06-20): a `Severity::Warning` boot system-check (`plugin.security_missing`) fires when `auth`/`sessions` is registered without `security` — clear message to add `.plugin(SecurityPlugin::new())` (warning, not fail). `CheckContext` gained `registered_plugin_names`; 8 tests (373729c). REMAINING: the `umbra startproject` scaffold auto-mounting `.plugin(SecurityPlugin::new())` by default — depends on the #8 startproject scaffold (deferred)._
+25. [x] startproject auto-mounts SecurityPlugin — SHIPPED (2026-06-21): scaffolded main.rs mounts SecurityPlugin::new() by default (unblocked by #8). — archived
 
 26. [x] Signed/session-bound CSRF (`SecurityConfig::signed_csrf`) is now the default — archived
 
