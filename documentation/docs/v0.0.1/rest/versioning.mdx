@@ -1,0 +1,97 @@
+---
+title: Versioning
+description: Opt-in DRF-style API versioning — URL-path (/api/v1/...) and accept-header (Accept; version=v2) schemes, allowed/default versions, and reading the resolved version on the request context.
+sidebar_position: 9
+icon: git-branch
+tags: [rest, versioning, api]
+---
+
+API versioning lets one deployment serve several wire contracts at once — `v1` for old clients, `v2` for new ones — without forking the app. umbra-rest ports Django REST Framework's two most common versioning classes.
+
+Versioning is **opt-in and off by default**. A `RestPlugin` with no `.versioning(...)` call serves the unversioned API exactly as before: routes mount at `/api/<table>/`, no version is required, and `RequestContext::version` is always `None`.
+
+<Callout type="info">
+Once resolved, the version is exposed on the request context (`RequestContext::version` for the CRUD handlers, `ActionContext::version` for `@action` endpoints) as `Option<String>`. Handlers — and, later, `transform` / `computed` callbacks — can branch on it.
+</Callout>
+
+## The two schemes
+
+<Tabs>
+<Tab title="URL path">
+
+`VersioningScheme::url_path()` puts the version in the path, right after the base path: `/api/v1/<table>/`. The resource route-set mounts under `{base}/{version}/...` for **each** allowed version, so `/api/v1/post/` and `/api/v2/post/` both resolve when both are allowed.
+
+A request to a version that isn't in `allowed_versions` matches **no route** → **404** (DRF's `URLPathVersioning` behaviour). The version is **required** in the path once this scheme is on — there is no unversioned `/api/<table>/` fallback.
+
+```rust
+use umbra_rest::{RestPlugin, VersioningConfig, VersioningScheme};
+
+RestPlugin::default().versioning(
+    VersioningConfig::new(VersioningScheme::url_path())
+        .allowed_versions(["v1", "v2"])
+        .default_version("v1"),
+)
+// → /api/v1/post/, /api/v2/post/  (GET /api/v3/post/ → 404)
+```
+
+</Tab>
+<Tab title="Accept header">
+
+`VersioningScheme::accept_header()` keeps paths unversioned (`/api/<table>/`) and reads the version from the `Accept` header's media-type `version` parameter:
+
+```
+Accept: application/json; version=v2
+```
+
+An absent version falls back to `default_version`; a version outside `allowed_versions` is rejected with **406 Not Acceptable** (DRF's `AcceptHeaderVersioning`).
+
+```rust
+use umbra_rest::{RestPlugin, VersioningConfig, VersioningScheme};
+
+RestPlugin::default().versioning(
+    VersioningConfig::new(VersioningScheme::accept_header())
+        .allowed_versions(["v1", "v2"])
+        .default_version("v1"),
+)
+```
+
+Prefer a plain header? Use `VersioningScheme::header("X-API-Version")` — same resolution, reading `X-API-Version: v2` instead of the `Accept` param.
+
+</Tab>
+</Tabs>
+
+## Configuration
+
+`VersioningConfig::new(scheme)` plus chainable builders:
+
+- `.default_version("v1")` — the version assumed when a request supplies none (header schemes).
+- `.allowed_version("v1")` / `.allowed_versions(["v1", "v2"])` — the closed set of versions the API serves. A version outside this set is rejected (404 for URL-path, 406 for accept-header).
+
+```rust
+VersioningConfig::new(VersioningScheme::url_path())
+    .allowed_versions(["v1", "v2"])
+    .default_version("v1")
+```
+
+## Reading the version in a handler
+
+A custom `@action` (or, later, a version-aware transform) reads the resolved version off the context:
+
+```rust
+ResourceConfig::new("post").action(
+    "whoami",
+    Method::GET,
+    ActionScope::Collection,
+    |ctx| async move { Ok(serde_json::json!({ "version": ctx.version })) },
+)
+```
+
+Under URL-path versioning, `GET /api/v2/post/whoami/` returns `{"version":"v2"}`.
+
+Safe-by-default exposure (blocked tables, the `password_hash` strip), permissions, throttling, and pagination all stay intact under versioned paths.
+
+## See also
+
+- [Exposure](/docs/v0.0.1/rest/exposure) — which tables are served, and the base path (`RestPlugin::at`).
+- [Permissions](/docs/v0.0.1/rest/permissions) and [Throttling](/docs/v0.0.1/rest/throttling) — both apply under versioned paths.
+- Design rationale: gaps2 #82 (REST remainder) and DRF's versioning classes.

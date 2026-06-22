@@ -54,7 +54,10 @@ pub use pagination::{
 };
 
 pub mod resource;
-pub use resource::{ActionContext, ActionError, ActionScope, ResourceConfig};
+pub use resource::{ActionContext, ActionError, ActionScope, RequestContext, ResourceConfig};
+
+pub mod versioning;
+pub use versioning::{VersioningConfig, VersioningScheme, version_from_headers};
 
 pub mod auth;
 pub use auth::{
@@ -279,6 +282,11 @@ pub struct RestPlugin {
     /// `/api`. Set via `RestPlugin::at("/v1")`. Always normalised
     /// to one leading slash, no trailing slash.
     base_path: String,
+    /// Opt-in API versioning (gaps2 #82). `None` (the default) means no
+    /// versioning: routes mount at `{base_path}/<table>/` and
+    /// `RequestContext::version` is always `None`. `Some(cfg)` selects a
+    /// scheme (URL-path or accept-header) — see [`RestPlugin::versioning`].
+    versioning: Option<VersioningConfig>,
 }
 
 impl std::fmt::Debug for RestPlugin {
@@ -497,7 +505,56 @@ impl RestPlugin {
             search_fields: HashMap::new(),
             nested: HashMap::new(),
             base_path: "/api".to_string(),
+            versioning: None,
         }
+    }
+
+    /// Opt into DRF-style API versioning (gaps2 #82). **Off by default** —
+    /// without this call the API is unversioned (`/api/<table>/`) and
+    /// [`RequestContext::version`] is always `None`.
+    ///
+    /// Pass a [`VersioningConfig`] built from a [`VersioningScheme`]:
+    ///
+    /// - [`VersioningScheme::url_path()`] — the version is a path segment
+    ///   after the base path. Routes mount under `{base}/{version}/...`
+    ///   for **each** allowed version, so `/api/v1/post/` and
+    ///   `/api/v2/post/` both resolve when both are allowed. An unknown
+    ///   version matches no route → **404**. The version is required in the
+    ///   path (DRF-aligned); there is no unversioned `/api/<table>/`
+    ///   fallback once this scheme is on.
+    /// - [`VersioningScheme::accept_header()`] — paths stay
+    ///   `/api/<table>/`; the version comes from the `Accept` header
+    ///   (`application/json; version=v2`). A configurable plain header is
+    ///   supported via [`VersioningScheme::header("X-API-Version")`].
+    ///   Absent → `default_version`; an unknown version → **406**.
+    ///
+    /// The resolved version lands on [`RequestContext::version`] so
+    /// handlers / `transform` / `computed` can branch on it.
+    ///
+    /// ```ignore
+    /// // URL-path: /api/v1/post/ and /api/v2/post/, default v1
+    /// RestPlugin::default().versioning(
+    ///     VersioningConfig::new(VersioningScheme::url_path())
+    ///         .allowed_versions(["v1", "v2"])
+    ///         .default_version("v1"),
+    /// )
+    ///
+    /// // Accept header: Accept: application/json; version=v2
+    /// RestPlugin::default().versioning(
+    ///     VersioningConfig::new(VersioningScheme::accept_header())
+    ///         .allowed_versions(["v1", "v2"])
+    ///         .default_version("v1"),
+    /// )
+    /// ```
+    pub fn versioning(mut self, cfg: VersioningConfig) -> Self {
+        self.versioning = Some(cfg);
+        self
+    }
+
+    /// The configured versioning, if any. Public so `umbra-openapi` can
+    /// mirror the versioned paths in the spec.
+    pub fn versioning_config(&self) -> Option<&VersioningConfig> {
+        self.versioning.as_ref()
     }
 
     /// Gap 107: override the URL prefix for all REST endpoints.
@@ -526,6 +583,82 @@ impl RestPlugin {
     /// OpenAPI plugin to read so the spec mirrors the live routes.
     pub fn base_path(&self) -> &str {
         &self.base_path
+    }
+
+    /// The URL prefixes the resource route-set mounts under. Just
+    /// `[base_path]` normally; `[{base}/{version}, ...]` (one per allowed
+    /// version) when [`VersioningScheme::UrlPath`] is configured.
+    fn mount_prefixes(&self) -> Vec<String> {
+        match &self.versioning {
+            Some(cfg) if matches!(cfg.scheme, VersioningScheme::UrlPath) => {
+                if cfg.allowed_versions.is_empty() {
+                    // No allow-list with URL-path versioning would mean no
+                    // routable prefix at all; fall back to the bare base so
+                    // the misconfiguration is visible (every path 404s on
+                    // the version segment) rather than panicking at boot.
+                    vec![self.base_path.clone()]
+                } else {
+                    cfg.allowed_versions
+                        .iter()
+                        .map(|v| format!("{}/{}", self.base_path, v))
+                        .collect()
+                }
+            }
+            // Accept-header versioning keeps unversioned paths; no version
+            // in the URL. No versioning at all → the plain base path.
+            _ => vec![self.base_path.clone()],
+        }
+    }
+
+    /// Resolve the API version for a request, given its full URL path and
+    /// headers, then validate it against `allowed_versions`.
+    ///
+    /// - No versioning configured → `Ok(None)`.
+    /// - URL-path: the segment right after the base path. Routing already
+    ///   guarantees it's an allowed version (an unknown one matched no
+    ///   route), so this just reads it back onto the context.
+    /// - Accept-header: read from the configured header. Absent →
+    ///   `default_version`. A version outside `allowed_versions` → 406.
+    fn resolve_version(
+        &self,
+        uri_path: &str,
+        headers: &umbra::web::HeaderMap,
+    ) -> Result<Option<String>, ApiError> {
+        let Some(cfg) = &self.versioning else {
+            return Ok(None);
+        };
+        match &cfg.scheme {
+            VersioningScheme::UrlPath => {
+                // The version is the first path segment after the base path.
+                let base = self.base_path.trim_matches('/');
+                let rest = uri_path
+                    .trim_start_matches('/')
+                    .strip_prefix(base)
+                    .map(|r| r.trim_start_matches('/'))
+                    .unwrap_or("");
+                let seg = rest.split('/').next().unwrap_or("");
+                if seg.is_empty() {
+                    // No version segment — only reachable if a prefix-less
+                    // route matched (shouldn't with URL-path versioning).
+                    Ok(cfg.default_version.clone())
+                } else if cfg.is_allowed(seg) {
+                    Ok(Some(seg.to_string()))
+                } else {
+                    // Defense in depth: routing already 404s unknown
+                    // versions, so this path is unreachable in practice.
+                    Err(ApiError::NotFound(format!("unknown API version `{seg}`")))
+                }
+            }
+            VersioningScheme::AcceptHeader { header } => {
+                match version_from_headers(headers, header) {
+                    Some(v) if cfg.is_allowed(&v) => Ok(Some(v)),
+                    Some(v) => Err(ApiError::NotAcceptable(format!(
+                        "requested API version `{v}` is not supported"
+                    ))),
+                    None => Ok(cfg.default_version.clone()),
+                }
+            }
+        }
     }
 
     /// Set the authentication backend run on every request. Default
@@ -1450,56 +1583,74 @@ impl Plugin for RestPlugin {
             }
         }
 
-        let base = &self.base_path;
-        let mut router = Router::new()
-            .route(&format!("{base}/{{table}}/"), get(list).post(create))
-            .route(&format!("{base}/{{table}}"), get(list).post(create))
-            .route(
-                &format!("{base}/{{table}}/{{id}}"),
-                get(retrieve).put(update).patch(update).delete(destroy),
-            );
+        // Compute the URL prefixes the resource route-set mounts under.
+        // Without versioning (or with accept-header versioning, where the
+        // version travels in a header) that's just the base path. With
+        // URL-path versioning it's `{base}/{version}` for EACH allowed
+        // version, so `/api/v1/...` and `/api/v2/...` both resolve. An
+        // unknown version matches none of these prefixes → axum 404,
+        // which is exactly DRF's "unknown version is not routable".
+        let prefixes = self.mount_prefixes();
 
-        // API root index: lists the exposed resources + every plugin's
-        // advertised endpoints (service discovery). Skipped when REST is
-        // mounted at the bare root (empty base), where `/` would collide
-        // with the app's own home route.
-        if !base.is_empty() {
+        let mut router = Router::new();
+        let mut root_mounted = false;
+        for base in &prefixes {
             router = router
-                .route(&format!("{base}/"), get(api_root))
-                .route(base, get(api_root));
-        }
-
-        // Mount the `@action`-style custom endpoints. We register
-        // each one with the table name and action name baked into
-        // the path as LITERAL segments — axum's matchit router
-        // prefers literal over `{param}` when both exist at the
-        // same level, so collection actions on `/api/post/recent`
-        // win over `/api/{table}/{id}` cleanly.
-        //
-        // The handler is a single dispatch fn shared by every
-        // action; it pulls the `(table, name)` pair from the URL
-        // segments and looks the closure back out of CONFIG.
-        for (table, action_list) in &self.actions {
-            for def in action_list {
-                let path = match def.scope {
-                    ActionScope::Collection => {
-                        format!("{base}/{}/{}", q_seg(table), q_seg(&def.name))
-                    }
-                    ActionScope::Detail => {
-                        format!("{base}/{}/{{id}}/{}", q_seg(table), q_seg(&def.name))
-                    }
-                };
-                let method_router =
-                    axum::routing::on(method_filter(&def.method), custom_action_dispatch);
-                // axum panics on duplicate (path, method); we accept that —
-                // a duplicate action registration is a programming
-                // error, not a runtime case to recover from.
-                router = router.route(&path, method_router);
-                // Trailing-slash mirror so `/api/post/recent/` works too.
-                router = router.route(
-                    &format!("{path}/"),
-                    axum::routing::on(method_filter(&def.method), custom_action_dispatch),
+                .route(&format!("{base}/{{table}}/"), get(list).post(create))
+                .route(&format!("{base}/{{table}}"), get(list).post(create))
+                .route(
+                    &format!("{base}/{{table}}/{{id}}"),
+                    get(retrieve).put(update).patch(update).delete(destroy),
                 );
+
+            // API root index: lists the exposed resources + every plugin's
+            // advertised endpoints (service discovery). Skipped when REST is
+            // mounted at the bare root (empty base), where `/` would collide
+            // with the app's own home route. With versioning the index lives
+            // at each `{base}/{version}/` prefix.
+            if !base.is_empty() && !root_mounted {
+                router = router
+                    .route(&format!("{base}/"), get(api_root))
+                    .route(base.as_str(), get(api_root));
+                // Only mount `{base}` (the bare, version-less root) once;
+                // the per-version `{base}/{version}/` index is mounted below.
+                root_mounted = true;
+            } else if !base.is_empty() {
+                router = router.route(&format!("{base}/"), get(api_root));
+            }
+
+            // Mount the `@action`-style custom endpoints. We register
+            // each one with the table name and action name baked into
+            // the path as LITERAL segments — axum's matchit router
+            // prefers literal over `{param}` when both exist at the
+            // same level, so collection actions on `/api/post/recent`
+            // win over `/api/{table}/{id}` cleanly.
+            //
+            // The handler is a single dispatch fn shared by every
+            // action; it pulls the `(table, name)` pair from the URL
+            // segments and looks the closure back out of CONFIG.
+            for (table, action_list) in &self.actions {
+                for def in action_list {
+                    let path = match def.scope {
+                        ActionScope::Collection => {
+                            format!("{base}/{}/{}", q_seg(table), q_seg(&def.name))
+                        }
+                        ActionScope::Detail => {
+                            format!("{base}/{}/{{id}}/{}", q_seg(table), q_seg(&def.name))
+                        }
+                    };
+                    let method_router =
+                        axum::routing::on(method_filter(&def.method), custom_action_dispatch);
+                    // axum panics on duplicate (path, method); we accept that —
+                    // a duplicate action registration is a programming
+                    // error, not a runtime case to recover from.
+                    router = router.route(&path, method_router);
+                    // Trailing-slash mirror so `/api/post/recent/` works too.
+                    router = router.route(
+                        &format!("{path}/"),
+                        axum::routing::on(method_filter(&def.method), custom_action_dispatch),
+                    );
+                }
             }
         }
 
@@ -1655,6 +1806,11 @@ enum ApiError {
     /// action. Returned when a Permission produced
     /// `PermissionError::Forbidden` on an authenticated identity.
     Forbidden,
+    /// 406 — the request asked (via the `Accept` / configured version
+    /// header) for an API version that isn't in `allowed_versions`.
+    /// DRF's `AcceptHeaderVersioning` rejects an unknown version this
+    /// way; URL-path versioning 404s instead (no matching route).
+    NotAcceptable(String),
     /// 429 — the caller is over their rate. Raised when a
     /// [`Throttle`] denied the request (after auth, before the
     /// handler). Carries the retry hint that becomes a `Retry-After`
@@ -1793,6 +1949,7 @@ impl umbra::web::IntoResponse for ApiError {
                 "authentication required".to_string(),
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "forbidden".to_string()),
+            ApiError::NotAcceptable(m) => (StatusCode::NOT_ACCEPTABLE, "not_acceptable", m),
             ApiError::Throttled { .. } => unreachable!("handled above"),
             ApiError::Internal(m) => {
                 tracing::error!(error = %m, "REST handler hit an internal error");
@@ -1960,11 +2117,19 @@ fn pk_column(model: &ModelMeta) -> Result<&umbra::migrate::Column, ApiError> {
 
 async fn list(
     Path(table): Path<String>,
+    uri: axum::http::Uri,
     Query(params): Query<HashMap<String, String>>,
     headers: umbra::web::HeaderMap,
 ) -> Result<Response, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
+    // Resolve + validate the API version (opt-in; `None` when off). For
+    // accept-header versioning an unsupported version is a 406 here.
+    let _ctx = RequestContext {
+        table: table.clone(),
+        identity: identity.clone(),
+        version: cfg.resolve_version(uri.path(), &headers)?,
+    };
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::List, identity.as_ref())?;
     cfg.gate_throttle(
@@ -2141,11 +2306,17 @@ fn csv_cell(v: Option<&Value>) -> String {
 
 async fn retrieve(
     Path((table, id)): Path<(String, String)>,
+    uri: axum::http::Uri,
     Query(params): Query<HashMap<String, String>>,
     headers: umbra::web::HeaderMap,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
+    let _ctx = RequestContext {
+        table: table.clone(),
+        identity: identity.clone(),
+        version: cfg.resolve_version(uri.path(), &headers)?,
+    };
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Retrieve, identity.as_ref())?;
     cfg.gate_throttle(
@@ -2176,11 +2347,17 @@ async fn retrieve(
 
 async fn create(
     Path(table): Path<String>,
+    uri: axum::http::Uri,
     headers: umbra::web::HeaderMap,
     Json(mut body): Json<Map<String, Value>>,
 ) -> Result<(StatusCode, Json<Map<String, Value>>), ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
+    let _ctx = RequestContext {
+        table: table.clone(),
+        identity: identity.clone(),
+        version: cfg.resolve_version(uri.path(), &headers)?,
+    };
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Create, identity.as_ref())?;
     cfg.gate_throttle(
@@ -2356,11 +2533,17 @@ fn child_fk_to<'a>(child: &'a ModelMeta, parent_table: &str) -> Result<&'a str, 
 
 async fn update(
     Path((table, id)): Path<(String, String)>,
+    uri: axum::http::Uri,
     headers: umbra::web::HeaderMap,
     Json(mut body): Json<Map<String, Value>>,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
+    let _ctx = RequestContext {
+        table: table.clone(),
+        identity: identity.clone(),
+        version: cfg.resolve_version(uri.path(), &headers)?,
+    };
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Update, identity.as_ref())?;
     cfg.gate_throttle(
@@ -2404,10 +2587,16 @@ async fn update(
 
 async fn destroy(
     Path((table, id)): Path<(String, String)>,
+    uri: axum::http::Uri,
     headers: umbra::web::HeaderMap,
 ) -> Result<StatusCode, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
+    let _ctx = RequestContext {
+        table: table.clone(),
+        identity: identity.clone(),
+        version: cfg.resolve_version(uri.path(), &headers)?,
+    };
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Delete, identity.as_ref())?;
     cfg.gate_throttle(
@@ -2454,8 +2643,9 @@ async fn custom_action_dispatch(
     headers: umbra::web::HeaderMap,
     body: Option<Json<Value>>,
 ) -> Result<Json<Value>, ApiError> {
-    let (table, name, pk) = parse_action_route(uri.path())?;
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    let version = cfg.resolve_version(uri.path(), &headers)?;
+    let (table, name, pk) = parse_action_route(uri.path(), &cfg.base_path, version.as_deref())?;
 
     // Locate the registered action by (table, name, method). The
     // request's HTTP method has to match the one the user passed at
@@ -2487,6 +2677,7 @@ async fn custom_action_dispatch(
         identity,
         body: body.map(|Json(v)| v).unwrap_or(Value::Null),
         query,
+        version,
     };
 
     // Validate the request body against the action's declared input schema
@@ -2528,15 +2719,42 @@ fn parse_query_string(q: &str) -> std::collections::HashMap<String, String> {
     out
 }
 
-/// Parse `/api/<table>/<name>` and `/api/<table>/<id>/<name>` —
-/// trailing slash tolerated. Returns `(table, action_name, pk)`
-/// where `pk` is `Some(id)` for detail-scope.
-fn parse_action_route(path: &str) -> Result<(String, String, Option<String>), ApiError> {
+/// Parse `{base}/<table>/<name>` and `{base}/<table>/<id>/<name>` —
+/// trailing slash tolerated. Returns `(table, action_name, pk)` where
+/// `pk` is `Some(id)` for detail-scope.
+///
+/// `base_path` (e.g. `"/api"`) and `version` (e.g. `Some("v1")` under
+/// URL-path versioning) are stripped off the front first, so the same
+/// parser works for `/api/post/recent` and `/api/v1/post/recent`.
+fn parse_action_route(
+    path: &str,
+    base_path: &str,
+    version: Option<&str>,
+) -> Result<(String, String, Option<String>), ApiError> {
     let trimmed = path.trim_end_matches('/');
-    let segments: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+    let mut segments: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+
+    // Strip the base-path segments (`/api` → ["api"], `/internal/api` →
+    // ["internal", "api"]) off the front.
+    for base_seg in base_path.split('/').filter(|s| !s.is_empty()) {
+        if segments.first() == Some(&base_seg) {
+            segments.remove(0);
+        } else {
+            return Err(ApiError::NotFound(format!(
+                "{path} is not a recognised @action route"
+            )));
+        }
+    }
+    // Under URL-path versioning, the next segment is the version — drop it.
+    if let Some(v) = version {
+        if segments.first() == Some(&v) {
+            segments.remove(0);
+        }
+    }
+
     match segments.as_slice() {
-        ["api", table, name] => Ok((table.to_string(), name.to_string(), None)),
-        ["api", table, id, name] => Ok((table.to_string(), name.to_string(), Some(id.to_string()))),
+        [table, name] => Ok((table.to_string(), name.to_string(), None)),
+        [table, id, name] => Ok((table.to_string(), name.to_string(), Some(id.to_string()))),
         _ => Err(ApiError::NotFound(format!(
             "{path} is not a recognised @action route"
         ))),

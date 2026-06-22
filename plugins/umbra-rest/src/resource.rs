@@ -97,6 +97,31 @@ pub struct ActionContext {
     pub body: Value,
     /// The query-string parameters as `(key, value)` pairs.
     pub query: std::collections::HashMap<String, String>,
+    /// The resolved API version for this request, or `None` when
+    /// versioning is off (the default) / the request carried none.
+    /// See [`RestPlugin::versioning`](crate::RestPlugin::versioning).
+    pub version: Option<String>,
+}
+
+/// Per-request context the built-in CRUD handlers resolve before
+/// dispatching. Bundles the table, the authenticated identity, and the
+/// resolved API version so handlers — and, later, `transform` / `computed`
+/// callbacks — can branch on who's calling and which version they asked
+/// for.
+///
+/// `version` is `None` unless the plugin opted into
+/// [`RestPlugin::versioning`](crate::RestPlugin::versioning); see that
+/// method and the [`versioning`](crate::versioning) module for the two
+/// schemes (URL-path and accept-header).
+#[derive(Debug, Clone)]
+pub struct RequestContext {
+    /// The table the request targets (e.g. `"post"`).
+    pub table: String,
+    /// Whoever the auth backend resolved. `None` is anonymous.
+    pub identity: Option<Identity>,
+    /// The resolved API version (`"v1"`, `"v2"`, ...), or `None` when
+    /// versioning is off or the request carried no recognisable version.
+    pub version: Option<String>,
 }
 
 /// Errors a custom action handler can return. Maps to the same JSON
