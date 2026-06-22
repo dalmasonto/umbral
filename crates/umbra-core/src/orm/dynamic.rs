@@ -847,6 +847,36 @@ impl<'a> DynQuerySet<'a> {
         form: &HashMap<String, String>,
         skip: &[String],
     ) -> Result<u64, DynError> {
+        let Some(q) = self.build_update_form_query(form, skip)? else {
+            return Ok(0);
+        };
+
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
+                Ok(res.rows_affected())
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
+                Ok(res.rows_affected())
+            }
+        }
+    }
+
+    /// Build the `UPDATE` statement (SET clauses + accumulated WHERE)
+    /// for [`Self::update_form`] / [`Self::update_form_in_tx`]. Returns
+    /// `None` when no column would be written (the callers translate
+    /// that into a `0` return). Holds all per-field validation —
+    /// PK/skip exclusion, `auto_now` refresh, and the structured
+    /// [`WriteError::Validator`] — so the pool and transaction paths
+    /// build provably the same statement.
+    fn build_update_form_query(
+        &self,
+        form: &HashMap<String, String>,
+        skip: &[String],
+    ) -> Result<Option<sea_query::UpdateStatement>, DynError> {
         let mut q = Query::update();
         q.table(crate::db::router::schema_qualified_table(&self.meta.table));
         let mut any = false;
@@ -890,22 +920,43 @@ impl<'a> DynQuerySet<'a> {
             any = true;
         }
         if !any {
-            return Ok(0);
+            return Ok(None);
         }
         let where_clauses = self.effective_where_clauses();
         for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
+        Ok(Some(q))
+    }
 
-        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
-            DbPool::Sqlite(pool) => {
+    /// Transaction-aware sibling of [`Self::update_form`]. Builds and
+    /// executes the identical `UPDATE` (same per-field validation,
+    /// `skip` / PK exclusion, `auto_now` refresh, [`WriteError::Validator`]
+    /// shape, and accumulated WHERE) but runs it on the caller-supplied
+    /// `tx`. The caller owns `commit` / `rollback`, so the update is
+    /// uncommitted until they say so — used by the admin to save a
+    /// parent edit and its inline child changes atomically.
+    pub async fn update_form_in_tx(
+        self,
+        tx: &mut crate::db::Transaction,
+        form: &HashMap<String, String>,
+        skip: &[String],
+    ) -> Result<u64, DynError> {
+        let Some(q) = self.build_update_form_query(form, skip)? else {
+            return Ok(0);
+        };
+
+        match tx.backend_name() {
+            "sqlite" => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
+                let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                let res = sqlx::query_with(&sql, values).execute(&mut **inner).await?;
                 Ok(res.rows_affected())
             }
-            DbPool::Postgres(pool) => {
+            _ => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
+                let inner = tx.as_pg_mut().expect("postgres backend_name");
+                let res = sqlx::query_with(&sql, values).execute(&mut **inner).await?;
                 Ok(res.rows_affected())
             }
         }
@@ -921,6 +972,55 @@ impl<'a> DynQuerySet<'a> {
         form: &HashMap<String, String>,
         skip: &[String],
     ) -> Result<i64, DynError> {
+        let Some(mut q) = self.build_insert_form_query(form, skip)? else {
+            return Ok(0);
+        };
+
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
+            DbPool::Sqlite(pool) => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, vals).execute(&pool).await?;
+                Ok(res.last_insert_rowid())
+            }
+            DbPool::Postgres(pool) => {
+                // Postgres doesn't have last_insert_rowid; we ask for
+                // RETURNING the PK and read it back. Falls back to 0
+                // when the model has no integer PK (e.g. UUID PKs) —
+                // the caller's flow needs to skip relying on the
+                // return value in that case.
+                let pk_name = self
+                    .meta
+                    .fields
+                    .iter()
+                    .find(|c| c.primary_key)
+                    .map(|c| c.name.clone());
+                if let Some(pk) = pk_name {
+                    q.returning_col(Alias::new(&pk));
+                    let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                    let row = sqlx::query_with(&sql, vals).fetch_one(&pool).await?;
+                    Ok(row.try_get::<i64, _>(pk.as_str()).unwrap_or(0))
+                } else {
+                    let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                    let _ = sqlx::query_with(&sql, vals).execute(&pool).await?;
+                    Ok(0)
+                }
+            }
+        }
+    }
+
+    /// Build the `INSERT` statement for [`Self::insert_form`] /
+    /// [`Self::insert_form_in_tx`]. Returns `None` when no column
+    /// survives the `skip` / auto-increment-PK filtering (the callers
+    /// translate that into a `0` return). All per-field validation —
+    /// auto-now/auto-now-add stamping, the auto-increment PK omission,
+    /// and the structured [`WriteError::Validator`] on a bad value —
+    /// lives here so the pool and transaction paths build provably the
+    /// same statement.
+    fn build_insert_form_query(
+        &self,
+        form: &HashMap<String, String>,
+        skip: &[String],
+    ) -> Result<Option<sea_query::InsertStatement>, DynError> {
         let mut cols: Vec<&str> = Vec::new();
         let mut values: Vec<SeaValue> = Vec::new();
         for col in &self.meta.fields {
@@ -968,7 +1068,7 @@ impl<'a> DynQuerySet<'a> {
             values.push(sea_value);
         }
         if cols.is_empty() {
-            return Ok(0);
+            return Ok(None);
         }
 
         let mut q = Query::insert();
@@ -976,33 +1076,53 @@ impl<'a> DynQuerySet<'a> {
         q.columns(cols.iter().map(|c| Alias::new(*c)).collect::<Vec<_>>());
         let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
         q.values_panic(exprs);
+        Ok(Some(q))
+    }
 
-        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
-            DbPool::Sqlite(pool) => {
+    /// Transaction-aware sibling of [`Self::insert_form`]. Builds and
+    /// executes the identical `INSERT` (same `form_str_to_sea_value`
+    /// per-field validation, same `skip` / auto-increment-PK / auto-now
+    /// handling, same [`WriteError::Validator`] shape, same returned-PK
+    /// semantics) but runs it on the caller-supplied `tx` instead of a
+    /// fresh pool connection. The caller owns `commit` / `rollback`, so
+    /// the insert is uncommitted until they say so — this is what lets
+    /// the admin save a parent row and its inline children atomically.
+    pub async fn insert_form_in_tx(
+        self,
+        tx: &mut crate::db::Transaction,
+        form: &HashMap<String, String>,
+        skip: &[String],
+    ) -> Result<i64, DynError> {
+        let Some(mut q) = self.build_insert_form_query(form, skip)? else {
+            return Ok(0);
+        };
+
+        match tx.backend_name() {
+            "sqlite" => {
                 let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, vals).execute(&pool).await?;
+                let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                let res = sqlx::query_with(&sql, vals).execute(&mut **inner).await?;
                 Ok(res.last_insert_rowid())
             }
-            DbPool::Postgres(pool) => {
-                // Postgres doesn't have last_insert_rowid; we ask for
-                // RETURNING the PK and read it back. Falls back to 0
-                // when the model has no integer PK (e.g. UUID PKs) —
-                // the caller's flow needs to skip relying on the
-                // return value in that case.
+            _ => {
+                // Postgres has no last_insert_rowid; RETURNING the PK
+                // mirrors the pool path exactly, including the `0`
+                // fallback for a non-integer PK.
                 let pk_name = self
                     .meta
                     .fields
                     .iter()
                     .find(|c| c.primary_key)
                     .map(|c| c.name.clone());
+                let inner = tx.as_pg_mut().expect("postgres backend_name");
                 if let Some(pk) = pk_name {
                     q.returning_col(Alias::new(&pk));
                     let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                    let row = sqlx::query_with(&sql, vals).fetch_one(&pool).await?;
+                    let row = sqlx::query_with(&sql, vals).fetch_one(&mut **inner).await?;
                     Ok(row.try_get::<i64, _>(pk.as_str()).unwrap_or(0))
                 } else {
                     let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                    let _ = sqlx::query_with(&sql, vals).execute(&pool).await?;
+                    let _ = sqlx::query_with(&sql, vals).execute(&mut **inner).await?;
                     Ok(0)
                 }
             }
