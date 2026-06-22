@@ -1,0 +1,458 @@
+//! umbra-storage — the unified storage plugin.
+//!
+//! Stage 2 of unifying umbra's storage: this crate MERGES the former
+//! `umbra-static` (static-file serving) and `umbra-media` (user uploads)
+//! plugins into ONE [`StoragePlugin`] built on the unified
+//! [`umbra::storage::Storage`] trait. A single S3 backend ([`S3Storage`],
+//! feature-gated) serves both the media (`"default"`) and static
+//! (`"staticfiles"`) storage instances.
+//!
+//! ## Two sides, one plugin
+//!
+//! ```ignore
+//! App::builder()
+//!     .plugin(
+//!         StoragePlugin::new()
+//!             .static_files("/static", "./assets")   // the umbra-static side
+//!             .media("/media", "./media")            // the umbra-media side
+//!             .max_size(10 * 1024 * 1024)            // media upload cap
+//!             .cleanup_on_delete::<Post>(),          // FileField cleanup
+//!     )
+//!     .build()?;
+//! ```
+//!
+//! - **Static side.** [`StoragePlugin::static_files`] /
+//!   [`StoragePlugin::embedded`] / [`StoragePlugin::max_age`] serve a
+//!   filesystem or `include_dir!`-embedded tree with ETag / cache headers
+//!   and a symlink-escape guard. The `collectstatic` command (with
+//!   `--hashed` / `--clear` / `--storage s3`) collects assets through the
+//!   `"staticfiles"` storage instance.
+//! - **Media side.** [`StoragePlugin::media`] /
+//!   [`StoragePlugin::media_with_storage`] serve user uploads, track them
+//!   in the [`MediaFile`] model, enforce a streaming size cap, and run
+//!   file-lifecycle cleanup on delete / replace. The media backend is
+//!   registered as the ambient `"default"` storage.
+//!
+//! Either side is optional: a static-only or media-only `StoragePlugin`
+//! works. `on_ready` registers `set_storage_named("default", media)` and
+//! `set_storage_named("staticfiles", static)` for whichever sides are
+//! configured.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use http::header::{HeaderName, HeaderValue};
+use include_dir::Dir;
+use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
+use umbra::prelude::*;
+use umbra::storage::{ByteStream, DEFAULT, STATICFILES};
+
+mod collect;
+mod media;
+#[cfg(feature = "s3")]
+mod s3;
+mod static_serve;
+
+pub use media::{FsStorage, MediaError, MediaFile, MediaSaveOutcome, MediaTracking};
+#[cfg(feature = "s3")]
+pub use s3::{S3Storage, S3StorageBuilder};
+// Re-export the core Storage trait through this crate for ergonomic
+// `umbra_storage::Storage` use, matching the old crates' surface.
+pub use umbra::storage::{Storage, StorageError, StoredFile};
+
+// The derived `media_file` column-const module (`media_file::KEY`, …) is
+// emitted by `#[derive(Model)]` at the crate root where the model is
+// defined. Re-export it so consumers reach `umbra_storage::media_file::KEY`.
+pub use media::media_file;
+
+use collect::CollectStaticCommand;
+use media::{CleanupSpec, SizeLimitedStorage, file_columns_of, save_stream_through, save_through};
+use static_serve::StaticServe;
+
+/// The unified storage plugin: a static-serving side, a media-upload side,
+/// or both. Replaces the former `StaticPlugin` + `MediaPlugin`.
+#[derive(Clone)]
+pub struct StoragePlugin {
+    /// The static-serving side, if configured.
+    static_side: Option<StaticServe>,
+    /// The media-upload side, if configured.
+    media: Option<MediaSide>,
+}
+
+/// The media side's configuration: mount, on-disk dir, the backend, an
+/// optional size cap, and the file-lifecycle cleanup registrations.
+#[derive(Clone)]
+struct MediaSide {
+    mount: String,
+    dir: PathBuf,
+    storage: Arc<dyn Storage>,
+    max_size: Option<u64>,
+    cleanup: Vec<CleanupSpec>,
+}
+
+impl Default for StoragePlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StoragePlugin {
+    /// An empty plugin — add a static side ([`Self::static_files`] /
+    /// [`Self::embedded`]) and/or a media side ([`Self::media`] /
+    /// [`Self::media_with_storage`]).
+    pub fn new() -> Self {
+        Self {
+            static_side: None,
+            media: None,
+        }
+    }
+
+    // ── Static side ────────────────────────────────────────────────────
+
+    /// Serve a *filesystem* directory at `mount` (the old
+    /// `StaticPlugin::new`). Requests to `/<mount>/<rest>` look for
+    /// `<dir>/<rest>` on disk, guarded against symlink escape.
+    pub fn static_files(mut self, mount: impl Into<String>, dir: impl AsRef<Path>) -> Self {
+        self.static_side = Some(StaticServe::fs(mount, dir));
+        self
+    }
+
+    /// Serve a compile-time-embedded asset tree at `mount` (the old
+    /// `StaticPlugin::embedded`). `dir` is a `&'static Dir<'static>` from
+    /// [`include_dir::include_dir!`]. Path traversal is structurally
+    /// impossible.
+    pub fn embedded(mut self, mount: impl Into<String>, dir: &'static Dir<'static>) -> Self {
+        self.static_side = Some(StaticServe::embedded(mount, dir));
+        self
+    }
+
+    /// Set a `Cache-Control: public, max-age=<duration>` header on every
+    /// static response. Forced to `0` in `Environment::Dev`. Only
+    /// meaningful when a static side is configured.
+    pub fn max_age(mut self, duration: Duration) -> Self {
+        if let Some(side) = self.static_side.take() {
+            self.static_side = Some(side.with_max_age(duration));
+        } else {
+            tracing::warn!(
+                "umbra-storage: max_age() called before a static side was configured; \
+                 add .static_files(..) or .embedded(..) first"
+            );
+        }
+        self
+    }
+
+    /// On-disk static directory, when the static side is a filesystem
+    /// source. `None` for embedded (or no static side).
+    pub fn static_dir(&self) -> Option<&Path> {
+        self.static_side.as_ref().and_then(StaticServe::dir)
+    }
+
+    /// The static mount path, if a static side is configured.
+    pub fn static_mount(&self) -> Option<&str> {
+        self.static_side.as_ref().map(|s| s.mount.as_str())
+    }
+
+    // ── Media side ─────────────────────────────────────────────────────
+
+    /// Serve user uploads from `dir` under URL prefix `mount`, backed by an
+    /// [`FsStorage`] (the old `MediaPlugin::new`).
+    pub fn media(mut self, mount: impl Into<String>, dir: impl AsRef<Path>) -> Self {
+        let mount = mount.into();
+        let dir = dir.as_ref().to_path_buf();
+        let storage: Arc<dyn Storage> = Arc::new(FsStorage::new(mount.clone(), dir.clone()));
+        self.media = Some(MediaSide {
+            mount,
+            dir,
+            storage,
+            max_size: None,
+            cleanup: Vec::new(),
+        });
+        self
+    }
+
+    /// Serve uploads backed by a custom [`Storage`] mounted at `mount` (the
+    /// old `MediaPlugin::with_storage`). The GET-serving `ServeDir` still
+    /// reads `mount` as a dir; a non-filesystem backend serves its own
+    /// URLs, so the route is a no-op for keys that never hit local disk.
+    pub fn media_with_storage(mut self, mount: impl Into<String>, storage: Arc<dyn Storage>) -> Self {
+        let mount = mount.into();
+        self.media = Some(MediaSide {
+            dir: PathBuf::from(&mount),
+            mount,
+            storage,
+            max_size: None,
+            cleanup: Vec::new(),
+        });
+        self
+    }
+
+    /// Back the media side with the unified [`S3Storage`] (feature `s3`).
+    /// The same backend can serve static via the `"staticfiles"` instance.
+    #[cfg(feature = "s3")]
+    pub fn media_s3(mut self, mount: impl Into<String>, s3: S3Storage) -> Self {
+        let mount = mount.into();
+        self.media = Some(MediaSide {
+            dir: PathBuf::from(&mount),
+            mount,
+            storage: Arc::new(s3),
+            max_size: None,
+            cleanup: Vec::new(),
+        });
+        self
+    }
+
+    /// Configure an absolute public base for the default [`FsStorage`]
+    /// media backend so resolved URLs are fully-qualified. Only meaningful
+    /// for an `FsStorage`-backed media side built by [`Self::media`].
+    pub fn public_base(mut self, base: impl Into<String>) -> Self {
+        let base = base.into();
+        if let Some(media) = self.media.as_mut() {
+            media.storage = Arc::new(
+                FsStorage::new(media.mount.clone(), media.dir.clone()).with_public_base(base),
+            );
+        } else {
+            tracing::warn!(
+                "umbra-storage: public_base() called before a media side was configured; \
+                 add .media(..) first"
+            );
+        }
+        self
+    }
+
+    /// Enforce a hard upload-size cap on the media side. [`Self::save`]
+    /// rejects bytes longer than this; the streaming path enforces it
+    /// mid-stream.
+    pub fn max_size(mut self, bytes: u64) -> Self {
+        if let Some(media) = self.media.as_mut() {
+            media.max_size = Some(bytes);
+        } else {
+            tracing::warn!(
+                "umbra-storage: max_size() called before a media side was configured; \
+                 add .media(..) first"
+            );
+        }
+        self
+    }
+
+    /// Opt model `M` into **file-lifecycle cleanup**, auto-detecting its
+    /// file columns (`FileField` / `ImageField`). On per-row delete the
+    /// blob behind every non-empty key is removed; on replace (file key
+    /// A→B via `save`) the OLD blob is removed (gaps2 #92). Best-effort.
+    pub fn cleanup_on_delete<M: Model>(mut self) -> Self {
+        let columns = file_columns_of::<M>();
+        let Some(media) = self.media.as_mut() else {
+            tracing::warn!(
+                "umbra-storage: cleanup_on_delete() called before a media side was configured; \
+                 add .media(..) first"
+            );
+            return self;
+        };
+        if columns.is_empty() {
+            tracing::warn!(
+                table = M::TABLE,
+                "umbra-storage: cleanup_on_delete found no FileField/ImageField columns on \
+                 `{}`; nothing will be cleaned up. Name the columns explicitly with \
+                 `cleanup_files` if you overrode the file widget.",
+                M::TABLE
+            );
+        } else {
+            media.cleanup.push(CleanupSpec {
+                table: M::TABLE.to_string(),
+                columns,
+            });
+        }
+        self
+    }
+
+    /// Opt model `M` into file-lifecycle cleanup for the named file
+    /// columns explicitly (when widget-based auto-detection can't see a
+    /// file column).
+    pub fn cleanup_files<M: Model>(mut self, fields: &[&str]) -> Self {
+        let Some(media) = self.media.as_mut() else {
+            tracing::warn!(
+                "umbra-storage: cleanup_files() called before a media side was configured; \
+                 add .media(..) first"
+            );
+            return self;
+        };
+        media.cleanup.push(CleanupSpec {
+            table: M::TABLE.to_string(),
+            columns: fields.iter().map(|s| s.to_string()).collect(),
+        });
+        self
+    }
+
+    /// The media mount path, if a media side is configured.
+    pub fn media_mount(&self) -> Option<&str> {
+        self.media.as_ref().map(|m| m.mount.as_str())
+    }
+
+    /// The media on-disk directory, if a media side is configured.
+    pub fn media_dir(&self) -> Option<&Path> {
+        self.media.as_ref().map(|m| m.dir.as_path())
+    }
+
+    /// The media storage backend (before the `MediaTracking` decorator is
+    /// applied in `on_ready`). Exposed so callers / tests can resolve a
+    /// key's public URL the same way the registered backend will.
+    pub fn storage(&self) -> &Arc<dyn Storage> {
+        &self
+            .media
+            .as_ref()
+            .expect("storage() requires a media side; add .media(..) / .media_with_storage(..)")
+            .storage
+    }
+
+    /// Test-only: wrap `inner` in the internal `SizeLimitedStorage`
+    /// decorator so the mid-stream cap can be exercised in isolation,
+    /// exactly as `on_ready` wires it. Not public API.
+    #[doc(hidden)]
+    pub fn size_limited_for_test(inner: Arc<dyn Storage>, max_size: u64) -> Arc<dyn Storage> {
+        Arc::new(SizeLimitedStorage::new(inner, max_size))
+    }
+
+    /// Persist one upload through the media backend and record it in
+    /// `media_file` (the old `MediaPlugin::save`).
+    pub async fn save(
+        &self,
+        filename: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<MediaSaveOutcome, MediaError> {
+        let media = self
+            .media
+            .as_ref()
+            .expect("save() requires a media side; add .media(..) / .media_with_storage(..)");
+        save_through(&media.storage, media.max_size, filename, content_type, bytes).await
+    }
+
+    /// Streaming counterpart of [`save`](StoragePlugin::save): persist an
+    /// upload from a byte-stream WITHOUT buffering, enforcing `max_size`
+    /// MID-STREAM (the old `MediaPlugin::save_stream`).
+    pub async fn save_stream(
+        &self,
+        filename: &str,
+        content_type: &str,
+        body: ByteStream,
+    ) -> Result<MediaSaveOutcome, MediaError> {
+        let media = self
+            .media
+            .as_ref()
+            .expect("save_stream() requires a media side; add .media(..) / .media_with_storage(..)");
+        save_stream_through(&media.storage, media.max_size, filename, content_type, body).await
+    }
+}
+
+impl Plugin for StoragePlugin {
+    fn name(&self) -> &'static str {
+        "storage"
+    }
+
+    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
+        // The MediaFile tracking model exists only when a media side is
+        // configured.
+        if self.media.is_some() {
+            vec![umbra::migrate::ModelMeta::for_::<MediaFile>()]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn routes(&self) -> Router {
+        let mut router = Router::new();
+
+        // Static side.
+        if let Some(side) = &self.static_side {
+            router = router.merge(side.routes());
+        }
+
+        // Media side — `ServeDir` over the media dir, with a nosniff
+        // header, nested so `/media/<key>` maps to `<dir>/<key>`.
+        if let Some(media) = &self.media {
+            if !media.dir.exists() {
+                tracing::warn!(
+                    "umbra-storage: media directory `{}` does not exist; requests under `{}` \
+                     will return 404",
+                    media.dir.display(),
+                    media.mount
+                );
+            }
+            let mount = media.mount.trim_end_matches('/').to_string();
+            let serve = ServeDir::new(&media.dir);
+            let svc = tower::ServiceBuilder::new()
+                .layer(SetResponseHeaderLayer::if_not_present(
+                    HeaderName::from_static("x-content-type-options"),
+                    HeaderValue::from_static("nosniff"),
+                ))
+                .service(serve);
+            router = router.nest_service(&mount, svc);
+        }
+
+        router
+    }
+
+    fn static_root_dirs(&self) -> Vec<PathBuf> {
+        self.static_side
+            .as_ref()
+            .map(StaticServe::static_root_dirs)
+            .unwrap_or_default()
+    }
+
+    fn commands(&self) -> Vec<Box<dyn umbra::cli::PluginCommand>> {
+        // `collectstatic` is contributed only when a static side exists.
+        if self.static_side.is_some() {
+            vec![Box::new(CollectStaticCommand)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn on_ready(&self, _ctx: &AppContext) -> Result<(), umbra::plugin::PluginError> {
+        // Register the media backend as the ambient "default" instance,
+        // wrapped in MediaTracking (so the admin/form upload path records a
+        // media_file row) and, when a cap is set, SizeLimitedStorage.
+        if let Some(media) = &self.media {
+            let storage: Arc<dyn Storage> = match media.max_size {
+                Some(max_size) => Arc::new(SizeLimitedStorage::new(media.storage.clone(), max_size)),
+                None => media.storage.clone(),
+            };
+            umbra::storage::set_storage_named(DEFAULT, Arc::new(MediaTracking::new(storage)));
+
+            for spec in &media.cleanup {
+                tracing::debug!(
+                    table = %spec.table,
+                    columns = ?spec.columns,
+                    "umbra-storage: registering file-lifecycle cleanup on delete"
+                );
+                media::register_cleanup(spec);
+            }
+        }
+
+        // Register the static collection backend as the ambient
+        // "staticfiles" instance. For a filesystem static side, point an
+        // FsStorage at the configured `static_root` so collectstatic's
+        // put("css/app.css", …) writes <static_root>/css/app.css and the
+        // unified static handler can read it back. Skip for an embedded
+        // side (nothing to collect) or when there's no static side.
+        if let Some(side) = &self.static_side {
+            if side.dir().is_some() {
+                let static_root = umbra::settings::get_opt()
+                    .map(|s| s.static_root.clone())
+                    .unwrap_or_else(|| "staticfiles".to_string());
+                let backend: Arc<dyn Storage> =
+                    Arc::new(FsStorage::new(String::new(), &static_root));
+                umbra::storage::set_storage_named(STATICFILES, backend);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn provides_storage(&self) -> bool {
+        // A media side registers the ambient "default" backend that the
+        // boot `field.storage_backend` check looks for.
+        self.media.is_some()
+    }
+}

@@ -4967,6 +4967,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-storage"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "bytes",
+ "chrono",
+ "clap",
+ "futures-util",
+ "http 1.4.1",
+ "http-body-util",
+ "include_dir",
+ "mime_guess",
+ "percent-encoding",
+ "rust-s3",
+ "serde",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "umbra",
+ "uuid",
+]
+
+[[package]]
 name = "umbra-tasks"
 version = "0.0.1"
 dependencies = [
