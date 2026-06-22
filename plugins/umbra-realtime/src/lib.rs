@@ -83,6 +83,13 @@ pub struct Event {
     pub event: String,
     /// The JSON payload.
     pub data: serde_json::Value,
+    /// The channel this event was addressed to, stamped by
+    /// [`Registry::dispatch`] from the [`TargetKind`]: a group is its own name
+    /// (`"chat:1"`), a user is `"@user:{id}"`, and a broadcast is
+    /// `"@broadcast"`. The SSE transport carries this in the enveloped frame so
+    /// the single shared `EventSource` can route each event to the right tabs.
+    /// Empty until `dispatch` stamps it.
+    pub channel: String,
     /// Process-global monotonic sequence id, assigned by
     /// [`Registry::dispatch`] when the event is delivered. The SSE transport
     /// renders this as the event's `id:` line so a browser's `EventSource`
@@ -105,6 +112,20 @@ pub enum TargetKind {
     Group(String),
     /// Every connection.
     Broadcast,
+}
+
+impl TargetKind {
+    /// The channel string stamped on every [`Event`] this target dispatches,
+    /// so the single shared SSE `EventSource` can route the enveloped frame to
+    /// the interested tabs: a group is its own name, a user is `"@user:{id}"`,
+    /// and a broadcast is `"@broadcast"`.
+    pub fn channel(&self) -> String {
+        match self {
+            TargetKind::Group(g) => g.clone(),
+            TargetKind::User(uid) => format!("@user:{uid}"),
+            TargetKind::Broadcast => "@broadcast".to_string(),
+        }
+    }
 }
 
 /// A message published to the [`Broker`]: a target + the event to deliver.
@@ -279,6 +300,10 @@ impl Registry {
         // matching connection (and the replay buffer) sees the same seq.
         let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
         event.seq = seq;
+        // Tag the event with its channel so the single shared SSE EventSource
+        // can route the enveloped frame to the interested tabs. The same event
+        // goes to one target, so stamp once.
+        event.channel = target.channel();
 
         // Record in the replay buffer (synchronous; the lock is never held
         // across an `.await`). Cap 0 disables replay entirely.
@@ -355,6 +380,7 @@ impl Registry {
             .map(|(seq, env)| Event {
                 event: env.event.clone(),
                 data: env.data.clone(),
+                channel: env.target.channel(),
                 seq: *seq,
             })
             .collect()
@@ -414,6 +440,7 @@ impl Broker for InProcessBroker {
                 Event {
                     event: env.event,
                     data: env.data,
+                    channel: String::new(),
                     seq: 0,
                 },
             )
@@ -519,7 +546,7 @@ impl RedisBroker {
                         registry
                             .dispatch(
                                 &env.target,
-                                Event { event: env.event, data: env.data, seq: 0 },
+                                Event { event: env.event, data: env.data, channel: String::new(), seq: 0 },
                             )
                             .await;
                     }
@@ -1025,6 +1052,7 @@ mod tests {
         Event {
             event: event.into(),
             data,
+            channel: String::new(),
             seq: 0,
         }
     }
@@ -1171,6 +1199,45 @@ mod tests {
     }
 
     #[test]
+    fn target_channel_stamps_group_user_broadcast() {
+        assert_eq!(TargetKind::Group("chat:1".into()).channel(), "chat:1");
+        assert_eq!(TargetKind::User(42).channel(), "@user:42");
+        assert_eq!(TargetKind::Broadcast.channel(), "@broadcast");
+    }
+
+    #[tokio::test]
+    async fn dispatch_stamps_the_channel_on_delivered_events() {
+        let reg = Registry::default();
+        let (_g, mut rx_g) = reg
+            .register(Some(5), groups(&["chat:1"]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        reg.dispatch(
+            &TargetKind::Group("chat:1".into()),
+            reg_event("message", serde_json::json!("hi")),
+        )
+        .await;
+        assert_eq!(recv(&mut rx_g).await.unwrap().channel, "chat:1");
+
+        let (_u, mut rx_u) = reg
+            .register(Some(7), groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        reg.dispatch(&TargetKind::User(7), reg_event("ping", serde_json::json!({})))
+            .await;
+        assert_eq!(recv(&mut rx_u).await.unwrap().channel, "@user:7");
+
+        let (_b, mut rx_b) = reg
+            .register(None, groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        reg.dispatch(&TargetKind::Broadcast, reg_event("all", serde_json::json!({})))
+            .await;
+        // Drain other receivers' broadcast copies are irrelevant; check b.
+        assert_eq!(recv(&mut rx_b).await.unwrap().channel, "@broadcast");
+    }
+
+    #[test]
     fn default_group_policy_allows_only_public() {
         let p = PublicGroupsOnly;
         assert!(p.can_join(Some(1), "public:lobby"));
@@ -1182,6 +1249,7 @@ mod tests {
         Event {
             event: "e".into(),
             data: serde_json::Value::Null,
+            channel: String::new(),
             seq: 0,
         }
     }

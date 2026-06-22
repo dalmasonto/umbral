@@ -34,6 +34,7 @@ fn reg_event(event: &str, data: serde_json::Value) -> Event {
     Event {
         event: event.into(),
         data,
+        channel: String::new(),
         seq: 0,
     }
 }

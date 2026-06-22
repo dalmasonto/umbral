@@ -44,47 +44,37 @@ Realtime::broadcast().send("ping", &json!({})).await;
 
 `send` is fire-and-forget. It never blocks on socket I/O, so it's safe to call inside a request handler. A connection that can't keep up is skipped (best-effort), never back-pressured. When `RealtimePlugin` isn't installed, `send` is a no-op rather than a panic.
 
-## Connecting (the browser)
+## Connecting (the browser): `umbra.realtime.subscribe`
 
-A client opens the stream and names the rooms it wants:
-
-```js
-const es = new EventSource("/realtime/sse?groups=public:lobby");
-
-es.addEventListener("message", (e) => {
-  const data = JSON.parse(e.data);
-  // render the chat message
-});
-
-es.addEventListener("notification", (e) => {
-  showToast(JSON.parse(e.data));
-});
-```
-
-The connection's user is resolved from the session cookie at handshake, so `to_user(...)` finds it with no extra work.
-
-### Share one connection across tabs: `umbra.realtime.subscribe`
-
-A raw `new EventSource(...)` opens **one connection per tab**. Open the same page in a handful of tabs and you exhaust the browser's ~6-connections-per-host HTTP/1.1 budget — later requests on that origin start hanging as if the server were down.
-
-`umbra-realtime` ships a tiny client helper that collapses N tabs of the same subscription into **one** server connection via a `SharedWorker`. Include it once, then subscribe with a map of event-name handlers:
+Connect through the client helper, **not** a raw `EventSource`. Include it once, then subscribe with the rooms you want and a map of event-name handlers:
 
 ```html
 <script src="/realtime/client.js"></script>
 <script>
   umbra.realtime.subscribe("public:plugin-42", {
     note: function (data, raw) {
-      // data is the parsed JSON payload; raw.id is the SSE event id
+      // data is the parsed JSON payload; raw.channel is the event's channel,
+      // raw.id is the SSE event id
       insertNote(data);
     },
   });
 </script>
 ```
 
-`subscribe(groups, handlers)` returns `{ unsubscribe }`. Every tab with the same `groups` key shares **one** `EventSource('/realtime/sse?groups=…')` held by the worker, which fans each event out only to the tabs (and handler names) that asked for it. The groups key is normalized (sorted), so `"a,b"` and `"b,a"` share a connection. When the last tab for a subscription closes, the worker closes that `EventSource`.
+`subscribe(groups, handlers)` returns `{ unsubscribe }`. The connection's user is resolved from the session cookie at handshake, so `to_user(...)` finds it with no extra work.
+
+### One connection per browser — across all tabs *and* all subscriptions
+
+A raw `new EventSource(...)` opens **one connection per tab**. Open the same page in a handful of tabs and you exhaust the browser's ~6-connections-per-host HTTP/1.1 budget — later requests on that origin start hanging as if the server were down.
+
+`umbra.realtime.subscribe` collapses that to **exactly one** server connection per browser, no matter how many tabs are open or what mix of subscriptions they hold. A `SharedWorker` holds a single `EventSource` over the **set-union** of every tab's groups; each event is routed to the tabs interested in its channel. Open unlimited tabs with any mix of rooms and it stays one connection — when a tab subscribes or unsubscribes a room that changes the union, the worker reconnects that one stream (its `Last-Event-ID` fills the brief gap); an unchanged union never reconnects. When the last tab closes, the connection closes.
 
 <Callout type="info">
-**Graceful fallback.** On browsers without `SharedWorker` (or when its construction is blocked by CSP), `subscribe` transparently opens a per-tab `EventSource('/realtime/sse?groups=…')` and wires the same handlers — identical behavior, just not shared across tabs. If `EventSource` is also missing, `subscribe` is a no-op. You never write the fallback yourself.
+**Wire format is internal.** On the wire every event ships under a single `u` SSE event type carrying a channel-tagged envelope `{c, e, d}` (channel, event-name, data) — that's what lets one union connection route to the right tabs. You never see it: the `umbra.realtime.subscribe` API above is unchanged, and the helper unwraps the envelope and calls your handler by event name. A group's channel is its own name; a `to_user` event is `@user:{id}` (delivered to all that browser's tabs); a `broadcast` is `@broadcast`.
+</Callout>
+
+<Callout type="info">
+**Graceful fallback.** On browsers without `SharedWorker` (or when its construction is blocked by CSP), `subscribe` transparently opens a per-tab `EventSource('/realtime/sse?groups=…')`, listens for the single `u` event, unwraps the envelope, and routes by channel to the same handlers — identical behavior, just one connection per tab instead of per browser. If `EventSource` is also missing, `subscribe` is a no-op. You never write the fallback yourself.
 </Callout>
 
 ## Group access: `GroupPolicy`
@@ -162,13 +152,14 @@ Networks drop. When a browser's `EventSource` loses its connection it reconnects
 
 Every delivered event is stamped with a process-global, strictly-increasing sequence id, written as the SSE `id:` line. The registry keeps a bounded **replay buffer** of recent events. On a reconnect carrying `Last-Event-ID`, the server replays — *before* attaching the live stream — exactly the buffered events newer than that id **that this connection's target would have received** (its user, its joined groups, and broadcasts; never another user's private events). A first connection with no `Last-Event-ID` behaves as before: live only.
 
-It's automatic — the browser side is just `new EventSource(...)`:
+It's automatic — the browser side is just `umbra.realtime.subscribe(...)`:
 
 ```js
-const es = new EventSource("/realtime/sse?groups=public:lobby");
-// On a network blip the browser reconnects and replays missed events for you;
-// you write no resume logic. Each event's e.lastEventId is the seq.
-es.addEventListener("message", (e) => render(JSON.parse(e.data)));
+umbra.realtime.subscribe("public:lobby", {
+  // On a network blip the connection reconnects and replays missed events for
+  // you; you write no resume logic. raw.id is the event's seq.
+  message: (data, raw) => render(data),
+});
 ```
 
 Size the buffer with `replay_buffer(n)` (default 1024; `0` disables replay, live-only):

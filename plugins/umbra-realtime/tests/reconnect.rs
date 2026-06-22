@@ -22,6 +22,7 @@ fn evt(event: &str) -> Event {
     Event {
         event: event.into(),
         data: serde_json::Value::Null,
+        channel: String::new(),
         seq: 0,
     }
 }
