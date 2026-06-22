@@ -735,6 +735,36 @@ pub trait GroupPolicy: Send + Sync {
 pub struct PublicGroupsOnly;
 impl GroupPolicy for PublicGroupsOnly {}
 
+/// A [`GroupPolicy`] built from a closure — the ergonomic way to gate rooms
+/// without declaring a named type. Construct it directly, or use
+/// [`RealtimePlugin::group_policy_fn`]. The closure returns `true` to allow
+/// the join.
+///
+/// ```ignore
+/// use umbra_realtime::RealtimePlugin;
+///
+/// RealtimePlugin::new()
+///     .with_auth_sessions()                       // so `user_id` is the logged-in user
+///     .group_policy_fn(|user_id, group| {
+///         if group.starts_with("public:") { return true; }   // public rooms: anyone
+///         match user_id {
+///             Some(uid) => group == format!("user:{uid}")     // your own private room
+///                 || is_member(uid, group),                   // or your DB membership check
+///             None => false,                                  // anonymous: public only
+///         }
+///     });
+/// ```
+pub struct FnGroupPolicy<F>(pub F);
+
+impl<F> GroupPolicy for FnGroupPolicy<F>
+where
+    F: Fn(Option<i64>, &str) -> bool + Send + Sync,
+{
+    fn can_join(&self, user_id: Option<i64>, group: &str) -> bool {
+        (self.0)(user_id, group)
+    }
+}
+
 // =========================================================================
 // Inbound WebSocket messages.
 // =========================================================================
@@ -1339,6 +1369,28 @@ impl RealtimePlugin {
         self
     }
 
+    /// Gate room access with a closure — the ergonomic alternative to a named
+    /// [`GroupPolicy`] type. `|user_id, group| -> bool` returns `true` to allow
+    /// the join (`user_id` is the authenticated user, or `None` for anonymous).
+    /// Wire [`with_auth_sessions`](Self::with_auth_sessions) (or a custom
+    /// [`identity_resolver`](Self::identity_resolver)) first so `user_id` is
+    /// populated. See [`FnGroupPolicy`].
+    ///
+    /// ```ignore
+    /// RealtimePlugin::new()
+    ///     .with_auth_sessions()
+    ///     .group_policy_fn(|user_id, group| {
+    ///         group.starts_with("public:")
+    ///             || matches!(user_id, Some(uid) if group == format!("user:{uid}"))
+    ///     });
+    /// ```
+    pub fn group_policy_fn<F>(self, f: F) -> Self
+    where
+        F: Fn(Option<i64>, &str) -> bool + Send + Sync + 'static,
+    {
+        self.group_policy(FnGroupPolicy(f))
+    }
+
     /// Supply a custom identity resolver: an async function that maps the
     /// request headers to the authenticated user's `i64` id (or `None` for
     /// anonymous). This is the extension point for custom auth schemes (JWT,
@@ -1809,6 +1861,20 @@ mod tests {
         assert!(p.can_join(Some(1), "public:lobby"));
         assert!(!p.can_join(Some(1), "tenant:99"));
         assert!(!p.can_join(None, "chat:1"));
+    }
+
+    #[test]
+    fn fn_group_policy_gates_rooms_via_closure() {
+        // The ergonomic gate: public rooms for anyone, a private room only for
+        // its owning user, everything else denied.
+        let p = FnGroupPolicy(|user_id: Option<i64>, group: &str| {
+            group.starts_with("public:")
+                || matches!(user_id, Some(uid) if group == format!("user:{uid}"))
+        });
+        assert!(p.can_join(None, "public:lobby"), "public open to anyone");
+        assert!(p.can_join(Some(7), "user:7"), "owner can join their room");
+        assert!(!p.can_join(Some(8), "user:7"), "non-owner denied");
+        assert!(!p.can_join(None, "user:7"), "anonymous denied private");
     }
 
     fn evt() -> Event {
