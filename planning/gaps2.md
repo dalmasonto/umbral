@@ -343,7 +343,7 @@
 
 84. [x] Plugin-contract & shared framework primitives — SHIPPED (2026-06-20): health umbra::db::ping()+timeout (14c30c4), shared block_on_ready bridge (8a48b5f), realtime auth-optional + IdentityResolver seam (7f96fd5). — archived
 
-85. [ ] **Plugin test-coverage holes (security/correctness-critical).** Security-critical HTTP paths with zero coverage: oauth `callback` state-CSRF defense has no e2e test; empty-key CSRF degradation untested; email header-injection untested; tasks panic-recovery (`tokio::spawn` catch) + concurrent-worker double-claim guard (the BROKEN-1 fix) untested; signals async-panic-isolation (would fail today), bulk `bulk_post_save`/`bulk_post_delete` firing, `m2m_changed`, and the actor envelope all untested; admin permcheck-authz + `.at()` base-path + non-i64-PK untested. Add focused tests alongside the fixes above. → `plugins-review/*.md`.
+85. [x] Plugin test-coverage holes (security/correctness-critical) — CLOSED (2026-06-21, 8d9b2dd): oauth state-CSRF, signals async-panic/bulk/m2m/actor, tasks double-claim+handler-panic now tested; email/CSRF/admin coverage pre-existing. — archived
 
 86. [x] Plugin doc drifts — SHIPPED (2026-06-20): signals.mdx (bulk methods DO fire `bulk_post_save`/`bulk_post_delete`; `m2m_changed` ships), umbra-openapi `//!` (has securitySchemes + pagination), tasks.mdx (Postgres-locking note corrected post-BROKEN-1) (`5d5f745`). — archived
 
