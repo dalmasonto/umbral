@@ -278,6 +278,14 @@ pub struct RestPlugin {
     /// child_table)]`. Merged from `ResourceConfig::nested(...)`; read by
     /// the create handler to insert children alongside the parent.
     nested: HashMap<String, Vec<(String, String)>>,
+    /// Tables that opted IN to bulk endpoints via `ResourceConfig::bulk()`
+    /// (gaps2 #82). A table NOT in this set keeps the original behaviour:
+    /// `POST` of a JSON array is rejected, and no collection-level
+    /// `PATCH`/`DELETE` mounts. A table in the set enables transactional
+    /// bulk create/update/delete, each gated by the same
+    /// permission/throttle/denylist/blocked-table checks as the
+    /// single-object handlers.
+    bulk: std::collections::HashSet<String>,
     /// Gap 107: base URL prefix for all REST endpoints. Default
     /// `/api`. Set via `RestPlugin::at("/v1")`. Always normalised
     /// to one leading slash, no trailing slash.
@@ -504,6 +512,7 @@ impl RestPlugin {
             search_disabled: std::collections::HashSet::new(),
             search_fields: HashMap::new(),
             nested: HashMap::new(),
+            bulk: std::collections::HashSet::new(),
             base_path: "/api".to_string(),
             versioning: None,
         }
@@ -847,6 +856,7 @@ impl RestPlugin {
             search_disabled,
             search_fields,
             nested,
+            bulk,
         } = config;
         for field in hidden {
             self.hidden.push((table.clone(), field));
@@ -894,6 +904,9 @@ impl RestPlugin {
         }
         if !nested.is_empty() {
             self.nested.entry(table.clone()).or_default().extend(nested);
+        }
+        if bulk {
+            self.bulk.insert(table.clone());
         }
         self
     }
@@ -1595,9 +1608,20 @@ impl Plugin for RestPlugin {
         let mut router = Router::new();
         let mut root_mounted = false;
         for base in &prefixes {
+            // Collection routes carry GET (list) + POST (create) always, and
+            // PATCH (bulk_update) + DELETE (bulk_delete) for the bulk path
+            // (gaps2 #82). The bulk handlers self-gate on the per-table
+            // `.bulk()` opt-in — a collection PATCH/DELETE to a resource that
+            // didn't opt in returns 404, so a non-bulk resource is unchanged.
             router = router
-                .route(&format!("{base}/{{table}}/"), get(list).post(create))
-                .route(&format!("{base}/{{table}}"), get(list).post(create))
+                .route(
+                    &format!("{base}/{{table}}/"),
+                    get(list).post(create).patch(bulk_update).delete(bulk_delete),
+                )
+                .route(
+                    &format!("{base}/{{table}}"),
+                    get(list).post(create).patch(bulk_update).delete(bulk_delete),
+                )
                 .route(
                     &format!("{base}/{{table}}/{{id}}"),
                     get(retrieve).put(update).patch(update).delete(destroy),
@@ -2349,8 +2373,8 @@ async fn create(
     Path(table): Path<String>,
     uri: axum::http::Uri,
     headers: umbra::web::HeaderMap,
-    Json(mut body): Json<Map<String, Value>>,
-) -> Result<(StatusCode, Json<Map<String, Value>>), ApiError> {
+    Json(raw): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let _ctx = RequestContext {
@@ -2367,6 +2391,28 @@ async fn create(
         throttle_client_ip(&headers).as_deref(),
     )?;
 
+    // gaps2 #82: when this resource opted into bulk, a JSON ARRAY body is a
+    // bulk create — every item in ONE transaction. A JSON object falls
+    // through to the unchanged single-create path. Without `.bulk()` an
+    // array is rejected exactly as before (it isn't a single-object body),
+    // so behaviour is byte-for-byte unchanged for non-bulk resources.
+    if let Value::Array(items) = raw {
+        if !cfg.bulk.contains(&table) {
+            return Err(ApiError::BadInput(
+                "request body must be a JSON object (bulk create is not enabled for this \
+                 resource — call ResourceConfig::bulk() to opt in)"
+                    .into(),
+            ));
+        }
+        return bulk_create(cfg, &table, model, items).await;
+    }
+
+    let Value::Object(mut body) = raw else {
+        return Err(ApiError::BadInput(
+            "request body must be a JSON object".into(),
+        ));
+    };
+
     let nested_specs = cfg.nested.get(&table).cloned().unwrap_or_default();
 
     // WEB-2: a hidden field must not be writable (see strip_hidden_for_write).
@@ -2382,10 +2428,264 @@ async fn create(
             .insert_json(&body)
             .await?;
         cfg.apply_overrides(&table, &mut row);
-        return Ok((StatusCode::CREATED, Json(row)));
+        return Ok((StatusCode::CREATED, Json(Value::Object(row))));
     }
 
-    create_nested(cfg, &table, model, &mut body, &nested_specs).await
+    let (status, Json(row)) = create_nested(cfg, &table, model, &mut body, &nested_specs).await?;
+    Ok((status, Json(Value::Object(row))))
+}
+
+/// Largest batch a single bulk request may carry. Mirrors the list
+/// ceiling ([`MAX_LIST_ROWS`]) so a bulk write can never be an unbounded
+/// number of statements — an over-cap batch is a `400` before any DB work.
+const MAX_BULK_ITEMS: usize = MAX_LIST_ROWS as usize;
+
+/// Reject an over-cap batch (gaps2 #82 safety): a bulk request must never
+/// translate into an unbounded number of statements.
+fn check_bulk_size(len: usize) -> Result<(), ApiError> {
+    if len > MAX_BULK_ITEMS {
+        return Err(ApiError::BadInput(format!(
+            "bulk batch of {len} exceeds the maximum of {MAX_BULK_ITEMS}"
+        )));
+    }
+    Ok(())
+}
+
+/// Bulk create (gaps2 #82): insert EVERY item in `items` on ONE
+/// transaction, returning `201` and the array of created rows. Each item
+/// runs the SAME field denylist and validation as the single create (the
+/// permission, throttle, and blocked-table checks already ran in
+/// `create`). Any item failing rolls the whole transaction back, and the
+/// error names the offending index.
+async fn bulk_create(
+    cfg: &RestPlugin,
+    table: &str,
+    model: ModelMeta,
+    items: Vec<Value>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    check_bulk_size(items.len())?;
+
+    let mut tx = umbra::db::begin().await?;
+    let mut created: Vec<Value> = Vec::with_capacity(items.len());
+    for (idx, item) in items.into_iter().enumerate() {
+        let Value::Object(mut body) = item else {
+            return Err(ApiError::BadInput(format!(
+                "bulk create item {idx} must be a JSON object"
+            )));
+        };
+        // SAME hidden-field denylist (incl. password_hash) as single create.
+        cfg.strip_hidden_for_write(table, &mut body);
+        let mut row = umbra::orm::DynQuerySet::for_meta(&model)
+            .insert_json_in_tx(&body, &mut tx)
+            .await
+            .map_err(|e| bulk_item_error(idx, "create", e.into()))?;
+        cfg.apply_overrides(table, &mut row);
+        created.push(Value::Object(row));
+    }
+    // Commit only after every item succeeded — all-or-nothing.
+    tx.commit().await?;
+    Ok((StatusCode::CREATED, Json(Value::Array(created))))
+}
+
+/// Collection-level bulk update (gaps2 #82): `PATCH {prefix}/<table>/`
+/// with a JSON array where each item carries its primary key. Partial-
+/// updates every item on ONE transaction → `200` + the updated rows.
+/// Only mounted when the resource opted into `.bulk()`. Mirrors the
+/// permission / throttle / denylist of the single-object PATCH.
+async fn bulk_update(
+    Path(table): Path<String>,
+    uri: axum::http::Uri,
+    headers: umbra::web::HeaderMap,
+    Json(raw): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    let identity = cfg.authentication.authenticate(&headers).await;
+    let _ctx = RequestContext {
+        table: table.clone(),
+        identity: identity.clone(),
+        version: cfg.resolve_version(uri.path(), &headers)?,
+    };
+    // Blocked-table + bulk opt-in gate. `allowed_model` enforces the
+    // DEFAULT_BLOCKED_TABLES set, so auth_user / session get no bulk
+    // surface either. The route only mounts when `.bulk()` was set, but we
+    // re-check defensively so a stray request can never bypass it.
+    let model = allowed_model(&table)?;
+    if !cfg.bulk.contains(&table) {
+        return Err(ApiError::NotFound(format!(
+            "bulk update is not enabled on /api/{table}"
+        )));
+    }
+    cfg.gate(&table, &Action::Update, identity.as_ref())?;
+    cfg.gate_throttle(
+        &table,
+        &Action::Update,
+        identity.as_ref(),
+        throttle_client_ip(&headers).as_deref(),
+    )?;
+
+    let Value::Array(items) = raw else {
+        return Err(ApiError::BadInput(
+            "bulk update body must be a JSON array of objects, each carrying its primary key"
+                .into(),
+        ));
+    };
+    check_bulk_size(items.len())?;
+    let pk = pk_column(&model)?.name.clone();
+
+    let mut tx = umbra::db::begin().await?;
+    let mut updated: Vec<Value> = Vec::with_capacity(items.len());
+    for (idx, item) in items.into_iter().enumerate() {
+        let Value::Object(mut body) = item else {
+            return Err(ApiError::BadInput(format!(
+                "bulk update item {idx} must be a JSON object"
+            )));
+        };
+        // Pull the PK out of the item; never let the body rewrite it.
+        let pk_value = body.remove(&pk).ok_or_else(|| {
+            ApiError::BadInput(format!(
+                "bulk update item {idx} is missing its primary key `{pk}`"
+            ))
+        })?;
+        let pk_str = json_pk_to_string(&pk_value).ok_or_else(|| {
+            ApiError::BadInput(format!("bulk update item {idx} has an invalid `{pk}`"))
+        })?;
+        // SAME hidden-field denylist as single update.
+        cfg.strip_hidden_for_write(&table, &mut body);
+
+        let affected = umbra::orm::DynQuerySet::for_meta(&model)
+            .filter_eq_string(&pk, &pk_str)
+            .update_json_in_tx(&body, &mut tx)
+            .await
+            .map_err(|e| bulk_item_error(idx, "update", e.into()))?;
+        if affected == 0 {
+            // A PK that matched no row → roll the whole batch back.
+            return Err(ApiError::NotFound(format!(
+                "bulk update item {idx}: no row with {pk} = {pk_str} in {table}"
+            )));
+        }
+        // Read the row back ON THE TX so the response reflects the
+        // uncommitted update.
+        let mut row = fetch_one_in_tx(&model, &pk, &pk_str, &mut tx).await?;
+        cfg.apply_overrides(&table, &mut row);
+        updated.push(Value::Object(row));
+    }
+    tx.commit().await?;
+    Ok(Json(Value::Array(updated)))
+}
+
+/// Collection-level bulk delete (gaps2 #82): `DELETE {prefix}/<table>/`
+/// with `{ "ids": [ ... ] }`. Deletes (or soft-deletes, for a
+/// soft-delete model — consistent with #35) every matching row on ONE
+/// transaction → `204`. Only mounted when `.bulk()` was set.
+async fn bulk_delete(
+    Path(table): Path<String>,
+    uri: axum::http::Uri,
+    headers: umbra::web::HeaderMap,
+    body: Option<Json<Value>>,
+) -> Result<StatusCode, ApiError> {
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    let identity = cfg.authentication.authenticate(&headers).await;
+    let _ctx = RequestContext {
+        table: table.clone(),
+        identity: identity.clone(),
+        version: cfg.resolve_version(uri.path(), &headers)?,
+    };
+    let model = allowed_model(&table)?;
+    if !cfg.bulk.contains(&table) {
+        return Err(ApiError::NotFound(format!(
+            "bulk delete is not enabled on /api/{table}"
+        )));
+    }
+    cfg.gate(&table, &Action::Delete, identity.as_ref())?;
+    cfg.gate_throttle(
+        &table,
+        &Action::Delete,
+        identity.as_ref(),
+        throttle_client_ip(&headers).as_deref(),
+    )?;
+
+    let ids = match body {
+        Some(Json(Value::Object(mut m))) => match m.remove("ids") {
+            Some(Value::Array(a)) => a,
+            _ => {
+                return Err(ApiError::BadInput(
+                    "bulk delete body must be `{ \"ids\": [ ... ] }`".into(),
+                ));
+            }
+        },
+        _ => {
+            return Err(ApiError::BadInput(
+                "bulk delete body must be `{ \"ids\": [ ... ] }`".into(),
+            ));
+        }
+    };
+    check_bulk_size(ids.len())?;
+    let pk = pk_column(&model)?.name.clone();
+
+    let mut tx = umbra::db::begin().await?;
+    for (idx, id) in ids.into_iter().enumerate() {
+        let pk_str = json_pk_to_string(&id).ok_or_else(|| {
+            ApiError::BadInput(format!("bulk delete id at index {idx} is invalid"))
+        })?;
+        umbra::orm::DynQuerySet::for_meta(&model)
+            .filter_eq_string(&pk, &pk_str)
+            .delete_in_tx(&mut tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Reshape a per-item write failure so the error names which index in the
+/// batch tripped. Keeps the structured field errors from the underlying
+/// `ApiError` for `Validation`, prefixes the message otherwise.
+fn bulk_item_error(idx: usize, op: &str, err: ApiError) -> ApiError {
+    match err {
+        ApiError::BadInput(m) => ApiError::BadInput(format!("bulk {op} item {idx}: {m}")),
+        ApiError::Validation {
+            code,
+            mut field_errors,
+            mut non_field_errors,
+        } => {
+            non_field_errors.insert(0, format!("bulk {op} item {idx} failed; batch rolled back"));
+            // Leave field_errors intact so the client still sees which field
+            // tripped; the non_field_errors prefix carries the index.
+            let _ = &mut field_errors;
+            ApiError::Validation {
+                code,
+                field_errors,
+                non_field_errors,
+            }
+        }
+        other => other,
+    }
+}
+
+/// Render a JSON PK value (number or string) into the string form
+/// `filter_eq_string` expects. Returns `None` for shapes that can't be a
+/// primary key (object / array / bool / null).
+fn json_pk_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// Read one row back on the open transaction so a bulk update's response
+/// reflects its own uncommitted writes. Uses the typed select path on the
+/// tx via `DynQuerySet::fetch_one_in_tx`.
+async fn fetch_one_in_tx(
+    model: &ModelMeta,
+    pk: &str,
+    pk_str: &str,
+    tx: &mut umbra::db::Transaction,
+) -> Result<Map<String, Value>, ApiError> {
+    let row = umbra::orm::DynQuerySet::for_meta(model)
+        .filter_eq_string(pk, pk_str)
+        .fetch_one_json_in_tx(tx)
+        .await?;
+    row.ok_or_else(|| ApiError::BadInput("row updated but disappeared on read-back".into()))
 }
 
 /// Writable nested create (feature #58): insert the parent, then each

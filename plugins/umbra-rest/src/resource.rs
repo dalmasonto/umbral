@@ -261,6 +261,16 @@ pub struct ResourceConfig {
     /// then each child (with its FK to the parent set), returning the full
     /// nested object. Declared via [`ResourceConfig::nested`].
     pub(crate) nested: Vec<(String, String)>,
+    /// Opt IN to DRF-style bulk endpoints (gaps2 #82). `false` (the
+    /// default) keeps the resource byte-for-byte unchanged: a `POST` with
+    /// a JSON array is rejected as a bad single-object body, and no
+    /// collection-level `PATCH` / `DELETE` is mounted. `true` enables:
+    /// bulk create (`POST` an array), bulk update (`PATCH` an array of
+    /// objects each carrying its PK), and bulk delete
+    /// (`DELETE { "ids": [...] }`) — each transactional + subject to the
+    /// SAME permission / throttle / field-denylist / blocked-table checks
+    /// as the single-object handlers. Declared via [`ResourceConfig::bulk`].
+    pub(crate) bulk: bool,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -291,7 +301,41 @@ impl ResourceConfig {
             search_disabled: false,
             search_fields: None,
             nested: Vec::new(),
+            bulk: false,
         }
+    }
+
+    /// Opt IN to DRF-style bulk endpoints for this resource.
+    ///
+    /// Off by default. Without this call the resource behaves exactly as
+    /// before: a `POST` whose body is a JSON array is rejected, and no
+    /// collection-level `PATCH` / `DELETE` route exists.
+    ///
+    /// With it, three transactional (all-or-nothing) endpoints turn on:
+    ///
+    /// - **Bulk create** — `POST {prefix}/<table>/` with a JSON **array**
+    ///   creates every item in ONE transaction → `201` + the created rows.
+    ///   A single JSON **object** still does the ordinary single create.
+    /// - **Bulk update** — `PATCH {prefix}/<table>/` with a JSON array
+    ///   where each item carries its primary key partial-updates each in
+    ///   ONE transaction → `200` + the updated rows.
+    /// - **Bulk delete** — `DELETE {prefix}/<table>/` with
+    ///   `{ "ids": [ ... ] }` deletes (or soft-deletes) all matching rows
+    ///   in ONE transaction → `204`.
+    ///
+    /// Every bulk item runs the SAME validation, field denylist
+    /// (`password_hash` / hidden / `noform`), permission class
+    /// (`Add` / `Change` / `Delete`), throttle, and blocked-table check as
+    /// the single-object handler — bulk opens no bypass. A batch is capped
+    /// at the list ceiling (1000 items); an oversize batch is a `400`.
+    ///
+    /// ```ignore
+    /// RestPlugin::default()
+    ///     .resource(ResourceConfig::for_::<Post>().bulk())
+    /// ```
+    pub fn bulk(mut self) -> Self {
+        self.bulk = true;
+        self
     }
 
     /// Declare a writable nested resource. A `POST` to this resource whose

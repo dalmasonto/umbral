@@ -24,5 +24,6 @@ The full surface lives in the [**REST**](/docs/v0.0.1/rest) section:
 - [**Permissions**](/docs/v0.0.1/rest/permissions) - `AllowAny`, `IsAuthenticated`, `IsStaff`, `ReadOnly`, `OrPermission` / `AndPermission`, writing your own
 - [**Throttling**](/docs/v0.0.1/rest/throttling) - `AnonRateThrottle`, `UserRateThrottle`, `ScopedRateThrottle`, the rate string + 429/Retry-After
 - [**Versioning**](/docs/v0.0.1/rest/versioning) - opt-in URL-path (`/api/v1/...`) and accept-header (`Accept; version=v2`) schemes, allowed/default versions
+- [**Bulk endpoints**](/docs/v0.0.1/rest/bulk) - opt-in `.bulk()` create / update / delete, transactional all-or-nothing, max-batch cap, same permissions + denylist as single-object
 
 The plugin contract itself is documented in `arch.md`; the `rest/` folder above covers the everyday consumer surface.

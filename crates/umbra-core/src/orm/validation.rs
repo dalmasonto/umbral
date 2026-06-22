@@ -158,6 +158,36 @@ pub async fn validate_on_update(meta: &ModelMeta, body: &Map<String, Value>) -> 
     errors
 }
 
+/// Transaction-aware sibling of [`validate_on_update`]. Identical
+/// except the FK-existence check runs on the passed transaction, so a
+/// bulk update inside one tx validates an FK against rows the same
+/// (uncommitted) tx may have just written.
+pub async fn validate_on_update_in_tx(
+    meta: &ModelMeta,
+    body: &Map<String, Value>,
+    tx: &mut crate::db::Transaction,
+) -> Vec<WriteError> {
+    let mut errors = validate_required_update(meta, body);
+    errors.extend(validate_choices(meta, body));
+    errors.extend(validate_m2m_relations(meta, body).await);
+    let mut fk_errors = validate_fk_references_in_tx(meta, body, tx).await;
+    let fk_fields: std::collections::HashSet<String> = fk_errors
+        .iter()
+        .filter_map(|e| match e {
+            WriteError::ForeignKeyNotFound { field, .. } => Some(field.clone()),
+            _ => None,
+        })
+        .collect();
+    errors.retain(|e| match e {
+        WriteError::RequiredFieldMissing { field } | WriteError::BlankNotAllowed { field } => {
+            !fk_fields.contains(field)
+        }
+        _ => true,
+    });
+    errors.append(&mut fk_errors);
+    errors
+}
+
 /// Classify a `sqlx::Error::Database` constraint failure into a
 /// structured `WriteError`. The original body is used to lift the
 /// offending value into the response message. Returns `None`

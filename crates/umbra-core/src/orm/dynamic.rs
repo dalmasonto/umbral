@@ -1191,6 +1191,69 @@ impl<'a> DynQuerySet<'a> {
         Ok(rows.pop())
     }
 
+    /// Transaction-aware single-row read: `SELECT <cols> ... LIMIT 1` for
+    /// the accumulated WHERE, run on the open `tx`. Decodes every model
+    /// column into a JSON map. Used by REST bulk update to read a row back
+    /// on the same (uncommitted) transaction so the response reflects the
+    /// in-flight write. Returns `None` when the filter matches no row.
+    ///
+    /// Unlike [`Self::fetch_as_json`] this does NOT hydrate M2M arrays or
+    /// `select_related` — it's the column-level read the bulk write path
+    /// needs, matching what the single-object PATCH read-back returns.
+    pub async fn fetch_one_json_in_tx(
+        self,
+        tx: &mut crate::db::Transaction,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, DynError> {
+        let mut q = Query::select();
+        q.from(crate::db::router::schema_qualified_table(&self.meta.table));
+        for c in &self.meta.fields {
+            q.column(Alias::new(&c.name));
+        }
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
+            q.cond_where(cond.clone());
+        }
+        q.limit(1);
+
+        let out = match tx.backend_name() {
+            "sqlite" => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                let row = sqlx::query_with(&sql, values)
+                    .fetch_optional(&mut **inner)
+                    .await?;
+                match row {
+                    Some(row) => {
+                        let mut entry = serde_json::Map::new();
+                        for col in &self.meta.fields {
+                            entry.insert(col.name.clone(), decode_to_json(&row, col)?);
+                        }
+                        Some(entry)
+                    }
+                    None => None,
+                }
+            }
+            _ => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let inner = tx.as_pg_mut().expect("postgres backend_name");
+                let row = sqlx::query_with(&sql, values)
+                    .fetch_optional(&mut **inner)
+                    .await?;
+                match row {
+                    Some(row) => {
+                        let mut entry = serde_json::Map::new();
+                        for col in &self.meta.fields {
+                            entry.insert(col.name.clone(), decode_pg_to_json(&row, col)?);
+                        }
+                        Some(entry)
+                    }
+                    None => None,
+                }
+            }
+        };
+        Ok(out)
+    }
+
     /// Terminal: INSERT one row from a JSON map. Auto-increment integer
     /// PKs are omitted when missing or null (the backend assigns).
     /// Returns the newly-inserted row as JSON (via RETURNING * on
@@ -1463,6 +1526,208 @@ impl<'a> DynQuerySet<'a> {
                 Ok(out)
             }
         }
+    }
+
+    /// Transaction-aware sibling of [`Self::update_json`]. PATCH semantics —
+    /// update only the columns present in `body` for the rows matched by the
+    /// accumulated WHERE — but every statement runs on the open `tx` so a
+    /// batch of updates commits or rolls back as a unit. M2M arrays in the
+    /// body are mirrored into junction tables on the same tx. Returns the
+    /// number of rows touched.
+    ///
+    /// Used by REST bulk update (one tx for the whole array). Mirrors the
+    /// pool path's validation + `noform`/`slug_from`/`auto_now` handling;
+    /// the only difference is the execution target.
+    pub async fn update_json_in_tx(
+        self,
+        body: &serde_json::Map<String, serde_json::Value>,
+        tx: &mut crate::db::Transaction,
+    ) -> Result<u64, crate::orm::write::WriteError> {
+        use crate::orm::write::WriteError;
+
+        // Phase -1 — strip `noform` columns + derive `slug_from` (mirrors
+        // the pool path).
+        let needs_owned = self
+            .meta
+            .fields
+            .iter()
+            .any(|c| c.noform || c.slug_from.is_some());
+        let mut body_owned: serde_json::Map<String, serde_json::Value>;
+        let body: &serde_json::Map<String, serde_json::Value> = if needs_owned {
+            body_owned = body.clone();
+            for col in &self.meta.fields {
+                if col.noform {
+                    body_owned.remove(&col.name);
+                }
+            }
+            crate::orm::write::apply_slug_from(&self.meta.fields, &mut body_owned, true);
+            &body_owned
+        } else {
+            body
+        };
+
+        // Phase 0 — pre-DB validation, same shape as `update_json`. FK
+        // existence reads through the open tx so an FK at an uncommitted
+        // sibling row in the same batch resolves.
+        let validation_errors =
+            crate::orm::validation::validate_on_update_in_tx(self.meta, body, tx).await;
+        if !validation_errors.is_empty() {
+            return Err(WriteError::Multiple {
+                errors: validation_errors,
+            });
+        }
+
+        let mut q = Query::update();
+        q.table(crate::db::router::schema_qualified_table(&self.meta.table));
+        let mut any = false;
+        for col in &self.meta.fields {
+            if col.primary_key {
+                continue;
+            }
+            let Some(json) = body.get(&col.name) else {
+                if col.auto_now {
+                    let now_value = crate::orm::write::now_for_column(col.ty);
+                    q.value(Alias::new(&col.name), now_value);
+                    any = true;
+                }
+                continue;
+            };
+            validate_numeric_bounds(col, json)?;
+            if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
+                if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
+                    return Err(WriteError::Validator {
+                        field: col.name.clone(),
+                        message: e.to_string(),
+                    });
+                }
+            }
+            let sea_value = crate::orm::write::json_to_sea_value(
+                col.ty,
+                json,
+                col.nullable,
+                &col.name,
+                fk_target_pk_sql_type(col),
+            )?;
+            q.value(Alias::new(&col.name), sea_value);
+            any = true;
+        }
+        let touches_m2m = self
+            .meta
+            .m2m_relations
+            .iter()
+            .any(|r| body.contains_key(&r.field_name));
+        if !any && !touches_m2m {
+            return Ok(0);
+        }
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
+            q.cond_where(cond.clone());
+        }
+
+        // The PKs the WHERE matches — needed for the M2M mirror below. We
+        // read them on the same tx so the bulk update sees its own
+        // uncommitted siblings.
+        let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
+            Some(pk_col) => {
+                collect_parent_pks_in_tx(self.meta, pk_col, &where_clauses, tx).await?
+            }
+            None => Vec::new(),
+        };
+
+        if any {
+            match tx.backend_name() {
+                "sqlite" => {
+                    let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                    let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                    sqlx::query_with(&sql, values)
+                        .execute(&mut **inner)
+                        .await
+                        .map_err(|e| classify_or_sqlx(e, body))?;
+                }
+                _ => {
+                    let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                    let inner = tx.as_pg_mut().expect("postgres backend_name");
+                    sqlx::query_with(&sql, values)
+                        .execute(&mut **inner)
+                        .await
+                        .map_err(|e| classify_or_sqlx(e, body))?;
+                }
+            }
+        }
+        for pk in &parent_pks {
+            write_m2m_junctions_in_tx(self.meta, Some(pk), body, tx).await?;
+        }
+        Ok(parent_pks.len().max(if any { 1 } else { 0 }) as u64)
+    }
+
+    /// Transaction-aware sibling of [`Self::delete`]. Deletes (or
+    /// soft-deletes, for a `soft_delete` model) the rows matched by the
+    /// accumulated WHERE on the open `tx`, so a batch of deletes commits or
+    /// rolls back as a unit. Returns the number of rows affected.
+    ///
+    /// Soft-delete models stamp `deleted_at = now()` (consistent with the
+    /// pool path / gaps #35) unless [`Self::hard_delete`] was set.
+    pub async fn delete_in_tx(self, tx: &mut crate::db::Transaction) -> Result<u64, DynError> {
+        let soft = self.meta.soft_delete && !self.hard_delete;
+        let where_clauses = if soft {
+            self.live_where_clauses()
+        } else {
+            self.effective_where_clauses()
+        };
+
+        // Build the SQL for the active backend. Soft-delete is an UPDATE
+        // stamping `deleted_at`; a hard delete is a DELETE. Each statement
+        // type lowers to `(sql, values)` so the execute arm is uniform.
+        let table = crate::db::router::schema_qualified_table(&self.meta.table);
+        let build = |is_sqlite: bool| {
+            if soft {
+                let mut u = Query::update();
+                u.table(table.clone());
+                u.value(
+                    Alias::new("deleted_at"),
+                    sea_query::Value::ChronoDateTimeUtc(Some(Box::new(chrono::Utc::now()))),
+                );
+                for cond in &where_clauses {
+                    u.cond_where(cond.clone());
+                }
+                if is_sqlite {
+                    u.build_sqlx(SqliteQueryBuilder)
+                } else {
+                    u.build_sqlx(PostgresQueryBuilder)
+                }
+            } else {
+                let mut d = Query::delete();
+                d.from_table(table.clone());
+                for cond in &where_clauses {
+                    d.cond_where(cond.clone());
+                }
+                if is_sqlite {
+                    d.build_sqlx(SqliteQueryBuilder)
+                } else {
+                    d.build_sqlx(PostgresQueryBuilder)
+                }
+            }
+        };
+
+        let rows_affected = match tx.backend_name() {
+            "sqlite" => {
+                let (sql, values) = build(true);
+                let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                sqlx::query_with(&sql, values)
+                    .execute(&mut **inner)
+                    .await?
+                    .rows_affected()
+            }
+            _ => {
+                let (sql, values) = build(false);
+                let inner = tx.as_pg_mut().expect("postgres backend_name");
+                sqlx::query_with(&sql, values)
+                    .execute(&mut **inner)
+                    .await?
+                    .rows_affected()
+            }
+        };
+        Ok(rows_affected)
     }
 
     /// Terminal: PATCH semantics — update only the columns present
@@ -2765,6 +3030,47 @@ async fn collect_parent_pks(
         DbPool::Postgres(pool) => {
             let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
             let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
+            rows.iter()
+                .map(|row| decode_pg_to_json(row, pk_col))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(crate::orm::write::WriteError::Sqlx)
+        }
+    }
+}
+
+/// Transaction-aware sibling of [`collect_parent_pks`]: reads the matched
+/// PKs on the open `tx` so a bulk update mid-transaction sees the rows the
+/// same tx has touched. Used by `update_json_in_tx`.
+async fn collect_parent_pks_in_tx(
+    meta: &crate::migrate::ModelMeta,
+    pk_col: &crate::migrate::Column,
+    where_clauses: &[Condition],
+    tx: &mut crate::db::Transaction,
+) -> Result<Vec<serde_json::Value>, crate::orm::write::WriteError> {
+    let mut sel = Query::select();
+    sel.from(crate::db::router::schema_qualified_table(&meta.table));
+    sel.column(Alias::new(&pk_col.name));
+    for cond in where_clauses {
+        sel.cond_where(cond.clone());
+    }
+    match tx.backend_name() {
+        "sqlite" => {
+            let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
+            let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+            let rows = sqlx::query_with(&sql, values)
+                .fetch_all(&mut **inner)
+                .await?;
+            rows.iter()
+                .map(|row| decode_to_json(row, pk_col))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(crate::orm::write::WriteError::Sqlx)
+        }
+        _ => {
+            let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
+            let inner = tx.as_pg_mut().expect("postgres backend_name");
+            let rows = sqlx::query_with(&sql, values)
+                .fetch_all(&mut **inner)
+                .await?;
             rows.iter()
                 .map(|row| decode_pg_to_json(row, pk_col))
                 .collect::<Result<Vec<_>, _>>()

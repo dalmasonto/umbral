@@ -1,0 +1,93 @@
+---
+title: Bulk endpoints
+description: Opt-in DRF-style bulk create / update / delete — one transaction, all-or-nothing, with the same permissions, throttle, and field denylist as the single-object endpoints.
+sidebar_position: 10
+icon: layers
+tags: [rest, bulk, transactions, api]
+---
+
+# Bulk endpoints
+
+Create, update, or delete many rows in **one request and one transaction**. This ports DRF's bulk-operation pattern: send an array (or a list of ids) and the whole batch commits together — or rolls back together if any item fails.
+
+Bulk is **opt-in and off by default**. A resource you don't enable keeps the exact behaviour it has today: a `POST` of a JSON array is rejected (it isn't a single-object body), and there's no collection-level `PATCH` / `DELETE`.
+
+<Callout type="info">
+Every bulk endpoint inherits the resource's permission class, throttle, field denylist (`password_hash` / hidden / `noform`), and the safe-by-default blocked-table set. Bulk opens **no bypass** — a `ReadOnly` resource still rejects a bulk write with `403`, and a blocked table (`auth_user`, `session`, …) has no bulk surface at all.
+</Callout>
+
+## Enable it
+
+Add `.bulk()` to the resource:
+
+```rust
+RestPlugin::default()
+    .resource(ResourceConfig::for_::<Post>().bulk())
+```
+
+That turns on three transactional endpoints on the existing collection path.
+
+## Bulk create
+
+`POST {prefix}/<table>/` with a JSON **array** creates every item in one transaction and returns `201` with the created rows:
+
+```http
+POST /api/post/
+Content-Type: application/json
+
+[
+  { "title": "First",  "body": "..." },
+  { "title": "Second", "body": "..." }
+]
+```
+
+A single JSON **object** still does the ordinary single create — the handler branches on array-vs-object, so existing clients are unaffected. If any item fails validation, the **whole transaction rolls back** (zero rows created) and the error names the failing index.
+
+## Bulk update
+
+`PATCH {prefix}/<table>/` with a JSON array where each item carries its **primary key** partial-updates each row in one transaction and returns `200` with the updated rows:
+
+```http
+PATCH /api/post/
+Content-Type: application/json
+
+[
+  { "id": 1, "title": "Renamed" },
+  { "id": 2, "body": "Edited" }
+]
+```
+
+A missing or unknown primary key — or a denied field — rolls the whole batch back. The per-`/<id>` `PUT` / `PATCH` is unchanged.
+
+## Bulk delete
+
+`DELETE {prefix}/<table>/` with `{ "ids": [ ... ] }` deletes all matching rows in one transaction and returns `204`:
+
+```http
+DELETE /api/post/
+Content-Type: application/json
+
+{ "ids": [3, 4, 5] }
+```
+
+For a [soft-delete](/docs/v0.0.1/orm) model this stamps `deleted_at` (the rows leave the live API but stay in the table), consistent with `DynQuerySet::delete()`. The per-`/<id>` `DELETE` is unchanged.
+
+## Max batch size
+
+A bulk request is capped at **1000 items** (the same ceiling as a list response) so a single call can never become an unbounded write. An over-cap batch is rejected with `400` before any database work.
+
+## Security parity
+
+| Guarantee | How bulk preserves it |
+|---|---|
+| Permissions | Each verb checks `Add` / `Change` / `Delete` via the resource's permission class — a `ReadOnly` resource returns `403` on any bulk write. |
+| Blocked tables | A default-blocked table has no REST surface; bulk create/update/delete all `404`. |
+| Field denylist | `password_hash`, hidden fields, and `noform` columns are stripped from every item before the write — the same as single create/update. |
+| Throttle | The resource's throttles run on the bulk verb just as on the single-object verb. |
+| Atomicity | One transaction per request: any item failing rolls the whole batch back. |
+
+## See also
+
+- Design rationale: [`arch.md`](https://github.com/) and the gaps2 #82 entry in `planning/`.
+- [Permissions](/docs/v0.0.1/rest/permissions) — the classes bulk writes are gated by.
+- [Exposure](/docs/v0.0.1/rest/exposure) — the blocked-table set bulk respects.
