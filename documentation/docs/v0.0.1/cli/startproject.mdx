@@ -78,10 +78,25 @@ What you get is a **complete blog-style demo** - not a hello-world skeleton.
 The first `cargo run -- serve` boots into a working application that exercises
 every major umbra surface.
 
+The layout follows the **per-concern convention** the framework dogfoods in `examples/shop`: `main.rs` stays a thin wiring layer that reads like a table of contents, and every subsystem lives behind a `mod.rs` re-export/orchestrator file. You open day one to a project that already scales past 1000 lines instead of a single ballooning `main.rs`.
+
 ```
 myblog/
 ├── Cargo.toml          # umbra + all built-in plugins + tokio
-├── src/main.rs         # ~110 lines wiring every surface (see tour below)
+├── src/
+│   ├── main.rs         # App builder + route table + boot helpers
+│   ├── views/          # HTTP handlers, one file per resource grouping
+│   │   ├── mod.rs      # re-export layer + shared internal_error helper
+│   │   └── public.rs   # public/unauth handlers (home, JSON, dashboard)
+│   ├── seed/           # first-run data
+│   │   ├── mod.rs      # seed::all() orchestrator (pins dependency order)
+│   │   └── credentials.rs  # idempotent dev-superuser seed
+│   └── widgets/        # admin dashboard widgets, one file per kind
+│       ├── mod.rs      # per-kind re-export layer
+│       └── cards.rs    # one builtin widget so the dashboard isn't empty
+├── plugins/            # local app plugins land here (umbra startapp <name>)
+│   ├── .gitkeep
+│   └── README.md
 ├── umbra.toml          # framework settings
 ├── .env                # working dev env file (do not commit)
 ├── .env.example        # env-variable cheat sheet
@@ -95,21 +110,28 @@ myblog/
     └── 500.html        # rendered on handler panic
 ```
 
+<Callout type="info">
+These directories are a **recommended convention, not a requirement**. The runtime reads `main.rs` directly and doesn't care whether handlers live in `views/`, `handlers/`, or inline. Restructure freely - the scaffold just hands you a shape that already scales.
+</Callout>
+
 ### What the scaffold demonstrates
 
 | Surface | Where |
 |---|---|
 | `Post` model with `ForeignKey<AuthUser>` | `struct Post` in `main.rs` |
 | Migrations auto-run on boot | `auto_migrate()` in `main.rs` |
-| Public home route | `GET /` → `home()` handler + `home.html` |
-| JSON API endpoint | `GET /api/posts` → `api_list_posts()` |
-| `login_required_html("/login")` layer | `/dashboard` route in the router |
-| `LoggedIn<AuthUser>` extractor | `dashboard()` handler signature |
-| `umbra::transaction` | inside `dashboard()` wrapping the ORM fetch |
+| First-run data seeding | `seed::all()` in `main.rs` → `src/seed/credentials.rs` |
+| Public home route | `GET /` → `views::public::home` + `home.html` |
+| JSON API endpoint | `GET /api/posts` → `views::public::api_list_posts` |
+| `login_required_html("/login")` layer | `/dashboard` route in the router (`main.rs`) |
+| `LoggedIn<AuthUser>` extractor | `views::public::dashboard` handler signature |
+| `umbra::transaction` | inside `dashboard` wrapping the ORM fetch |
+| Shared `internal_error` 500 helper | `src/views/mod.rs` |
 | `AuthPlugin` + `SessionsPlugin` | `.plugin(...)` in the builder |
 | `RestPlugin` with a `post` resource | `.plugin(RestPlugin::default().resource(...))` |
-| `AdminPlugin` | `.plugin(AdminPlugin::default())` |
+| `AdminPlugin` with a dashboard widget | `.dashboard_section(widgets::cards::overview_section())` |
 | `OpenApiPlugin` (Swagger UI at `/openapi/`) | `.plugin(OpenApiPlugin::new())` |
+| `SecurityPlugin` (CSRF + hardening headers, **on by default**) | `.plugin(SecurityPlugin::with_config(...))` |
 | Custom 404 / 500 templates | `.not_found_template("404.html")` + `.server_error_template("500.html")` |
 | Tailwind classes (CDN) | `templates/base.html` |
 
@@ -127,20 +149,27 @@ different name or move the old one aside.
 
 ### src/main.rs
 
-The generated `main.rs` is intentionally readable in one pass. It is structured
-in three sections: **models**, **app wiring**, and **handlers**.
+The generated `main.rs` reads like a table of contents. It opens with the per-concern module declarations (`mod views; mod seed; mod widgets;`), declares the `Post` model, and then wires the App. Everything else lives in the submodules - `main.rs` stays a thin wiring layer.
 
-**Models section** declares a `Post` struct with a `ForeignKey<AuthUser>` author
-field. The `#[derive(Model)]` macro generates the `Model` trait impl, the ORM
-manager, and the typed column constants (`post::ID`, `post::TITLE`,
-`post::PUBLISHED`, `post::AUTHOR`).
+The model declaration is a `Post` struct with a `ForeignKey<AuthUser>` author field. The `#[derive(Model)]` macro generates the `Model` trait impl, the ORM manager, and the typed column constants (`post::ID`, `post::TITLE`, `post::PUBLISHED`, `post::AUTHOR`).
 
-**App wiring** calls `App::builder()` with every plugin registered in order: `AuthPlugin`, `SessionsPlugin`, `AdminPlugin`, `RestPlugin`, `OpenApiPlugin`, and `SecurityPlugin`. The `RestPlugin` call chains `.resource(ResourceConfig::new("post"))`, which exposes JSON CRUD at the `/api/post/` endpoint. Query-string filtering is on by default, so `?published=true` and `?title__icontains=rust` work out of the box; call `.disable_filters()` on the resource to turn it off.
+The `App::builder()` chain registers every plugin in order: `AuthPlugin`, `SessionsPlugin`, `AdminPlugin`, `RestPlugin`, `OpenApiPlugin`, and `SecurityPlugin`. **`SecurityPlugin` is mounted by default** - it adds CSRF protection plus clickjacking/HSTS hardening headers, with `/api` exempt so token-authenticated JSON clients can POST without a browser form CSRF cookie. The `RestPlugin` call chains `.resource(ResourceConfig::new("post"))`, which exposes JSON CRUD at `/api/post/`; query-string filtering is on by default, so `?published=true` and `?title__icontains=rust` work out of the box (`.disable_filters()` turns it off). The route table wires the handlers as `views::public::home`, `views::public::api_list_posts`, and `views::public::dashboard` - "which file owns a handler" is a lookup, not memorisation. On boot, `main()` runs `auto_migrate()` then the idempotent `seed::all()`.
 
-**Handlers** show three patterns: a public HTML page (`home`), a plain JSON
-response (`api_list_posts`), and a login-gated view (`dashboard`) that uses both
-the `LoggedIn<AuthUser>` extractor and `umbra::transaction` to wrap a DB fetch
-atomically.
+### src/views/
+
+`views/mod.rs` is the re-export / discoverability layer: open it and you see the whole web surface plus the shared `internal_error` helper that every handler bubbles a `?` through. `views/public.rs` holds the public/unauth handlers (`home`, `api_list_posts`, `dashboard`). When auth-gated views land you add `pub mod account;` to `mod.rs` and a sibling `account.rs` - the convention is one file per resource grouping.
+
+### src/seed/
+
+`seed/mod.rs` exposes `seed::all()`, the orchestrator that pins dependency order: the order steps run in doubles as documentation of which step depends on which. The starter calls just `credentials::test_credentials()` (`src/seed/credentials.rs`), which mints a deterministic dev superuser (`admin` / `admin`) when no users exist yet. Every step is idempotent - it short-circuits on a non-empty table - so calling `all()` on a partially-seeded DB tops up only what's missing.
+
+### src/widgets/
+
+`widgets/mod.rs` is the per-kind re-export layer; `widgets/cards.rs` re-exports one framework builtin (`overview_section()`) so a fresh `/admin/` dashboard isn't empty. Add `charts.rs`, `tables.rs`, etc. as your dashboard grows, then mount each section with `.dashboard_section(...)` in `main.rs`.
+
+### plugins/
+
+An empty home for your local app plugins. Run `umbra startapp <name>` (below) to create one - it scaffolds the crate under `plugins/<name>/` and auto-wires it into your project's `Cargo.toml`.
 
 ### templates/
 
@@ -162,20 +191,24 @@ new plugin crate at `plugins/<name>/`:
 umbra startapp posts
 ```
 
-Generates:
+Generates a **Django-app-style per-concern layout** - one file per concern, so a new plugin opens to obvious "what's in which file" structure:
 
 ```
 plugins/posts/
 ├── Cargo.toml          # umbra dep
 └── src/
-    ├── lib.rs          # PostsPlugin + Plugin trait stub
-    └── models.rs       # an empty place to declare your first model
+    ├── lib.rs          # the Plugin impl (name/models/routes/on_ready)
+    ├── models.rs       # #[derive(Model)] structs (this app's tables)
+    ├── views.rs        # HTTP handlers
+    └── urls.rs         # the URL conf (router()), like Django's urls.py
 ```
 
-The generated `lib.rs` looks like:
+The generated `lib.rs` glues the modules together; `routes()` returns `urls::router()` so the route table lives in one place:
 
 ```rust
 pub mod models;
+pub mod urls;
+pub mod views;
 
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::web::Router;
@@ -197,7 +230,8 @@ impl Plugin for PostsPlugin {
     }
 
     fn routes(&self) -> Router {
-        Router::new()
+        // Routes live in urls.rs (this app's URL conf).
+        urls::router()
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
@@ -206,25 +240,32 @@ impl Plugin for PostsPlugin {
 }
 ```
 
-After scaffolding, the command prints two follow-up edits you make
-yourself:
+`urls.rs` is the app's URL conf - the route table that maps paths to `views::` handlers, like Django's `urls.py`:
 
-1. Add the plugin crate as a dependency in your project's `Cargo.toml`:
+```rust
+use umbra::web::{Router, routing::get};
+use crate::views;
 
-   ```toml
-   posts = { path = "plugins/posts" }
-   ```
+pub fn router() -> Router {
+    Router::new().route("/posts/", get(views::index))
+}
+```
 
-2. Wire it into your `App::builder()` chain in `src/main.rs`:
+`views.rs` holds the handlers (a sample `index` ships out of the box), and `models.rs` is where you declare your first `#[derive(Model)]` struct.
 
-   ```rust
-   .plugin(posts::PostsPlugin::default())
-   ```
+**`startapp` auto-wires the new crate into your project's `Cargo.toml`.** After scaffolding it adds the path dep under `[dependencies]` for you:
 
-We don't edit those files automatically - Cargo manifests and your
-`main.rs` can be in any shape, and silently rewriting them is more
-surprise than help. The two lines you add are explicit and easy to
-undo.
+```toml
+posts = { path = "plugins/posts" }
+```
+
+The insertion is idempotent (a second `startapp posts` won't duplicate the line) and preserves your existing dep ordering and comments. If the project has no `Cargo.toml` (you ran `startapp` outside a project), the scaffold still writes the plugin files and just skips the dep registration.
+
+The one edit you still make yourself is wiring the plugin into your `App::builder()` chain in `src/main.rs` - the `main.rs` shape is yours to control, so silently rewriting it would be more surprise than help:
+
+```rust
+.plugin(posts::PostsPlugin::default())
+```
 
 <Callout type="info">
 Plugin names follow the same rules as Cargo crate names - ASCII
@@ -296,9 +337,9 @@ After scaffolding, the printed next-steps walk you through wiring it into your p
 
 | Choosing... | Use |
 |---|---|
-| An internal module that just needs a `Plugin` seam | `startapp` (one `lib.rs`, easy to read in one sitting) |
-| A reusable plugin you'll share or publish | `startplugin` (separate `models.rs` / `handlers.rs`, README, real deps) |
-| You're learning the Plugin trait surface | `startplugin` - seeing the full impl is more useful than a stub |
+| A local app plugin for your project | `startapp` (Django-app-style `lib`/`models`/`views`/`urls`, auto-wired into your `Cargo.toml`) |
+| A reusable plugin you'll share or publish | `startplugin` (adds a README + example model with field attributes + real deps for a distributable crate) |
+| You're learning the Plugin trait surface | `startplugin` - the example model + handler show the attributes and patterns you hit on day one |
 
 Same reserved-name list and same already-exists guard for both.
 

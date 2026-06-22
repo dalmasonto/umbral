@@ -103,14 +103,19 @@ fn scaffold_project_cargo_toml_lists_every_builtin_plugin_at_least_commented() {
     }
 }
 
-// gap 20: main.rs references all major plugin and auth surfaces.
+// gap 20: the scaffolded project references all major plugin and auth
+// surfaces. With the per-concern layout (gaps2 #8) the App-wiring
+// surfaces stay in main.rs while the handler-level surfaces moved to
+// views/public.rs; assert each marker in the file that now owns it.
 #[test]
 fn scaffold_project_main_rs_references_all_plugins() {
     let tmp = TempDir::new().unwrap();
     let report = scaffold_project("testapp", tmp.path(), None).unwrap();
     let main_rs = fs::read_to_string(report.root.join("src/main.rs")).unwrap();
+    let public_rs = fs::read_to_string(report.root.join("src/views/public.rs")).unwrap();
 
-    let markers = &[
+    // App-wiring surfaces — these live in main.rs.
+    let main_markers = &[
         "AuthPlugin",
         "SessionsPlugin",
         "AdminPlugin",
@@ -120,19 +125,25 @@ fn scaffold_project_main_rs_references_all_plugins() {
         "SecurityConfig",
         "csrf_exempt_paths",
         "login_required_html",
-        "LoggedIn",
         "ForeignKey",
-        "umbra::transaction",
         "ResourceConfig",
         "ResourceConfig::new(\"post\")",
         "umbra_cli::dispatch(app).await",
         "#[tokio::main]",
         "auto_migrate",
     ];
-    for marker in markers {
+    for marker in main_markers {
         assert!(
             main_rs.contains(marker),
             "main.rs should contain `{marker}`;\ngot:\n{main_rs}"
+        );
+    }
+
+    // Handler-level surfaces — these live in views/public.rs now.
+    for marker in &["LoggedIn", "umbra::transaction"] {
+        assert!(
+            public_rs.contains(marker),
+            "views/public.rs should contain `{marker}`;\ngot:\n{public_rs}"
         );
     }
 }
