@@ -1,0 +1,176 @@
+---
+title: Gating access
+description: Decide who can join a room. The two gates (identity + GroupPolicy), the public-only default, and worked examples for private, membership, tenant, and role-based rooms.
+sidebar_position: 2
+tags: [realtime, security, gating, auth, permissions]
+---
+
+# Gating access to rooms
+
+A client subscribes to a room by joining a **group** at the SSE/WS handshake. Whether that join is allowed is decided by two gates working together:
+
+1. **Identity resolution** — the framework figures out *who* is connecting (`user_id: Option<i64>`).
+2. **Group policy** — your `GroupPolicy` decides whether *this user* may join *this group*.
+
+A group the policy rejects fails the whole handshake with `403 Forbidden` before any data flows. This is default-deny: a client can never subscribe to a room it has no claim to.
+
+<Callout type="warning">
+**Group names are the security boundary.** Anything in a `public:` group is readable by anyone (the default policy lets anyone join `public:*`). Only name a group `public:` when its data is genuinely public. Everything sensitive belongs in a group the policy gates.
+</Callout>
+
+## The default policy: `public:*` only
+
+With no configuration, `RealtimePlugin` uses `PublicGroupsOnly`. Its rule is exactly one line: allow only groups whose name starts with `public:`.
+
+```rust
+// The built-in default — you get this for free:
+RealtimePlugin::new()   // PublicGroupsOnly
+```
+
+- `public:lobby`, `public:posts` → anyone may join, signed in or not.
+- `chat:123`, `tenant:99`, `user:7` → **denied for everyone**, including authenticated users.
+
+To grant access to private rooms, override the policy and decide from the authenticated identity.
+
+## Gate 1: who is connecting (`user_id`)
+
+Every policy receives `user_id: Option<i64>` — the authenticated user, or `None` for anonymous. By default the identity resolver always returns `None`, so **without wiring identity your policy can never see a real user**.
+
+Two ways to populate it:
+
+<Tabs>
+<Tab title="umbra-auth sessions">
+
+If you use `umbra-auth`, enable the `auth` feature and call `with_auth_sessions()`. It reads the session cookie at the handshake and resolves the logged-in user's id:
+
+```rust
+RealtimePlugin::new()
+    .with_auth_sessions()   // requires the `auth` cargo feature
+```
+
+</Tab>
+<Tab title="Custom resolver (JWT / API key)">
+
+For any other scheme, supply an async closure mapping request headers to a user id:
+
+```rust
+RealtimePlugin::new()
+    .identity_resolver(|headers| async move {
+        let token = headers.get("authorization")?.to_str().ok()?;
+        verify_jwt(token).await   // -> Option<i64>
+    })
+```
+
+</Tab>
+</Tabs>
+
+<Callout type="warning">
+**Anonymous-by-default footgun.** If you write a policy that grants `user:{id}` rooms but forget `with_auth_sessions()` / `identity_resolver(...)`, `user_id` is always `None` and every private room is silently denied. Wire identity first, then write the policy.
+</Callout>
+
+## Gate 2: the policy — `group_policy_fn`
+
+The ergonomic way to gate rooms is a closure: `|user_id: Option<i64>, group: &str| -> bool`. Return `true` to allow the join. (Under the hood this wraps your closure in `FnGroupPolicy`.)
+
+### Public rooms — anyone
+
+```rust
+RealtimePlugin::new()
+    .group_policy_fn(|_user_id, group| group.starts_with("public:"));
+```
+
+### Per-user private room — `user:{id}`
+
+Each user gets a room only they can join:
+
+```rust
+RealtimePlugin::new()
+    .with_auth_sessions()
+    .group_policy_fn(|user_id, group| {
+        if group.starts_with("public:") {
+            return true; // public rooms: anyone
+        }
+        match user_id {
+            Some(uid) => group == format!("user:{uid}"),  // your own private room
+            None => false,                                 // anonymous: public only
+        }
+    });
+```
+
+### Membership / multi-tenant — check the DB or the session
+
+For a `tenant:{id}` or a `team:{id}` room, gate on a membership check. The closure is synchronous, so resolve membership from data you can read synchronously (a cache, or a check that doesn't need `.await`):
+
+```rust
+RealtimePlugin::new()
+    .with_auth_sessions()
+    .group_policy_fn(|user_id, group| {
+        if group.starts_with("public:") {
+            return true;
+        }
+        match user_id {
+            Some(uid) => is_member(uid, group),  // your membership lookup -> bool
+            None => false,
+        }
+    });
+```
+
+### Role-based — staff-only channels
+
+```rust
+RealtimePlugin::new()
+    .with_auth_sessions()
+    .group_policy_fn(|user_id, group| {
+        if group.starts_with("public:") {
+            return true;
+        }
+        if group.starts_with("staff:") {
+            return matches!(user_id, Some(uid) if is_staff(uid));
+        }
+        false
+    });
+```
+
+<Callout type="info">
+A clean pattern for sensitive data that avoids gating logic entirely: never put it in a joinable group. Target it with `Realtime::to_user(id)` instead — a user-targeted send reaches only that user's own connections, so it's effectively a private channel a visitor can never subscribe to.
+</Callout>
+
+## Complex policies: a named `GroupPolicy` type
+
+When a closure isn't enough (you want state, or shared helpers across methods), implement the `GroupPolicy` trait on your own type and pass it to `group_policy`:
+
+```rust
+use umbra_realtime::{GroupPolicy, RealtimePlugin};
+
+struct AppPolicy {
+    // ... any state you need
+}
+
+impl GroupPolicy for AppPolicy {
+    fn can_join(&self, user_id: Option<i64>, group: &str) -> bool {
+        if group.starts_with("public:") {
+            return true;
+        }
+        match user_id {
+            Some(uid) => self.allows(uid, group),
+            None => false,
+        }
+    }
+}
+
+RealtimePlugin::new()
+    .with_auth_sessions()
+    .group_policy(AppPolicy { /* ... */ });
+```
+
+The default `can_join` (if you don't override it) is the same `group.starts_with("public:")` rule as `PublicGroupsOnly`.
+
+## How it all fits
+
+| Step | Where | Result |
+|---|---|---|
+| Resolve identity | `with_auth_sessions()` / `identity_resolver(...)` | `user_id: Option<i64>` |
+| Check the join | `group_policy_fn(...)` / `group_policy(...)` | allow → stream; deny → `403` |
+| Per-group dispatch | `Realtime::to_group(...).send(...)` | reaches only joined connections |
+
+Because every send to a group only reaches connections the policy already admitted, the policy is the single chokepoint for "who can see this room" — including for [model subscriptions](model-subscriptions) and [presence](presence), which both ride the same group dispatch.

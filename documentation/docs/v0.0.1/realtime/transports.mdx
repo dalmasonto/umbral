@@ -1,0 +1,128 @@
+---
+title: Transports
+description: SSE vs WebSocket, the one-connection-per-browser SharedWorker model, reconnect and replay (Last-Event-ID), connection limits, and WS inbound messages.
+sidebar_position: 5
+tags: [realtime, sse, websockets, transport, reconnect]
+---
+
+# Transports
+
+`umbra-realtime` ships two transports behind one targeting API. The send side (`Realtime::to_user` / `to_group` / `broadcast`) is identical for both — only how the browser connects differs.
+
+| Transport | Endpoint | Direction | Reach for it when |
+|---|---|---|---|
+| **SSE** | `GET /realtime/sse?groups=a,b` | server → client | the default — push only (notifications, live data, presence) |
+| **WebSocket** | `GET /realtime/ws?groups=a,b` | bidirectional | the client also needs to **send** (chat, typed commands) |
+
+Both check identity and the [group policy](gating) at the handshake; a rejected group fails with `403` before any data flows.
+
+## Connecting the browser
+
+Connect through the client helper served at `GET /realtime/client.js` — **not** a raw `EventSource`. Include it once, then subscribe with the rooms you want and a map of event-name handlers:
+
+```html
+<script src="/realtime/client.js"></script>
+<script>
+  const sub = umbra.realtime.subscribe("public:lobby", {
+    message: function (data, raw) {
+      // data is the parsed JSON payload; raw.channel is the event's channel,
+      // raw.id is the SSE event id.
+      render(data);
+    },
+  });
+  // later: sub.unsubscribe();
+</script>
+```
+
+`subscribe(groups, handlers)` returns `{ unsubscribe }`. `groups` is a comma-separated string (or single group); `handlers` is keyed by event name. The connection's user is resolved at handshake (see [Gating](gating)), so `to_user(...)` finds it with no extra work.
+
+There are two sugar helpers over `subscribe` — `umbra.realtime.model(...)` ([model subscriptions](model-subscriptions)) and `umbra.realtime.presence(...)` ([presence](presence)) — both share the same single connection described below.
+
+## One connection per browser
+
+A raw `new EventSource(...)` opens **one connection per tab**. Open the same page in a handful of tabs and you exhaust the browser's ~6-connections-per-host HTTP/1.1 budget — later requests on that origin start hanging as if the server were down.
+
+`umbra.realtime.subscribe` collapses that to **exactly one** server connection per browser, no matter how many tabs are open or what mix of subscriptions they hold:
+
+- A `SharedWorker` holds a single `EventSource` over the **set-union** of every tab's groups.
+- Each event is routed to the tabs interested in its channel.
+- When a tab subscribes or unsubscribes a room that changes the union, the worker reconnects that one stream (its `Last-Event-ID` fills the brief gap); an unchanged union never reconnects.
+- When the last tab closes, the connection closes.
+
+<Callout type="info">
+**Graceful fallback.** On browsers without `SharedWorker` (or when its construction is blocked by CSP), `subscribe` transparently opens a per-tab `EventSource('/realtime/sse?groups=…')` with identical observable behavior — just one connection per tab instead of per browser. If `EventSource` is also missing, `subscribe` is a no-op returning a no-op `unsubscribe`. You never write the fallback yourself.
+</Callout>
+
+<Callout type="info">
+**The wire format is internal.** Every SSE event ships under a single `u` event type carrying a channel-tagged envelope `{c, e, d}` (channel, event-name, data) — that's what lets one union connection route each event to the right tabs. You never see it: the helper unwraps the envelope and calls your handler by event name. A group's channel is its own name; a `to_user` event is `@user:{id}` (delivered to all that browser's tabs); a `broadcast` is `@broadcast`.
+</Callout>
+
+## Reconnect and replay (`Last-Event-ID`)
+
+Networks drop. When a browser's `EventSource` loses its connection it reconnects on its own, and on that reconnect it sends back the `id:` of the last event it saw as the `Last-Event-ID` header. `umbra-realtime` keys off that to fill the gap with no missed events.
+
+Every delivered event is stamped with a process-global, strictly-increasing sequence id, written as the SSE `id:` line. The registry keeps a bounded **replay buffer** of recent events. On a reconnect carrying `Last-Event-ID`, the server replays — *before* attaching the live stream — exactly the buffered events newer than that id **that this connection's target would have received** (its user, its joined groups, and broadcasts; never another user's private events). A first connection with no `Last-Event-ID` is live-only.
+
+It's automatic — the browser side is just `umbra.realtime.subscribe(...)`; you write no resume logic. Size the buffer with `replay_buffer(n)` (default 1024; `0` disables replay):
+
+```rust
+RealtimePlugin::new().replay_buffer(4096)
+```
+
+<Callout type="warning">
+**Bounded-buffer caveat.** The buffer holds only the most recent `n` events. If a client is offline long enough that the event it missed has already been evicted, it resumes from the oldest *retained* event and silently skips anything older — there's no infinite history. Size `n` to cover the longest drop you want to bridge at your peak event rate.
+
+**WebSocket has no native `Last-Event-ID`,** so reconnect resume is an SSE feature; a WS client re-subscribes and gets the live stream from the moment it reconnects.
+</Callout>
+
+## Connection limits (`max_connections`)
+
+Cap the total number of live connections across **both** transports so a runaway client (or a load test) can't exhaust file descriptors:
+
+```rust
+RealtimePlugin::new().max_connections(10_000)
+```
+
+The default is unlimited. Once the cap is reached, a new SSE or WebSocket handshake is refused with `503 Service Unavailable` instead of opening the stream; a disconnect frees a slot and the next connection is admitted immediately. `EventSource` treats the 503 as a transient error and retries on its own, so clients drain back in as capacity frees.
+
+## WebSocket: two-way traffic
+
+For chat or typed commands, connect to `GET /realtime/ws?groups=...`. The same `Realtime::to_user` / `to_group` / `broadcast` push API works unchanged; outbound events arrive as JSON text frames `{"event":"…","data":{…}}`. Inbound client text frames go to a `MessageHandler` you register:
+
+```rust
+use umbra_realtime::{MessageContext, MessageHandler, Realtime, RealtimePlugin};
+
+struct Chat;
+
+#[umbra_realtime::async_trait]
+impl MessageHandler for Chat {
+    async fn on_message(&self, ctx: &MessageContext, text: String) {
+        // ctx.conn_id / ctx.user_id let you authorize and route.
+        let msg: ChatMsg = serde_json::from_str(&text).unwrap();
+        Realtime::to_group(&msg.room).send("message", &msg).await;
+    }
+}
+
+RealtimePlugin::new().message_handler(Chat);
+```
+
+```js
+const ws = new WebSocket("ws://localhost:8000/realtime/ws?groups=public:lobby");
+ws.onmessage = (e) => {
+  const { event, data } = JSON.parse(e.data);
+  // ...
+};
+ws.send(JSON.stringify({ room: "public:lobby", body: "hi" }));
+```
+
+The same [`GroupPolicy`](gating) gate applies at the WS handshake (a denied group fails the upgrade). The default `MessageHandler` (`NoopMessageHandler`) ignores inbound frames, which is fine for push-only apps — SSE is push-only, so a handler only matters for WebSocket.
+
+<Callout type="info">
+The umbra `umbra.realtime` client helper uses **SSE** (the one-connection-per-browser model). Use WebSocket directly via the browser's native `WebSocket` when you need inbound frames; for pure push, prefer SSE so you get the shared connection and reconnect replay for free.
+</Callout>
+
+## See also
+
+- [Getting started](getting-started) — install the plugin and send your first event.
+- [Gating access](gating) — the policy checked at every handshake.
+- [Scaling](scaling) — the Redis backplane and the proven 10k-connection numbers.

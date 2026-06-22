@@ -1,0 +1,143 @@
+---
+title: Getting started
+description: Add live data and presence to your app in five minutes — install RealtimePlugin, wire identity, drop in one script tag, and push your first event.
+sidebar_position: 1
+tags: [realtime, getting-started, sse, push, supabase]
+---
+
+# Getting started with realtime
+
+`umbra-realtime` is the "Supabase feeling" for umbra: subscribe to live data and presence from the browser, push from the server with one line, and stay safe by default. There is no socket bookkeeping, no polling, and no serializer code to write.
+
+This page is the five-minute path: install the plugin, wire identity, add the client script, and send your first end-to-end event.
+
+<Callout type="info">
+One browser holds **one** connection no matter how many tabs or subscriptions are open, the server is proven to **10,000 connections** on a single instance, and nothing is broadcast unless you explicitly opt in. The defaults are the safe path.
+</Callout>
+
+## 1. Install the plugin
+
+Add `umbra-realtime` to your binary crate and register the plugin on the app builder. With nothing else configured you get both transports mounted (`GET /realtime/sse`, `GET /realtime/ws`) and the ambient `Realtime` handle for sending.
+
+```rust
+use umbra::prelude::*;
+use umbra_realtime::RealtimePlugin;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let app = App::builder()
+        // ... your settings, database, models, routes ...
+        .plugin(RealtimePlugin::new())
+        .build()?;
+
+    umbra_cli::dispatch(app).await
+}
+```
+
+<Callout type="info">
+`RealtimePlugin::new()` is an alias for `RealtimePlugin::default()`: anonymous identity, `public:*`-only group policy, and no model exposed. Everything else is opt-in.
+</Callout>
+
+## 2. Wire identity (so the framework knows who's connecting)
+
+By default **every connection is anonymous** — the identity resolver returns `None`. That's fine for a fully public feed, but if you want to gate rooms by user or use presence, the framework needs to know who's connecting.
+
+If you use `umbra-auth`, enable the `auth` feature and call `with_auth_sessions()`. It identifies the connecting user from the session cookie at the SSE/WS handshake:
+
+```rust
+RealtimePlugin::new()
+    .with_auth_sessions()   // requires the `auth` cargo feature
+```
+
+For a custom scheme (JWT, API key), supply your own async resolver — see [Gating access](gating).
+
+<Callout type="warning">
+Forget this step and **everyone is anonymous**: `user_id` is always `None`, so any policy that checks the user can never grant a private room, and presence shows no one. If your app has logins, wire `with_auth_sessions()` (or a custom resolver) from the start.
+</Callout>
+
+## 3. Add the client script
+
+The plugin serves a tiny browser helper at `GET /realtime/client.js`. Add one script tag to your template; it exposes the `umbra.realtime` namespace.
+
+```html
+<script src="/realtime/client.js"></script>
+```
+
+There is nothing to bundle or import — the script registers `window.umbra.realtime` with `subscribe`, `model`, and `presence`.
+
+## 4. Your first end-to-end event
+
+Here is a full round trip on the public `public:lobby` group — allowed by the default policy with no extra wiring.
+
+<Steps>
+
+<Step title="Subscribe in the browser">
+
+```html
+<script src="/realtime/client.js"></script>
+<script>
+  const sub = umbra.realtime.subscribe("public:lobby", {
+    ping: (data) => console.log("got ping", data),
+  });
+  // later: sub.unsubscribe();
+</script>
+```
+
+`subscribe(groups, handlers)` returns `{ unsubscribe }`. `handlers` is keyed by event name — here we listen for the `"ping"` event.
+
+</Step>
+
+<Step title="Push from the server">
+
+Anywhere in a request handler, a signal handler, or a background task:
+
+```rust
+use umbra_realtime::Realtime;
+use serde_json::json;
+
+Realtime::to_group("public:lobby")
+    .send("ping", &json!({ "message": "hello room" }))
+    .await;
+```
+
+`.send(event_name, &data)` serializes `data` to JSON and pushes it to every connection in the group. It's fire-and-forget: it never blocks on socket I/O, so it's safe in a request handler.
+
+</Step>
+
+</Steps>
+
+That's the whole loop. Every browser in `public:lobby` logs `got ping { message: "hello room" }`.
+
+<Callout type="info">
+`Realtime::to_group(...).send(...)` is a **no-op when `RealtimePlugin` isn't installed**, so you can call it unconditionally and an app (or test) that doesn't wire realtime simply ignores it instead of panicking. Use `Realtime::is_installed()` if you need to check.
+</Callout>
+
+## The three ways to target a send
+
+| Call | Reaches |
+|---|---|
+| `Realtime::to_user(id)` | every live connection authenticated as that user |
+| `Realtime::to_group(group)` | every connection that joined that group/room |
+| `Realtime::broadcast()` | every connection |
+
+Each returns a `Target`; call `.send(event_name, &data).await` on it.
+
+## What's next
+
+<CardGrid>
+  <Card title="Gating access" href="gating">
+    Gate rooms by user, tenant, or role. The two gates and the "anonymous by default" footgun.
+  </Card>
+  <Card title="Model subscriptions" href="model-subscriptions">
+    Subscribe to a model's live create / update / delete, safe by construction.
+  </Card>
+  <Card title="Presence" href="presence">
+    "Who's online in a room", deduped by user and identity-projected.
+  </Card>
+  <Card title="Transports" href="transports">
+    SSE vs WebSocket, the one-connection-per-browser model, reconnect and replay.
+  </Card>
+  <Card title="Scaling" href="scaling">
+    Run multiple instances behind a load balancer with the Redis backplane.
+  </Card>
+</CardGrid>

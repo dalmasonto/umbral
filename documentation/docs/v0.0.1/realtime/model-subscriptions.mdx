@@ -1,15 +1,15 @@
 ---
 title: Model subscriptions
-description: Supabase-style "subscribe to a model's live changes" — safe by construction, opt-in per model with a field whitelist (id-only by default).
-sidebar_position: 2
+description: Subscribe to a model's live create / update / delete — Supabase-style, but safe by construction. Opt-in per model, field-whitelisted, id-only by default.
+sidebar_position: 3
 tags: [realtime, models, subscriptions, security, sse]
 ---
 
 # Model subscriptions
 
-Stream a model's create / update / delete to the browser with zero polling, the Supabase "subscribe to a table" story, but **safe by construction**. A model is never exposed unless you say so, and even then only the fields you list reach the wire.
+Stream a model's create / update / delete to the browser with zero polling — the Supabase "subscribe to a table" story, but **safe by construction**. A model is never broadcast unless you say so, and even then only the fields you list reach the wire.
 
-`RealtimePlugin::expose::<T>(spec)` wraps the [`on_model`](sse#model-fan-out-zero-polling) bridge with two things `on_model` leaves to you: a **field projection** (so secrets never leak) and **group routing** (static or per-row).
+`RealtimePlugin::expose::<T>(spec)` turns ORM model changes into real-time events. It wraps the lower-level `on_model` signal bridge with two things you'd otherwise hand-roll: a **field projection** (so secrets never leak) and **group routing** (static or per-row).
 
 ```rust
 use umbra_realtime::{Expose, RealtimePlugin};
@@ -18,81 +18,156 @@ RealtimePlugin::new()
     .expose::<Post>(
         Expose::to_group("public:posts")        // the group you consciously broadcast to
             .fields(&["id", "title", "slug"])    // whitelist — only these columns go on the wire
-    )
+    );
 ```
 
-On every create/update/delete of `Post`, the projected row is sent to `public:posts` with the event name `"created"`, `"updated"`, or `"deleted"`.
+When any `Post` is created, updated, or deleted, the framework sends an event named `"created"` / `"updated"` / `"deleted"` to `public:posts`, carrying only `id`, `title`, and `slug`.
 
-## The client: `umbra.realtime.model`
+<Callout type="warning">
+Security is the default in three layers: **(1)** a model with no `expose` is never broadcast (default-deny); **(2)** without `.fields(...)` the payload is the **primary key only**; **(3)** the group you name is governed by [`GroupPolicy::can_join`](gating), so a private group is unjoinable under the default policy. You opt into exposure consciously, one model and one field list at a time.
+</Callout>
 
-Sugar over [`subscribe`](sse#connecting-the-browser-umbra-realtime-subscribe) that routes a group's `created` / `updated` / `deleted` events to handlers. `group` is required — name the group you exposed to.
+## Picking the group
+
+### Static group — `to_group`
+
+Every matching change lands in one named group. `to_group` is **required** (you consciously pick the group whose visibility the policy governs):
+
+```rust
+Expose::to_group("public:posts")
+```
+
+### Per-row group — `to_group_with`
+
+Route each event to a group computed from the row, so a client can watch a single record. The closure receives the `ModelEvent`; `ev.pk()` returns the row's `id` when it's an integer PK:
+
+```rust
+Expose::to_group_with(|ev| format!("post:{}", ev.pk().unwrap_or(0)))
+```
+
+A client then subscribes to `post:42` to follow just that post. The computed group is still governed by `GroupPolicy::can_join`.
+
+## Which fields reach the wire
+
+The projection is the core safety control. There are three modes:
+
+<Tabs>
+<Tab title="Whitelist (recommended)">
+
+`.fields(&[...])` lists exactly the columns to include. Every other key in the row — including secrets you never list — is dropped:
+
+```rust
+Expose::to_group("public:posts").fields(&["id", "title", "slug"])
+```
+
+</Tab>
+<Tab title="Id-only (the default)">
+
+If you call neither `.fields(...)` nor `.all_fields()`, the payload carries the **primary key alone**. The client treats it as "row N changed — refetch it through your normal authorized endpoint" (the notify-then-refetch pattern):
+
+```rust
+Expose::to_group("public:posts")   // payload is { "id": <pk> }
+```
+
+</Tab>
+<Tab title="All fields (explicit opt-in)">
+
+`.all_fields()` broadcasts the entire row. It's conspicuously named so it can't happen by accident — by calling it you knowingly accept that every column reaches every subscriber:
+
+```rust
+Expose::to_group("public:posts").all_fields()
+```
+
+Prefer `.fields(...)` (or the id-only default) unless you genuinely need the whole row on the wire.
+
+</Tab>
+</Tabs>
+
+### Updating the exposed fields
+
+To change what a model broadcasts, **edit the `.fields(&[...])` list**. Adding a field starts broadcasting it; removing a field stops it from ever reaching the wire. There is no separate registry — the `.fields(...)` whitelist *is* the contract.
+
+If you'd rather not put any model data on the wire at all, drop the whole list and rely on the **id-only default**: the client gets a "something changed" nudge and refetches through its authorized endpoint, which already enforces row-level access. This is the safest option when the data is sensitive.
+
+## Which actions fan out
+
+By default all three of `Created`, `Updated`, `Deleted` are broadcast. Restrict them with `.actions(...)`:
+
+```rust
+use umbra_realtime::{Expose, ModelAction, RealtimePlugin};
+
+RealtimePlugin::new()
+    .expose::<Post>(
+        Expose::to_group("public:posts")
+            .fields(&["id", "title"])
+            .actions(&[ModelAction::Created, ModelAction::Updated]) // no deletes
+    );
+```
+
+## Subscribing from the browser
+
+Use `umbra.realtime.model(table, handlers, { group })`. It's sugar over `subscribe` that wires the `created` / `updated` / `deleted` event names for you. **`group` is required** — name the group you exposed to; there's no magic default:
 
 ```html
 <script src="/realtime/client.js"></script>
 <script>
-  umbra.realtime.model('post', {
-    created: function (row) { addRow(row); },
-    updated: function (row) { patchRow(row); },
-    deleted: function (row) { dropRow(row.id); },
-  }, { group: 'public:posts' });
+  umbra.realtime.model("post", {
+    created: (row) => addPostToList(row),
+    updated: (row) => updatePostInList(row),
+    deleted: (row) => removePostFromList(row.id),
+  }, { group: "public:posts" });
 </script>
 ```
 
-It returns the same `{ unsubscribe }` as `subscribe`, and shares the one cross-tab connection.
-
-## Watch a single row
-
-Pass a closure to route each event to a per-row group, so a client can subscribe to just one record:
-
-```rust
-Expose::to_group_with(|ev| format!("post:{}", ev.pk().unwrap_or(0)))
-    .fields(&["id", "title"])
-```
+With the id-only default, `row` is just `{ id }` — the cue to refetch:
 
 ```js
-umbra.realtime.model('post', { updated: render }, { group: 'post:42' });
+umbra.realtime.model("post", {
+  updated: (row) => refetchPost(row.id),  // re-load through your authorized API
+}, { group: "public:posts" });
 ```
 
-## Security
+For a per-row group exposed with `to_group_with`, subscribe to the specific group:
 
-Security is the whole point of `expose`. Three layers, all on by default:
+```js
+umbra.realtime.model("post", {
+  updated: (row) => render(row),
+}, { group: "post:42" });
+```
 
-<CardGrid>
-  <Card title="Opt-in per model">
-    A model with no <code>expose</code> (or <code>on_model</code>) is **never** broadcast. There is no auto-exposure. Nothing reaches a client unless you wrote the <code>expose</code> line.
-  </Card>
-  <Card title="Field whitelist (id-only default)">
-    Without <code>.fields(...)</code> the payload is the **primary key only** — "row N changed, refetch it through your normal authorized endpoint". <code>.fields(&[...])</code> includes exactly the columns you name; every other key (a <code>secret</code>, a <code>password_hash</code>) is dropped before the event leaves the server.
-  </Card>
-  <Card title="Group + GroupPolicy">
-    <code>expose</code> picks the group; <a href="sse#group-access-grouppolicy"><code>GroupPolicy::can_join</code></a> governs who may subscribe to it. Under the default policy only <code>public:*</code> groups are joinable — a private group is denied at the SSE/WS handshake even if you exposed a model to it.
-  </Card>
-</CardGrid>
+## The lower-level bridge: `on_model` / `on_table`
 
-<Callout type="warning">
-**Nothing is exposed unless you `expose` it, and only the fields you list.** The default projection is id-only; the whitelist is the safe path. Broadcasting the whole row is possible but never implicit — you opt in with the conspicuously-named `.all_fields()`:
+`expose` is the safe, projected path. If you need full control — push to a user, transform the payload, fan out to several targets — use the raw signal bridge directly. It hands your handler a `ModelEvent` for every change and lets you do anything:
 
 ```rust
-Expose::to_group("public:posts").all_fields()   // every column on the wire — you accept the leak
+use umbra_realtime::{ModelAction, ModelEvent, Realtime, RealtimePlugin};
+
+RealtimePlugin::new()
+    .on_model::<Post, _, _>(|ev: ModelEvent| async move {
+        if ev.action == ModelAction::Created {
+            Realtime::to_group(format!("post:{}", ev.pk().unwrap_or(0)))
+                .send("new", &ev.instance)
+                .await;
+        }
+    });
 ```
 
-Reach for `.all_fields()` only when you genuinely need the full row client-side and the group's `GroupPolicy` already restricts who can see it.
+`on_table("post", handler)` is the same thing keyed by table name when you don't have the `Model` type handy. The `ModelEvent` fields:
+
+| Field | Meaning |
+|---|---|
+| `table` | the model's table name |
+| `action` | `ModelAction::Created` / `Updated` / `Deleted` |
+| `instance` | the row as `serde_json::Value` |
+| `actor` | who triggered the change (`Null` outside a `with_actor` scope) |
+| `ev.pk()` | the row's `id` as `Option<i64>` (integer PKs only) |
+
+<Callout type="info">
+`on_model` gives you the raw row in `instance` — **no field projection**. If you `.send(..., &ev.instance)` you broadcast every column. Use `expose` (with `.fields(...)`) whenever you want the safety rails; reach for `on_model` only when you need the extra control and are projecting the payload yourself.
 </Callout>
-
-## Actions
-
-By default all three actions fan out. Restrict them with `.actions(...)`:
-
-```rust
-use umbra_realtime::ModelAction;
-
-Expose::to_group("public:posts")
-    .fields(&["id", "title"])
-    .actions(&[ModelAction::Created, ModelAction::Updated])   // no delete broadcasts
-```
 
 ## See also
 
-- [Server-Sent Events](sse) — the transport, `subscribe`, and `GroupPolicy`.
-- [ORM signals](../orm/signals) — the `post_save` / `post_delete` bridge `expose` is built on.
-- Design: `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
+- [Gating access](gating) — the policy that governs who can join the group you expose to.
+- [Presence](presence) — "who's online" on the same connections.
+- [Transports](transports) — the connection model these events ride on.

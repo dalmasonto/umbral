@@ -1,7 +1,7 @@
 ---
 title: Presence
 description: "Who's online in a group" — opt-in per group, identity projected to id-only by default, deduped by user, and governed by the same GroupPolicy that gates the room.
-sidebar_position: 3
+sidebar_position: 4
 tags: [realtime, presence, security, sse, online]
 ---
 
@@ -27,7 +27,7 @@ PresenceSpec::matching(|group| group == "public:lobby" || group.starts_with("roo
 
 ## The client: `umbra.realtime.presence`
 
-Sugar over [`subscribe`](sse#connecting-the-browser-umbra-realtime-subscribe) that routes a group's `presence:sync` / `presence:join` / `presence:leave` events to handlers. It returns the same `{ unsubscribe }` and shares the one cross-tab connection.
+Sugar over [`subscribe`](transports#connecting-the-browser) that routes a group's `presence:sync` / `presence:join` / `presence:leave` events to handlers. It returns the same `{ unsubscribe }` and shares the one cross-tab connection.
 
 ```html
 <script src="/realtime/client.js"></script>
@@ -80,7 +80,7 @@ Opening a second tab adds no second `join`; closing one of two tabs is not a `le
     Anonymous connections (no signed-in user) **never** appear in presence — nothing to dedupe on, and "someone anonymous is here" is itself a leak. A present user is <code>{"id": …}</code> only, unless your resolver returns more.
   </Card>
   <Card title="GroupPolicy gates visibility">
-    Presence rides the normal group dispatch, so <a href="sse#group-access-grouppolicy"><code>GroupPolicy::can_join</code></a> governs who can *see* it: a client that can't join <code>room:42</code> never receives its presence. Enabling presence never widens who may subscribe.
+    Presence rides the normal group dispatch, so <a href="gating"><code>GroupPolicy::can_join</code></a> governs who can *see* it: a client that can't join <code>room:42</code> never receives its presence. Enabling presence never widens who may subscribe.
   </Card>
 </CardGrid>
 
@@ -90,6 +90,6 @@ Presence is **off unless you enable it**, and it only exposes the **id** (or exa
 
 ## See also
 
-- [Server-Sent Events](sse) — the transport, `subscribe`, and `GroupPolicy`.
+- [Gating access](gating) — the `GroupPolicy` that governs who can see a group's presence.
+- [Transports](transports) — the SSE/WS connections presence rides on, and `subscribe`.
 - [Model subscriptions](model-subscriptions) — the sibling opt-in feature with the same id-only-by-default safety stance.
-- Design: `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
