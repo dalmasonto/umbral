@@ -176,3 +176,7 @@ The default `can_join` (if you don't override it) is the same `group.starts_with
 | Per-group dispatch | `Realtime::to_group(...).send(...)` | reaches only joined connections |
 
 Because every send to a group only reaches connections the policy already admitted, the policy is the single chokepoint for "who can see this room" — including for [model subscriptions](model-subscriptions) and [presence](presence), which both ride the same group dispatch.
+
+<Callout type="info">
+**Transport-level security is separate from the policy.** `GroupPolicy` decides *who* may join a room. On top of that, the WebSocket handshake is guarded against **cross-site WebSocket hijacking (CSWSH)** — cross-origin WS upgrades are rejected in production by default, because CORS does not cover WebSockets. If you serve a separate frontend origin, allow it with `allowed_origins([...])`. See the [WebSocket Origin guard](transports#websocket-origin-guard-cswsh).
+</Callout>
