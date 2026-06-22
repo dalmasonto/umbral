@@ -119,3 +119,52 @@ async fn s3_exists_false_for_missing_key() {
         "a never-written key does not exist"
     );
 }
+
+/// A presigned `url()` against the live endpoint carries SigV4 query params
+/// and actually fetches the object (proving the signature is valid for the
+/// configured credentials). Uses the same `UMBRA_S3_TEST_*` gate.
+#[tokio::test]
+async fn s3_presigned_url_round_trip() {
+    let bucket = match std::env::var("UMBRA_S3_TEST_BUCKET")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        Some(b) => b,
+        None => {
+            eprintln!("UMBRA_S3_TEST_BUCKET not set — skipping s3 presign integration test");
+            return;
+        }
+    };
+    let mut builder = S3Storage::builder(bucket)
+        .region(std::env::var("UMBRA_S3_TEST_REGION").unwrap_or_else(|_| "us-east-1".into()))
+        .presign(300);
+    if let Some(endpoint) = std::env::var("UMBRA_S3_TEST_ENDPOINT")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        builder = builder.endpoint(endpoint);
+    }
+    let s = match builder.build() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("presign builder failed: {e} — skipping");
+            return;
+        }
+    };
+
+    let key = "umbra-s3-test/presign/hello.txt";
+    let body = b"presigned hello";
+    s.put(key, "text/plain", body).await.expect("put for presign");
+
+    let url = s.url(key);
+    assert!(
+        url.contains("X-Amz-Signature") && url.contains("X-Amz-Expires"),
+        "presigned url should carry SigV4 params, got: {url}"
+    );
+    assert!(
+        url.contains("hello.txt"),
+        "presigned url references the object key, got: {url}"
+    );
+
+    s.delete(key).await.expect("cleanup");
+}

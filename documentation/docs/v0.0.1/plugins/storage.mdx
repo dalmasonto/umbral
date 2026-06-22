@@ -174,13 +174,17 @@ The manifest is loaded once at `App::build()`; an app that never runs `--hashed`
 # Build umbra-storage with the optional `s3` feature:
 #   umbra-storage = { version = "0.0.1", features = ["s3"] }
 
-export UMBRA_STATIC_BUCKET=my-assets
-export UMBRA_STATIC_REGION=us-east-1
-# Optional: UMBRA_STATIC_ENDPOINT (MinIO/R2), UMBRA_STATIC_PREFIX, plus the
-# standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY credential chain.
+export UMBRA_S3_BUCKET=my-assets
+export UMBRA_S3_REGION=us-east-1
+# Optional: UMBRA_S3_ENDPOINT (MinIO/R2), UMBRA_S3_PREFIX, plus either explicit
+# UMBRA_S3_ACCESS_KEY / UMBRA_S3_SECRET_KEY or the standard AWS credential chain.
 
 cargo run -- collectstatic --hashed --storage s3
 ```
+
+<Callout type="info">
+The S3-backend env vars are now `UMBRA_S3_*`. The legacy `UMBRA_STATIC_BUCKET` / `_REGION` / `_ENDPOINT` / `_PREFIX` / `_PUBLIC_BASE` names still work as a deprecated fallback (a one-time warning is logged when only the old name is set). The static *pipeline* settings `UMBRA_STATIC_URL` / `UMBRA_STATIC_ROOT` are a separate concern and are unchanged.
+</Callout>
 
 The backend can also be selected via `UMBRA_STATIC_STORAGE=s3` (the `--storage` flag overrides it). Design rationale: `planning/gaps2.md` #82 (cache-busting) and #55 (storage backend).
 
@@ -262,12 +266,14 @@ umbra-storage = { version = "0.0.1", features = ["s3"] }
 ```rust
 use umbra_storage::{StoragePlugin, S3Storage};
 
-// From the environment (the UMBRA_STATIC_* vars + the AWS credential chain):
+// From the environment (the UMBRA_S3_* vars + explicit or AWS-chain credentials):
 let s3 = S3Storage::from_env()?;
 // …or build it explicitly:
 let s3 = S3Storage::builder("my-bucket")
     .endpoint("https://minio.example.com")    // omit for real AWS S3
     .region("us-east-1")
+    .credentials("ACCESS_KEY", "SECRET_KEY", None) // or omit → AWS chain
+    .path_style(true)                         // MinIO / self-hosted; omit for AWS
     .public_base("https://cdn.example.com")   // where objects are publicly served
     .build()?;
 
@@ -277,18 +283,90 @@ App::builder()
 ```
 
 ```bash
-export UMBRA_STATIC_BUCKET=my-bucket
-export UMBRA_STATIC_REGION=us-east-1
-# Optional: UMBRA_STATIC_ENDPOINT (MinIO/R2/B2/Spaces), UMBRA_STATIC_PREFIX, UMBRA_STATIC_PUBLIC_BASE
-export AWS_ACCESS_KEY_ID=…  AWS_SECRET_ACCESS_KEY=…
+export UMBRA_S3_BUCKET=my-bucket
+export UMBRA_S3_REGION=us-east-1
+# Optional: UMBRA_S3_ENDPOINT (MinIO/R2/B2/Spaces), UMBRA_S3_PREFIX, UMBRA_S3_PUBLIC_BASE
+# Explicit creds (else the AWS chain): UMBRA_S3_ACCESS_KEY / UMBRA_S3_SECRET_KEY
+export UMBRA_S3_ACCESS_KEY=…  UMBRA_S3_SECRET_KEY=…
 ```
 
-The **same** `S3Storage` backs both instances — pass it to `.media_s3(...)` for uploads and use `collectstatic --storage s3` for assets, and one bucket serves both. (The env vars are prefixed `UMBRA_STATIC_*` because a single shared S3 backend powers both the media and static sides.)
+The **same** `S3Storage` backs both instances — pass it to `.media_s3(...)` for uploads and use `collectstatic --storage s3` for assets, and one bucket serves both.
+
+## S3-compatible providers
+
+The `UMBRA_S3_*` env vars target **any** S3-compatible provider. Set the bucket + region for AWS; add an endpoint (and usually path-style) for everyone else. Credentials come from explicit `UMBRA_S3_ACCESS_KEY` / `UMBRA_S3_SECRET_KEY` when both are set, otherwise the AWS chain.
+
+<Tabs>
+<Tab title="AWS S3">
+```bash
+export UMBRA_S3_BUCKET=my-bucket
+export UMBRA_S3_REGION=us-east-1
+export UMBRA_S3_ACCESS_KEY=…  UMBRA_S3_SECRET_KEY=…
+# No endpoint, no path-style — virtual-hosted addressing is the AWS default.
+```
+</Tab>
+<Tab title="MinIO">
+```bash
+export UMBRA_S3_BUCKET=my-bucket
+export UMBRA_S3_ENDPOINT=https://minio.example.com
+export UMBRA_S3_REGION=us-east-1
+export UMBRA_S3_PATH_STYLE=true        # MinIO needs path-style addressing
+export UMBRA_S3_ACCESS_KEY=…  UMBRA_S3_SECRET_KEY=…
+```
+</Tab>
+<Tab title="Cloudflare R2">
+```bash
+export UMBRA_S3_BUCKET=my-bucket
+export UMBRA_S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+export UMBRA_S3_REGION=auto
+export UMBRA_S3_ACCESS_KEY=…  UMBRA_S3_SECRET_KEY=…
+```
+</Tab>
+<Tab title="Backblaze B2">
+```bash
+export UMBRA_S3_BUCKET=my-bucket
+export UMBRA_S3_ENDPOINT=https://s3.<region>.backblazeb2.com
+export UMBRA_S3_REGION=<region>        # e.g. us-west-004
+export UMBRA_S3_ACCESS_KEY=…  UMBRA_S3_SECRET_KEY=…
+```
+</Tab>
+<Tab title="DigitalOcean Spaces">
+```bash
+export UMBRA_S3_BUCKET=my-space
+export UMBRA_S3_ENDPOINT=https://<region>.digitaloceanspaces.com
+export UMBRA_S3_REGION=<region>        # e.g. nyc3
+export UMBRA_S3_ACCESS_KEY=…  UMBRA_S3_SECRET_KEY=…
+```
+</Tab>
+</Tabs>
+
+<Callout type="info">
+**Credentials precedence.** If both `UMBRA_S3_ACCESS_KEY` and `UMBRA_S3_SECRET_KEY` are set, the storage backend uses them (plus optional `UMBRA_S3_SESSION_TOKEN`) — handy when you want storage to use a different provider's keys without colliding with `AWS_*` used by other services. Otherwise it falls back to the standard AWS chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, an IAM role, `~/.aws/credentials`).
+
+**Path-style.** Set `UMBRA_S3_PATH_STYLE=true` (or `.path_style(true)`) for MinIO and most self-hosted stores, which serve `endpoint/bucket/key`. Leave it off for AWS, which uses virtual-hosted addressing (`bucket.s3.region.amazonaws.com`).
+</Callout>
+
+### Presigned URLs (private buckets)
+
+By default `S3Storage::url()` returns a **public** URL (`<public_base>/<key>`, or the bare key). For a **private** bucket, set a presign TTL and `url()` returns a signed, time-limited GET URL instead — no public bucket required:
+
+```bash
+export UMBRA_S3_PRESIGN_TTL=900    # url() returns links valid for 900 seconds
+```
+
+```rust
+let s3 = S3Storage::builder("private-bucket")
+    .region("us-east-1")
+    .presign(900)   // url() now yields presigned, 900s-valid GET URLs
+    .build()?;
+```
+
+`presign_ttl` takes **precedence over** `public_base`: when set, `url()` signs the request (carrying `X-Amz-Signature` / `X-Amz-Expires`) rather than joining a public base. Presigning is pure local HMAC, so `url()` stays synchronous and needs no network round-trip — but the signature is only valid against the **real** credentials configured for the bucket. This is how you serve private media without exposing a public bucket.
 
 <Callout type="warning">
 **Enabling S3 safely.**
-- **Credentials** come from the standard AWS chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, an IAM role, `~/.aws/credentials`) — never hard-code keys in source or `settings`.
-- **URLs are public, not signed.** `S3Storage::url()` returns `<public_base>/<key>` (or the bare key when `public_base` is unset) — it does **not** generate presigned URLs. It is built for **public-read** buckets fronted by a CDN; set `UMBRA_STATIC_PUBLIC_BASE` (or `.public_base(...)`) to that origin. Don't put private or sensitive uploads in an S3-backed media side expecting signed access — presigned private-bucket URLs aren't supported yet.
+- **Credentials** come from explicit `UMBRA_S3_ACCESS_KEY` / `UMBRA_S3_SECRET_KEY` or the standard AWS chain (IAM role, `~/.aws/credentials`) — never hard-code keys in source or `settings`.
+- **Public vs signed.** Without a presign TTL, `S3Storage::url()` returns `<public_base>/<key>` (or the bare key) — built for **public-read** buckets fronted by a CDN; set `UMBRA_S3_PUBLIC_BASE` (or `.public_base(...)`) to that origin. For **private** buckets, set `UMBRA_S3_PRESIGN_TTL` (or `.presign(secs)`) and `url()` returns signed, time-limited URLs instead.
 - **Feature-gated.** The `rust-s3` AWS client compiles only with the `s3` feature, so a local-only app never pulls it in.
 - The **active-content guard** (`.html` / `.svg` / `.js` → `.txt`) applies on every backend, so the stored-XSS defence travels to S3 too.
 </Callout>
@@ -461,10 +539,9 @@ This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying bo
 
 ## What v0 does not ship
 
-The storage-backend trait `gaps.md #49` called for **has shipped**: it landed as `Storage` (in `umbra-core`, see above), with the filesystem `FsStorage` impl, the `s3`-gated `S3Storage`, and `.media_with_storage(...)` for swapping backends. Two things still deferred:
+The storage-backend trait `gaps.md #49` called for **has shipped**: it landed as `Storage` (in `umbra-core`, see above), with the filesystem `FsStorage` impl, the `s3`-gated `S3Storage` (now with `UMBRA_S3_*` config, explicit credentials, path-style addressing, and **presigned URLs** for private buckets), and `.media_with_storage(...)` for swapping backends. One thing still deferred:
 
 1. **Image library.** Thumbnails, EXIF strip, format probing. Behind an `images` cargo feature, later.
-2. **Signed URLs.** Auth-required reads against the S3 backend.
 
 Design rationale and the migration plan live in `docs/decisions/2026-06-02-media-and-s3.md` in the repo. Each step keeps the v0 public surface compatible.
 

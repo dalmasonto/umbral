@@ -15,7 +15,7 @@ default = []
 # ("default") and static ("staticfiles") storage instances. Pulls in
 # `rust-s3` only when enabled, so a local-only app never compiles the AWS
 # client. Off by default — matches umbra-static's old `s3` feature.
-s3 = ["dep:rust-s3"]
+s3 = ["dep:rust-s3", "dep:futures-executor"]
 
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
@@ -23,6 +23,12 @@ umbra = { path = "../../crates/umbra", version = "0.0.1" }
 # can upload without an async runtime; default features off to keep the dep
 # lean. Only built under the `s3` feature.
 rust-s3 = { version = "0.35", optional = true, default-features = false, features = ["blocking", "tokio-rustls-tls"] }
+# `url()` is a SYNC trait method called from inside async request handlers, so
+# it must NOT use rust-s3's `*_blocking` presign (which does `Runtime::new().
+# block_on` and panics inside an existing tokio runtime). Instead we drive the
+# async `presign_get` — pure local HMAC, no I/O — with `futures_executor::
+# block_on`, which polls the already-ready future without spinning a runtime.
+futures-executor = { version = "0.3", optional = true, default-features = false, features = ["std"] }
 tower-http = { version = "0.6", features = ["fs", "set-header"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 tokio = { version = "1", features = ["fs", "io-util"] }

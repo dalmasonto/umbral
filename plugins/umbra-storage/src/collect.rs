@@ -107,7 +107,7 @@ impl umbra::cli::PluginCommand for CollectStaticCommand {
                     .help(
                         "Where to write collected assets: `local` (default, the on-disk \
                          static_root) or `s3` (upload to a bucket; requires the umbra-storage `s3` \
-                         feature and UMBRA_STATIC_BUCKET / UMBRA_STATIC_REGION). Overrides \
+                         feature and UMBRA_S3_BUCKET / UMBRA_S3_REGION). Overrides \
                          UMBRA_STATIC_STORAGE.",
                     ),
             )
