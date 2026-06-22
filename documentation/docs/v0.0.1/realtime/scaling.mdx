@@ -9,7 +9,7 @@ tags: [realtime, scaling, redis, websocket, sse]
 
 A single instance already goes a long way — the registry is proven to **10,000 concurrent connections** (see below). When you outgrow one process, the Redis backplane lets you run many instances behind a load balancer with no change to your code.
 
-`Realtime::to_user(42).send(...)` delivers to user 42's socket, but only if that socket is held by the same process that runs the send. With one instance, every socket is local, so nothing is needed. Behind a load balancer, user 42's browser might be connected to instance A while the code that sends runs on instance B. The `RedisBroker` bridges that gap.
+`Realtime::to_user("42").send(...)` delivers to user `"42"`'s socket, but only if that socket is held by the same process that runs the send. With one instance, every socket is local, so nothing is needed. Behind a load balancer, that user's browser might be connected to instance A while the code that sends runs on instance B. The `RedisBroker` bridges that gap.
 
 <Callout type="info">
 This is a drop-in: the `Realtime` API (`to_user` / `to_group` / `broadcast` / `on_model`) is identical whether you run one instance or fifty. Only the broker swaps.
