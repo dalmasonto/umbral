@@ -1,201 +1,51 @@
 ---
-title: Realtime (SSE + WebSocket)
-description: Push data to one user or a named group over Server-Sent Events and WebSocket, with Last-Event-ID reconnect resume, a connection cap, and an optional Redis backplane for horizontal scale.
+title: Realtime
+description: Push live data to one user or a room over SSE/WebSocket — model subscriptions, presence, room gating, and a Redis backplane. Full guides live in the Realtime section.
 sidebar_position: 21
 icon: radio
-tags: [realtime, sse, websocket, push, redis]
+tags: [realtime, sse, websocket, push, presence, redis]
 ---
 
-# Realtime (SSE + WebSocket)
+# Realtime
 
-`umbra-realtime` pushes data to **one user** or to a **named group/room** without hand-rolling connection bookkeeping. It ships two transports — Server-Sent Events (push-only) and WebSocket (bidirectional) — over one connection registry, plus a broker seam that swaps a single-process dispatch for a Redis backplane when you scale out.
+`umbra-realtime` pushes data to **one user** or a **named room** without hand-rolling connection bookkeeping. It ships two transports — Server-Sent Events (push-only) and WebSocket (bidirectional) — over one connection registry, plus a `GroupPolicy` auth seam, live model-change fan-out, presence, and a Redis backplane for horizontal scale.
 
 ```rust
 use umbra_realtime::Realtime;
 
+// Fire-and-forget; no-ops when RealtimePlugin isn't installed.
 Realtime::to_user(42).send("notification", &payload).await;
-Realtime::to_group("chat:123").send("message", &msg).await;
-Realtime::broadcast().send("ping", &serde_json::json!({})).await;
+Realtime::to_group("public:lobby").send("message", &msg).await;
 ```
-
-`send` is fire-and-forget: it publishes to the broker and returns without blocking on socket I/O, so it's safe to call from a request handler. It **no-ops when `RealtimePlugin` isn't installed**, so a handler can call it unconditionally and an app (or test) that doesn't wire realtime simply ignores it. Check `Realtime::is_installed()` if you need to know.
-
-## Wiring the plugin
-
-`RealtimePlugin::default()` mounts two routes — `GET /realtime/sse` and `GET /realtime/ws` — and sets the ambient `Realtime` handle at boot:
-
-```rust
-use umbra_realtime::RealtimePlugin;
-
-App::builder()
-    .plugin(RealtimePlugin::default())
-    .build()?;
-```
-
-By default every connection is **anonymous** (the identity resolver always returns `None`) so a push-only feed compiles with no auth dependency.
-
-## Connecting from the browser
-
-Both transports take an optional `?groups=` query of comma-separated rooms to join at handshake:
 
 ```js
-// SSE — push-only. EventSource reconnects automatically.
-const es = new EventSource("/realtime/sse?groups=public:lobby");
-es.addEventListener("message", (e) => console.log(JSON.parse(e.data)));
-
-// WebSocket — bidirectional.
-const ws = new WebSocket("ws://localhost:8000/realtime/ws?groups=public:lobby");
-ws.onmessage = (e) => console.log(JSON.parse(e.data));
-```
-
-The SSE transport renders each event as `event: <name>\ndata: <json>` with an `id:` line; the WS transport sends each event as a JSON text frame.
-
-## Targets
-
-| Constructor | Reaches |
-|---|---|
-| `Realtime::to_user(id)` | every live connection authenticated as user `id` |
-| `Realtime::to_group(name)` | every connection that joined group `name` |
-| `Realtime::broadcast()` | every connection |
-
-Call `.send(event, &data)` on the returned `Target`. `data` is any `T: Serialize` — it's serialized to JSON before delivery.
-
-## Identifying the connection
-
-To target `to_user(42)`, the plugin needs to know which user owns a socket. Supply an identity resolver — an async fn from request headers to an `Option<i64>` user id:
-
-```rust
-RealtimePlugin::default().identity_resolver(|headers| async move {
-    // JWT, API key, custom session — your scheme.
-    my_auth::user_id_from(&headers).await
-})
-```
-
-For session-cookie auth backed by `umbra-auth`, use the convenience method (requires the `auth` cargo feature):
-
-```toml
-umbra-realtime = { version = "0.0.1", features = ["auth"] }
-```
-
-```rust
-RealtimePlugin::default().with_auth_sessions()
-```
-
-## Group access policy
-
-Groups are gated by a `GroupPolicy`. The default (`PublicGroupsOnly`) allows only `public:*` groups, so a client can't subscribe to `tenant:99` or `chat:123` it has no claim to — the handshake fails with `403 Forbidden`. Override it to grant access from the authenticated identity:
-
-```rust
-use umbra_realtime::{RealtimePlugin, GroupPolicy};
-
-struct MembershipPolicy;
-impl GroupPolicy for MembershipPolicy {
-    fn can_join(&self, user_id: Option<i64>, group: &str) -> bool {
-        // e.g. check a membership table, tenant id, or role.
-        group.starts_with("public:") || user_id.is_some()
-    }
-}
-
-RealtimePlugin::default().group_policy(MembershipPolicy)
-```
-
-## Handling inbound WebSocket frames
-
-SSE is push-only; the WebSocket transport can also receive. The default `MessageHandler` ignores client frames. Implement the trait to react — a chat app broadcasts a received message back to its room:
-
-```rust
-use umbra_realtime::{async_trait, MessageHandler, MessageContext, Realtime, RealtimePlugin};
-
-struct ChatHandler;
-
-#[async_trait]
-impl MessageHandler for ChatHandler {
-    async fn on_message(&self, ctx: &MessageContext, text: String) {
-        // ctx.conn_id / ctx.user_id identify the sender.
-        let msg: ChatMsg = serde_json::from_str(&text).unwrap();
-        Realtime::to_group(&msg.room).send("message", &msg).await;
-    }
-}
-
-RealtimePlugin::default().message_handler(ChatHandler)
-```
-
-## Last-Event-ID reconnect resume
-
-Every delivered event carries a process-global monotonic sequence id, rendered as the SSE frame's `id:` line. When a browser's `EventSource` reconnects after a brief drop, it re-sends the last id it saw as the `Last-Event-ID` header. The transport replays every event after that id this connection *would have received* — in order, before the live stream — so a momentary disconnect leaves **no gap**.
-
-The replay buffer is **bounded**: it retains the most recent events (default 1024). Size it with `.replay_buffer(n)`:
-
-```rust
-RealtimePlugin::default()
-    .replay_buffer(4096)   // retain the last 4096 events for resume
-```
-
-```rust
-RealtimePlugin::default()
-    .replay_buffer(0)      // disable replay (live-only)
+// One <script src="/realtime/client.js">, then — one shared connection across every tab:
+umbra.realtime.subscribe("public:lobby", { message: (m) => render(m) });
 ```
 
 <Callout type="info">
-An event evicted from the buffer before a client reconnects is unrecoverable — the client resumes from the oldest *retained* event and silently misses anything older. Size the buffer to cover the longest drop you want to bridge times your peak event rate.
+This is the plugin overview. The full guides — **setup, room gating, model subscriptions, presence, transports, and scaling** — live in the dedicated **[Realtime section](/docs/v0.0.1/realtime/getting-started)**.
 </Callout>
 
-## Connection cap
+## The guides
 
-`.max_connections(n)` caps the **aggregate** number of live connections across SSE *and* WebSocket. Once reached, a new handshake is refused with `503 Service Unavailable` instead of opening the stream; a freed slot (a disconnect) immediately admits the next connection. `None` (the default) is unlimited.
+<CardGrid cols={2}>
+  <Card icon="rocket" title="Getting started" href="/docs/v0.0.1/realtime/getting-started" description="Install RealtimePlugin, wire identity, add the client script, and send your first event end-to-end." />
+  <Card icon="shield" title="Gating rooms" href="/docs/v0.0.1/realtime/gating" description="GroupPolicy + group_policy_fn — who may join which room. public:* is open by default; everything else is denied." />
+  <Card icon="database" title="Model subscriptions" href="/docs/v0.0.1/realtime/model-subscriptions" description="expose::<T>() pushes live model changes through a field whitelist (id-only by default). Subscribe with umbra.realtime.model(...)." />
+  <Card icon="users" title="Presence" href="/docs/v0.0.1/realtime/presence" description="Who's online in a room — opt-in per group, identity projected to id-only by default, deduped by user." />
+  <Card icon="radio" title="Transports" href="/docs/v0.0.1/realtime/transports" description="SSE vs WebSocket, the one-connection-per-browser SharedWorker model, and Last-Event-ID reconnect replay." />
+  <Card icon="layers" title="Scaling" href="/docs/v0.0.1/realtime/scaling" description="A Redis backplane for multi-instance dispatch — proven non-starving to 10k connections." />
+</CardGrid>
 
-```rust
-RealtimePlugin::default()
-    .max_connections(10_000)
-```
+## At a glance
 
-## Model-change fan-out (zero polling)
-
-`.on_model::<M>(handler)` (or `.on_table(name, handler)` by table name) fans out a model's create / update / delete to real-time clients with no polling. It subscribes to the ORM's `post_save` / `post_delete` signals; each fire hands your handler a `ModelEvent { table, action, instance, actor }`, which typically pushes via `Realtime::to_group` / `to_user`:
-
-```rust
-RealtimePlugin::default().on_model::<Post>(|ev| async move {
-    Realtime::to_group(format!("post:{}", ev.pk().unwrap_or(0)))
-        .send("changed", &ev)
-        .await;
-})
-```
-
-`ev.action` is `Created` / `Updated` / `Deleted`; `ev.pk()` returns the row's `id` for the common i64-PK case; `ev.instance` is the row as JSON. (Requires `umbra-signals` in play; the ORM fires the signal regardless of plugin order.)
-
-## Scaling out: the Redis backplane
-
-`to_user(42)` only reaches user 42 if the send lands on the process that holds their socket. One process needs nothing. To scale horizontally, point `.redis(url)` at a shared Redis: every targeted send relays over pub/sub to whichever instance holds the socket — the `Realtime` API is identical, only the broker swaps. Requires the `redis` cargo feature:
-
-```toml
-umbra-realtime = { version = "0.0.1", features = ["redis"] }
-```
-
-```rust
-RealtimePlugin::default()
-    .redis("redis://localhost:6379/0")   // same url on every instance
-```
-
-<Callout type="info">
-A Redis url set **without** the `redis` feature warns at boot and falls back to the single-instance in-process broker rather than silently scaling to one node.
-</Callout>
-
-## Builder reference
-
-| Method | Default | What it does |
-|---|---|---|
-| `.identity_resolver(fn)` | anonymous (`None`) | Map request headers → `Option<i64>` user id at handshake. |
-| `.with_auth_sessions()` | — | Use `umbra-auth`'s session-cookie resolver (feature `auth`). |
-| `.group_policy(p)` | `PublicGroupsOnly` | Decide which groups a connection may join. |
-| `.message_handler(h)` | no-op | Handle inbound WebSocket text frames. |
-| `.replay_buffer(n)` | `1024` | Events retained for `Last-Event-ID` resume; `0` disables. |
-| `.max_connections(n)` | unlimited | Aggregate SSE+WS connection cap; over it → `503`. |
-| `.on_model::<M>(h)` / `.on_table(t, h)` | — | Fan out model create/update/delete to clients. |
-| `.redis(url)` | in-process | Redis pub/sub backplane for multi-instance (feature `redis`). |
-
-The full design lives in `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`. Source: `plugins/umbra-realtime/src/{lib.rs,sse.rs,ws.rs}`.
+- **Two transports** — SSE (push-only, auto-reconnect) and WebSocket (bidirectional): `GET /realtime/sse`, `GET /realtime/ws`.
+- **Safe by default** — anonymous connections may join only `public:*` rooms; model exposure and presence are opt-in, and exposed model fields are whitelisted. See [Gating rooms](/docs/v0.0.1/realtime/gating).
+- **One connection per browser** — a `SharedWorker` shares a single SSE stream across all tabs and subscriptions, so opening many tabs never exhausts the browser's HTTP/1.1 connection limit.
+- **Fire-and-forget sends** — `Realtime::to_user / to_group / broadcast` publish without blocking on socket I/O and no-op when the plugin isn't installed, so a handler can call them unconditionally (`Realtime::is_installed()` if you need to check).
 
 ## See also
 
-- [Signals](/docs/v0.0.1/plugins/signals) — the model-change hooks `on_model` subscribes to.
-- [Sessions](/docs/v0.0.1/plugins/sessions) — the session cookie `with_auth_sessions` reads.
+- The full **[Realtime section](/docs/v0.0.1/realtime/getting-started)** for setup, gating, model subscriptions, presence, transports, and scaling.
+- [The Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait) — how `RealtimePlugin` (and every plugin) plugs in.
