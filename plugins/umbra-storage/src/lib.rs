@@ -55,7 +55,12 @@ mod media;
 mod s3;
 mod static_serve;
 
-pub use media::{FsStorage, MediaError, MediaFile, MediaSaveOutcome, MediaTracking};
+pub use media::{
+    BoxError, FsStorage, MediaError, MediaFile, MediaSaveOutcome, MediaTracking, Processor,
+    STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
+};
+#[doc(hidden)]
+pub use media::clear_processors_for_test;
 #[cfg(feature = "s3")]
 pub use s3::{S3Storage, S3StorageBuilder};
 // Re-export the core Storage trait through this crate for ergonomic
@@ -68,7 +73,10 @@ pub use umbra::storage::{Storage, StorageError, StoredFile};
 pub use media::media_file;
 
 use collect::CollectStaticCommand;
-use media::{CleanupSpec, SizeLimitedStorage, file_columns_of, save_stream_through, save_through};
+use media::{
+    CleanupSpec, SizeLimitedStorage, file_columns_of, save_deferred_through, save_stream_through,
+    save_through,
+};
 use static_serve::StaticServe;
 
 /// The unified storage plugin: a static-serving side, a media-upload side,
@@ -79,6 +87,10 @@ pub struct StoragePlugin {
     static_side: Option<StaticServe>,
     /// The media-upload side, if configured.
     media: Option<MediaSide>,
+    /// Background upload processors, run in registration order after a file's
+    /// bytes land in storage. Installed ambiently at `on_ready` (see
+    /// [`media::set_processors`]) so EVERY save path can trigger them.
+    processors: Vec<Processor>,
 }
 
 /// The media side's configuration: mount, on-disk dir, the backend, an
@@ -106,7 +118,48 @@ impl StoragePlugin {
         Self {
             static_side: None,
             media: None,
+            processors: Vec::new(),
         }
+    }
+
+    /// Register a **background upload processor** — an async fn run over each
+    /// saved [`MediaFile`] after its bytes land in storage (thumbnailing,
+    /// transcoding, virus scan, …). Multiple are allowed; they run in
+    /// registration order. While they run the row's `status` is
+    /// `"processing"`; on all-ok it becomes `"ready"`, on any error
+    /// `"failed"`.
+    ///
+    /// ```ignore
+    /// StoragePlugin::new()
+    ///     .media("/media", "./media")
+    ///     .on_upload(|media: MediaFile| async move {
+    ///         make_thumbnail(&media).await?;
+    ///         Ok(())
+    ///     })
+    /// ```
+    ///
+    /// Processing runs via an in-process [`tokio::spawn`] (no `umbra-tasks`
+    /// dependency). For crash-durable processing, have the processor enqueue
+    /// an `umbra-tasks` job instead of doing the work inline. To notify the
+    /// frontend when a file finishes, expose the model over realtime —
+    /// `RealtimePlugin::new().expose::<MediaFile>(...)` — and the
+    /// `post_save:media_file` a status change fires is pushed automatically;
+    /// umbra-storage never imports realtime.
+    pub fn on_upload<F, Fut, E>(mut self, f: F) -> Self
+    where
+        F: Fn(MediaFile) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<(), E>> + Send + 'static,
+        E: Into<media::BoxError>,
+    {
+        let processor: Processor = Arc::new(move |media: MediaFile| {
+            let fut = f(media);
+            Box::pin(async move { fut.await.map_err(Into::into) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<(), media::BoxError>> + Send>,
+                >
+        });
+        self.processors.push(processor);
+        self
     }
 
     // ── Static side ────────────────────────────────────────────────────
@@ -343,6 +396,32 @@ impl StoragePlugin {
             .expect("save_stream() requires a media side; add .media(..) / .media_with_storage(..)");
         save_stream_through(&media.storage, media.max_size, filename, content_type, body).await
     }
+
+    /// **Deferred-upload** counterpart of [`save`](StoragePlugin::save) (Mode
+    /// B): insert the `media_file` row with `status="processing"` and return
+    /// IMMEDIATELY with the final, deterministic URL — the bytes are written
+    /// to the backend in a background [`tokio::spawn`], so the URL 404s until
+    /// that write (and the registered processors) finish. On success the row
+    /// flips to `status="ready"`; on any failure (write or processor) it
+    /// becomes `status="failed"`.
+    ///
+    /// The frontend shows a placeholder until the `post_save:media_file` a
+    /// status change fires reaches it (forward it over realtime by exposing
+    /// the model — no umbra-storage→realtime coupling) or until a poll of the
+    /// row's `status` reads `"ready"`. Use [`save`](StoragePlugin::save)
+    /// instead when the URL must resolve the instant you return; use this
+    /// when the caller mustn't block on a slow backend write.
+    pub async fn save_deferred(
+        &self,
+        filename: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<MediaSaveOutcome, MediaError> {
+        let media = self.media.as_ref().expect(
+            "save_deferred() requires a media side; add .media(..) / .media_with_storage(..)",
+        );
+        save_deferred_through(&media.storage, media.max_size, filename, content_type, bytes).await
+    }
 }
 
 impl Plugin for StoragePlugin {
@@ -410,6 +489,14 @@ impl Plugin for StoragePlugin {
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), umbra::plugin::PluginError> {
+        // Install the background upload processors ambiently (like the
+        // storage seam) so EVERY save path — `save`, `save_deferred`, and the
+        // admin/form multipart upload through `MediaTracking` — can trigger
+        // them, not just `StoragePlugin::save`.
+        if !self.processors.is_empty() {
+            media::set_processors(Arc::new(self.processors.clone()));
+        }
+
         // Register the media backend as the ambient "default" instance,
         // wrapped in MediaTracking (so the admin/form upload path records a
         // media_file row) and, when a cap is set, SizeLimitedStorage.

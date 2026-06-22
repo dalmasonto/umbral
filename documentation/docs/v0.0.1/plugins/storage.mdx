@@ -440,6 +440,92 @@ The underlying `Storage` trait has two additional streaming methods with default
 
 Both `save`/`store` (buffered) and `save_stream`/`store_stream` (streaming) apply the **same** filename guards — path-separator sanitisation and active-content (`.html`/`.svg`/`.js` → `.txt`) neutralisation — so streaming never weakens the stored-XSS defence.
 
+## Background uploads & processing
+
+Real uploads often need work *after* the bytes land — generate a thumbnail, transcode a video, strip EXIF, scan for malware. Doing that inline blocks the upload response on slow work. umbra-storage runs it in the background instead, and tracks where each file is in its lifecycle with `MediaFile.status`:
+
+| `status`     | Meaning                                                                                  |
+|--------------|------------------------------------------------------------------------------------------|
+| `ready`      | Done — the file is stored and any processors finished. The default for a plain upload.   |
+| `processing` | A background task is running (processors, or a deferred write). The URL may not resolve yet. |
+| `failed`     | A processor (or a deferred write) errored. For `save`, the **original is still stored**.  |
+
+### `on_upload` processors
+
+Register a processor on the builder. It's an async fn over the saved `MediaFile`; multiple are allowed and run in **registration order**:
+
+```rust
+StoragePlugin::new()
+    .media("/media", "./media")
+    .on_upload(|media: MediaFile| async move {
+        make_thumbnail(&media).await?;   // your work; `?` boxes any error
+        Ok(())
+    })
+    .on_upload(|media: MediaFile| async move {
+        strip_exif(&media).await?;
+        Ok(())
+    })
+```
+
+Processors are installed **ambiently** at boot (`on_ready`), so they fire on *every* save path — `StoragePlugin::save`, `save_stream`, the admin/form multipart upload, and `save_deferred` — not just one entry point.
+
+### `save()` — sync write, background processing (Mode A)
+
+`save` (and `save_stream`) always writes the original **synchronously**, so the returned URL works the instant `save` returns. Processing is what moves to the background:
+
+- **No processors registered** → the row is inserted `status="ready"` and `save` returns as before.
+- **Processors registered** → the row is inserted `status="processing"`, `save` returns **immediately** (it never awaits the work), and a detached `tokio::spawn` runs every processor in order. On all-ok the row flips to `status="ready"`; on any error to `status="failed"` (the cause is logged). A processing failure **never loses the upload** — the original bytes are already stored.
+
+```rust
+let MediaSaveOutcome { file, url } =
+    storage.save(&filename, &content_type, &bytes).await?;
+// `url` resolves now; `file.status` is "processing" if processors are registered.
+```
+
+### `save_deferred()` — deferred write (Mode B)
+
+When the caller mustn't block on a slow backend write either, `save_deferred` defers the **write itself**:
+
+```rust
+let MediaSaveOutcome { file, url } =
+    storage.save_deferred(&filename, &content_type, bytes).await?;
+// `url` is final & deterministic, but 404s until the background write finishes.
+```
+
+It generates the final key + URL upfront (the same `<uuid>-<filename>` scheme `save` uses), inserts the row `status="processing"` with the known `size`, and returns immediately. A detached `tokio::spawn` then writes the bytes to the backend at that exact key and runs the processors; success → `status="ready"`, any failure (write or processor) → `status="failed"`.
+
+Because the bytes aren't written yet, the returned URL **404s until the background task finishes** — show a placeholder on the frontend until the file goes `ready` (see the realtime pattern below, or poll the row's `status`).
+
+<Callout type="info">
+`save` vs `save_deferred`: use **`save`** when the URL must resolve the instant you return (the original is stored synchronously; only post-processing is deferred). Use **`save_deferred`** when even the write may be slow and the caller mustn't block — at the cost of a URL that resolves only after the background write.
+</Callout>
+
+### Pushing "ready" to the frontend (realtime, no coupling)
+
+When a background task flips `status` through the ORM, the ORM fires `post_save:media_file`. umbra-storage does **not** depend on umbra-realtime — instead a developer who wants the frontend notified just exposes the model over realtime, and the status change is pushed automatically:
+
+```rust
+RealtimePlugin::new()
+    .expose::<MediaFile>(
+        Expose::to_group("uploads").fields(&["id", "status", "url"]),
+    )
+```
+
+Now the browser that uploaded a `processing` file gets a live `status: "ready"` (and the resolvable `url`) the moment processing finishes — swap the placeholder for the real image. The frontend can also just poll the row's `status` if it isn't on a realtime transport.
+
+### Durability: in-process vs crash-durable
+
+Background work runs via an in-process `tokio::spawn`. That's simple and has **no plugin dependency** — umbra-storage doesn't import umbra-tasks. The trade-off: a process crash mid-processing loses the in-flight work (the file stays `processing`). For crash-durable processing, have the processor **enqueue an `umbra-tasks` job** instead of doing the work inline:
+
+```rust
+.on_upload(|media: MediaFile| async move {
+    ProcessUpload { media_id: media.id }.enqueue().await?;  // your umbra-tasks job
+    Ok(())
+})
+```
+
+The job survives a restart because it's persisted in the task queue; the `on_upload` closure just hands work off to it. umbra-storage stays decoupled from both umbra-tasks and umbra-realtime — the developer composes them.
+
 ## The `MediaFile` model
 
 Every upload is one row:
@@ -452,6 +538,7 @@ Every upload is one row:
 | `content_type`  | `String`                        | MIME type the client declared                  |
 | `size`          | `i64`                           | Byte count                                     |
 | `uploaded_at`   | `DateTime<Utc>`                 | Time of save                                   |
+| `status`        | `String`                        | `ready` \| `processing` \| `failed` — the [background-processing](#background-uploads--processing) lifecycle. Defaults to `ready`, so a plain upload is usable immediately. |
 
 The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate` and the admin lists it under the **storage** sidebar group automatically. Every column is `#[umbra(noedit)]` — the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
 
@@ -541,7 +628,7 @@ This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying bo
 
 The storage-backend trait `gaps.md #49` called for **has shipped**: it landed as `Storage` (in `umbra-core`, see above), with the filesystem `FsStorage` impl, the `s3`-gated `S3Storage` (now with `UMBRA_S3_*` config, explicit credentials, path-style addressing, and **presigned URLs** for private buckets), and `.media_with_storage(...)` for swapping backends. One thing still deferred:
 
-1. **Image library.** Thumbnails, EXIF strip, format probing. Behind an `images` cargo feature, later.
+1. **Image library.** A *built-in* thumbnail / EXIF-strip / format-probe implementation behind an `images` cargo feature, later. The *hook* to run that work — [`on_upload` processors](#background-uploads--processing), with the `processing`/`ready`/`failed` lifecycle and `save_deferred` — has shipped; you can wire your own image pipeline today.
 
 Design rationale and the migration plan live in `docs/decisions/2026-06-02-media-and-s3.md` in the repo. Each step keeps the v0 public surface compatible.
 

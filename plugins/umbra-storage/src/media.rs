@@ -8,12 +8,135 @@
 //! model. The active-content guard, mid-stream size cap, and streaming
 //! paths are preserved byte-for-byte.
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use umbra::prelude::*;
 use umbra::storage::{ByteStream, StorageError, StoredFile, cap_stream, is_cap_exceeded};
+
+/// Status string a freshly-uploaded file carries when no background work is
+/// pending — the upload is immediately usable.
+pub const STATUS_READY: &str = "ready";
+/// Status while a background task (processors and/or the deferred write) is
+/// in flight. The original is already stored for `save`, but NOT yet stored
+/// for `save_deferred`.
+pub const STATUS_PROCESSING: &str = "processing";
+/// Status after a processor or the deferred write errored. The original
+/// bytes of a `save` upload are still stored (processing failure never loses
+/// the upload); a `save_deferred` failure may mean the bytes were never
+/// written.
+pub const STATUS_FAILED: &str = "failed";
+
+/// A boxed, send-able error any processor can return.
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// An upload **processor**: an async fn run, in registration order, over a
+/// saved [`MediaFile`] after its bytes land in storage (thumbnailing,
+/// transcoding, virus scan, …). Register via [`crate::StoragePlugin::on_upload`].
+///
+/// Boxed so the registry can hold a heterogeneous list. The future is
+/// `Send + 'static` so it runs in a detached [`tokio::spawn`]; the error is
+/// boxed so any `E: Error` works.
+pub type Processor =
+    Arc<dyn Fn(MediaFile) -> Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>> + Send + Sync>;
+
+/// The ambient processor list, installed at `on_ready` (mirrors the ambient
+/// storage seam's `OnceLock<Mutex<…>>`). ANY save path — `StoragePlugin::save`,
+/// `save_deferred`, the admin/form multipart upload through `MediaTracking` —
+/// reads this, so background processing isn't tied to one entry point. The
+/// `Mutex` (rather than a bare `OnceLock<Vec>`) makes the install replaceable,
+/// matching `set_storage_named`'s set-but-overwritable shape so a test
+/// process that boots more than one plugin doesn't leak one test's
+/// processors into the next.
+static PROCESSORS: OnceLock<Mutex<Arc<Vec<Processor>>>> = OnceLock::new();
+
+fn processor_slot() -> &'static Mutex<Arc<Vec<Processor>>> {
+    PROCESSORS.get_or_init(|| Mutex::new(Arc::new(Vec::new())))
+}
+
+/// Install the processor list ambiently. Called from `on_ready`.
+pub(crate) fn set_processors(list: Arc<Vec<Processor>>) {
+    *processor_slot().lock().expect("processor registry mutex") = list;
+}
+
+/// The ambient processor list, or an empty list when none were registered.
+pub(crate) fn processors() -> Arc<Vec<Processor>> {
+    processor_slot()
+        .lock()
+        .expect("processor registry mutex")
+        .clone()
+}
+
+/// Test-only: clear the ambient processor registry so a test process that
+/// boots more than one plugin can reset to a known-empty baseline. Not
+/// public API; used by the background-processing integration tests.
+#[doc(hidden)]
+pub fn clear_processors_for_test() {
+    *processor_slot().lock().expect("processor registry mutex") = Arc::new(Vec::new());
+}
+
+/// Run every processor over `media` in order, then persist the terminal
+/// status (`"ready"` on all-ok, `"failed"` on the first error) through the
+/// ORM so `post_save:media_file` fires. Shared by the `save` and
+/// `save_deferred` background tasks. `prelude` runs before the processors
+/// (the deferred write); a `prelude` error short-circuits to `"failed"`.
+async fn run_processing<F, Fut>(media: MediaFile, processors: Arc<Vec<Processor>>, prelude: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<(), BoxError>>,
+{
+    let id = media.id;
+    let outcome: Result<(), BoxError> = async {
+        prelude().await?;
+        for processor in processors.iter() {
+            processor(media.clone()).await?;
+        }
+        Ok(())
+    }
+    .await;
+
+    let status = match &outcome {
+        Ok(()) => STATUS_READY,
+        Err(e) => {
+            tracing::error!(
+                media_id = id,
+                "umbra-storage: background processing failed for media_file #{id}: {e}"
+            );
+            STATUS_FAILED
+        }
+    };
+    persist_status(id, status).await;
+}
+
+/// Re-fetch the `media_file` row, set its `status`, and `save()` it so the
+/// UPDATE fires `post_save:media_file` (the realtime tie-in). Best-effort:
+/// a failure here is logged and swallowed — the bytes are already stored.
+async fn persist_status(id: i64, status: &str) {
+    let row = match MediaFile::objects()
+        .filter(media_file::ID.eq(id))
+        .first()
+        .await
+    {
+        Ok(Some(mut row)) => {
+            row.status = status.to_string();
+            row
+        }
+        Ok(None) => {
+            tracing::warn!(media_id = id, "umbra-storage: media_file #{id} vanished before status update");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(media_id = id, "umbra-storage: could not load media_file #{id} for status update: {e}");
+            return;
+        }
+    };
+    if let Err(e) = MediaFile::objects().save(row).await {
+        tracing::warn!(media_id = id, "umbra-storage: failed to persist media_file #{id} status={status}: {e}");
+    }
+}
 
 /// Filesystem-backed [`Storage`] — the local backend factored out so the
 /// plugin routes file bytes through the backend-agnostic trait
@@ -541,6 +664,12 @@ impl Storage for MediaTracking {
 /// ACTUAL byte count the backend wrote. A failure must NOT fail the upload:
 /// it is logged and swallowed.
 async fn record_tracking_row(filename: &str, content_type: &str, stored: &StoredFile) {
+    let procs = processors();
+    let initial = if procs.is_empty() {
+        STATUS_READY
+    } else {
+        STATUS_PROCESSING
+    };
     let row = MediaFile {
         id: 0,
         key: stored.key.clone(),
@@ -548,12 +677,25 @@ async fn record_tracking_row(filename: &str, content_type: &str, stored: &Stored
         content_type: content_type.to_string(),
         size: stored.size as i64,
         uploaded_at: chrono::Utc::now(),
+        status: initial.to_string(),
     };
-    if let Err(e) = MediaFile::objects().create(row).await {
-        tracing::warn!(
-            key = %stored.key,
-            "umbra-storage: upload stored but media_file tracking insert failed: {e}"
-        );
+    let saved = match MediaFile::objects().create(row).await {
+        Ok(saved) => saved,
+        Err(e) => {
+            tracing::warn!(
+                key = %stored.key,
+                "umbra-storage: upload stored but media_file tracking insert failed: {e}"
+            );
+            return;
+        }
+    };
+    // The ambient/admin upload path runs processors too (the registry is
+    // ambient by design), so a thumbnail/scan fires for admin uploads, not
+    // just `StoragePlugin::save`. Bytes are already stored; spawn detached.
+    if !procs.is_empty() {
+        tokio::spawn(async move {
+            run_processing(saved, procs, || async { Ok(()) }).await;
+        });
     }
 }
 
@@ -577,6 +719,18 @@ pub struct MediaFile {
     pub size: i64,
     #[umbra(noedit)]
     pub uploaded_at: chrono::DateTime<chrono::Utc>,
+    /// Background-processing lifecycle: `"ready"` (the default — a plain
+    /// upload with no processors is immediately ready), `"processing"`
+    /// (a background task is running processors / a deferred write is in
+    /// flight), or `"failed"` (a processor or the deferred write errored).
+    ///
+    /// The `#[umbra(default = "ready")]` clause makes the additive column
+    /// migration safe: existing `media_file` rows backfill to `"ready"`.
+    /// A status change persisted through the ORM fires `post_save:media_file`,
+    /// which a developer can forward to the frontend with
+    /// `RealtimePlugin::new().expose::<MediaFile>(...)` — no coupling.
+    #[umbra(noedit, default = "ready", max_length = 16)]
+    pub status: String,
 }
 
 /// Result of a successful upload.
@@ -644,23 +798,126 @@ pub(crate) async fn save_through(
     }
 
     let stored = storage.store(filename, content_type, bytes).await?;
+    finish_save(stored, filename, content_type).await
+}
 
+/// Shared tail of the buffered/streaming `save` paths (Mode A): the original
+/// IS already in storage, so the URL works immediately. Insert the
+/// `media_file` row with `status="ready"` when no processors are registered,
+/// else `status="processing"` + a detached [`tokio::spawn`] that runs every
+/// processor and flips the status to `"ready"`/`"failed"`. Returns the
+/// outcome IMMEDIATELY — never awaits processing.
+async fn finish_save(
+    stored: StoredFile,
+    filename: &str,
+    content_type: &str,
+) -> Result<MediaSaveOutcome, MediaError> {
+    let procs = processors();
+    let initial = if procs.is_empty() {
+        STATUS_READY
+    } else {
+        STATUS_PROCESSING
+    };
     let row = MediaFile {
         id: 0,
         key: stored.key.clone(),
         filename: filename.to_string(),
         content_type: content_type.to_string(),
-        size: bytes.len() as i64,
+        size: stored.size as i64,
         uploaded_at: chrono::Utc::now(),
+        status: initial.to_string(),
     };
     let saved = MediaFile::objects()
         .save(row)
         .await
         .map_err(|e| MediaError::Storage(format!("media_file save failed: {e}")))?;
 
+    if !procs.is_empty() {
+        let spawn_row = saved.clone();
+        tokio::spawn(async move {
+            run_processing(spawn_row, procs, || async { Ok(()) }).await;
+        });
+    }
+
     Ok(MediaSaveOutcome {
         file: saved,
         url: stored.url,
+    })
+}
+
+/// Persist one upload at a DEFERRED time (Mode B): generate the key + URL
+/// upfront via the backend's deterministic `put` key-gen, insert the
+/// `media_file` row with `status="processing"` and the known size, then
+/// return IMMEDIATELY. A detached [`tokio::spawn`] writes `bytes` to the
+/// backend at the exact key and runs the processors; success →
+/// `status="ready"`, any failure (write or processor) → `status="failed"`.
+///
+/// The returned URL is final/deterministic but 404s until the background
+/// write finishes — the frontend shows a placeholder until the
+/// `post_save:media_file` → realtime "ready" push (or a poll). For very
+/// large files a future optimisation is to stage `bytes` in a temp file
+/// rather than holding them in the spawned task.
+pub(crate) async fn save_deferred_through(
+    storage: &Arc<dyn Storage>,
+    max_size: Option<u64>,
+    filename: &str,
+    content_type: &str,
+    bytes: Vec<u8>,
+) -> Result<MediaSaveOutcome, MediaError> {
+    if let Some(cap) = max_size {
+        if bytes.len() as u64 > cap {
+            return Err(MediaError::TooLarge {
+                limit: cap,
+                actual: bytes.len() as u64,
+            });
+        }
+    }
+
+    // Same key-gen `store` uses (`<uuid>-<sanitised name>`) so the URL is
+    // final the instant we return; the bytes land at this exact key later.
+    let safe_name: String = filename
+        .chars()
+        .filter(|c| !matches!(c, '/' | '\\' | '\0'))
+        .take(120)
+        .collect();
+    let safe_name = neutralise_active_content(&safe_name);
+    let key = format!("{}-{safe_name}", uuid::Uuid::new_v4());
+    let url = storage.url(&key);
+
+    let row = MediaFile {
+        id: 0,
+        key: key.clone(),
+        filename: filename.to_string(),
+        content_type: content_type.to_string(),
+        size: bytes.len() as i64,
+        uploaded_at: chrono::Utc::now(),
+        status: STATUS_PROCESSING.to_string(),
+    };
+    let saved = MediaFile::objects()
+        .save(row)
+        .await
+        .map_err(|e| MediaError::Storage(format!("media_file save failed: {e}")))?;
+
+    let procs = processors();
+    let storage = storage.clone();
+    let content_type = content_type.to_string();
+    let spawn_row = saved.clone();
+    tokio::spawn(async move {
+        // The deferred WRITE is the `prelude`: it must succeed before the
+        // processors run; a write error short-circuits to `status="failed"`.
+        run_processing(spawn_row, procs, move || async move {
+            storage
+                .put(&key, &content_type, &bytes)
+                .await
+                .map(|_| ())
+                .map_err(|e| Box::new(e) as BoxError)
+        })
+        .await;
+    });
+
+    Ok(MediaSaveOutcome {
+        file: saved,
+        url,
     })
 }
 
@@ -691,23 +948,7 @@ pub(crate) async fn save_stream_through(
         None => storage.store_stream(filename, content_type, body).await?,
     };
 
-    let row = MediaFile {
-        id: 0,
-        key: stored.key.clone(),
-        filename: filename.to_string(),
-        content_type: content_type.to_string(),
-        size: stored.size as i64,
-        uploaded_at: chrono::Utc::now(),
-    };
-    let saved = MediaFile::objects()
-        .save(row)
-        .await
-        .map_err(|e| MediaError::Storage(format!("media_file save failed: {e}")))?;
-
-    Ok(MediaSaveOutcome {
-        file: saved,
-        url: stored.url,
-    })
+    finish_save(stored, filename, content_type).await
 }
 
 #[cfg(test)]

@@ -271,7 +271,8 @@ async fn boot() {
                 filename TEXT NOT NULL,\
                 content_type TEXT NOT NULL,\
                 size INTEGER NOT NULL,\
-                uploaded_at TEXT NOT NULL\
+                uploaded_at TEXT NOT NULL,\
+                status TEXT NOT NULL DEFAULT 'ready'\
              )",
         )
         .execute(&pool)
