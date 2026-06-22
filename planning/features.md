@@ -240,7 +240,7 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: Add checkboxes to the list view (`templates/list.html`), a dropdown for action selection, and POST handlers for each built-in action. Custom actions via `AdminModel::actions()` returning `Vec<AdminAction>`. The existing `AdminConfig::actions()` already supports this at the API level; wire it to the frontend.
 
-54. [ ] **Admin inlines — tabular and stacked** 🟡 Medium
+54. [x] **Admin inlines — tabular and stacked** 🟡 Medium — SHIPPED (2026-06-23): InlineModel{model,fk_field,kind,extra,can_delete} on AdminModel.inlines; atomic parent+children save; admin/inlines.mdx.
     > Why: Edit related objects on the parent form. `PostAdmin` shows an inline `Comment` form set so an editor can moderate comments without leaving the post page. One of the most-used Django admin features.
     >
     > How: Add `AdminModel::inlines(&["comment_set"])`. In the form template, render a sub-table or sub-form for each related row. POST handling saves the parent and all inlines in one transaction. Depends on gap #30 (reverse relation accessors) to get `post.comment_set`.
