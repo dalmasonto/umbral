@@ -197,8 +197,9 @@ pub mod db {
     pub use umbra_core::db::{
         Alias, DatabaseRouter, DbPool, DefaultRouter, RouteContext, RouteOp, Schema, TenantKey,
         Transaction, TxFuture, begin, begin_pg, begin_sqlite, close, connect, connect_sqlite, ping,
-        pool, pool_dispatched, pool_for, pool_for_dispatched, registered_aliases, route_context,
-        router, transaction, transaction_pg, transaction_sqlite,
+        pool, pool_alias_registered, pool_dispatched, pool_for, pool_for_dispatched,
+        register_tenant_pool, registered_aliases, route_context, router, transaction,
+        transaction_pg, transaction_sqlite,
     };
 }
 

@@ -136,6 +136,18 @@ impl From<PgPool> for DbPool {
 /// The "default" pool is always present after `App::build()` succeeds.
 static POOLS: OnceLock<HashMap<String, DbPool>> = OnceLock::new();
 
+/// Runtime tenant-pool registry for **database-per-tenant** multitenancy:
+/// pools registered AFTER `App::build()`, as tenants are onboarded (e.g. by a
+/// `DatabaseRouter` that maps a request's tenant to its own database). The
+/// static `POOLS` map above is set once at build; this `RwLock`-backed map
+/// grows at runtime via [`register_tenant_pool`]. Stored pools are leaked to
+/// `&'static` on insert — a tenant pool lives for the whole process (you never
+/// drop one mid-serve), so [`pool_for_dispatched`] keeps its zero-cost
+/// `&'static DbPool` return: the `&'static` is copied out before the read guard
+/// drops, so no lock guard ever escapes.
+static DYNAMIC_POOLS: OnceLock<std::sync::RwLock<HashMap<String, &'static DbPool>>> =
+    OnceLock::new();
+
 /// Global default for whether ORM write terminals should wrap in a
 /// transaction. Set by `AppBuilder::atomic_transactions(...)`; read by
 /// every terminal that supports `.atomic()` / `.non_atomic()`. Unset
@@ -220,12 +232,59 @@ pub fn pool_for(alias: &str) -> SqlitePool {
 
 /// Return a named connection pool as a typed [`DbPool`]. Phase 2
 /// surface; see [`pool_dispatched`].
+///
+/// Resolution order: the build-time `POOLS` map first, then the runtime
+/// [`register_tenant_pool`] registry (database-per-tenant). Panics only when
+/// the alias is in neither.
 pub fn pool_for_dispatched(alias: &str) -> &'static DbPool {
-    POOLS
+    if let Some(p) = POOLS.get().and_then(|pools| pools.get(alias)) {
+        return p;
+    }
+    if let Some(p) = DYNAMIC_POOLS
         .get()
-        .expect("umbra: db pool not initialised — did you call App::build()?")
-        .get(alias)
-        .unwrap_or_else(|| panic!("umbra: no database registered under alias '{alias}'"))
+        .and_then(|reg| reg.read().ok().and_then(|m| m.get(alias).copied()))
+    {
+        return p;
+    }
+    if POOLS.get().is_none() {
+        panic!("umbra: db pool not initialised — did you call App::build()?");
+    }
+    panic!("umbra: no database registered under alias '{alias}'");
+}
+
+/// Register a database pool under `alias` at runtime — the database-per-tenant
+/// seam. Unlike the build-time `App::builder().database(alias, pool)` (which
+/// fills the static pool map), this may be called any time after `App::build()`
+/// as tenants are onboarded. First-write-wins: re-registering an existing alias
+/// is a no-op (a re-resolution of the same tenant won't churn its pool) and the
+/// surplus pool is dropped without leaking. The stored pool is leaked to
+/// `&'static` because tenant pools are process-lifetime.
+///
+/// A [`DatabaseRouter`](crate::db::router::DatabaseRouter) whose
+/// `db_for_read`/`db_for_write` returns `alias` for a tenant request then routes
+/// that tenant's queries to this pool.
+pub fn register_tenant_pool(alias: impl Into<String>, pool: DbPool) {
+    let alias = alias.into();
+    let mut guard = DYNAMIC_POOLS
+        .get_or_init(|| std::sync::RwLock::new(HashMap::new()))
+        .write()
+        .expect("umbra: dynamic pool registry poisoned");
+    if guard.contains_key(&alias) {
+        return; // first-write-wins; `pool` is dropped here, not leaked
+    }
+    let leaked: &'static DbPool = Box::leak(Box::new(pool));
+    guard.insert(alias, leaked);
+}
+
+/// True if `alias` resolves to a registered pool — build-time `POOLS` or the
+/// runtime tenant registry. A router can use this to fall back to the default
+/// pool for a tenant whose database hasn't been onboarded yet.
+pub fn pool_alias_registered(alias: &str) -> bool {
+    POOLS.get().is_some_and(|p| p.contains_key(alias))
+        || DYNAMIC_POOLS
+            .get()
+            .and_then(|reg| reg.read().ok().map(|m| m.contains_key(alias)))
+            .unwrap_or(false)
 }
 
 /// Ping the default database pool with a backend-appropriate liveness
