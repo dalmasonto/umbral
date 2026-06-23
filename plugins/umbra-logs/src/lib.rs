@@ -42,6 +42,9 @@
 //! - [`flush`]. Test hook: await every in-flight capture task so a test can
 //!   assert the row exists right after the request.
 
+pub mod observability;
+pub use observability::{init as init_observability, ObservabilityConfig, ObservabilityGuard};
+
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;

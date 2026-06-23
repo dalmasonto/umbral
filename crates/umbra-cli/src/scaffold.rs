@@ -300,6 +300,10 @@ umbra-admin    = {{ git = "https://github.com/dalmasonto/umbra" }}
 umbra-rest     = {{ git = "https://github.com/dalmasonto/umbra" }}
 umbra-openapi  = {{ git = "https://github.com/dalmasonto/umbra" }}
 umbra-security = {{ git = "https://github.com/dalmasonto/umbra" }}
+# Observability init helper (structured JSON logging). Enable the `otel`
+# feature to ALSO export OpenTelemetry traces over OTLP to a collector
+# (Jaeger/Tempo/Honeycomb): `umbra-logs = {{ git = "...", features = ["otel"] }}`.
+umbra-logs     = {{ git = "https://github.com/dalmasonto/umbra" }}
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbra-playground   = {{ git = "https://github.com/dalmasonto/umbra" }}  # Interactive API playground UI (think mini-Postman) at /playground/.
@@ -401,12 +405,12 @@ pub struct Post {{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    // Observability: structured logging + (under the `otel` feature on
+    // `umbra-logs`) OpenTelemetry OTLP trace export. Reads RUST_LOG,
+    // UMBRA_LOG_FORMAT=json, OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME.
+    // Keep the guard alive for the whole program: it flushes the OTLP
+    // exporter on drop so trailing spans aren't lost at exit.
+    let _obs = umbra_logs::observability::init(umbra_logs::ObservabilityConfig::from_env());
 
     let settings = Settings::from_env()?;
     let pool = umbra::db::connect(&settings.database_url).await?;

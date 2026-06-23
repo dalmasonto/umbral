@@ -1,0 +1,84 @@
+---
+title: Logging and tracing
+description: One init call wires structured JSON logging and OpenTelemetry OTLP trace export. Per-request spans go to any OTLP collector (Jaeger, Tempo, Honeycomb); env knobs flip the format and endpoint.
+sidebar_position: 1
+tags: [observability, logging, tracing, opentelemetry, otlp]
+---
+
+# Logging and tracing
+
+umbra gives you one entry point for observability: `umbra_logs::observability::init`. It installs the global `tracing` subscriber (human-readable or JSON) and, when the `otel` feature is on and a collector is reachable, exports a span per HTTP request over OTLP to any OpenTelemetry backend — Jaeger, Grafana Tempo, Honeycomb, or an OpenTelemetry Collector.
+
+It replaces the hand-rolled `tracing_subscriber::fmt().init()` that example apps used to put in `main.rs`.
+
+## Quick start
+
+Call `init` once at the top of `main`, and keep the returned guard alive for the whole program. The guard flushes and shuts down the OTLP exporter on drop, so spans buffered by the batch processor aren't lost when the process exits.
+
+```rust
+use umbra_logs::observability::{init, ObservabilityConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // `_obs` MUST stay in scope for the program's lifetime — dropping it
+    // flushes the exporter. `from_env()` reads every knob below.
+    let _obs = init(ObservabilityConfig::from_env());
+
+    // ... build and serve your App ...
+    Ok(())
+}
+```
+
+Generated projects (`umbra startproject`) already wire this in.
+
+## Environment knobs
+
+`ObservabilityConfig::from_env()` reads the standard OpenTelemetry environment variables plus umbra's log-format switch:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `RUST_LOG` | `info` | The `tracing` `EnvFilter` directive (e.g. `info,tower_http=debug`). |
+| `UMBRA_LOG_FORMAT` | _(unset)_ | Set to `json` for structured JSON log lines (with `level`, `target`, fields, and `trace_id`/`span_id` under the `otel` feature). Anything else = human-readable. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP **gRPC** endpoint the exporter ships spans to. `otel` feature only. |
+| `OTEL_SERVICE_NAME` | `umbra` | The `service.name` resource attribute on every span. `otel` feature only. |
+
+You can also set the fields explicitly instead of (or on top of) the env:
+
+```rust
+let _obs = init(
+    ObservabilityConfig::from_env()
+        .service_name("checkout-api")
+        .json(true)
+        .otlp_endpoint("http://otel-collector:4317"),
+);
+```
+
+## Enabling OTLP trace export
+
+Span export is gated behind the `otel` cargo feature so a base build never pulls the OpenTelemetry / tonic / gRPC stack:
+
+```toml
+# Cargo.toml
+umbra-logs = { version = "0.0.1", features = ["otel"] }
+```
+
+With the feature **off**, `init` still configures fmt/JSON logging — it just never builds the exporter. With the feature **on**, `init` builds an OTLP gRPC exporter pointed at `OTEL_EXPORTER_OTLP_ENDPOINT`, attaches it to a batch span processor on the tokio runtime, and bridges `tracing` spans into it via `tracing-opentelemetry`.
+
+<Callout type="info">
+A collector that's unreachable at startup is **not** a fatal error — the exporter connects lazily and umbra falls back to logs-only if the exporter can't even be constructed (a malformed endpoint). Your app boots either way.
+</Callout>
+
+## What gets exported
+
+The framework opens an `http.request` span around every request (a `tower_http` `TraceLayer` mounted outermost in the app router), carrying `http.method`, `http.route`, and the response `http.status_code`. Under the `otel` feature, that span is exported per request. So out of the box you get one trace per HTTP request in your collector with no per-handler instrumentation.
+
+`init` is **set-once**: calling it twice is a no-op (the second call logs a warning and returns an inert guard) so a re-boot in the same process never panics or double-installs the subscriber.
+
+## Not yet wired (follow-ups)
+
+This slice is the foundation — structured JSON logging, OTLP export, and request spans. Deeper instrumentation is deferred:
+
+- **Per-DB-query spans** and **per-task spans** (task-queue operations) are not yet emitted; only the request span is.
+- **W3C `traceparent` propagation** — extracting an inbound trace context from the request header so a trace continues across services — is not wired yet. The request span is created locally.
+
+See `arch.md` and `planning/features.md` #48 for the design rationale and the deferred deep-instrumentation notes.

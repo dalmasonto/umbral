@@ -58,12 +58,14 @@ use crate::auth::{TokenSchemeAuthentication, session_authentication};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    // Observability: structured logging + OpenTelemetry OTLP trace export
+    // (the `otel` feature on umbra-logs is on for the shop). Env knobs:
+    // RUST_LOG, UMBRA_LOG_FORMAT=json, OTEL_EXPORTER_OTLP_ENDPOINT (default
+    // http://localhost:4317), OTEL_SERVICE_NAME. The guard flushes the OTLP
+    // exporter on drop, so keep it alive for the whole program.
+    let _obs = umbra_logs::observability::init(
+        umbra_logs::ObservabilityConfig::from_env().service_name("umbra-shop"),
+    );
 
     let settings = Settings::from_env()?;
     eprintln!(

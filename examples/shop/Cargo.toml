@@ -26,6 +26,10 @@ umbra-permissions  = { path = "../../plugins/umbra-permissions" }
 # umbra-signals      = { path = "../../plugins/umbra-signals" }
 umbra-storage      = { path = "../../plugins/umbra-storage" }
 umbra-security     = { path = "../../plugins/umbra-security" }
+# Observability init helper. `otel` feature on so the shop demonstrates the
+# full OpenTelemetry OTLP trace-export path (set OTEL_EXPORTER_OTLP_ENDPOINT
+# to point at a collector; without one it degrades to logs only).
+umbra-logs         = { path = "../../plugins/umbra-logs", features = ["otel"] }
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

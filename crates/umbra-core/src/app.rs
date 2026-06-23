@@ -1242,6 +1242,29 @@ impl AppBuilder {
             crate::hosts::host_guard,
         ));
 
+        // Phase 5.99 — request tracing span. Applied outermost so every request
+        // (including host-guard rejections) runs inside a span. The span
+        // carries `http.method`, `http.route`/`uri`, and the response
+        // `http.status_code`; this is what an OpenTelemetry layer (installed by
+        // an app via `umbra_logs::observability::init`) exports as one span per
+        // request. Without an OTel layer attached it's a cheap `tracing` span
+        // that the fmt subscriber can surface under `RUST_LOG=tower_http=debug`.
+        // W3C `traceparent` propagation (extracting an upstream trace context
+        // from the inbound header) is a noted follow-up; this layer creates the
+        // local request span.
+        router = router.layer(
+            tower_http::trace::TraceLayer::new_for_http().make_span_with(
+                |request: &axum::http::Request<axum::body::Body>| {
+                    tracing::info_span!(
+                        "http.request",
+                        http.method = %request.method(),
+                        http.route = %request.uri().path(),
+                        http.status_code = tracing::field::Empty,
+                    )
+                },
+            ),
+        );
+
         // Phase 6 — fire each plugin's `on_ready` in topological order.
         // Runs after the system check passes and after the router is
         // built, so a plugin can rely on ambient state being live and on
