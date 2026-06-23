@@ -104,6 +104,18 @@ pub trait DatabaseRouter: Send + Sync {
         let _ = ctx;
         None
     }
+
+    /// The Postgres schema to scope queries against a specific `table` to, for
+    /// this request. Default: delegates to [`schema_for`](Self::schema_for)
+    /// (the per-request schema, table-agnostic). Override to vary the schema
+    /// **per table** — the seam schema-per-tenant needs so a SHARED_APPS table
+    /// (the `Tenant` registry, auth, etc.) stays in `public` (`None`) while a
+    /// tenant-owned table routes to the active tenant's schema. `table` is the
+    /// bare SQL table name (`ModelMeta::table`).
+    fn schema_for_table(&self, ctx: &RouteContext, table: &str) -> Option<Schema> {
+        let _ = table;
+        self.schema_for(ctx)
+    }
 }
 
 /// Today's static precedence, resolved by name: per-model `Model::DATABASE`
@@ -158,7 +170,7 @@ pub fn router() -> Arc<dyn DatabaseRouter> {
 pub fn schema_qualified_table(table: &str) -> sea_query::TableRef {
     use sea_query::{Alias as SqAlias, IntoTableRef};
     let ctx = crate::db::route_context::current();
-    match router().schema_for(&ctx) {
+    match router().schema_for_table(&ctx, table) {
         Some(schema) => (SqAlias::new(schema.as_str()), SqAlias::new(table)).into_table_ref(),
         None => SqAlias::new(table).into_table_ref(),
     }
