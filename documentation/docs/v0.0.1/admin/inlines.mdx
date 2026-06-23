@@ -37,18 +37,18 @@ The FK column is set to the parent automatically on every child write. You never
 
 Two layouts, like Django:
 
-<Tabs>
-<Tab title="Tabular (default)">
+<Tabs defaultValue="Tabular (default)">
+<Tab label="Tabular (default)">
 
 Children render as a table — one column per field, one row per child. Best when a child has a few short fields.
 
-```rust
-InlineModel::new("comment", "post", &["text", "rating"])
-    .kind(InlineKind::Tabular) // the default
-```
+  ```rust
+  InlineModel::new("comment", "post", &["text", "rating"])
+      .kind(InlineKind::Tabular) // the default
+  ```
 
 </Tab>
-<Tab title="Stacked">
+<Tab label="Stacked">
 
 Each child renders as a vertical sub-form. Best when a child has many fields that wouldn't fit a table row.
 
@@ -91,7 +91,12 @@ The child's FK column must exist and point at the parent table. If the declared 
 
 ## Where it works
 
-Inlines render and save on the admin's **full-page change form** (`/{table}/new` and `/{table}/{id}/edit`) — the path the changelist's "Add" and "Edit" buttons link to. The HTMX sheet variant is a follow-up.
+Inlines render and save in **both** of the admin's edit surfaces, from the same declaration:
+
+- The **full-page change form** (`/{table}/new` and `/{table}/{id}/edit`) — the path the changelist's "Add" and "Edit" buttons link to.
+- The **slide-over sheet** — the HTMX right-side panel that opens when you create or edit a row inline on the changelist.
+
+Both surfaces share one formset macro, so the child fields, the "Add another" button, and the DELETE checkbox look and behave identically. The save path is the same atomic transaction in either place: a bad child rolls back the parent and every sibling, and the sheet re-renders the slide-over (not a full page) with your edits and the error intact.
 
 ## See also
 

@@ -261,6 +261,46 @@ async fn get_page(router: &axum::Router, session: &str, uri: &str) -> (StatusCod
     (s, body)
 }
 
+/// GET with the `hx-request` header so the sheet handler returns the
+/// partial fragment (not a redirect).
+async fn get_htmx(router: &axum::Router, session: &str, uri: &str) -> (StatusCode, String) {
+    let (s, _, body) = send_full(
+        router.clone(),
+        Request::builder()
+            .uri(uri)
+            .header(header::COOKIE, format!("umbra_session={session}"))
+            .header("hx-request", "true")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    (s, body)
+}
+
+/// POST a urlencoded form WITH the `hx-request` header — the shape the
+/// slide-over sheet submits. Exercises the sheet-aware code paths
+/// (success HX-Trigger, sheet-fragment error re-render).
+async fn post_form_htmx(
+    router: &axum::Router,
+    session: &str,
+    uri: &str,
+    pairs: &[(&str, &str)],
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let body = serde_urlencoded::to_string(pairs).unwrap();
+    send_full(
+        router.clone(),
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(header::COOKIE, format!("umbra_session={session}"))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header("hx-request", "true")
+            .body(Body::from(body))
+            .unwrap(),
+    )
+    .await
+}
+
 async fn count(table: &str) -> i64 {
     let pool = umbra::db::pool();
     sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
@@ -529,4 +569,225 @@ async fn model_without_inlines_has_no_regression() {
         "plain create should succeed: {s}\n{body}"
     );
     assert_eq!(count("plain").await, before + 1, "plain row created");
+}
+
+// ---------------------------------------------------------------------------
+// Sheet (HTMX slide-over) inline tests. The sheet edit form posts to the
+// SAME `crud::update` handler the full-page form does, and the sheet
+// create form posts to `sheet::sheet_create` — both now save inlines
+// atomically through the shared path. These prove the inline section
+// renders in the sheet partial and the save round-trips identically.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn edit_sheet_renders_inline_section_with_existing_and_blank_rows() {
+    let _g = LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login(&router).await;
+
+    let post_id = seed_post("SheetRenderable").await;
+    seed_comment(post_id, "sheet child", 5).await;
+
+    let (status, html) =
+        get_htmx(&router, &session, &format!("/admin/post/{post_id}/edit-sheet")).await;
+    assert_eq!(status, StatusCode::OK, "edit-sheet should 200:\n{html}");
+
+    // Same inline assertions as the full-page render test, against the
+    // sheet partial.
+    assert!(
+        html.contains("inline-comment-TOTAL"),
+        "inline management count missing in sheet:\n{html}"
+    );
+    assert!(
+        html.contains("sheet child"),
+        "existing child value not prefilled in sheet:\n{html}"
+    );
+    assert!(
+        html.contains(r#"name="inline-comment-0-id""#)
+            && html.contains(r#"name="inline-comment-0-text""#),
+        "row 0 field names missing in sheet:\n{html}"
+    );
+    // 1 existing + 1 extra blank => TOTAL=2.
+    assert!(
+        html.contains(r#"name="inline-comment-TOTAL" value="2""#),
+        "expected TOTAL=2 (1 existing + 1 extra) in sheet:\n{html}"
+    );
+}
+
+#[tokio::test]
+async fn new_sheet_renders_blank_inline_row() {
+    let _g = LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login(&router).await;
+
+    let (status, html) = get_htmx(&router, &session, "/admin/post/new-sheet").await;
+    assert_eq!(status, StatusCode::OK, "new-sheet should 200:\n{html}");
+    assert!(
+        html.contains("inline-comment-TOTAL"),
+        "inline section missing on create sheet:\n{html}"
+    );
+    // No parent yet → only the `extra=1` blank row.
+    assert!(
+        html.contains(r#"name="inline-comment-TOTAL" value="1""#),
+        "expected TOTAL=1 (only the blank extra) on create sheet:\n{html}"
+    );
+}
+
+#[tokio::test]
+async fn sheet_create_creates_children() {
+    let _g = LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login(&router).await;
+
+    let before = count("comment").await;
+    let before_posts = count("post").await;
+
+    // The sheet create form posts to /admin/{table}/create.
+    let (status, _h, body) = post_form_htmx(
+        &router,
+        &session,
+        "/admin/post/create",
+        &[
+            ("title", "SheetCreated"),
+            ("inline-comment-TOTAL", "1"),
+            ("inline-comment-0-id", ""),
+            ("inline-comment-0-text", "child via sheet create"),
+            ("inline-comment-0-rating", "7"),
+        ],
+    )
+    .await;
+    assert!(
+        status == StatusCode::OK || status == StatusCode::SEE_OTHER,
+        "sheet create should succeed, got {status}:\n{body}"
+    );
+    assert_eq!(count("post").await, before_posts + 1, "parent created");
+    assert_eq!(count("comment").await, before + 1, "one child created");
+
+    let pool = umbra::db::pool();
+    let (text, fk): (String, i64) = sqlx::query_as(
+        "SELECT c.text, c.post FROM comment c JOIN post p ON p.id = c.post \
+         WHERE p.title = 'SheetCreated'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(text, "child via sheet create");
+    let parent: i64 = sqlx::query_scalar("SELECT id FROM post WHERE title = 'SheetCreated'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(fk, parent, "child FK set to the new parent automatically");
+}
+
+#[tokio::test]
+async fn sheet_edit_updates_and_deletes_children() {
+    let _g = LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login(&router).await;
+
+    let post_id = seed_post("SheetEdit").await;
+    let keep_id = seed_comment(post_id, "keep me old", 1).await;
+    let doomed_id = seed_comment(post_id, "delete me", 2).await;
+    let before = count("comment").await;
+
+    // Via the sheet edit POST (same /edit endpoint, hx-request): update
+    // one existing child and delete the other.
+    let keep = keep_id.to_string();
+    let doomed = doomed_id.to_string();
+    let (status, _h, body) = post_form_htmx(
+        &router,
+        &session,
+        &format!("/admin/post/{post_id}/edit"),
+        &[
+            ("title", "SheetEdit"),
+            ("inline-comment-TOTAL", "2"),
+            ("inline-comment-0-id", &keep),
+            ("inline-comment-0-text", "keep me new"),
+            ("inline-comment-0-rating", "8"),
+            ("inline-comment-1-id", &doomed),
+            ("inline-comment-1-text", "delete me"),
+            ("inline-comment-1-rating", "2"),
+            ("inline-comment-1-DELETE", "on"),
+        ],
+    )
+    .await;
+    assert!(
+        status == StatusCode::OK || status == StatusCode::SEE_OTHER,
+        "sheet edit should succeed, got {status}:\n{body}"
+    );
+
+    assert_eq!(count("comment").await, before - 1, "one child deleted");
+    let pool = umbra::db::pool();
+    let (text, rating): (String, i64) =
+        sqlx::query_as("SELECT text, rating FROM comment WHERE id = ?")
+            .bind(keep_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(text, "keep me new", "kept child updated via sheet");
+    assert_eq!(rating, 8, "kept child rating updated via sheet");
+    let gone: Option<i64> = sqlx::query_scalar("SELECT id FROM comment WHERE id = ?")
+        .bind(doomed_id)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert!(gone.is_none(), "doomed child removed via sheet");
+}
+
+#[tokio::test]
+async fn sheet_edit_invalid_child_rolls_back_and_rerenders_sheet() {
+    let _g = LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login(&router).await;
+
+    let post_id = seed_post("SheetRollbackOriginal").await;
+    let before_comments = count("comment").await;
+
+    // Valid parent change + invalid child rating → the whole tx rolls
+    // back, AND the error re-render is the SHEET fragment (not a full
+    // page), carrying the inline section + the submitted values.
+    let (status, _h, body) = post_form_htmx(
+        &router,
+        &session,
+        &format!("/admin/post/{post_id}/edit"),
+        &[
+            ("title", "SheetRollbackChanged"),
+            ("inline-comment-TOTAL", "1"),
+            ("inline-comment-0-id", ""),
+            ("inline-comment-0-text", "must not persist via sheet"),
+            ("inline-comment-0-rating", "not-a-number"),
+        ],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "invalid child should re-render the sheet with an error:\n{body}"
+    );
+    // Sheet-aware re-render: the fragment is the sheet panel (with the
+    // inline formset), NOT the full-page form (no <html>/breadcrumb).
+    assert!(
+        body.contains("umbra-sheet-panel") && body.contains("inline-comment-TOTAL"),
+        "error re-render must be the sheet fragment with inlines:\n{body}"
+    );
+    assert!(
+        body.contains("must not persist via sheet"),
+        "submitted inline value must be repopulated in the sheet:\n{body}"
+    );
+
+    let pool = umbra::db::pool();
+    let title: String = sqlx::query_scalar("SELECT title FROM post WHERE id = ?")
+        .bind(post_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        title, "SheetRollbackOriginal",
+        "parent title must roll back on the sheet path too"
+    );
+    assert_eq!(
+        count("comment").await,
+        before_comments,
+        "no child may persist when the sheet submit rolled back"
+    );
 }

@@ -143,6 +143,11 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         )
         .expect("admin/_macros/field_editor.html parses");
         env.add_template(
+            "admin/_macros/inlines.html",
+            include_str!("../templates/_macros/inlines.html"),
+        )
+        .expect("admin/_macros/inlines.html parses");
+        env.add_template(
             "admin/_macros/confirm_dialog.html",
             include_str!("../templates/_macros/confirm_dialog.html"),
         )

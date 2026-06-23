@@ -1,4 +1,5 @@
 {% extends "admin/base.html" %}
+{% from "admin/_macros/inlines.html" import inline_formset %}
 {% block title %}{{ verb }} {{ model.name }} — {{ site_title }}{% endblock %}
 {% block content %}
   <div class="breadcrumb">
@@ -177,132 +178,11 @@
       {% endif %}
 
       {# Inlines: edit reverse-FK children right on the parent change
-         form. Each inline renders a formset whose rows carry a hidden
-         PK (empty = new) and, when can_delete, a DELETE checkbox. The
-         POST handler reads them back by the
-         `inline-<name>-<i>-<field>` naming scheme and saves them
-         atomically with the parent. A dependency-free "Add another"
-         clones the row template and bumps the hidden TOTAL. #}
-      {# Per-field input widget for one inline cell. `idx` may be a real
-         index or the `__IDX__` placeholder (string) for the blank
-         template; the value is then empty. #}
-      {% macro inline_field_input(name, idx, f, blank=false) %}
-        {% set fname = "inline-" ~ name ~ "-" ~ idx ~ "-" ~ f.name %}
-        {% set fval = "" if blank else f.value %}
-        {% if f.kind == "bool" %}
-          <input type="checkbox" name="{{ fname }}" value="true"{% if fval == "true" %} checked{% endif %}{% if f.readonly %} disabled{% endif %}>
-        {% elif f.kind == "select" %}
-          <select name="{{ fname }}"{% if f.readonly %} disabled{% endif %} style="width:100%;padding:4px;">
-            {% if f.nullable %}<option value="">—</option>{% endif %}
-            {% for opt in f.choices %}<option value="{{ opt.value }}"{% if fval == opt.value %} selected{% endif %}>{{ opt.label }}</option>{% endfor %}
-          </select>
-        {% elif f.kind == "textarea" or f.kind == "json" %}
-          <textarea name="{{ fname }}" rows="2"{% if f.readonly %} readonly{% endif %} style="width:100%;padding:4px;">{{ fval }}</textarea>
-        {% else %}
-          <input type="{% if f.kind == "number" %}number{% elif f.kind == "date" %}date{% elif f.kind == "time" %}time{% elif f.kind == "datetime-local" %}datetime-local{% else %}text{% endif %}" name="{{ fname }}" value="{{ fval }}"{% if f.readonly %} readonly{% endif %} style="width:100%;padding:4px;">
-        {% endif %}
-      {% endmacro %}
-
-      {% if inlines %}
-        {% for inline in inlines %}
-          <fieldset class="inline-group" data-inline="{{ inline.name }}" style="margin:1.25rem 0;border:1px solid #ddd;border-radius:8px;padding:0.75rem 1rem;">
-            <legend style="font-weight:600;padding:0 0.4rem;">{{ inline.label }}</legend>
-            <input type="hidden" name="inline-{{ inline.name }}-TOTAL" value="{{ inline.total }}" data-inline-total>
-
-            {% if inline.kind == "tabular" %}
-              <table class="inline-table" style="width:100%;border-collapse:collapse;">
-                <thead>
-                  <tr>
-                    {% for f in inline.fields %}<th style="text-align:left;padding:0.3rem;font-size:0.85rem;">{{ f.name }}</th>{% endfor %}
-                    {% if inline.can_delete %}<th style="padding:0.3rem;font-size:0.85rem;">Delete</th>{% endif %}
-                  </tr>
-                </thead>
-                <tbody data-inline-body>
-                  {% for r in inline.rows %}
-                  {% set row_idx = loop.index0 %}
-                  <tr data-inline-row data-index="{{ row_idx }}">
-                    <input type="hidden" name="inline-{{ inline.name }}-{{ row_idx }}-id" value="{{ r.id }}">
-                    {% for f in r.fields %}
-                    <td style="padding:0.3rem;">{{ inline_field_input(inline.name, row_idx, f) }}</td>
-                    {% endfor %}
-                    {% if inline.can_delete %}
-                    <td style="padding:0.3rem;text-align:center;">
-                      {% if r.id %}<input type="checkbox" name="inline-{{ inline.name }}-{{ row_idx }}-DELETE" value="on">{% endif %}
-                    </td>
-                    {% endif %}
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            {% else %}
-              <div data-inline-body>
-                {% for r in inline.rows %}
-                {% set row_idx = loop.index0 %}
-                <div data-inline-row data-index="{{ row_idx }}" style="border:1px solid #eee;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.5rem;">
-                  <input type="hidden" name="inline-{{ inline.name }}-{{ row_idx }}-id" value="{{ r.id }}">
-                  {% for f in r.fields %}
-                  <div class="field" style="margin-bottom:0.5rem;">
-                    <label style="display:block;font-size:0.85rem;">{{ f.name }}</label>
-                    {{ inline_field_input(inline.name, row_idx, f) }}
-                  </div>
-                  {% endfor %}
-                  {% if inline.can_delete and r.id %}
-                  <label style="font-size:0.85rem;"><input type="checkbox" name="inline-{{ inline.name }}-{{ row_idx }}-DELETE" value="on"> Delete</label>
-                  {% endif %}
-                </div>
-                {% endfor %}
-              </div>
-            {% endif %}
-
-            {# Blank-row template for the "Add another" JS. Index
-               placeholder __IDX__ is substituted on clone. #}
-            <template data-inline-template>
-              {% if inline.kind == "tabular" %}
-              <tr data-inline-row>
-                <input type="hidden" name="inline-{{ inline.name }}-__IDX__-id" value="">
-                {% for f in inline.fields %}
-                <td style="padding:0.3rem;">{{ inline_field_input(inline.name, "__IDX__", f, true) }}</td>
-                {% endfor %}
-                {% if inline.can_delete %}<td></td>{% endif %}
-              </tr>
-              {% else %}
-              <div data-inline-row style="border:1px solid #eee;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.5rem;">
-                <input type="hidden" name="inline-{{ inline.name }}-__IDX__-id" value="">
-                {% for f in inline.fields %}
-                <div class="field" style="margin-bottom:0.5rem;">
-                  <label style="display:block;font-size:0.85rem;">{{ f.name }}</label>
-                  {{ inline_field_input(inline.name, "__IDX__", f, true) }}
-                </div>
-                {% endfor %}
-              </div>
-              {% endif %}
-            </template>
-
-            <button type="button" class="btn" data-inline-add style="margin-top:0.5rem;">+ Add another {{ inline.label }}</button>
-          </fieldset>
-        {% endfor %}
-
-        <script>
-        (function() {
-          document.querySelectorAll('.inline-group').forEach(function(group) {
-            var totalInput = group.querySelector('[data-inline-total]');
-            var body = group.querySelector('[data-inline-body]');
-            var tpl = group.querySelector('[data-inline-template]');
-            var addBtn = group.querySelector('[data-inline-add]');
-            if (!addBtn || !tpl || !body || !totalInput) return;
-            addBtn.addEventListener('click', function() {
-              var idx = parseInt(totalInput.value, 10) || 0;
-              var html = tpl.innerHTML.replace(/__IDX__/g, String(idx));
-              var wrap = document.createElement('tbody');
-              wrap.innerHTML = html.trim();
-              var node = wrap.firstElementChild;
-              body.appendChild(node);
-              totalInput.value = String(idx + 1);
-            });
-          });
-        })();
-        </script>
-      {% endif %}
+         form. The formset markup is the ONE shared `inline_formset`
+         macro (also used by the slide-over sheet) so the field names
+         the `crud::create` / `crud::update` handler parses are
+         byte-identical in both surfaces. #}
+      {{ inline_formset(inlines) }}
 
       <div class="actions">
         {# Save is gated on the relevant verb: a new-row form needs

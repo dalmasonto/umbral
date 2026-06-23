@@ -16,7 +16,7 @@ use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column};
 use crate::engine::render;
 use crate::error::AdminError;
-use crate::rows::{fetch_rows_filtered, insert_row};
+use crate::rows::fetch_rows_filtered;
 use crate::util::{is_htmx, sanitise_form_error};
 use crate::view::{form_fields_for, form_m2m_fields_for, model_for_template};
 
@@ -129,6 +129,12 @@ pub(crate) async fn edit_sheet_handler(
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, Some(&row_strings), cfg);
     let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
+    // Inlines: existing children (prefilled) + `extra` blank rows, the
+    // same builder the full-page `edit_form` uses.
+    let inlines = match crate::inlines::build_inline_views(&model, Some(&id), cfg).await {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
     let model_view = model_for_template(&model);
 
     let password_field = cfg.and_then(|c| c.password_field.as_deref()).unwrap_or("");
@@ -141,6 +147,7 @@ pub(crate) async fn edit_sheet_handler(
                 instance_id    => id,
                 fields         => fields,
                 m2m_fields     => m2m_fields,
+                inlines        => inlines,
                 error          => "",
                 password_field => password_field,
             ),
@@ -179,6 +186,12 @@ pub(crate) async fn new_sheet(
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, None, cfg);
     let m2m_fields = form_m2m_fields_for(&model, None).await;
+    // Inlines: blank `extra` rows only (no parent PK yet), mirroring the
+    // full-page `new_form`.
+    let inlines = match crate::inlines::build_inline_views(&model, None, cfg).await {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
     let model_view = model_for_template(&model);
 
     match render(
@@ -188,6 +201,7 @@ pub(crate) async fn new_sheet(
             instance_id => "",
             fields      => fields,
             m2m_fields  => m2m_fields,
+            inlines     => inlines,
             error       => "",
         ),
     ) {
@@ -277,7 +291,11 @@ pub(crate) async fn sheet_create(
     let form: HashMap<String, String> = pairs.iter().cloned().collect();
     let multi_form: Vec<(String, String)> = pairs;
     let cfg = state.config_for(&table);
-    match insert_row(&model, &form, cfg).await {
+    // Atomic save: parent INSERT + inline children in one transaction,
+    // via the SAME shared path the full-page `crud::create` uses. A bad
+    // child rolls back the parent too.
+    match crate::handlers::crud::create_parent_and_inlines_pub(&model, &form, cfg, &multi_form).await
+    {
         Ok(new_pk) => {
             // BUG-16 admin: apply M2M selections to the auto-junction
             // tables. Same shape as `crud::create`.
@@ -338,6 +356,17 @@ pub(crate) async fn sheet_create(
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
             let m2m_fields = form_m2m_fields_for(&model, None).await;
+            // Repopulate the inline rows from the submission so a bad
+            // child re-renders the sheet with the user's in-flight inline
+            // edits intact (mirrors the full-page `create` error path).
+            let inlines =
+                crate::inlines::build_inline_views_from_submitted(&model, cfg, &multi_form);
+            // A `BadInput` from a failed inline child carries the
+            // row-level diagnostic verbatim; other errors are sanitised.
+            let error = match &e {
+                AdminError::BadInput(msg) => msg.clone(),
+                _ => sanitise_form_error(&e),
+            };
             let model_view = model_for_template(&model);
             match render(
                 "admin/sheet_create.html",
@@ -346,7 +375,8 @@ pub(crate) async fn sheet_create(
                     instance_id => "",
                     fields      => fields,
                     m2m_fields  => m2m_fields,
-                    error       => sanitise_form_error(&e),
+                    inlines     => inlines,
+                    error       => error,
                 ),
             ) {
                 Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),

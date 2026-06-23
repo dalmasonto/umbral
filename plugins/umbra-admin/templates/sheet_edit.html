@@ -7,4 +7,4 @@
   When set, a "Change password" button appears instead of a raw input.
 #}
 {% from "admin/_macros/sheet.html" import sheet %}
-{{ sheet("edit", model.name, model.table, instance_id, fields, error=error, password_field=password_field, m2m_fields=m2m_fields | default([])) }}
+{{ sheet("edit", model.name, model.table, instance_id, fields, error=error, password_field=password_field, m2m_fields=m2m_fields | default([]), inlines=inlines | default([])) }}

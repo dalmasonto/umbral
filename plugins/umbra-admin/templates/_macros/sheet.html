@@ -1,4 +1,5 @@
 {% from "admin/_macros/field_editor.html" import field_editor %}
+{% from "admin/_macros/inlines.html" import inline_formset %}
 {#
 sheet(mode, model_name, table, instance_id, fields, title, error)
 Floating right-side panel for preview and edit.
@@ -8,7 +9,7 @@ Arguments: mode="preview"|"edit"|"create", model_name, table, instance_id, field
 Phase-3 deferred: sheet stacking requires a JS state machine.
 Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
 #}
-{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="", depth=0, password_field="", m2m_fields=[]) %}
+{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="", depth=0, password_field="", m2m_fields=[], inlines=[]) %}
 {% set sheet_title = title if title else ("New " ~ model_name if mode == "create" else ("Edit " ~ model_name ~ " #" ~ instance_id if mode == "edit" else (model_name ~ " #" ~ instance_id))) %}
 {% set is_edit = mode == "edit" or mode == "create" %}
 {% set offset = depth * 40 %}
@@ -170,6 +171,13 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
         {% endif %}
       </div>
       {% endfor %}
+
+      {# Inlines: same shared formset macro the full-page change form
+         uses, so the `inline-<child>-<i>-<field>` names are identical
+         and `crud::create` / `crud::update` parse + save them
+         atomically with the parent — no sheet-specific handler. The
+         "Add another" JS in the macro re-binds on every HTMX swap. #}
+      {{ inline_formset(inlines) }}
     </form>
 
     {% else %}

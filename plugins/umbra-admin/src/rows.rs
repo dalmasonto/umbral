@@ -192,58 +192,7 @@ pub(crate) async fn fetch_rows_filtered(
     Ok(qs.fetch_as_strings().await?)
 }
 
-/// INSERT one form submission. Handles `password_field` (hash + confirm
-/// check) before delegating to [`DynQuerySet::insert_form`] and
-/// respects the merged readonly set (config + sensitive-column
-/// defaults) so the server can't be tricked into writing fields the
-/// form was supposed to skip.
-pub(crate) async fn insert_row(
-    model: &ModelMeta,
-    form: &HashMap<String, String>,
-    cfg: Option<&AdminConfig>,
-) -> Result<String, AdminError> {
-    let form_owned: HashMap<String, String>;
-    let form = if let Some(pw_col) = cfg.and_then(|c| c.password_field.as_deref()) {
-        if let Some(plaintext) = form.get(pw_col).filter(|v| !v.is_empty()) {
-            let confirm_key = format!("{pw_col}_confirm");
-            let confirm = form.get(&confirm_key).map(|s| s.as_str()).unwrap_or("");
-            if plaintext != confirm {
-                return Err(AdminError::BadInput("Passwords do not match.".to_string()));
-            }
-            let hash = umbra_auth::hash_password_async(plaintext)
-                .await
-                .map_err(|e| AdminError::BadInput(format!("password hashing failed: {e}")))?;
-            let mut owned = form.clone();
-            owned.insert(pw_col.to_string(), hash);
-            form_owned = owned;
-            &form_owned
-        } else {
-            form
-        }
-    } else {
-        form
-    };
-
-    let skip = readonly_set(model, cfg);
-    let new_int_pk = DynQuerySet::for_meta(model)
-        .insert_form(form, &skip)
-        .await?;
-    // Return the new PK as a string. For integer-PK models
-    // `insert_form` hands back the just-allocated row id; for
-    // String-PK models (e.g. `Permission`) the integer is 0 and
-    // the real PK is whatever the form supplied — read it back
-    // out of the form. The M2M post-write path in `crud.rs` uses
-    // this to address the junction's parent_id.
-    let pk_col = model.fields.iter().find(|c| c.primary_key);
-    Ok(match pk_col {
-        Some(c) if !matches!(c.ty, SqlType::SmallInt | SqlType::Integer | SqlType::BigInt) => {
-            form.get(&c.name).cloned().unwrap_or_default()
-        }
-        _ => new_int_pk.to_string(),
-    })
-}
-
-/// Transaction-aware sibling of [`insert_row`]. Same password-hashing +
+/// Transaction-aware INSERT of one form submission. Same password-hashing +
 /// readonly enforcement, but runs the INSERT on the caller's open `tx`
 /// so the parent write and its inline children commit (or roll back) as
 /// one unit. Returns the new parent PK as a string.

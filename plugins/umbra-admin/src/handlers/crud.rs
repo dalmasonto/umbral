@@ -436,6 +436,18 @@ pub(crate) async fn create(
     }
 }
 
+/// Cross-module wrapper so `handlers::sheet::sheet_create` reuses the
+/// exact same atomic parent-INSERT + inline-children save path the
+/// full-page `create` uses, keeping `save_parent_and_inlines` private.
+pub(crate) async fn create_parent_and_inlines_pub(
+    model: &umbra::migrate::ModelMeta,
+    form: &HashMap<String, String>,
+    cfg: Option<&crate::config::AdminConfig>,
+    multi_form: &[(String, String)],
+) -> Result<String, AdminError> {
+    save_parent_and_inlines(model, None, form, cfg, multi_form).await
+}
+
 /// Save a parent row plus all its inline children atomically.
 ///
 /// `existing_pk` is `Some((pk_col, pk_value))` for an UPDATE, `None` for
@@ -611,6 +623,26 @@ pub(crate) async fn update(
         }
         let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
         let inlines = crate::inlines::build_inline_views_from_submitted(&model, cfg, &multi_form);
+        // Sheet-aware: an invalid field from the slide-over sheet
+        // re-renders the sheet fragment (same shared handler).
+        if is_htmx(&headers) {
+            let password_field = cfg.and_then(|c| c.password_field.as_deref()).unwrap_or("");
+            return match render(
+                "admin/sheet_edit.html",
+                context!(
+                    model          => model_for_template(&model),
+                    instance_id    => id,
+                    fields         => fields,
+                    m2m_fields     => m2m_fields,
+                    inlines        => inlines,
+                    error          => "",
+                    password_field => password_field,
+                ),
+            ) {
+                Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
+                Err(e2) => e2.into_response(),
+            };
+        }
         let apps = sidebar_apps(&state, &user).await;
         let breadcrumbs = vec![
             serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -718,6 +750,30 @@ pub(crate) async fn update(
             let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
             let inlines =
                 crate::inlines::build_inline_views_from_submitted(&model, cfg, &multi_form);
+            // Sheet-aware error re-render: a bad submit from the slide-over
+            // sheet (HTMX, posting to this same shared handler) re-renders
+            // the SHEET fragment — keeping the user's values + the error
+            // in the open panel — rather than a full page. Mirrors the
+            // `_save_continue` → `edit_sheet_handler` success precedent.
+            if is_htmx(&headers) {
+                let password_field =
+                    cfg.and_then(|c| c.password_field.as_deref()).unwrap_or("");
+                return match render(
+                    "admin/sheet_edit.html",
+                    context!(
+                        model          => model_for_template(&model),
+                        instance_id    => id,
+                        fields         => fields,
+                        m2m_fields     => m2m_fields,
+                        inlines        => inlines,
+                        error          => banner_error,
+                        password_field => password_field,
+                    ),
+                ) {
+                    Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
+                    Err(e2) => e2.into_response(),
+                };
+            }
             let apps = sidebar_apps(&state, &user).await;
             let breadcrumbs = vec![
                 serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
