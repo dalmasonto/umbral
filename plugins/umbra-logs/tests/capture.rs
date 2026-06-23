@@ -23,6 +23,13 @@ use umbra_logs::{LogsPlugin, RequestLog, flush, request_log};
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
 
+/// Serialises the DB/`PENDING`-touching tests. `flush()` drains the
+/// process-global in-flight capture buffer, so two tests flushing in parallel
+/// can each drain the other's spawned insert before it's registered — a
+/// #30-family race that flakes under full-workspace load. Every test that
+/// `send()`s + `flush()`es holds this for the duration.
+static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Boot the app + DB exactly once for the whole test binary. The capture
 /// layer reads its config ambiently, so all tests in this file share the
 /// default config (`sample_rate = 1.0`, `min_status = 0`, default exclusions).
@@ -102,6 +109,7 @@ async fn count_path(path: &str) -> i64 {
 /// (a) The capture layer records a row with the right method/path/status.
 #[tokio::test]
 async fn records_request_with_method_path_status() {
+    let _guard = TEST_LOCK.lock().await;
     boot().await;
     let path = "/hello";
 
@@ -133,6 +141,7 @@ async fn records_request_with_method_path_status() {
 /// (b) An excluded prefix (the default `/health`) is NOT logged.
 #[tokio::test]
 async fn excluded_prefix_is_not_logged() {
+    let _guard = TEST_LOCK.lock().await;
     boot().await;
     let path = "/health";
 
@@ -198,6 +207,7 @@ fn default_exclusions_drop_static_and_health() {
 /// (d) `RequestLog` round-trips through the ORM: create then read back.
 #[tokio::test]
 async fn request_log_round_trips_through_orm() {
+    let _guard = TEST_LOCK.lock().await;
     boot().await;
 
     let created = RequestLog::objects()
