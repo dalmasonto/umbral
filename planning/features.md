@@ -225,7 +225,7 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: Defer until a concrete app needs it. When needed, use `fluent` (Mozilla's localization system) rather than gettext — it's modern, designed for software, and has a Rust crate. Add `LocaleMiddleware` that sets language from `Accept-Language` or a cookie.
 
-51. [ ] **Form validation framework** 🟡 Medium
+51. [x] **Form validation framework** 🟡 Medium — DONE (verified 2026-06-23): the declarative validation framework exists — `#[umbra(email|url|regex|min_length|max_length|length(min,max)|min|max)]` + `Slug`/`Email`/`Url` newtype wrappers (`orm/validators.rs`), producing per-field `WriteError::Validator` maps surfaced as admin inline errors + REST `400 {field:[err]}`. Under `#[umbra(...)]` with custom validators (not a separate `#[validate]`/the validator crate), same capability.
     > Why: Declarative validators (`#[validate(min_length = 5)]`) that produce per-field error maps. Currently validation is ad-hoc; a unified framework would replace scattered `if` checks in handlers.
     >
     > How: Use `validator` crate (already popular in the Rust ecosystem). Integrate with the admin (render errors inline) and REST (return `400` with `{"field": ["error"]}`). The derive macro can read `#[validate(...)]` attributes alongside `#[umbra(...)]` and emit validation logic.
