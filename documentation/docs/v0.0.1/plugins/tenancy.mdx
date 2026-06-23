@@ -1,6 +1,6 @@
 ---
 title: Multitenancy (umbra-tenants)
-description: Schema-per-tenant multitenancy — one Postgres database, one schema per tenant, a shared public for cross-tenant apps. The django-tenants shape.
+description: Multitenancy two ways — schema-per-tenant (one Postgres database, a schema per tenant, the django-tenants shape) and database-per-tenant (a separate database per tenant, stronger isolation).
 sidebar_position: 22
 icon: building
 tags:
@@ -110,6 +110,31 @@ cargo run -- migrate_schemas
 ```
 
 Adding a tenant-owned model later is the usual loop: `makemigrations`, `migrate` (public), then `migrate_schemas` to roll the new table into every tenant's schema.
+
+## Database-per-tenant (the stronger-isolation strategy)
+
+Schema-per-tenant keeps one database; **database-per-tenant** gives each tenant its **own database** — stronger isolation (separate databases, not schema namespaces) at the cost of one connection pool per tenant. Opt in with `TenantStrategy::Database`:
+
+```rust
+use umbra_tenants::{TenantsPlugin, TenantStrategy};
+
+TenantsPlugin::new()
+    .strategy(TenantStrategy::Database)
+    .shared_apps(["tenants"])      // the registry still lives in the default DB
+```
+
+In this mode the `TenantRouter` routes through `db_for_read`/`db_for_write` instead of `schema_for_table`: a tenant-owned model under an active tenant resolves to **that tenant's database pool**; SHARED models (the `tenant` registry) stay on the default pool; no schema qualification happens (separate databases need none).
+
+You provision each tenant's database (creating a Postgres database is an ops step, not something a request transaction can do) and hand the plugin a connected pool. `register_tenant_database` records the registry row, registers the pool at runtime, and migrates the tenant apps into it:
+
+```rust
+let pool = umbra::db::connect("postgres://…/acme_db").await?;
+plugin.register_tenant_database("Acme", "acme_db", "acme.example.com", pool).await?;
+```
+
+The pool lands in a runtime registry (`umbra::db::register_tenant_pool`), so `pool_for_dispatched` resolves it even though it was added after `App::build`. Each tenant database carries its own `umbra_migrations` ledger.
+
+**Picking a strategy.** Schema-per-tenant is the default django-tenants shape — cheaper (one pool, zero-round-trip routing), ideal for many small tenants. Database-per-tenant is for stronger isolation, per-tenant backup/restore, compliance boundaries, or a few large tenants — at the cost of a pool per tenant.
 
 ## How resolution works
 

@@ -31,6 +31,33 @@
 //!
 //! When you add more tenants later, `cargo run -- migrate_schemas` (re)creates
 //! and migrates every active tenant's schema, idempotently.
+//!
+//! ## Database-per-tenant (the stronger-isolation alternative)
+//!
+//! This example uses schema-per-tenant. For a **database per tenant** — one
+//! whole Postgres database per tenant, the strongest isolation — flip the
+//! strategy and onboard each tenant with its own pool. The operator provisions
+//! the database (and opens the pool); the framework owns routing + the registry
+//! row + migrating the tenant apps into that database:
+//!
+//! ```ignore
+//! use umbra_tenants::{TenantStrategy, TenantsPlugin};
+//!
+//! let plugin = TenantsPlugin::new()
+//!     .strategy(TenantStrategy::Database)   // many DBs, not many schemas
+//!     .shared_apps(["tenants"]);            // the registry stays in the app DB
+//!
+//! // …App::builder().plugin(plugin)…build()…
+//!
+//! // Operator created the `acme_db` Postgres database and opened a pool for it:
+//! let acme_pool = umbra::db::connect("postgres://user:pass@host/acme_db").await?;
+//! plugin
+//!     .register_tenant_database("Acme", "acme_db", "acme.localhost", acme_pool)
+//!     .await?;
+//! // The registry row lands in the default DB; `acme_db` gets its own
+//! // `umbra_migrations` ledger + the tenant tables. A request resolving to
+//! // `acme.localhost` then routes its tenant-owned queries to the `acme_db` pool.
+//! ```
 
 use serde::{Deserialize, Serialize};
 

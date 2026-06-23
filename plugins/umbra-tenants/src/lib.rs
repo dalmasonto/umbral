@@ -45,9 +45,36 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use umbra::db::{DatabaseRouter, RouteContext, Schema, TenantKey};
+use umbra::db::{Alias, DatabaseRouter, DbPool, RouteContext, Schema, TenantKey};
 use umbra::migrate::ModelMeta;
 use umbra::prelude::*;
+
+/// Which isolation strategy the plugin wires.
+///
+/// The plugin defaults to [`TenantStrategy::Schema`] — every existing call site
+/// and test keeps the django-tenants shape (one database, one schema per tenant)
+/// byte-for-byte. Opt into [`TenantStrategy::Database`] with
+/// [`TenantsPlugin::strategy`] for a *database per tenant* (stronger isolation,
+/// the operator provisions each tenant's database/pool).
+///
+/// The two modes are mutually exclusive in the [`TenantRouter`]:
+/// - **Schema** routes via `schema_for_table` (qualify tenant tables to the
+///   tenant's PG schema; `db_for_read`/`db_for_write` keep the default pool).
+/// - **Database** routes via `db_for_read`/`db_for_write` (pick the tenant's
+///   pool by alias; `schema_for_table` returns `None` — separate databases need
+///   no schema qualification).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TenantStrategy {
+    /// One database, one Postgres schema per tenant. Zero extra round-trips
+    /// (the SQL builder schema-qualifies tenant tables). **Default.**
+    #[default]
+    Schema,
+    /// One database (pool) per tenant. Stronger isolation; the operator
+    /// provisions the database and the pool, then onboards it via
+    /// [`TenantsPlugin::register_tenant_database`]. In this mode a tenant's
+    /// `schema_name` field names the *pool alias / database*, not a PG schema.
+    Database,
+}
 
 /// The tenant registry. Lives in `public` (a SHARED app) — every tenant
 /// resolution reads it without a tenant context, so it stays in the shared
@@ -162,6 +189,9 @@ pub struct TenantsPlugin {
     /// What to do when no active tenant matches. Default:
     /// [`MissingTenant::FallThroughToPublic`].
     on_missing: MissingTenant,
+    /// Schema-per-tenant (default) vs database-per-tenant. Threaded into the
+    /// [`TenantRouter`] at `on_ready`.
+    strategy: TenantStrategy,
 }
 
 impl Default for TenantsPlugin {
@@ -180,7 +210,17 @@ impl TenantsPlugin {
             subdomain_base: None,
             tenant_header: Some("X-Tenant".to_string()),
             on_missing: MissingTenant::default(),
+            strategy: TenantStrategy::default(),
         }
+    }
+
+    /// Pick the isolation strategy. Default [`TenantStrategy::Schema`] (one DB,
+    /// schema per tenant). [`TenantStrategy::Database`] routes each tenant to
+    /// its own database/pool — onboard those via
+    /// [`Self::register_tenant_database`].
+    pub fn strategy(mut self, strategy: TenantStrategy) -> Self {
+        self.strategy = strategy;
+        self
     }
 
     /// Override the SHARED app labels (tables that stay in `public`). The
@@ -291,36 +331,119 @@ impl TenantsPlugin {
         );
         Ok(saved)
     }
+
+    /// Onboard a tenant in **database-per-tenant** mode
+    /// ([`TenantStrategy::Database`]) — the sibling of [`Self::create_tenant`].
+    ///
+    /// `alias` is the tenant's pool alias **and** its `schema_name` field (in
+    /// Database mode `schema_name` names the pool/database, not a PG schema);
+    /// it's validated as a safe identifier the same way. Steps:
+    ///
+    /// 1. Insert the [`Tenant`] registry row into the **default** database (the
+    ///    registry lives with the app, not inside any tenant DB — there's no
+    ///    tenant context here, so the router routes `tenant` to default).
+    /// 2. Register `pool` under `alias` at runtime
+    ///    ([`umbra::db::register_tenant_pool`]) so the [`TenantRouter`] can route
+    ///    that tenant's queries to it.
+    /// 3. Migrate the **tenant apps** (every plugin not in `shared_apps`) into
+    ///    that pool ([`umbra::migrate::migrate_apps_into_pool`]) — the tenant
+    ///    database gets its own `umbra_migrations` ledger.
+    ///
+    /// The operator provisions the actual database and opens the pool
+    /// (`CREATE DATABASE` can't run in a transaction and is an ops concern); the
+    /// framework owns routing, the registry row, and migration. First-write-wins
+    /// on the pool registry: re-onboarding the same alias keeps the original
+    /// pool.
+    pub async fn register_tenant_database(
+        &self,
+        name: impl Into<String>,
+        alias: impl Into<String>,
+        domain: impl Into<String>,
+        pool: DbPool,
+    ) -> Result<Tenant, TenantError> {
+        let alias = alias.into();
+        // Validate up front: the alias doubles as schema_name, so it must be a
+        // safe identifier (it names a pool, never reaches SQL as a schema, but
+        // keeping the same gate means a tenant can be migrated to Schema mode
+        // later without renaming).
+        Schema::new(alias.clone()).ok_or_else(|| TenantError::InvalidSchemaName(alias.clone()))?;
+
+        // 1. Registry row in the default DB.
+        let row = Tenant {
+            id: 0,
+            schema_name: alias.clone(),
+            name: name.into(),
+            domain: domain.into(),
+            is_active: true,
+            created_at: Utc::now(),
+        };
+        let saved = Tenant::objects().create(row).await?;
+
+        // 2. Register the runtime pool under the alias.
+        umbra::db::register_tenant_pool(alias.clone(), pool);
+
+        // 3. Migrate the tenant apps into the tenant's own database.
+        let migrated =
+            umbra::migrate::migrate_apps_into_pool(&alias, &self.shared_app_set()).await?;
+        tracing::info!(
+            alias = %alias,
+            domain = %saved.domain,
+            migrated,
+            "umbra-tenants: onboarded tenant database"
+        );
+        Ok(saved)
+    }
 }
 
-/// The schema-per-tenant [`DatabaseRouter`].
+/// The tenant [`DatabaseRouter`]. Its routing seam depends on the configured
+/// [`TenantStrategy`] — the two modes are mutually exclusive:
 ///
-/// `schema_for_table` is the whole policy:
+/// **Schema mode** (`schema_for_table` is the whole policy):
 /// - a SHARED table → `None` (stays in `public`),
 /// - a tenant-owned table under a tenant context → the tenant's schema,
 /// - a tenant-owned table with **no** tenant context → `None` (public — the
 ///   bare-domain / background path).
+///   `db_for_read`/`db_for_write` keep the defaults (one database).
 ///
-/// `db_for_read` / `db_for_write` keep the defaults: schema-per-tenant is ONE
-/// database, so there's no per-tenant pool routing.
+/// **Database mode** (`db_for_read`/`db_for_write` pick the pool):
+/// - a SHARED table, or no tenant ctx → the default alias,
+/// - a tenant-owned table under a tenant ctx whose **alias is registered** →
+///   the tenant's pool alias (its `schema_name`),
+/// - a tenant-owned table under a tenant ctx whose alias is **not yet
+///   onboarded** → the default alias (the not-yet-registered fallback — avoids
+///   a panic resolving an unknown pool).
+///   `schema_for_table` returns `None` (separate databases need no schema
+///   qualification).
 #[derive(Debug, Clone)]
 pub struct TenantRouter {
     shared_tables: Arc<HashSet<String>>,
+    strategy: TenantStrategy,
 }
 
 impl TenantRouter {
-    /// Build a router from the SHARED table-name set (the tables that stay in
-    /// `public`).
+    /// Build a schema-mode router from the SHARED table-name set (the tables
+    /// that stay in `public`). Kept for back-compat; [`Self::with_strategy`] is
+    /// the general constructor.
     pub fn new(shared_tables: HashSet<String>) -> Self {
+        Self::with_strategy(shared_tables, TenantStrategy::Schema)
+    }
+
+    /// Build a router for an explicit [`TenantStrategy`].
+    pub fn with_strategy(shared_tables: HashSet<String>, strategy: TenantStrategy) -> Self {
         Self {
             shared_tables: Arc::new(shared_tables),
+            strategy,
         }
     }
 }
 
 impl DatabaseRouter for TenantRouter {
     fn schema_for_table(&self, ctx: &RouteContext, table: &str) -> Option<Schema> {
-        // SHARED table → public, regardless of tenant context.
+        // Database mode: separate databases, no schema qualification ever.
+        if self.strategy == TenantStrategy::Database {
+            return None;
+        }
+        // Schema mode. SHARED table → public, regardless of tenant context.
         if self.shared_tables.contains(table) {
             return None;
         }
@@ -329,6 +452,47 @@ impl DatabaseRouter for TenantRouter {
         match ctx.tenant() {
             Some(key) => Schema::new(key.as_str()),
             None => None,
+        }
+    }
+
+    fn db_for_read(&self, model: &ModelMeta, ctx: &RouteContext) -> Alias {
+        self.db_for(model, ctx)
+    }
+
+    fn db_for_write(&self, model: &ModelMeta, ctx: &RouteContext) -> Alias {
+        self.db_for(model, ctx)
+    }
+}
+
+impl TenantRouter {
+    /// Shared read/write pool resolution for database mode. In schema mode this
+    /// always falls back to the model's static alias (the trait default), so
+    /// schema mode's pool selection is byte-identical to `DefaultRouter`.
+    fn db_for(&self, model: &ModelMeta, ctx: &RouteContext) -> Alias {
+        // The model's static alias (per-model `Model::DATABASE` / per-plugin
+        // `Plugin::database()`, folded into the registry at build), else
+        // `"default"` — exactly what the `DatabaseRouter` trait default resolves
+        // to. Schema mode keeps this verbatim, so its pool selection is
+        // byte-identical to `DefaultRouter`.
+        let default = || match umbra::migrate::model_alias(&model.name) {
+            Some(a) => Alias::new(a),
+            None => Alias::new("default"),
+        };
+        if self.strategy != TenantStrategy::Database {
+            return default();
+        }
+        // SHARED model (the Tenant registry, auth, …) → default DB, always.
+        if self.shared_tables.contains(&model.table) {
+            return default();
+        }
+        match ctx.tenant() {
+            // Route to the tenant's pool — but only once its database has been
+            // onboarded (register_tenant_database). An un-onboarded tenant
+            // falls back to default rather than panicking on an unknown alias.
+            Some(key) if umbra::db::pool_alias_registered(key.as_str()) => {
+                Alias::new(key.as_str())
+            }
+            _ => default(),
         }
     }
 }
@@ -414,7 +578,7 @@ impl Plugin for TenantsPlugin {
         // the app also called `App::builder().router(...)` (installed during
         // build, before on_ready), that one already won — document "don't also
         // set .router(...)".
-        let router = TenantRouter::new(self.shared_table_set());
+        let router = TenantRouter::with_strategy(self.shared_table_set(), self.strategy);
         umbra::db::install_router_from_plugin(Arc::new(router));
         Ok(())
     }
@@ -643,5 +807,90 @@ mod tests {
     fn shared_apps_always_includes_tenants() {
         let plugin = TenantsPlugin::new().shared_apps(["auth", "sessions"]);
         assert!(plugin.shared_app_set().contains("tenants"));
+    }
+
+    // -- Database-mode (TenantStrategy::Database) router tests ----------------
+
+    fn meta_for_table(table: &str) -> ModelMeta {
+        // A minimal late-bound model meta; db_for only reads `name` + `table`.
+        ModelMeta {
+            name: format!("Model_{table}"),
+            table: table.to_string(),
+            ..ModelMeta::default()
+        }
+    }
+
+    /// Register a throwaway in-memory sqlite pool under a unique alias so
+    /// `pool_alias_registered(alias)` is true for it. Uses a process-unique
+    /// alias to avoid the global pool-registry racing other tests (see the #30
+    /// process-global-state convention).
+    async fn register_unique_pool() -> String {
+        let alias = format!(
+            "tnt_test_db_{}_{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("sqlite mem pool");
+        umbra::db::register_tenant_pool(alias.clone(), umbra::db::DbPool::Sqlite(pool));
+        alias
+    }
+
+    #[tokio::test]
+    async fn db_mode_routes_tenant_model_to_registered_alias() {
+        let alias = register_unique_pool().await;
+        let router = TenantRouter::with_strategy(shared_set(&["tenant"]), TenantStrategy::Database);
+        let ctx = RouteContext::new().with_tenant(TenantKey::new(alias.clone()));
+        let post = meta_for_table("post");
+        // Tenant-owned model under a tenant ctx whose alias IS registered →
+        // routes to the tenant's pool for both read and write.
+        assert_eq!(router.db_for_write(&post, &ctx).as_str(), alias);
+        assert_eq!(router.db_for_read(&post, &ctx).as_str(), alias);
+        // schema_for_table is always None in Database mode.
+        assert!(router.schema_for_table(&ctx, "post").is_none());
+    }
+
+    #[tokio::test]
+    async fn db_mode_falls_back_to_default_when_alias_not_registered() {
+        let router = TenantRouter::with_strategy(shared_set(&["tenant"]), TenantStrategy::Database);
+        // Alias that was never registered → not-yet-onboarded fallback.
+        let ctx = RouteContext::new().with_tenant(TenantKey::new("never_onboarded_xyz"));
+        let post = meta_for_table("post");
+        assert_eq!(router.db_for_write(&post, &ctx).as_str(), "default");
+        assert_eq!(router.db_for_read(&post, &ctx).as_str(), "default");
+    }
+
+    #[tokio::test]
+    async fn db_mode_shared_model_always_default() {
+        let alias = register_unique_pool().await;
+        let router = TenantRouter::with_strategy(shared_set(&["tenant"]), TenantStrategy::Database);
+        // SHARED model under a tenant ctx whose alias IS registered → still
+        // default (the registry lives in the app DB).
+        let ctx = RouteContext::new().with_tenant(TenantKey::new(alias));
+        let tenant = meta_for_table("tenant");
+        assert_eq!(router.db_for_write(&tenant, &ctx).as_str(), "default");
+        assert_eq!(router.db_for_read(&tenant, &ctx).as_str(), "default");
+    }
+
+    #[tokio::test]
+    async fn db_mode_no_tenant_ctx_is_default() {
+        let router = TenantRouter::with_strategy(shared_set(&["tenant"]), TenantStrategy::Database);
+        let ctx = RouteContext::new();
+        let post = meta_for_table("post");
+        assert_eq!(router.db_for_write(&post, &ctx).as_str(), "default");
+        assert_eq!(router.db_for_read(&post, &ctx).as_str(), "default");
+    }
+
+    #[test]
+    fn schema_mode_db_for_is_default_unchanged() {
+        // In the default (Schema) strategy db_for_read/write never deviate from
+        // the model's static alias — schema mode pool selection is byte-
+        // identical to DefaultRouter.
+        let router = TenantRouter::new(shared_set(&["tenant"]));
+        let ctx = RouteContext::new().with_tenant(TenantKey::new("acme"));
+        let post = meta_for_table("post");
+        assert_eq!(router.db_for_write(&post, &ctx).as_str(), "default");
+        assert_eq!(router.db_for_read(&post, &ctx).as_str(), "default");
     }
 }

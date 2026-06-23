@@ -1674,6 +1674,148 @@ async fn run_tenant_apps_in_postgres_schema(
     Ok(applied_count)
 }
 
+/// Migrate the **tenant** apps into the pool registered under `alias`
+/// (database-per-tenant). The db-per-tenant sibling of [`run_for_schema`]:
+/// where the schema variant pins `search_path` inside one shared Postgres
+/// database, this targets a *whole separate database/pool* registered at
+/// runtime via [`register_tenant_pool`](crate::db::register_tenant_pool) and
+/// resolved here through [`pool_for_dispatched`](crate::db::pool_for_dispatched)
+/// (which sees dynamic pools). No schema games — per-database migration
+/// tracking is just that database's own `umbra_migrations` table.
+///
+/// Like the schema variant it applies only the **tenant apps**: every plugin
+/// NOT in `shared_apps` (the shared registry/auth tables live in the default
+/// DB and are migrated there by the normal [`run`]). A migration file whose
+/// declared plugin is shared is skipped without a tracking row. Idempotent:
+/// re-running applies only what the tenant DB's own ledger hasn't recorded.
+///
+/// Works on both backends — a tenant pool can be Postgres (the production case)
+/// or SQLite (tests). Unlike the alias-routed [`run_in`], this does NOT filter
+/// ops by [`table_alias`]: a tenant-owned model's static alias is still
+/// `"default"`, so the per-alias filter would wrongly exclude it from the
+/// tenant DB. The shared/tenant split is the *only* filter here.
+pub async fn migrate_apps_into_pool(
+    alias: &str,
+    shared_apps: &std::collections::HashSet<String>,
+) -> Result<u64, MigrateError> {
+    migrate_apps_into_pool_in(Path::new(MIGRATIONS_DIR), alias, shared_apps).await
+}
+
+/// Same as [`migrate_apps_into_pool`] but takes an explicit migrations base
+/// directory. The entry tests drive.
+pub async fn migrate_apps_into_pool_in(
+    dir: &Path,
+    alias: &str,
+    shared_apps: &std::collections::HashSet<String>,
+) -> Result<u64, MigrateError> {
+    match crate::db::pool_for_dispatched(alias) {
+        crate::db::DbPool::Postgres(p) => {
+            migrate_tenant_apps_into_pg_pool(dir, shared_apps, p).await
+        }
+        crate::db::DbPool::Sqlite(p) => {
+            migrate_tenant_apps_into_sqlite_pool(dir, shared_apps, p).await
+        }
+    }
+}
+
+/// Postgres tenant-DB apply loop. Mirrors [`run_in_postgres_for_alias`] but the
+/// only filter is the shared/tenant split — every plugin not in `shared_apps`
+/// is applied in full into this database.
+async fn migrate_tenant_apps_into_pg_pool(
+    dir: &Path,
+    shared_apps: &std::collections::HashSet<String>,
+    pool: &sqlx::PgPool,
+) -> Result<u64, MigrateError> {
+    ensure_tracking_table_postgres(pool).await?;
+    let applied = applied_names_postgres(pool).await?;
+
+    let mut applied_count: u64 = 0;
+    for plugin in plugin_order() {
+        if shared_apps.contains(&plugin) {
+            continue;
+        }
+        let plugin_dir = dir.join(&plugin);
+        for path in list_migration_files(&plugin_dir)? {
+            let file = read_migration_file(&path)?;
+            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+                continue;
+            }
+            if shared_apps.contains(&file.plugin) {
+                continue;
+            }
+            let mut tx = pool.begin().await?;
+            for op in &file.operations {
+                for sql in render_operation_for(op, "postgres") {
+                    sqlx::query(&sql).execute(&mut *tx).await?;
+                }
+            }
+            let snapshot_hash = file.snapshot_after.hash();
+            let applied_at = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO umbra_migrations (plugin, name, applied_at, snapshot_hash) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(&file.plugin)
+            .bind(&file.id)
+            .bind(&applied_at)
+            .bind(&snapshot_hash)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            applied_count += 1;
+        }
+    }
+    Ok(applied_count)
+}
+
+/// SQLite tenant-DB apply loop (tests). Same shape as the Postgres variant.
+async fn migrate_tenant_apps_into_sqlite_pool(
+    dir: &Path,
+    shared_apps: &std::collections::HashSet<String>,
+    pool: &sqlx::SqlitePool,
+) -> Result<u64, MigrateError> {
+    ensure_tracking_table_sqlite(pool).await?;
+    let applied = applied_names_sqlite(pool).await?;
+
+    let mut applied_count: u64 = 0;
+    for plugin in plugin_order() {
+        if shared_apps.contains(&plugin) {
+            continue;
+        }
+        let plugin_dir = dir.join(&plugin);
+        for path in list_migration_files(&plugin_dir)? {
+            let file = read_migration_file(&path)?;
+            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+                continue;
+            }
+            if shared_apps.contains(&file.plugin) {
+                continue;
+            }
+            let mut tx = pool.begin().await?;
+            for op in &file.operations {
+                for sql in render_operation_for(op, "sqlite") {
+                    sqlx::query(&sql).execute(&mut *tx).await?;
+                }
+            }
+            let snapshot_hash = file.snapshot_after.hash();
+            let applied_at = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO umbra_migrations (plugin, name, applied_at, snapshot_hash) \
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(&file.plugin)
+            .bind(&file.id)
+            .bind(&applied_at)
+            .bind(&snapshot_hash)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            applied_count += 1;
+        }
+    }
+    Ok(applied_count)
+}
+
 /// `ensure_tracking_table_postgres` against an explicit connection (so the
 /// caller can pin `search_path` first and have the table created in the tenant
 /// schema rather than `public`).
