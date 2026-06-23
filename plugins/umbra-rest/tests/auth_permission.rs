@@ -46,6 +46,19 @@ struct Archive {
 
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 
+/// Every test in this binary shares one ambient SQLite pool (created once in
+/// `boot()` and published into umbra-core's process-wide `OnceLock`s by
+/// `App::build()`). The default test harness runs these `#[tokio::test]`s on
+/// parallel OS threads, so they hammer that single pool concurrently — which
+/// is what tripped the intermittent sqlite SIGSEGV under full-workspace runs
+/// (gaps2 #30). Serialising the test bodies on this lock makes the shared pool
+/// single-user-at-a-time. Mirrors the `TEST_LOCK` pattern in
+/// `plugins/umbra-signals/tests/*`.
+fn test_lock() -> &'static tokio::sync::Mutex<()> {
+    static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    &TEST_LOCK
+}
+
 async fn boot() -> &'static axum::Router {
     BOOT.get_or_init(|| async {
         let settings = umbra::Settings::from_env().expect("figment defaults");
@@ -148,6 +161,7 @@ async fn send(
 
 #[tokio::test]
 async fn readonly_list_succeeds_anonymously() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, _) = send(app, "GET", "/api/note/", None, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -155,6 +169,7 @@ async fn readonly_list_succeeds_anonymously() {
 
 #[tokio::test]
 async fn readonly_retrieve_succeeds_anonymously() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, _) = send(app, "GET", "/api/note/1", None, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -162,6 +177,7 @@ async fn readonly_retrieve_succeeds_anonymously() {
 
 #[tokio::test]
 async fn readonly_create_returns_403() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, body) = send(
         app,
@@ -177,6 +193,7 @@ async fn readonly_create_returns_403() {
 
 #[tokio::test]
 async fn readonly_delete_returns_403() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, _) = send(app, "DELETE", "/api/note/1", Some(1), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -188,6 +205,7 @@ async fn readonly_delete_returns_403() {
 
 #[tokio::test]
 async fn isstaff_anonymous_returns_401() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, body) = send(app, "GET", "/api/secret/", None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -196,6 +214,7 @@ async fn isstaff_anonymous_returns_401() {
 
 #[tokio::test]
 async fn isstaff_non_staff_returns_403() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, body) = send(app, "GET", "/api/secret/", Some(1), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -204,6 +223,7 @@ async fn isstaff_non_staff_returns_403() {
 
 #[tokio::test]
 async fn isstaff_staff_user_succeeds() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, _) = send(app, "GET", "/api/secret/", Some(99), None).await;
     assert_eq!(status, StatusCode::OK);
@@ -215,6 +235,7 @@ async fn isstaff_staff_user_succeeds() {
 
 #[tokio::test]
 async fn opt_in_views_list_exposed() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, _) = send(app, "GET", "/api/archive/", None, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -222,6 +243,7 @@ async fn opt_in_views_list_exposed() {
 
 #[tokio::test]
 async fn opt_in_views_retrieve_exposed() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, _) = send(app, "GET", "/api/archive/1", None, None).await;
     assert_eq!(status, StatusCode::OK);
@@ -229,6 +251,7 @@ async fn opt_in_views_retrieve_exposed() {
 
 #[tokio::test]
 async fn opt_in_views_create_returns_404() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, body) = send(
         app,
@@ -252,6 +275,7 @@ async fn opt_in_views_create_returns_404() {
 
 #[tokio::test]
 async fn opt_in_views_delete_returns_404() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, _) = send(app, "DELETE", "/api/archive/1", Some(99), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -259,6 +283,7 @@ async fn opt_in_views_delete_returns_404() {
 
 #[tokio::test]
 async fn opt_in_views_update_returns_404() {
+    let _guard = test_lock().lock().await;
     let app = boot().await.clone();
     let (status, _) = send(
         app,

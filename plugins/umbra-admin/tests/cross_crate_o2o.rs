@@ -79,6 +79,16 @@ pub struct AuditNote {
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
 
+/// Every test in this binary shares one ambient SQLite pool (created once in
+/// `boot()` and published into umbra-core's process-wide `OnceLock`s by
+/// `App::build()`). The default test harness runs these `#[tokio::test]`s on
+/// parallel OS threads, so they insert into / read from that single pool
+/// concurrently, which is the within-binary contention that flaked under
+/// full-workspace runs (gaps2 #30). Serialising the test bodies on this lock
+/// makes the shared pool single-user-at-a-time. Mirrors the `NOTE_LOCK`
+/// pattern in `plugins/umbra-admin/tests/phase2_sheet.rs`.
+static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn boot() {
     BOOT.get_or_init(|| async {
         let settings = umbra::Settings::from_env().expect("figment defaults");
@@ -173,6 +183,7 @@ async fn make_user(username: &str) -> AuthUser {
 
 #[tokio::test]
 async fn cross_crate_o2o_returns_some_for_matching_child() {
+    let _guard = TEST_LOCK.lock().await;
     boot().await;
     let user = make_user("alpha-o2o").await;
 
@@ -197,6 +208,7 @@ async fn cross_crate_o2o_returns_some_for_matching_child() {
 
 #[tokio::test]
 async fn cross_crate_o2o_returns_none_when_no_child_exists() {
+    let _guard = TEST_LOCK.lock().await;
     boot().await;
     let user = make_user("beta-no-child").await;
 
@@ -209,6 +221,7 @@ async fn cross_crate_o2o_returns_none_when_no_child_exists() {
 
 #[tokio::test]
 async fn cross_crate_o2o_isolates_per_parent_row() {
+    let _guard = TEST_LOCK.lock().await;
     boot().await;
     let a = make_user("iso-a").await;
     let b = make_user("iso-b").await;
@@ -236,6 +249,7 @@ async fn two_distinct_children_emit_distinct_method_names() {
     // (`user`) instead of the child struct, both calls would be
     // `auth_user.user()` and trigger E0034 "multiple applicable items
     // in scope".
+    let _guard = TEST_LOCK.lock().await;
     boot().await;
     let user = make_user("two-children").await;
 
@@ -277,6 +291,7 @@ async fn non_unique_fk_does_not_get_reverse_o2o_accessor() {
     // works for AuditNote — that's gap #30, not what this test is
     // proving, but a quick check keeps the test file honest about
     // the difference between the two emissions.
+    let _guard = TEST_LOCK.lock().await;
     boot().await;
     let user = make_user("audit-target").await;
     let pool = umbra::db::pool();

@@ -11,12 +11,23 @@
 use base64::Engine as _;
 use umbra::orm::{MaskError, MaskKeyring};
 
+/// `UMBRA_MASK_PUBLIC_KEY` is process-global. The two tests that mutate it
+/// (`absent_env_key_returns_no_keyring` removes it; the `from_env` cases set
+/// it) race under the default parallel test harness: one removes the var and
+/// reads it back while the other sets it, so the absent-key test can observe a
+/// malformed value and vice-versa. Serialising the env-mutating tests on this
+/// lock makes the set/remove/read sequence single-owner-at-a-time. Mirrors the
+/// `SUPERUSER_ENV_LOCK` pattern in `plugins/umbra-auth/tests/integration.rs`
+/// (gaps2 #30 / #52). std::sync::Mutex because these are sync `#[test]`s.
+static MASK_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // -------------------------------------------------------------------------
 // Case 1: absent key → Err(NoKeyring), not Err(BadKey)
 // -------------------------------------------------------------------------
 
 #[test]
 fn absent_env_key_returns_no_keyring() {
+    let _env_guard = MASK_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Temporarily ensure the var is absent.
     let prev = std::env::var("UMBRA_MASK_PUBLIC_KEY").ok();
     unsafe { std::env::remove_var("UMBRA_MASK_PUBLIC_KEY") };
@@ -97,6 +108,7 @@ fn valid_key_seals_and_opens() {
 
 #[test]
 fn malformed_env_key_returns_bad_key_not_no_keyring() {
+    let _env_guard = MASK_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Set the env var to something that is not valid base64 / 32 bytes.
     let prev = std::env::var("UMBRA_MASK_PUBLIC_KEY").ok();
     unsafe { std::env::set_var("UMBRA_MASK_PUBLIC_KEY", "definitelynotavalidkey!!") };
