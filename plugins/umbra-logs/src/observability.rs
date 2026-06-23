@@ -91,7 +91,9 @@ impl ObservabilityConfig {
     }
 
     /// The effective service name: explicit value, else `OTEL_SERVICE_NAME` (via
-    /// `from_env`), else `"umbra"`.
+    /// `from_env`), else `"umbra"`. Only used by the OTLP exporter, so gated to
+    /// the `otel` feature (dead code otherwise).
+    #[cfg(feature = "otel")]
     fn effective_service_name(&self) -> String {
         self.service_name.clone().unwrap_or_else(|| "umbra".to_string())
     }
