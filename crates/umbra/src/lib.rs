@@ -193,6 +193,7 @@ pub mod db {
     //! ```
 
     pub use umbra_core::db::route_context::scope as route_context_scope;
+    pub use umbra_core::db::router::install_router_from_plugin;
     pub use umbra_core::db::{
         Alias, DatabaseRouter, DbPool, DefaultRouter, RouteContext, RouteOp, Schema, TenantKey,
         Transaction, TxFuture, begin, begin_pg, begin_sqlite, close, connect, connect_sqlite, ping,
@@ -258,7 +259,8 @@ pub mod migrate {
         fake_initial, fake_initial_in, fk_effective_type, make, make_in, model_alias,
         model_meta_for_table, models_for_plugin, pk_meta_for_table, plugin_order, record_applied,
         registered_api_endpoints, registered_models, registered_plugins, render_operation_for, run,
-        run_checked, run_checked_in, run_in, show, show_in, table_alias,
+        run_checked, run_checked_in, run_for_schema, run_for_schema_in, run_in, show, show_in,
+        table_alias,
     };
 }
 

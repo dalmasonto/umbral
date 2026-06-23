@@ -1164,6 +1164,10 @@ pub enum MigrateError {
     /// The operator must either restore the files from VCS or run with
     /// `--allow-drift` to proceed despite the inconsistency.
     DriftDetected { missing: Vec<(String, String)> },
+    /// A schema-scoped migration ([`run_for_schema`]) was requested against a
+    /// SQLite pool. SQLite has no schemas, so schema-per-tenant is Postgres-only
+    /// (mirrors how `Inet`/`Cidr` gate on backend). Carries the schema name.
+    SchemaUnsupportedOnSqlite { schema: String },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -1202,6 +1206,11 @@ impl std::fmt::Display for MigrateError {
                     names.join("\n  ")
                 )
             }
+            MigrateError::SchemaUnsupportedOnSqlite { schema } => write!(
+                f,
+                "umbra migrate: schema-per-tenant migration into `{schema}` requires \
+                 Postgres; SQLite has no schemas. Point the app at a Postgres pool."
+            ),
         }
     }
 }
@@ -1520,6 +1529,169 @@ async fn run_in_postgres_for_alias(
         }
     }
     Ok(applied_count)
+}
+
+/// Migrate the **tenant** apps into a named Postgres schema (schema-per-tenant,
+/// django-tenants style). The migration engine owns all schema DDL; this is the
+/// sanctioned `CREATE SCHEMA` / `SET search_path` exception (a plugin calls this
+/// rather than writing raw schema SQL itself).
+///
+/// Steps, all inside one transaction per migration file (mirroring
+/// [`run_in_postgres_for_alias`]):
+/// 1. `CREATE SCHEMA IF NOT EXISTS "<schema>"` (the `Schema` was already
+///    validated to a safe PG identifier, but is still emitted quoted).
+/// 2. `SET LOCAL search_path TO "<schema>"` so every unqualified
+///    `CREATE TABLE` **and** the `umbra_migrations` ledger land *inside*
+///    `<schema>` — per-schema migration tracking falls out for free.
+/// 3. Apply pending migrations, **filtered to the tenant apps** — every plugin
+///    NOT in `shared_apps` (those tables live in `public` and are migrated by
+///    the normal [`run`]). A file with no tenant-app ops for this schema is
+///    skipped without a tracking row.
+///
+/// Idempotent: re-running applies only the migrations the schema's own
+/// `umbra_migrations` ledger hasn't recorded. Postgres-only — schemas don't
+/// exist on SQLite, so a SQLite pool is a clear error
+/// ([`MigrateError::SchemaUnsupportedOnSqlite`]).
+pub async fn run_for_schema(
+    schema: &crate::db::Schema,
+    shared_apps: &std::collections::HashSet<String>,
+) -> Result<u64, MigrateError> {
+    run_for_schema_in(Path::new(MIGRATIONS_DIR), schema, shared_apps).await
+}
+
+/// Same as [`run_for_schema`] but takes an explicit migrations base directory.
+/// The entry tests drive.
+pub async fn run_for_schema_in(
+    dir: &Path,
+    schema: &crate::db::Schema,
+    shared_apps: &std::collections::HashSet<String>,
+) -> Result<u64, MigrateError> {
+    match crate::db::pool_dispatched() {
+        crate::db::DbPool::Postgres(p) => {
+            run_tenant_apps_in_postgres_schema(dir, schema, shared_apps, p).await
+        }
+        crate::db::DbPool::Sqlite(_) => Err(MigrateError::SchemaUnsupportedOnSqlite {
+            schema: schema.as_str().to_string(),
+        }),
+    }
+}
+
+/// Postgres schema-scoped variant of [`run_in_postgres_for_alias`]. Creates the
+/// schema, pins `search_path` to it for the transaction, and applies only the
+/// tenant apps' migrations (plugins not in `shared_apps`). The `umbra_migrations`
+/// ledger is read/written *inside* the schema (search_path is set first), so
+/// tracking is per-schema with no extra book-keeping.
+async fn run_tenant_apps_in_postgres_schema(
+    dir: &Path,
+    schema: &crate::db::Schema,
+    shared_apps: &std::collections::HashSet<String>,
+    pool: &sqlx::PgPool,
+) -> Result<u64, MigrateError> {
+    let quoted = format!("\"{}\"", schema.as_str());
+
+    // Create the schema once, outside the per-file loop. IF NOT EXISTS makes
+    // the whole call idempotent.
+    sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {quoted}"))
+        .execute(pool)
+        .await?;
+
+    // Ensure + read the ledger INSIDE the schema. Each block runs in its own
+    // transaction with `SET LOCAL search_path` so the tracking table is created
+    // in (and read from) `<schema>`, not `public` — AND the search_path is
+    // transaction-scoped, so the pooled connection is NOT left pinned to this
+    // schema when it returns to the pool. A plain session-level `SET` here
+    // pollutes the pool: the next unqualified ORM query that reuses the
+    // connection would resolve against `<schema>` instead of `public` (e.g. an
+    // insert into the public `tenant` registry failing with "relation does not
+    // exist") — a real cross-tenant bug, caught only against live Postgres.
+    {
+        let mut tx = pool.begin().await?;
+        sqlx::query(&format!("SET LOCAL search_path TO {quoted}"))
+            .execute(&mut *tx)
+            .await?;
+        ensure_tracking_table_pg_conn(&mut tx).await?;
+        tx.commit().await?;
+    }
+    let applied = {
+        let mut tx = pool.begin().await?;
+        sqlx::query(&format!("SET LOCAL search_path TO {quoted}"))
+            .execute(&mut *tx)
+            .await?;
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT plugin, name FROM umbra_migrations")
+                .fetch_all(&mut *tx)
+                .await?;
+        tx.commit().await?;
+        rows.into_iter().collect::<std::collections::HashSet<_>>()
+    };
+
+    let mut applied_count: u64 = 0;
+    for plugin in plugin_order() {
+        // Tenant apps only — shared apps live in `public`.
+        if shared_apps.contains(&plugin) {
+            continue;
+        }
+        let plugin_dir = dir.join(&plugin);
+        let paths = list_migration_files(&plugin_dir)?;
+
+        for path in paths {
+            let file = read_migration_file(&path)?;
+            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+                continue;
+            }
+            // Belt-and-braces: skip a file whose declared plugin is shared.
+            if shared_apps.contains(&file.plugin) {
+                continue;
+            }
+
+            let mut tx = pool.begin().await?;
+            // Pin search_path for THIS transaction so every unqualified
+            // CREATE TABLE / INSERT lands in the tenant schema.
+            sqlx::query(&format!("SET LOCAL search_path TO {quoted}"))
+                .execute(&mut *tx)
+                .await?;
+            for op in &file.operations {
+                for sql in render_operation_for(op, "postgres") {
+                    sqlx::query(&sql).execute(&mut *tx).await?;
+                }
+            }
+            let snapshot_hash = file.snapshot_after.hash();
+            let applied_at = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO umbra_migrations (plugin, name, applied_at, snapshot_hash) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(&file.plugin)
+            .bind(&file.id)
+            .bind(&applied_at)
+            .bind(&snapshot_hash)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            applied_count += 1;
+        }
+    }
+    Ok(applied_count)
+}
+
+/// `ensure_tracking_table_postgres` against an explicit connection (so the
+/// caller can pin `search_path` first and have the table created in the tenant
+/// schema rather than `public`).
+async fn ensure_tracking_table_pg_conn(
+    conn: &mut sqlx::PgConnection,
+) -> Result<(), MigrateError> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS umbra_migrations (
+            plugin TEXT NOT NULL,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL,
+            snapshot_hash TEXT NOT NULL,
+            PRIMARY KEY (plugin, name)
+        )",
+    )
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 /// SQLite drift-checking path for `run_checked_in`.

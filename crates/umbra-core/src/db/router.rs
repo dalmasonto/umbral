@@ -143,6 +143,21 @@ pub(crate) fn install_router(router: Arc<dyn DatabaseRouter>) {
     let _ = ROUTER.set(router);
 }
 
+/// Public seam for a **plugin** to install its [`DatabaseRouter`] from
+/// `Plugin::on_ready`, when the router is plugin-owned rather than wired by the
+/// app via `App::builder().router(...)`. The schema-per-tenant `TenantsPlugin`
+/// is the motivating case: it builds its `TenantRouter` from per-build config
+/// (the SHARED_APPS table set) and installs it itself, so the consumer's
+/// `main.rs` only writes `.plugin(TenantsPlugin::new()...)`.
+///
+/// Idempotent first-write-wins, exactly like [`install_router`]: an explicit
+/// `App::builder().router(...)` (installed during `build()`, before `on_ready`)
+/// therefore takes precedence over a plugin's. A plugin that needs to be sure
+/// it owns routing simply documents "don't also call `.router(...)`".
+pub fn install_router_from_plugin(router: Arc<dyn DatabaseRouter>) {
+    let _ = ROUTER.set(router);
+}
+
 fn default_router_arc() -> Arc<dyn DatabaseRouter> {
     DEFAULT.get_or_init(|| Arc::new(DefaultRouter)).clone()
 }

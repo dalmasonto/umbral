@@ -1,0 +1,128 @@
+---
+title: Multitenancy (umbra-tenants)
+description: Schema-per-tenant multitenancy — one Postgres database, one schema per tenant, a shared public for cross-tenant apps. The django-tenants shape.
+sidebar_position: 22
+icon: building
+tags:
+  - tenants
+  - multitenancy
+  - postgres
+---
+
+`umbra-tenants` is umbra's schema-per-tenant multitenancy layer — the *django-tenants* shape in Rust. **One** Postgres database holds **one schema per tenant**, plus a shared `public` schema for cross-tenant data (the tenant registry itself, auth, sessions). A request is mapped to a tenant by its `Host` subdomain or an explicit header; the rest of that request then runs scoped to the tenant, and every tenant-owned table is **schema-qualified to the tenant's schema with zero extra round-trips** — no `SET search_path` per request.
+
+<Callout type="warning">
+Schema-per-tenant is **Postgres-only**. SQLite has no schemas. The router never returns a schema on a SQLite-bound request, and the schema-migrate helper errors clearly on a SQLite pool.
+</Callout>
+
+## The model
+
+- **One database, many schemas.** Tenant `acme` gets a Postgres schema `acme`; its `note`, `invoice`, etc. tables live there. Tenant `globex` gets schema `globex` with its own copy. Rows never cross.
+- **Shared `public`.** SHARED apps keep their tables in `public` — every tenant sees the same rows. The tenant registry (`Tenant`) is always shared, plus the usual built-ins (auth, sessions, permissions).
+- **Zero round-trip routing.** The `TenantRouter` is a [`DatabaseRouter`](/docs/v0.0.1/orm/database-router) whose `schema_for_table` returns the active tenant's schema for tenant-owned tables. The SQL builder emits `"acme"."note"` directly — no per-request `SET search_path`.
+
+## SHARED_APPS vs tenant apps
+
+A **shared app** keeps its tables in `public`. **Every other app is a tenant app**: its tables are created in each tenant's schema and its rows are isolated per tenant.
+
+```rust
+use umbra_tenants::{TenantsPlugin, MissingTenant};
+
+TenantsPlugin::new()
+    // SHARED = these app labels stay in public. The tenants registry is
+    // always shared; here we keep ONLY it shared, so every other app
+    // (your models) is tenant-owned.
+    .shared_apps(["tenants"])
+    // Resolve the tenant from this header (wins over the subdomain)…
+    .tenant_header("X-Tenant")
+    // …and/or the left-most Host label under this base
+    // (acme.example.com -> tenant key "acme").
+    .subdomain_base("example.com")
+    // A request that maps to no active tenant falls through to public
+    // (the bare-domain marketing site). Use NotFound to 404 instead.
+    .on_missing_tenant(MissingTenant::FallThroughToPublic)
+```
+
+The plugin installs its `TenantRouter` and the resolution middleware for you — register it and you're done. (Don't also call `App::builder().router(...)`; an explicitly-wired app router wins over the plugin's.)
+
+## One example
+
+```rust
+use umbra::prelude::*;
+use umbra_tenants::TenantsPlugin;
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "note")]
+pub struct Note {
+    pub id: i64,
+    pub body: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let settings = Settings::from_env()?;            // UMBRA_DATABASE_URL=postgres://…
+    let pool = umbra::db::connect(&settings.database_url).await?;
+
+    let app = App::builder()
+        .settings(settings)
+        .database("default", pool)
+        .plugin(
+            TenantsPlugin::new()
+                .shared_apps(["tenants"])
+                .tenant_header("X-Tenant")
+                .subdomain_base("localhost"),
+        )
+        .model::<Note>()                              // a tenant-owned model
+        .routes(Routes::new().get("/notes", list_notes))
+        .build()?;
+
+    app.serve("127.0.0.1:3000".parse::<std::net::SocketAddr>()?).await?;
+    Ok(())
+}
+```
+
+A request with `X-Tenant: acme.localhost` (or host `acme.localhost`) runs scoped to schema `acme`; `Note::objects().fetch()` reads only Acme's notes. A request with no tenant falls through to `public`.
+
+## Provisioning a tenant
+
+`create_tenant` is the one-call provision: validate the schema name, insert the registry row in `public`, then `CREATE SCHEMA` + migrate the tenant apps into it.
+
+```rust
+let plugin = TenantsPlugin::new().shared_apps(["tenants"]);
+
+// Insert Tenant{name, schema_name, domain} in public, CREATE SCHEMA "acme",
+// and migrate every tenant app's tables into it. Idempotent on the schema.
+plugin.create_tenant("Acme", "acme", "acme.example.com").await?;
+```
+
+`schema_name` is validated as a safe Postgres identifier (`Schema::new`) before it ever reaches the database — an injection-shaped name is rejected, not escaped.
+
+## Migrating tenant schemas
+
+Run the normal `migrate` first — it migrates the SHARED apps (the `tenant` registry) into `public`. Then `migrate_schemas` (a management command the plugin contributes) walks every **active** tenant and ensures its schema exists and is migrated, idempotently:
+
+```bash
+# 1. shared apps -> public
+cargo run -- migrate
+# 2. every active tenant's schema (create + migrate the tenant apps)
+cargo run -- migrate_schemas
+```
+
+Adding a tenant-owned model later is the usual loop: `makemigrations`, `migrate` (public), then `migrate_schemas` to roll the new table into every tenant's schema.
+
+## How resolution works
+
+The plugin's middleware (a `Plugin::wrap_router` layer) runs per request:
+
+1. Extract the tenant key — the `X-Tenant` header (wins), else the `Host` subdomain under the configured base.
+2. Look the `Tenant` up by `domain` **in public** (no tenant context yet, so the registry read stays in `public`) — via the ORM, never raw SQL.
+3. If found and active, scope the rest of the request under `RouteContext::new().with_tenant(TenantKey::new(tenant.schema_name))`. Otherwise apply the missing-tenant policy.
+
+Because the scope spans the whole handler — every `.await`, every ORM call — the `TenantRouter` sees the tenant for the entire request.
+
+## See also
+
+- [The DatabaseRouter](/docs/v0.0.1/orm/database-router) — the routing seam `umbra-tenants` builds on.
+- `arch.md` and `docs/superpowers/specs/2026-06-16-database-router-foundation-design.md` for the design rationale.
+- Standalone example: `examples/umbra-tenants/`.
