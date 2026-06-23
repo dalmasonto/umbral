@@ -661,6 +661,11 @@ fn coerce_value(col: &Column, value: &str) -> Result<sea_query::Value, ApiError>
         | SqlType::Inet
         | SqlType::Cidr
         | SqlType::MacAddr
+        // gaps2 #70: text-backed PG types aren't typed-filterable through
+        // the REST query surface (no general operator semantics at v1).
+        | SqlType::Xml
+        | SqlType::Ltree
+        | SqlType::Bit
         | SqlType::FullText
         | SqlType::Bytes
         | SqlType::Decimal => {

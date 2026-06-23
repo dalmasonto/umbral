@@ -2066,9 +2066,13 @@ pub fn decode_to_string(
                 .try_get::<Option<Value>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
             SqlType::Array(_) => panic_array_unsupported(&col.name),
-            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-                panic_pg_only_unsupported(&col.name)
-            }
+            SqlType::Inet
+            | SqlType::Cidr
+            | SqlType::MacAddr
+            | SqlType::Xml
+            | SqlType::Ltree
+            | SqlType::Bit
+            | SqlType::FullText => panic_pg_only_unsupported(&col.name),
             // PK lift (review #3): FK columns to a String/Uuid-PK target
             // store TEXT/UUID, not BIGINT — decode by the target PK type so
             // the admin display path doesn't fail on a non-i64 FK.
@@ -2105,9 +2109,13 @@ pub fn decode_to_string(
         SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
         SqlType::Json => row.try_get::<Value, _>(name)?.to_string(),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-            panic_pg_only_unsupported(&col.name)
-        }
+        SqlType::Inet
+        | SqlType::Cidr
+        | SqlType::MacAddr
+        | SqlType::Xml
+        | SqlType::Ltree
+        | SqlType::Bit
+        | SqlType::FullText => panic_pg_only_unsupported(&col.name),
         SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
             Some(SqlType::Text) => row.try_get::<String, _>(name)?,
             Some(SqlType::Uuid) => row.try_get::<Uuid, _>(name)?.to_string(),
@@ -2184,6 +2192,9 @@ pub fn decode_pg_to_string(
             | SqlType::Inet
             | SqlType::Cidr
             | SqlType::MacAddr
+            | SqlType::Xml
+            | SqlType::Ltree
+            | SqlType::Bit
             | SqlType::FullText => row
                 .try_get::<Option<String>, _>(name)
                 .ok()
@@ -2229,6 +2240,9 @@ pub fn decode_pg_to_string(
         | SqlType::Inet
         | SqlType::Cidr
         | SqlType::MacAddr
+        | SqlType::Xml
+        | SqlType::Ltree
+        | SqlType::Bit
         | SqlType::FullText => row.try_get::<String, _>(name).unwrap_or_default(),
         SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
             Some(SqlType::Text) => row.try_get::<String, _>(name)?,
@@ -2349,9 +2363,13 @@ pub fn decode_to_json(
                 .try_get::<Option<Value>, _>(name)?
                 .unwrap_or(Value::Null),
             SqlType::Array(_) => panic_array_unsupported(&col.name),
-            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-                panic_pg_only_unsupported(&col.name)
-            }
+            SqlType::Inet
+            | SqlType::Cidr
+            | SqlType::MacAddr
+            | SqlType::Xml
+            | SqlType::Ltree
+            | SqlType::Bit
+            | SqlType::FullText => panic_pg_only_unsupported(&col.name),
             // PK lift Pass A: FK columns that target a String /
             // Uuid PK store their values as TEXT, not BIGINT. Probe
             // the target meta to pick the right Rust type for the
@@ -2386,9 +2404,13 @@ pub fn decode_to_json(
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
         SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-            panic_pg_only_unsupported(&col.name)
-        }
+        SqlType::Inet
+        | SqlType::Cidr
+        | SqlType::MacAddr
+        | SqlType::Xml
+        | SqlType::Ltree
+        | SqlType::Bit
+        | SqlType::FullText => panic_pg_only_unsupported(&col.name),
         // PK lift Pass A: see the nullable arm above for the same
         // String/Uuid target dispatch.
         SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
@@ -2455,6 +2477,9 @@ pub fn decode_pg_to_json(
             | SqlType::Inet
             | SqlType::Cidr
             | SqlType::MacAddr
+            | SqlType::Xml
+            | SqlType::Ltree
+            | SqlType::Bit
             | SqlType::FullText => row
                 .try_get::<Option<String>, _>(name)
                 .ok()
@@ -2496,6 +2521,9 @@ pub fn decode_pg_to_json(
         | SqlType::Inet
         | SqlType::Cidr
         | SqlType::MacAddr
+        | SqlType::Xml
+        | SqlType::Ltree
+        | SqlType::Bit
         | SqlType::FullText => row
             .try_get::<String, _>(name)
             .map(Value::from)

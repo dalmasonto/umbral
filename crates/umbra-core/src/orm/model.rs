@@ -918,6 +918,31 @@ pub enum SqlType {
     /// `MACADDR` — Postgres MAC address column. Maps to
     /// `mac_address::MacAddress` in Rust. **Postgres-only.**
     MacAddr,
+    /// `XML` — Postgres XML document column. Maps to `String` in Rust
+    /// (umbra stores and round-trips the serialized XML text; it does
+    /// not parse or validate the document at the framework level —
+    /// Postgres does that on insert). **Postgres-only.** Reach for this
+    /// over `Text` only when you want Postgres' `xml` type checking and
+    /// the `xpath` / `xmlexists` operator surface; otherwise `Text`
+    /// stores XML strings just fine. Closest Django analogue: there's
+    /// none — Django models XML as a plain `TextField`.
+    Xml,
+    /// `LTREE` — Postgres hierarchical label-path column (the `ltree`
+    /// extension). Maps to `String` in Rust (the dotted path, e.g.
+    /// `"Top.Science.Astronomy"`). **Postgres-only**, and requires the
+    /// `ltree` extension (`CREATE EXTENSION ltree`) to be installed in
+    /// the target database. The umbra migration engine emits the bare
+    /// `ltree` column type; the extension itself is the operator's
+    /// responsibility (a hand-written migration or a DB bootstrap step).
+    Ltree,
+    /// `BIT VARYING` — Postgres bit-string column. Maps to `String` in
+    /// Rust (the textual `"0"`/`"1"` representation, e.g. `"101"`).
+    /// **Postgres-only.** v1 renders as `BIT VARYING` (variable-length);
+    /// a fixed-width `BIT(n)` needs a hand-written migration after the
+    /// initial create until a `#[umbra(bit_len = N)]` attribute lands
+    /// for a real consumer. The Django analogue is again a plain
+    /// `TextField` (Django has no bit-string field).
+    Bit,
     /// `TSVECTOR` — Postgres full-text search lexeme vector. Maps to
     /// [`crate::orm::TsVector`] in Rust (a thin newtype around
     /// `String` with sqlx Type/Encode/Decode impls). **Postgres-only.**

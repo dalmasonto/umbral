@@ -2677,6 +2677,11 @@ fn postgres_type_name(ty: SqlType) -> &'static str {
         Inet => "inet",
         Cidr => "cidr",
         MacAddr => "macaddr",
+        // gaps2 #70: text-backed Postgres types. `bit varying` mirrors
+        // what sea-query's builder emits for the CREATE TABLE path.
+        Xml => "xml",
+        Ltree => "ltree",
+        Bit => "bit varying",
         FullText => "tsvector",
         Bytes => "bytea",
         // BUG-10: NUMERIC(19, 4) — same dimensions as the CREATE TABLE

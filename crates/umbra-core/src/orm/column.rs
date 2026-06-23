@@ -2235,6 +2235,260 @@ impl<T> NullableMacAddrCol<T> {
 }
 
 // =========================================================================
+// Text-backed Postgres-only columns — gaps2 #70.
+//
+// Three pairs of String-valued columns for Postgres types that have a
+// faithful textual representation but their own native column type:
+// `XmlCol` (XML), `LtreeCol` (LTREE), `BitCol` (BIT VARYING). Unlike the
+// network columns above, the Rust binding is a plain `String` — umbra
+// stores and round-trips the serialized form and lets Postgres enforce
+// the type's invariants on insert. **Postgres-only**; the field.backend
+// system check rejects them on SQLite the same way it rejects Inet /
+// Cidr / MacAddr / Decimal / Array.
+//
+// v1 surface mirrors the network columns: equality / inequality, plus
+// `IS NULL` / `IS NOT NULL` on the nullable variants and `asc()` /
+// `desc()`. Type-specific operators (`@>` ancestor on ltree, `xpath` on
+// xml, bitwise ops on bit) are deferred until a real consumer surfaces
+// them. Each `eq` / `ne` binds the value as a text parameter; Postgres
+// applies the column's own cast on the way in.
+// =========================================================================
+
+/// A `String`-valued Postgres `XML` column.
+pub struct XmlCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> XmlCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\"::text = $1", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn ne(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\"::text <> $1", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable XML column.
+pub struct NullableXmlCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableXmlCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\"::text = $1", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn ne(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\"::text <> $1", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A `String`-valued Postgres `LTREE` column (dotted label path).
+pub struct LtreeCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> LtreeCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\" = $1::ltree", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn ne(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1::ltree", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable LTREE column.
+pub struct NullableLtreeCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableLtreeCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\" = $1::ltree", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn ne(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1::ltree", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A `String`-valued Postgres `BIT VARYING` column.
+pub struct BitCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> BitCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\" = $1::bit varying", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn ne(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1::bit varying", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable BIT VARYING column.
+pub struct NullableBitCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableBitCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\" = $1::bit varying", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn ne(&self, val: &str) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1::bit varying", self.name.replace('"', "\"\""));
+        let values = vec![sea_query::Value::String(Some(Box::new(val.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+// =========================================================================
 // Foreign-key columns — gap 14.
 //
 // `ForeignKeyCol<T>` is the column type emitted by `#[derive(Model)]` for

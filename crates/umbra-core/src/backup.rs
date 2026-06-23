@@ -320,7 +320,7 @@ async fn dump_one_postgres(
 ) -> Result<ModelDump, BackupError> {
     let sql = format!(
         "SELECT {} FROM {}",
-        column_list(model),
+        column_list_pg_select(model),
         quoted_ident(&model.table)
     );
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
@@ -381,6 +381,28 @@ fn column_list(model: &ModelMeta) -> String {
         .fields
         .iter()
         .map(|c| quoted_ident(&c.name))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Like [`column_list`] but, for the Postgres dump SELECT, casts the
+/// text-backed Postgres-only types (`XML` / `LTREE` / `BIT VARYING`,
+/// gaps2 #70) to `text` and re-aliases them to their column name so the
+/// driver hands them back as a plain `String` (sqlx has no native
+/// `Decode` for those column types into `String`). The cast is harmless
+/// for every other column, so only the special types are wrapped.
+fn column_list_pg_select(model: &ModelMeta) -> String {
+    model
+        .fields
+        .iter()
+        .map(|c| {
+            if matches!(c.ty, SqlType::Xml | SqlType::Ltree | SqlType::Bit) {
+                let q = quoted_ident(&c.name);
+                format!("{q}::text AS {q}")
+            } else {
+                quoted_ident(&c.name)
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -451,6 +473,11 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             SqlType::Array(_) => unreachable_array(&col.name),
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
             SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
+            // gaps2 #70: text-backed Postgres types — backup's SQLite
+            // path is unreachable for them (field.backend gates at boot).
+            SqlType::Xml => unreachable_pg_only(&col.name, "Xml"),
+            SqlType::Ltree => unreachable_pg_only(&col.name, "Ltree"),
+            SqlType::Bit => unreachable_pg_only(&col.name, "Bit"),
             // ForeignKey stores as i64 — same as BigInt.
             SqlType::ForeignKey => row
                 .try_get::<Option<i64>, _>(name)?
@@ -483,6 +510,9 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Array(_) => unreachable_array(&col.name),
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
         SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
+        SqlType::Xml => unreachable_pg_only(&col.name, "Xml"),
+        SqlType::Ltree => unreachable_pg_only(&col.name, "Ltree"),
+        SqlType::Bit => unreachable_pg_only(&col.name, "Bit"),
         // ForeignKey stores as i64 — same as BigInt.
         SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
         SqlType::Bytes => {
@@ -543,6 +573,12 @@ fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value,
             SqlType::FullText => row
                 .try_get::<Option<TsVector>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.into_inner())),
+            // gaps2 #70: text-backed Postgres types dump via their text
+            // form. The dump query casts these columns to `text` (see
+            // `select_columns_sql`), so the driver hands back a `String`.
+            SqlType::Xml | SqlType::Ltree | SqlType::Bit => row
+                .try_get::<Option<String>, _>(name)?
+                .map_or(Value::Null, Value::from),
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(Value::Null, bytes_to_json),
@@ -570,6 +606,10 @@ fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value,
         }
         SqlType::MacAddr => Value::from(row.try_get::<MacAddress, _>(name)?.to_string()),
         SqlType::FullText => Value::from(row.try_get::<TsVector, _>(name)?.into_inner()),
+        // gaps2 #70: dump via the `::text` cast added in column_list_pg_select.
+        SqlType::Xml | SqlType::Ltree | SqlType::Bit => {
+            Value::from(row.try_get::<String, _>(name)?)
+        }
         SqlType::Bytes => bytes_to_json(row.try_get::<Vec<u8>, _>(name)?),
         SqlType::Decimal => Value::from(row.try_get::<Decimal, _>(name)?.to_string()),
     })
@@ -694,6 +734,11 @@ fn bind_value<'q>(
             SqlType::Array(_) => unreachable_array(&col.name),
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
             SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
+            // gaps2 #70: text-backed Postgres types — backup's SQLite
+            // path is unreachable for them (field.backend gates at boot).
+            SqlType::Xml => unreachable_pg_only(&col.name, "Xml"),
+            SqlType::Ltree => unreachable_pg_only(&col.name, "Ltree"),
+            SqlType::Bit => unreachable_pg_only(&col.name, "Bit"),
             // ForeignKey stores as i64 — same as BigInt.
             SqlType::ForeignKey => q.bind(None::<i64>),
             SqlType::Bytes => q.bind(None::<Vec<u8>>),
@@ -756,6 +801,9 @@ fn bind_value<'q>(
         SqlType::Array(_) => unreachable_array(&col.name),
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
         SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
+        SqlType::Xml => unreachable_pg_only(&col.name, "Xml"),
+        SqlType::Ltree => unreachable_pg_only(&col.name, "Ltree"),
+        SqlType::Bit => unreachable_pg_only(&col.name, "Bit"),
         // ForeignKey stores as i64 — same as BigInt.
         SqlType::ForeignKey => q.bind(val.as_i64().ok_or_else(|| mismatch(json_type_name(&val)))?),
         // BLOB: accept a JSON array of u8 numbers — the same shape the
@@ -792,6 +840,9 @@ fn bind_value_pg<'q>(
             SqlType::Inet | SqlType::Cidr => q.bind(None::<IpNetwork>),
             SqlType::MacAddr => q.bind(None::<MacAddress>),
             SqlType::FullText => q.bind(None::<TsVector>),
+            // gaps2 #70: text-backed types bind their NULL as a text
+            // parameter; Postgres applies the column's assignment cast.
+            SqlType::Xml | SqlType::Ltree | SqlType::Bit => q.bind(None::<String>),
             SqlType::Bytes => q.bind(None::<Vec<u8>>),
             SqlType::Decimal => q.bind(None::<Decimal>),
         });
@@ -864,6 +915,13 @@ fn bind_value_pg<'q>(
         SqlType::FullText => {
             let s = val.as_str().ok_or_else(|| mismatch(json_type_name(&val)))?;
             q.bind(TsVector::from(s))
+        }
+        // gaps2 #70: text-backed types bind their string form; Postgres
+        // applies the column's assignment cast (text → xml / ltree /
+        // bit) on insert.
+        SqlType::Xml | SqlType::Ltree | SqlType::Bit => {
+            let s = val.as_str().ok_or_else(|| mismatch(json_type_name(&val)))?;
+            q.bind(s.to_string())
         }
         SqlType::Bytes => q.bind(bytes_from_json(table, col, &val)?),
         SqlType::Decimal => {

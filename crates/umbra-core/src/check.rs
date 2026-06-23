@@ -680,6 +680,12 @@ fn is_postgres_only(ty: crate::orm::SqlType) -> bool {
             | SqlType::Inet
             | SqlType::Cidr
             | SqlType::MacAddr
+            // gaps2 #70: text-backed Postgres types (XML / LTREE /
+            // BIT VARYING) have no SQLite equivalent; the boot check
+            // rejects them on SQLite the same way as the network types.
+            | SqlType::Xml
+            | SqlType::Ltree
+            | SqlType::Bit
             | SqlType::FullText
             // BUG-10: sqlx's `rust_decimal` Encode/Decode is
             // Postgres-only. SQLite has no native NUMERIC type;

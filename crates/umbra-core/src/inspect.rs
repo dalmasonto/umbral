@@ -478,6 +478,12 @@ fn map_postgres_type(raw: &str) -> Option<SqlType> {
         "inet" => Some(SqlType::Inet),
         "cidr" => Some(SqlType::Cidr),
         "macaddr" => Some(SqlType::MacAddr),
+        // gaps2 #70: text-backed Postgres types. `bit varying` and bare
+        // `bit` (the information_schema sometimes reports `bit` for a
+        // BIT(n)) both round-trip to the `Bit` variant.
+        "xml" => Some(SqlType::Xml),
+        "ltree" => Some(SqlType::Ltree),
+        "bit" | "bit varying" | "varbit" => Some(SqlType::Bit),
         "tsvector" => Some(SqlType::FullText),
         "bytea" => Some(SqlType::Bytes),
         _ => None,
@@ -666,6 +672,15 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         SqlType::Inet => "ipnetwork::IpNetwork".to_string(),
         SqlType::Cidr => "ipnetwork::IpNetwork".to_string(),
         SqlType::MacAddr => "mac_address::MacAddress".to_string(),
+        // gaps2 #70: text-backed Postgres types surface as `String`.
+        // inspectdb can't recover which `#[umbra(...)]` attr produced
+        // the column (the attr lives only in the source model, not the
+        // DB), so the generated model is a plain `String`; the user
+        // re-adds `#[umbra(xml)]` / `#[umbra(ltree)]` / `#[umbra(bit)]`
+        // if they want the native type back on a re-migrate.
+        SqlType::Xml => "String".to_string(),
+        SqlType::Ltree => "String".to_string(),
+        SqlType::Bit => "String".to_string(),
         SqlType::FullText => "umbra::orm::TsVector".to_string(),
         // ForeignKey inspectdb renders as i64 for now; the FK relationship
         // introspection that would emit ForeignKey<T> is deferred.

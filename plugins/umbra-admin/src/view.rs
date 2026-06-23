@@ -759,6 +759,11 @@ pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
         SqlType::Array(_) => "json",
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
         SqlType::FullText => "textarea",
+        // gaps2 #70: text-backed PG types. XML documents are typically
+        // multi-line → textarea; ltree paths / bit strings are short →
+        // a plain text input.
+        SqlType::Xml => "textarea",
+        SqlType::Ltree | SqlType::Bit => "text",
         SqlType::ForeignKey => "fk",
         // Bytes columns render as a plain text input today: the admin
         // doesn't yet ship a file-upload widget for raw byte payloads.
@@ -819,6 +824,8 @@ pub(crate) fn sql_type_name(ty: SqlType) -> &'static str {
         SqlType::Array(_) => "array",
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
         SqlType::FullText => "text",
+        // gaps2 #70: text-backed PG types display as text in the admin.
+        SqlType::Xml | SqlType::Ltree | SqlType::Bit => "text",
         SqlType::Bytes => "bytes",
         SqlType::Decimal => "decimal",
     }

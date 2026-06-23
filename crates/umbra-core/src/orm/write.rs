@@ -542,6 +542,12 @@ pub fn json_to_sea_value(
         | SqlType::Inet
         | SqlType::Cidr
         | SqlType::MacAddr
+        // gaps2 #70: XML / LTREE / BIT VARYING are text-backed — the
+        // value arrives as a JSON string and binds as a text parameter;
+        // Postgres applies the column's own cast on the way in.
+        | SqlType::Xml
+        | SqlType::Ltree
+        | SqlType::Bit
         | SqlType::FullText => Ok(SeaValue::String(Some(Box::new(coerce_string(
             value, field_name,
         )?)))),
@@ -762,6 +768,9 @@ pub(crate) fn null_for(sql_type: SqlType) -> SeaValue {
         | SqlType::Inet
         | SqlType::Cidr
         | SqlType::MacAddr
+        | SqlType::Xml
+        | SqlType::Ltree
+        | SqlType::Bit
         | SqlType::FullText => SeaValue::String(None),
         SqlType::Bytes => SeaValue::Bytes(None),
         SqlType::Decimal => SeaValue::Decimal(None),

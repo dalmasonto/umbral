@@ -168,6 +168,20 @@ struct UmbraFieldAttr {
     /// default `SqlType::Inet` (INET). No-ops on any other field type.
     /// Closes the derive-reachable half of gaps2 #70.
     cidr: bool,
+    /// `#[umbra(macaddr)]` — explicit marker for a `mac_address::
+    /// MacAddress` / `Option<…>` field. The type already auto-detects to
+    /// MACADDR, so this is a no-op confirmation attribute that documents
+    /// intent at the field; it never changes a non-MacAddr field. gaps2 #70.
+    macaddr: bool,
+    /// `#[umbra(xml)]` — on a `String` / `Option<String>` field, declare
+    /// it as a Postgres `XML` column instead of `Text`. gaps2 #70.
+    xml: bool,
+    /// `#[umbra(ltree)]` — on a `String` / `Option<String>` field,
+    /// declare it as a Postgres `LTREE` column. gaps2 #70.
+    ltree: bool,
+    /// `#[umbra(bit)]` — on a `String` / `Option<String>` field, declare
+    /// it as a Postgres `BIT VARYING` column. gaps2 #70.
+    bit: bool,
     /// `#[umbra(noform)]` — never show on any form.
     noform: bool,
     /// `#[umbra(db_constraint = false)]` — keep the FK logical (column +
@@ -311,6 +325,10 @@ fn has_sqlx_skip(attrs: &[syn::Attribute]) -> bool {
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
     let mut parsed = UmbraFieldAttr {
         cidr: false,
+        macaddr: false,
+        xml: false,
+        ltree: false,
+        bit: false,
         noform: false,
         db_constraint: true,
         noedit: false,
@@ -346,6 +364,25 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 // type stays `ipnetwork::IpNetwork`; only the SqlType
                 // changes. Closes the derive-reachable half of gaps2 #70.
                 parsed.cidr = true;
+                Ok(())
+            } else if meta.path.is_ident("macaddr") {
+                // `#[umbra(macaddr)]` — explicit MACADDR marker. The
+                // `mac_address::MacAddress` type already auto-detects to
+                // MacAddr, so this only documents intent; the upgrade
+                // step below leaves a non-MacAddr field untouched. gaps2 #70.
+                parsed.macaddr = true;
+                Ok(())
+            } else if meta.path.is_ident("xml") {
+                // `#[umbra(xml)]` — declare a String field as Postgres XML.
+                parsed.xml = true;
+                Ok(())
+            } else if meta.path.is_ident("ltree") {
+                // `#[umbra(ltree)]` — declare a String field as Postgres LTREE.
+                parsed.ltree = true;
+                Ok(())
+            } else if meta.path.is_ident("bit") {
+                // `#[umbra(bit)]` — declare a String field as Postgres BIT VARYING.
+                parsed.bit = true;
                 Ok(())
             } else if meta.path.is_ident("noform") {
                 parsed.noform = true;
@@ -510,7 +547,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                     .unwrap_or_else(|| "<unknown>".to_string());
                 Err(meta.error(format!(
                     "unknown field-level umbra attribute `{path}` — known keys are \
-                     `cidr`, `noform`, `db_constraint = false`, `noedit`, \
+                     `cidr`, `macaddr`, `xml`, `ltree`, `bit`, \
+                     `noform`, `db_constraint = false`, `noedit`, \
                      `primary_key`, `no_reverse`, \
                      `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
@@ -1098,6 +1136,34 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             kind = match kind {
                 FieldKind::Inet => FieldKind::Cidr,
                 FieldKind::NullableInet => FieldKind::NullableCidr,
+                other => other,
+            };
+        }
+        // gaps2 #70 — text-backed Postgres types. `#[umbra(xml)]` /
+        // `#[umbra(ltree)]` / `#[umbra(bit)]` upgrade a `String` /
+        // `Option<String>` field from Text → the native PG column type.
+        // No-op on any other kind. `#[umbra(macaddr)]` is an explicit
+        // confirmation marker — the `mac_address::MacAddress` type
+        // already detects to MacAddr, so the attribute only documents
+        // intent and never re-classifies a non-MacAddr field.
+        if field_attr.xml {
+            kind = match kind {
+                FieldKind::Str => FieldKind::Xml,
+                FieldKind::NullableStr => FieldKind::NullableXml,
+                other => other,
+            };
+        }
+        if field_attr.ltree {
+            kind = match kind {
+                FieldKind::Str => FieldKind::Ltree,
+                FieldKind::NullableStr => FieldKind::NullableLtree,
+                other => other,
+            };
+        }
+        if field_attr.bit {
+            kind = match kind {
+                FieldKind::Str => FieldKind::Bit,
+                FieldKind::NullableStr => FieldKind::NullableBit,
                 other => other,
             };
         }
@@ -2166,6 +2232,19 @@ enum FieldKind {
     /// `mac_address::MacAddress` — Postgres MACADDR column.
     MacAddr,
     NullableMacAddr,
+    /// `String` declared as a Postgres `XML` column via `#[umbra(xml)]`.
+    /// Text-backed (the Rust type stays `String`); only the SqlType /
+    /// DDL changes. gaps2 #70.
+    Xml,
+    NullableXml,
+    /// `String` declared as a Postgres `LTREE` column via
+    /// `#[umbra(ltree)]`. Text-backed. gaps2 #70.
+    Ltree,
+    NullableLtree,
+    /// `String` declared as a Postgres `BIT VARYING` column via
+    /// `#[umbra(bit)]`. Text-backed. gaps2 #70.
+    Bit,
+    NullableBit,
     /// `umbra::orm::TsVector` — Postgres full-text-search tsvector
     /// column (Phase 4.3).
     FullText,
@@ -2302,6 +2381,9 @@ impl FieldKind {
             FieldKind::MacAddr | FieldKind::NullableMacAddr => {
                 quote!(::umbra::orm::SqlType::MacAddr)
             }
+            FieldKind::Xml | FieldKind::NullableXml => quote!(::umbra::orm::SqlType::Xml),
+            FieldKind::Ltree | FieldKind::NullableLtree => quote!(::umbra::orm::SqlType::Ltree),
+            FieldKind::Bit | FieldKind::NullableBit => quote!(::umbra::orm::SqlType::Bit),
             FieldKind::FullText | FieldKind::NullableFullText => {
                 quote!(::umbra::orm::SqlType::FullText)
             }
@@ -2348,6 +2430,9 @@ impl FieldKind {
                 | FieldKind::NullableInet
                 | FieldKind::NullableCidr
                 | FieldKind::NullableMacAddr
+                | FieldKind::NullableXml
+                | FieldKind::NullableLtree
+                | FieldKind::NullableBit
                 | FieldKind::NullableFullText
                 | FieldKind::NullableForeignKey(_)
                 | FieldKind::NullableBytes
@@ -3132,6 +3217,12 @@ fn column_const_for(
         FieldKind::NullableCidr => format_ident!("NullableCidrCol"),
         FieldKind::MacAddr => format_ident!("MacAddrCol"),
         FieldKind::NullableMacAddr => format_ident!("NullableMacAddrCol"),
+        FieldKind::Xml => format_ident!("XmlCol"),
+        FieldKind::NullableXml => format_ident!("NullableXmlCol"),
+        FieldKind::Ltree => format_ident!("LtreeCol"),
+        FieldKind::NullableLtree => format_ident!("NullableLtreeCol"),
+        FieldKind::Bit => format_ident!("BitCol"),
+        FieldKind::NullableBit => format_ident!("NullableBitCol"),
         FieldKind::FullText => format_ident!("FullTextCol"),
         FieldKind::NullableFullText => format_ident!("NullableFullTextCol"),
         FieldKind::ForeignKey(_) => format_ident!("ForeignKeyCol"),

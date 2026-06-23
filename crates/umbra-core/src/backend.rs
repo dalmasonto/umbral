@@ -187,6 +187,13 @@ impl DatabaseBackend for PostgresBackend {
             SqlType::Inet => ColumnType::Inet,
             SqlType::Cidr => ColumnType::Cidr,
             SqlType::MacAddr => ColumnType::MacAddr,
+            // sea-query has no built-in variant for these text-backed
+            // Postgres types — render the native column type through
+            // ColumnType::Custom. `bit varying` is the variable-length
+            // bit string (v1 doesn't pin a width). gaps2 #70.
+            SqlType::Xml => ColumnType::custom("xml"),
+            SqlType::Ltree => ColumnType::custom("ltree"),
+            SqlType::Bit => ColumnType::custom("bit varying"),
             // sea-query has no built-in `tsvector` variant — go through
             // ColumnType::Custom to render it. Populate via Postgres
             // trigger or GENERATED clause; umbra's migration engine
@@ -282,6 +289,12 @@ impl DatabaseBackend for SqliteBackend {
             // boot path was bypassed.
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic!(
                 "umbra::backend::SqliteBackend::map_type: SqlType::Inet/Cidr/MacAddr are \
+                 Postgres-only. The field.backend system check should have failed boot."
+            ),
+            // gaps2 #70 — text-backed Postgres types are equally
+            // Postgres-only; the field.backend check gates them at boot.
+            SqlType::Xml | SqlType::Ltree | SqlType::Bit => panic!(
+                "umbra::backend::SqliteBackend::map_type: SqlType::Xml/Ltree/Bit are \
                  Postgres-only. The field.backend system check should have failed boot."
             ),
             SqlType::FullText => panic!(
