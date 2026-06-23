@@ -18,9 +18,19 @@
 //! - `email_smtp_password`. SASL password. Optional.
 //! - `email_default_from`. Fallback sender when `EmailMessage.from`
 //!   is empty.
+//! - `email_api_provider`. `"resend"` or `"sendgrid"`. Selects the HTTP
+//!   API backend (requires the `api` cargo feature).
+//! - `email_api_key`. Bearer token for the API provider.
 //!
-//! The env var `UMBRA_EMAIL_BACKEND=console` forces the console
-//! backend even when SMTP keys are present. Useful in CI / tests.
+//! ## Backend selection
+//!
+//! `UMBRA_EMAIL_BACKEND=console` forces the console backend even when
+//! other keys are present (useful in CI / tests). Otherwise the order
+//! is: `UMBRA_EMAIL_BACKEND=api` (or both `email_api_provider` +
+//! `email_api_key` set) ⇒ **API**; else `email_smtp_host` set ⇒
+//! **SMTP**; else **console**. The API backend POSTs JSON to a
+//! transactional-email provider (Resend / SendGrid) and complements —
+//! does not replace — SMTP.
 //!
 //! ## Surface
 //!
@@ -272,6 +282,19 @@ pub enum EmailError {
         field: &'static str,
         offending_char: char,
     },
+    /// The API backend was selected but `email_api_provider` and/or
+    /// `email_api_key` is missing or invalid. Set both
+    /// (`email_api_provider = "resend" | "sendgrid"`, `email_api_key =
+    /// "<key>"`), or unset `UMBRA_EMAIL_BACKEND=api`.
+    ApiNotConfigured,
+    /// The HTTP request to the provider failed at the transport level
+    /// (DNS, connection, TLS, timeout) before any response was received.
+    /// Carries the provider's error message.
+    ApiTransport(String),
+    /// The provider returned a non-2xx HTTP status. Carries the status
+    /// code and the response body so the operator can see the provider's
+    /// own error description (bad key, malformed payload, rate limit).
+    ApiResponse { status: u16, body: String },
     /// The console backend was used in a non-Dev/Test environment.
     /// Printing full message bodies (including password-reset tokens)
     /// to stderr/stdout in production would leak secrets to log
@@ -311,6 +334,19 @@ impl std::fmt::Display for EmailError {
                  U+{:04X} (CRLF/LF/CR/NUL in a header value is an SMTP \
                  injection vector)",
                 *offending_char as u32,
+            ),
+            EmailError::ApiNotConfigured => write!(
+                f,
+                "umbra-email: API backend selected but email_api_provider \
+                 and/or email_api_key is missing — set both, or unset \
+                 UMBRA_EMAIL_BACKEND=api",
+            ),
+            EmailError::ApiTransport(e) => {
+                write!(f, "umbra-email: API HTTP transport: {e}")
+            }
+            EmailError::ApiResponse { status, body } => write!(
+                f,
+                "umbra-email: API provider returned HTTP {status}: {body}",
             ),
             EmailError::ConsoleBackendInProduction => write!(
                 f,
@@ -366,6 +402,10 @@ struct EmailConfig {
     smtp_user: Option<String>,
     smtp_password: Option<String>,
     default_from: Option<String>,
+    /// HTTP API provider, when the API backend is selected.
+    api_provider: Option<EmailApiProvider>,
+    /// API key (bearer token) for the HTTP API provider.
+    api_key: Option<String>,
     /// Per-send timeout passed to lettre. Covers connection +
     /// SMTP command exchange. Configurable via `email_smtp_timeout_secs`
     /// in settings; defaults to 10 s. Set to 0 to remove the cap
@@ -375,8 +415,33 @@ struct EmailConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BackendKind {
+    /// HTTP API backend (Resend / SendGrid) — POSTs the message as JSON
+    /// to a transactional-email provider over HTTPS.
+    Api,
     Smtp,
     Console,
+}
+
+/// A transactional-email HTTP API provider. Both expose a simple JSON
+/// `POST` endpoint authenticated with a bearer token. Selected via the
+/// `email_api_provider` setting (`"resend"` / `"sendgrid"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmailApiProvider {
+    /// Resend (<https://resend.com>). `POST https://api.resend.com/emails`.
+    Resend,
+    /// SendGrid (<https://sendgrid.com>). `POST https://api.sendgrid.com/v3/mail/send`.
+    SendGrid,
+}
+
+impl EmailApiProvider {
+    /// Parse the `email_api_provider` setting value. Case-insensitive.
+    fn from_setting(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "resend" => Some(Self::Resend),
+            "sendgrid" => Some(Self::SendGrid),
+            _ => None,
+        }
+    }
 }
 
 static CONFIG: OnceLock<EmailConfig> = OnceLock::new();
@@ -388,8 +453,14 @@ fn config() -> &'static EmailConfig {
 fn load_config() -> EmailConfig {
     // Env-var override wins over settings, same precedence as every
     // other UMBRA_-prefixed knob.
-    let env_forced_console = std::env::var("UMBRA_EMAIL_BACKEND")
+    let backend_override = std::env::var("UMBRA_EMAIL_BACKEND").ok();
+    let env_forced_console = backend_override
+        .as_deref()
         .map(|v| v.eq_ignore_ascii_case("console"))
+        .unwrap_or(false);
+    let env_forced_api = backend_override
+        .as_deref()
+        .map(|v| v.eq_ignore_ascii_case("api"))
         .unwrap_or(false);
 
     // Re-parse from env / umbra.toml rather than reaching for the
@@ -437,10 +508,31 @@ fn load_config() -> EmailConfig {
         .and_then(|n| u64::try_from(n).ok())
         .unwrap_or(10);
 
-    let backend = if env_forced_console || smtp_host.is_none() {
+    let api_provider = extra
+        .and_then(|e| e.get("email_api_provider"))
+        .and_then(|v| v.as_str())
+        .and_then(EmailApiProvider::from_setting);
+
+    let api_key = extra
+        .and_then(|e| e.get("email_api_key"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    // Resolution order: API (env-forced, or provider+key both set) →
+    // SMTP (host set) → console. `UMBRA_EMAIL_BACKEND=console` still
+    // forces console above everything, preserving the existing safety
+    // valve for CI / tests.
+    let api_selected =
+        !env_forced_console && (env_forced_api || (api_provider.is_some() && api_key.is_some()));
+
+    let backend = if env_forced_console {
         BackendKind::Console
-    } else {
+    } else if api_selected {
+        BackendKind::Api
+    } else if smtp_host.is_some() {
         BackendKind::Smtp
+    } else {
+        BackendKind::Console
     };
 
     EmailConfig {
@@ -450,6 +542,8 @@ fn load_config() -> EmailConfig {
         smtp_user,
         smtp_password,
         default_from,
+        api_provider,
+        api_key,
         smtp_timeout_secs,
     }
 }
@@ -478,9 +572,29 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
         return Err(EmailError::MissingFrom);
     };
 
+    // The API backend builds its own JSON body from the EmailMessage —
+    // it never goes through lettre's MIME composition. Validate the
+    // header values (the injection guard) but skip `compose`, which
+    // targets the SMTP wire format.
+    if cfg.backend == BackendKind::Api {
+        validate_header_value("subject", &message.subject)?;
+        validate_header_value("from", &from)?;
+        if let Some(reply_to) = &message.reply_to {
+            validate_header_value("reply_to", reply_to)?;
+        }
+        for recipient in &message.to {
+            validate_header_value("to", recipient)?;
+        }
+        let provider = cfg.api_provider.ok_or(EmailError::ApiNotConfigured)?;
+        let key = cfg.api_key.as_deref().ok_or(EmailError::ApiNotConfigured)?;
+        let request = build_api_request(provider, key, message, &from);
+        return deliver_api(request).await;
+    }
+
     let composed = compose(&from, message)?;
 
     match cfg.backend {
+        BackendKind::Api => unreachable!("API backend handled above"),
         BackendKind::Console => {
             // The console backend prints the full rendered RFC 822
             // message — headers AND body — to stderr. In Dev / Test
@@ -700,6 +814,192 @@ async fn deliver_smtp(cfg: &EmailConfig, message: Message) -> Result<(), EmailEr
 }
 
 // =========================================================================
+// HTTP API backend (Resend / SendGrid)
+// =========================================================================
+
+/// A fully-built provider HTTP request: the endpoint URL, the bearer
+/// token, and the JSON body. Produced by [`build_api_request`] (a pure
+/// function with no I/O, so the request mapping is unit-testable without
+/// a network round-trip) and consumed by [`deliver_api`], which performs
+/// the actual `reqwest` POST under the `api` feature.
+#[derive(Debug, Clone)]
+pub struct ApiRequest {
+    /// Provider endpoint to POST to.
+    pub url: String,
+    /// Bearer token sent as `Authorization: Bearer <bearer>`.
+    pub bearer: String,
+    /// JSON request body in the provider's expected shape.
+    pub body: serde_json::Value,
+}
+
+/// Map an [`EmailMessage`] into a provider-specific HTTP request.
+///
+/// Pure: builds the URL, bearer header, and JSON body from the message
+/// alone, with no network call. `default_from` is the already-resolved
+/// sender (the caller applies the `email_default_from` fallback before
+/// calling this), and is used as `from` when the message's own `from`
+/// is empty.
+///
+/// The two supported providers expect different JSON shapes:
+///
+/// - **Resend** (`POST https://api.resend.com/emails`):
+///   `{ from, to: [..], subject, html?, text? }`.
+/// - **SendGrid** (`POST https://api.sendgrid.com/v3/mail/send`):
+///   `{ personalizations: [{ to: [{email}] }], from: {email}, subject,
+///   content: [{type, value}] }`.
+///
+/// Attachments are included as base64 in the JSON body for both
+/// providers (Resend: `attachments: [{filename, content}]`; SendGrid:
+/// `attachments: [{filename, type, content, disposition}]`).
+pub fn build_api_request(
+    provider: EmailApiProvider,
+    key: &str,
+    msg: &EmailMessage,
+    default_from: &str,
+) -> ApiRequest {
+    use base64::Engine as _;
+
+    let from = if msg.from.is_empty() {
+        default_from
+    } else {
+        msg.from.as_str()
+    };
+
+    match provider {
+        EmailApiProvider::Resend => {
+            let mut body = serde_json::json!({
+                "from": from,
+                "to": msg.to,
+                "subject": msg.subject,
+            });
+            if let Some(html) = &msg.html_body {
+                body["html"] = serde_json::Value::String(html.clone());
+            }
+            if let Some(text) = &msg.text_body {
+                body["text"] = serde_json::Value::String(text.clone());
+            }
+            if let Some(reply_to) = &msg.reply_to {
+                body["reply_to"] = serde_json::Value::String(reply_to.clone());
+            }
+            if !msg.attachments.is_empty() {
+                let attachments: Vec<serde_json::Value> = msg
+                    .attachments
+                    .iter()
+                    .map(|a| {
+                        serde_json::json!({
+                            "filename": a.filename,
+                            "content": base64::engine::general_purpose::STANDARD.encode(&a.data),
+                        })
+                    })
+                    .collect();
+                body["attachments"] = serde_json::Value::Array(attachments);
+            }
+            ApiRequest {
+                url: "https://api.resend.com/emails".to_string(),
+                bearer: key.to_string(),
+                body,
+            }
+        }
+        EmailApiProvider::SendGrid => {
+            let to: Vec<serde_json::Value> = msg
+                .to
+                .iter()
+                .map(|addr| serde_json::json!({ "email": addr }))
+                .collect();
+
+            let mut content: Vec<serde_json::Value> = Vec::new();
+            // SendGrid requires text/plain to precede text/html when both
+            // are present (RFC 2046 "least to most faithful" ordering).
+            if let Some(text) = &msg.text_body {
+                content.push(serde_json::json!({ "type": "text/plain", "value": text }));
+            }
+            if let Some(html) = &msg.html_body {
+                content.push(serde_json::json!({ "type": "text/html", "value": html }));
+            }
+            if content.is_empty() {
+                // SendGrid rejects an empty content array; send an empty
+                // plain part so a body-less message still validates.
+                content.push(serde_json::json!({ "type": "text/plain", "value": "" }));
+            }
+
+            let mut body = serde_json::json!({
+                "personalizations": [{ "to": to }],
+                "from": { "email": from },
+                "subject": msg.subject,
+                "content": content,
+            });
+            if let Some(reply_to) = &msg.reply_to {
+                body["reply_to"] = serde_json::json!({ "email": reply_to });
+            }
+            if !msg.attachments.is_empty() {
+                let attachments: Vec<serde_json::Value> = msg
+                    .attachments
+                    .iter()
+                    .map(|a| {
+                        serde_json::json!({
+                            "filename": a.filename,
+                            "type": a.content_type,
+                            "disposition": "attachment",
+                            "content": base64::engine::general_purpose::STANDARD.encode(&a.data),
+                        })
+                    })
+                    .collect();
+                body["attachments"] = serde_json::Value::Array(attachments);
+            }
+            ApiRequest {
+                url: "https://api.sendgrid.com/v3/mail/send".to_string(),
+                bearer: key.to_string(),
+                body,
+            }
+        }
+    }
+}
+
+/// POST a [`build_api_request`] result to the provider. Maps a non-2xx
+/// response (including the provider's response body) to
+/// [`EmailError::ApiResponse`] and a transport failure to
+/// [`EmailError::ApiTransport`].
+///
+/// Only compiled under the `api` feature (which pulls in `reqwest`).
+#[cfg(feature = "api")]
+async fn deliver_api(request: ApiRequest) -> Result<(), EmailError> {
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&request.url)
+        .bearer_auth(&request.bearer)
+        .json(&request.body)
+        .send()
+        .await
+        .map_err(|e| EmailError::ApiTransport(e.to_string()))?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+    Err(EmailError::ApiResponse {
+        status: status.as_u16(),
+        body,
+    })
+}
+
+/// Without the `api` feature, selecting the API backend is a
+/// configuration error surfaced at send time rather than a compile
+/// error: the rest of the plugin (SMTP / console) still builds. Enable
+/// `umbra-email/api` to compile the `reqwest`-backed delivery path.
+#[cfg(not(feature = "api"))]
+async fn deliver_api(_request: ApiRequest) -> Result<(), EmailError> {
+    Err(EmailError::ApiTransport(
+        "the `api` feature is not enabled — rebuild umbra-email with \
+         `--features api` to use the HTTP API backend"
+            .to_string(),
+    ))
+}
+
+// =========================================================================
 // Console backend
 // =========================================================================
 
@@ -795,6 +1095,112 @@ mod tests {
     /// floor (a real hung-server integration test isn't feasible in
     /// unit-test scope, but if the default is 0 a hung relay would
     /// block indefinitely).
+    // ---- HTTP API backend: build_api_request -------------------------
+
+    #[test]
+    fn resend_request_maps_url_bearer_and_body() {
+        let msg = EmailMessage::new("Hello", vec!["alice@example.com".into()])
+            .from("noreply@acme.test")
+            .html_body("<p>hi</p>")
+            .text_body("hi");
+        let req = build_api_request(EmailApiProvider::Resend, "re_test_key", &msg, "fallback@x.test");
+
+        assert_eq!(req.url, "https://api.resend.com/emails");
+        assert_eq!(req.bearer, "re_test_key");
+        assert_eq!(req.body["from"], "noreply@acme.test");
+        assert_eq!(req.body["subject"], "Hello");
+        // `to` is an array.
+        assert_eq!(
+            req.body["to"],
+            serde_json::json!(["alice@example.com"]),
+            "to must be a JSON array"
+        );
+        assert_eq!(req.body["html"], "<p>hi</p>");
+        assert_eq!(req.body["text"], "hi");
+    }
+
+    #[test]
+    fn resend_request_uses_default_from_when_message_from_empty() {
+        // No `.from(...)` set on the message → falls back to default_from.
+        let msg = EmailMessage::new("Subj", vec!["a@b.test".into()]).text_body("body");
+        let req = build_api_request(EmailApiProvider::Resend, "k", &msg, "default@acme.test");
+        assert_eq!(
+            req.body["from"], "default@acme.test",
+            "empty message.from must fall back to default_from"
+        );
+    }
+
+    #[test]
+    fn resend_request_maps_multiple_recipients_to_array() {
+        let msg = EmailMessage::new("Subj", vec!["a@b.test".into(), "c@d.test".into()])
+            .from("s@acme.test")
+            .text_body("hi");
+        let req = build_api_request(EmailApiProvider::Resend, "k", &msg, "x@x.test");
+        assert_eq!(
+            req.body["to"],
+            serde_json::json!(["a@b.test", "c@d.test"]),
+            "both recipients must be in the to array"
+        );
+    }
+
+    #[test]
+    fn sendgrid_request_maps_nested_shape() {
+        let msg = EmailMessage::new("Hello", vec!["alice@example.com".into()])
+            .from("noreply@acme.test")
+            .html_body("<p>hi</p>")
+            .text_body("hi");
+        let req =
+            build_api_request(EmailApiProvider::SendGrid, "SG.test_key", &msg, "fallback@x.test");
+
+        assert_eq!(req.url, "https://api.sendgrid.com/v3/mail/send");
+        assert_eq!(req.bearer, "SG.test_key");
+        // from is nested under {email}.
+        assert_eq!(req.body["from"]["email"], "noreply@acme.test");
+        assert_eq!(req.body["subject"], "Hello");
+        // personalizations[0].to is [{email}].
+        assert_eq!(
+            req.body["personalizations"][0]["to"],
+            serde_json::json!([{ "email": "alice@example.com" }]),
+        );
+        // content has text/plain then text/html.
+        assert_eq!(req.body["content"][0]["type"], "text/plain");
+        assert_eq!(req.body["content"][0]["value"], "hi");
+        assert_eq!(req.body["content"][1]["type"], "text/html");
+        assert_eq!(req.body["content"][1]["value"], "<p>hi</p>");
+    }
+
+    #[test]
+    fn sendgrid_request_maps_multiple_recipients() {
+        let msg = EmailMessage::new("Subj", vec!["a@b.test".into(), "c@d.test".into()])
+            .from("s@acme.test")
+            .text_body("hi");
+        let req = build_api_request(EmailApiProvider::SendGrid, "k", &msg, "x@x.test");
+        assert_eq!(
+            req.body["personalizations"][0]["to"],
+            serde_json::json!([{ "email": "a@b.test" }, { "email": "c@d.test" }]),
+        );
+    }
+
+    #[test]
+    fn sendgrid_uses_default_from_when_message_from_empty() {
+        let msg = EmailMessage::new("Subj", vec!["a@b.test".into()]).text_body("body");
+        let req = build_api_request(EmailApiProvider::SendGrid, "k", &msg, "default@acme.test");
+        assert_eq!(req.body["from"]["email"], "default@acme.test");
+    }
+
+    #[test]
+    fn api_provider_parses_case_insensitively() {
+        assert_eq!(
+            EmailApiProvider::from_setting("Resend"),
+            Some(EmailApiProvider::Resend)
+        );
+        assert_eq!(
+            EmailApiProvider::from_setting("SENDGRID"),
+            Some(EmailApiProvider::SendGrid)
+        );
+        assert_eq!(EmailApiProvider::from_setting("mailgun"), None);
+    }
+
     #[test]
     fn smtp_timeout_default_is_ten_seconds() {
         // Exercise load_config in isolation. The CONFIG OnceLock may

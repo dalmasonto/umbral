@@ -39,7 +39,11 @@ models.
 |---------|--------|
 | `email_smtp_host` unset | **Console backend** (default). Messages render to stderr; no network. |
 | `email_smtp_host` set | **SMTP backend**. Connects to the configured relay with STARTTLS. |
-| `UMBRA_EMAIL_BACKEND=console` | Forces the console backend even when SMTP keys exist. Useful in CI / tests. |
+| `email_api_provider` + `email_api_key` set | **HTTP API backend** (requires the `api` cargo feature). POSTs JSON to Resend / SendGrid. |
+| `UMBRA_EMAIL_BACKEND=api` | Forces the HTTP API backend (still needs `email_api_provider` + `email_api_key`). |
+| `UMBRA_EMAIL_BACKEND=console` | Forces the console backend even when SMTP / API keys exist. Useful in CI / tests. |
+
+**Selection order:** `UMBRA_EMAIL_BACKEND=console` wins above everything (the safety valve). Otherwise: API (env-forced, or both `email_api_provider` + `email_api_key` set) → SMTP (`email_smtp_host` set) → console.
 
 SMTP settings (all read from `UMBRA_<KEY>` env vars or `umbra.toml`):
 
@@ -61,6 +65,50 @@ To fix: set `UMBRA_EMAIL_SMTP_HOST` in production. If you intentionally want con
 ### SMTP send timeout
 
 The SMTP transport applies a configurable per-send timeout (default: **10 seconds**). A hung relay will surface as `EmailError::Smtp` after that deadline rather than blocking the request indefinitely. Override via `email_smtp_timeout_secs` in `umbra.toml` or `UMBRA_EMAIL_SMTP_TIMEOUT_SECS`. Set to `0` to remove the cap (not recommended in production).
+
+## HTTP API backend (Resend / SendGrid)
+
+For deployments that prefer a transactional-email provider's HTTP API over an SMTP relay, `umbra-email` ships an API backend behind the optional `api` cargo feature. It POSTs the message as JSON over HTTPS — no SMTP connection, no relay to operate. It **complements** SMTP rather than replacing it; pick whichever your provider exposes.
+
+Enable the feature in your app's `Cargo.toml`:
+
+```toml
+umbra-email = { version = "0.0.1", features = ["api"] }
+```
+
+Then configure the provider and key:
+
+```bash
+export UMBRA_EMAIL_API_PROVIDER=resend     # or: sendgrid
+export UMBRA_EMAIL_API_KEY=re_xxxxxxxxxxxx  # the provider's bearer token
+export UMBRA_EMAIL_DEFAULT_FROM=noreply@acme.test
+```
+
+With both `email_api_provider` and `email_api_key` set, the API backend is selected automatically (or force it with `UMBRA_EMAIL_BACKEND=api`). The `send(&EmailMessage)` call is unchanged — the same message you'd send over SMTP goes through the API path:
+
+```rust
+let msg = EmailMessage::new("Welcome to Acme", vec!["alice@example.com".into()])
+    .from("noreply@acme.test")            // or rely on email_default_from
+    .text_body("Glad to have you.")
+    .html_body("<p>Glad to have you.</p>");
+
+send(&msg).await?;
+```
+
+| Provider | Endpoint | Body shape |
+|----------|----------|------------|
+| **Resend** | `POST https://api.resend.com/emails` | `{ from, to: [..], subject, html?, text? }` |
+| **SendGrid** | `POST https://api.sendgrid.com/v3/mail/send` | `{ personalizations: [{ to: [{email}] }], from: {email}, subject, content: [{type, value}] }` |
+
+Both authenticate with `Authorization: Bearer <email_api_key>`. The `email_default_from` fallback applies to the API path too. A non-2xx response surfaces as `EmailError::ApiResponse { status, body }` (the provider's own error description is preserved in `body`); a transport failure surfaces as `EmailError::ApiTransport`.
+
+<Callout type="info">
+**Attachments over the API** ride along as base64 in the JSON body for both providers. The same `.attach(filename, content_type, bytes)` builder you use for SMTP works on the API path.
+</Callout>
+
+<Callout type="warning">
+Without the `api` feature, `umbra-email` compiles exactly as before (SMTP + console only) and pulls in no HTTP client. Selecting the API backend without the feature enabled returns an error at send time pointing you at `--features api` rather than failing to compile.
+</Callout>
 
 ## Building messages
 
