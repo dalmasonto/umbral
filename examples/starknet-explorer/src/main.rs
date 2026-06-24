@@ -299,11 +299,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
+    // Bind address is configurable via `UMBRA_BIND` (default `127.0.0.1:3000`)
+    // so two examples can run side by side without colliding on a port.
+    let bind = std::env::var("UMBRA_BIND").unwrap_or_else(|_| "127.0.0.1:3000".into());
     tracing::info!(
-        "serving on http://127.0.0.1:3000  (try: curl -H 'X-Network: sepolia.localhost' localhost:3000/txs/seed)"
+        "serving on http://{bind}  (try: curl -H 'X-Network: sepolia.localhost' {bind}/txs/seed)"
     );
-    app.serve("127.0.0.1:3000".parse::<std::net::SocketAddr>()?)
-        .await?;
+    app.serve(bind.parse::<std::net::SocketAddr>()?).await?;
     Ok(())
 }
 
