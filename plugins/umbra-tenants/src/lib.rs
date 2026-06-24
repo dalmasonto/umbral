@@ -268,6 +268,28 @@ impl TenantsPlugin {
         self
     }
 
+    /// Type-safe sibling of [`Self::tenant_apps`]: declare a tenant app by the
+    /// **plugin itself**, so its label comes from [`Plugin::name`] and a mistyped
+    /// string can never desync the tenant set from the plugin's real name —
+    /// the compiler checks the type, and the name is the single source of truth.
+    /// Chain one per tenant app:
+    ///
+    /// ```ignore
+    /// TenantsPlugin::new()
+    ///     .tenant_app(&ExplorerPlugin)   // -> "explorer", from ExplorerPlugin::name()
+    ///     .tenant_app(&LedgerPlugin);
+    /// ```
+    ///
+    /// Merges with any [`Self::tenant_apps`] call; like it, wins over
+    /// `shared_apps`. Prefer this in multi-dev projects where a stringly-typed
+    /// app label is easy to fat-finger.
+    pub fn tenant_app<P: Plugin + ?Sized>(mut self, plugin: &P) -> Self {
+        self.tenant_apps
+            .get_or_insert_with(HashSet::new)
+            .insert(plugin.name().to_string());
+        self
+    }
+
     /// Pick the isolation strategy. Default [`TenantStrategy::Schema`] (one DB,
     /// schema per tenant). [`TenantStrategy::Database`] routes each tenant to
     /// its own database/pool — onboard those via
@@ -631,6 +653,23 @@ impl Plugin for TenantsPlugin {
     }
 
     fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
+        // Fail FAST on a non-Postgres database. Schema-per-tenant isolates
+        // tenants with Postgres schemas — without them there is no isolation, so
+        // refuse to boot rather than silently misbehave later inside a migrate
+        // or a schema-qualified query. (`TenantStrategy::Database` routes through
+        // explicit per-tenant pools, so its backend is the operator's choice.)
+        if self.strategy == TenantStrategy::Schema {
+            let backend = umbra::db::pool_dispatched().backend_name();
+            if backend != "postgres" {
+                return Err(format!(
+                    "umbra-tenants (schema-per-tenant) requires a Postgres database, but the \
+                     default pool is `{backend}`. Postgres schemas are how tenants are isolated; \
+                     point UMBRA_DATABASE_URL at a Postgres before registering TenantsPlugin."
+                )
+                .into());
+            }
+        }
+
         // Install the TenantRouter now that the model registry is published, so
         // `shared_table_set()` sees every plugin's tables. First-write-wins: if
         // the app also called `App::builder().router(...)` (installed during
@@ -795,6 +834,29 @@ mod tests {
 
     fn shared_set(tables: &[&str]) -> HashSet<String> {
         tables.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Schema-per-tenant needs Postgres schemas — registering the plugin on a
+    /// non-Postgres pool must FAIL at build (in `on_ready`), not silently later.
+    #[tokio::test]
+    async fn schema_strategy_rejects_non_postgres_pool_at_build() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("sqlite memory pool");
+        let result = umbra::App::builder()
+            .settings(umbra::Settings::from_env().expect("settings"))
+            .database("default", pool)
+            .plugin(TenantsPlugin::new()) // schema strategy (the default)
+            .build();
+        assert!(
+            result.is_err(),
+            "TenantsPlugin (schema strategy) must reject a non-Postgres default pool"
+        );
+        let msg = format!("{}", result.err().unwrap());
+        assert!(
+            msg.to_lowercase().contains("postgres"),
+            "the build error should name Postgres, got: {msg}"
+        );
     }
 
     #[test]

@@ -224,11 +224,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .database("default", pool)
         .plugin(
             TenantsPlugin::new()
-                // Declare only the TENANT app. Everything else — the built-ins,
-                // `access`, `content`, and anything you add later — is shared by
-                // default. That's the safe direction: forget to list an app and
-                // it stays in `public`, never accidentally fragmented per network.
-                .tenant_apps(["explorer"])
+                // Declare only the TENANT app, by the PLUGIN itself — its name
+                // comes from `ExplorerPlugin::name()`, so a typo can't desync the
+                // tenant set from the real app name. Everything else (built-ins,
+                // `access`, `content`, anything you add later) is shared by
+                // default — the safe direction: forget an app and it stays in
+                // `public`, never accidentally fragmented per network.
+                .tenant_app(&ExplorerPlugin)
                 .tenant_header("X-Network") // resolve the network by header
                 .subdomain_base("localhost") // …or sepolia.localhost / mainnet.localhost
                 .on_missing_tenant(MissingTenant::FallThroughToPublic),
@@ -270,7 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     // registered app EXCEPT `explorer`. (`migrate_schemas` does
                     // this AND the tenant schemas in one go; on a first run
                     // there are no tenants yet, so the public step is enough.)
-                    let shared = TenantsPlugin::new().tenant_apps(["explorer"]).shared_app_set();
+                    let shared = TenantsPlugin::new().tenant_app(&ExplorerPlugin).shared_app_set();
                     let n = umbra::migrate::run_shared(&shared).await?;
                     tracing::info!(applied = n, "migrate (shared apps → public) done");
                     return Ok(());
@@ -289,7 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Provision both networks on boot (idempotent on the schema). `create_tenant`
     // inserts the registry row + CREATE SCHEMA + migrates the `explorer` tenant
     // tables (transaction/address/token) into that network's schema.
-    let plugin = TenantsPlugin::new().tenant_apps(["explorer"]);
+    let plugin = TenantsPlugin::new().tenant_app(&ExplorerPlugin);
     for (name, schema, domain) in [
         ("Starknet Sepolia", "sepolia", "sepolia.localhost"),
         ("Starknet Mainnet", "mainnet", "mainnet.localhost"),

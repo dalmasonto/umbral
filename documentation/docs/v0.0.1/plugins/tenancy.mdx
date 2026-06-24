@@ -12,7 +12,7 @@ tags:
 `umbra-tenants` lets one app serve many **tenants** with their data isolated, without you threading a tenant id through every query. It's the *django-tenants* shape in Rust: **one** Postgres database, **one schema per tenant**, plus a shared `public` schema for cross-tenant data. A request is mapped to a tenant by its `Host` subdomain or a header; the rest of that request runs scoped to the tenant, and every tenant-owned table is **schema-qualified to the tenant's schema with zero extra round-trips** — no `SET search_path` per request.
 
 <Callout type="warning">
-Schema-per-tenant is **Postgres-only**. SQLite has no schemas — the router never returns a schema on a SQLite-bound request, and the schema-migrate helper errors clearly on a SQLite pool. Point `UMBRA_DATABASE_URL` at a Postgres.
+Schema-per-tenant is **Postgres-only**, and registering `TenantsPlugin` on a non-Postgres pool **fails fast at boot** — `App::build()` returns an error naming the offending backend, rather than letting you discover it later inside a migrate. SQLite has no schemas to isolate tenants with. Point `UMBRA_DATABASE_URL` at a Postgres.
 </Callout>
 
 ## The running example: a Starknet explorer
@@ -118,6 +118,16 @@ TenantsPlugin::new()
 
 <Callout type="warning">
 **Prefer `tenant_apps` over `shared_apps`.** With `shared_apps([...])` you must enumerate *every* shared app — including built-ins like `auth` and `sessions`. Forget one and it silently becomes a *tenant* app: its table is created in every tenant schema, and a shared concept (your users!) fragments per tenant. `tenant_apps` inverts the default to the safe side — an app you forget to classify stays in `public`, and you'd notice the missing isolation immediately. `shared_apps` still exists for when you genuinely want to enumerate the shared set; if both are set, `tenant_apps` wins.
+</Callout>
+
+<Callout type="info">
+**Name apps type-safely.** A stringly-typed app label is easy to fat-finger, and a misspelling silently changes the split — dangerous when several devs share a project. Pass the **plugin itself** instead: `.tenant_app(&ExplorerPlugin)` reads the name from `ExplorerPlugin::name()`, so the compiler keeps your declaration and the plugin in sync (and renaming the plugin can't leave a stale string behind). Chain one per tenant app — the example uses this form.
+
+```rust
+TenantsPlugin::new()
+    .tenant_app(&ExplorerPlugin)      // "explorer", straight from ExplorerPlugin::name()
+    .tenant_app(&LedgerPlugin)        // add more tenant apps the same way
+```
 </Callout>
 
 The plugin installs its `TenantRouter` and the per-request resolution middleware for you. Wire everything into the builder:
