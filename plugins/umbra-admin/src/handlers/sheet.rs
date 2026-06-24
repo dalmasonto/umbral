@@ -17,8 +17,10 @@ use crate::discovery::{find_model, pk_column};
 use crate::engine::render;
 use crate::error::AdminError;
 use crate::rows::fetch_rows_filtered;
-use crate::util::{is_htmx, sanitise_form_error};
-use crate::view::{form_fields_for, form_m2m_fields_for, model_for_template};
+use crate::util::{
+    apply_write_error_to_fields, is_htmx, parse_unique_violation_column, sanitise_form_error,
+};
+use crate::view::{form_fields_for, form_m2m_fields_for, model_for_template, validate_form};
 
 /// `GET /admin/{table}/{id}/sheet` — preview sheet fragment. Falls
 /// back to redirecting non-HTMX requests to the changelist with
@@ -291,6 +293,37 @@ pub(crate) async fn sheet_create(
     let form: HashMap<String, String> = pairs.iter().cloned().collect();
     let multi_form: Vec<(String, String)> = pairs;
     let cfg = state.config_for(&table);
+    // Validate up front and surface ALL field failures at once (each below its
+    // own input), mirroring the full-page `crud::create`. Without this the sheet
+    // form only ever showed a flattened top banner on a DB error; now a
+    // required/choice/FK failure highlights the OFFENDING field. Re-render the
+    // sheet fragment with the per-field errors instead of attempting the write.
+    let field_errors = validate_form(&model, &form, cfg);
+    if !field_errors.is_empty() {
+        let mut fields = form_fields_for(&model, Some(&form), cfg);
+        for f in &mut fields {
+            if let Some(m) = field_errors.get(&f.name) {
+                f.error = m.clone();
+            }
+        }
+        let m2m_fields = form_m2m_fields_for(&model, None).await;
+        let inlines = crate::inlines::build_inline_views_from_submitted(&model, cfg, &multi_form);
+        let model_view = model_for_template(&model);
+        return match render(
+            "admin/sheet_create.html",
+            context!(
+                model       => model_view,
+                instance_id => "",
+                fields      => fields,
+                m2m_fields  => m2m_fields,
+                inlines     => inlines,
+                error       => "",
+            ),
+        ) {
+            Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
+            Err(e2) => e2.into_response(),
+        };
+    }
     // Atomic save: parent INSERT + inline children in one transaction,
     // via the SAME shared path the full-page `crud::create` uses. A bad
     // child rolls back the parent too.
@@ -354,17 +387,37 @@ pub(crate) async fn sheet_create(
             }
         }
         Err(e) => {
-            let fields = form_fields_for(&model, Some(&form), cfg);
+            let mut fields = form_fields_for(&model, Some(&form), cfg);
             let m2m_fields = form_m2m_fields_for(&model, None).await;
             // Repopulate the inline rows from the submission so a bad
             // child re-renders the sheet with the user's in-flight inline
             // edits intact (mirrors the full-page `create` error path).
             let inlines =
                 crate::inlines::build_inline_views_from_submitted(&model, cfg, &multi_form);
-            // A `BadInput` from a failed inline child carries the
-            // row-level diagnostic verbatim; other errors are sanitised.
+            // Per-field errors: merge `WriteError::field_errors()` into each
+            // field's `.error` slot (exactly like the full-page `create` path),
+            // so a validation failure highlights the OFFENDING field instead of
+            // only showing a flattened top banner. Unmatched / non-field errors
+            // fall to the banner; a unique violation is attributed to its column
+            // when parseable; an inline-child `BadInput` keeps its row-level
+            // diagnostic verbatim in the banner.
             let error = match &e {
                 AdminError::BadInput(msg) => msg.clone(),
+                AdminError::Write(we) => {
+                    sanitise_form_error(&e); // fires the tracing::error! log
+                    apply_write_error_to_fields(we, &mut fields)
+                }
+                AdminError::Sqlx(sqlx_err) => {
+                    match parse_unique_violation_column(&sqlx_err.to_string())
+                        .and_then(|col| fields.iter_mut().find(|f| f.name == col).map(|f| (col, f)))
+                    {
+                        Some((col, f)) => {
+                            f.error = format!("A record with this `{col}` already exists.");
+                            String::new()
+                        }
+                        None => sanitise_form_error(&e),
+                    }
+                }
                 _ => sanitise_form_error(&e),
             };
             let model_view = model_for_template(&model);

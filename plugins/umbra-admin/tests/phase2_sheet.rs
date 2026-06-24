@@ -708,3 +708,33 @@ async fn test_sheet_delete_success_emits_show_toast_trigger() {
         "toast level = success: {trigger}"
     );
 }
+
+/// gaps2 #12 Part 2: a sheet-create validation failure renders a PER-FIELD error
+/// (next to the offending input), not just a flattened top banner. An empty
+/// required `title` (NOT NULL, no default) is the trigger.
+#[tokio::test]
+async fn test_sheet_create_renders_per_field_error_for_empty_required() {
+    let _g = NOTE_LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+
+    let body = "title=&body=some+body&published=false";
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/note/create")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("hx-request", "true")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _h, html) = send(router, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "empty required field is a 400: {html}");
+    assert!(
+        html.contains("This field is required."),
+        "the per-field required message must render: {html}"
+    );
+    assert!(
+        html.contains("mt-xs text-error"),
+        "the per-field error span (below the field, not the top banner) must render: {html}"
+    );
+}
