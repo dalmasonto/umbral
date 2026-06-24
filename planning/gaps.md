@@ -152,7 +152,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 86. [x] In the playground plugin - In the body, json autofills the required fields but form does not. Form … — archived
 87. [x] The playground plugin - It does not save endpoint changes like what the user selected and entered … — archived
 88. [x] Autodetector: column rename detection — `RenameColumn` operation missing. Renaming `title` → … — archived
-89. [ ] Autodetector: no data migrations — no equivalent to Django's `RunPython` / `RunSQL` operations. Backfilling a new column from an old one, or migrating data between models, requires a standalone script outside the migration system. The `operations` enum in the migration file has no escape hatch for arbitrary code.
+89. [~] Autodetector: no data migrations — RunSql SHIPPED (2026-06-24): `Operation::RunSql { sql, reverse_sql }` + `makemigrations --empty` give the RunSQL escape hatch (hand-authored data migrations, applied per-tenant-schema under multitenancy). REMAINING: `RunPython`/`RunCode` (arbitrary Rust in a migration) — needs a callback-registration mechanism, deferred. (Autodetecting data migrations is intentionally absent — Django doesn't either; they're hand-authored.)
 90. [ ] Autodetector: no `SeparateDatabaseAndState` — Django can run schema operations that touch the DB but *not* the model state (or vice versa). This is critical for zero-downtime deploys where you add a column as nullable, deploy code, backfill, then make it non-nullable in a second migration. Umbra's `operations` and `snapshot_after` are tightly coupled; every op updates the snapshot.
 91. [x] Autodetector: multi-step `AlterColumn` is not batched — changing `nullable`, `default`, and … — archived
 92. [x] Autodetector: constraint-level operations missing — adding a `unique_together` or an `index` on an … — archived
@@ -171,7 +171,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 105. [x] Reverse-FK accessors across crates — replace `#[umbra(no_reverse)]` with a trait-based emission. … — archived
 106. [x] Timezone awareness — Django `USE_TZ` / `TIME_ZONE` equivalent. — archived
 107. [x] The base path for admin plugin is fixed at `/admin/`. Can this be made dynamic so a user can use … — archived
-108. [ ] How can we safely do api versioning using our rest plugin?
+108. [x] How can we safely do api versioning using our rest plugin? — ANSWERED/SHIPPED: `umbra-rest` versioning (`versioning.rs`) — URL-path versions with `.default_version(...)`/`.allowed_version(...)` (features #63).
 109. [x] We need an auto-slugify field given a field value ie `title` -> `title-slug`. Should be a model … — archived
 110. [ ] Can we use `Rayon` in this project?
 111. [x] How do we select specific fields from a model? `let explained_query = … — archived
