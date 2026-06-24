@@ -5269,6 +5269,7 @@ dependencies = [
  "clap",
  "http 1.4.1",
  "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "tracing",

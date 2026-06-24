@@ -79,7 +79,15 @@ enum Command {
     },
     /// Diff registered models against the latest snapshot and write a
     /// new migration file per plugin with changes.
-    Makemigrations,
+    Makemigrations {
+        /// Write an EMPTY migration for `<plugin>` (current snapshot, no
+        /// operations) instead of auto-detecting a schema diff. The stub
+        /// for a hand-authored data migration: open the file and add a
+        /// `RunSql { sql, reverse_sql }` op. Because it carries no schema
+        /// change, it never disturbs the model-snapshot chain.
+        #[arg(long, value_name = "PLUGIN")]
+        empty: Option<String>,
+    },
     /// Apply every pending migration against the ambient pool.
     Migrate {
         /// Mark a specific migration as applied in the tracking table
@@ -272,7 +280,7 @@ pub async fn dispatch_with_argv(
     };
     match cli.command.unwrap_or(Command::Serve { addr: None }) {
         Command::Serve { addr } => serve(app, addr).await,
-        Command::Makemigrations => makemigrations().await,
+        Command::Makemigrations { empty } => makemigrations(empty).await,
         Command::Migrate {
             fake,
             fake_initial,
@@ -452,7 +460,22 @@ async fn serve(
     Ok(())
 }
 
-async fn makemigrations() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn makemigrations(
+    empty: Option<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // --empty <plugin>: write a no-op migration (current snapshot, empty
+    // ops) the developer edits to add a `RunSql` data migration.
+    if let Some(plugin) = empty {
+        let path = umbra::migrate::make_empty(&plugin).await?;
+        println!("Wrote {} (empty)", path.display());
+        println!(
+            "  Edit it to add a data migration, e.g.:\n  \
+             {{ \"kind\": \"RunSql\", \"sql\": \"UPDATE ... SET ...\", \
+             \"reverse_sql\": null }}"
+        );
+        return Ok(());
+    }
+
     match umbra::migrate::make().await {
         Ok(paths) => {
             for path in paths {
@@ -636,6 +659,7 @@ fn op_kind(op: &umbra::migrate::Operation) -> &'static str {
         Operation::RenameColumn { .. } => "RENAME COL",
         Operation::CreateM2MTable { .. } => "CREATE M2M",
         Operation::DropM2MTable { .. } => "DROP M2M",
+        Operation::RunSql { .. } => "RUN SQL",
     }
 }
 

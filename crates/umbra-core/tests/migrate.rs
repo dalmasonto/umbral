@@ -359,7 +359,8 @@ fn create_table_names(ops: &[Operation]) -> Vec<String> {
             | Operation::AlterColumn { .. }
             | Operation::RenameTable { .. }
             | Operation::RenameColumn { .. }
-            | Operation::CreateM2MTable { .. } => None,
+            | Operation::CreateM2MTable { .. }
+            | Operation::RunSql { .. } => None,
         })
         .collect();
     names.sort();

@@ -1,0 +1,90 @@
+---
+title: Data migrations (RunSql)
+description: Hand-authored raw-SQL migrations that change rows, not the schema.
+sidebar_position: 6
+icon: database
+tags:
+  - migrations
+  - data
+---
+
+Most migrations are **schema** migrations — umbra auto-detects them from a model change (`CreateTable`, `AddColumn`, …). A **data migration** changes *rows*, not the schema: backfill a new column, normalise existing values, seed lookup rows. umbra ships this as `Operation::RunSql`, a hand-authored raw-SQL op.
+
+A data migration is never auto-generated — `makemigrations` only emits schema diffs. You write it by hand, and because it has no schema effect, it never disturbs the model-snapshot chain (its `snapshot_after` equals the previous snapshot, so the next `makemigrations` still detects no change).
+
+## Authoring one: `makemigrations --empty`
+
+Generate an empty migration for a plugin, then edit it to add a `RunSql` op:
+
+<Steps>
+
+<Step title="Write the empty stub">
+
+```bash
+cargo run -- makemigrations --empty app
+# Wrote migrations/app/0002_empty.json (empty)
+```
+
+This writes the current snapshot with an empty `operations` list.
+
+</Step>
+
+<Step title="Add a RunSql op">
+
+Open the file and replace the empty `operations` array:
+
+```jsonc
+{
+  "id": "0002_empty",
+  "plugin": "app",
+  "operations": [
+    {
+      "kind": "RunSql",
+      "sql": "UPDATE post SET status = 'draft' WHERE status IS NULL",
+      "reverse_sql": "UPDATE post SET status = NULL WHERE status = 'draft'"
+    }
+  ],
+  "snapshot_after": { /* unchanged — carried forward verbatim */ }
+}
+```
+
+`sql` is the forward statement, executed verbatim on both backends (you own portability). `reverse_sql` is optional — `null` means irreversible.
+
+</Step>
+
+<Step title="Apply it">
+
+```bash
+cargo run -- migrate
+```
+
+The op runs inside the same per-migration transaction as the tracking-table insert, so it's atomic and applied exactly once. A re-run is a no-op (the tracking table guards it).
+
+</Step>
+
+</Steps>
+
+<Callout type="warning">
+`RunSql` runs arbitrary SQL the engine can't reason about. `checkmigrations` flags it as a WARNING — review its row impact and make it idempotent or guarded before deploying.
+</Callout>
+
+## Under multitenancy: per-tenant-schema application
+
+Under [schema-per-tenant](/docs/v0.0.1/plugins/tenancy), a `RunSql` in a **tenant** app runs **once per tenant schema**, under `search_path = "<schema>", public`. That lets the data migration read shared `public` lookup tables while writing tenant rows — a boundary-spanning backfill:
+
+```jsonc
+{
+  "kind": "RunSql",
+  "sql": "INSERT INTO subscription (plan_code, amount_cents) \
+          SELECT code, price_cents FROM public.plan",
+  "reverse_sql": "DELETE FROM subscription"
+}
+```
+
+`subscription` (bare) resolves to the current tenant schema; `public.plan` is the shared lookup. Roll it out with `migrate_schemas`. A `RunSql` in a **shared** app runs once in `public` via the normal `migrate`.
+
+## See also
+
+- [Managed migrations](/docs/v0.0.1/migrations/managed-migrations) — the auto-detected schema loop.
+- [Multitenancy](/docs/v0.0.1/plugins/tenancy) — boundary-spanning data migrations.
+- `crates/umbra-core/src/migrate.rs` (the `Operation::RunSql` variant) and `docs/specs/06-migration-engine.md` for the design.

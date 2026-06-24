@@ -141,6 +141,22 @@ Under each tenant's scope you attach the shared tag to that tenant's article. Bo
 The shared/tenant split is by **app label**: the shared child must be owned by a plugin you list in `shared_apps([...])`. A model registered with `.model::<T>()` lands in the implicit `app` plugin (a tenant app by default), so put a shared child behind a plugin whose name is in `shared_apps`.
 </Callout>
 
+## Data migrations across the tenant boundary
+
+The same `"<schema>", public` search_path lets a hand-authored [`RunSql` data migration](/docs/v0.0.1/migrations/data-migrations) in a **tenant** app read shared `public` lookup tables while writing tenant rows — a boundary-spanning backfill. Because the schema-migrate loop applies every op once per tenant schema, the data migration runs **per tenant**:
+
+```jsonc
+// migrations/app/0002_seed_subscriptions.json — a tenant-app data migration.
+{
+  "kind": "RunSql",
+  "sql": "INSERT INTO subscription (plan_code, amount_cents) \
+          SELECT code, price_cents FROM public.plan",
+  "reverse_sql": "DELETE FROM subscription"
+}
+```
+
+`subscription` (bare) resolves to the current tenant schema; `public.plan` is the shared lookup. Run it via `migrate_schemas` — each tenant gets its own derived rows. A data migration in a **shared** app runs once in `public` via the normal `migrate`.
+
 ## Database-per-tenant (the stronger-isolation strategy)
 
 Schema-per-tenant keeps one database; **database-per-tenant** gives each tenant its **own database** — stronger isolation (separate databases, not schema namespaces) at the cost of one connection pool per tenant. Opt in with `TenantStrategy::Database`:

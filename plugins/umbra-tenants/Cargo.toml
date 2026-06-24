@@ -25,3 +25,5 @@ tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+# Hand-authoring a `RunSql` data-migration file in the boundary-spanning test.
+serde_json = "1"

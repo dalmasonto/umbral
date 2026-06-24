@@ -658,6 +658,32 @@ pub enum Operation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         column: Option<Column>,
     },
+    /// Gap #69: a raw-SQL **data** migration. Unlike every other
+    /// variant it changes *rows*, not the schema model — so the
+    /// autodetector NEVER emits it (it has no model-state effect), and
+    /// a migration carrying only `RunSql` ops has
+    /// `snapshot_after == snapshot_before`. It is always hand-authored:
+    /// generate an empty migration with `makemigrations --empty
+    /// <plugin>`, then add the `RunSql` op by editing the file.
+    ///
+    /// `sql` is the forward statement(s), executed verbatim on the
+    /// per-migration transaction — same string on both backends (raw
+    /// SQL the renderer passes through untouched), so the author owns
+    /// portability. `reverse_sql` is the optional un-apply statement
+    /// (used by a future `migrate --reverse`); `None` means
+    /// irreversible.
+    ///
+    /// Under schema-per-tenant the op runs **per tenant schema** (the
+    /// schema-migrate loop applies every op under the
+    /// `<schema>, public` search_path), so a tenant-app `RunSql` writes
+    /// tenant rows while reading shared `public` lookup tables — the
+    /// boundary-spanning data migration. A shared-app `RunSql` runs once
+    /// in `public` via the normal `migrate`.
+    RunSql {
+        sql: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reverse_sql: Option<String>,
+    },
 }
 
 impl Operation {
@@ -679,6 +705,10 @@ impl Operation {
             Operation::RenameTable { from, .. } => from,
             Operation::CreateM2MTable { junction_table, .. }
             | Operation::DropM2MTable { junction_table } => junction_table,
+            // A data migration targets no single table. The empty name
+            // routes it to the `"default"` alias via `table_alias`'s
+            // fallback (see `op_targets_alias`).
+            Operation::RunSql { .. } => "",
         }
     }
 }
@@ -1168,6 +1198,10 @@ pub enum MigrateError {
     /// SQLite pool. SQLite has no schemas, so schema-per-tenant is Postgres-only
     /// (mirrors how `Inet`/`Cidr` gate on backend). Carries the schema name.
     SchemaUnsupportedOnSqlite { schema: String },
+    /// `makemigrations --empty <plugin>` named a plugin that isn't
+    /// registered. Carries the requested name and the registered set so
+    /// the CLI can list the valid choices.
+    UnknownPlugin { requested: String, known: Vec<String> },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -1210,6 +1244,12 @@ impl std::fmt::Display for MigrateError {
                 f,
                 "umbra migrate: schema-per-tenant migration into `{schema}` requires \
                  Postgres; SQLite has no schemas. Point the app at a Postgres pool."
+            ),
+            MigrateError::UnknownPlugin { requested, known } => write!(
+                f,
+                "umbra makemigrations --empty: no registered plugin named `{requested}`. \
+                 Known plugins: {}",
+                known.join(", ")
             ),
         }
     }
@@ -1307,6 +1347,65 @@ pub async fn make_in(dir: &Path) -> Result<Vec<PathBuf>, MigrateError> {
         return Err(MigrateError::NoChanges);
     }
     Ok(written)
+}
+
+/// Write an **empty** migration for one plugin: the current snapshot
+/// with an empty `operations` list, the authoring stub for a
+/// hand-written data migration (`Operation::RunSql`). The developer
+/// opens the file and adds a `RunSql { sql, reverse_sql }` op.
+///
+/// The empty op-list means `snapshot_after == snapshot_before`, so the
+/// next `make` diffs against the same state and produces nothing — a
+/// data migration never disturbs the schema-snapshot chain. Mirror of
+/// [`make`] for the `--empty <plugin>` CLI path.
+pub async fn make_empty(plugin: &str) -> Result<PathBuf, MigrateError> {
+    make_empty_in(Path::new(MIGRATIONS_DIR), plugin).await
+}
+
+/// Same as [`make_empty`] but takes an explicit base directory. The
+/// seam tests drive.
+pub async fn make_empty_in(dir: &Path, plugin: &str) -> Result<PathBuf, MigrateError> {
+    // The plugin must be registered, else the snapshot/sequence would be
+    // meaningless. Fail loudly with the known set.
+    let known = plugin_order();
+    if !known.iter().any(|p| p == plugin) {
+        return Err(MigrateError::UnknownPlugin {
+            requested: plugin.to_string(),
+            known,
+        });
+    }
+
+    let plugin_dir = dir.join(plugin);
+
+    // Carry the latest snapshot forward verbatim: an empty migration has
+    // NO schema effect, so `snapshot_after` equals the previous one. The
+    // current model snapshot is the same as the prior file's
+    // `snapshot_after` (no model changed); use the current registry state
+    // so the file is self-consistent even on a plugin's very first
+    // migration.
+    let existing = list_migration_files(&plugin_dir)?;
+    let snapshot = match existing.last() {
+        Some(path) => read_migration_file(path)?.snapshot_after,
+        None => Snapshot::current_for(plugin),
+    };
+
+    let seq = (existing.len() + 1) as u32;
+    let id = format!("{seq:04}_empty");
+    let filename = format!("{id}.json");
+
+    let file = MigrationFile {
+        id: id.clone(),
+        plugin: plugin.to_string(),
+        depends_on: Vec::new(),
+        operations: Vec::new(),
+        snapshot_after: snapshot,
+    };
+
+    std::fs::create_dir_all(&plugin_dir)?;
+    let path = plugin_dir.join(filename);
+    let json = serde_json::to_string_pretty(&file)?;
+    std::fs::write(&path, json)?;
+    Ok(path)
 }
 
 /// Apply every pending migration across every registered plugin's
@@ -2496,6 +2595,14 @@ pub fn classify_operation(op: &Operation) -> OpSafety {
         Operation::AlterColumn { table, column, .. } => OpSafety::Warning(format!(
             "alters column `{table}.{column}` — a type change rewrites the column (locks the table on large data) and a NOT NULL tightening fails on existing NULLs; verify against production data first"
         )),
+
+        // A hand-authored data migration runs arbitrary SQL — the
+        // engine can't reason about its row impact, so flag it for
+        // human review (it may rewrite or delete data, and re-running
+        // the rollout while it's mid-flight can double-apply).
+        Operation::RunSql { .. } => OpSafety::Warning(
+            "runs a hand-authored data migration (raw SQL) — review its row impact, ensure it's idempotent or guarded, and verify it against production data first".to_string(),
+        ),
     }
 }
 
@@ -3280,6 +3387,7 @@ fn suffix_for(ops: &[Operation]) -> String {
                 table, from, to, ..
             },
         ] => format!("rename_{table}_{from}_to_{to}"),
+        [Operation::RunSql { .. }] => "run_sql".to_string(),
         _ => "auto".to_string(),
     }
 }
@@ -3565,6 +3673,9 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 "ALTER TABLE \"{t}\" RENAME COLUMN \"{f}\" TO \"{tn}\""
             )]
         }
+        // A data migration renders to its raw forward SQL verbatim —
+        // the author owns portability across backends.
+        Operation::RunSql { sql, .. } => vec![sql.clone()],
     }
 }
 
@@ -3694,6 +3805,9 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
                 "ALTER TABLE \"{t}\" RENAME COLUMN \"{f}\" TO \"{tn}\""
             )]
         }
+        // A data migration renders to its raw forward SQL verbatim —
+        // the author owns portability across backends.
+        Operation::RunSql { sql, .. } => vec![sql.clone()],
     }
 }
 

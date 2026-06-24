@@ -787,7 +787,8 @@ pub async fn write_outputs(
                 | Operation::DropColumn { .. }
                 | Operation::AlterColumn { .. }
                 | Operation::RenameTable { .. }
-                | Operation::RenameColumn { .. } => (t, c),
+                | Operation::RenameColumn { .. }
+                | Operation::RunSql { .. } => (t, c),
             });
 
     Ok(InspectReport {
