@@ -154,10 +154,16 @@ async fn m2m_cross_boundary_tenant_parent_shared_child() {
         .map(|s| s.to_string())
         .collect();
 
-    // 1) Migrate the PUBLIC apps: `tenant` registry + the shared `xtag`.
-    umbra::migrate::run_in(std::path::Path::new(&tmp))
+    // 1) Migrate ONLY the SHARED apps into public: the `tenant` registry +
+    //    `sharedtags` (the `xtag` lookup). Using `run_shared_in` (not the
+    //    unfiltered `run_in`) keeps the TENANT app's `xarticle` + its M2M
+    //    junction OUT of public — they belong only in each tenant schema, where
+    //    the junction's FK to `public.xtag` resolves via the `<schema>, public`
+    //    search_path. (Unfiltered `run_in` would create the junction in public
+    //    with an FK to `xtag` before `xtag` exists there → it would error.)
+    umbra::migrate::run_shared_in(std::path::Path::new(&tmp), &shared_for_schema)
         .await
-        .expect("public migrate");
+        .expect("public (shared-only) migrate");
 
     // 2) Provision two tenant schemas; migrate the tenant app (article +
     //    junction) into each. This MUST NOT error: the junction's FK to the

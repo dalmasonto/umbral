@@ -1481,10 +1481,45 @@ pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
     for alias in crate::db::registered_aliases() {
         match crate::db::pool_for_dispatched(&alias) {
             crate::db::DbPool::Sqlite(p) => {
-                total += run_in_sqlite_for_alias(dir, &alias, p).await?
+                total += run_in_sqlite_for_alias(dir, &alias, p, None).await?
             }
             crate::db::DbPool::Postgres(p) => {
-                total += run_in_postgres_for_alias(dir, &alias, p).await?
+                total += run_in_postgres_for_alias(dir, &alias, p, None).await?
+            }
+        }
+    }
+    Ok(total)
+}
+
+/// Apply only the **SHARED** apps' pending migrations to the default pool —
+/// the `public`/shared half of schema-per-tenant multitenancy. This is the
+/// mirror of [`run_for_schema_in`] (which migrates the *tenant* apps into a
+/// tenant schema): here only plugins IN `shared_apps` migrate into `public`,
+/// so a tenant app's tables — and crucially its M2M junctions — are NEVER
+/// created in `public`. They live only in each tenant schema, where a junction's
+/// FK to a SHARED child resolves via the `<schema>, public` search-path.
+///
+/// Use this instead of the unfiltered [`run`]/[`run_in`] when running a
+/// schema-per-tenant app: `run_shared` (shared → public) then `migrate_schemas`
+/// (tenant apps → each schema). On a non-multitenant app the two are equivalent
+/// only if every app is shared; otherwise prefer plain [`run`].
+pub async fn run_shared(shared_apps: &std::collections::HashSet<String>) -> Result<u64, MigrateError> {
+    run_shared_in(Path::new(MIGRATIONS_DIR), shared_apps).await
+}
+
+/// [`run_shared`] against an explicit migrations directory (tests / tooling).
+pub async fn run_shared_in(
+    dir: &Path,
+    shared_apps: &std::collections::HashSet<String>,
+) -> Result<u64, MigrateError> {
+    let mut total: u64 = 0;
+    for alias in crate::db::registered_aliases() {
+        match crate::db::pool_for_dispatched(&alias) {
+            crate::db::DbPool::Sqlite(p) => {
+                total += run_in_sqlite_for_alias(dir, &alias, p, Some(shared_apps)).await?
+            }
+            crate::db::DbPool::Postgres(p) => {
+                total += run_in_postgres_for_alias(dir, &alias, p, Some(shared_apps)).await?
             }
         }
     }
@@ -1523,12 +1558,18 @@ async fn run_in_sqlite_for_alias(
     dir: &Path,
     alias: &str,
     pool: &sqlx::SqlitePool,
+    shared_only: Option<&std::collections::HashSet<String>>,
 ) -> Result<u64, MigrateError> {
     ensure_tracking_table_sqlite(pool).await?;
     let applied = applied_names_sqlite(pool).await?;
 
     let mut applied_count: u64 = 0;
     for plugin in plugin_order() {
+        if let Some(shared) = shared_only {
+            if !shared.contains(&plugin) {
+                continue;
+            }
+        }
         let plugin_dir = dir.join(&plugin);
         let paths = list_migration_files(&plugin_dir)?;
 
@@ -1581,12 +1622,23 @@ async fn run_in_postgres_for_alias(
     dir: &Path,
     alias: &str,
     pool: &sqlx::PgPool,
+    shared_only: Option<&std::collections::HashSet<String>>,
 ) -> Result<u64, MigrateError> {
     ensure_tracking_table_postgres(pool).await?;
     let applied = applied_names_postgres(pool).await?;
 
     let mut applied_count: u64 = 0;
     for plugin in plugin_order() {
+        // Shared-filtered public migrate (multitenancy): when a shared-app set
+        // is given, migrate ONLY those plugins into this pool, so a tenant
+        // app's tables (and its M2M junctions) are NOT created in `public` —
+        // they belong only in each tenant schema. `None` = migrate everything
+        // (the default single-DB behaviour, byte-identical to before).
+        if let Some(shared) = shared_only {
+            if !shared.contains(&plugin) {
+                continue;
+            }
+        }
         let plugin_dir = dir.join(&plugin);
         let paths = list_migration_files(&plugin_dir)?;
 
@@ -1995,7 +2047,7 @@ async fn run_in_sqlite_checked(
         );
     }
 
-    run_in_sqlite_for_alias(dir, alias, pool).await
+    run_in_sqlite_for_alias(dir, alias, pool, None).await
 }
 
 /// Postgres drift-checking path for `run_checked_in`. Same logic as
@@ -2043,7 +2095,7 @@ async fn run_in_postgres_checked(
         );
     }
 
-    run_in_postgres_for_alias(dir, alias, pool).await
+    run_in_postgres_for_alias(dir, alias, pool, None).await
 }
 
 /// Record a migration as applied in the `umbra_migrations` tracking
@@ -2974,30 +3026,46 @@ fn collect_m2m_pairs(snap: &Snapshot) -> std::collections::BTreeMap<(String, Str
 /// snapshot the diff is computing toward) — without it the DDL would
 /// reference a column the child table doesn't have.
 fn build_create_m2m_op(spec: &M2MPair, current: &Snapshot) -> Result<Operation, MigrateError> {
-    let target = current
+    // Resolve the target's PK from the current snapshot, FALLING BACK to the
+    // global model registry. Migrations are generated per-plugin, so a
+    // CROSS-PLUGIN M2M (parent owned by app A, target model owned by app B —
+    // e.g. a tenant model with an M2M to a SHARED lookup table, or any app's
+    // M2M to `umbra-auth`'s `User`) has its target in a *different* plugin's
+    // snapshot, absent from `current`. The global registry sees every
+    // registered model, so the junction DDL resolves the child PK no matter
+    // which plugin owns the target. (Cross-plugin FK ordering already lets the
+    // junction migration run after the target table's own migration.)
+    let pk_col_and_ty = |m: &ModelMeta| -> (String, crate::orm::SqlType) {
+        let pk = m.fields.iter().find(|c| c.primary_key);
+        (
+            pk.map(|c| c.name.clone()).unwrap_or_else(|| "id".to_string()),
+            pk.map(|c| c.ty).unwrap_or(crate::orm::SqlType::BigInt),
+        )
+    };
+    let (child_pk_col, child_ty) = current
         .models
         .iter()
         .find(|m| m.table == spec.target_table)
+        .map(|m| pk_col_and_ty(m))
+        .or_else(|| {
+            // Non-panicking global lookup. `registered_models()` panics if the
+            // registry isn't initialised (unit tests that call `diff` directly,
+            // with no `App::build`); a `None` registry simply yields no global
+            // fallback, so a TRULY-unregistered target is still rejected below.
+            REGISTRY.get().and_then(|reg| {
+                reg.iter()
+                    .find(|(_, m)| m.table == spec.target_table)
+                    .map(|(_, m)| pk_col_and_ty(m))
+            })
+        })
         .ok_or_else(|| {
             MigrateError::UnsupportedChange(format!(
                 "M2M `{}.{}` targets table `{}` which is not registered \
-                 in the current snapshot — register the target model with \
-                 `AppBuilder::model::<{}>()` before its parent.",
+                 anywhere — register the target model via \
+                 `AppBuilder::model::<{}>()` or its owning plugin.",
                 spec.parent_table, spec.field_name, spec.target_table, spec.target_table,
             ))
         })?;
-    let child_pk_col = target
-        .fields
-        .iter()
-        .find(|c| c.primary_key)
-        .map(|c| c.name.clone())
-        .unwrap_or_else(|| "id".to_string());
-    let child_ty = target
-        .fields
-        .iter()
-        .find(|c| c.primary_key)
-        .map(|c| c.ty)
-        .unwrap_or(crate::orm::SqlType::BigInt);
     let parent_model = current
         .models
         .iter()
