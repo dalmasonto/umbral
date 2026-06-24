@@ -168,6 +168,31 @@ pub enum MissingTenant {
 /// context), plus the usual cross-tenant built-ins.
 const DEFAULT_SHARED_APPS: &[&str] = &["app", "tenants", "auth", "sessions", "permissions"];
 
+/// Resolve the SHARED app-label set from the plugin's config. When `tenant_apps`
+/// is set (the recommended safe-by-default mode), the shared set is **every
+/// registered plugin EXCEPT the tenant apps** — so built-ins and external
+/// plugins are shared without being named. The `tenants` registry is forced
+/// shared regardless. Otherwise the explicit `shared_apps` list is used.
+///
+/// Reads the live plugin registry (`plugin_order`), so it is meaningful once the
+/// app is built — call it at `on_ready` or command-run time, not at config time.
+fn resolve_shared_app_set(
+    shared_apps: &[String],
+    tenant_apps: Option<&HashSet<String>>,
+) -> HashSet<String> {
+    match tenant_apps {
+        Some(tenant) => {
+            let mut shared: HashSet<String> = umbra::migrate::plugin_order()
+                .into_iter()
+                .filter(|p| !tenant.contains(p))
+                .collect();
+            shared.insert("tenants".to_string()); // the registry is always shared
+            shared
+        }
+        None => shared_apps.iter().cloned().collect(),
+    }
+}
+
 /// Schema-per-tenant management plugin.
 ///
 /// Register it with the consumer's `App::builder().plugin(TenantsPlugin::new())`.
@@ -179,6 +204,12 @@ pub struct TenantsPlugin {
     /// set is computed from these at `on_ready` (via [`Self::shared_table_set`]),
     /// once the model registry is published.
     shared_apps: Vec<String>,
+    /// Opt-in TENANT apps — the safer inverse of [`Self::shared_apps`]. When
+    /// `Some`, THESE are the per-tenant apps and **every other registered app is
+    /// shared** (built-ins, external plugins, anything you forgot). Wins over
+    /// `shared_apps`. Resolved against the live plugin registry, so it only
+    /// needs the names of the apps you own that are tenant-specific.
+    tenant_apps: Option<HashSet<String>>,
     /// If set, the resolver extracts the left-most `Host` label as the tenant
     /// key when the host ends in `.<base>` (e.g. base `example.com` →
     /// `acme.example.com` resolves tenant `acme`).
@@ -207,11 +238,34 @@ impl TenantsPlugin {
     pub fn new() -> Self {
         Self {
             shared_apps: DEFAULT_SHARED_APPS.iter().map(|s| s.to_string()).collect(),
+            tenant_apps: None,
             subdomain_base: None,
             tenant_header: Some("X-Tenant".to_string()),
             on_missing: MissingTenant::default(),
             strategy: TenantStrategy::default(),
         }
+    }
+
+    /// Declare the **TENANT** apps — the apps whose tables are per-tenant
+    /// (created in each tenant's schema, isolated). EVERY OTHER registered app
+    /// is **shared** (its tables stay in `public`): built-ins (`auth`,
+    /// `sessions`, …), external plugins, and anything you didn't list.
+    ///
+    /// This is the safer inverse of [`Self::shared_apps`]. With `shared_apps`
+    /// you must enumerate *every* shared app — forget one and it silently
+    /// becomes tenant (its tables fragment into every schema). With
+    /// `tenant_apps` you list only the handful of apps you own that are
+    /// tenant-specific; forgetting one leaves it shared (public), which is the
+    /// safe failure. The `tenants` registry is forced shared regardless.
+    ///
+    /// **Prefer this** over `shared_apps`. If both are set, `tenant_apps` wins.
+    pub fn tenant_apps<I, S>(mut self, apps: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.tenant_apps = Some(apps.into_iter().map(Into::into).collect());
+        self
     }
 
     /// Pick the isolation strategy. Default [`TenantStrategy::Schema`] (one DB,
@@ -261,9 +315,11 @@ impl TenantsPlugin {
     }
 
     /// The set of SHARED **app labels** (used to filter migrations: the tenant
-    /// apps are every plugin NOT in here).
+    /// apps are every plugin NOT in here). Resolves [`Self::tenant_apps`] when
+    /// set (shared = every registered app except the tenant ones), else returns
+    /// the explicit [`Self::shared_apps`] list.
     pub fn shared_app_set(&self) -> HashSet<String> {
-        self.shared_apps.iter().cloned().collect()
+        resolve_shared_app_set(&self.shared_apps, self.tenant_apps.as_ref())
     }
 
     /// Collect the SHARED apps' model **table names** into a set, so the router
@@ -554,7 +610,9 @@ impl Plugin for TenantsPlugin {
 
     fn commands(&self) -> Vec<Box<dyn umbra::cli::PluginCommand>> {
         vec![Box::new(MigrateSchemasCommand {
-            shared_apps: self.shared_app_set(),
+            shared_apps: self.shared_apps.clone(),
+            tenant_apps: self.tenant_apps.clone(),
+            strategy: self.strategy,
         })]
     }
 
@@ -646,29 +704,57 @@ async fn apply_missing(
     }
 }
 
-/// The `migrate_schemas` management command: for every active [`Tenant`], ensure
-/// its schema exists and migrate the tenant apps into it (idempotent). Shared
-/// apps are migrated into `public` by the normal `migrate`.
+/// The `migrate_schemas` management command — the one-stop "migrate everything to
+/// where it belongs". Two phases: (1) the SHARED apps into `public` (via
+/// `run_shared`), then (2) the TENANT apps into every active [`Tenant`]'s schema
+/// (idempotent). Resolves the shared/tenant split at run time against the live
+/// registry, so `tenant_apps([...])` works.
 struct MigrateSchemasCommand {
-    shared_apps: HashSet<String>,
+    shared_apps: Vec<String>,
+    tenant_apps: Option<HashSet<String>>,
+    strategy: TenantStrategy,
 }
 
 #[async_trait]
 impl umbra::cli::PluginCommand for MigrateSchemasCommand {
     fn command(&self) -> clap::Command {
         clap::Command::new("migrate_schemas").about(
-            "Create + migrate the schema of every active tenant (schema-per-tenant). \
-             Idempotent. Run after `migrate` (which handles the shared `public` apps).",
+            "Migrate everything to where it belongs: the SHARED apps into public, \
+             then the TENANT apps into every active tenant's schema. Idempotent — \
+             the one command to run after `makemigrations`.",
         )
     }
 
     async fn run(&self, _matches: &clap::ArgMatches) -> Result<(), umbra::cli::CliError> {
+        // Resolve the shared/tenant split now, against the live registry, so
+        // `tenant_apps([...])` (shared = every other registered app) works.
+        let shared = resolve_shared_app_set(&self.shared_apps, self.tenant_apps.as_ref());
+
+        // Phase 1 — SHARED apps into `public` (the app/default DB). `run_shared`
+        // (not the unfiltered `migrate`) keeps the tenant apps OUT of public.
+        let shared_n = umbra::migrate::run_shared(&shared).await?;
+        tracing::info!(
+            applied = shared_n,
+            "umbra-tenants migrate_schemas: shared apps → public"
+        );
+
+        // Phase 2 — TENANT apps into each tenant's schema. In Database strategy
+        // the per-tenant databases are migrated when you onboard them with
+        // `register_tenant_database`, so there is nothing schema-scoped here.
+        if self.strategy == TenantStrategy::Database {
+            tracing::info!(
+                "umbra-tenants migrate_schemas: database strategy — tenant databases \
+                 migrate at register_tenant_database time"
+            );
+            return Ok(());
+        }
+
         let tenants = Tenant::objects()
             .filter(tenant::IS_ACTIVE.eq(true))
             .fetch()
             .await?;
         if tenants.is_empty() {
-            tracing::info!("umbra-tenants migrate_schemas: no active tenants");
+            tracing::info!("umbra-tenants migrate_schemas: no active tenants yet");
             return Ok(());
         }
         let mut total: u64 = 0;
@@ -684,7 +770,7 @@ impl umbra::cli::PluginCommand for MigrateSchemasCommand {
                     continue;
                 }
             };
-            let n = umbra::migrate::run_for_schema(&schema, &self.shared_apps).await?;
+            let n = umbra::migrate::run_for_schema(&schema, &shared).await?;
             total += n;
             tracing::info!(
                 schema = %schema.as_str(),
@@ -696,7 +782,7 @@ impl umbra::cli::PluginCommand for MigrateSchemasCommand {
         tracing::info!(
             tenants = tenants.len(),
             applied = total,
-            "umbra-tenants migrate_schemas: done"
+            "umbra-tenants migrate_schemas: tenant schemas done"
         );
         Ok(())
     }

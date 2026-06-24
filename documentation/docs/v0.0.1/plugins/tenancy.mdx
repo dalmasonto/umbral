@@ -94,18 +94,18 @@ pub struct ApiKey {                // owned by AccessPlugin (shared) -> public
 Quick prototypes can register a model directly with `.model::<T>()` instead of a plugin — it lands in an implicit `app` plugin. That `app` plugin is a **tenant app by default** (it's not in `shared_apps`). Grouping models into named plugins is what lets you put *some* of them in `public`.
 </Callout>
 
-## Step 2 — declare the shared apps
+## Step 2 — declare which apps are tenant-specific
 
-Register `TenantsPlugin` and list the shared app names. Here only `explorer` is left out, so it's the one tenant app:
+Register `TenantsPlugin` and name your **tenant apps** with `tenant_apps`. **Everything else is shared by default** — built-ins (`auth`, `sessions`), external plugins, your own shared apps. Here only `explorer` is per-network:
 
 ```rust
 use umbra_tenants::{TenantsPlugin, MissingTenant};
 
 TenantsPlugin::new()
-    // SHARED = these app names keep their tables in public. The `tenants`
-    // registry is always shared; `access` + `content` join it. `explorer`
-    // is NOT here, so it is the tenant app (per-network tables).
-    .shared_apps(["tenants", "access", "content"])
+    // TENANT apps = per-network. Everything NOT listed here is shared (public),
+    // including built-ins and any plugin you add later. `explorer` is the only
+    // tenant app; `access`, `content`, `tenants` are shared automatically.
+    .tenant_apps(["explorer"])
     // Map a request to a network by this header (wins over the subdomain)…
     .tenant_header("X-Network")
     // …and/or the left-most Host label under this base
@@ -116,6 +116,10 @@ TenantsPlugin::new()
     .on_missing_tenant(MissingTenant::FallThroughToPublic)
 ```
 
+<Callout type="warning">
+**Prefer `tenant_apps` over `shared_apps`.** With `shared_apps([...])` you must enumerate *every* shared app — including built-ins like `auth` and `sessions`. Forget one and it silently becomes a *tenant* app: its table is created in every tenant schema, and a shared concept (your users!) fragments per tenant. `tenant_apps` inverts the default to the safe side — an app you forget to classify stays in `public`, and you'd notice the missing isolation immediately. `shared_apps` still exists for when you genuinely want to enumerate the shared set; if both are set, `tenant_apps` wins.
+</Callout>
+
 The plugin installs its `TenantRouter` and the per-request resolution middleware for you. Wire everything into the builder:
 
 ```rust
@@ -124,7 +128,7 @@ let app = App::builder()
     .database("default", pool)
     .plugin(
         TenantsPlugin::new()
-            .shared_apps(["tenants", "access", "content"])
+            .tenant_apps(["explorer"])     // the one per-network app
             .tenant_header("X-Network")
             .subdomain_base("localhost")
             .on_missing_tenant(MissingTenant::FallThroughToPublic),
@@ -140,9 +144,9 @@ let app = App::builder()
 Don't also call `App::builder().router(...)` — an explicitly-wired app router takes precedence over the plugin's `TenantRouter`, and you'd lose the tenant routing.
 </Callout>
 
-## Step 3 — migrate: shared apps to `public`, tenant apps to each schema
+## Step 3 — migrate everything with one command
 
-This is the one place multitenancy changes the migrate flow. Generate migrations as usual, but for the **public** migrate use `run_shared`, **not** the unfiltered `migrate`/`run`:
+`migrate_schemas` (contributed by the plugin) does **both** phases: the shared apps into `public`, then the tenant apps into every active network's schema. It's the one command to run after `makemigrations`.
 
 <Steps>
 <Step title="Generate migrations for every app">
@@ -151,30 +155,25 @@ cargo run -- makemigrations
 ```
 One migration folder per app — `migrations/explorer/`, `migrations/access/`, `migrations/content/`, `migrations/tenants/`.
 </Step>
-<Step title="Migrate the SHARED apps into public — with run_shared">
-```rust
-// In your `migrate` command handler:
-let shared: std::collections::HashSet<String> =
-    ["tenants", "access", "content"].into_iter().map(String::from).collect();
-umbra::migrate::run_shared(&shared).await?;
+<Step title="Migrate everything — migrate_schemas">
+```bash
+cargo run -- migrate_schemas
 ```
-`run_shared` migrates **only** the shared apps into `public`. The plain `migrate`/`run` is unfiltered — it would create the `explorer` (tenant) tables in `public` too. They don't belong there; they belong in each network's schema. Using `run_shared` keeps `public` to `tenant`, `api_key`, `blog_post`.
+**Phase 1** migrates the shared apps into `public` (via `run_shared`, so the `explorer` tenant tables are *not* created in `public` — they belong only in each network's schema). **Phase 2** migrates the `explorer` tenant app into **every active network's schema**. Idempotent — re-run it any time after adding a model.
 </Step>
-<Step title="Provision each network — create_tenant">
+<Step title="Provision a network — create_tenant">
 ```rust
-let plugin = TenantsPlugin::new().shared_apps(["tenants", "access", "content"]);
+let plugin = TenantsPlugin::new().tenant_apps(["explorer"]);
 plugin.create_tenant("Starknet Sepolia", "sepolia", "sepolia.localhost").await?;
 plugin.create_tenant("Starknet Mainnet", "mainnet", "mainnet.localhost").await?;
 ```
-Each `create_tenant` inserts the registry row in `public`, runs `CREATE SCHEMA "sepolia"`, and migrates the **tenant** apps (`explorer`) into that schema — so `sepolia.transaction`, `sepolia.address`, `sepolia.token` come into existence. Idempotent on the schema. `schema_name` is validated as a safe Postgres identifier (`Schema::new`) before it touches the DB, so an injection-shaped name is rejected, not escaped.
-</Step>
-<Step title="Add a network later — migrate_schemas">
-```bash
-cargo run -- migrate_schemas      # the plugin contributes this command
-```
-After you add a tenant model or a new network, `migrate_schemas` walks every **active** tenant and (re)creates + migrates its schema, idempotently.
+Each `create_tenant` inserts the registry row in `public`, runs `CREATE SCHEMA "sepolia"`, and migrates the **tenant** apps (`explorer`) into that schema — so `sepolia.transaction`, `sepolia.address`, `sepolia.token` come into existence. Idempotent on the schema. `schema_name` is validated as a safe Postgres identifier (`Schema::new`) before it touches the DB, so an injection-shaped name is rejected, not escaped. After provisioning, `migrate_schemas` keeps every network current as you add models.
 </Step>
 </Steps>
+
+<Callout type="info">
+**Where do migrations end up?** A *shared*-app migration is applied **once**, to `public`. A *tenant*-app migration is applied to **every** active network's schema (Phase 2 walks them) — and to a new network's schema the moment you `create_tenant` it. So a tenant table exists in every network's schema but **never** in `public`; a shared table exists only in `public`. Because `migrate_schemas` is idempotent, running it after any `makemigrations` brings every schema up to date.
+</Callout>
 
 ## Step 4 — it just works per network
 

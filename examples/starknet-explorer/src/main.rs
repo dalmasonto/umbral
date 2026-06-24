@@ -15,13 +15,13 @@
 //!   `api_key` / `blog_post` tables live once, in `public`, and read identically
 //!   no matter which network you resolve.
 //!
-//! The split is made entirely by **plugin name**: whatever you list in
-//! `.shared_apps([...])` goes to `public`; everything else is tenant-owned and
-//! gets a copy of its tables in each tenant schema. Here:
+//! The split is made entirely by **plugin name**: you list your TENANT apps with
+//! `.tenant_apps([...])`, and EVERYTHING ELSE — built-ins, external plugins, your
+//! shared apps — stays in `public` by default (the safe direction). Here:
 //!
 //! ```text
-//!   shared_apps = ["tenants", "access", "content"]   →  public (shared)
-//!   explorer (the ONLY tenant app)                   →  one schema per network
+//!   tenant_apps = ["explorer"]                          →  one schema per network
+//!   everything else (tenants / access / content / …)    →  public (shared)
 //! ```
 //!
 //! A "tenant" is a network: `sepolia` (Starknet Sepolia testnet) and `mainnet`
@@ -224,7 +224,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .database("default", pool)
         .plugin(
             TenantsPlugin::new()
-                .shared_apps(["tenants", "access", "content"]) // explorer is the ONLY tenant app
+                // Declare only the TENANT app. Everything else — the built-ins,
+                // `access`, `content`, and anything you add later — is shared by
+                // default. That's the safe direction: forget to list an app and
+                // it stays in `public`, never accidentally fragmented per network.
+                .tenant_apps(["explorer"])
                 .tenant_header("X-Network") // resolve the network by header
                 .subdomain_base("localhost") // …or sepolia.localhost / mainnet.localhost
                 .on_missing_tenant(MissingTenant::FallThroughToPublic),
@@ -261,12 +265,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }
             _ => {
                 if args.get(1).map(String::as_str) == Some("migrate") {
-                    let shared_set: std::collections::HashSet<String> =
-                        ["tenants", "access", "content"]
-                            .into_iter()
-                            .map(String::from)
-                            .collect();
-                    let n = umbra::migrate::run_shared(&shared_set).await?;
+                    // Shared apps → public. `shared_app_set()` resolves the
+                    // `tenant_apps(["explorer"])` split for us: shared = every
+                    // registered app EXCEPT `explorer`. (`migrate_schemas` does
+                    // this AND the tenant schemas in one go; on a first run
+                    // there are no tenants yet, so the public step is enough.)
+                    let shared = TenantsPlugin::new().tenant_apps(["explorer"]).shared_app_set();
+                    let n = umbra::migrate::run_shared(&shared).await?;
                     tracing::info!(applied = n, "migrate (shared apps → public) done");
                     return Ok(());
                 }
@@ -284,7 +289,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Provision both networks on boot (idempotent on the schema). `create_tenant`
     // inserts the registry row + CREATE SCHEMA + migrates the `explorer` tenant
     // tables (transaction/address/token) into that network's schema.
-    let plugin = TenantsPlugin::new().shared_apps(["tenants", "access", "content"]);
+    let plugin = TenantsPlugin::new().tenant_apps(["explorer"]);
     for (name, schema, domain) in [
         ("Starknet Sepolia", "sepolia", "sepolia.localhost"),
         ("Starknet Mainnet", "mainnet", "mainnet.localhost"),
