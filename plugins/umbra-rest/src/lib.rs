@@ -1616,15 +1616,27 @@ impl Plugin for RestPlugin {
             router = router
                 .route(
                     &format!("{base}/{{table}}/"),
-                    get(list).post(create).patch(bulk_update).delete(bulk_delete),
+                    get(list)
+                        .post(create)
+                        .patch(bulk_update)
+                        .delete(bulk_delete)
+                        .options(collection_options),
                 )
                 .route(
                     &format!("{base}/{{table}}"),
-                    get(list).post(create).patch(bulk_update).delete(bulk_delete),
+                    get(list)
+                        .post(create)
+                        .patch(bulk_update)
+                        .delete(bulk_delete)
+                        .options(collection_options),
                 )
                 .route(
                     &format!("{base}/{{table}}/{{id}}"),
-                    get(retrieve).put(update).patch(update).delete(destroy),
+                    get(retrieve)
+                        .put(update)
+                        .patch(update)
+                        .delete(destroy)
+                        .options(detail_options),
                 );
 
             // API root index: lists the exposed resources + every plugin's
@@ -1764,6 +1776,46 @@ fn method_filter(m: &http::Method) -> axum::routing::MethodFilter {
             panic!("umbra-rest: method {other} isn't supported as an `@action` HTTP method")
         }
     }
+}
+
+// =========================================================================
+// OPTIONS (gaps2 #98). A resource endpoint answers `OPTIONS` with `204 No
+// Content` + an `Allow` header listing its supported verbs, instead of the
+// bare `405` axum returns for an unregistered method. CORS-preflight OPTIONS
+// is still handled by the cors layer when present; this is the resource-level
+// method-discovery answer (the HTTP-spec-correct response). A JSON metadata
+// body — fields, writable columns — is a deferred follow-up.
+// =========================================================================
+
+/// Build a `204 No Content` response carrying an `Allow` header.
+fn options_response(allow: &str) -> Response {
+    let mut resp = StatusCode::NO_CONTENT.into_response();
+    if let Ok(value) = http::HeaderValue::from_str(allow) {
+        resp.headers_mut().insert(http::header::ALLOW, value);
+    }
+    resp
+}
+
+/// `OPTIONS` on a collection endpoint (`/api/{table}` and `/api/{table}/`).
+/// `GET` (list) + `POST` (create) are always supported; collection
+/// `PATCH`/`DELETE` (bulk) only when the resource opted in via `.bulk()`.
+async fn collection_options(Path(table): Path<String>) -> Response {
+    let bulk = CONFIG
+        .get()
+        .map(|cfg| cfg.bulk.contains(&table))
+        .unwrap_or(false);
+    let allow = if bulk {
+        "OPTIONS, GET, POST, PATCH, DELETE"
+    } else {
+        "OPTIONS, GET, POST"
+    };
+    options_response(allow)
+}
+
+/// `OPTIONS` on a detail endpoint (`/api/{table}/{id}`): retrieve / update /
+/// destroy are always registered.
+async fn detail_options() -> Response {
+    options_response("OPTIONS, GET, PUT, PATCH, DELETE")
 }
 
 // =========================================================================
