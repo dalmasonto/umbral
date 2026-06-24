@@ -111,6 +111,36 @@ cargo run -- migrate_schemas
 
 Adding a tenant-owned model later is the usual loop: `makemigrations`, `migrate` (public), then `migrate_schemas` to roll the new table into every tenant's schema.
 
+## Cross-boundary relations: a tenant model that points at a shared one
+
+A tenant-owned model can relate to a **shared** (`public`) model — an FK or an `M2M<T>` from a per-tenant parent to a child that lives in `public`. The shared child stays a single row every tenant sees; the *links* are per-tenant.
+
+This works because the schema-migrate step pins `search_path` to `"<tenant_schema>", public` for each migration. An unqualified reference resolves against the tenant schema **first** (so tenant tables still shadow same-named public ones), then falls back to `public`. A junction's `child_id REFERENCES "tag"(...)` therefore resolves `tag` to `public.tag` when the child is shared, instead of failing `relation "tag" does not exist`.
+
+```rust
+// Child owned by a SHARED app → lives in public, one row per tenant-visible tag.
+#[derive(Model)]
+#[umbra(table = "tag")]
+struct Tag { id: i64, label: String }       // registered by a plugin in shared_apps([...])
+
+// Parent is a TENANT app → `article` + the `article_tags` junction land in each
+// tenant schema; the junction's FK to `tag` resolves to `public.tag`.
+#[derive(Model)]
+#[umbra(table = "article")]
+struct Article {
+    id: i64,
+    title: String,
+    #[sqlx(skip)] #[serde(skip)]
+    tags: M2M<Tag>,
+}
+```
+
+Under each tenant's scope you attach the shared tag to that tenant's article. Both tenants link the *same* `public.tag` row, but each tenant's junction holds only its own links — shared child, isolated relationships.
+
+<Callout type="info">
+The shared/tenant split is by **app label**: the shared child must be owned by a plugin you list in `shared_apps([...])`. A model registered with `.model::<T>()` lands in the implicit `app` plugin (a tenant app by default), so put a shared child behind a plugin whose name is in `shared_apps`.
+</Callout>
+
 ## Database-per-tenant (the stronger-isolation strategy)
 
 Schema-per-tenant keeps one database; **database-per-tenant** gives each tenant its **own database** — stronger isolation (separate databases, not schema namespaces) at the cost of one connection pool per tenant. Opt in with `TenantStrategy::Database`:

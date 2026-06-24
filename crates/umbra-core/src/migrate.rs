@@ -1645,9 +1645,19 @@ async fn run_tenant_apps_in_postgres_schema(
             }
 
             let mut tx = pool.begin().await?;
-            // Pin search_path for THIS transaction so every unqualified
-            // CREATE TABLE / INSERT lands in the tenant schema.
-            sqlx::query(&format!("SET LOCAL search_path TO {quoted}"))
+            // Pin search_path for THIS transaction, tenant schema FIRST with
+            // `public` as a fallback. `CREATE TABLE` / `INSERT` still land in
+            // the tenant schema (it's first), but an unqualified reference that
+            // ISN'T in the tenant schema resolves against `public` — which is
+            // what makes a CROSS-BOUNDARY foreign key work: a tenant-owned
+            // table (or an M2M junction) with an FK `REFERENCES <shared_child>`
+            // resolves the shared child in `public` instead of erroring
+            // `relation does not exist`. It also lets a (future) RunSql data
+            // migration in a tenant schema read SHARED/`public` lookup tables.
+            // The tenant-first ordering means a tenant table still shadows a
+            // same-named public table, so no behaviour changes for the common
+            // case where tenant and shared table names are distinct.
+            sqlx::query(&format!("SET LOCAL search_path TO {quoted}, public"))
                 .execute(&mut *tx)
                 .await?;
             for op in &file.operations {
