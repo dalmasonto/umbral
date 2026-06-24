@@ -733,8 +733,43 @@ async fn test_sheet_create_renders_per_field_error_for_empty_required() {
         html.contains("This field is required."),
         "the per-field required message must render: {html}"
     );
+    // Rendered INLINE by the field_editor macro (its per-field message span),
+    // not as a flattened top banner.
     assert!(
-        html.contains("mt-xs text-error"),
-        "the per-field error span (below the field, not the top banner) must render: {html}"
+        html.contains("text-error mt-0.5"),
+        "the inline per-field message (field_editor span, below the input) must render: {html}"
     );
+    assert!(
+        !html.contains("bg-error-container/10 border border-error/20"),
+        "a field error renders inline, NOT in the top banner: {html}"
+    );
+}
+
+/// gaps2 #12 Part 2 (edit path): an HTMX sheet-EDIT validation failure also
+/// renders per-field inline in the re-rendered sheet fragment — not a top
+/// banner, not a full-page form.
+#[tokio::test]
+async fn test_sheet_edit_renders_per_field_error_inline_htmx() {
+    let _g = NOTE_LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+
+    let body = "title=&body=updated&published=true"; // empty required title
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/note/1/edit")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("hx-request", "true")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _h, html) = send(router, req).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "empty required on edit is a 400: {html}");
+    assert!(html.contains("This field is required."), "per-field message renders: {html}");
+    assert!(html.contains("text-error mt-0.5"), "inline per-field span renders: {html}");
+    assert!(
+        !html.contains("bg-error-container/10 border border-error/20"),
+        "field errors render inline, not in the top banner: {html}"
+    );
+    assert!(html.contains("sheet-form"), "re-renders the SHEET fragment (stays in drawer): {html}");
 }

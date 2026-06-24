@@ -100,10 +100,11 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
       {# Single field renderer — every form field (admin sheet AND the
          full-page form) goes through the one field_editor macro so the
          widget/markdown/rte/code/help logic lives in exactly one place.
-         `field.error` (set by the handler on a validation failure) drives the
-         red border inside the macro and the per-field message below it. #}
+         Passing `field.error` (set by the handler on a validation failure)
+         makes the macro draw the red border AND render the inline per-field
+         message below the input (field_editor owns that markup — do NOT also
+         render it here, or the message double-renders). #}
       {{ field_editor(field, field.value, table, field.readonly, field.error) }}
-      {% if field.error %}<p class="mt-xs text-error text-body-sm">{{ field.error }}</p>{% endif %}
       {% endfor %}
 
       {# BUG-16 admin: M2M selection sections.
