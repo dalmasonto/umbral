@@ -45,6 +45,13 @@ fn default_database_url() -> String {
     "sqlite::memory:".into()
 }
 
+/// Default `Form<T>` body cap: 16 MiB — generous for urlencoded forms while
+/// still a DoS guard, and 8× the old hardcoded 2 MiB. Override via
+/// `UMBRA_MAX_FORM_BODY_BYTES`, or set `0` to disable.
+fn default_max_form_body_bytes() -> Option<usize> {
+    Some(16 * 1024 * 1024)
+}
+
 fn default_secret_key() -> String {
     "umbra-insecure-dev-key-change-me".into()
 }
@@ -265,6 +272,15 @@ pub struct Settings {
 
     #[serde(default)]
     pub databases: std::collections::HashMap<String, String>,
+
+    /// Max request-body size (bytes) the `Form<T>` extractor buffers before
+    /// returning `413 Payload Too Large`. Default **16 MiB** (8× the old
+    /// hardcoded 2 MiB). Set `UMBRA_MAX_FORM_BODY_BYTES` (or `max_form_body_bytes`
+    /// in `umbra.toml`); set it to `0` to **disable** the cap entirely — handy
+    /// in dev. (For large uploads use a file field / the storage backend, not
+    /// the form extractor.)
+    #[serde(default = "default_max_form_body_bytes")]
+    pub max_form_body_bytes: Option<usize>,
 
     /// Max connections in the Postgres pool (PERF-5). Default 10. Set via
     /// `UMBRA_DB_MAX_CONNECTIONS` or `db_max_connections` in `umbra.toml`.

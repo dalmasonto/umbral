@@ -50,6 +50,7 @@ fn make_settings() -> Settings {
     Settings {
         database_url: "sqlite::memory:".to_string(),
         databases: HashMap::new(),
+        max_form_body_bytes: Some(16 * 1024 * 1024),
         secret_key: "real-secret-not-the-default".to_string(),
         environment: Environment::Dev,
         allowed_hosts: vec!["localhost".to_string(), "127.0.0.1".to_string()],

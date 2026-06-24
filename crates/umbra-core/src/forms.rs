@@ -1166,17 +1166,27 @@ where
                 .into_response());
         }
 
-        // Read the body up to a sane limit (2 MiB matches axum's
-        // default Form extractor). Anything larger almost certainly
-        // means a misuse (file upload through the form extractor)
-        // and we'd rather 413 than buffer megabytes silently.
-        const MAX_BODY: usize = 2 * 1024 * 1024;
-        let bytes = match to_bytes(req.into_body(), MAX_BODY).await {
+        // Read the body up to the CONFIGURED limit. Defaults to 16 MiB
+        // (`Settings::max_form_body_bytes`); set `UMBRA_MAX_FORM_BODY_BYTES`, or
+        // `0` to disable the cap entirely. Buffering an unbounded urlencoded
+        // body is a DoS risk, so a cap is the default — but it's no longer
+        // hardcoded, and `0` removes it for dev / large forms.
+        const FALLBACK_MAX_FORM_BODY: usize = 16 * 1024 * 1024;
+        let max_body = match crate::settings::get_opt() {
+            Some(s) => match s.max_form_body_bytes {
+                None | Some(0) => usize::MAX, // explicitly disabled = no cap
+                Some(n) => n,
+            },
+            None => FALLBACK_MAX_FORM_BODY, // Settings not published (low-level tests)
+        };
+        let bytes = match to_bytes(req.into_body(), max_body).await {
             Ok(b) => b,
             Err(_) => {
-                return Err(
-                    (StatusCode::PAYLOAD_TOO_LARGE, "form body exceeds 2 MiB").into_response()
-                );
+                return Err((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "form body exceeds the configured limit (Settings::max_form_body_bytes)",
+                )
+                    .into_response());
             }
         };
 
