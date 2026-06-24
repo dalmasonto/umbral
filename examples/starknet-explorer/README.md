@@ -8,11 +8,11 @@ The data splits in two, **by plugin name**:
 
 | Plugin | Role | Tables | Lives in |
 |---|---|---|---|
-| `explorer` | **TENANT app** (NOT in `shared_apps`) | `transaction`, `address`, `token` | one schema per network |
-| `access` | **SHARED app** | `api_key` | `public` |
-| `content` | **SHARED app** | `blog_post` | `public` |
+| `explorer` | **TENANT app** (named in `tenant_apps`) | `transaction`, `address`, `token` | one schema per network |
+| `access` | **SHARED app** (the default) | `api_key` | `public` |
+| `content` | **SHARED app** (the default) | `blog_post` | `public` |
 
-So Sepolia's transactions are invisible when you're serving Mainnet (and vice-versa), but the blog and API keys read identically under every network. Whatever you pass to `.shared_apps([...])` goes to `public`; everything else is tenant-owned and gets a copy of its tables in each tenant schema.
+So Sepolia's transactions are invisible when you're serving Mainnet (and vice-versa), but the blog and API keys read identically under every network. You name your tenant apps with `.tenant_app(&ExplorerPlugin)` (or `.tenant_apps([...])`); **everything else is shared by default** and stays in `public`.
 
 A "tenant" here is a **network**: `sepolia` and `mainnet`, resolved by the `X-Network` header (or an `*.localhost` subdomain).
 

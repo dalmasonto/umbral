@@ -66,8 +66,8 @@ use umbra::prelude::*;
 use umbra_tenants::{MissingTenant, TenantsPlugin};
 
 // ---------------------------------------------------------------------------
-// `explorer` — the TENANT app. NOT in shared_apps, so these tables are created
-// in EACH network's schema and their rows are isolated per network.
+// `explorer` — the TENANT app. The one app named in `tenant_apps`, so these
+// tables are created in EACH network's schema and isolated per network.
 // ---------------------------------------------------------------------------
 
 /// A Starknet transaction. Per-network: Sepolia's txs and Mainnet's txs live in
@@ -110,8 +110,8 @@ pub struct Token {
     pub decimals: i32,
 }
 
-/// The TENANT plugin. Because "explorer" is NOT listed in `shared_apps`, its
-/// three tables are migrated into each network's schema, not into `public`.
+/// The TENANT plugin. Because `explorer` is named in `tenant_apps`, its three
+/// tables are migrated into each network's schema, not into `public`.
 #[derive(Debug, Default, Clone)]
 pub struct ExplorerPlugin;
 
@@ -131,7 +131,7 @@ impl Plugin for ExplorerPlugin {
 }
 
 // ---------------------------------------------------------------------------
-// `access` — a SHARED app (in shared_apps → public). One copy, all networks.
+// `access` — a SHARED app (not a tenant app → public). One copy, all networks.
 // ---------------------------------------------------------------------------
 
 /// An API key. Cross-network: the same keys authorize requests on every
@@ -161,7 +161,7 @@ impl Plugin for AccessPlugin {
 }
 
 // ---------------------------------------------------------------------------
-// `content` — a SHARED app (in shared_apps → public). Same blog everywhere.
+// `content` — a SHARED app (not a tenant app → public). Same blog everywhere.
 // ---------------------------------------------------------------------------
 
 /// A blog post. Cross-network marketing content: identical under every network.
