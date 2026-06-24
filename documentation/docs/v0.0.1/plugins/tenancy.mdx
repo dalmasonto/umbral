@@ -1,6 +1,6 @@
 ---
 title: Multitenancy (umbra-tenants)
-description: Multitenancy two ways — schema-per-tenant (one Postgres database, a schema per tenant, the django-tenants shape) and database-per-tenant (a separate database per tenant, stronger isolation).
+description: Schema-per-tenant and database-per-tenant multitenancy for Postgres. Split your app into tenant apps (isolated per tenant) and shared apps (one copy in public), worked through a Starknet explorer where blockchain networks are the tenants.
 sidebar_position: 22
 icon: building
 tags:
@@ -9,191 +9,287 @@ tags:
   - postgres
 ---
 
-`umbra-tenants` is umbra's schema-per-tenant multitenancy layer — the *django-tenants* shape in Rust. **One** Postgres database holds **one schema per tenant**, plus a shared `public` schema for cross-tenant data (the tenant registry itself, auth, sessions). A request is mapped to a tenant by its `Host` subdomain or an explicit header; the rest of that request then runs scoped to the tenant, and every tenant-owned table is **schema-qualified to the tenant's schema with zero extra round-trips** — no `SET search_path` per request.
+`umbra-tenants` lets one app serve many **tenants** with their data isolated, without you threading a tenant id through every query. It's the *django-tenants* shape in Rust: **one** Postgres database, **one schema per tenant**, plus a shared `public` schema for cross-tenant data. A request is mapped to a tenant by its `Host` subdomain or a header; the rest of that request runs scoped to the tenant, and every tenant-owned table is **schema-qualified to the tenant's schema with zero extra round-trips** — no `SET search_path` per request.
 
 <Callout type="warning">
-Schema-per-tenant is **Postgres-only**. SQLite has no schemas. The router never returns a schema on a SQLite-bound request, and the schema-migrate helper errors clearly on a SQLite pool.
+Schema-per-tenant is **Postgres-only**. SQLite has no schemas — the router never returns a schema on a SQLite-bound request, and the schema-migrate helper errors clearly on a SQLite pool. Point `UMBRA_DATABASE_URL` at a Postgres.
 </Callout>
 
-## The model
+## The running example: a Starknet explorer
 
-- **One database, many schemas.** Tenant `acme` gets a Postgres schema `acme`; its `note`, `invoice`, etc. tables live there. Tenant `globex` gets schema `globex` with its own copy. Rows never cross.
-- **Shared `public`.** SHARED apps keep their tables in `public` — every tenant sees the same rows. The tenant registry (`Tenant`) is always shared, plus the usual built-ins (auth, sessions, permissions).
-- **Zero round-trip routing.** The `TenantRouter` is a [`DatabaseRouter`](/docs/v0.0.1/orm/database-router) whose `schema_for_table` returns the active tenant's schema for tenant-owned tables. The SQL builder emits `"acme"."note"` directly — no per-request `SET search_path`.
+Imagine a block explorer API that serves two networks — **Sepolia** (testnet) and **Mainnet**. The two share the same code, but their on-chain data must never mix: a Sepolia transaction must be invisible when you're serving Mainnet. Other data — API keys, a blog — is the same for everyone.
 
-## SHARED_APPS vs tenant apps
+So **networks are tenants**, and your data splits in two:
 
-A **shared app** keeps its tables in `public`. **Every other app is a tenant app**: its tables are created in each tenant's schema and its rows are isolated per tenant.
+| Data | Belongs to | Lives in |
+|---|---|---|
+| `transaction`, `address`, `token` | each **network** (tenant) | the network's schema — `sepolia.transaction`, `mainnet.transaction` |
+| `api_key`, `blog_post` | **everyone** (shared) | `public.api_key`, `public.blog_post` |
+| `tenant` (the registry of networks) | the framework (always shared) | `public.tenant` |
+
+That's the whole mental model: **tenant data is isolated per tenant; shared data has one copy in `public`.** The rest of this page is how you declare which is which.
+
+## Step 1 — split your app into tenant apps and shared apps
+
+The split is **by app (plugin), not by model**. You group models into plugins, then tell `umbra-tenants` which plugin names are shared. **Everything not listed as shared is a tenant app**, and its tables are created in every tenant's schema.
+
+A plugin is just a struct implementing `Plugin` with a `name()` and the models it owns:
+
+```rust
+use umbra::prelude::*;
+use umbra::migrate::ModelMeta;
+
+// ── The TENANT app: per-network data. NOT listed in shared_apps, so its
+//    tables are created in EACH network's schema and isolated per network. ──
+pub struct ExplorerPlugin;
+impl Plugin for ExplorerPlugin {
+    fn name(&self) -> &'static str { "explorer" }
+    fn models(&self) -> Vec<ModelMeta> {
+        vec![
+            ModelMeta::for_::<Transaction>(),
+            ModelMeta::for_::<Address>(),
+            ModelMeta::for_::<Token>(),
+        ]
+    }
+}
+
+// ── A SHARED app: one copy in public, every network sees the same rows. ──
+pub struct AccessPlugin;
+impl Plugin for AccessPlugin {
+    fn name(&self) -> &'static str { "access" }
+    fn models(&self) -> Vec<ModelMeta> { vec![ModelMeta::for_::<ApiKey>()] }
+}
+
+// ── Another SHARED app (blog content). ──
+pub struct ContentPlugin;
+impl Plugin for ContentPlugin {
+    fn name(&self) -> &'static str { "content" }
+    fn models(&self) -> Vec<ModelMeta> { vec![ModelMeta::for_::<BlogPost>()] }
+}
+```
+
+The models themselves are ordinary `#[derive(Model)]` structs — nothing tenant-specific on them. What makes `Transaction` per-network and `ApiKey` shared is **which plugin owns it** and whether that plugin is shared:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "transaction")]
+pub struct Transaction {           // owned by ExplorerPlugin -> per-network
+    pub id: i64,
+    #[umbra(unique)] pub hash: String,
+    pub block_number: i64,
+    pub sender_address: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "api_key")]
+pub struct ApiKey {                // owned by AccessPlugin (shared) -> public
+    pub id: i64,
+    #[umbra(unique)] pub key: String,
+    pub label: String,
+}
+```
+
+<Callout type="info">
+Quick prototypes can register a model directly with `.model::<T>()` instead of a plugin — it lands in an implicit `app` plugin. That `app` plugin is a **tenant app by default** (it's not in `shared_apps`). Grouping models into named plugins is what lets you put *some* of them in `public`.
+</Callout>
+
+## Step 2 — declare the shared apps
+
+Register `TenantsPlugin` and list the shared app names. Here only `explorer` is left out, so it's the one tenant app:
 
 ```rust
 use umbra_tenants::{TenantsPlugin, MissingTenant};
 
 TenantsPlugin::new()
-    // SHARED = these app labels stay in public. The tenants registry is
-    // always shared; here we keep ONLY it shared, so every other app
-    // (your models) is tenant-owned.
-    .shared_apps(["tenants"])
-    // Resolve the tenant from this header (wins over the subdomain)…
-    .tenant_header("X-Tenant")
+    // SHARED = these app names keep their tables in public. The `tenants`
+    // registry is always shared; `access` + `content` join it. `explorer`
+    // is NOT here, so it is the tenant app (per-network tables).
+    .shared_apps(["tenants", "access", "content"])
+    // Map a request to a network by this header (wins over the subdomain)…
+    .tenant_header("X-Network")
     // …and/or the left-most Host label under this base
-    // (acme.example.com -> tenant key "acme").
-    .subdomain_base("example.com")
-    // A request that maps to no active tenant falls through to public
-    // (the bare-domain marketing site). Use NotFound to 404 instead.
+    // (sepolia.localhost -> tenant key "sepolia").
+    .subdomain_base("localhost")
+    // A request that maps to no active network falls through to public
+    // (e.g. the bare-domain landing page). Use NotFound to 404 instead.
     .on_missing_tenant(MissingTenant::FallThroughToPublic)
 ```
 
-The plugin installs its `TenantRouter` and the resolution middleware for you — register it and you're done. (Don't also call `App::builder().router(...)`; an explicitly-wired app router wins over the plugin's.)
-
-## One example
+The plugin installs its `TenantRouter` and the per-request resolution middleware for you. Wire everything into the builder:
 
 ```rust
-use umbra::prelude::*;
-use umbra_tenants::TenantsPlugin;
-
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-#[umbra(table = "note")]
-pub struct Note {
-    pub id: i64,
-    pub body: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let settings = Settings::from_env()?;            // UMBRA_DATABASE_URL=postgres://…
-    let pool = umbra::db::connect(&settings.database_url).await?;
-
-    let app = App::builder()
-        .settings(settings)
-        .database("default", pool)
-        .plugin(
-            TenantsPlugin::new()
-                .shared_apps(["tenants"])
-                .tenant_header("X-Tenant")
-                .subdomain_base("localhost"),
-        )
-        .model::<Note>()                              // a tenant-owned model
-        .routes(Routes::new().get("/notes", list_notes))
-        .build()?;
-
-    app.serve("127.0.0.1:3000".parse::<std::net::SocketAddr>()?).await?;
-    Ok(())
-}
+let app = App::builder()
+    .settings(settings)                    // UMBRA_DATABASE_URL=postgres://…
+    .database("default", pool)
+    .plugin(
+        TenantsPlugin::new()
+            .shared_apps(["tenants", "access", "content"])
+            .tenant_header("X-Network")
+            .subdomain_base("localhost")
+            .on_missing_tenant(MissingTenant::FallThroughToPublic),
+    )
+    .plugin(ExplorerPlugin)                 // tenant app
+    .plugin(AccessPlugin)                   // shared app
+    .plugin(ContentPlugin)                  // shared app
+    .routes(/* … */)
+    .build()?;
 ```
-
-A request with `X-Tenant: acme.localhost` (or host `acme.localhost`) runs scoped to schema `acme`; `Note::objects().fetch()` reads only Acme's notes. A request with no tenant falls through to `public`.
-
-## Provisioning a tenant
-
-`create_tenant` is the one-call provision: validate the schema name, insert the registry row in `public`, then `CREATE SCHEMA` + migrate the tenant apps into it.
-
-```rust
-let plugin = TenantsPlugin::new().shared_apps(["tenants"]);
-
-// Insert Tenant{name, schema_name, domain} in public, CREATE SCHEMA "acme",
-// and migrate every tenant app's tables into it. Idempotent on the schema.
-plugin.create_tenant("Acme", "acme", "acme.example.com").await?;
-```
-
-`schema_name` is validated as a safe Postgres identifier (`Schema::new`) before it ever reaches the database — an injection-shaped name is rejected, not escaped.
-
-## Migrating tenant schemas
-
-Run the normal `migrate` first — it migrates the SHARED apps (the `tenant` registry) into `public`. Then `migrate_schemas` (a management command the plugin contributes) walks every **active** tenant and ensures its schema exists and is migrated, idempotently:
-
-```bash
-# 1. shared apps -> public
-cargo run -- migrate
-# 2. every active tenant's schema (create + migrate the tenant apps)
-cargo run -- migrate_schemas
-```
-
-Adding a tenant-owned model later is the usual loop: `makemigrations`, `migrate` (public), then `migrate_schemas` to roll the new table into every tenant's schema.
-
-## Cross-boundary relations: a tenant model that points at a shared one
-
-A tenant-owned model can relate to a **shared** (`public`) model — an FK or an `M2M<T>` from a per-tenant parent to a child that lives in `public`. The shared child stays a single row every tenant sees; the *links* are per-tenant.
-
-This works because the schema-migrate step pins `search_path` to `"<tenant_schema>", public` for each migration. An unqualified reference resolves against the tenant schema **first** (so tenant tables still shadow same-named public ones), then falls back to `public`. A junction's `child_id REFERENCES "tag"(...)` therefore resolves `tag` to `public.tag` when the child is shared, instead of failing `relation "tag" does not exist`.
-
-```rust
-// Child owned by a SHARED app → lives in public, one row per tenant-visible tag.
-#[derive(Model)]
-#[umbra(table = "tag")]
-struct Tag { id: i64, label: String }       // registered by a plugin in shared_apps([...])
-
-// Parent is a TENANT app → `article` + the `article_tags` junction land in each
-// tenant schema; the junction's FK to `tag` resolves to `public.tag`.
-#[derive(Model)]
-#[umbra(table = "article")]
-struct Article {
-    id: i64,
-    title: String,
-    #[sqlx(skip)] #[serde(skip)]
-    tags: M2M<Tag>,
-}
-```
-
-Under each tenant's scope you attach the shared tag to that tenant's article. Both tenants link the *same* `public.tag` row, but each tenant's junction holds only its own links — shared child, isolated relationships.
 
 <Callout type="info">
-The shared/tenant split is by **app label**: the shared child must be owned by a plugin you list in `shared_apps([...])`. A model registered with `.model::<T>()` lands in the implicit `app` plugin (a tenant app by default), so put a shared child behind a plugin whose name is in `shared_apps`.
+Don't also call `App::builder().router(...)` — an explicitly-wired app router takes precedence over the plugin's `TenantRouter`, and you'd lose the tenant routing.
 </Callout>
+
+## Step 3 — migrate: shared apps to `public`, tenant apps to each schema
+
+This is the one place multitenancy changes the migrate flow. Generate migrations as usual, but for the **public** migrate use `run_shared`, **not** the unfiltered `migrate`/`run`:
+
+<Steps>
+<Step title="Generate migrations for every app">
+```bash
+cargo run -- makemigrations
+```
+One migration folder per app — `migrations/explorer/`, `migrations/access/`, `migrations/content/`, `migrations/tenants/`.
+</Step>
+<Step title="Migrate the SHARED apps into public — with run_shared">
+```rust
+// In your `migrate` command handler:
+let shared: std::collections::HashSet<String> =
+    ["tenants", "access", "content"].into_iter().map(String::from).collect();
+umbra::migrate::run_shared(&shared).await?;
+```
+`run_shared` migrates **only** the shared apps into `public`. The plain `migrate`/`run` is unfiltered — it would create the `explorer` (tenant) tables in `public` too. They don't belong there; they belong in each network's schema. Using `run_shared` keeps `public` to `tenant`, `api_key`, `blog_post`.
+</Step>
+<Step title="Provision each network — create_tenant">
+```rust
+let plugin = TenantsPlugin::new().shared_apps(["tenants", "access", "content"]);
+plugin.create_tenant("Starknet Sepolia", "sepolia", "sepolia.localhost").await?;
+plugin.create_tenant("Starknet Mainnet", "mainnet", "mainnet.localhost").await?;
+```
+Each `create_tenant` inserts the registry row in `public`, runs `CREATE SCHEMA "sepolia"`, and migrates the **tenant** apps (`explorer`) into that schema — so `sepolia.transaction`, `sepolia.address`, `sepolia.token` come into existence. Idempotent on the schema. `schema_name` is validated as a safe Postgres identifier (`Schema::new`) before it touches the DB, so an injection-shaped name is rejected, not escaped.
+</Step>
+<Step title="Add a network later — migrate_schemas">
+```bash
+cargo run -- migrate_schemas      # the plugin contributes this command
+```
+After you add a tenant model or a new network, `migrate_schemas` walks every **active** tenant and (re)creates + migrates its schema, idempotently.
+</Step>
+</Steps>
+
+## Step 4 — it just works per network
+
+With the explorer's handlers using the plain ORM (`Transaction::objects().fetch().await`), routing is automatic — the active network is resolved from the request and every tenant-owned query is scoped to its schema:
+
+```bash
+# Seed a tx on each network — they accumulate independently:
+curl -H 'X-Network: sepolia.localhost' localhost:3000/txs/seed
+curl -H 'X-Network: mainnet.localhost' localhost:3000/txs/seed
+
+# Read back — fully isolated:
+curl -H 'X-Network: sepolia.localhost' localhost:3000/txs   # only Sepolia's txs
+curl -H 'X-Network: mainnet.localhost' localhost:3000/txs   # only Mainnet's txs
+
+# Shared data — same under every network, no header needed:
+curl localhost:3000/blog
+curl localhost:3000/apikeys
+```
+
+`Transaction::objects().fetch()` in a handler serving `sepolia.localhost` reads `sepolia.transaction`; the same code serving `mainnet.localhost` reads `mainnet.transaction`. `BlogPost::objects().fetch()` always reads `public.blog_post`. You wrote one set of handlers; isolation is the router's job.
+
+<Callout type="info">
+**The full, runnable version of everything above is `examples/starknet-explorer/`** — three plugins (one tenant, two shared), `run_shared`, two provisioned networks, and routes that demonstrate per-network isolation vs shared data end to end.
+</Callout>
+
+## Safely presenting tenant data
+
+A few rules keep tenant isolation airtight:
+
+- **Tables are the boundary.** A tenant-owned query can only ever reach the active tenant's schema — the router never emits another tenant's schema name, so there's no query shape that reads across networks.
+- **Resolve the tenant from something you trust.** The subdomain/header maps to a `Tenant` row by `domain`; only an **active** registered network resolves. Don't let an end user pick an arbitrary schema name.
+- **Decide what an unknown tenant does.** `on_missing_tenant(MissingTenant::NotFound)` 404s an unrecognized network; `FallThroughToPublic` (the default) serves the bare-domain/public site. Pick per route group as needed.
+- **Shared writes are shared.** Anything in a shared app (`api_key`, `blog_post`) is visible to — and writable from — every network's requests. Keep per-network data in a tenant app; only put genuinely cross-tenant data in shared apps.
+
+## Cross-boundary relations: a tenant model pointing at a shared one
+
+A tenant-owned model can relate to a **shared** (`public`) model — an FK or an `M2M<T>` from a per-tenant parent to a child in `public`. For a Starknet explorer, a per-network `Transaction` could `M2M` to a **shared** `Label` taxonomy: the labels are the same everywhere, but which network's txs carry which label is per-network.
+
+This works because the schema-migrate pins `search_path` to `"<tenant_schema>", public`. An unqualified reference resolves against the tenant schema **first** (tenant tables still shadow same-named public ones), then falls back to `public` — so a junction's `child_id REFERENCES "label"(...)` resolves `label` to `public.label` instead of failing `relation "label" does not exist`.
+
+```rust
+// Child owned by a SHARED app -> lives in public, one row every network sees.
+#[derive(Model)] #[umbra(table = "label")]
+struct Label { id: i64, name: String }              // registered by a shared plugin
+
+// Parent is a TENANT app -> `transaction` + the junction land in each network's
+// schema; the junction's FK to `label` resolves to `public.label`.
+#[derive(Model)] #[umbra(table = "transaction")]
+struct Transaction {
+    id: i64,
+    hash: String,
+    #[sqlx(skip)] #[serde(skip)]
+    labels: M2M<Label>,
+}
+```
+
+Both networks link the *same* `public.label` rows, but each network's junction holds only its own links — shared taxonomy, isolated relationships. (This also enables M2M to a model in **any** other plugin — e.g. `umbra-auth`'s `User` — not just the tenant case.)
 
 ## Data migrations across the tenant boundary
 
-The same `"<schema>", public` search_path lets a hand-authored [`RunSql` data migration](/docs/v0.0.1/migrations/data-migrations) in a **tenant** app read shared `public` lookup tables while writing tenant rows — a boundary-spanning backfill. Because the schema-migrate loop applies every op once per tenant schema, the data migration runs **per tenant**:
+The same `"<schema>", public` search_path lets a hand-authored [`RunSql` data migration](/docs/v0.0.1/migrations/data-migrations) in a **tenant** app read shared `public` lookups while writing tenant rows. Because the schema-migrate loop applies every op once per tenant schema, the data migration runs **per network**:
 
 ```jsonc
-// migrations/app/0002_seed_subscriptions.json — a tenant-app data migration.
+// migrations/explorer/0002_seed_known_tokens.json — a tenant-app data migration.
 {
   "kind": "RunSql",
-  "sql": "INSERT INTO subscription (plan_code, amount_cents) \
-          SELECT code, price_cents FROM public.plan",
-  "reverse_sql": "DELETE FROM subscription"
+  "sql": "INSERT INTO token (contract_address, name, symbol, decimals) \
+          SELECT contract_address, name, symbol, decimals FROM public.token_catalog",
+  "reverse_sql": "DELETE FROM token"
 }
 ```
 
-`subscription` (bare) resolves to the current tenant schema; `public.plan` is the shared lookup. Run it via `migrate_schemas` — each tenant gets its own derived rows. A data migration in a **shared** app runs once in `public` via the normal `migrate`.
+`token` (bare) resolves to the current network's schema; `public.token_catalog` is the shared seed list. `migrate_schemas` gives each network its own derived rows. A data migration in a **shared** app runs once in `public` via the normal `migrate`.
 
 ## Database-per-tenant (the stronger-isolation strategy)
 
-Schema-per-tenant keeps one database; **database-per-tenant** gives each tenant its **own database** — stronger isolation (separate databases, not schema namespaces) at the cost of one connection pool per tenant. Opt in with `TenantStrategy::Database`:
+Schema-per-tenant keeps one database; **database-per-tenant** gives each tenant its **own database** — stronger isolation (separate databases, not schema namespaces) at the cost of one connection pool per tenant. For a Starknet explorer you might keep Mainnet (large, sensitive) in its own database. Opt in with `TenantStrategy::Database`:
 
 ```rust
 use umbra_tenants::{TenantsPlugin, TenantStrategy};
 
 TenantsPlugin::new()
     .strategy(TenantStrategy::Database)
-    .shared_apps(["tenants"])      // the registry still lives in the default DB
+    .shared_apps(["tenants", "access", "content"])   // the registry stays in the app DB
 ```
 
-In this mode the `TenantRouter` routes through `db_for_read`/`db_for_write` instead of `schema_for_table`: a tenant-owned model under an active tenant resolves to **that tenant's database pool**; SHARED models (the `tenant` registry) stay on the default pool; no schema qualification happens (separate databases need none).
+In this mode the `TenantRouter` routes through `db_for_read`/`db_for_write` instead of `schema_for_table`: a tenant-owned model under an active network resolves to **that network's database pool**; shared models stay on the default pool; no schema qualification happens (separate databases need none).
 
-You provision each tenant's database (creating a Postgres database is an ops step, not something a request transaction can do) and hand the plugin a connected pool. `register_tenant_database` records the registry row, registers the pool at runtime, and migrates the tenant apps into it:
+You provision each database (creating a Postgres database is an ops step, not something a request transaction can do) and hand the plugin a connected pool. `register_tenant_database` records the registry row, registers the pool at runtime, and migrates the tenant apps into it:
 
 ```rust
-let pool = umbra::db::connect("postgres://…/acme_db").await?;
-plugin.register_tenant_database("Acme", "acme_db", "acme.example.com", pool).await?;
+let mainnet_pool = umbra::db::connect("postgres://…/explorer_mainnet").await?;
+plugin
+    .register_tenant_database("Starknet Mainnet", "mainnet", "mainnet.localhost", mainnet_pool)
+    .await?;
 ```
 
 The pool lands in a runtime registry (`umbra::db::register_tenant_pool`), so `pool_for_dispatched` resolves it even though it was added after `App::build`. Each tenant database carries its own `umbra_migrations` ledger.
 
-**Picking a strategy.** Schema-per-tenant is the default django-tenants shape — cheaper (one pool, zero-round-trip routing), ideal for many small tenants. Database-per-tenant is for stronger isolation, per-tenant backup/restore, compliance boundaries, or a few large tenants — at the cost of a pool per tenant.
+**Picking a strategy.** Schema-per-tenant is the default django-tenants shape — cheaper (one pool, zero-round-trip routing), ideal for many tenants. Database-per-tenant is for stronger isolation, per-tenant backup/restore, compliance boundaries, or a few large tenants — at the cost of a pool per tenant.
 
 ## How resolution works
 
 The plugin's middleware (a `Plugin::wrap_router` layer) runs per request:
 
-1. Extract the tenant key — the `X-Tenant` header (wins), else the `Host` subdomain under the configured base.
+1. Extract the tenant key — the configured header (e.g. `X-Network`, wins), else the `Host` subdomain under the configured base.
 2. Look the `Tenant` up by `domain` **in public** (no tenant context yet, so the registry read stays in `public`) — via the ORM, never raw SQL.
-3. If found and active, scope the rest of the request under `RouteContext::new().with_tenant(TenantKey::new(tenant.schema_name))`. Otherwise apply the missing-tenant policy.
+3. If found and active, scope the rest of the request under `RouteContext::new().with_tenant(TenantKey::new(tenant.schema_name))`. Otherwise apply the `on_missing_tenant` policy.
 
-Because the scope spans the whole handler — every `.await`, every ORM call — the `TenantRouter` sees the tenant for the entire request.
+Because the scope spans the whole handler — every `.await`, every ORM call — the `TenantRouter` sees the active tenant for the entire request.
 
 ## See also
 
+- **`examples/starknet-explorer/`** — the complete, live-Postgres-verified version of this page (networks as tenants, tenant + shared plugins, `run_shared`, per-network isolation).
+- `examples/umbra-tenants/` — a minimal one-tenant-model variant.
 - [The DatabaseRouter](/docs/v0.0.1/orm/database-router) — the routing seam `umbra-tenants` builds on.
+- [RunSql data migrations](/docs/v0.0.1/migrations/data-migrations) — the boundary-spanning backfill mechanism.
 - `arch.md` and `docs/superpowers/specs/2026-06-16-database-router-foundation-design.md` for the design rationale.
-- Standalone example: `examples/umbra-tenants/`.
