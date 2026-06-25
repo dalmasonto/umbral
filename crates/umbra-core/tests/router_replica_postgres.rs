@@ -27,9 +27,7 @@ use std::time::Duration;
 use umbra::db::{Alias, DatabaseRouter, RouteContext};
 use umbra::migrate::ModelMeta;
 
-#[derive(
-    Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model,
-)]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
 #[umbra(table = "repl_note")]
 pub struct RNote {
     pub id: i64,
@@ -149,7 +147,11 @@ async fn read_write_split_against_real_streaming_replica() {
 
     // Sanity: the two databases have genuinely diverged.
     assert_eq!(count(&primary).await, 2, "primary has alpha+beta");
-    assert_eq!(count(&replica).await, 1, "frozen replica still has only alpha");
+    assert_eq!(
+        count(&replica).await,
+        1,
+        "frozen replica still has only alpha"
+    );
 
     // 4) READ-YOUR-WRITES UNDER LAG: get_or_create on "beta" must find it on
     //    the PRIMARY (the write pool). If it probed the frozen replica it would
@@ -165,7 +167,11 @@ async fn read_write_split_against_real_streaming_replica() {
         .await
         .expect("get_or_create");
     assert!(!was_created, "read-your-writes: found beta on the primary");
-    assert_eq!(count(&primary).await, 2, "no duplicate inserted on the primary");
+    assert_eq!(
+        count(&primary).await,
+        2,
+        "no duplicate inserted on the primary"
+    );
 
     // 5) THE KEY PROOF: an umbra READ routes to the replica, so it must return
     //    the STALE state {alpha} — NOT the primary's fresh {alpha, beta}. This
@@ -186,7 +192,10 @@ async fn read_write_split_against_real_streaming_replica() {
         .await
         .expect("resume replay");
     wait_until(&replica, |n| n == 2, "beta replicated after resume").await;
-    let rows = RNote::objects().fetch().await.expect("fetch after catch-up");
+    let rows = RNote::objects()
+        .fetch()
+        .await
+        .expect("fetch after catch-up");
     assert_eq!(rows.len(), 2, "replica caught up; umbra reads both");
 
     sqlx::query("DROP TABLE IF EXISTS repl_note")
