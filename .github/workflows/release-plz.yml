@@ -1,0 +1,61 @@
+# Manual, dependency-ordered publish of every umbra crate to crates.io.
+#
+# Deliberately NOT on push — this is a "slow, silent" release that a maintainer
+# dispatches by hand from the Actions tab. The two-step flow:
+#
+#   1. Dispatch with command = release-pr  → opens/refreshes a single "Release"
+#      PR that bumps every crate to the next unified version (see
+#      release-plz.toml `version_group`) and updates changelogs. Review it.
+#   2. Merge that PR, then dispatch with command = release → publishes every
+#      crate whose version isn't yet on crates.io, in dependency order, and
+#      cuts the git tag + GitHub release.
+#
+# REQUIRED REPO SECRET: CARGO_REGISTRY_TOKEN — a crates.io API token with
+# publish scope (https://crates.io/settings/tokens). GITHUB_TOKEN is provided
+# automatically. The Cargo workspace is at crates/Cargo.toml, so the action is
+# pointed there via manifest_path.
+
+name: release-plz
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "release-pr = open the version-bump PR · release = publish merged versions to crates.io"
+        type: choice
+        required: true
+        default: release-pr
+        options:
+          - release-pr
+          - release
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Never run two releases at once; don't cancel an in-flight publish.
+concurrency:
+  group: release-plz
+  cancel-in-progress: false
+
+jobs:
+  release-plz:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history — release-plz diffs tags to detect changes)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz (${{ inputs.command }})
+        uses: release-plz/action@v0.5
+        with:
+          command: ${{ inputs.command }}
+          # The workspace is NOT at the repo root.
+          manifest_path: crates/Cargo.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -1,0 +1,145 @@
+# release-plz configuration — https://release-plz.dev/docs/config
+#
+# Drives the automated, dependency-ordered publish of every umbra crate to
+# crates.io. Triggered manually from .github/workflows/release-plz.yml (a
+# "slow, silent" release: we dispatch it, not every push).
+#
+# The Cargo workspace lives at `crates/Cargo.toml`, NOT the repo root, so the
+# workflow passes `manifest_path: crates/Cargo.toml` to the action. Keep that in
+# sync if the workspace ever moves.
+#
+# UNIFIED VERSIONING
+# ------------------
+# Every publishable crate shares ONE version number and releases in lockstep:
+# the project ships as a single coherent "umbra X.Y.Z", not 27 crates drifting
+# apart. release-plz has no workspace-level `shared_version` switch; the
+# mechanism is `version_group` — crates sharing a group name are all assigned
+# the same version (the highest next-version among the group). So every crate
+# below carries `version_group = "umbra"`.
+#
+# WHEN YOU ADD A NEW CRATE: add it to `crates/Cargo.toml` members AND add a
+# `[[package]]` block here with `version_group = "umbra"`. Miss this and the new
+# crate versions independently, silently breaking lockstep. Run the workflow
+# once with the `dry_run` path (or `release-plz update --dry-run` locally) after
+# adding crates to confirm they all resolve to the same next version.
+
+[workspace]
+# Build changelogs from conventional-commit messages (feat/fix/docs/…), which
+# is exactly the commit convention this repo already follows (see CLAUDE.md).
+changelog_update = true
+# Cut a GitHub release + git tag when a version publishes.
+git_release_enable = true
+git_tag_enable = true
+# Only sync workspace-internal versions into Cargo.lock; don't `cargo update`
+# the entire dependency graph on every release.
+dependencies_update = false
+
+# --- core crates (crates/) ---
+[[package]]
+name = "umbra-casing"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-core"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-macros"
+version_group = "umbra"
+
+[[package]]
+name = "umbra"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-cli"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-testing"
+version_group = "umbra"
+
+# --- built-in plugins (plugins/) ---
+[[package]]
+name = "umbra-auth"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-admin"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-sessions"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-rest"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-tasks"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-email"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-openapi"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-signals"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-storage"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-cache"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-security"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-rls"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-permissions"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-playground"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-health"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-oauth"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-realtime"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-livereload"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-analytics"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-logs"
+version_group = "umbra"
+
+[[package]]
+name = "umbra-tenants"
+version_group = "umbra"
