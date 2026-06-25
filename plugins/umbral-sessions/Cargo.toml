@@ -82,7 +82,7 @@ optional = true
 # build graph level — Cargo treats the test binary as a separate
 # crate from the lib, so umbral-auth -> umbral-sessions (prod) +
 # umbral-sessions -> umbral-auth (dev) is legal.
-umbral-auth = { path = "../umbral-auth", version = "0.0.1" }
+umbral-auth = { path = "../umbral-auth" }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tempfile = "3"
 # The extractor + messages tests build synthetic axum requests via
