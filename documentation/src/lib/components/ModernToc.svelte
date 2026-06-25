@@ -1,5 +1,6 @@
 <script lang="ts">
   import { browser } from '$app/environment';
+  import { renderInlineCode } from 'specra';
 
   interface TOCItem {
     id: string;
@@ -78,7 +79,7 @@
         class:active={activeId === item.id}
         class:nested={item.level === 3}
       >
-        {item.title}
+        {@html renderInlineCode(item.title)}
       </a>
     {/each}
   </nav>

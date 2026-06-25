@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { buildSidebarStructure, sortSidebarGroups, sortSidebarItems, link } from 'specra';
+  import { buildSidebarStructure, sortSidebarGroups, sortSidebarItems, link, renderInlineCode } from 'specra';
   import type { SpecraConfig } from 'specra';
   import SidebarSelect from './SidebarSelect.svelte';
 
@@ -120,7 +120,7 @@
           class:active={isActive(doc.slug)}
           onclick={() => onLinkClick?.()}
         >
-          {doc.meta.title || doc.slug}
+          {@html renderInlineCode(doc.meta.title || doc.slug)}
         </a>
       {/each}
     </div>
@@ -129,7 +129,7 @@
   <!-- Groups -->
   {#each sortedGroups as [key, group], groupIndex}
     <div class="sidebar-group" class:has-border={groupIndex < sortedGroups.length - 1 || sortedStandalone.length > 0}>
-      <h3 class="sidebar-group-label">{group.label}</h3>
+      <h3 class="sidebar-group-label">{@html renderInlineCode(group.label)}</h3>
 
       {#each sortSidebarItems(group.items) as doc}
         <a
@@ -138,7 +138,7 @@
           class:active={isActive(doc.slug)}
           onclick={() => onLinkClick?.()}
         >
-          {doc.meta.title || doc.slug}
+          {@html renderInlineCode(doc.meta.title || doc.slug)}
         </a>
       {/each}
 
@@ -151,7 +151,7 @@
             class:active={isActive(doc.slug)}
             onclick={() => onLinkClick?.()}
           >
-            {doc.meta.title || doc.slug}
+            {@html renderInlineCode(doc.meta.title || doc.slug)}
           </a>
         {/each}
       {/each}
