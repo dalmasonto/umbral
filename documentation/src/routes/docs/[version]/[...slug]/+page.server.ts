@@ -1,12 +1,4 @@
-import {
-  extractTableOfContents,
-  getAdjacentDocs,
-  isCategoryPage,
-  getCachedAllDocs,
-  getCachedDocBySlug,
-  getI18nConfig,
-  getProducts,
-} from 'specra';
+import { extractTableOfContents, getAdjacentDocs, isCategoryPage, getCachedAllDocs, getCachedDocBySlug, getI18nConfig, getProducts, link } from 'specra';
 import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 
@@ -28,7 +20,7 @@ export const load: PageServerLoad = async ({ params }) => {
     const products = getProducts();
     const defaultProduct = products.find(p => p.default) || products[0];
     if (defaultProduct) {
-      redirect(302, `/docs/${defaultProduct.slug}/${version}/${slug}`);
+      redirect(302, link(`/docs/${defaultProduct.slug}/${version}/${slug}`));
     }
   }
 
@@ -37,7 +29,7 @@ export const load: PageServerLoad = async ({ params }) => {
 
   let title = 'Page Not Found';
   let description = 'The requested documentation page could not be found.';
-  let ogUrl = `/docs/${version}/${slug}`;
+  let ogUrl = link(`/docs/${version}/${slug}`);
 
   if (doc) {
     title = doc.meta.title || doc.title;

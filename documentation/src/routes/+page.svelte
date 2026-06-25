@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { link } from 'specra';
   import {
     ArrowRight,
     Github,
@@ -13,7 +14,7 @@
 
   let { data } = $props();
   let config = $derived(data.config);
-  const docsUrl = '/docs/v0.0.1/about';
+  const docsUrl = link('/docs/v0.0.1/about');
   const pageTitle = 'Umbral - the batteries-included Rust web framework for full-stack apps and APIs';
   const pageDescription =
     'Umbral is a Rust web framework for shipping complete web applications: ORM with managed migrations, auto-generated REST API, admin UI, auth + sessions, background tasks, email, and a plugin system. Compile-time guarantees instead of runtime hopes.';
@@ -60,7 +61,7 @@
 
   <header class="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60" style="border-color: var(--border);">
     <div class="max-w-7xl mx-auto flex h-14 items-center justify-between px-6">
-      <a href="/" class="flex items-center gap-2">
+      <a href={link('/')} class="flex items-center gap-2">
         <Logo logo={config.site.logo} alt={config.site.title} className="w-16 object-contain" />
         <span class="font-semibold text-foreground">{config.site.title || 'Umbral'}</span>
       </a>
@@ -196,10 +197,10 @@
             Read the docs
             <ArrowRight class="ml-2 h-4 w-4" />
           </Button>
-          <a href="/docs/v0.0.1/orm/models" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+          <a href={link('/docs/v0.0.1/orm/models')} class="text-sm text-muted-foreground hover:text-foreground transition-colors">
             See a model →
           </a>
-          <a href="/docs/v0.0.1/plugins/rest" class="text-sm text-muted-foreground hover:text-foreground transition-colors">
+          <a href={link('/docs/v0.0.1/plugins/rest')} class="text-sm text-muted-foreground hover:text-foreground transition-colors">
             See the REST plugin →
           </a>
         </div>

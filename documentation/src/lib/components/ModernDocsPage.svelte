@@ -14,6 +14,7 @@
     mdxComponents,
   } from 'specra/components';
   import { sidebarStore } from 'specra/stores';
+  import { link } from 'specra';
   import ModernSidebar from './ModernSidebar.svelte';
   import ModernToc from './ModernToc.svelte';
   import ModernFooter from './ModernFooter.svelte';
@@ -69,7 +70,7 @@
   >
     <div class="flex flex-col h-full border-r border-border">
       <div class="shrink-0 px-4 py-4 border-b border-border">
-        <a href="/" class="font-semibold text-foreground">
+        <a href={link('/')} class="font-semibold text-foreground">
           {data.config.site?.title || 'Documentation'}
         </a>
       </div>

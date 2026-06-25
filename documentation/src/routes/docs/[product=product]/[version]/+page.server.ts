@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { getCachedAllDocs, getProducts } from 'specra';
+import { getCachedAllDocs, getProducts, link } from 'specra';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -16,9 +16,9 @@ export const load: PageServerLoad = async ({ params }) => {
 
   if (docs.length === 0) {
     const activeVersion = matchedProduct.config.activeVersion || 'v1.0.0';
-    redirect(302, `/docs/${product}/${activeVersion}`);
+    redirect(302, link(`/docs/${product}/${activeVersion}`));
   }
 
   // Redirect to first doc in this product's version
-  redirect(302, `/docs/${product}/${version}/${docs[0].slug}`);
+  redirect(302, link(`/docs/${product}/${version}/${docs[0].slug}`));
 };

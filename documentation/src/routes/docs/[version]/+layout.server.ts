@@ -1,4 +1,4 @@
-import { getCachedVersions, getCachedAllDocs, getEffectiveConfig, getI18nConfig, getVersionsMeta, getProducts, loadVersionConfig } from 'specra';
+import { getCachedVersions, getCachedAllDocs, getEffectiveConfig, getI18nConfig, getVersionsMeta, getProducts, loadVersionConfig, link } from 'specra';
 import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
 
@@ -23,7 +23,7 @@ export const load: LayoutServerLoad = async ({ params }) => {
   if (currentVersionConfig?.hidden) {
     const config = getEffectiveConfig(version);
     const activeVersion = config.site?.activeVersion || 'v1.0.0';
-    throw redirect(302, `/docs/${activeVersion}`);
+    throw redirect(302, link(`/docs/${activeVersion}`));
   }
 
   let allDocs = await getCachedAllDocs(version, defaultLocale);

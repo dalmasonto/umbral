@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SpecraConfig } from 'specra';
+  import { link } from 'specra';
 
   interface Props {
     config: SpecraConfig;
@@ -20,7 +21,7 @@
             {#each column.items as item, itemIdx (itemIdx)}
               <li>
                 <a
-                  href={item.href}
+                  href={item.href?.startsWith('/') ? link(item.href) : item.href}
                   class="text-sm text-muted-foreground hover:text-foreground transition-colors"
                 >
                   {item.label}

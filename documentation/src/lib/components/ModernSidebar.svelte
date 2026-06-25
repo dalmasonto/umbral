@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { buildSidebarStructure, sortSidebarGroups, sortSidebarItems } from 'specra';
+  import { buildSidebarStructure, sortSidebarGroups, sortSidebarItems, link } from 'specra';
   import type { SpecraConfig } from 'specra';
   import SidebarSelect from './SidebarSelect.svelte';
 
@@ -40,8 +40,8 @@
 
   let docsBase = $derived(
     product && product !== '_default_'
-      ? `/docs/${product}/${version}`
-      : `/docs/${version}`
+      ? link(`/docs/${product}/${version}`)
+      : link(`/docs/${version}`)
   );
 
   let pathname = $derived($page.url.pathname.replace(/\/$/, ''));

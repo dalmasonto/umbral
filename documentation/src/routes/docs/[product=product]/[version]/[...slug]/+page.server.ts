@@ -1,12 +1,4 @@
-import {
-  extractTableOfContents,
-  getAdjacentDocs,
-  isCategoryPage,
-  getCachedAllDocs,
-  getCachedDocBySlug,
-  getI18nConfig,
-  getProducts,
-} from 'specra';
+import { extractTableOfContents, getAdjacentDocs, isCategoryPage, getCachedAllDocs, getCachedDocBySlug, getI18nConfig, getProducts, link } from 'specra';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -32,7 +24,7 @@ export const load: PageServerLoad = async ({ params }) => {
       next: null,
       title: 'Page Not Found',
       description: 'The requested documentation page could not be found.',
-      ogUrl: `/docs/${product}/${version}/${slug}`,
+      ogUrl: link(`/docs/${product}/${version}/${slug}`),
     };
   }
 
@@ -46,7 +38,7 @@ export const load: PageServerLoad = async ({ params }) => {
   const allDocs = await getCachedAllDocs(version, locale, product);
   const isCategory = isCategoryPage(slug, allDocs);
   const doc = await getCachedDocBySlug(slug, version, product);
-  const urlPrefix = `/docs/${product}/${version}`;
+  const urlPrefix = link(`/docs/${product}/${version}`);
 
   let title = 'Page Not Found';
   let description = 'The requested documentation page could not be found.';

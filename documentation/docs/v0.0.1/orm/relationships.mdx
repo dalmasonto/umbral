@@ -406,7 +406,7 @@ A `NULL` column anywhere in the chain bottoms out cleanly (the deeper hops simpl
 - **`ON DELETE` behaviour**: supported (see [`on_delete` / `on_update`](#referential-actions-on_delete--on_update)); only *changing* the action on an already-created table needs a hand-written migration.
 - **Non-`i64` primary keys**: supported. A `ForeignKey<T>` stores `T::PrimaryKey`, so `i64`, `String`, and `Uuid` targets all work end-to-end through `select_related`, `prefetch_related`, and `reverse::<C>()`. The parent PK is bound through the same JSON-to-SQL coercion regardless of shape.
 
-For the design rationale see [`arch.md`](../../../../arch.md) §M9 and the design spec `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md`.
+For the design rationale see [`arch.md`](https://github.com/dalmasonto/umbral/blob/main/arch.md) §M9 and the design spec `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md`.
 
 ## Many-to-many relationships
 
