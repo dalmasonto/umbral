@@ -1,7 +1,7 @@
 [package]
 name = "umbra-realtime"
 description = "Real-time push for umbra — SSE + WebSocket, with user- and group/room-targeted delivery over a pluggable broker."
-workspace = "../../crates"
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

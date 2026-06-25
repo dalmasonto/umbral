@@ -1,11 +1,10 @@
 [package]
 name = "umbra-auth"
 description = "Authentication plugin for umbra: User model, argon2 password hashing, login helpers."
-# The umbra workspace lives at crates/Cargo.toml (the repo root deliberately
-# has no Cargo.toml so the tree can also hold docs + example apps). Plugins
-# live at `plugins/<name>/`, which is a sibling of `crates/`, so cargo's
-# upward walk can't find the workspace on its own — point at it explicitly.
-workspace = "../../crates"
+# The umbra workspace is rooted at the repo-root Cargo.toml (it spans crates/*
+# and plugins/*). cargo's upward walk would reach it from here on its own; we
+# still name it explicitly so membership is unambiguous and resilient.
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

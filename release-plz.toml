@@ -4,9 +4,9 @@
 # crates.io. Triggered manually from .github/workflows/release-plz.yml (a
 # "slow, silent" release: we dispatch it, not every push).
 #
-# The Cargo workspace lives at `crates/Cargo.toml`, NOT the repo root, so the
-# workflow passes `manifest_path: crates/Cargo.toml` to the action. Keep that in
-# sync if the workspace ever moves.
+# The Cargo workspace is rooted at the repo-root `Cargo.toml` (it spans
+# `crates/*` and `plugins/*`), so the action runs at the repo root with no
+# manifest_path override.
 #
 # UNIFIED VERSIONING
 # ------------------
@@ -17,7 +17,7 @@
 # the same version (the highest next-version among the group). So every crate
 # below carries `version_group = "umbra"`.
 #
-# WHEN YOU ADD A NEW CRATE: add it to `crates/Cargo.toml` members AND add a
+# WHEN YOU ADD A NEW CRATE: add it to the root `Cargo.toml` members AND add a
 # `[[package]]` block here with `version_group = "umbra"`. Miss this and the new
 # crate versions independently, silently breaking lockstep. Run the workflow
 # once with the `dry_run` path (or `release-plz update --dry-run` locally) after

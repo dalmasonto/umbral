@@ -18,7 +18,7 @@ The **name** "umbra" and the project's branding are covered separately — see [
 
 ## Project layout
 
-The Cargo workspace lives at **`crates/Cargo.toml`**, *not* the repo root — the root is a multi-purpose tree (framework + docs + website + examples). Every `cargo` command for the framework runs from inside `crates/`.
+The Cargo workspace is rooted at the **repo-root `Cargo.toml`** and spans `crates/*` (the framework) plus `plugins/*` (the built-in plugins). `examples/`, `umbra_website/`, and `documentation/` are excluded and stay standalone projects, so the tree is still multi-purpose. `cargo` commands run from the repo root.
 
 ```
 crates/        # the framework workspace
@@ -40,8 +40,6 @@ umbra_website/ # the project's own marketing/community site (an umbra app)
 You need a recent stable Rust (the workspace pins `rust-version = "1.85"`, edition 2024). Postgres is the first-class backend; SQLite is used for tests.
 
 ```bash
-cd crates
-
 cargo build                      # build all workspace crates
 cargo test                       # run all tests
 cargo test -p umbra-core         # test a single crate
@@ -93,7 +91,6 @@ These messages feed the changelog automatically at release time (see below), so 
 A change in `umbra-core` can silently break the facade's re-exports, so verify everything, not just the crate you touched:
 
 ```bash
-cd crates
 cargo fmt
 cargo clippy --all-targets
 cargo build

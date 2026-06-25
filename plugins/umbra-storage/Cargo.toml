@@ -1,7 +1,7 @@
 [package]
 name = "umbra-storage"
 description = "Unified storage plugin for umbra: merges static-file serving (umbra-static) and media uploads (umbra-media) onto one Storage trait, with an optional S3 backend."
-workspace = "../../crates"
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

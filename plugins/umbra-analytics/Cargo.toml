@@ -1,7 +1,7 @@
 [package]
 name = "umbra-analytics"
 description = "Product-analytics event capture for umbra. PostHog backend with fire-and-forget capture, ambient client, and opt-in per-request middleware."
-workspace = "../../crates"
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

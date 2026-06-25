@@ -12,8 +12,8 @@
 #
 # REQUIRED REPO SECRET: CARGO_REGISTRY_TOKEN — a crates.io API token with
 # publish scope (https://crates.io/settings/tokens). GITHUB_TOKEN is provided
-# automatically. The Cargo workspace is at crates/Cargo.toml, so the action is
-# pointed there via manifest_path.
+# automatically. The Cargo workspace is rooted at the repo-root Cargo.toml, so
+# the action runs at the repo root with no manifest_path override.
 
 name: release-plz
 
@@ -54,8 +54,6 @@ jobs:
         uses: release-plz/action@v0.5
         with:
           command: ${{ inputs.command }}
-          # The workspace is NOT at the repo root.
-          manifest_path: crates/Cargo.toml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

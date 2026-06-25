@@ -1,7 +1,7 @@
 [package]
 name = "umbra-livereload"
 description = "Opt-in dev live-reload for umbra — a file watcher pushes reload / CSS-swap events to the browser over SSE; the client script is auto-injected into HTML responses. Dev-only, zero per-app code."
-workspace = "../../crates"
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -87,8 +87,8 @@ The tests create and drop their own tables (`DROP TABLE IF EXISTS …` first), s
 
 ```bash
 cargo new --lib --vcs none my-new-crate
-# then edit Cargo.toml:
-#   [workspace.members]   <- add "my-new-crate"
+# then edit the repo-root Cargo.toml:
+#   [workspace] members   <- add "crates/my-new-crate" (or "plugins/<name>")
 # and edit my-new-crate/Cargo.toml to use workspace inheritance:
 #   version.workspace = true
 #   edition.workspace = true

@@ -1,7 +1,7 @@
 [package]
 name = "umbra-permissions"
 description = "Role-based access control for umbra: ContentType, Permission, Group, user-group and user-permission M2M tables, plus the has_perm / user_perms query layer."
-workspace = "../../crates"
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

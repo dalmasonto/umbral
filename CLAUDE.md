@@ -153,11 +153,9 @@ Workarounds without a logged gap entry are how frameworks accumulate the kind of
 
 ## Commands
 
-The Cargo workspace lives at `crates/Cargo.toml`, **not** at the repo root. Every `cargo` command runs from inside `crates/`:
+The Cargo workspace is rooted at the **repo-root `Cargo.toml`**, which spans the framework crates (`crates/*`) and the built-in plugins (`plugins/*`). `cargo` commands run from the repo root (or any member crate's directory):
 
 ```bash
-cd crates
-
 cargo build                      # build all workspace crates
 cargo test                       # run all tests
 cargo test -p umbra-core         # test a single crate
@@ -167,7 +165,7 @@ cargo clippy --all-targets       # lint
 cargo fmt                        # format
 ```
 
-Build artefacts (`crates/target/`, `crates/Cargo.lock`) are produced inside the same directory and are gitignored. The repo root deliberately has no `Cargo.toml`: this is a multi-purpose tree (framework + docs + Specra site + example apps) rather than a single cargo project.
+Build artefacts (`target/`, `Cargo.lock`) live at the repo root; `target/` is gitignored and `Cargo.lock` is committed. The root `Cargo.toml` is a *virtual* manifest (only `[workspace]`, no `[package]`) and explicitly `exclude`s `examples/`, `umbra_website/`, and `documentation/`, so those stay standalone projects — the tree still holds docs + the Specra site + example apps, not one monolithic cargo project. (The workspace root was moved up from `crates/Cargo.toml` so workspace tooling — release-plz — sees a root that is an ancestor of every member, including the sibling `plugins/*`.)
 
 For an example app outside the framework workspace:
 

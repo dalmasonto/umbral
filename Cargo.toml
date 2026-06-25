@@ -1,0 +1,76 @@
+# Workspace root for the umbra framework: the core crates (crates/) plus the
+# built-in plugins (plugins/).
+#
+# This manifest lives at the repo root — moved up from crates/Cargo.toml — so
+# that workspace tooling (release-plz, in particular) sees a root that is an
+# ancestor of every member. The plugins live in plugins/, a sibling of crates/,
+# so the workspace root has to sit above both.
+#
+# The repo is still a multi-purpose tree: the docs site (documentation/), the
+# project's own website (umbra_website/), and the example apps (examples/) are
+# NOT part of this workspace — they are excluded below and remain standalone
+# cargo projects (documentation/ isn't a cargo project at all). The `exclude`
+# entries cover everything beneath those directories, so adding a new example
+# needs no further wiring here.
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/umbra-casing",
+    "crates/umbra-core",
+    "crates/umbra-macros",
+    "crates/umbra",
+    "crates/umbra-cli",
+    "crates/umbra-testing",
+    # Built-in plugins (M9+). Add a new plugin's path here as it lands.
+    "plugins/umbra-auth",
+    "plugins/umbra-admin",
+    "plugins/umbra-sessions",
+    "plugins/umbra-rest",
+    "plugins/umbra-tasks",
+    "plugins/umbra-email",
+    "plugins/umbra-openapi",
+    "plugins/umbra-signals",
+    "plugins/umbra-storage",
+    "plugins/umbra-cache",
+    "plugins/umbra-security",
+    "plugins/umbra-rls",
+    "plugins/umbra-permissions",
+    "plugins/umbra-playground",
+    "plugins/umbra-health",
+    "plugins/umbra-oauth",
+    "plugins/umbra-realtime",
+    "plugins/umbra-livereload",
+    "plugins/umbra-analytics",
+    "plugins/umbra-logs",
+    "plugins/umbra-tenants",
+]
+# Standalone cargo projects that must NOT be pulled into this workspace.
+# Excluding a directory excludes every package beneath it.
+exclude = [
+    "examples",
+    "umbra_website",
+    "documentation",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dalmasonto/umbra"
+authors = ["Dalmas Ogembo <dalmasogembo@gmail.com>"]
+rust-version = "1.85"
+
+# Disk: keep `target/` small. The workspace has dozens of integration-test
+# binaries (one per `tests/*.rs`), and the default `debug = 2` embeds full
+# DWARF in every one — that alone is what drives `target/` toward ~80 GB.
+# `line-tables-only` keeps panic/backtrace file:line locations (so test
+# failures still point at the right line) while dropping the bulk of the
+# debug info, taking the full workspace + all test binaries to ~20 GB.
+# See crates/README.md "Build, test, run" for the env-var alternative and
+# how to shrink the incremental cache.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"

@@ -1,7 +1,7 @@
 [package]
 name = "umbra-playground"
 description = "Interactive API playground UI for umbra-rest. The DRF browsable API, in umbra."
-workspace = "../../crates"
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

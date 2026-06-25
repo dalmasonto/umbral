@@ -1,7 +1,7 @@
 [package]
 name = "umbra-tasks"
 description = "DB-backed background task queue for umbra. The Celery in Rust shape."
-workspace = "../../crates"
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

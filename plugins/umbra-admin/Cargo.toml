@@ -3,7 +3,7 @@ name = "umbra-admin"
 description = "Auto-generated CRUD admin for umbra models. The Django admin in Rust shape."
 # Plugins live under `plugins/` (a sibling of `crates/`), so the
 # workspace pointer matches what umbra-auth does.
-workspace = "../../crates"
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

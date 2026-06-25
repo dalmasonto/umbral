@@ -1,7 +1,7 @@
 [package]
 name = "umbra-rest"
 description = "Auto-generated JSON REST API over umbra models. The DRF in Rust shape."
-workspace = "../../crates"
+workspace = "../.."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
