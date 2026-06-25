@@ -1,11 +1,11 @@
 //! Recent-Orders table widget. Five most-recent orders with a
 //! "View all →" link to the admin's order changelist —
 //! `view_all_for::<Order>()` resolves the URL from the model
-//! type so a `#[umbra(table = "...")]` rename propagates
+//! type so a `#[umbral(table = "...")]` rename propagates
 //! without chasing strings.
 
 use ecommerce::models::{Order, order};
-use umbra_admin::{
+use umbral_admin::{
     Span, TableColumn, TablePayload, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
 };
 

@@ -1,0 +1,9 @@
+[package]
+name = "umbral-casing"
+description = "Shared casing helpers (to_snake_case, pascal_case variants) for the umbral workspace. No dependencies — safe to use from proc-macro crates."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true

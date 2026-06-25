@@ -5,9 +5,9 @@ sidebar_position: 1
 icon: git-branch
 ---
 
-Declare or change a model; umbra diffs the current state against the latest
+Declare or change a model; umbral diffs the current state against the latest
 snapshot and writes a migration file. `migrate` applies pending files in
-order, recording each one in the `umbra_migrations` tracking table. The loop
+order, recording each one in the `umbral_migrations` tracking table. The loop
 works from the first milestone that has models.
 
 ## Register a model
@@ -46,7 +46,7 @@ calls diff against the latest snapshot, not the live database.
 
 ## CLI reference
 
-Every migration command runs through the binary's argv dispatch (umbra-cli). The three you'll use day-to-day, plus their flags:
+Every migration command runs through the binary's argv dispatch (umbral-cli). The three you'll use day-to-day, plus their flags:
 
 ### `makemigrations`
 
@@ -71,7 +71,7 @@ cargo run -- migrate --fake-initial                  # for each plugin, fake-app
 
 | Flag | What it does | When to reach for it |
 |---|---|---|
-| `--allow-drift` | Logs each missing-on-disk migration as a warning and proceeds. The orphan rows stay in `umbra_migrations`. | You deleted a migration file and the schema change it represented is already in the DB. |
+| `--allow-drift` | Logs each missing-on-disk migration as a warning and proceeds. The orphan rows stay in `umbral_migrations`. | You deleted a migration file and the schema change it represented is already in the DB. |
 | `--fake <plugin>/<name>` | Inserts a tracking row for the named migration without executing its SQL. | A schema change was applied out-of-band (psql, raw script) and you're reconciling state. |
 | `--fake-initial` | For every plugin, if the tables the `0001_*` migration would create already exist, mark it applied without SQL. | Adopting a legacy database - paired with [`inspectdb`](./inspectdb). |
 
@@ -104,7 +104,7 @@ diff produces the right operation:
 - New field → `AddColumn`
 - Removed field → `DropColumn`
 - Nullable flip → `AlterColumn` (rendered via the SQLite table-recreation dance:
-  CREATE _umbra_new, INSERT SELECT, DROP, RENAME - Postgres uses native
+  CREATE _umbral_new, INSERT SELECT, DROP, RENAME - Postgres uses native
   `ALTER COLUMN ... SET NOT NULL` / `DROP NOT NULL`).
 - **Safe type change** → `AlterColumn`. The engine keeps a whitelist of
   data-preserving casts:
@@ -124,25 +124,25 @@ diff produces the right operation:
 - Table rename → `RenameTable` (see [Rename detection](#rename-detection) below).
 
 <Callout type="info">
-The `umbra_migrations` tracking table is keyed by `(plugin, name)`. Two plugins can each ship their own `0001_initial.json` without colliding.
+The `umbral_migrations` tracking table is keyed by `(plugin, name)`. Two plugins can each ship their own `0001_initial.json` without colliding.
 </Callout>
 
 ## Rename detection
 
 When `makemigrations` sees a model disappear from the snapshot and a new model appear, it tries to determine whether the change is a rename (one DDL statement) or a genuine drop-and-create (two). The autodetector runs two passes:
 
-**First pass - struct-name match.** `Model::NAME` (the Rust struct name) is the stable identity key. If the same struct name appears in both the previous snapshot and the current model set but the SQL table name changed, the autodetector emits `RenameTable { from, to }` and zero DropTable / CreateTable operations. This is the common case when you opt into the `#[umbra(plugin = "blog")]` namespace attribute on an existing model.
+**First pass - struct-name match.** `Model::NAME` (the Rust struct name) is the stable identity key. If the same struct name appears in both the previous snapshot and the current model set but the SQL table name changed, the autodetector emits `RenameTable { from, to }` and zero DropTable / CreateTable operations. This is the common case when you opt into the `#[umbral(plugin = "blog")]` namespace attribute on an existing model.
 
 ```
 # Before: Post, table = "post"
-# After:  Post, table = "blog_post"   (#[umbra(plugin = "blog")] added)
+# After:  Post, table = "blog_post"   (#[umbral(plugin = "blog")] added)
 # → makemigrations emits: RenameTable { from: "post", to: "blog_post" }
 ```
 
 **Second pass - column-shape match.** For models that are unpaired after the first pass (different struct names on both sides), the autodetector checks whether the column shapes are bit-identical (same column names, types, nullable, FK target). If they match, it emits `RenameTable` and prints a warning to stderr so you can verify the intent:
 
 ```
-umbra makemigrations: rename detected (column-shape match): `foo` -> `bar` - please verify this is a rename and not a coincidental column-shape match between two unrelated models
+umbral makemigrations: rename detected (column-shape match): `foo` -> `bar` - please verify this is a rename and not a coincidental column-shape match between two unrelated models
 ```
 
 **No match.** If neither pass pairs a drop with a create, the autodetector falls back to plain `DropTable` + `CreateTable`.
@@ -158,5 +158,5 @@ The second-pass warning is intentional: identical column shapes are a heuristic,
 ## What's next
 
 - [Port an existing database](/docs/v0.0.1/migrations/inspectdb) into the same migration loop.
-- [Plugin-namespaced tables](/docs/v0.0.1/orm/models#plugin-namespaced-tables) explains the `#[umbra(plugin = "...")]` attribute that triggers first-pass rename detection.
+- [Plugin-namespaced tables](/docs/v0.0.1/orm/models#plugin-namespaced-tables) explains the `#[umbral(plugin = "...")]` attribute that triggers first-pass rename detection.
 - The full operation catalogue and the deferred items (index ops, RunSql, interactive rename prompts) live in `docs/specs/06-migration-engine.md`.

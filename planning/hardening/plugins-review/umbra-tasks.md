@@ -1,4 +1,4 @@
-# umbra-tasks review
+# umbral-tasks review
 
 ## Verdict
 
@@ -18,9 +18,9 @@ The plugin is a functional, surprisingly lean v1: the core claim/dispatch/retry 
 - Claim guard — conditional `UPDATE WHERE status='pending'` inside a transaction; `affected == 0` ⇒ another worker took the row, return `None`. This is the BROKEN-1 fix (`98ef6e9`). Correct under READ COMMITTED Postgres (second worker's UPDATE blocks on first's row lock, then re-evaluates the `status='pending'` predicate against the committed `running` row and gets zero affected rows).
 - Retry semantics — `attempts` incremented in `claim_one`; handler failure resets to `pending` until `attempts >= max_attempts`, then terminal `failed`; `handler not found` is immediately terminal regardless of attempts.
 - Panic isolation — handler future `tokio::task::spawn`ed; join error / panic payload stringified and stored as the `error` column value; one panicking handler does not take the worker down.
-- `Plugin::commands()` — `tasks-worker` subcommand contributed; dispatched via `umbra_cli::dispatch`; tested end-to-end in `integration.rs`.
+- `Plugin::commands()` — `tasks-worker` subcommand contributed; dispatched via `umbral_cli::dispatch`; tested end-to-end in `integration.rs`.
 - Handler registry — `OnceLock<RwLock<HashMap<&'static str, BoxedHandler>>>` with `register_handler` (idempotent) and `_clear_handlers_for_tests` escape hatch.
-- Architecture boundary — imports only `umbra::prelude::*`; zero `umbra-core` direct deps; zero raw `sqlx::query` in `src/`.
+- Architecture boundary — imports only `umbral::prelude::*`; zero `umbral-core` direct deps; zero raw `sqlx::query` in `src/`.
 
 ### Stubs / Partial
 
@@ -36,7 +36,7 @@ The plugin is a functional, surprisingly lean v1: the core claim/dispatch/retry 
 - Result backend — no way to store or await a task's return value. The task handler returns `Result<(), String>`; the success path stores only status + timestamp, not a payload. Not even a deferred note in the current code.
 - Priority queues — no `priority` column or per-queue routing. Documented as out of scope for v1 in module header.
 - Admin visibility — `TaskRow` is a registered model but `TasksPlugin` does not call `admin_register` (nor does any admin auto-register it). Task queue depth and history are not visible in the admin UI.
-- Metrics / queue-depth observable — no `queue_depth` gauge, no per-task timing, no integration with `umbra-health` readiness probe.
+- Metrics / queue-depth observable — no `queue_depth` gauge, no per-task timing, no integration with `umbral-health` readiness probe.
 - Per-task execution timeout (`time_limit` / `soft_time_limit`) — a handler that blocks forever holds the worker indefinitely. `tokio::time::timeout` is not applied to the handler future.
 
 ---
@@ -134,7 +134,7 @@ The `TaskError` enum already has a `HandlerNotFound` variant (`src/lib.rs:147`),
 - Unknown handler: non-retriable immediately terminal `failed`, `error` contains "handler not found" (`unknown_handler_marks_task_failed_with_handler_not_found_error`).
 - Basic enqueue shape: returns positive id, row has expected defaults — `status = pending`, `attempts = 0`, `max_attempts = DEFAULT_MAX_ATTEMPTS`, no timestamps or error (`enqueue_returns_new_id_and_writes_pending_row`).
 - Empty queue idle: `run_worker_once` returns `Ok(false)` without blocking (`run_worker_once_returns_false_on_empty_queue`).
-- CLI dispatch: `tasks-worker --once` dispatched through `umbra::cli::dispatch` runs the worker and flags the handler; `Unmatched` returned for unknown command (`dispatch_routes_tasks_worker_command_to_run_worker_once`, `dispatch_returns_unmatched_for_unknown_command`).
+- CLI dispatch: `tasks-worker --once` dispatched through `umbral::cli::dispatch` runs the worker and flags the handler; `Unmatched` returned for unknown command (`dispatch_routes_tasks_worker_command_to_run_worker_once`, `dispatch_returns_unmatched_for_unknown_command`).
 - `#[task]` macro: happy path with typed `GreetPayload`; `name =` override registered under custom key; bad payload (wrong fields) → `failed` with "payload deserialise error" message (`macro_integration.rs`, 3 tests).
 
 ### Not covered

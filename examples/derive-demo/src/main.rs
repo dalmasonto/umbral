@@ -1,4 +1,4 @@
-//! Standalone umbra example: `#[derive(Model)]` on a user-defined struct,
+//! Standalone umbral example: `#[derive(Model)]` on a user-defined struct,
 //! schema managed by the migration engine, served over HTTP with both
 //! HTML and JSON endpoints.
 //!
@@ -8,14 +8,14 @@
 //!   the `objects()` Manager, and the typed column constants for free.
 //! - Registering the model with `App::builder().model::<Article>()` so the
 //!   M5 migration engine tracks it.
-//! - Running `umbra::migrate::make()` + `run()` in-process on startup so
+//! - Running `umbral::migrate::make()` + `run()` in-process on startup so
 //!   `cargo run` Just Works against a fresh database.
 //! - Inserting rows without explicit IDs — SQLite's
 //!   `INTEGER PRIMARY KEY AUTOINCREMENT` (the shape the migration engine
 //!   renders for `i64` PKs) hands out monotonically increasing ids.
 //! - Reading rows back through the ambient pool:
 //!   `Article::objects().fetch().await` with no pool argument anywhere.
-//! - Rendering HTML pages with `umbra::templates`: a `base.html` carrying
+//! - Rendering HTML pages with `umbral::templates`: a `base.html` carrying
 //!   the layout, child templates extending it with `{% block content %}`,
 //!   and autoescape on by default for the XSS guarantee.
 //! - Wiring the Django-shaped 404/500 fallback: drop a `404.html` and
@@ -28,18 +28,18 @@
 //!   page, `/api/articles` returns the same data as JSON.
 
 use std::sync::Arc;
-use umbra::migrate::MigrateError;
-use umbra::prelude::*;
-use umbra::templates::context;
-use umbra::web::{Html, StatusCode};
-use umbra_auth::{AuthUser, BearerAuthentication};
-use umbra_rest::{
+use umbral::migrate::MigrateError;
+use umbral::prelude::*;
+use umbral::templates::context;
+use umbral::web::{Html, StatusCode};
+use umbral_auth::{AuthUser, BearerAuthentication};
+use umbral_rest::{
     Action, ChainAuthentication, Identity, IsAuthenticated, IsStaff, Permission, PermissionError,
     ResourceConfig,
 };
-use umbra_auth::SessionAuthentication;
+use umbral_auth::SessionAuthentication;
 
-/// A closed-set enum used as a model field via `#[umbra(choices)]`.
+/// A closed-set enum used as a model field via `#[umbral(choices)]`.
 ///
 /// `#[derive(Choices)]` emits the trait impls + the sqlx Type / Encode /
 /// Decode pair so `Article::create(.. status: ArticleStatus::Draft ..)`
@@ -66,12 +66,12 @@ pub enum ArticleStatus {
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow, Model)]
 pub struct Article {
     pub id: i64,
-    #[umbra(string, max_length = 50)]
+    #[umbral(string, max_length = 50)]
     pub title: String,
     pub body: String,
-    #[umbra(choices, default = "draft")]
+    #[umbral(choices, default = "draft")]
     pub status: ArticleStatus,
-    #[umbra(noedit)]
+    #[umbral(noedit)]
     pub published_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -115,16 +115,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut settings = Settings::from_env()?;
 
     // Demo defaults to a local Postgres so the example exercises the
-    // backend most umbra apps will deploy on. The local setup script
+    // backend most umbral apps will deploy on. The local setup script
     // lives at `scripts/create_db.sh` (one-time `CREATE ROLE` +
     // `CREATE DATABASE`); after that, `cargo run` Just Works.
     //
     // The framework still ships with `sqlite::memory:` as the
     // ambient Settings default, so on a fresh checkout (no env, no
-    // `umbra.toml`) we swap it for the demo's chosen Postgres URL.
-    // An explicit `UMBRA_DATABASE_URL=...` env var (or
-    // `umbra.toml`) wins over this override — set
-    // `UMBRA_DATABASE_URL=sqlite://demo.db?mode=rwc` to fall back to
+    // `umbral.toml`) we swap it for the demo's chosen Postgres URL.
+    // An explicit `UMBRAL_DATABASE_URL=...` env var (or
+    // `umbral.toml`) wins over this override — set
+    // `UMBRAL_DATABASE_URL=sqlite://demo.db?mode=rwc` to fall back to
     // the SQLite shape, etc.
     //
     // We mutate `settings.database_url` rather than just connecting
@@ -132,11 +132,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // backend against the pool's runtime backend (a guard against
     // accidentally registering a Sqlite pool against a Postgres
     // settings URL and vice versa).
-    const DEMO_PG_URL: &str = "postgres://umbra_dev:umbra_dev@localhost/umbra_dev";
+    const DEMO_PG_URL: &str = "postgres://umbral_dev:umbral_dev@localhost/umbral_dev";
     if settings.database_url == "sqlite::memory:" {
         settings.database_url = DEMO_PG_URL.to_string();
     }
-    let pool = umbra::db::connect(&settings.database_url).await?;
+    let pool = umbral::db::connect(&settings.database_url).await?;
 
     let app = (App::builder()
         .settings(settings)
@@ -165,9 +165,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Auto-generated JSON CRUD at /api/article/. The RestPlugin
         // walks the same model registry the migration engine uses,
         // so the surface stays in lockstep with the schema for free.
-        .plugin(umbra_openapi::OpenApiPlugin::new())
+        .plugin(umbral_openapi::OpenApiPlugin::new())
         .plugin(
-            umbra_rest::RestPlugin::default()
+            umbral_rest::RestPlugin::default()
                 .expose(["auth_user", "session"])
                 // Two-way authentication: browsers send the session
                 // cookie, CLI / mobile / CI send a bearer token. First
@@ -184,10 +184,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .resource(ResourceConfig::new("article").permission(StaffWritesOnly)),
         )
         // App name scopes browser-side storage (history, theme,
-        // settings) so two umbra apps in the same browser don't
+        // settings) so two umbral apps in the same browser don't
         // collide. Closes gap #71 — the no-arg `Default` fallback
         // logs a tracing::warn.
-        .plugin(umbra_playground::PlaygroundPlugin::new("derive-demo"))
+        .plugin(umbral_playground::PlaygroundPlugin::new("derive-demo"))
         // `with_default_routes()` mounts /api/auth/{register,login,
         // logout,me} — the four-handler reference surface lifted
         // from this app's own `auth_api.rs` (now retired) into the
@@ -195,17 +195,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // on `AuthPlugin<AuthUser>` because the handlers FK into
         // `AuthToken` → `AuthUser`; custom user models bring their
         // own auth surface.
-        .plugin(umbra_auth::AuthPlugin::<AuthUser>::default().with_default_routes())
-        .plugin(umbra_sessions::SessionsPlugin::default())
+        .plugin(umbral_auth::AuthPlugin::<AuthUser>::default().with_default_routes())
+        .plugin(umbral_sessions::SessionsPlugin::default())
         // Register Article with the admin so the datatable renders a
         // search box (search_fields driven) and the list view shows the
         // columns we actually care about. Without `.register(...)` the
         // admin falls back to auto-discovery — every column listed, no
         // search input, no per-column tweaks.
         .plugin(
-            umbra_admin::AdminPlugin::default()
+            umbral_admin::AdminPlugin::default()
                 .register(
-                    umbra_admin::AdminModel::new("article")
+                    umbral_admin::AdminModel::new("article")
                         .label("Articles")
                         .icon("newspaper")
                         .list_display(&["id", "title", "status", "published_at"])
@@ -217,16 +217,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 )
                 // Surface the AuthUser model and turn on the "Change password"
                 // affordance on its edit sheet. The route + handler are always
-                // wired (in `umbra-admin`); `password_field` is what makes the
+                // wired (in `umbral-admin`); `password_field` is what makes the
                 // button render in the footer.
                 .register(
-                    umbra_admin::AdminModel::new("auth_user")
+                    umbral_admin::AdminModel::new("auth_user")
                         .label("Users")
                         .icon("users")
                         .password_field("password_hash"),
                 ),
         )
-        .plugin(umbra_permissions::PermissionsPlugin)
+        .plugin(umbral_permissions::PermissionsPlugin)
         // Routes builder records each (method, path) pair as it
         // registers the handler, so the framework surfaces them in
         // the dev-mode 404 panel without a parallel `.route_paths(...)`
@@ -262,11 +262,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Hand argv to the CLI dispatcher. With no subcommand it serves on
     // `settings.bind_addr`; with a subcommand like `createsuperuser`
-    // (contributed by umbra-auth via Plugin::commands()), `migrate`,
+    // (contributed by umbral-auth via Plugin::commands()), `migrate`,
     // `makemigrations`, etc., it routes to the matching handler.
     // Calling `app.serve(...)` directly would bypass the dispatcher
     // and ignore argv entirely.
-    umbra_cli::dispatch(app).await?;
+    umbral_cli::dispatch(app).await?;
     Ok(())
 }
 
@@ -282,7 +282,7 @@ fn is_serve_invocation() -> bool {
 /// without re-listing the full set.
 async fn home() -> Result<Html<String>, (StatusCode, String)> {
     let count = Article::objects().count().await.map_err(internal_error)?;
-    let body = umbra::templates::render("home.html", &context!(article_count => count))
+    let body = umbral::templates::render("home.html", &context!(article_count => count))
         .map_err(internal_error)?;
     Ok(Html(body))
 }
@@ -295,13 +295,13 @@ async fn list_articles_html() -> Result<Html<String>, (StatusCode, String)> {
         .fetch()
         .await
         .map_err(internal_error)?;
-    let body = umbra::templates::render("articles_list.html", &context!(articles))
+    let body = umbral::templates::render("articles_list.html", &context!(articles))
         .map_err(internal_error)?;
     Ok(Html(body))
 }
 
 async fn test_500_html() -> Result<Html<String>, (StatusCode, String)> {
-    // let body = umbra::templates::render("test-500.html", &context!()).map_err(internal_error)?;
+    // let body = umbral::templates::render("test-500.html", &context!()).map_err(internal_error)?;
     panic!("Something went south ofcourse");
     // Ok(Html(body))
 }
@@ -319,12 +319,12 @@ async fn article_detail(
 
     match found {
         Some(article) => {
-            let body = umbra::templates::render("article_detail.html", &context!(article))
+            let body = umbral::templates::render("article_detail.html", &context!(article))
                 .map_err(internal_error)?;
             Ok((StatusCode::OK, Html(body)))
         }
         None => {
-            let body = umbra::templates::render("not_found.html", &context!(id))
+            let body = umbral::templates::render("not_found.html", &context!(id))
                 .map_err(internal_error)?;
             Ok((StatusCode::NOT_FOUND, Html(body)))
         }
@@ -349,7 +349,7 @@ fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
 }
 
 async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    match umbra::migrate::make().await {
+    match umbral::migrate::make().await {
         Ok(paths) => {
             for path in paths {
                 eprintln!("auto-migrate: wrote {}", path.display());
@@ -358,17 +358,17 @@ async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
         Err(MigrateError::NoChanges) => {}
         Err(err) => return Err(Box::new(err)),
     }
-    // Self-heal the "DB exists from before umbra started tracking it"
+    // Self-heal the "DB exists from before umbral started tracking it"
     // case: for every plugin whose first migration's tables are already
     // present in the DB, record that migration as applied without
     // running its CREATE TABLE. Idempotent — does nothing on a fresh DB
     // or one that's already in sync. This is the same recovery path the
     // CLI exposes as `migrate --fake-initial`.
-    let faked = umbra::migrate::fake_initial().await?;
+    let faked = umbral::migrate::fake_initial().await?;
     if faked > 0 {
         eprintln!("auto-migrate: fake-applied initial migration for {faked} plugin(s)");
     }
-    let n = umbra::migrate::run().await?;
+    let n = umbral::migrate::run().await?;
     if n > 0 {
         eprintln!("auto-migrate: applied {n} migration(s)");
     }

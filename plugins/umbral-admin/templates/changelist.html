@@ -1,0 +1,61 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ model.name }} — {{ site_title }}{% endblock %}
+
+{% block extra_head %}
+{{ super() }}
+<style>
+  /* HTMX indicator */
+  .htmx-indicator { opacity: 0; transition: opacity 200ms; }
+  .htmx-request .htmx-indicator { opacity: 1; }
+  .htmx-request.htmx-indicator  { opacity: 1; }
+</style>
+{% endblock %}
+
+{% block content %}
+{# Import DataTable macro #}
+{% from "admin/_macros/data_table.html" import data_table %}
+
+{# Sheet slot: HTMX swaps sheet fragments here #}
+<aside id="umbral-sheet-slot"></aside>
+
+{# Dialog slot: HTMX swaps confirm dialog here #}
+<div id="umbral-dialog-slot"></div>
+
+{# DataTable macro invocation #}
+{{ data_table(model, rows, columns, pk, facets, active_filters, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=inline_edit_fields, column_widths=column_widths, soft_delete=soft_delete, trash=trash, trashed_count=trashed_count) }}
+
+{# Close-sheet helper — appended once to the page #}
+<script>
+  umbral.closeSheet = function() {
+    document.getElementById('umbral-sheet-slot').innerHTML = '';
+  };
+  umbral.closeDialog = function() {
+    document.getElementById('umbral-dialog-slot').innerHTML = '';
+  };
+
+  {# Auto-open the preview sheet when `?row=<id>` is on the URL. The
+     palette + saved deep links use this to land the user directly on
+     a row. After opening, strip ONLY the `row` param from the URL so
+     search / sort / page state stay intact. #}
+  {% if open_row %}
+  (function autoOpenRow() {
+    {# Minijinja doesn't ship `tojson`; both values are URL-safe
+       strings (server already sanitised), so a plain quoted literal
+       is fine here. #}
+    var rowId = "{{ open_row }}";
+    if (!rowId) return;
+    var table = "{{ active_table }}";
+    // Remove only `row` from the URL; keep everything else.
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.delete('row');
+      history.replaceState({}, '', u.pathname + (u.search || '') + (u.hash || ''));
+    } catch (e) { /* URL not supported — skip the rewrite */ }
+    htmx.ajax('GET', '{{ admin_base }}/' + table + '/' + rowId + '/sheet', {
+      target: '#umbral-sheet-slot',
+      swap: 'innerHTML'
+    });
+  })();
+  {% endif %}
+</script>
+{% endblock %}

@@ -1,17 +1,17 @@
 ---
 title: Playground plugin
-description: Interactive API playground for umbra-rest endpoints - Postman-style request builder, schema introspection, per-endpoint stats.
+description: Interactive API playground for umbral-rest endpoints - Postman-style request builder, schema introspection, per-endpoint stats.
 sidebar_position: 17
 ---
 
-`umbra-playground` mounts an interactive API explorer at `/api/playground/`. It reads the OpenAPI spec produced by `umbra-openapi` and gives you a navigable endpoint tree, a request builder with schema introspection, a response viewer, per-endpoint history, and a per-endpoint stats panel - all in the browser, no extra service to run.
+`umbral-playground` mounts an interactive API explorer at `/api/playground/`. It reads the OpenAPI spec produced by `umbral-openapi` and gives you a navigable endpoint tree, a request builder with schema introspection, a response viewer, per-endpoint history, and a per-endpoint stats panel - all in the browser, no extra service to run.
 
 ## Quick start
 
 ```rust
-use umbra_playground::PlaygroundPlugin;
-use umbra_rest::RestPlugin;
-use umbra_openapi::OpenApiPlugin;
+use umbral_playground::PlaygroundPlugin;
+use umbral_rest::RestPlugin;
+use umbral_openapi::OpenApiPlugin;
 
 let app = App::builder()
     .plugin(RestPlugin::default())
@@ -20,7 +20,7 @@ let app = App::builder()
     .build();
 ```
 
-`PlaygroundPlugin::new(app_name)` takes an application name. The playground namespaces its browser-side storage (Dexie/IndexedDB, `localStorage`) per app so two umbra apps served to the same browser don't collide. `PlaygroundPlugin::default()` warns and falls back to `"default"`. Move the mount with `.at("/some/path")`.
+`PlaygroundPlugin::new(app_name)` takes an application name. The playground namespaces its browser-side storage (Dexie/IndexedDB, `localStorage`) per app so two umbral apps served to the same browser don't collide. `PlaygroundPlugin::default()` warns and falls back to `"default"`. Move the mount with `.at("/some/path")`.
 
 Open `http://localhost:8000/api/playground/` in a browser.
 
@@ -33,11 +33,11 @@ The playground is a request console that fires live REST calls with the visitor'
 The plugin ships a React + Vite UI. To produce the bundle, you need Node.js 20+ available so `npm` can install the frontend's dev dependencies once:
 
 ```bash
-cd plugins/umbra-playground/frontend
+cd plugins/umbral-playground/frontend
 npm install
 ```
 
-A normal `cargo build` of the plugin runs `npm run build` (Vite) automatically through `build.rs`, writing the output into the crate's `dist/` directory. The plugin's shell HTML is compiled into the binary, but the JS/CSS bundle itself is served off disk through umbra's **unified static pipeline** — the plugin contributes its `dist/` directory via `Plugin::static_dirs()` under the `playground` namespace, so `dist/assets/index.js` is reachable at `<static_url>playground/assets/index.js` (`/static/playground/assets/…` with the default `static_url`). In `Environment::Dev` the pipeline serves the file live off disk on every request, so dropping a freshly-built bundle into `dist/` is picked up on the next request with no Rust recompile; in prod the collected copy under `<static_root>/playground/…` is served.
+A normal `cargo build` of the plugin runs `npm run build` (Vite) automatically through `build.rs`, writing the output into the crate's `dist/` directory. The plugin's shell HTML is compiled into the binary, but the JS/CSS bundle itself is served off disk through umbral's **unified static pipeline** — the plugin contributes its `dist/` directory via `Plugin::static_dirs()` under the `playground` namespace, so `dist/assets/index.js` is reachable at `<static_url>playground/assets/index.js` (`/static/playground/assets/…` with the default `static_url`). In `Environment::Dev` the pipeline serves the file live off disk on every request, so dropping a freshly-built bundle into `dist/` is picked up on the next request with no Rust recompile; in prod the collected copy under `<static_root>/playground/…` is served.
 
 Without Node available (the bundle couldn't be built), the plugin still compiles and serves a placeholder page explaining the recovery steps — the placeholder HTML is baked into the binary so the route always renders something.
 
@@ -51,7 +51,7 @@ Without Node available (the bundle couldn't be built), the plugin still compiles
 
 ### Schema-driven request building
 
-The **Schema tab** in the request builder surfaces the request body shape and every response schema. Each field is rendered with type / required / nullable / readOnly / `maxLength` / `default` / enum (choices) / FK target / multichoice - pulled straight from the OpenAPI vendor extensions emitted by `umbra-openapi`.
+The **Schema tab** in the request builder surfaces the request body shape and every response schema. Each field is rendered with type / required / nullable / readOnly / `maxLength` / `default` / enum (choices) / FK target / multichoice - pulled straight from the OpenAPI vendor extensions emitted by `umbral-openapi`.
 
 Two **autofill** flows for request bodies:
 
@@ -66,7 +66,7 @@ The Params table reads `pathItem.parameters` *and* `operation.parameters` from t
 
 ### Filter discovery
 
-When the OpenAPI spec advertises filter parameters (umbra-openapi emits them for every filterable resource; filtering is on by default unless you call `ResourceConfig::disable_filters()`), the Params table shows them with proper types and lookups. When it doesn't, the playground falls back to chip suggestions inferred from the response item schema: `[+ eq]` / `[+ contains]` / `[+ gte]` / `[+ in]` etc. per field, scoped by type.
+When the OpenAPI spec advertises filter parameters (umbral-openapi emits them for every filterable resource; filtering is on by default unless you call `ResourceConfig::disable_filters()`), the Params table shows them with proper types and lookups. When it doesn't, the playground falls back to chip suggestions inferred from the response item schema: `[+ eq]` / `[+ contains]` / `[+ gte]` / `[+ in]` etc. per field, scoped by type.
 
 ### Per-endpoint stats
 
@@ -105,4 +105,4 @@ Settings (base URL, default headers, variables) live in `localStorage` since the
 - History total cap is per-operation only; no global ceiling yet.
 - Schema tab doesn't drill into nested `$ref`s - names like `→ Profile` are clickable in v2.
 
-See [the design spec](https://github.com/umbra/umbra/blob/main/docs/superpowers/specs/2026-06-02-rest-playground-design.md) for the full design history and the post-v1 backlog at `bugs/playground-openapi-gaps.md`.
+See [the design spec](https://github.com/umbral/umbral/blob/main/docs/superpowers/specs/2026-06-02-rest-playground-design.md) for the full design history and the post-v1 backlog at `bugs/playground-openapi-gaps.md`.

@@ -7,9 +7,9 @@
 
 ## Goal
 
-Django's ORM feels good in templates because relations traverse without ceremony: `{{ comment.plugin.author.name }}` just works, `post.comments.all` just works, and `annotate(Count("comments"))` collapses to one query. umbra already has most of the *read* machinery (`ReverseSet`, `prefetch_related`, nested `select_related`, `annotate_count`). The gaps that break the Django feel are concentrated in two places:
+Django's ORM feels good in templates because relations traverse without ceremony: `{{ comment.plugin.author.name }}` just works, `post.comments.all` just works, and `annotate(Count("comments"))` collapses to one query. umbral already has most of the *read* machinery (`ReverseSet`, `prefetch_related`, nested `select_related`, `annotate_count`). The gaps that break the Django feel are concentrated in two places:
 
-1. **The write/form half.** `#[derive(Form)]` rejects `ForeignKey<T>`, `ReverseSet<T>`, and choices enums outright, forcing the `#[umbra(noform)]` + hand-rolled `Default` boilerplate that litters `PluginComment` and keeps its public submission form commented out. The admin's dynamic save path binds an FK id as TEXT, producing `column "plugin" is of type bigint but expression is of type text`.
+1. **The write/form half.** `#[derive(Form)]` rejects `ForeignKey<T>`, `ReverseSet<T>`, and choices enums outright, forcing the `#[umbral(noform)]` + hand-rolled `Default` boilerplate that litters `PluginComment` and keeps its public submission form commented out. The admin's dynamic save path binds an FK id as TEXT, producing `column "plugin" is of type bigint but expression is of type text`.
 2. **Join depth and type.** `join_related` is one-hop and LEFT-only. Real apps need nested joins in one round-trip and the ability to pick INNER vs LEFT vs RIGHT.
 
 This spec hardens both halves so a model with FKs and choices is form-submittable end to end, and so the JOIN builder spans relations with full join-type control.
@@ -38,23 +38,23 @@ The "nearly free" kinds (forward O2O, reverse O2O) get explicit test pins so the
 
 ## Part 1 — `#[derive(Form)]` learns FK / O2O, M2M, choices, and ignores reverse relations
 
-All three changes land in `expand_form()` / `classify_form_field_type()` in `crates/umbra-macros/src/lib.rs` (today's reject site is ~line 3447). The Model derive already distinguishes these field kinds (`FieldKind::ReverseSet`, the `#[umbra(choices)]` flag, and the `ForeignKey<T>` / `Option<ForeignKey<T>>` path shapes); the Form derive reuses the same detection so the two derives agree on what a field *is*.
+All three changes land in `expand_form()` / `classify_form_field_type()` in `crates/umbral-macros/src/lib.rs` (today's reject site is ~line 3447). The Model derive already distinguishes these field kinds (`FieldKind::ReverseSet`, the `#[umbral(choices)]` flag, and the `ForeignKey<T>` / `Option<ForeignKey<T>>` path shapes); the Form derive reuses the same detection so the two derives agree on what a field *is*.
 
 ### 1a. Reverse relations → auto-skip (#39b)
 
-A `ReverseSet<C>` field and a reverse `OneToOne<T>` (the `#[sqlx(skip)]` variant) are back-pointers, never user-submittable by construction. The Model derive already drops them from `FIELDS`; the Form derive must do the same — skip them before type classification, exactly as it already skips `#[umbra(noform)]` / `primary_key` / `auto_now*` fields. Detection reuses the Model derive's `FieldKind::ReverseSet` and `FieldKind::OneToOne` + `has_sqlx_skip` checks so the two derives agree. Removes the manual `#[umbra(noform)]` requirement on every reverse-relation field.
+A `ReverseSet<C>` field and a reverse `OneToOne<T>` (the `#[sqlx(skip)]` variant) are back-pointers, never user-submittable by construction. The Model derive already drops them from `FIELDS`; the Form derive must do the same — skip them before type classification, exactly as it already skips `#[umbral(noform)]` / `primary_key` / `auto_now*` fields. Detection reuses the Model derive's `FieldKind::ReverseSet` and `FieldKind::OneToOne` + `has_sqlx_skip` checks so the two derives agree. Removes the manual `#[umbral(noform)]` requirement on every reverse-relation field.
 
 ### 1b. Choices enum → a `Select` field (#39)
 
-When a field carries `#[umbra(choices)]` (the same signal the Model derive keys on), emit a `Select` form field whose options come from `<T as ChoiceField>::VALUES` / `LABELS` — both compile-time consts, so **no DB access is needed** for choices. `validate()` checks the submitted string is a member of `VALUES`; a non-member produces a per-field validation error. A nullable choices field (`Option<T>`) renders a leading empty `<option>`.
+When a field carries `#[umbral(choices)]` (the same signal the Model derive keys on), emit a `Select` form field whose options come from `<T as ChoiceField>::VALUES` / `LABELS` — both compile-time consts, so **no DB access is needed** for choices. `validate()` checks the submitted string is a member of `VALUES`; a non-member produces a per-field validation error. A nullable choices field (`Option<T>`) renders a leading empty `<option>`.
 
 New `InputKind` variant:
 
 ```rust
-// crates/umbra-core/src/forms.rs
+// crates/umbral-core/src/forms.rs
 pub enum InputKind {
     // ...existing...
-    /// Closed-set enum (#[umbra(choices)]). Options are compile-time.
+    /// Closed-set enum (#[umbral(choices)]). Options are compile-time.
     Select { options: Vec<(String, String)> },     // (value, label)
 }
 ```
@@ -172,7 +172,7 @@ RIGHT/FULL JOIN requires SQLite ≥ 3.39 (Postgres is unconditional). The boot-t
 
 ## Part 5 — `annotate_count` child-side filter + soft-delete awareness (#39a)
 
-`annotate_count("comment_set")` counts **all** children — blind to the child's `SOFT_DELETE` and to any predicate — so umbra.dev counts hidden/trashed notes.
+`annotate_count("comment_set")` counts **all** children — blind to the child's `SOFT_DELETE` and to any predicate — so umbral.dev counts hidden/trashed notes.
 
 ### 5a. Carry `soft_delete` onto the relation/registry (shared with #35)
 
@@ -192,7 +192,7 @@ pub fn annotate_count_where<C: Model>(
 
 Renders the child `Predicate<C>` into the subquery WHERE alongside the correlation. Mirrors Django's `Count("comments", filter=Q(moderation="visible"))`. Generic over the child model `C` so the predicate is typed against the child's columns.
 
-The umbra.dev homepage moves from `annotate_count("comment_set")` to `annotate_count_where::<PluginComment>("notes", "comment_set", comment::MODERATION.eq("visible"))`, counting visible-only.
+The umbral.dev homepage moves from `annotate_count("comment_set")` to `annotate_count_where::<PluginComment>("notes", "comment_set", comment::MODERATION.eq("visible"))`, counting visible-only.
 
 ### 5d. `annotate_count` over M2M
 
@@ -241,7 +241,7 @@ The umbra.dev homepage moves from `annotate_count("comment_set")` to `annotate_c
 | 4 | new `joins_nested.rs` | per-join-type drop/keep behavior + SQL shape; nested graph; M2M chain |
 | 5 | `annotate_count.rs` (extend) | soft-delete exclusion, filtered count, M2M count, zero-child kept |
 
-`PluginComment` on umbra.dev is the primary end-to-end acceptance case: derive `Form`, delete the hand-rolled `Default`, submit a comment with FK + `Option<FK>` + choices through the public form, and confirm it saves with the FK bound as bigint. It exercises FK / forward-O2O / choices / reverse-skip but **not M2M** (no M2M field on `PluginComment`) — so a second acceptance uses an existing `M2M<T>` model (e.g. the shop's tag-style relation) to submit a multi-select and confirm junction rows land.
+`PluginComment` on umbral.dev is the primary end-to-end acceptance case: derive `Form`, delete the hand-rolled `Default`, submit a comment with FK + `Option<FK>` + choices through the public form, and confirm it saves with the FK bound as bigint. It exercises FK / forward-O2O / choices / reverse-skip but **not M2M** (no M2M field on `PluginComment`) — so a second acceptance uses an existing `M2M<T>` model (e.g. the shop's tag-style relation) to submit a multi-select and confirm junction rows land.
 
 ## Docs (ship a feature, ship its doc page)
 

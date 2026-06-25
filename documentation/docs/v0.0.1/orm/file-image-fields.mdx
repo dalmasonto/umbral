@@ -11,13 +11,13 @@ tags: [orm, files, images, storage, media]
 `ImageField` is a `FileField` in everything but its default form widget: the admin renders an image preview for an `ImageField` and a plain file input for a `FileField`. At the storage, serialisation, and SQL layers they behave identically.
 
 <Callout type="info">
-A model that declares a `FileField` / `ImageField` needs a `Storage` backend registered, or the build fails the `field.storage_backend` system check at boot. Add [`StoragePlugin`](/docs/v0.0.1/plugins/storage) with a media side (it registers a filesystem backend) or call `umbra::storage::set_storage(...)` before `App::build()`.
+A model that declares a `FileField` / `ImageField` needs a `Storage` backend registered, or the build fails the `field.storage_backend` system check at boot. Add [`StoragePlugin`](/docs/v0.0.1/plugins/storage) with a media side (it registers a filesystem backend) or call `umbral::storage::set_storage(...)` before `App::build()`.
 </Callout>
 
 ## Example
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
 pub struct Post {

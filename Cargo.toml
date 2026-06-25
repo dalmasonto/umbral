@@ -1,4 +1,4 @@
-# Workspace root for the umbra framework: the core crates (crates/) plus the
+# Workspace root for the umbral framework: the core crates (crates/) plus the
 # built-in plugins (plugins/).
 #
 # This manifest lives at the repo root — moved up from crates/Cargo.toml — so
@@ -7,7 +7,7 @@
 # so the workspace root has to sit above both.
 #
 # The repo is still a multi-purpose tree: the docs site (documentation/), the
-# project's own website (umbra_website/), and the example apps (examples/) are
+# project's own website (umbral_website/), and the example apps (examples/) are
 # NOT part of this workspace — they are excluded below and remain standalone
 # cargo projects (documentation/ isn't a cargo project at all). The `exclude`
 # entries cover everything beneath those directories, so adding a new example
@@ -16,40 +16,40 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/umbra-casing",
-    "crates/umbra-core",
-    "crates/umbra-macros",
-    "crates/umbra",
-    "crates/umbra-cli",
-    "crates/umbra-testing",
+    "crates/umbral-casing",
+    "crates/umbral-core",
+    "crates/umbral-macros",
+    "crates/umbral",
+    "crates/umbral-cli",
+    "crates/umbral-testing",
     # Built-in plugins (M9+). Add a new plugin's path here as it lands.
-    "plugins/umbra-auth",
-    "plugins/umbra-admin",
-    "plugins/umbra-sessions",
-    "plugins/umbra-rest",
-    "plugins/umbra-tasks",
-    "plugins/umbra-email",
-    "plugins/umbra-openapi",
-    "plugins/umbra-signals",
-    "plugins/umbra-storage",
-    "plugins/umbra-cache",
-    "plugins/umbra-security",
-    "plugins/umbra-rls",
-    "plugins/umbra-permissions",
-    "plugins/umbra-playground",
-    "plugins/umbra-health",
-    "plugins/umbra-oauth",
-    "plugins/umbra-realtime",
-    "plugins/umbra-livereload",
-    "plugins/umbra-analytics",
-    "plugins/umbra-logs",
-    "plugins/umbra-tenants",
+    "plugins/umbral-auth",
+    "plugins/umbral-admin",
+    "plugins/umbral-sessions",
+    "plugins/umbral-rest",
+    "plugins/umbral-tasks",
+    "plugins/umbral-email",
+    "plugins/umbral-openapi",
+    "plugins/umbral-signals",
+    "plugins/umbral-storage",
+    "plugins/umbral-cache",
+    "plugins/umbral-security",
+    "plugins/umbral-rls",
+    "plugins/umbral-permissions",
+    "plugins/umbral-playground",
+    "plugins/umbral-health",
+    "plugins/umbral-oauth",
+    "plugins/umbral-realtime",
+    "plugins/umbral-livereload",
+    "plugins/umbral-analytics",
+    "plugins/umbral-logs",
+    "plugins/umbral-tenants",
 ]
 # Standalone cargo projects that must NOT be pulled into this workspace.
 # Excluding a directory excludes every package beneath it.
 exclude = [
     "examples",
-    "umbra_website",
+    "umbral_website",
     "documentation",
 ]
 
@@ -57,7 +57,7 @@ exclude = [
 version = "0.0.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/dalmasonto/umbra"
+repository = "https://github.com/dalmasonto/umbral"
 authors = ["Dalmas Ogembo <dalmasogembo@gmail.com>"]
 rust-version = "1.85"
 

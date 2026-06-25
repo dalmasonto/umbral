@@ -9,7 +9,7 @@
 //! digits with commas for the "verify-this" AOV tile.
 
 use ecommerce::models::Customer;
-use umbra_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+use umbral_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
 
 use super::aggregates::{daily_orders_trail, daily_sales_trail, orders_between, sales_between};
 
@@ -34,7 +34,7 @@ pub fn shop_total_sales_widget() -> Widget {
             let trail = daily_sales_trail(30).await;
 
             WidgetPayload::Card(
-                CardPayload::new(umbra_admin::humanize_number(current))
+                CardPayload::new(umbral_admin::humanize_number(current))
                     .unit("USD")
                     .icon("dollar-sign")
                     .subtitle("Last 30 days")
@@ -64,7 +64,7 @@ pub fn shop_orders_widget() -> Widget {
             let trail = daily_orders_trail(30).await;
 
             WidgetPayload::Card(
-                CardPayload::new(umbra_admin::humanize_number(current as f64))
+                CardPayload::new(umbral_admin::humanize_number(current as f64))
                     .unit("total")
                     .icon("shopping-cart")
                     .subtitle("Last 30 days")
@@ -87,7 +87,7 @@ pub fn shop_customers_widget() -> Widget {
         data: WidgetDataFn::new(|_user| async move {
             let total = Customer::objects().count().await.unwrap_or(0);
             WidgetPayload::Card(
-                CardPayload::new(umbra_admin::humanize_number(total as f64))
+                CardPayload::new(umbral_admin::humanize_number(total as f64))
                     .unit("total")
                     .icon("users")
                     .subtitle("All time"),
@@ -127,7 +127,7 @@ pub fn shop_avg_order_value_widget() -> Widget {
                 .collect();
 
             WidgetPayload::Card(
-                CardPayload::new(umbra_admin::format_thousands(cur_aov))
+                CardPayload::new(umbral_admin::format_thousands(cur_aov))
                     .unit("USD")
                     .icon("trending-up")
                     .subtitle("Per order, 30d")

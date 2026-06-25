@@ -6,8 +6,8 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use content::{Category, Tag};
 use serde::{Deserialize, Serialize};
-use umbra::prelude::*;
-use umbra_auth::AuthUser;
+use umbral::prelude::*;
+use umbral_auth::AuthUser;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -92,9 +92,9 @@ pub enum DiscountType {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Brand {
     pub id: i64,
-    #[umbra(unique, string)]
+    #[umbral(unique, string)]
     pub name: String,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub slug: String,
     pub logo: Option<String>,
     pub website: Option<String>,
@@ -104,44 +104,44 @@ pub struct Brand {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Product {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub sku: String,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub slug: String,
-    #[umbra(string)]
+    #[umbral(string)]
     pub name: String,
     pub description: String,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub status: ProductStatus,
     pub category: ForeignKey<Category>,
     pub brand: Option<ForeignKey<Brand>>,
     pub price: String,
     pub compare_at_price: Option<String>,
     pub cost: String,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub currency: Currency,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub tax_rate: String,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub stock_quantity: i32,
     pub weight_kg: Option<f64>,
     pub dimensions: Option<serde_json::Value>,
     pub barcode: Option<String>,
     pub thumbnail: Option<String>,
     pub spec_sheet: Option<String>,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub is_featured: bool,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub rating_avg: f64,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub review_count: i32,
     pub metadata: serde_json::Value,
     pub keywords: Option<String>,
     pub external_id: Option<Uuid>,
     pub published_at: Option<DateTime<Utc>>,
-    #[umbra(auto_now_add)]
+    #[umbral(auto_now_add)]
     pub created_at: DateTime<Utc>,
-    #[umbra(auto_now)]
+    #[umbral(auto_now)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -151,7 +151,7 @@ pub struct ProductImage {
     pub product: ForeignKey<Product>,
     pub image: String,
     pub alt_text: Option<String>,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub position: i32,
 }
 
@@ -159,11 +159,11 @@ pub struct ProductImage {
 pub struct ProductVariant {
     pub id: i64,
     pub product: ForeignKey<Product>,
-    #[umbra(max_length = 64)]
+    #[umbral(max_length = 64)]
     pub sku: String,
     pub attributes: serde_json::Value,
     pub price_override: Option<String>,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub stock_quantity: i32,
 }
 
@@ -175,20 +175,20 @@ pub struct ProductVariant {
 pub struct Customer {
     pub id: i64,
     /// Cross-crate 1:1 to AuthUser via the `OneToOne<T>` sugar
-    /// (lives in umbra-auth; Customer lives here in ecommerce).
-    /// Equivalent to `#[umbra(unique)] pub user: ForeignKey<AuthUser>`
+    /// (lives in umbral-auth; Customer lives here in ecommerce).
+    /// Equivalent to `#[umbral(unique)] pub user: ForeignKey<AuthUser>`
     /// — emits a UNIQUE FK column AND exposes `auth_user.customer()
     /// .await?` as a back-link accessor on AuthUser via the
     /// cross-crate reverse-O2O trait.
     pub user: OneToOne<AuthUser>,
     pub phone: Option<String>,
     pub date_of_birth: Option<NaiveDate>,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub accepts_marketing: bool,
     pub loyalty_points: i32,
-    #[umbra(auto_now_add)]
+    #[umbral(auto_now_add)]
     pub created_at: DateTime<Utc>,
-    #[umbra(auto_now)]
+    #[umbral(auto_now)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -196,7 +196,7 @@ pub struct Customer {
 pub struct Address {
     pub id: i64,
     pub customer: ForeignKey<Customer>,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub kind: AddressType,
     pub line1: String,
     pub line2: Option<String>,
@@ -204,22 +204,22 @@ pub struct Address {
     pub region: Option<String>,
     pub postal_code: String,
     pub country: String,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub is_default: bool,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Order {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub number: String,
     pub public_id: Uuid,
     pub customer: ForeignKey<Customer>,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub status: OrderStatus,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub payment_status: PaymentStatus,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub currency: Currency,
     pub subtotal: String,
     pub shipping_total: String,
@@ -231,9 +231,9 @@ pub struct Order {
     pub billing_address: Option<ForeignKey<Address>>,
     pub notes: Option<String>,
     pub invoice: Option<String>,
-    #[umbra(auto_now_add)]
+    #[umbral(auto_now_add)]
     pub placed_at: DateTime<Utc>,
-    #[umbra(auto_now)]
+    #[umbral(auto_now)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -252,12 +252,12 @@ pub struct OrderItem {
 pub struct Payment {
     pub id: i64,
     pub order: ForeignKey<Order>,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub method: PaymentMethod,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub status: PaymentStatus,
     pub amount: String,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub currency: Currency,
     pub transaction_id: Option<String>,
     pub paid_at: Option<DateTime<Utc>>,
@@ -276,17 +276,17 @@ pub struct Shipment {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Coupon {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub code: String,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub discount_type: DiscountType,
     pub value: String,
     pub valid_from: DateTime<Utc>,
     pub valid_to: DateTime<Utc>,
     pub usage_limit: Option<i32>,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub used_count: i32,
-    #[umbra(default = "true")]
+    #[umbral(default = "true")]
     pub is_active: bool,
 }
 
@@ -298,9 +298,9 @@ pub struct Review {
     pub rating: i32,
     pub title: Option<String>,
     pub body: String,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub is_verified_purchase: bool,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub is_approved: bool,
     pub created_at: DateTime<Utc>,
 }

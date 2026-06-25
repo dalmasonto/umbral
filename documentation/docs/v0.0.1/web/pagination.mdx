@@ -6,7 +6,7 @@ icon: book-open
 tags: [web, templates, orm, pagination]
 ---
 
-`umbra::pagination` is the page-of-rows helper for **server-rendered (Jinja) list views** — the Django `django.core.paginator` equivalent. A `Paginator` counts a [`QuerySet`](/docs/v0.0.1/orm) once and slices it into fixed-size `Page`s; a `Page` exposes Django's familiar `has_next()`, `start_index()`, `next_page_number()`, and a windowed `elided_page_range()` for the `1 … 4 5 [6] 7 8 … 20` nav.
+`umbral::pagination` is the page-of-rows helper for **server-rendered (Jinja) list views** — the Django `django.core.paginator` equivalent. A `Paginator` counts a [`QuerySet`](/docs/v0.0.1/orm) once and slices it into fixed-size `Page`s; a `Page` exposes Django's familiar `has_next()`, `start_index()`, `next_page_number()`, and a windowed `elided_page_range()` for the `1 … 4 5 [6] 7 8 … 20` nav.
 
 It lives in the core (no plugin to register): any handler can paginate a queryset directly. This is distinct from REST's JSON pagination — reach for this when you render HTML.
 
@@ -17,9 +17,9 @@ It lives in the core (no plugin to register): any handler can paginate a queryse
 ## Handler example
 
 ```rust
-use umbra::prelude::*;
-use umbra::pagination::Paginator;
-use umbra::templates::{render, context};
+use umbral::prelude::*;
+use umbral::pagination::Paginator;
+use umbral::templates::{render, context};
 
 async fn post_list(query: Query<HashMap<String, String>>) -> Response {
     let page_num: i64 = query.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
@@ -42,7 +42,7 @@ async fn post_list(query: Query<HashMap<String, String>>) -> Response {
 
 ## The nav partial
 
-A reusable `_pagination.html` partial ships under `crates/umbra-core/templates/`. Copy it into your project `templates/` dir and `{% include %}` it from a list template; it renders a minimal, CSS-framework-agnostic `<nav>` with `aria` attributes from two context vars: `page` (the `PageContext` above) and `base_query` (the current querystring).
+A reusable `_pagination.html` partial ships under `crates/umbral-core/templates/`. Copy it into your project `templates/` dir and `{% include %}` it from a list template; it renders a minimal, CSS-framework-agnostic `<nav>` with `aria` attributes from two context vars: `page` (the `PageContext` above) and `base_query` (the current querystring).
 
 ```jinja
 {# posts/list.html #}

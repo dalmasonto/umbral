@@ -1,4 +1,4 @@
-# umbra — motto & hero copy
+# umbral — motto & hero copy
 
 Date: 2026-06-10. Companion to `competitive-positioning.md`. The reasoning here is grounded in the audit in this folder (the modularity claim is verified, not aspirational) and the competitor sweep.
 
@@ -9,9 +9,9 @@ Django, cot, and loco all compete on the same axis — **developer ease**:
 - cot.rs: *"The Rust web framework for lazy developers."*
 - loco.rs: *"Productivity-first… the one-person framework."*
 
-That axis is crowded, and on it umbra is the fourth voice saying a version of *fast and pleasant* — and it would lose the fight on maturity (cot ships, loco is mature).
+That axis is crowded, and on it umbral is the fourth voice saying a version of *fast and pleasant* — and it would lose the fight on maturity (cot ships, loco is mature).
 
-umbra's genuinely unique, audit-verified truth lives on a **different axis: radical modularity.** Auth, sessions, admin, tasks, and REST are all plugins, registered through the *same trait a third party uses*, enforced by Cargo's ban on circular crate dependencies. No competitor can claim this without re-architecting. **The motto should plant a flag on the axis umbra already owns — not fight on ease.**
+umbral's genuinely unique, audit-verified truth lives on a **different axis: radical modularity.** Auth, sessions, admin, tasks, and REST are all plugins, registered through the *same trait a third party uses*, enforced by Cargo's ban on circular crate dependencies. No competitor can claim this without re-architecting. **The motto should plant a flag on the axis umbral already owns — not fight on ease.**
 
 ## Recommended motto
 
@@ -19,10 +19,10 @@ umbra's genuinely unique, audit-verified truth lives on a **different axis: radi
 
 Why this is the line:
 
-1. **It's true and verified.** The audit confirmed the framework cannot structurally distinguish its own auth plugin from yours. The motto is a fact, not a promise — the opposite of a claim like "secure by default" that the audit showed umbra can't yet substantiate.
+1. **It's true and verified.** The audit confirmed the framework cannot structurally distinguish its own auth plugin from yours. The motto is a fact, not a promise — the opposite of a claim like "secure by default" that the audit showed umbral can't yet substantiate.
 2. **"Even ours" does enormous work in two words** — it carries the no-privileged-core bet, the dogfooding discipline, and a note of confident humility all at once.
-3. **It survives a rename.** "umbra" is a placeholder (per CLAUDE.md); a motto built on shadow/Latin wordplay dies the day the tree is `sed`-renamed. This one is anchored to the architecture, not the word.
-4. **It competes on the open lane.** Ease is taken; modularity is not. It's also the one wedge umbra's code actually backs up.
+3. **It survives a rename.** "umbral" is a placeholder (per CLAUDE.md); a motto built on shadow/Latin wordplay dies the day the tree is `sed`-renamed. This one is anchored to the architecture, not the word.
+4. **It competes on the open lane.** Ease is taken; modularity is not. It's also the one wedge umbral's code actually backs up.
 
 **The caveat that makes it the right line:** a motto is a promise you must keep shipping. "Every feature is a plugin, even ours" raises the bar — the day a built-in quietly bypasses the Plugin trait for a shortcut, the motto becomes a lie the next developer notices. It's the right line *because* it's demanding: it keeps the architecture honest.
 
@@ -36,9 +36,9 @@ Why this is the line:
 
 ## Why not the others
 
-- **Ease/speed lines** ("fast", "productive", "for X developers") are taken, and umbra loses that fight on maturity today.
+- **Ease/speed lines** ("fast", "productive", "for X developers") are taken, and umbral loses that fight on maturity today.
 - **"Django for Rust"** is literally cot's slot.
-- **Shadow/umbra puns** are clever but fragile (placeholder name) and inward-looking.
+- **Shadow/umbral puns** are clever but fragile (placeholder name) and inward-looking.
 
 Modularity is the open lane, and the only one the code can survive being fact-checked on.
 
@@ -60,7 +60,7 @@ Each is headline + subline + three proof-points. The proof-points are grounded i
 ### Variation 2 — Provocative / minimal
 
 > # There is no core.
-> umbra is a Rust web framework that dissolved its own center. Every capability — auth, sessions, admin, background tasks, REST — is a plugin you could have written, registered through one trait. Replace any piece without forking.
+> umbral is a Rust web framework that dissolved its own center. Every capability — auth, sessions, admin, background tasks, REST — is a plugin you could have written, registered through one trait. Replace any piece without forking.
 
 - **One seam, infinite surface.** A single `Plugin` trait contributes models, routes, middleware, commands, settings, and admin registrations.
 - **Your code and ours, indistinguishable.** Built-ins earn no privileges yours can't.
@@ -78,7 +78,7 @@ Each is headline + subline + three proof-points. The proof-points are grounded i
 ### Variation 4 — Identity / who-it's-for
 
 > # For builders who refuse to inherit someone else's monolith.
-> umbra gives you Django's shape — models, migrations, an admin, a real REST framework, a task queue — on Rust, with one difference that changes everything: nothing is built-in. Everything is a plugin, including the parts we wrote.
+> umbral gives you Django's shape — models, migrations, an admin, a real REST framework, a task queue — on Rust, with one difference that changes everything: nothing is built-in. Everything is a plugin, including the parts we wrote.
 
 - **Outgrow nothing.** When you need to replace the admin, the auth, or the API layer, there's no privileged core fighting you — just another plugin.
 - **More batteries than a starter kit.** Auth, permissions, sessions, admin with dashboards, DRF-style REST, OpenAPI, a background task queue, email, cache, media. *(Harden tasks-queue correctness before leading with it — see broken-features.md.)*
@@ -98,4 +98,4 @@ Each is headline + subline + three proof-points. The proof-points are grounded i
 ## Notes for using these
 
 - **Pick one motto and commit** — fragmenting across taglines weakens the flag-plant. Variation 1's headline is the recommendation; the others are A/B candidates.
-- **Two proof-points in every variation depend on closing round-one gaps** to be honest in public: the security-defaults theme (so "secure primitives by default" reads as true end-to-end) and the umbra-tasks correctness bugs (before the task queue headlines a bullet). The motto raises the bar; the backlog is how you clear it. See `competitive-positioning.md` → "the engineering backlog *is* the marketing strategy."
+- **Two proof-points in every variation depend on closing round-one gaps** to be honest in public: the security-defaults theme (so "secure primitives by default" reads as true end-to-end) and the umbral-tasks correctness bugs (before the task queue headlines a bullet). The motto raises the bar; the backlog is how you clear it. See `competitive-positioning.md` → "the engineering backlog *is* the marketing strategy."

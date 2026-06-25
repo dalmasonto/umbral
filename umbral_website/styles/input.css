@@ -1,0 +1,250 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Umbral website design system — from design/Home.dc.html.
+ *
+ * Warm paper surfaces, one violet accent, Inter + JetBrains Mono.
+ * Every color is a CSS variable so the palette swaps per theme: the
+ * `:root` block is the LIGHT theme (the only one designed so far);
+ * dark mode lands later as a `.dark { ... }` override block plus
+ * `class="dark"` on <html> — the templates never change.
+ */
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /* Surfaces */
+    --paper:      #FAF8F5; /* page background */
+    --surface:    #FFFFFF; /* cards */
+    --surface-2:  #F7F4F0; /* inset rows, code chips */
+    --surface-3:  #F6F2ED; /* footer band */
+
+    /* Text */
+    --ink:        #1B1714; /* headings, strongest text */
+    --ink-2:      #3A332D; /* strong body, button labels */
+    --body:       #4A423B; /* nav + link text */
+    --muted:      #6E655C; /* paragraphs */
+    --faint:      #978C81; /* captions, kickers */
+    --ghost:      #B6ABA0; /* faintest meta */
+
+    /* Lines */
+    --hairline:   #ECE6DE; /* card + section borders */
+    --hairline-2: #E9E3DB; /* input + chip borders */
+
+    /* Accent (violet) */
+    --accent:       #6B4DFF;
+    --accent-2:     #5938E8; /* deep accent text */
+    --accent-soft:  #F0ECFF; /* tinted backgrounds */
+    --accent-line:  #DDD3FF; /* tinted borders, ::selection */
+    --accent-ghost: #C9BEF6; /* accent on dark panels */
+
+    /* Status */
+    --ok:        #1F9D57;
+    --ok-soft:   #E7F4EC;
+    --warn:      #B5730F;
+    --warn-soft: #FBF1DE;
+    --tan:       #9A7B43;
+    --tan-soft:  #F3EEE7;
+    --tan-line:  #E5DCD0;
+
+    /* Dark panels (terminal, security card) — separate from --ink so a
+       future dark theme can keep panels distinct from the page bg. */
+    --shade:       #1B1714;
+    --shade-2:     #2C2722; /* borders inside dark panels */
+    --shade-ink:   #E7E1DA; /* text on dark panels */
+    --shade-muted: #A99E93;
+    --shade-faint: #8A817A;
+
+    /* Terminal syntax */
+    --code-violet: #7E76E8;
+    --code-green:  #9CE8B6;
+    --code-amber:  #F3C98B;
+    --code-blue:   #9AB6F0;
+  }
+
+  /* Dark theme: designed later. Override the variables above here and
+     toggle class="dark" on <html>; tailwind.config.js already runs the
+     class strategy. */
+  /* .dark { ... } */
+
+  html {
+    text-rendering: optimizeLegibility;
+    background: var(--paper);
+    color: var(--ink);
+  }
+
+  body {
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  code, kbd, pre, samp {
+    font-family: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  }
+
+  ::selection { background: var(--accent-line); }
+
+  a { text-decoration: none; color: inherit; }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+}
+
+@layer components {
+  /* The Umbral mark — a violet disc with a paper "eclipse" bite. The
+     bite color tracks the surface it sits on via --logo-bite. */
+  .logo-mark {
+    position: relative;
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    --logo-bite: var(--paper);
+  }
+  .logo-mark::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: var(--accent);
+  }
+  .logo-mark::after {
+    content: "";
+    position: absolute;
+    top: -4px;
+    right: -5px;
+    width: 20px;
+    height: 20px;
+    border-radius: 9999px;
+    background: var(--logo-bite);
+  }
+  .logo-mark--sm { width: 12px; height: 12px; }
+  .logo-mark--sm::after { top: -2px; right: -2px; width: 10px; height: 10px; }
+
+  /* Primary CTA — violet, soft glow on the large variant. */
+  .btn-accent {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 11px 18px;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 10px;
+    font-size: 14.5px;
+    font-weight: 600;
+    line-height: 1.2;
+    transition: background-color 120ms ease;
+  }
+  .btn-accent:hover { background: var(--accent-2); }
+  .btn-accent--lg {
+    padding: 13px 22px;
+    border-radius: 11px;
+    font-size: 15.5px;
+    box-shadow: 0 8px 24px -8px rgba(107, 77, 255, 0.55);
+  }
+
+  /* Secondary CTA — white card button. */
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 11px 18px;
+    background: var(--surface);
+    color: var(--ink-2);
+    border: 1px solid var(--hairline-2);
+    border-radius: 10px;
+    font-size: 14.5px;
+    font-weight: 600;
+    line-height: 1.2;
+    transition: border-color 120ms ease, background-color 120ms ease;
+  }
+  .btn-ghost:hover { border-color: var(--ghost); }
+  .btn-ghost--lg { padding: 13px 22px; border-radius: 11px; font-size: 15.5px; }
+
+  /* White card. */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 16px;
+  }
+
+  /* Status pills. */
+  .pill-official {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent-2);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    padding: 3px 8px;
+    border-radius: 9999px;
+    white-space: nowrap;
+  }
+  .pill-community {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--muted);
+    background: var(--tan-soft);
+    border: 1px solid var(--tan-line);
+    padding: 3px 8px;
+    border-radius: 9999px;
+    white-space: nowrap;
+  }
+  .pill-ok {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ok);
+    background: var(--ok-soft);
+    padding: 3px 8px;
+    border-radius: 9999px;
+    white-space: nowrap;
+  }
+  .pill-warn {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--warn);
+    background: var(--warn-soft);
+    padding: 3px 8px;
+    border-radius: 9999px;
+    white-space: nowrap;
+  }
+
+  /* Copy-to-clipboard icon button (install commands). Shows the
+     clipboard icon normally, the green check for ~1.2s after a copy
+     (admin.js-style class toggle from the inline umbralCopy helper). */
+  .copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border: 1px solid var(--hairline);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--faint);
+    cursor: pointer;
+    transition: color 120ms ease, border-color 120ms ease;
+  }
+  .copy-btn:hover { color: var(--ink-2); border-color: var(--ghost); }
+  .copy-btn .icon-check { display: none; }
+  .copy-btn.copied .icon-copy { display: none; }
+  .copy-btn.copied .icon-check { display: block; }
+  .copy-btn.copied { border-color: var(--ok); }
+
+  /* Uppercase section kicker. */
+  .kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+}

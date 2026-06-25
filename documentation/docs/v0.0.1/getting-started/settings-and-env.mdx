@@ -1,19 +1,19 @@
 ---
 title: Settings and environment variables
-description: How umbra reads umbra.toml, .env, and UMBRA_-prefixed env vars, plus how to access settings from handlers, plugins, or task bodies.
+description: How umbral reads umbral.toml, .env, and UMBRAL_-prefixed env vars, plus how to access settings from handlers, plugins, or task bodies.
 sidebar_position: 2
 icon: settings
 tags: [getting-started, settings, env]
 ---
 
-Every umbra app has one ambient `Settings` value loaded once at boot from configuration files and environment variables, with later sources overriding earlier ones:
+Every umbral app has one ambient `Settings` value loaded once at boot from configuration files and environment variables, with later sources overriding earlier ones:
 
 1. **Built-in defaults**: `database_url = "sqlite::memory:"`, `bind_addr = "127.0.0.1:8000"`, etc.
-2. **`umbra.toml`** at the project root.
+2. **`umbral.toml`** at the project root.
 3. **`.env`** at the project root, merged like environment variables for local development.
-4. **`UMBRA_`-prefixed environment variables already set in the process.**
+4. **`UMBRAL_`-prefixed environment variables already set in the process.**
 
-After `App::build` runs, `umbra::settings::get()` returns the resolved value from anywhere in the app: handlers, plugin code, task bodies, signal handlers. No state plumbing, no extractors.
+After `App::build` runs, `umbral::settings::get()` returns the resolved value from anywhere in the app: handlers, plugin code, task bodies, signal handlers. No state plumbing, no extractors.
 
 ## The known fields
 
@@ -39,31 +39,31 @@ pub struct Settings {
 }
 ```
 
-| Field | Env var | umbra.toml key | Default |
+| Field | Env var | umbral.toml key | Default |
 |---|---|---|---|
-| `database_url` | `UMBRA_DATABASE_URL` | `database_url` | `"sqlite::memory:"` |
-| `databases` | `UMBRA_DATABASES__<NAME>` (double underscore) | `[databases]` table | empty map |
-| `db_max_connections` | `UMBRA_DB_MAX_CONNECTIONS` | `db_max_connections` | `10` |
-| `db_acquire_timeout_secs` | `UMBRA_DB_ACQUIRE_TIMEOUT_SECS` | `db_acquire_timeout_secs` | `30` |
-| `db_min_connections` | `UMBRA_DB_MIN_CONNECTIONS` | `db_min_connections` | `0` |
-| `db_idle_timeout_secs` | `UMBRA_DB_IDLE_TIMEOUT_SECS` | `db_idle_timeout_secs` | `Some(600)` (`0`/empty disables) |
-| `db_max_lifetime_secs` | `UMBRA_DB_MAX_LIFETIME_SECS` | `db_max_lifetime_secs` | `Some(1800)` (`0`/empty disables) |
-| `db_test_before_acquire` | `UMBRA_DB_TEST_BEFORE_ACQUIRE` | `db_test_before_acquire` | `true` |
-| `secret_key` | `UMBRA_SECRET_KEY` | `secret_key` | `"umbra-insecure-dev-key-change-me"` (rejected in prod) |
-| `environment` | `UMBRA_ENVIRONMENT` | `environment` | `Dev` (values: `Dev` / `Test` / `Prod`) |
-| `allowed_hosts` | `UMBRA_ALLOWED_HOSTS` (comma-list) | `allowed_hosts` | `["localhost", "127.0.0.1"]` |
-| `log_level` | `UMBRA_LOG_LEVEL` | `log_level` | `"info"` |
-| `bind_addr` | `UMBRA_BIND_ADDR` | `bind_addr` | `"127.0.0.1:8000"` |
-| `time_zone` | `UMBRA_TIME_ZONE` | `time_zone` | `None` (treats naive datetimes as UTC) |
-| `static_url` | `UMBRA_STATIC_URL` | `static_url` | `"/static/"` |
-| `static_root` | `UMBRA_STATIC_ROOT` | `static_root` | `"staticfiles/"` |
+| `database_url` | `UMBRAL_DATABASE_URL` | `database_url` | `"sqlite::memory:"` |
+| `databases` | `UMBRAL_DATABASES__<NAME>` (double underscore) | `[databases]` table | empty map |
+| `db_max_connections` | `UMBRAL_DB_MAX_CONNECTIONS` | `db_max_connections` | `10` |
+| `db_acquire_timeout_secs` | `UMBRAL_DB_ACQUIRE_TIMEOUT_SECS` | `db_acquire_timeout_secs` | `30` |
+| `db_min_connections` | `UMBRAL_DB_MIN_CONNECTIONS` | `db_min_connections` | `0` |
+| `db_idle_timeout_secs` | `UMBRAL_DB_IDLE_TIMEOUT_SECS` | `db_idle_timeout_secs` | `Some(600)` (`0`/empty disables) |
+| `db_max_lifetime_secs` | `UMBRAL_DB_MAX_LIFETIME_SECS` | `db_max_lifetime_secs` | `Some(1800)` (`0`/empty disables) |
+| `db_test_before_acquire` | `UMBRAL_DB_TEST_BEFORE_ACQUIRE` | `db_test_before_acquire` | `true` |
+| `secret_key` | `UMBRAL_SECRET_KEY` | `secret_key` | `"umbral-insecure-dev-key-change-me"` (rejected in prod) |
+| `environment` | `UMBRAL_ENVIRONMENT` | `environment` | `Dev` (values: `Dev` / `Test` / `Prod`) |
+| `allowed_hosts` | `UMBRAL_ALLOWED_HOSTS` (comma-list) | `allowed_hosts` | `["localhost", "127.0.0.1"]` |
+| `log_level` | `UMBRAL_LOG_LEVEL` | `log_level` | `"info"` |
+| `bind_addr` | `UMBRAL_BIND_ADDR` | `bind_addr` | `"127.0.0.1:8000"` |
+| `time_zone` | `UMBRAL_TIME_ZONE` | `time_zone` | `None` (treats naive datetimes as UTC) |
+| `static_url` | `UMBRAL_STATIC_URL` | `static_url` | `"/static/"` |
+| `static_root` | `UMBRAL_STATIC_ROOT` | `static_root` | `"staticfiles/"` |
 
-## umbra.toml
+## umbral.toml
 
 The closest analogue to Django's `settings.py`. Lives at the project root next to `Cargo.toml`:
 
 ```toml
-# umbra.toml
+# umbral.toml
 database_url = "sqlite://app.db?mode=rwc"
 bind_addr = "0.0.0.0:8000"
 secret_key = "replace-me-with-openssl-rand-hex-32"
@@ -71,41 +71,41 @@ environment = "Prod"
 log_level = "info"
 allowed_hosts = ["example.com", "www.example.com"]
 
-# Named secondary pools, routed per-model via `#[umbra(database = "alias")]`
+# Named secondary pools, routed per-model via `#[umbral(database = "alias")]`
 # or per-plugin via `Plugin::database()`
 [databases]
 analytics = "postgres://analytics:pw@db-host/analytics"
 cache = "sqlite://cache.db?mode=rwc"
 ```
 
-Commit `umbra.toml` to git for everything that isn't a secret. Keep secrets (`secret_key`, real `database_url` with passwords) out of the committed copy and supply them via env vars instead.
+Commit `umbral.toml` to git for everything that isn't a secret. Keep secrets (`secret_key`, real `database_url` with passwords) out of the committed copy and supply them via env vars instead.
 
 ## Environment variables (production / containers)
 
 ```bash
-export UMBRA_DATABASE_URL="postgres://app:pw@db/app"
-export UMBRA_BIND_ADDR="0.0.0.0:8080"
-export UMBRA_SECRET_KEY="$(openssl rand -hex 32)"
-export UMBRA_ENVIRONMENT="Prod"
+export UMBRAL_DATABASE_URL="postgres://app:pw@db/app"
+export UMBRAL_BIND_ADDR="0.0.0.0:8080"
+export UMBRAL_SECRET_KEY="$(openssl rand -hex 32)"
+export UMBRAL_ENVIRONMENT="Prod"
 
 cargo run -- serve
 ```
 
-The `UMBRA_` prefix marks the env var as framework-owned. Anything else in your shell is invisible to umbra's settings loader, so there's no accidental capture.
+The `UMBRAL_` prefix marks the env var as framework-owned. Anything else in your shell is invisible to umbral's settings loader, so there's no accidental capture.
 
 ## Reading settings from anywhere
 
 ```rust
 // In a handler:
 async fn home() -> Html<String> {
-    let settings = umbra::settings::get();
+    let settings = umbral::settings::get();
     Html(format!("running in {:?} mode", settings.environment))
 }
 
 // In a Plugin::on_ready:
 fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-    let settings = umbra::settings::get();
-    if matches!(settings.environment, umbra::Environment::Prod) {
+    let settings = umbral::settings::get();
+    if matches!(settings.environment, umbral::Environment::Prod) {
         // production-only setup
     }
     Ok(())
@@ -114,7 +114,7 @@ fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
 // In a #[task] body:
 #[task]
 async fn ping_external_api(payload: PingPayload) -> Result<(), String> {
-    let api_key = umbra::settings::get_opt()
+    let api_key = umbral::settings::get_opt()
         .and_then(|s| s.extra_str("openai_api_key").map(str::to_string))
         .ok_or("OPENAI_API_KEY not configured")?;
     // ... call the API
@@ -122,7 +122,7 @@ async fn ping_external_api(payload: PingPayload) -> Result<(), String> {
 }
 ```
 
-`umbra::settings::get()` returns `&'static Settings` and panics if `App::build` hasn't run. `umbra::settings::get_opt()` returns `Option<&'static Settings>`; use it in code that may run before `App::build` finishes (rare, but possible in macro-emitted helpers, test fixtures, etc.).
+`umbral::settings::get()` returns `&'static Settings` and panics if `App::build` hasn't run. `umbral::settings::get_opt()` returns `Option<&'static Settings>`; use it in code that may run before `App::build` finishes (rare, but possible in macro-emitted helpers, test fixtures, etc.).
 
 <Callout type="info">
 The `&'static` lifetime is real: the settings live for the process. You can stash field clones (`settings.secret_key.clone()`) freely; the underlying struct doesn't move.
@@ -130,15 +130,15 @@ The `&'static` lifetime is real: the settings live for the process. You can stas
 
 ## Custom settings (the `extra` field)
 
-Most real apps need keys umbra doesn't know about: `OPENAI_API_KEY`, `STRIPE_SECRET`, third-party plugin config. The `extra: HashMap<String, toml::Value>` field catches everything that doesn't match a known field name:
+Most real apps need keys umbral doesn't know about: `OPENAI_API_KEY`, `STRIPE_SECRET`, third-party plugin config. The `extra: HashMap<String, toml::Value>` field catches everything that doesn't match a known field name:
 
 ```bash
 # Env var
-export UMBRA_OPENAI_API_KEY="sk-test"
+export UMBRAL_OPENAI_API_KEY="sk-test"
 ```
 
 ```toml
-# umbra.toml - both work
+# umbral.toml - both work
 openai_api_key = "sk-test"
 
 # Or nested
@@ -150,7 +150,7 @@ model = "gpt-4o"
 Read with `extra_str` for the common scalar-string case:
 
 ```rust
-let key = umbra::settings::get()
+let key = umbral::settings::get()
     .extra_str("openai_api_key")
     .ok_or("missing OPENAI_API_KEY")?;
 ```
@@ -158,7 +158,7 @@ let key = umbra::settings::get()
 For nested values (`[external.openai]`), index `extra` directly:
 
 ```rust
-let cfg = umbra::settings::get();
+let cfg = umbral::settings::get();
 let model: &str = cfg.extra
     .get("external")
     .and_then(|v| v.get("openai"))
@@ -169,12 +169,12 @@ let model: &str = cfg.extra
 
 ## .env files
 
-`Settings::from_env()` automatically reads a project-root `.env` file before reading `UMBRA_` variables from the process environment. This is the local-dev place for values you do not want to commit:
+`Settings::from_env()` automatically reads a project-root `.env` file before reading `UMBRAL_` variables from the process environment. This is the local-dev place for values you do not want to commit:
 
 ```bash
 cat > .env <<'EOF'
-UMBRA_DATABASE_URL=postgres://app:pw@localhost/app_dev
-UMBRA_SECRET_KEY=dev-only-secret
+UMBRAL_DATABASE_URL=postgres://app:pw@localhost/app_dev
+UMBRAL_SECRET_KEY=dev-only-secret
 EOF
 
 cargo run -- serve
@@ -187,15 +187,15 @@ Values already exported by the shell, Docker, systemd, or a hosting provider win
 Later wins:
 
 1. Struct defaults (in `Settings::default_*` functions).
-2. `umbra.toml` at the project root.
-3. `UMBRA_` variables from `.env`, unless the process already set the same key.
-4. `UMBRA_`-prefixed env vars already present in the process environment.
-5. The `--addr` flag on `umbra serve` (one-off override; doesn't write back to settings).
+2. `umbral.toml` at the project root.
+3. `UMBRAL_` variables from `.env`, unless the process already set the same key.
+4. `UMBRAL_`-prefixed env vars already present in the process environment.
+5. The `--addr` flag on `umbral serve` (one-off override; doesn't write back to settings).
 
 When the server starts it logs the bound address:
 
 ```
-INFO umbra_core::app: umbra serving on 127.0.0.1:8000
+INFO umbral_core::app: umbral serving on 127.0.0.1:8000
 ```
 
 ## Loading settings yourself (rare)
@@ -203,17 +203,17 @@ INFO umbra_core::app: umbra serving on 127.0.0.1:8000
 `App::builder().settings(...)` accepts a pre-built `Settings`. The common shape uses `from_env`:
 
 ```rust
-let settings = umbra::Settings::from_env()?;  // figment-loaded
+let settings = umbral::Settings::from_env()?;  // figment-loaded
 let app = App::builder().settings(settings).build()?;
 ```
 
 For tests, build a `Settings` literal directly:
 
 ```rust
-let settings = umbra::Settings {
+let settings = umbral::Settings {
     database_url: "sqlite::memory:".into(),
-    environment: umbra::Environment::Test,
-    ..umbra::Settings::from_env()?
+    environment: umbral::Environment::Test,
+    ..umbral::Settings::from_env()?
 };
 ```
 
@@ -222,5 +222,5 @@ let settings = umbra::Settings {
 - [Management commands](/docs/v0.0.1/cli/management-commands): env vars affect every subcommand the same way.
 - [Connection pooling](/docs/v0.0.1/orm/connection-pooling): the `db_*` knobs above (`db_max_connections`, `db_idle_timeout_secs`, …) in depth.
 - [Backends, Postgres](/docs/v0.0.1/backends/postgres) and [SQLite](/docs/v0.0.1/backends/sqlite): what to put in `database_url` per backend.
-- [`umbra-tasks`](/docs/v0.0.1/plugins/tasks): `settings::get()` works in task handlers too.
-- [`umbra-signals`](/docs/v0.0.1/plugins/signals): same in signal handlers.
+- [`umbral-tasks`](/docs/v0.0.1/plugins/tasks): `settings::get()` works in task handlers too.
+- [`umbral-signals`](/docs/v0.0.1/plugins/signals): same in signal handlers.

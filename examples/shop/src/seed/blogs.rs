@@ -5,8 +5,8 @@
 //! See `super::all()` for the order.
 
 use content::models::{Category, Comment, Post, PostStatus, Tag};
-use umbra::prelude::*;
-use umbra_auth::AuthUser;
+use umbral::prelude::*;
+use umbral_auth::AuthUser;
 
 pub async fn blogs() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if Tag::objects().count().await? == 0 {
@@ -296,7 +296,7 @@ fn heavy_post(
         is_featured: idx <= 5,
         reading_minutes: 12 + (idx as i32 % 8),
         view_count: 1000 + idx * 150,
-        seo_title: Some(format!("{} | Umbra Engineering Blog", title)),
+        seo_title: Some(format!("{} | Umbral Engineering Blog", title)),
         seo_description: Some(excerpt),
         published_at: Some(*now),
         created_at: *now,

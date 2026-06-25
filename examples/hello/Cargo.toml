@@ -1,13 +1,13 @@
 [package]
-name = "umbra-hello"
+name = "umbral-hello"
 version = "0.1.0"
 edition = "2024"
-description = "Minimal umbra hello-world example."
+description = "Minimal umbral hello-world example."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-umbra = { path = "../../crates/umbra" }
-umbra-cli = { path = "../../crates/umbra-cli" }
+umbral = { path = "../../crates/umbral" }
+umbral-cli = { path = "../../crates/umbral-cli" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # For the benchmark model: serde derives + a sqlx pool for the bench table.
 serde = { version = "1", features = ["derive"] }

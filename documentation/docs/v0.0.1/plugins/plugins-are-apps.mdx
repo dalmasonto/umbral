@@ -1,38 +1,38 @@
 ---
 title: Plugins are apps
-description: umbra's `Plugin` is the Django-app concept under a different name.
+description: umbral's `Plugin` is the Django-app concept under a different name.
 sidebar_position: 2
 icon: package
 ---
 
-If you came to umbra from Django and went looking for `INSTALLED_APPS`, you
+If you came to umbral from Django and went looking for `INSTALLED_APPS`, you
 probably didn't find it. The reason is naming, not a missing feature.
 
-**A `Plugin` is an app.** The umbra `Plugin` trait carries every contribution a Django app makes (models, routes, system checks, an `on_ready` hook, middleware via `wrap_router`, management commands via `commands()`, template directories, and embedded static files) through one trait, into one builder call. The built-in `umbra-auth` plugin is the
+**A `Plugin` is an app.** The umbral `Plugin` trait carries every contribution a Django app makes (models, routes, system checks, an `on_ready` hook, middleware via `wrap_router`, management commands via `commands()`, template directories, and embedded static files) through one trait, into one builder call. The built-in `umbral-auth` plugin is the
 canonical example: it ships a `User` model, password hashing helpers, a
 `Plugin` impl that registers the model under the `"auth"` namespace, and
-lives in its own crate under `plugins/umbra-auth/`. Structurally it's
+lives in its own crate under `plugins/umbral-auth/`. Structurally it's
 identical to anything you'd write yourself.
 
-## The Django → umbra mapping
+## The Django → umbral mapping
 
-| Django | umbra |
+| Django | umbral |
 |---|---|
-| `django.apps.AppConfig` | `impl umbra::prelude::Plugin for MyPlugin` |
+| `django.apps.AppConfig` | `impl umbral::prelude::Plugin for MyPlugin` |
 | `INSTALLED_APPS = ['my_app']` | `App::builder().plugin(MyPlugin)` |
 | `my_app/models.py` | `pub struct ... ` with `#[derive(Model)]` |
 | `my_app/migrations/` | `plugins/my-app/migrations/<my-app>/` |
 | `my_app/urls.py` | `Plugin::routes()` returning an axum `Router` |
 | `apps.py` `ready()` | `Plugin::on_ready(&ctx)` |
-| `my_app/management/commands/` | `Plugin::commands()`; `umbra-auth` contributes `createsuperuser` this way (see the [Plugin trait page](/docs/v0.0.1/plugins/the-plugin-trait)) |
-| `auth_user`, `auth_permission` (Django's auto-prefixed table names) | Up to you. `#[umbra(table = "...")]` overrides the snake-case default |
+| `my_app/management/commands/` | `Plugin::commands()`; `umbral-auth` contributes `createsuperuser` this way (see the [Plugin trait page](/docs/v0.0.1/plugins/the-plugin-trait)) |
+| `auth_user`, `auth_permission` (Django's auto-prefixed table names) | Up to you. `#[umbral(table = "...")]` overrides the snake-case default |
 
 ## Where apps live
 
 The convention is `plugins/<name>/` at the repo root, as its own Cargo
-project. `plugins/umbra-auth/` is the live example. The pattern matches
+project. `plugins/umbral-auth/` is the live example. The pattern matches
 what every built-in plugin will look like (sessions, tasks, admin, REST),
-and what a third-party `cargo add umbra-blog` would look like - there's
+and what a third-party `cargo add umbral-blog` would look like - there's
 no special-casing between "built-in" and "third-party".
 
 A small project that doesn't yet need its own crate can register the
@@ -65,16 +65,16 @@ routes that hit the ORM from the plugin code, customises REST via a
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use umbra::plugin::{AppContext, Plugin, PluginError};
-use umbra::prelude::*;
-use umbra::web::{Html, Json, Path, Router, StatusCode, get};
+use umbral::plugin::{AppContext, Plugin, PluginError};
+use umbral::prelude::*;
+use umbral::web::{Html, Json, Path, Router, StatusCode, get};
 
 // --- Model -----------------------------------------------------------------
 
 /// The plugin owns its model. `App::builder()` auto-discovers it
 /// through the `Plugin::models()` hook below - no `.model::<Post>()`
 /// line on the builder.
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbral::orm::Model)]
 pub struct Post {
     pub id: i64,
     pub title: String,
@@ -122,8 +122,8 @@ async fn post_detail(Path(id): Path<i64>) -> Result<Json<Post>, (StatusCode, Str
 /// plugin so main.rs doesn't have to thread customisation per-table.
 /// Register from main.rs via `.plugin(RestPlugin::default()
 /// .resource(blog::rest_resource()))`.
-pub fn rest_resource() -> umbra_rest::ResourceConfig {
-    umbra_rest::ResourceConfig::new("post")
+pub fn rest_resource() -> umbral_rest::ResourceConfig {
+    umbral_rest::ResourceConfig::new("post")
         // Hide the raw author email; show the domain only.
         .transform("author_email", |v| {
             let s = v.as_str().unwrap_or("");
@@ -153,8 +153,8 @@ impl Plugin for BlogPlugin {
     /// `App::builder()` walks `Plugin::models()` on every registered
     /// plugin and feeds the results into the migration registry -
     /// you do NOT also call `.model::<Post>()` from main.rs.
-    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
-        vec![umbra::migrate::ModelMeta::for_::<Post>()]
+    fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
+        vec![umbral::migrate::ModelMeta::for_::<Post>()]
     }
 
     fn routes(&self) -> Router {
@@ -169,7 +169,7 @@ impl Plugin for BlogPlugin {
     /// first; in production you'd guard this behind a feature flag
     /// or move it to a separate `seed` management command.
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        umbra::plugin::block_on_ready(async {
+        umbral::plugin::block_on_ready(async {
             let count = Post::objects().count().await?;
             if count == 0 {
                 Post::objects()
@@ -197,7 +197,7 @@ let app = App::builder()
     .database("default", pool)
     .plugin(blog::BlogPlugin)                     // model + routes + on_ready
     .plugin(
-        umbra_rest::RestPlugin::default()
+        umbral_rest::RestPlugin::default()
             .resource(blog::rest_resource()),    // REST customisation
     )
     .build()?;
@@ -221,15 +221,15 @@ Four things that matter in this shape:
    customisation is one more line in `main.rs`, not a 30-line builder
    chain.
 4. **`on_ready` bridges sync to async.** The trait method is sync; sqlx
-   is async; `umbra::plugin::block_on_ready(...)` is the canonical bridge.
+   is async; `umbral::plugin::block_on_ready(...)` is the canonical bridge.
    It works under a multi-thread `#[tokio::main]` runtime, under
    `#[tokio::test]`'s current-thread runtime, and with no ambient runtime
    at all — without panicking (a raw `Handle::current().block_on` would
-   panic on the current-thread path). The `umbra-rls` plugin uses the same
+   panic on the current-thread path). The `umbral-rls` plugin uses the same
    helper.
 
 ## Next
 
 - The trait surface in detail: [The Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait).
-- The canonical built-in plugin: [Users and passwords (umbra-auth)](/docs/v0.0.1/auth/users-and-passwords).
+- The canonical built-in plugin: [Users and passwords (umbral-auth)](/docs/v0.0.1/auth/users-and-passwords).
 - The dependency-inversion rationale: `arch.md §3`.

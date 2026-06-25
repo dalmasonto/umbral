@@ -7,7 +7,7 @@ tags: [realtime, sse, websockets, transport, reconnect]
 
 # Transports
 
-`umbra-realtime` ships two transports behind one targeting API. The send side (`Realtime::to_user` / `to_group` / `broadcast`) is identical for both — only how the browser connects differs.
+`umbral-realtime` ships two transports behind one targeting API. The send side (`Realtime::to_user` / `to_group` / `broadcast`) is identical for both — only how the browser connects differs.
 
 | Transport | Endpoint | Direction | Reach for it when |
 |---|---|---|---|
@@ -23,7 +23,7 @@ Connect through the client helper served at `GET /realtime/client.js` — **not*
 ```html
 <script src="/realtime/client.js"></script>
 <script>
-  const sub = umbra.realtime.subscribe("public:lobby", {
+  const sub = umbral.realtime.subscribe("public:lobby", {
     message: function (data, raw) {
       // data is the parsed JSON payload; raw.channel is the event's channel,
       // raw.id is the SSE event id.
@@ -36,13 +36,13 @@ Connect through the client helper served at `GET /realtime/client.js` — **not*
 
 `subscribe(groups, handlers)` returns `{ unsubscribe }`. `groups` is a comma-separated string (or single group); `handlers` is keyed by event name. The connection's user is resolved at handshake (see [Gating](gating)), so `to_user(...)` finds it with no extra work.
 
-There are two sugar helpers over `subscribe` — `umbra.realtime.model(...)` ([model subscriptions](model-subscriptions)) and `umbra.realtime.presence(...)` ([presence](presence)) — both share the same single connection described below.
+There are two sugar helpers over `subscribe` — `umbral.realtime.model(...)` ([model subscriptions](model-subscriptions)) and `umbral.realtime.presence(...)` ([presence](presence)) — both share the same single connection described below.
 
 ## One connection per browser
 
 A raw `new EventSource(...)` opens **one connection per tab**. Open the same page in a handful of tabs and you exhaust the browser's ~6-connections-per-host HTTP/1.1 budget — later requests on that origin start hanging as if the server were down.
 
-`umbra.realtime.subscribe` collapses that to **exactly one** server connection per browser, no matter how many tabs are open or what mix of subscriptions they hold:
+`umbral.realtime.subscribe` collapses that to **exactly one** server connection per browser, no matter how many tabs are open or what mix of subscriptions they hold:
 
 - A `SharedWorker` holds a single `EventSource` over the **set-union** of every tab's groups.
 - Each event is routed to the tabs interested in its channel.
@@ -59,11 +59,11 @@ A raw `new EventSource(...)` opens **one connection per tab**. Open the same pag
 
 ## Reconnect and replay (`Last-Event-ID`)
 
-Networks drop. When a browser's `EventSource` loses its connection it reconnects on its own, and on that reconnect it sends back the `id:` of the last event it saw as the `Last-Event-ID` header. `umbra-realtime` keys off that to fill the gap with no missed events.
+Networks drop. When a browser's `EventSource` loses its connection it reconnects on its own, and on that reconnect it sends back the `id:` of the last event it saw as the `Last-Event-ID` header. `umbral-realtime` keys off that to fill the gap with no missed events.
 
 Every delivered event is stamped with a process-global, strictly-increasing sequence id, written as the SSE `id:` line. The registry keeps a bounded **replay buffer** of recent events. On a reconnect carrying `Last-Event-ID`, the server replays — *before* attaching the live stream — exactly the buffered events newer than that id **that this connection's target would have received** (its user, its joined groups, and broadcasts; never another user's private events). A first connection with no `Last-Event-ID` is live-only.
 
-It's automatic — the browser side is just `umbra.realtime.subscribe(...)`; you write no resume logic. Size the buffer with `replay_buffer(n)` (default 1024; `0` disables replay):
+It's automatic — the browser side is just `umbral.realtime.subscribe(...)`; you write no resume logic. Size the buffer with `replay_buffer(n)` (default 1024; `0` disables replay):
 
 ```rust
 RealtimePlugin::new().replay_buffer(4096)
@@ -90,11 +90,11 @@ The default is unlimited. Once the cap is reached, a new SSE or WebSocket handsh
 For chat or typed commands, connect to `GET /realtime/ws?groups=...`. The same `Realtime::to_user` / `to_group` / `broadcast` push API works unchanged; outbound events arrive as JSON text frames `{"event":"…","data":{…}}`. Inbound client text frames go to a `MessageHandler` you register:
 
 ```rust
-use umbra_realtime::{MessageContext, MessageHandler, Realtime, RealtimePlugin};
+use umbral_realtime::{MessageContext, MessageHandler, Realtime, RealtimePlugin};
 
 struct Chat;
 
-#[umbra_realtime::async_trait]
+#[umbral_realtime::async_trait]
 impl MessageHandler for Chat {
     async fn on_message(&self, ctx: &MessageContext, text: String) {
         // ctx.conn_id / ctx.user_id let you authorize and route.
@@ -118,14 +118,14 @@ ws.send(JSON.stringify({ room: "public:lobby", body: "hi" }));
 The same [`GroupPolicy`](gating) gate applies at the WS handshake (a denied group fails the upgrade). The default `MessageHandler` (`NoopMessageHandler`) ignores inbound frames, which is fine for push-only apps — SSE is push-only, so a handler only matters for WebSocket.
 
 <Callout type="info">
-The umbra `umbra.realtime` client helper uses **SSE** (the one-connection-per-browser model). Use WebSocket directly via the browser's native `WebSocket` when you need inbound frames; for pure push, prefer SSE so you get the shared connection and reconnect replay for free.
+The umbral `umbral.realtime` client helper uses **SSE** (the one-connection-per-browser model). Use WebSocket directly via the browser's native `WebSocket` when you need inbound frames; for pure push, prefer SSE so you get the shared connection and reconnect replay for free.
 </Callout>
 
 ## WebSocket Origin guard (CSWSH)
 
 CORS does **not** cover the WebSocket handshake. Without a guard, a malicious page on `evil.com` can open `wss://your-host/realtime/ws` from the victim's browser — the request carries the victim's session cookie, so it authenticates as them and subscribes to their gated rooms. That's a **cross-site WebSocket hijacking** (CSWSH) attack: the cross-origin page can't read a `fetch()` to your API (CORS blocks that), but a raw `WebSocket` slips past CORS entirely.
 
-`umbra-realtime` rejects cross-origin WebSocket upgrades **by default, in production, with no configuration**. The guard runs before the upgrade and returns `403 cross-origin WebSocket rejected`. Its rules, in order:
+`umbral-realtime` rejects cross-origin WebSocket upgrades **by default, in production, with no configuration**. The guard runs before the upgrade and returns `403 cross-origin WebSocket rejected`. Its rules, in order:
 
 | Request | Decision |
 |---|---|

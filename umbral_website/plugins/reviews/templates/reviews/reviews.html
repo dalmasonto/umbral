@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Reviews - Umbral{% endblock %}
+{% block meta_description %}What developers say about building with Umbral — honest reviews from side projects, internal tools, and production work.{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[1200px] px-7 pb-2 pt-[52px] text-center">
+  <div class="kicker mb-3.5 text-accent">
+    <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+    Reviews
+  </div>
+  <h1 class="mx-auto max-w-[760px] text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[46px]">
+    What developers say
+  </h1>
+  <p class="mx-auto mt-3.5 max-w-[600px] text-[17px] leading-[1.55] text-muted sm:text-[17.5px]">
+    Real notes from people shipping with Umbral — the good, grounded in the version they used.
+  </p>
+</section>
+
+<section class="mx-auto max-w-[1200px] px-7 pb-6 pt-10">
+  <div class="grid gap-3.5 md:grid-cols-2 lg:grid-cols-3">
+    {% for r in reviews %}
+    <article class="card flex flex-col p-6">
+      <div class="mb-2 flex items-center gap-1 text-[15px]" aria-label="{{ r.rating }} out of 5">
+        {% for i in range(5) %}<span class="{% if i < r.rating %}text-accent{% else %}text-ghost{% endif %}">★</span>{% endfor %}
+        {% if r.verified %}<span class="pill-ok ml-2">Verified developer</span>{% endif %}
+      </div>
+      <h2 class="mb-1.5 text-[16px] font-bold leading-snug text-ink">{{ r.title }}</h2>
+      <div class="text-[14px] leading-[1.6] text-muted">{{ r.body | markdown }}</div>
+      <div class="mt-4 flex items-center gap-3 border-t border-hairline pt-4">
+        <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[13px] font-bold text-accent-2">{{ r.initials }}</span>
+        <div class="min-w-0">
+          <div class="truncate text-[13.5px] font-semibold text-ink">{{ r.byline }}</div>
+          <div class="text-[12px] text-faint">{{ r.context }}</div>
+        </div>
+      </div>
+    </article>
+    {% else %}
+    <div class="card rounded-[20px] p-8 text-center text-muted md:col-span-2 lg:col-span-3">
+      No reviews yet. Run <code class="font-mono text-[13px] text-ink-2">cargo run -- seed_orm_data</code> to populate them.
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="mx-auto max-w-[1200px] px-7 pb-16 pt-2">
+  <div class="flex flex-wrap items-center gap-6 rounded-[20px] border border-accent-line bg-accent-soft px-6 py-7 sm:px-8">
+    <div class="min-w-[280px] flex-1">
+      <h2 class="mb-1.5 text-[22px] font-extrabold tracking-[-0.02em] text-[#3A2BA8]">Built something with Umbral?</h2>
+      <p class="m-0 text-[14.5px] leading-[1.55] text-[#6E5FB8]">Share it in the showcase, or list your plugin in the directory.</p>
+    </div>
+    <a href="/showcase" class="btn-accent whitespace-nowrap">See the showcase
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+</section>
+
+{% endblock %}

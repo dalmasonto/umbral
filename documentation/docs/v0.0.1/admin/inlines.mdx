@@ -5,7 +5,7 @@ sidebar_position: 2
 icon: rows
 ---
 
-An **inline** lets you edit a child model's rows directly on its parent's change form. Open a `Post`, and right below its fields you get its `Comment`s — add new ones, edit existing ones, tick a box to delete. When you hit Save, the parent and all its children are written in **one transaction**: if any child fails to save, the whole thing rolls back and nothing changes. This is umbra's take on Django's `TabularInline` / `StackedInline`.
+An **inline** lets you edit a child model's rows directly on its parent's change form. Open a `Post`, and right below its fields you get its `Comment`s — add new ones, edit existing ones, tick a box to delete. When you hit Save, the parent and all its children are written in **one transaction**: if any child fails to save, the whole thing rolls back and nothing changes. This is umbral's take on Django's `TabularInline` / `StackedInline`.
 
 ## When you'd reach for it
 
@@ -16,7 +16,7 @@ A child model whose rows only make sense in the context of one parent — order 
 Inlines hang off the parent's `AdminModel` via `.inlines(...)`. Each [`InlineModel`] names the **child table**, the **FK column** on the child that points back at the parent, and which child columns to surface:
 
 ```rust
-use umbra_admin::{AdminPlugin, AdminModel, InlineModel, InlineKind};
+use umbral_admin::{AdminPlugin, AdminModel, InlineModel, InlineKind};
 
 let post = AdminModel::new("post").inlines(vec![
     InlineModel::new("comment", "post", &["text", "rating"]),
@@ -25,7 +25,7 @@ let post = AdminModel::new("post").inlines(vec![
 AdminPlugin::default().register(post)
 ```
 
-`"comment"` is the child SQL table. `"post"` is the FK column on `comment` — note that a `ForeignKey<Post>` field named `post` maps to a column named `post` (umbra does **not** append `_id`). `&["text", "rating"]` are the editable columns shown per row; the FK and primary key are managed for you and never rendered.
+`"comment"` is the child SQL table. `"post"` is the FK column on `comment` — note that a `ForeignKey<Post>` field named `post` maps to a column named `post` (umbral does **not** append `_id`). `&["text", "rating"]` are the editable columns shown per row; the FK and primary key are managed for you and never rendered.
 
 The minimal struct form still works for back-compat — `InlineModel { model, fk_field, list_display }` constructs with the other knobs defaulted — but prefer the `::new(...)` constructor plus chainable setters.
 

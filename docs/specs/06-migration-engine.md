@@ -11,8 +11,8 @@
 **The north star.** This spec defines the declare → migrate → change → migrate loop end-to-end. From the user's perspective:
 
 1. Declare or change a model.
-2. Run `cargo run -p umbra-cli -- makemigrations` and a new migration file appears, generated from a diff between the current models and the last snapshot.
-3. Run `cargo run -p umbra-cli -- migrate` and pending migrations apply to the database.
+2. Run `cargo run -p umbral-cli -- makemigrations` and a new migration file appears, generated from a diff between the current models and the last snapshot.
+3. Run `cargo run -p umbral-cli -- migrate` and pending migrations apply to the database.
 4. Change the model again. Repeat.
 
 What this spec owns:
@@ -21,10 +21,10 @@ What this spec owns:
 - The **operation catalogue** (`CreateTable`, `DropTable`, `AddColumn`, `DropColumn`, `AlterColumn`, indices, constraints, `RunSql`, `RunCode`).
   - **Shipped at M5:** `CreateTable`, `DropTable`.
   - **Shipped at M8 v1:** `AddColumn`, `DropColumn`. The autodetector now diffs columns within an existing model and emits these ops in declaration order. Renames are still drop+add; the heuristic detector that disambiguates rename vs drop+add is deferred. A column change the engine can't express safely (type change, primary-key flip) surfaces as `MigrateError::UnsafeAlter` and stops the build.
-  - **Shipped at M5.1 close:** `AlterColumn` for **nullable flips** via the SQLite table-recreation dance (`CREATE TABLE _umbra_new_t` with the new schema, `INSERT ... SELECT` to copy, `DROP` the old, `RENAME` the new). Self-contained: the op carries the full new column list so the migration file is replay-safe without re-reading the snapshot. Nullable `TRUE -> FALSE` fails at apply time on existing NULL data, which is the right behaviour (data integrity over silent corruption). Postgres native `ALTER COLUMN ... SET / DROP NOT NULL` lands when the Postgres backend body does.
+  - **Shipped at M5.1 close:** `AlterColumn` for **nullable flips** via the SQLite table-recreation dance (`CREATE TABLE _umbral_new_t` with the new schema, `INSERT ... SELECT` to copy, `DROP` the old, `RENAME` the new). Self-contained: the op carries the full new column list so the migration file is replay-safe without re-reading the snapshot. Nullable `TRUE -> FALSE` fails at apply time on existing NULL data, which is the right behaviour (data integrity over silent corruption). Postgres native `ALTER COLUMN ... SET / DROP NOT NULL` lands when the Postgres backend body does.
   - **Still deferred:** type changes (need cast semantics + the table-recreation dance to know whether the SELECT will silently coerce vs fail), primary-key flips, index / constraint ops, `RunSql` / `RunCode` data-migration escape hatches, rename detection. The table-recreation dance for nullable flips already pays the recreation cost; the same machinery extends naturally once cast safety is modelled.
 - The **autodetection algorithm**: diff the current `FIELDS` against the latest snapshot, produce ordered ops, write a new migration file.
-- The **tracking table** (`umbra_migrations`) and the rules for what counts as "applied".
+- The **tracking table** (`umbral_migrations`) and the rules for what counts as "applied".
 - The **plugin-aware ordering**: cross-plugin FKs and the rule that a plugin's migrations apply after its dependencies'.
 - The **CLI surface**: `makemigrations`, `migrate`, `showmigrations`, `sqlmigrate`.
 
@@ -42,8 +42,8 @@ What this spec **does not** own:
 One migration is one JSON file inside the plugin's `migrations/` directory:
 
 ```
-plugins/umbra-auth/migrations/0001_initial.json
-plugins/umbra-auth/migrations/0002_add_email_index.json
+plugins/umbral-auth/migrations/0001_initial.json
+plugins/umbral-auth/migrations/0002_add_email_index.json
 my-app/blog/migrations/0001_initial.json
 ```
 
@@ -94,7 +94,7 @@ Every operation knows how to render itself for the active backend via the `Datab
 ### Tracking table
 
 ```sql
-CREATE TABLE umbra_migrations (
+CREATE TABLE umbral_migrations (
     id BIGSERIAL PRIMARY KEY,
     plugin TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -113,7 +113,7 @@ The table is created by the very first `migrate` run, before any other migration
 Three rules combined:
 
 1. **Within a plugin**, migrations are ordered by their numeric prefix.
-2. **Across plugins**, a plugin's migrations apply only after its `Plugin::dependencies()` have caught up. (`umbra-admin` depends on `umbra-auth`; auth's migrations run first.)
+2. **Across plugins**, a plugin's migrations apply only after its `Plugin::dependencies()` have caught up. (`umbral-admin` depends on `umbral-auth`; auth's migrations run first.)
 3. **Cross-plugin migration-level dependencies** declared in a migration file's `depends_on` add finer-grained ordering. (Plugin `blog`'s `0001_initial` depends on plugin `auth`'s `0001_initial` because `blog.post.author_id` FKs to `auth.user.id`.)
 
 Rules 2 and 3 are joined: the engine builds a global DAG of (plugin, migration) nodes, topologically sorts, and applies in that order. A cycle is `MigrationError::CycleInDependencies { cycle }`.
@@ -150,10 +150,10 @@ After diffing, the engine orders operations within the migration so each one is 
 ### CLI commands
 
 ```
-cargo run -p umbra-cli -- makemigrations [PLUGIN]
-cargo run -p umbra-cli -- migrate [PLUGIN[:MIGRATION]]
-cargo run -p umbra-cli -- showmigrations
-cargo run -p umbra-cli -- sqlmigrate PLUGIN MIGRATION
+cargo run -p umbral-cli -- makemigrations [PLUGIN]
+cargo run -p umbral-cli -- migrate [PLUGIN[:MIGRATION]]
+cargo run -p umbral-cli -- showmigrations
+cargo run -p umbral-cli -- sqlmigrate PLUGIN MIGRATION
 ```
 
 - **`makemigrations`** generates new migration files. With no argument, runs over every registered plugin. The filenames it picks come from a deterministic naming rule (the dominant op's table name plus suffix), so two developers running `makemigrations` against the same model change get the same filename.
@@ -167,8 +167,8 @@ A migration applied via the engine, end-to-end (sketch):
 
 ```rust
 pub async fn migrate(target: MigrateTarget) -> Result<MigrateReport> {
-    let backend = umbra::db::backend();
-    let pool = umbra::db::pool();
+    let backend = umbral::db::backend();
+    let pool = umbral::db::pool();
 
     ensure_tracking_table(&pool, backend).await?;
 
@@ -203,7 +203,7 @@ Exception: migrations explicitly marked `transactional: false` in the file run o
 
 Future `makemigrations` runs never re-execute prior migrations to figure out the schema state. They read `snapshot_after` from the latest migration file per plugin. Snapshots are the contract that lets migration files be small (only the diff) and fast to process (linear in migration count, not in DB rows).
 
-### The chicken-and-egg of `umbra_migrations`
+### The chicken-and-egg of `umbral_migrations`
 
 The tracking table itself can't be a migration of any plugin, because every plugin's migrations need the tracking table to exist before they can run. Resolution: `migrate` checks for the table before doing anything else. If it doesn't exist, `migrate` creates it directly via the backend's DDL renderer, then proceeds. The table's existence is the engine's responsibility, not a plugin's.
 
@@ -225,7 +225,7 @@ M5 ships with `Plugin::dependencies()` driving the order. At M8, the autodetecto
 
 **At M5, drop+add for renames vs prompt the user.** Django's `makemigrations` interactively asks "did you rename `body` to `content`?" That UX is hard to do well in a non-Python ecosystem. M5 says "drop+add by default; edit the file to use `AlterColumn(rename)` if you need to preserve data." M8 introduces the heuristic detector (Hamming distance of `FieldSpec` shapes, name similarity); the spec note already plans for it.
 
-**Tracking-table location: shared `umbra_migrations` vs per-plugin tracking tables.** A shared table is much easier to reason about (one row per applied migration, anywhere). Per-plugin tables would let plugins manage their own state but force the engine to query N tables to know "has X been applied?". The shared design wins on simplicity and the cost (one table the engine owns) is trivial.
+**Tracking-table location: shared `umbral_migrations` vs per-plugin tracking tables.** A shared table is much easier to reason about (one row per applied migration, anywhere). Per-plugin tables would let plugins manage their own state but force the engine to query N tables to know "has X been applied?". The shared design wins on simplicity and the cost (one table the engine owns) is trivial.
 
 ## Open questions
 
@@ -241,4 +241,4 @@ M5 ships with `Plugin::dependencies()` driving the order. At M8, the autodetecto
 - `Plugin::migrations()` and `Plugin::dependencies()`: `02-plugin-contract.md`.
 - Where the snapshot ends up when porting an existing DB: `07-inspectdb.md` builds the equivalent of "migration 0001_initial" from an introspected schema and feeds it into the same engine.
 - Rename detection and data-preserving alters: deferred to M8; this spec carries the open question and the engine has the seams to accept the M8 additions without restructuring.
-- The CLI binary `umbra-cli` is where the subcommands live; full CLI surface gets a spec when the command list grows past these four.
+- The CLI binary `umbral-cli` is where the subcommands live; full CLI surface gets a spec when the command list grows past these four.

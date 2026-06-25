@@ -7,7 +7,7 @@ App: examples/shop (e-commerce + content demo, 41 models)
 ## Test Setup
 
 - **SQLite**: Local file (`shop.db`) with WAL mode enabled
-- **Postgres**: PostgreSQL 18, `umbra_shop` database, user `umbra_shop` / password `umbra_shop`
+- **Postgres**: PostgreSQL 18, `umbral_shop` database, user `umbral_shop` / password `umbral_shop`
 - **Server**: Debug build, single-process Tokio runtime
 - **Load**: Apache Bench (`ab`) — 1000 requests per concurrency level
 - **Endpoints tested**:
@@ -58,9 +58,9 @@ App: examples/shop (e-commerce + content demo, 41 models)
 
 **Severity**: Medium — affects developer experience
 **Status**: Fixed in `1dd9e07` (`fix(settings): load .env files in Settings::from_env`).
-**Repro**: Put `UMBRA_DATABASE_URL=postgres://...` in `.env` and run `cargo run -- serve`. The app still connects to the URL in `umbra.toml`.
+**Repro**: Put `UMBRAL_DATABASE_URL=postgres://...` in `.env` and run `cargo run -- serve`. The app still connects to the URL in `umbral.toml`.
 **Root cause**: `Settings::from_env()` does not call `dotenvy::dotenv()` (or equivalent) to load the `.env` file into the process environment.
-**Workaround**: Export the env var explicitly before running: `UMBRA_DATABASE_URL=postgres://... cargo run -- serve`
+**Workaround**: Export the env var explicitly before running: `UMBRAL_DATABASE_URL=postgres://... cargo run -- serve`
 **Fix**: Add `dotenvy::dotenv().ok()` at the top of `Settings::from_env()`.
 **Implemented**: `Settings::from_env()` now reads project-root `.env` values through Figment without mutating the global process environment; real process env vars still override `.env`.
 
@@ -73,9 +73,9 @@ App: examples/shop (e-commerce + content demo, 41 models)
 2. Run `cargo run -- dumpdata --output dump.json`
 3. Run `cargo run -- loaddata dump.json`
 **Expected**: Data loads into Postgres
-**Actual**: Panic at `crates/umbra-core/src/db.rs:98`:
+**Actual**: Panic at `crates/umbral-core/src/db.rs:98`:
 ```
- umbra: a Postgres pool is registered but this code path still reads SqlitePool.
+ umbral: a Postgres pool is registered but this code path still reads SqlitePool.
 ```
 **Root cause**: `backup::dump_one()` and `backup::load_one()` take `&sqlx::SqlitePool` directly:
 ```rust
@@ -119,9 +119,9 @@ This assumption is wrong: sqlx-pg does **not** automatically coerce a string `"{
 
 ## Raw Results Files
 
-- `/home/dalmas/E/projects/umbra/bugs/db-testing-results/sqlite_ab_results.txt`
-- `/home/dalmas/E/projects/umbra/bugs/db-testing-results/postgres_ab_results.txt`
-- `/home/dalmas/E/projects/umbra/bugs/db-testing-results/shop_dump.json` (2.4MB dump from SQLite)
+- `/home/dalmas/E/projects/umbral/bugs/db-testing-results/sqlite_ab_results.txt`
+- `/home/dalmas/E/projects/umbral/bugs/db-testing-results/postgres_ab_results.txt`
+- `/home/dalmas/E/projects/umbral/bugs/db-testing-results/shop_dump.json` (2.4MB dump from SQLite)
 
 ## Recommendations
 

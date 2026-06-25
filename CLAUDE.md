@@ -6,7 +6,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 Greenfield. No Cargo workspace or source yet. Before scaffolding anything, read `arch.md`; that's the authoritative design spec.
 
-umbra is a Django-inspired web framework in Rust (*umbra* is Latin for shadow — the framework lives in Django's shadow in shape, not in code). It's a separate project that shares no code with Django; the goal is to recreate Django's *feeling*: declare data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees. The name is a placeholder; the whole tree can be renamed later with `sed 's/umbra/yourname/g'`.
+umbral is a Django-inspired web framework in Rust (*umbral* means 'of the shadow', from Latin *umbra* — the framework lives in Django's shadow in shape, not in code). It's a separate project that shares no code with Django; the goal is to recreate Django's *feeling*: declare data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees. The name is a placeholder; the whole tree can be renamed later with `sed 's/umbral/yourname/g'`.
 
 ## The one idea that matters most
 
@@ -18,32 +18,32 @@ The Cargo workspace boundaries *encode* the core-vs-plugin split:
 
 ```
 crates/
-  umbra-core     # ORM, migrations, routing, DB backends, the Plugin TRAIT. No plugin deps.
-  umbra-macros   # #[derive(Model)], #[task], etc.
-  umbra          # FACADE: re-exports core + macros as one stable surface (umbra::prelude::*)
-  umbra-cli      # the `manage.py` equivalent binary
+  umbral-core     # ORM, migrations, routing, DB backends, the Plugin TRAIT. No plugin deps.
+  umbral-macros   # #[derive(Model)], #[task], etc.
+  umbral          # FACADE: re-exports core + macros as one stable surface (umbral::prelude::*)
+  umbral-cli      # the `manage.py` equivalent binary
 plugins/         # built-in plugins, each its own crate (from M9 onward)
-  umbra-auth      # built-in: users, permissions, password hashing (argon2)
-  umbra-sessions  # built-in: session store + middleware (tower-sessions)
-  umbra-admin     # built-in: auto CRUD UI
-  umbra-tasks     # built-in: DB-backed task queue (Celery equivalent)
-  umbra-rest      # OPTIONAL: serializers, viewsets, routers (the "DRF")
-  umbra-openapi   # OPTIONAL: Swagger UI / schema gen; depends on umbra-rest
+  umbral-auth      # built-in: users, permissions, password hashing (argon2)
+  umbral-sessions  # built-in: session store + middleware (tower-sessions)
+  umbral-admin     # built-in: auto CRUD UI
+  umbral-tasks     # built-in: DB-backed task queue (Celery equivalent)
+  umbral-rest      # OPTIONAL: serializers, viewsets, routers (the "DRF")
+  umbral-openapi   # OPTIONAL: Swagger UI / schema gen; depends on umbral-rest
 ```
 
 ## Dependency inversion is the whole game
 
 - **Dependencies point inward toward core. Control flows outward through the trait.**
-- Every plugin depends on the `umbra` facade, never the reverse. `umbra-core` defines the `Plugin` trait but never names a concrete plugin; it touches plugins only as `Box<dyn Plugin>`. That trait object is the dynamic seam standing in for Django's `INSTALLED_APPS`.
+- Every plugin depends on the `umbral` facade, never the reverse. `umbral-core` defines the `Plugin` trait but never names a concrete plugin; it touches plugins only as `Box<dyn Plugin>`. That trait object is the dynamic seam standing in for Django's `INSTALLED_APPS`.
 - The user's binary crate depends on core plus every chosen plugin and wires them via an explicit builder: `App::builder().plugin(...).build()`.
-- `umbra-core` depends on neither `umbra-rest` nor `umbra-openapi`. That's the structural proof that "serializers are a plugin." Cargo's ban on circular deps enforces it for us.
-- Plugins import only the facade (`use umbra::prelude::*`), never `umbra-core` internals. The internal crate split can then be refactored without breaking any plugin.
+- `umbral-core` depends on neither `umbral-rest` nor `umbral-openapi`. That's the structural proof that "serializers are a plugin." Cargo's ban on circular deps enforces it for us.
+- Plugins import only the facade (`use umbral::prelude::*`), never `umbral-core` internals. The internal crate split can then be refactored without breaking any plugin.
 
 ## The Plugin contract
 
 A plugin (Django's "app") implements the `Plugin` trait. It can contribute any subset of: models (which become migrations), routes and views, middleware, management commands, a typed settings schema with defaults, admin registrations, and lifecycle hooks (`on_ready()` is the Rust version of `AppConfig.ready()`).
 
-Each plugin owns its own migrations. `migrate` walks every registered plugin, collects `plugin.migrations()`, orders them by a dependency graph (cross-plugin FKs allowed), and runs only those not yet recorded in an umbra-owned tracking table. The built-in auth, sessions, and tasks tables are created this exact way. Nothing is special-cased.
+Each plugin owns its own migrations. `migrate` walks every registered plugin, collects `plugin.migrations()`, orders them by a dependency graph (cross-plugin FKs allowed), and runs only those not yet recorded in an umbral-owned tracking table. The built-in auth, sessions, and tasks tables are created this exact way. Nothing is special-cased.
 
 ## Ambient ORM access: decide deliberately
 
@@ -89,7 +89,7 @@ Build the primitives by hand first, then extract abstractions. Managed migration
 - **M6.** `inspectdb`: introspect an existing DB into models that feed straight into M5.
 - **M7.** Extract the `Plugin` trait (the architectural keystone). Routes, migrations, and commands flow through it, and `migrate` extends to walk all registered plugins.
 - **M8.** Harden autodetection (rename detection, data migrations, cross-plugin FK ordering), and re-express auth and sessions as plugins. That's the proof of the contract.
-- **M9–M13.** `umbra-tasks`, `umbra-rest`, `umbra-admin`, `umbra-openapi`, then polish (generators, autoreload, docs).
+- **M9–M13.** `umbral-tasks`, `umbral-rest`, `umbral-admin`, `umbral-openapi`, then polish (generators, autoreload, docs).
 
 ## Design principles to uphold
 
@@ -115,11 +115,11 @@ What this looks like:
 | Count / exists | `Session::objects().filter(...).count().await?` | `sqlx::query_scalar("SELECT COUNT(*) ...")...` |
 | Late-bound model (admin) | `DynQuerySet::for_meta(&meta).filter(...).fetch(...).await?` | — |
 
-The ambient pool resolution is already wired: every QuerySet terminal calls `pool_dispatched()` internally and dispatches per `DbPool::Sqlite | DbPool::Postgres`. Plugin code never types `umbra::db::pool()` or `sqlx::SqlitePool`.
+The ambient pool resolution is already wired: every QuerySet terminal calls `pool_dispatched()` internally and dispatches per `DbPool::Sqlite | DbPool::Postgres`. Plugin code never types `umbral::db::pool()` or `sqlx::SqlitePool`.
 
 **The narrow exceptions.** Two kinds of raw SQL are allowed because the ORM can't model them at the row level:
 
-1. **Schema DDL** (`CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`). Owned by the migration engine. A plugin that creates its own tables outside the migration system (e.g. `ensure_tables_for_tests` in umbra-admin) is the lone allowed pattern, and only because tests bypass `make`/`run`.
+1. **Schema DDL** (`CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`). Owned by the migration engine. A plugin that creates its own tables outside the migration system (e.g. `ensure_tables_for_tests` in umbral-admin) is the lone allowed pattern, and only because tests bypass `make`/`run`.
 2. **Backend-specific features the ORM doesn't model** (Postgres RLS policies, full-text indexes, custom triggers). Gate these with `match pool_dispatched() { DbPool::Postgres(_) => ..., DbPool::Sqlite(_) => skip-with-warn }`. Never use the SQLite branch as a fallback path that quietly diverges from the Postgres behaviour.
 
 If the ORM can't express a row-level operation you need, **the right fix is to add the operation to the ORM**, not to write raw SQL in the plugin. The 80% that's already there: filter, order_by, limit, offset, first, fetch, get, count, exists, delete, update_values, update_expr, create, bulk_create, select_related, transactions. If your use case isn't on that list, it's a gap to fix — file a deferred-spec entry and discuss before shipping the raw-SQL workaround.
@@ -141,7 +141,7 @@ Concretely, in this codebase, these are workarounds — not fixes:
 - A `cfg(not(test))` that hides broken-in-test behaviour. The fix is to make it work in tests; otherwise tests prove nothing about production.
 - Renaming an unused variable with a `_` prefix to silence a warning instead of asking why it was unused. Often the original author forgot to wire it; the `_` prefix preserves the bug.
 
-The rule applies to the doc-comment surface too. If `plugins/umbra-auth/src/session_user.rs:261` says "opt in via `AuthPlugin::with_user_in_templates`" and the method doesn't exist, **the fix is to write the method**, not to delete the doc-comment claim or to manually wire the middleware in the consumer's main.rs. The docstring describes the framework's intended surface; making the surface match the docstring IS the fix.
+The rule applies to the doc-comment surface too. If `plugins/umbral-auth/src/session_user.rs:261` says "opt in via `AuthPlugin::with_user_in_templates`" and the method doesn't exist, **the fix is to write the method**, not to delete the doc-comment claim or to manually wire the middleware in the consumer's main.rs. The docstring describes the framework's intended surface; making the surface match the docstring IS the fix.
 
 When you're tempted to patch:
 
@@ -158,14 +158,14 @@ The Cargo workspace is rooted at the **repo-root `Cargo.toml`**, which spans the
 ```bash
 cargo build                      # build all workspace crates
 cargo test                       # run all tests
-cargo test -p umbra-core         # test a single crate
+cargo test -p umbral-core         # test a single crate
 cargo test <test_name>           # run a single test by name
-cargo run -p umbra-cli -- <cmd>  # the manage.py equivalent (migrate, makemigrations, worker, inspectdb, ...)
+cargo run -p umbral-cli -- <cmd>  # the manage.py equivalent (migrate, makemigrations, worker, inspectdb, ...)
 cargo clippy --all-targets       # lint
 cargo fmt                        # format
 ```
 
-Build artefacts (`target/`, `Cargo.lock`) live at the repo root; `target/` is gitignored and `Cargo.lock` is committed. The root `Cargo.toml` is a *virtual* manifest (only `[workspace]`, no `[package]`) and explicitly `exclude`s `examples/`, `umbra_website/`, and `documentation/`, so those stay standalone projects — the tree still holds docs + the Specra site + example apps, not one monolithic cargo project. (The workspace root was moved up from `crates/Cargo.toml` so workspace tooling — release-plz — sees a root that is an ancestor of every member, including the sibling `plugins/*`.)
+Build artefacts (`target/`, `Cargo.lock`) live at the repo root; `target/` is gitignored and `Cargo.lock` is committed. The root `Cargo.toml` is a *virtual* manifest (only `[workspace]`, no `[package]`) and explicitly `exclude`s `examples/`, `umbral_website/`, and `documentation/`, so those stay standalone projects — the tree still holds docs + the Specra site + example apps, not one monolithic cargo project. (The workspace root was moved up from `crates/Cargo.toml` so workspace tooling — release-plz — sees a root that is an ancestor of every member, including the sibling `plugins/*`.)
 
 For an example app outside the framework workspace:
 
@@ -181,28 +181,28 @@ cargo build                      # standalone Cargo project, ignores the framewo
 The four core crates connect via a single dependency arrow pointing inward toward the framework's centre:
 
 ```
-umbra-cli  →  umbra (facade)  →  { umbra-core, umbra-macros }
+umbral-cli  →  umbral (facade)  →  { umbral-core, umbral-macros }
                   ↑
             plugins/* (from M9 onward, each a separate crate)
 ```
 
-`umbra` is the **facade**, the only stable surface user code and plugin authors should import. Internal types live in `umbra-core` and `umbra-macros`; the facade re-exports the subset that's stable. When you add something a plugin author needs (a trait, a field type, an extractor, a derive), it goes in `umbra-core` (or `umbra-macros` for a macro) **and** gets a re-export from the facade. The prelude (`umbra::prelude`) re-exports the common subset so `use umbra::prelude::*;` brings in everything a typical handler / model / plugin author needs.
+`umbral` is the **facade**, the only stable surface user code and plugin authors should import. Internal types live in `umbral-core` and `umbral-macros`; the facade re-exports the subset that's stable. When you add something a plugin author needs (a trait, a field type, an extractor, a derive), it goes in `umbral-core` (or `umbral-macros` for a macro) **and** gets a re-export from the facade. The prelude (`umbral::prelude`) re-exports the common subset so `use umbral::prelude::*;` brings in everything a typical handler / model / plugin author needs.
 
 | Adding ... | Goes in ... |
 |---|---|
-| ORM types, field types, QuerySet methods | `umbra-core` |
-| Proc macros (`#[derive(Model)]`, `#[task]`, etc.) | `umbra-macros` |
-| CLI binary subcommands (`migrate`, `inspectdb`, …) | `umbra-cli`; per-plugin commands extend it via `Plugin::commands()` from M7+ |
-| Built-in plugin logic (auth, sessions, admin, tasks, REST, openapi) | `plugins/<name>/` from M9 onward. Each is its own crate that depends only on the `umbra` facade. |
-| A test or smoke-test app that exercises umbra as a consumer would | `examples/<name>/`. Each example is a standalone Cargo project (NOT a workspace member) that path-deps the local umbra. See `examples/README.md`. |
+| ORM types, field types, QuerySet methods | `umbral-core` |
+| Proc macros (`#[derive(Model)]`, `#[task]`, etc.) | `umbral-macros` |
+| CLI binary subcommands (`migrate`, `inspectdb`, …) | `umbral-cli`; per-plugin commands extend it via `Plugin::commands()` from M7+ |
+| Built-in plugin logic (auth, sessions, admin, tasks, REST, openapi) | `plugins/<name>/` from M9 onward. Each is its own crate that depends only on the `umbral` facade. |
+| A test or smoke-test app that exercises umbral as a consumer would | `examples/<name>/`. Each example is a standalone Cargo project (NOT a workspace member) that path-deps the local umbral. See `examples/README.md`. |
 | Helpers used inside one crate only | `pub(crate)` in that crate; do NOT add them to the facade |
 
-**Cargo's ban on circular crate deps enforces the architecture.** That `umbra-core` doesn't depend on `umbra-rest` (or anything under `plugins/*`) is the structural proof that "serializers are a plugin." Don't ever add a dep from `umbra-core` to a plugin; if you find yourself wanting to, the plugin contract is wrong and needs the fix instead.
+**Cargo's ban on circular crate deps enforces the architecture.** That `umbral-core` doesn't depend on `umbral-rest` (or anything under `plugins/*`) is the structural proof that "serializers are a plugin." Don't ever add a dep from `umbral-core` to a plugin; if you find yourself wanting to, the plugin contract is wrong and needs the fix instead.
 
 **Where to expose a new public type.** Three categories:
 
-- **Core surface** (`Plugin`, `Model`, `AppContext`, `Router`, `Request`, `Response`, common field types, common extractors). Add to `umbra-core` (or `umbra-macros`), re-export from `umbra`, include in `umbra::prelude`.
-- **Power-user surface** (raw SQL query builders, `DatabaseBackend` trait, the migration engine's operation enum). Add to `umbra-core`, re-export from `umbra` under a module (e.g. `umbra::db::query!`, `umbra::backends::*`), but **not** in the prelude. The prelude stays free of ambiguity.
+- **Core surface** (`Plugin`, `Model`, `AppContext`, `Router`, `Request`, `Response`, common field types, common extractors). Add to `umbral-core` (or `umbral-macros`), re-export from `umbral`, include in `umbral::prelude`.
+- **Power-user surface** (raw SQL query builders, `DatabaseBackend` trait, the migration engine's operation enum). Add to `umbral-core`, re-export from `umbral` under a module (e.g. `umbral::db::query!`, `umbral::backends::*`), but **not** in the prelude. The prelude stays free of ambiguity.
 - **Internal-only**. `pub(crate)` in the originating crate. Never appears in the facade.
 
 ## Never stash the user's working tree
@@ -226,7 +226,7 @@ This rule is in the same family as [never wipe the database to bypass a migratio
 
 **One feature, one fix, one commit.** Don't batch unrelated changes. If a feature took multiple WIP commits during development, squash them before merging into the public history.
 
-**Before every commit, verify the whole workspace** (not just the crate you changed; a change in `umbra-core` can silently break the facade's re-exports):
+**Before every commit, verify the whole workspace** (not just the crate you changed; a change in `umbral-core` can silently break the facade's re-exports):
 
 ```bash
 cargo fmt
@@ -237,7 +237,7 @@ cargo test
 
 If any of those fail, fix them or back out the change. Don't commit broken code, and never use `--no-verify` to skip pre-commit hooks. Investigate and fix the underlying issue instead.
 
-**Multi-crate commits are fine when they're one logical change.** A feature that adds a new field type genuinely touches `umbra-core` (the type and `FieldSpec`), `umbra-macros` (so `#[derive(Model)]` handles it), and `umbra` (the re-export). That's one commit, not three, because reverting it as a unit is the only sensible undo.
+**Multi-crate commits are fine when they're one logical change.** A feature that adds a new field type genuinely touches `umbral-core` (the type and `FieldSpec`), `umbral-macros` (so `#[derive(Model)]` handles it), and `umbral` (the re-export). That's one commit, not three, because reverting it as a unit is the only sensible undo.
 
 **Commit message form.**
 
@@ -252,7 +252,7 @@ If any of those fail, fix them or back out the change. Don't commit broken code,
 
 ## Writing conventions
 
-These apply to every internal spec (`arch.md`, `umbra-PRD.md`, `docs/specs/`, the design notes under `docs/decisions/`) and to user-facing MDX in `documentation/`.
+These apply to every internal spec (`arch.md`, `umbral-PRD.md`, `docs/specs/`, the design notes under `docs/decisions/`) and to user-facing MDX in `documentation/`.
 
 ### Line wrapping
 
@@ -264,8 +264,8 @@ When editing an existing wrapped doc, unwrap the prose lines you touch (and idea
 
 Two kinds of documentation live in this repo, and they serve different audiences:
 
-- **Internal design specs.** `arch.md`, `umbra-PRD.md`, `docs/specs/` (deep specs + `outlines/` for M7–M13 + `deferred.md` for the post-M13 backlog), `docs/decisions/` (ADR-style design notes). For us and future contributors. Format: plain Markdown. The source of truth for *why* and *how* the framework is built.
-- **User-facing docs.** `documentation/` (a SvelteKit + Specra site, served from `documentation/docs/v0.0.1/`). For people using umbra to build apps. Format: **MDX** (`.mdx`, not `.md`) using Specra components. Component catalog: https://specra-docs.com/docs/v1.0.0/en/components/accordion.
+- **Internal design specs.** `arch.md`, `umbral-PRD.md`, `docs/specs/` (deep specs + `outlines/` for M7–M13 + `deferred.md` for the post-M13 backlog), `docs/decisions/` (ADR-style design notes). For us and future contributors. Format: plain Markdown. The source of truth for *why* and *how* the framework is built.
+- **User-facing docs.** `documentation/` (a SvelteKit + Specra site, served from `documentation/docs/v0.0.1/`). For people using umbral to build apps. Format: **MDX** (`.mdx`, not `.md`) using Specra components. Component catalog: https://specra-docs.com/docs/v1.0.0/en/components/accordion.
 
 ### Rule: ship a feature, ship its doc page
 
@@ -306,7 +306,7 @@ The trackers under `planning/` (`gaps.md`, `gaps2.md`, `features.md`, plus `plan
 
 ## Skills: capture what you learn, as you learn it
 
-As you work on umbra, write skills. A skill is a small instruction file the next agent (or you, weeks later) can load to skip the re-discovery you just did. The goal is an incremental library that grows with the codebase.
+As you work on umbral, write skills. A skill is a small instruction file the next agent (or you, weeks later) can load to skip the re-discovery you just did. The goal is an incremental library that grows with the codebase.
 
 Three things are worth a skill:
 
@@ -370,7 +370,7 @@ Right after you understand or solve something, while the context is fresh. Don't
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **umbra** (15583 symbols, 32946 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **umbral** (15583 symbols, 32946 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -393,10 +393,10 @@ This project is indexed by GitNexus as **umbra** (15583 symbols, 32946 relations
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/umbra/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/umbra/clusters` | All functional areas |
-| `gitnexus://repo/umbra/processes` | All execution flows |
-| `gitnexus://repo/umbra/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/umbral/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/umbral/clusters` | All functional areas |
+| `gitnexus://repo/umbral/processes` | All execution flows |
+| `gitnexus://repo/umbral/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

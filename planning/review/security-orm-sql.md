@@ -1,10 +1,10 @@
 # Security — ORM / SQL layer
 
 > **Sweep status — 2026-06-14**
-> - **Fixed:** ORM-1 — LIKE wildcards (`%`/`_`/`\`) in user input for `contains`/`icontains`/`startswith`/`istartswith` (typed), `DynQuerySet::search`, and the REST `__contains`/`__icontains`/`__startswith` filters are now escaped via `umbra::orm::escape_like_literal` + `LikeExpr::escape('\\')` (`586ed84`). Behavioral round-trip test added. The raw `.like()`/`.ilike()` builders intentionally stay unescaped (user-authored patterns).
+> - **Fixed:** ORM-1 — LIKE wildcards (`%`/`_`/`\`) in user input for `contains`/`icontains`/`startswith`/`istartswith` (typed), `DynQuerySet::search`, and the REST `__contains`/`__icontains`/`__startswith` filters are now escaped via `umbral::orm::escape_like_literal` + `LikeExpr::escape('\\')` (`586ed84`). Behavioral round-trip test added. The raw `.like()`/`.ilike()` builders intentionally stay unescaped (user-authored patterns).
 > - Everything else here is the "verified safe / done well" list — no action.
 
-Scope: `crates/umbra-core/src` (queryset/query building, `DynQuerySet`, F-expressions, ordering, migrations DDL, inspectdb, backup) and `crates/umbra-cli`. **This answers the two open questions in `bugs/security.md`.**
+Scope: `crates/umbral-core/src` (queryset/query building, `DynQuerySet`, F-expressions, ordering, migrations DDL, inspectdb, backup) and `crates/umbral-cli`. **This answers the two open questions in `bugs/security.md`.**
 
 ## Verdict on `bugs/security.md`
 
@@ -20,10 +20,10 @@ The ORM is built on **sea-query** (`Expr::col(Alias::new(...))` for identifiers,
 **Severity: low–medium** — functional bug + minor DB-side DoS. **Not** SQL injection: values are bound parameters.
 
 - **File:**
-  - `plugins/umbra-rest/src/filtering.rs:461, 468, 471` (`build_predicate`) — attacker-reachable via `?title__contains=`, `?title__icontains=`, `?title__startswith=`
-  - `plugins/umbra-rest/src/filtering.rs:245` (`parse_search`) — attacker-reachable via `?search=`
-  - `crates/umbra-core/src/orm/dynamic.rs:251` (`DynQuerySet::search`) — admin/REST search term
-  - `crates/umbra-core/src/orm/column.rs:206, 226, 242, 248` (typed `contains`/`icontains`/`startswith`/`istartswith`)
+  - `plugins/umbral-rest/src/filtering.rs:461, 468, 471` (`build_predicate`) — attacker-reachable via `?title__contains=`, `?title__icontains=`, `?title__startswith=`
+  - `plugins/umbral-rest/src/filtering.rs:245` (`parse_search`) — attacker-reachable via `?search=`
+  - `crates/umbral-core/src/orm/dynamic.rs:251` (`DynQuerySet::search`) — admin/REST search term
+  - `crates/umbral-core/src/orm/column.rs:206, 226, 242, 248` (typed `contains`/`icontains`/`startswith`/`istartswith`)
 - **Evidence:**
   ```rust
   // filtering.rs build_predicate — value flows straight from the query string
@@ -39,7 +39,7 @@ The ORM is built on **sea-query** (`Expr::col(Alias::new(...))` for identifiers,
 ---
 
 ## Defense-in-depth notes (not currently reachable)
-- **`CreateM2MTable` DDL interpolates names without `"`-escaping** (`crates/umbra-core/src/migrate.rs:2963-2976` Postgres, `:2840-2853` SQLite): `junction_table`/`parent_table`/`child_table`/`parent_col`/`child_col` are dropped into `CREATE TABLE "{...}"(...)` via plain `format!`. These derive from compile-time model identifiers and M2M is not produced by inspectdb, so no untrusted name reaches here today. Route them through `quote_pg_ident` for consistency so a future M2M-introspection path is safe by construction.
+- **`CreateM2MTable` DDL interpolates names without `"`-escaping** (`crates/umbral-core/src/migrate.rs:2963-2976` Postgres, `:2840-2853` SQLite): `junction_table`/`parent_table`/`child_table`/`parent_col`/`child_col` are dropped into `CREATE TABLE "{...}"(...)` via plain `format!`. These derive from compile-time model identifiers and M2M is not produced by inspectdb, so no untrusted name reaches here today. Route them through `quote_pg_ident` for consistency so a future M2M-introspection path is safe by construction.
 - **Postgres constraint-name interpolation** in `render_alter_column_postgres` (`migrate.rs:3137-3146, 3177, 3205`) wraps `{table}_{column}_key`-style names in `"..."` without escaping embedded quotes. Same reasoning — model identifiers, not runtime input. Tidy alongside the M2M fix if touched.
 
 ## Verified safe (positives)

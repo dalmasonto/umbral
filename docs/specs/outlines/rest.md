@@ -1,4 +1,4 @@
-# Outline — REST (umbra-rest, optional plugin)
+# Outline — REST (umbral-rest, optional plugin)
 
 | | |
 |---|---|
@@ -8,7 +8,7 @@
 
 ## Purpose
 
-`umbra-rest` is umbra's Django REST Framework analog: serializers, viewsets, routers, pagination, filtering, throttling, content negotiation, renderers, and parsers. It is an **optional plugin** — `umbra-core` does not depend on it (this is the structural proof from `arch.md §1` Pillar 3 that "serializers are a plugin"), and a REST-free app must compile with zero serializer code and pay no serializer overhead. The plugin sits on serde for the JSON layer and on the QuerySet API from `03-orm-querysets.md` for data access, so a `ModelSerializer<Post>` is a thin mapping between `Post` (the ORM model) and its wire shape, not a parallel data layer. ViewSets reuse the routing surface from outline `web-layer.md`; the plugin contributes its built-in classes (auth/permission/throttle) via the same `Plugin` trait the rest of the framework uses. Importantly, REST serializers are **structurally different from `forms.md`'s `ModelForm`**: serializers handle JSON (parsed by a `Parser`, rendered by a `Renderer`, validated against a typed wire schema), while forms handle HTML form-encoded input and produce server-rendered HTML — different content types, different validation paths, different error shapes (machine-readable JSON envelopes vs field-attached HTML error nodes). They share a validator catalog (the same `validator` crate functions used in `#[umbra(validators(...))]`) but nothing else.
+`umbral-rest` is umbral's Django REST Framework analog: serializers, viewsets, routers, pagination, filtering, throttling, content negotiation, renderers, and parsers. It is an **optional plugin** — `umbral-core` does not depend on it (this is the structural proof from `arch.md §1` Pillar 3 that "serializers are a plugin"), and a REST-free app must compile with zero serializer code and pay no serializer overhead. The plugin sits on serde for the JSON layer and on the QuerySet API from `03-orm-querysets.md` for data access, so a `ModelSerializer<Post>` is a thin mapping between `Post` (the ORM model) and its wire shape, not a parallel data layer. ViewSets reuse the routing surface from outline `web-layer.md`; the plugin contributes its built-in classes (auth/permission/throttle) via the same `Plugin` trait the rest of the framework uses. Importantly, REST serializers are **structurally different from `forms.md`'s `ModelForm`**: serializers handle JSON (parsed by a `Parser`, rendered by a `Renderer`, validated against a typed wire schema), while forms handle HTML form-encoded input and produce server-rendered HTML — different content types, different validation paths, different error shapes (machine-readable JSON envelopes vs field-attached HTML error nodes). They share a validator catalog (the same `validator` crate functions used in `#[umbral(validators(...))]`) but nothing else.
 
 ## Key concepts
 
@@ -16,12 +16,12 @@
 
 ```rust
 #[derive(ModelSerializer)]
-#[umbra(model = Post, fields = [id, title, body, author, published_at])]
+#[umbral(model = Post, fields = [id, title, body, author, published_at])]
 pub struct PostSerializer {
-    #[umbra(read_only)] pub id: i64,
-    #[umbra(max_length = 200)] pub title: String,
+    #[umbral(read_only)] pub id: i64,
+    #[umbral(max_length = 200)] pub title: String,
     pub body: String,
-    #[umbra(nested = AuthorSerializer)] pub author: Author,
+    #[umbral(nested = AuthorSerializer)] pub author: Author,
     pub published_at: Option<DateTime<Utc>>,
 }
 ```
@@ -58,5 +58,5 @@ Promote at M10 entry, when the plugin lands. The deep spec resolves the open que
 ## Cross-links
 
 - Deep specs that constrain this: `02-plugin-contract.md` (the `Plugin` trait this plugin implements), `03-orm-querysets.md` (the queryset surface viewsets read from), `04-orm-model-and-fields.md` (the `Model` shape `ModelSerializer` maps).
-- Sibling outlines: `web-layer.md` (extractors, middleware, the `Router` viewsets mount on), `auth-and-sessions.md` (authentication classes wrap its `User` and login backends), `forms.md` (deliberately distinct: HTML forms vs JSON serializers), `openapi.md` (depends on `umbra-rest`; generates schemas from registered viewsets and serializers).
-- `arch.md §6.5` — the canonical `umbra-rest` description and the "core does not depend on this crate" rule.
+- Sibling outlines: `web-layer.md` (extractors, middleware, the `Router` viewsets mount on), `auth-and-sessions.md` (authentication classes wrap its `User` and login backends), `forms.md` (deliberately distinct: HTML forms vs JSON serializers), `openapi.md` (depends on `umbral-rest`; generates schemas from registered viewsets and serializers).
+- `arch.md §6.5` — the canonical `umbral-rest` description and the "core does not depend on this crate" rule.

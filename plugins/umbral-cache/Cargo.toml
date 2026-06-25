@@ -1,0 +1,55 @@
+[package]
+name = "umbral-cache"
+description = "Pluggable cache backend for umbral. In-memory, SQLite, and Redis backends, plus view-level cache_page middleware."
+workspace = "../.."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# Enable the Redis backend. Requires a Redis server reachable at the
+# configured URL. Adds the `redis` crate with tokio-comp (async connection
+# manager support). Activate with `--features redis` in cargo commands.
+redis = ["dep:redis"]
+
+[dependencies]
+umbral = { path = "../../crates/umbral", version = "0.0.1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+tokio = { version = "1", features = ["sync", "rt", "macros"] }
+async-trait = "0.1"
+tracing = "0.1"
+# HTTP types for the cache_page tower layer
+axum = "0.8"
+tower = { version = "0.5", default-features = false }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+# Compression (gzip/br/deflate/zstd) and response-header management via tower-http.
+# The compression features gate the underlying codec crates (flate2 for gzip/deflate,
+# brotli for br). set-header covers SetResponseHeaderLayer used by Cache-Control/Vary.
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-br", "compression-deflate", "compression-zstd", "set-header"] }
+
+# Optional Redis backend dep. Only compiled when the `redis` feature is
+# enabled. Connection manager handles reconnect transparently and avoids
+# the overhead of a new connection per command.
+[dependencies.redis]
+version = "0.27"
+features = ["tokio-comp", "connection-manager"]
+optional = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tempfile = "3"
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+http-body-util = "0.1"
+flate2 = "1"

@@ -18,7 +18,7 @@ A normal handler returns a fully-buffered body: a `String`, `Html`, or `Json`. T
 When producing a chunk can't fail (you're formatting rows you already have), use `from_chunks`. Each item is anything that converts to bytes: `String`, `Bytes`, `Vec<u8>`, `&'static str`:
 
 ```rust
-use umbra::prelude::*;            // brings in StreamingResponse
+use umbral::prelude::*;            // brings in StreamingResponse
 use futures_util::stream;
 
 async fn export_csv() -> StreamingResponse {
@@ -37,7 +37,7 @@ async fn export_csv() -> StreamingResponse {
 When producing a chunk *can* fail (reading a DB row, a file `read`), use `new` with a stream of `Result<impl Into<Bytes>, impl Into<BoxError>>`. The status line and headers are sent as soon as the first chunk is ready, so an error partway through aborts the response: the client sees a **truncated** body, which is the honest outcome for an already-started stream:
 
 ```rust
-use umbra::web::StreamingResponse;
+use umbral::web::StreamingResponse;
 use axum::body::Bytes;
 
 async fn download_file(path: std::path::PathBuf) -> StreamingResponse {
@@ -64,4 +64,4 @@ Filenames passed to `.attachment` / `.inline` are stripped of CR, LF, and `"` so
 
 - [Compression](compression) - gzip/brotli, which wraps streamed bodies transparently.
 - [CSV export](/docs/v0.0.1/rest/csv-export) - the REST list endpoint's `?format=csv`.
-- `crates/umbra-core/src/web/streaming.rs` for the implementation.
+- `crates/umbral-core/src/web/streaming.rs` for the implementation.

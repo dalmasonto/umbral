@@ -7,35 +7,35 @@ tags: [orm, forms, foreign-key, many-to-many, choices, validation]
 
 # Forms learn relations
 
-`#[derive(umbra::forms::Form)]` reads the same model struct your migrations come from, so a model with relation fields becomes a submittable form with no parallel struct. The derive classifies each relation field and wires the validation + render path through the ORM.
+`#[derive(umbral::forms::Form)]` reads the same model struct your migrations come from, so a model with relation fields becomes a submittable form with no parallel struct. The derive classifies each relation field and wires the validation + render path through the ORM.
 
 | Field type | Becomes | Validation | Render |
 |---|---|---|---|
 | `ForeignKey<T>` / forward `OneToOne<T>` / `Option<ForeignKey<T>>` | `ModelChoice` | id parsed + existence-checked through the ORM | `<select>` of `(id, label)` rows fetched from `T` |
 | `M2M<T>` | `ModelMultiChoice` | each submitted id existence-checked in ONE batched query | multi-`<select>`; selected ids written to the junction table after insert |
-| `#[umbra(choices)]` enum | `Select` | membership against the enum's compile-time values (no DB) | `<select>` of the enum's `VALUES`/`LABELS` |
+| `#[umbral(choices)]` enum | `Select` | membership against the enum's compile-time values (no DB) | `<select>` of the enum's `VALUES`/`LABELS` |
 | `ReverseSet<C>` / reverse `OneToOne<T>` (`#[sqlx(skip)]`) | *skipped* | n/a | absent from `fields()` |
 
 `FormValidate::validate` and `render_html` are `async`: FK/M2M existence checks and `<select>` option fetches resolve through the ambient pool. `validate` is where a relation is verified before insert — a miss is a field-keyed error and no row is written; `render_html` only reads option rows for display.
 
 <Callout type="info">
-Reverse relations (`ReverseSet<C>`, the `#[sqlx(skip)]` reverse `OneToOne`) are back-pointers, never user-submittable, so the derive skips them automatically. You do **not** need `#[umbra(noform)]` on them.
+Reverse relations (`ReverseSet<C>`, the `#[sqlx(skip)]` reverse `OneToOne`) are back-pointers, never user-submittable, so the derive skips them automatically. You do **not** need `#[umbral(noform)]` on them.
 </Callout>
 
 ## ForeignKey → ModelChoice
 
 ```rust
-use umbra::orm::{ForeignKey, Model};
-use umbra::forms::FormValidate;
+use umbral::orm::{ForeignKey, Model};
+use umbral::forms::FormValidate;
 
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-#[umbra(table = "author")]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "author")]
 struct Author { pub id: i64, pub name: String }
 
-#[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model, umbra::forms::Form)]
-#[umbra(table = "book")]
+#[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model, umbral::forms::Form)]
+#[umbral(table = "book")]
 struct Book {
-    #[umbra(primary_key)]
+    #[umbral(primary_key)]
     pub id: i64,
     #[form(required, length(min = 1, max = 200))]
     pub title: String,
@@ -53,16 +53,16 @@ let created = Book::objects().create(book).await?;
 ## M2M → ModelMultiChoice
 
 ```rust
-#[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model, umbra::forms::Form)]
-#[umbra(table = "article")]
+#[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model, umbral::forms::Form)]
+#[umbral(table = "article")]
 struct Article {
-    #[umbra(primary_key)]
+    #[umbral(primary_key)]
     pub id: i64,
     #[form(required, length(min = 1, max = 200))]
     pub title: String,
     #[sqlx(skip)]
     #[serde(skip)]
-    pub tags: umbra::orm::M2M<Tag>, // → a ModelMultiChoice
+    pub tags: umbral::orm::M2M<Tag>, // → a ModelMultiChoice
 }
 
 // The submitted tag ids are verified in ONE batched query and staged on
@@ -76,16 +76,16 @@ let created = Article::objects().create(article).await?;
 ## Choices → Select
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, umbra::orm::Choices, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, umbral::orm::Choices, serde::Serialize, serde::Deserialize)]
 #[choices(rename_all = "lowercase")]
 enum Mood { #[default] Happy, Sad, Neutral }
 
-#[derive(Debug, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model, umbra::forms::Form)]
-#[umbra(table = "note")]
+#[derive(Debug, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model, umbral::forms::Form)]
+#[umbral(table = "note")]
 struct Note {
     pub id: i64,
     pub body: String,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub mood: Mood, // → a Select; options from the enum's VALUES/LABELS
 }
 ```
@@ -95,5 +95,5 @@ A non-member value is a field-keyed error; a valid value decodes straight back i
 ## See also
 
 - [Relationships](/docs/v0.0.1/orm/relationships): the `ForeignKey`, `OneToOne`, and `M2M` field types themselves.
-- [Column types](/docs/v0.0.1/orm/column-types): `#[umbra(choices)]` enums via `#[derive(Choices)]`.
+- [Column types](/docs/v0.0.1/orm/column-types): `#[umbral(choices)]` enums via `#[derive(Choices)]`.
 - Design spec: `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md` (Part 1: field classification; Part 2: async `FormValidate`).

@@ -8,7 +8,7 @@
 
 ## Purpose
 
-The user-facing query API. `QuerySet<T>` is umbra's equivalent of Django's `QuerySet`: a lazy, chainable builder whose terminal methods drive sea-query → sqlx → a real Postgres or SQLite query. `T::objects()` is the entry point.
+The user-facing query API. `QuerySet<T>` is umbral's equivalent of Django's `QuerySet`: a lazy, chainable builder whose terminal methods drive sea-query → sqlx → a real Postgres or SQLite query. `T::objects()` is the entry point.
 
 This spec defines the call-site shape (filter/exclude/order/limit, the F/Q analog, aggregates, relation loading, transactions, the raw-SQL escape hatch) and the resolution model (ambient pool, explicit pool, alias). Field-side types (`post::title`, `post::published_at`, etc.) are defined in `04-orm-model-and-fields.md`; this spec uses them but doesn't own them.
 
@@ -113,7 +113,7 @@ Post::objects()
     .await?
 ```
 
-This is umbra's analog to Django's `Q` composition. F-expressions (referring to one column from another's RHS, e.g. `salary__lt=F('budget')`) reuse the same column constants: `salary.lt(employee::budget)` works because the column constants implement `Into<Expr<...>>`.
+This is umbral's analog to Django's `Q` composition. F-expressions (referring to one column from another's RHS, e.g. `salary__lt=F('budget')`) reuse the same column constants: `salary.lt(employee::budget)` works because the column constants implement `Into<Expr<...>>`.
 
 ### `.using(alias)` and `.on(pool)` (pool resolution)
 
@@ -126,8 +126,8 @@ Post::objects().on(&test_pool).fetch().await?                    // explicit poo
 The resolution rules:
 
 1. `.on(&pool)` wins if set. Used by tests that drive the ORM directly.
-2. Otherwise, `.using("alias")` looks up `umbra::db::pool_for(alias)` and uses it. Errors at boot's system check if the alias wasn't registered in `App::builder()`.
-3. Otherwise, the ambient pool resolution from `01-app-and-settings.md` applies: the `tokio::task_local!` test override is checked first, then the `umbra::db` `OnceLock`.
+2. Otherwise, `.using("alias")` looks up `umbral::db::pool_for(alias)` and uses it. Errors at boot's system check if the alias wasn't registered in `App::builder()`.
+3. Otherwise, the ambient pool resolution from `01-app-and-settings.md` applies: the `tokio::task_local!` test override is checked first, then the `umbral::db` `OnceLock`.
 
 `.using()` and `.on()` are inherent on `Manager<T>` (set early) and also on `QuerySet<T>` (set anywhere in the chain). Setting both is a `BuildError`-style panic at terminal time, not a silent override.
 
@@ -136,7 +136,7 @@ The resolution rules:
 A few small slices, against the canonical example app:
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 // list the 20 most recent published posts
 let recent = Post::objects()
@@ -190,15 +190,15 @@ Nested `Db::tx` uses a savepoint. Postgres-only behaviors stay Postgres-only.
 ### Raw SQL escape hatch
 
 ```rust
-let rows: Vec<Post> = umbra::db::query_as!(Post, "SELECT * FROM post WHERE created_at > $1", since)
+let rows: Vec<Post> = umbral::db::query_as!(Post, "SELECT * FROM post WHERE created_at > $1", since)
     .fetch_all().await?;
 ```
 
-`umbra::db::query!` and `umbra::db::query_as!` are re-exports of `sqlx::query!` / `sqlx::query_as!`. They run against the ambient pool unless the user threads one explicitly. Compile-time column checking still applies (`arch.md §7`), which is the whole reason this hatch is sqlx-shaped rather than a stringly-typed `execute_raw`.
+`umbral::db::query!` and `umbral::db::query_as!` are re-exports of `sqlx::query!` / `sqlx::query_as!`. They run against the ambient pool unless the user threads one explicitly. Compile-time column checking still applies (`arch.md §7`), which is the whole reason this hatch is sqlx-shaped rather than a stringly-typed `execute_raw`.
 
 ### Errors
 
-Every terminal returns `Result<_, umbra::Error>`. `umbra::Error` carries a `From<sqlx::Error>` so `?` flows naturally. The error type is the same across the QuerySet API; no terminal returns a method-specific error type. The `get()` terminal's "not found" and "more than one" cases surface as `Error::NotFound { .. }` and `Error::TooMany { .. }` variants.
+Every terminal returns `Result<_, umbral::Error>`. `umbral::Error` carries a `From<sqlx::Error>` so `?` flows naturally. The error type is the same across the QuerySet API; no terminal returns a method-specific error type. The `get()` terminal's "not found" and "more than one" cases surface as `Error::NotFound { .. }` and `Error::TooMany { .. }` variants.
 
 ## Trade-offs and alternatives considered
 
@@ -213,7 +213,7 @@ Every terminal returns `Result<_, umbra::Error>`. `umbra::Error` carries a `From
 ## Open questions
 
 - **F-expression syntax for arithmetic.** `salary.lt(employee::budget)` works for direct column references. `salary.lt(employee::budget * 0.9)` needs an expression DSL on the right-hand side. Sketched but unspecified; resolve when a real use case lands (likely M9 or later).
-- **Subqueries and `EXISTS`.** Sea-query supports both; the umbra API doesn't yet sketch them. Resolve when a real workload needs subquery composition. Likely a method form (`.subquery_in(field, other_qs)`) plus an `EXISTS` predicate.
+- **Subqueries and `EXISTS`.** Sea-query supports both; the umbral API doesn't yet sketch them. Resolve when a real workload needs subquery composition. Likely a method form (`.subquery_in(field, other_qs)`) plus an `EXISTS` predicate.
 - **`bulk_create` / `bulk_update` semantics under Postgres `RETURNING`.** Worth designing once `04-orm-model-and-fields.md` pins down what an insert returns (an Id, the full row, or nothing).
 - **Cursor-style streaming reads** for very large result sets. Defer until a workload genuinely needs `.fetch_stream()`; the current API assumes the result fits in memory.
 

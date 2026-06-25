@@ -1,15 +1,15 @@
-# umbra settings for kenn.
-# Environment variables (UMBRA_*) override these at runtime.
-# See umbra::settings for the full schema.
+# umbral settings for kenn.
+# Environment variables (UMBRAL_*) override these at runtime.
+# See umbral::settings for the full schema.
 
 database_url = "sqlite://kenn.db?mode=rwc"
 
 # Bind address for `cargo run -- serve`.
-# Override via UMBRA_BIND_ADDR or the --addr flag.
+# Override via UMBRAL_BIND_ADDR or the --addr flag.
 bind_addr = "127.0.0.1:8000"
 
 environment = "Dev"
 
 # CHANGE THIS IN PRODUCTION. The framework errors at boot when this
 # default key is used with environment = "Prod".
-secret_key = "umbra-insecure-dev-key-change-me"
+secret_key = "umbral-insecure-dev-key-change-me"

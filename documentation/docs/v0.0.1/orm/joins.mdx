@@ -19,7 +19,7 @@ The join type applies to the **last** hop of a nested path; intermediate hops ar
 ## One example: a three-level graph in one query
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 // comment.plugin is a nullable FK -> Plugin; plugin.author is a
 // NOT NULL FK -> Author. One INNER join down the whole chain.
@@ -62,7 +62,7 @@ let cat = posts[0].tags.resolved().unwrap()[0]
 ```
 
 <Callout type="warning">
-`RIGHT JOIN` needs **SQLite >= 3.39** (June 2022); Postgres is unconditional. On older SQLite, `right_join_related` errors at execute time, and umbra emits a one-time `tracing::warn!` the first time a RIGHT join is built against a SQLite pool. Prefer `left_`/`inner_join_related` on SQLite unless you've confirmed the engine version.
+`RIGHT JOIN` needs **SQLite >= 3.39** (June 2022); Postgres is unconditional. On older SQLite, `right_join_related` errors at execute time, and umbral emits a one-time `tracing::warn!` the first time a RIGHT join is built against a SQLite pool. Prefer `left_`/`inner_join_related` on SQLite unless you've confirmed the engine version.
 </Callout>
 
 ## See also

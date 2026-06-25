@@ -6,14 +6,14 @@ icon: globe
 tags: [rest, api, json, plugin]
 ---
 
-`umbra-rest` walks the same model registry the migration engine uses and mounts a JSON CRUD surface for every registered model. Add the plugin, get `/api/<table>/` on List + Retrieve + Create + Update + Delete, plus filtering, free-text search, FK expansion (`?include=`), sparse fieldsets (`?fields=`), pagination, and an OpenAPI spec everything else (the `umbra-playground` UI, code generators, third-party clients) reads from.
+`umbral-rest` walks the same model registry the migration engine uses and mounts a JSON CRUD surface for every registered model. Add the plugin, get `/api/<table>/` on List + Retrieve + Create + Update + Delete, plus filtering, free-text search, FK expansion (`?include=`), sparse fieldsets (`?fields=`), pagination, and an OpenAPI spec everything else (the `umbral-playground` UI, code generators, third-party clients) reads from.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 App::builder()
     .model::<Article>()
-    .plugin(umbra_rest::RestPlugin::default())
+    .plugin(umbral_rest::RestPlugin::default())
     .build()?;
 // → GET/POST/PATCH/PUT/DELETE under /api/article/
 ```
@@ -34,7 +34,7 @@ Authentication defaults to `NoAuthentication` (every request anonymous). Permiss
 
 ## Other surfaces
 
-- **Model exposure.** Every registered model is auto-served at `/api/<table>/` (opt-out, not opt-in); a set of framework-internal tables (`auth_user`, `session`, `umbra_migrations`, the `permissions_*` tables, `task_row`, `admin_audit_log`) is blocked by default, and `password_hash` is stripped from every response un-overridably. Tighten with `include_only` / `exclude`, or deliberately opt in with `expose`. See [Model exposure](/docs/v0.0.1/rest/exposure).
+- **Model exposure.** Every registered model is auto-served at `/api/<table>/` (opt-out, not opt-in); a set of framework-internal tables (`auth_user`, `session`, `umbral_migrations`, the `permissions_*` tables, `task_row`, `admin_audit_log`) is blocked by default, and `password_hash` is stripped from every response un-overridably. Tighten with `include_only` / `exclude`, or deliberately opt in with `expose`. See [Model exposure](/docs/v0.0.1/rest/exposure).
 - **Filtering, search, pagination.** Every list endpoint exposes `?field__op=value` (lookups: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `icontains`, `startswith`, `isnull`), `?search=term`, and `?page=2&page_size=50` (page-number pagination) or `?limit=&offset=` once you wire a `Pagination` class via `RestPlugin::paginate(...)`. Default is no pagination. `?search=` is a case-insensitive *substring* match (`icontains`) across the resource's text columns, ORing `UPPER(col) LIKE UPPER('%term%')` over each, and matching integers/bools by equality when the term parses. It is not full-text search: it doesn't stem or rank, and it skips `tsvector` columns. For word-aware, index-backed search use a [`TsVector` column](/docs/v0.0.1/orm/models#full-text-search-columns) and `.matches_websearch(...)`. Restrict the searched columns with `ResourceConfig::search_fields(["title", "body"])`, or turn it off with `disable_search()`.
 - **FK expansion and sparse fieldsets.** `?include=author,category` inlines related rows (select_related under the hood, up to 3 hops); `?fields=id,title` trims the response to named columns. Sparse fieldsets project into included relations: `?include=created_by&fields=created_by__name` (or the dotted `created_by.name`) prunes the nested object down to just `name`, and a multi-hop `author__profile__bio` prunes each level. `__` and `.` are interchangeable separators, depth is capped at 3 hops, and a nested path against a relation you didn't `?include=` silently leaves the raw FK integer in place.
 - **List cap.** A list response returns at most 1000 rows. An unbounded query is clamped to that ceiling; a paginator passes its own concrete limit.

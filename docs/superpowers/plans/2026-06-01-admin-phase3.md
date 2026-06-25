@@ -14,15 +14,15 @@
 
 | Action | File |
 |---|---|
-| Modify | `plugins/umbra-admin/src/config.rs` |
-| Modify | `plugins/umbra-admin/src/lib.rs` |
-| Modify | `plugins/umbra-admin/templates/_macros/data_table.html` |
-| Modify | `plugins/umbra-admin/templates/_macros/field_editor.html` |
-| Modify | `plugins/umbra-admin/templates/_macros/sheet.html` |
-| Modify | `plugins/umbra-admin/templates/wrapper.html` |
-| New | `plugins/umbra-admin/tests/phase3_actions.rs` |
-| New | `plugins/umbra-admin/tests/phase3_fk_picker.rs` |
-| New | `plugins/umbra-admin/tests/phase3_inline_edit.rs` |
+| Modify | `plugins/umbral-admin/src/config.rs` |
+| Modify | `plugins/umbral-admin/src/lib.rs` |
+| Modify | `plugins/umbral-admin/templates/_macros/data_table.html` |
+| Modify | `plugins/umbral-admin/templates/_macros/field_editor.html` |
+| Modify | `plugins/umbral-admin/templates/_macros/sheet.html` |
+| Modify | `plugins/umbral-admin/templates/wrapper.html` |
+| New | `plugins/umbral-admin/tests/phase3_actions.rs` |
+| New | `plugins/umbral-admin/tests/phase3_fk_picker.rs` |
+| New | `plugins/umbral-admin/tests/phase3_inline_edit.rs` |
 | Modify | `documentation/docs/v0.0.1/plugins/admin.mdx` |
 
 ---
@@ -32,7 +32,7 @@
 The existing `Action` carries only `name`, `label`, `handler`. Phase 3 needs `icon`, `variant`, `scope`, `confirm`, and `permission`. The handler signature also changes: receives `ActionInvocation` instead of `(Vec<i64>, AdminContext)`.
 
 **Files:**
-- Modify: `plugins/umbra-admin/src/config.rs`
+- Modify: `plugins/umbral-admin/src/config.rs`
 
 - [ ] **Step 1: Add the new types to config.rs**
 
@@ -138,7 +138,7 @@ pub struct Action {
     /// If `Some`, a confirm dialog is shown before firing.
     pub(crate) confirm: Option<String>,
     /// Permission codename to check. `None` = any staff user may invoke.
-    /// Full umbra-permissions integration deferred (gap 33); today gated
+    /// Full umbral-permissions integration deferred (gap 33); today gated
     /// on `is_staff` only. Field is stored for when permissions land.
     pub(crate) permission: Option<String>,
     pub(crate) handler: ActionHandlerFn,
@@ -378,7 +378,7 @@ pub type AdminConfig = AdminModel;
 - [ ] **Step 2: Verify config.rs compiles**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo build -p umbra-admin 2>&1 | head -60
+cd /home/dalmas/E/projects/umbral/crates && cargo build -p umbral-admin 2>&1 | head -60
 ```
 
 Expected: may have errors from `lib.rs` still using the old `Action` field names (`name` instead of `key`, old handler signature). That's fine — we fix lib.rs next.
@@ -393,7 +393,7 @@ The action dispatch endpoint `POST /admin/{table}/actions/{key}` replaces the ol
 3. Inline cell edit: `GET /admin/{table}/{id}/cell/{field}/edit` and `POST /admin/{table}/{id}/cell/{field}`
 
 **Files:**
-- Modify: `plugins/umbra-admin/src/lib.rs`
+- Modify: `plugins/umbral-admin/src/lib.rs`
 
 - [ ] **Step 1: Update the `Plugin::routes()` method to add new routes**
 
@@ -466,7 +466,7 @@ async fn run_action(
         ids: selected_ids,
         username: who.username.clone(),
         table: table.clone(),
-        pool: umbra::db::pool().clone(),
+        pool: umbral::db::pool().clone(),
     };
     let handler = Arc::clone(&action.handler);
     let result = match handler(inv).await {
@@ -497,7 +497,7 @@ Add after `run_action`. This handler accepts JSON `{ "ids": [...] }` and returns
 /// Response encoding follows `ActionResult`:
 ///   - Toast      → HX-Trigger header + 200 empty body
 ///   - RefreshTable → rows fragment (same as /rows endpoint)
-///   - OpenSheet  → sheet fragment + HX-Retarget: #umbra-sheet-slot
+///   - OpenSheet  → sheet fragment + HX-Retarget: #umbral-sheet-slot
 ///   - Download   → file bytes with Content-Disposition
 ///   - Redirect   → HX-Redirect header
 async fn dispatch_action(
@@ -541,7 +541,7 @@ async fn dispatch_action(
         ids,
         username: who.username.clone(),
         table: table.clone(),
-        pool: umbra::db::pool().clone(),
+        pool: umbral::db::pool().clone(),
     };
     let handler = Arc::clone(&action.handler);
     match handler(inv).await {
@@ -630,7 +630,7 @@ async fn rows_fragment_for(
     let mut fetch_cols = display_cols.clone();
     if !fetch_cols.contains(&pk.name) { fetch_cols.push(pk.name.clone()); }
     let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
-    let pool = umbra::db::pool();
+    let pool = umbral::db::pool();
     let total = match count_rows_filtered(&pool, &model, search_term.as_deref(), cfg,
         active_filter.as_ref().map(|(f, v)| (f.as_str(), v.as_str()))).await {
         Ok(t) => t,
@@ -740,7 +740,7 @@ async fn fk_options(
 
     // Pick a label column: first text column that isn't id.
     let label_col = related_model.fields.iter()
-        .find(|c| !c.primary_key && matches!(c.ty, umbra::orm::SqlType::Text))
+        .find(|c| !c.primary_key && matches!(c.ty, umbral::orm::SqlType::Text))
         .map(|c| c.name.as_str())
         .unwrap_or("id");
 
@@ -751,7 +751,7 @@ async fn fk_options(
         .map(|c| c.search_fields.iter().map(|s| s.as_str()).collect())
         .unwrap_or_else(|| vec![label_col]);
 
-    let pool = umbra::db::pool();
+    let pool = umbral::db::pool();
     // Build WHERE for search.
     let mut conditions: Vec<String> = Vec::new();
     let mut binds: Vec<String> = Vec::new();
@@ -839,7 +839,7 @@ async fn fk_options_resolve(
     }
 
     let label_col = related_model.fields.iter()
-        .find(|c| !c.primary_key && matches!(c.ty, umbra::orm::SqlType::Text))
+        .find(|c| !c.primary_key && matches!(c.ty, umbral::orm::SqlType::Text))
         .map(|c| c.name.as_str())
         .unwrap_or("id");
     let pk_col = pk_column(&related_model).map(|c| c.name.as_str()).unwrap_or("id");
@@ -849,7 +849,7 @@ async fn fk_options_resolve(
         "SELECT \"{pk_col}\", \"{label_col}\" FROM \"{}\" WHERE \"{pk_col}\" IN ({placeholders})",
         q(&related_table)
     );
-    let pool = umbra::db::pool();
+    let pool = umbral::db::pool();
     let mut qb = sqlx::query(&sql);
     for id in &ids { qb = qb.bind(*id); }
 
@@ -891,7 +891,7 @@ async fn cell_edit_get(
     let Some(col) = col else {
         return AdminError::NotFound(format!("no field `{field}`")).into_response();
     };
-    let pool = umbra::db::pool();
+    let pool = umbral::db::pool();
     let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
     let rows = match fetch_rows_filtered(&pool, &model, Some((&pk.name, &id)),
         &all_cols, "", None, None, None).await {
@@ -971,7 +971,7 @@ async fn cell_edit_post(
         return (StatusCode::FORBIDDEN, "field is read-only").into_response();
     }
     let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
-    let pool = umbra::db::pool();
+    let pool = umbral::db::pool();
     let sql = format!(
         "UPDATE \"{}\" SET \"{}\" = ? WHERE \"{}\" = ?",
         q(&model.table), q(&field), q(&pk.name)
@@ -1059,7 +1059,7 @@ let action_names: Vec<serde_json::Value> = cfg
 - [ ] **Step 9: Verify build**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo build -p umbra-admin 2>&1 | head -80
+cd /home/dalmas/E/projects/umbral/crates && cargo build -p umbral-admin 2>&1 | head -80
 ```
 
 Expected: clean build.
@@ -1071,7 +1071,7 @@ Expected: clean build.
 Add (a) row action overflow menu for custom actions, (b) floating bulk-action toolbar with selection-aware JS, and (c) inline-edit `dblclick` trigger on editable cells.
 
 **Files:**
-- Modify: `plugins/umbra-admin/templates/_macros/data_table.html`
+- Modify: `plugins/umbral-admin/templates/_macros/data_table.html`
 
 - [ ] **Step 1: Add custom actions to the row action column**
 
@@ -1165,7 +1165,7 @@ Before the closing `{% endmacro %}` tag (after the `<script>` block), add the to
   </span>
   <button
     type="button"
-    onclick="umbra.selectAllRows(false)"
+    onclick="umbral.selectAllRows(false)"
     class="font-label-sm text-label-sm text-on-surface-variant hover:text-on-surface transition-colors"
   >Clear</button>
   <div class="w-px h-4 bg-outline-variant"></div>
@@ -1181,7 +1181,7 @@ Before the closing `{% endmacro %}` tag (after the `<script>` block), add the to
     data-table="{{ model.table }}"
     class="flex items-center gap-xs px-md py-xs rounded-lg font-label-md text-label-md {% if action.variant == 'danger' %}text-error hover:bg-error-container/10{% else %}text-on-surface hover:bg-surface-container-high{% endif %} transition-colors"
     title="{{ action.label }}"
-    onclick="umbra.runBulkAction(this)"
+    onclick="umbral.runBulkAction(this)"
   >
     <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
     <span class="hidden sm:inline">{{ action.label }}</span>
@@ -1204,7 +1204,7 @@ Before the closing `{% endmacro %}` tag (after the `<script>` block), add the to
         data-action-confirm="{{ action.confirm | default('') }}"
         data-table="{{ model.table }}"
         class="w-full flex items-center gap-sm px-md py-sm text-left hover:bg-surface-container-high font-label-md text-label-md {% if action.variant == 'danger' %}text-error{% else %}text-on-surface{% endif %} transition-colors"
-        onclick="umbra.runBulkAction(this)"
+        onclick="umbral.runBulkAction(this)"
       >
         <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
         {{ action.label }}
@@ -1218,10 +1218,10 @@ Before the closing `{% endmacro %}` tag (after the `<script>` block), add the to
 
 - [ ] **Step 4: Add bulk-action JS to the `<script>` block**
 
-Inside the existing `<script>(function() { ... })();</script>` block, add the `umbra.runBulkAction` function after `umbra.onRowCheck`:
+Inside the existing `<script>(function() { ... })();</script>` block, add the `umbral.runBulkAction` function after `umbral.onRowCheck`:
 
 ```javascript
-umbra.runBulkAction = function(btn) {
+umbral.runBulkAction = function(btn) {
   var key = btn.getAttribute('data-action-key');
   var table = btn.getAttribute('data-table') || btn.closest('[data-table]')?.getAttribute('data-table');
   var confirmMsg = btn.getAttribute('data-action-confirm');
@@ -1239,16 +1239,16 @@ umbra.runBulkAction = function(btn) {
     if (trigger) {
       try {
         var obj = JSON.parse(trigger);
-        if (obj.showToast) umbra.showToast(obj.showToast.message, obj.showToast.level);
+        if (obj.showToast) umbral.showToast(obj.showToast.message, obj.showToast.level);
       } catch(e) {}
     }
     var redirect = resp.headers.get('HX-Redirect');
     if (redirect) { window.location.href = redirect; return; }
     // Default: refresh the table.
     htmx.ajax('GET', '/admin/' + table + '/rows', { target: '#table-body', swap: 'innerHTML' });
-    umbra.selectAllRows(false);
+    umbral.selectAllRows(false);
   }).catch(function(e) {
-    umbra.showToast('Action failed: ' + e, 'error');
+    umbral.showToast('Action failed: ' + e, 'error');
   });
 };
 ```
@@ -1258,12 +1258,12 @@ umbra.runBulkAction = function(btn) {
 ## Task 4: Add toast renderer to wrapper.html
 
 **Files:**
-- Modify: `plugins/umbra-admin/templates/wrapper.html`
+- Modify: `plugins/umbral-admin/templates/wrapper.html`
 
 - [ ] **Step 1: Read wrapper.html to find the right insertion point**
 
 ```bash
-grep -n "body\|</body>\|toast\|umbra\." /home/dalmas/E/projects/umbra/plugins/umbra-admin/templates/wrapper.html | head -30
+grep -n "body\|</body>\|toast\|umbral\." /home/dalmas/E/projects/umbral/plugins/umbral-admin/templates/wrapper.html | head -30
 ```
 
 - [ ] **Step 2: Add toast container + JS before `</body>`**
@@ -1272,16 +1272,16 @@ Find the `</body>` tag in `wrapper.html` and insert before it:
 
 ```html
 {# Toast notification container #}
-<div id="umbra-toast-container" class="fixed bottom-4 right-4 z-[300] flex flex-col gap-sm pointer-events-none" aria-live="polite"></div>
+<div id="umbral-toast-container" class="fixed bottom-4 right-4 z-[300] flex flex-col gap-sm pointer-events-none" aria-live="polite"></div>
 
 <script>
 (function() {
-  // Ensure umbra namespace exists (base.html may have initialized it).
-  window.umbra = window.umbra || {};
+  // Ensure umbral namespace exists (base.html may have initialized it).
+  window.umbral = window.umbral || {};
 
-  umbra.showToast = function(message, level) {
+  umbral.showToast = function(message, level) {
     level = level || 'info';
-    var container = document.getElementById('umbra-toast-container');
+    var container = document.getElementById('umbral-toast-container');
     if (!container) return;
     var colors = {
       info:    'bg-surface-container border-outline-variant text-on-surface',
@@ -1304,25 +1304,25 @@ Find the `</body>` tag in `wrapper.html` and insert before it:
 
   // Listen for HX-Trigger showToast events from HTMX responses.
   document.body.addEventListener('htmx:responseError', function(e) {
-    umbra.showToast('Server error', 'error');
+    umbral.showToast('Server error', 'error');
   });
 
   // Handle showToast trigger from HX-Trigger header.
   document.body.addEventListener('showToast', function(e) {
-    if (e.detail) umbra.showToast(e.detail.message, e.detail.level);
+    if (e.detail) umbral.showToast(e.detail.message, e.detail.level);
   });
 })();
 </script>
 ```
 
-- [ ] **Step 3: Also ensure `window.umbra = window.umbra || {}` is in base.html init**
+- [ ] **Step 3: Also ensure `window.umbral = window.umbral || {}` is in base.html init**
 
-Check that `base.html` (or `wrapper.html`) initialises `window.umbra = {}` before any template script uses it. Add if absent.
+Check that `base.html` (or `wrapper.html`) initialises `window.umbral = {}` before any template script uses it. Add if absent.
 
 - [ ] **Step 4: Verify wrapper.html still renders correctly**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo build -p umbra-admin 2>&1 | grep -E "error|warning" | head -20
+cd /home/dalmas/E/projects/umbral/crates && cargo build -p umbral-admin 2>&1 | grep -E "error|warning" | head -20
 ```
 
 ---
@@ -1332,7 +1332,7 @@ cd /home/dalmas/E/projects/umbra/crates && cargo build -p umbra-admin 2>&1 | gre
 Replace the placeholder number input for FK fields with a searchable combobox.
 
 **Files:**
-- Modify: `plugins/umbra-admin/templates/_macros/field_editor.html`
+- Modify: `plugins/umbral-admin/templates/_macros/field_editor.html`
 
 - [ ] **Step 1: Replace the `number` arm FK placeholder and add FK combobox + M2M chip picker**
 
@@ -1368,7 +1368,7 @@ Add to `field_editor.html` BEFORE the `{% elif field.kind == "number" %}` block:
       hx-get="/admin/api/{{ fk_table }}/{{ field.name }}/options/resolve?ids={{ value }}"
       hx-trigger="load"
       hx-swap="none"
-      hx-on:htmx:after-request="umbra.fkResolve('{{ field.name }}', event)"
+      hx-on:htmx:after-request="umbral.fkResolve('{{ field.name }}', event)"
     ></span>
     {% endif %}
     <div class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-48 overflow-y-auto">
@@ -1438,8 +1438,8 @@ After the `{% endmacro %}` tag, add:
   }
 
   // Resolve label helper called by hx-on after resolve request.
-  window.umbra = window.umbra || {};
-  umbra.fkResolve = function(field, event) {
+  window.umbral = window.umbral || {};
+  umbral.fkResolve = function(field, event) {
     try {
       var data = JSON.parse(event.detail.xhr.responseText);
       if (data.items && data.items[0]) {
@@ -1497,7 +1497,7 @@ FormField {
 }
 ```
 
-Note: `SqlType` may not implement `PartialEq`; check and add `#[derive(PartialEq)]` to `SqlType` in umbra-core if needed, or use `matches!()`.
+Note: `SqlType` may not implement `PartialEq`; check and add `#[derive(PartialEq)]` to `SqlType` in umbral-core if needed, or use `matches!()`.
 
 - [ ] **Step 4: Add FK options dropdown template fragment**
 
@@ -1520,7 +1520,7 @@ if is_htmx(&headers) {
     }
     // "+ Add new" link at bottom.
     html.push_str(&format!(
-        r#"<div class="border-t border-outline-variant px-md py-sm"><button type="button" class="text-primary font-label-sm text-label-sm hover:underline" onclick="umbra.openNestedSheet('{related_table}')"><i data-lucide="plus" class="w-3 h-3 inline mr-xs"></i>Add new</button></div>"#,
+        r#"<div class="border-t border-outline-variant px-md py-sm"><button type="button" class="text-primary font-label-sm text-label-sm hover:underline" onclick="umbral.openNestedSheet('{related_table}')"><i data-lucide="plus" class="w-3 h-3 inline mr-xs"></i>Add new</button></div>"#,
         related_table = related_table
     ));
     return axum::response::Response::builder()
@@ -1535,7 +1535,7 @@ if is_htmx(&headers) {
 - [ ] **Step 5: Build check**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo build -p umbra-admin 2>&1 | head -60
+cd /home/dalmas/E/projects/umbral/crates && cargo build -p umbral-admin 2>&1 | head -60
 ```
 
 ---
@@ -1545,12 +1545,12 @@ cd /home/dalmas/E/projects/umbra/crates && cargo build -p umbra-admin 2>&1 | hea
 Update `sheet.html` macro and `wrapper.html` to support nested sheets (offset by ~40px per level).
 
 **Files:**
-- Modify: `plugins/umbra-admin/templates/_macros/sheet.html`
-- Modify: `plugins/umbra-admin/templates/wrapper.html`
+- Modify: `plugins/umbral-admin/templates/_macros/sheet.html`
+- Modify: `plugins/umbral-admin/templates/wrapper.html`
 
 - [ ] **Step 1: Update sheet.html to support stack depth**
 
-In `sheet.html`, change `id="umbra-sheet-panel"` to accept a `depth` variable and apply offset transform:
+In `sheet.html`, change `id="umbral-sheet-panel"` to accept a `depth` variable and apply offset transform:
 
 ```jinja
 {% set depth = depth | default(0) %}
@@ -1566,7 +1566,7 @@ Add a "Back" button in the header when `depth > 0`:
 ```jinja
 {% if depth > 0 %}
 <button type="button"
-  onclick="umbra.popSheet()"
+  onclick="umbral.popSheet()"
   class="w-8 h-8 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-high transition-all mr-xs"
   aria-label="Back to previous"
 >
@@ -1584,49 +1584,49 @@ Add to the JS block in `wrapper.html` (before `</script>`):
 (function() {
   var stack = [];
 
-  umbra.openSheet = function(html) {
-    var slot = document.getElementById('umbra-sheet-slot');
+  umbral.openSheet = function(html) {
+    var slot = document.getElementById('umbral-sheet-slot');
     if (!slot) return;
     stack.push(slot.innerHTML);
     slot.innerHTML = html;
     document.body.classList.add('overflow-hidden');
     if (window.lucide) lucide.createIcons({ el: slot });
-    umbra._applyStackOffsets();
+    umbral._applyStackOffsets();
   };
 
-  umbra.popSheet = function() {
-    var slot = document.getElementById('umbra-sheet-slot');
+  umbral.popSheet = function() {
+    var slot = document.getElementById('umbral-sheet-slot');
     if (!slot) return;
     if (stack.length > 0) {
       slot.innerHTML = stack.pop();
       if (window.lucide) lucide.createIcons({ el: slot });
-      umbra._applyStackOffsets();
+      umbral._applyStackOffsets();
     } else {
-      umbra.closeSheet();
+      umbral.closeSheet();
     }
   };
 
-  umbra.closeSheet = function() {
-    var slot = document.getElementById('umbra-sheet-slot');
+  umbral.closeSheet = function() {
+    var slot = document.getElementById('umbral-sheet-slot');
     if (slot) slot.innerHTML = '';
     stack = [];
     document.body.classList.remove('overflow-hidden');
   };
 
-  umbra._applyStackOffsets = function() {
-    var slot = document.getElementById('umbra-sheet-slot');
+  umbral._applyStackOffsets = function() {
+    var slot = document.getElementById('umbral-sheet-slot');
     if (!slot) return;
-    var panels = slot.querySelectorAll('#umbra-sheet-panel');
+    var panels = slot.querySelectorAll('#umbral-sheet-panel');
     panels.forEach(function(panel, i) {
       panel.style.transform = 'translateX(-' + (i * 40) + 'px)';
     });
   };
 
-  umbra.openNestedSheet = function(table) {
+  umbral.openNestedSheet = function(table) {
     // Push current sheet onto stack, load create sheet for related table.
     htmx.ajax('GET', '/admin/' + table + '/new-sheet', {
       handler: function(elt, info) {
-        umbra.openSheet(info.xhr.responseText);
+        umbral.openSheet(info.xhr.responseText);
       }
     });
   };
@@ -1634,13 +1634,13 @@ Add to the JS block in `wrapper.html` (before `</script>`):
   // Escape closes top sheet only.
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
-      var slot = document.getElementById('umbra-sheet-slot');
-      if (slot && slot.innerHTML.trim()) { umbra.popSheet(); e.preventDefault(); }
+      var slot = document.getElementById('umbral-sheet-slot');
+      if (slot && slot.innerHTML.trim()) { umbral.popSheet(); e.preventDefault(); }
     }
   });
 
-  umbra.closeDialog = function() {
-    var slot = document.getElementById('umbra-dialog-slot');
+  umbral.closeDialog = function() {
+    var slot = document.getElementById('umbral-dialog-slot');
     if (slot) slot.innerHTML = '';
   };
 })();
@@ -1651,7 +1651,7 @@ Add to the JS block in `wrapper.html` (before `</script>`):
 ## Task 7: Write phase3_actions.rs tests
 
 **Files:**
-- New: `plugins/umbra-admin/tests/phase3_actions.rs`
+- New: `plugins/umbral-admin/tests/phase3_actions.rs`
 
 - [ ] **Step 1: Write the test file**
 
@@ -1674,12 +1674,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 
-use umbra_admin::{Action, ActionInvocation, ActionResult, ActionScope, ActionVariant, AdminModel, AdminPlugin, ToastLevel};
-use umbra_auth::{AuthPlugin, AuthUser, create_user};
-use umbra_sessions::SessionsPlugin;
+use umbral_admin::{Action, ActionInvocation, ActionResult, ActionScope, ActionVariant, AdminModel, AdminPlugin, ToastLevel};
+use umbral_auth::{AuthPlugin, AuthUser, create_user};
+use umbral_sessions::SessionsPlugin;
 use tower::ServiceExt;
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct Article {
     id: i64,
     title: String,
@@ -1691,7 +1691,7 @@ static LOCK: Mutex<()> = Mutex::const_new(());
 
 async fn boot() -> &'static axum::Router {
     BOOT.get_or_init(|| async {
-        let settings = umbra::Settings::from_env().expect("settings");
+        let settings = umbral::Settings::from_env().expect("settings");
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("phase3_actions.sqlite");
         std::mem::forget(tmp);
@@ -1729,7 +1729,7 @@ async fn boot() -> &'static axum::Router {
                 confirm_action,
             ]);
 
-        let app = umbra::App::builder()
+        let app = umbral::App::builder()
             .settings(settings)
             .database("default", pool)
             .plugin(AuthPlugin::<AuthUser>::default())
@@ -1738,7 +1738,7 @@ async fn boot() -> &'static axum::Router {
             .model::<Article>()
             .build().expect("App::build");
 
-        let pool = umbra::db::pool();
+        let pool = umbral::db::pool();
         sqlx::query("CREATE TABLE auth_user (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, email TEXT NOT NULL, password_hash TEXT NOT NULL, is_active INTEGER NOT NULL, is_staff INTEGER NOT NULL, is_superuser INTEGER NOT NULL, date_joined TEXT NOT NULL, last_login TEXT)")
             .execute(&pool).await.expect("auth_user");
         sqlx::query("CREATE TABLE session (id TEXT PRIMARY KEY, user_id INTEGER, data TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, expires_at TEXT NOT NULL)")
@@ -1795,7 +1795,7 @@ async fn login(router: axum::Router) -> String {
     let resp2 = router.clone().oneshot(
         Request::builder().method("POST").uri("/admin/login")
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .header(header::COOKIE, format!("umbra_session={anon_cookie}"))
+            .header(header::COOKIE, format!("umbral_session={anon_cookie}"))
             .body(Body::from(form)).unwrap()
     ).await.expect("post login");
     resp2.headers().get(header::SET_COOKIE).and_then(|v| v.to_str().ok())
@@ -1809,7 +1809,7 @@ async fn test_custom_action_appears_in_changelist() {
     let session = login(router.clone()).await;
     let (status, _headers, body) = send(router, Request::builder()
         .uri("/admin/article/")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .body(Body::empty()).unwrap()
     ).await;
     assert_eq!(status, StatusCode::OK);
@@ -1824,7 +1824,7 @@ async fn test_row_action_dispatch_returns_toast_trigger() {
     let (status, headers, _body) = send(router, Request::builder()
         .method("POST")
         .uri("/admin/article/actions/publish")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(r#"{"ids":[1]}"#)).unwrap()
     ).await;
@@ -1843,7 +1843,7 @@ async fn test_bulk_action_receives_multiple_ids() {
     let (status, headers, _body) = send(router, Request::builder()
         .method("POST")
         .uri("/admin/article/actions/publish")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(r#"{"ids":[1,2,3]}"#)).unwrap()
     ).await;
@@ -1862,7 +1862,7 @@ async fn test_unknown_action_returns_404() {
     let (status, _headers, _body) = send(router, Request::builder()
         .method("POST")
         .uri("/admin/article/actions/nonexistent")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(r#"{"ids":[1]}"#)).unwrap()
     ).await;
@@ -1875,7 +1875,7 @@ async fn test_delete_selected_action_deletes_row() {
     let router = boot().await.clone();
     let session = login(router.clone()).await;
     // Insert a throwaway row.
-    let pool = umbra::db::pool();
+    let pool = umbral::db::pool();
     sqlx::query("INSERT INTO article (title, published) VALUES ('ToDelete', 0)")
         .execute(&pool).await.expect("insert");
     let id: i64 = sqlx::query_scalar("SELECT id FROM article WHERE title = 'ToDelete'")
@@ -1884,7 +1884,7 @@ async fn test_delete_selected_action_deletes_row() {
     let (status, headers, _body) = send(router, Request::builder()
         .method("POST")
         .uri("/admin/article/actions/delete_selected")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(format!(r#"{{"ids":[{id}]}}"#))).unwrap()
     ).await;
@@ -1900,7 +1900,7 @@ async fn test_delete_selected_action_deletes_row() {
 - [ ] **Step 2: Run the tests to see them fail (expected until handler is in place)**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo test -p umbra-admin phase3_actions 2>&1 | tail -30
+cd /home/dalmas/E/projects/umbral/crates && cargo test -p umbral-admin phase3_actions 2>&1 | tail -30
 ```
 
 Expected: compile errors or test failures because handler code isn't written yet.
@@ -1910,7 +1910,7 @@ Expected: compile errors or test failures because handler code isn't written yet
 ## Task 8: Write phase3_fk_picker.rs tests
 
 **Files:**
-- New: `plugins/umbra-admin/tests/phase3_fk_picker.rs`
+- New: `plugins/umbral-admin/tests/phase3_fk_picker.rs`
 
 - [ ] **Step 1: Write the test file**
 
@@ -1933,17 +1933,17 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 use tower::ServiceExt;
 
-use umbra_admin::{AdminModel, AdminPlugin};
-use umbra_auth::{AuthPlugin, AuthUser, create_user};
-use umbra_sessions::SessionsPlugin;
+use umbral_admin::{AdminModel, AdminPlugin};
+use umbral_auth::{AuthPlugin, AuthUser, create_user};
+use umbral_sessions::SessionsPlugin;
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct Tag {
     id: i64,
     name: String,
 }
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct Post3 {
     id: i64,
     title: String,
@@ -1955,7 +1955,7 @@ static LOCK: Mutex<()> = Mutex::const_new(());
 
 async fn boot() -> &'static axum::Router {
     BOOT.get_or_init(|| async {
-        let settings = umbra::Settings::from_env().expect("settings");
+        let settings = umbral::Settings::from_env().expect("settings");
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("phase3_fk.sqlite");
         std::mem::forget(tmp);
@@ -1969,7 +1969,7 @@ async fn boot() -> &'static axum::Router {
             .search_fields(&["title"]);
         let tag_config = AdminModel::new("tag").search_fields(&["name"]);
 
-        let app = umbra::App::builder()
+        let app = umbral::App::builder()
             .settings(settings)
             .database("default", pool)
             .plugin(AuthPlugin::<AuthUser>::default())
@@ -1979,7 +1979,7 @@ async fn boot() -> &'static axum::Router {
             .model::<Post3>()
             .build().expect("build");
 
-        let pool = umbra::db::pool();
+        let pool = umbral::db::pool();
         sqlx::query("CREATE TABLE auth_user (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, email TEXT NOT NULL, password_hash TEXT NOT NULL, is_active INTEGER NOT NULL, is_staff INTEGER NOT NULL, is_superuser INTEGER NOT NULL, date_joined TEXT NOT NULL, last_login TEXT)")
             .execute(&pool).await.expect("auth_user");
         sqlx::query("CREATE TABLE session (id TEXT PRIMARY KEY, user_id INTEGER, data TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, expires_at TEXT NOT NULL)")
@@ -2034,7 +2034,7 @@ async fn login(router: axum::Router) -> String {
     let form = serde_urlencoded::to_string([("username","fk_admin"),("password","pass123"),("csrf_token",csrf.as_str()),("next","/admin/")]).unwrap();
     let resp2 = router.clone().oneshot(Request::builder().method("POST").uri("/admin/login")
         .header(header::CONTENT_TYPE,"application/x-www-form-urlencoded")
-        .header(header::COOKIE, format!("umbra_session={anon}"))
+        .header(header::COOKIE, format!("umbral_session={anon}"))
         .body(Body::from(form)).unwrap()).await.expect("post");
     resp2.headers().get(header::SET_COOKIE).and_then(|v| v.to_str().ok()).map(extract_cookie).unwrap_or(anon)
 }
@@ -2046,7 +2046,7 @@ async fn test_fk_options_search_returns_matches() {
     let session = login(router.clone()).await;
     let (status, _h, body) = send(router, Request::builder()
         .uri("/admin/api/post3/tag_id/options?search=foo")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .body(Body::empty()).unwrap()
     ).await;
     assert_eq!(status, StatusCode::OK, "status: body={body}");
@@ -2061,7 +2061,7 @@ async fn test_fk_options_has_more_when_exceeds_page_size() {
     // 26 tags total, default page_size=20 → has_more=true
     let (status, _h, body) = send(router, Request::builder()
         .uri("/admin/api/post3/tag_id/options?page_size=20")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .body(Body::empty()).unwrap()
     ).await;
     assert_eq!(status, StatusCode::OK);
@@ -2083,7 +2083,7 @@ async fn test_fk_options_resolve_returns_labels() {
     let session = login(router.clone()).await;
     let (status, _h, body) = send(router, Request::builder()
         .uri("/admin/api/post3/tag_id/options/resolve?ids=1,2")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .body(Body::empty()).unwrap()
     ).await;
     assert_eq!(status, StatusCode::OK);
@@ -2112,7 +2112,7 @@ async fn test_fk_options_no_staff_returns_403_or_redirect() {
 - [ ] **Step 2: Run to verify test compilation**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo test -p umbra-admin phase3_fk 2>&1 | tail -30
+cd /home/dalmas/E/projects/umbral/crates && cargo test -p umbral-admin phase3_fk 2>&1 | tail -30
 ```
 
 ---
@@ -2120,7 +2120,7 @@ cd /home/dalmas/E/projects/umbra/crates && cargo test -p umbra-admin phase3_fk 2
 ## Task 9: Write phase3_inline_edit.rs tests
 
 **Files:**
-- New: `plugins/umbra-admin/tests/phase3_inline_edit.rs`
+- New: `plugins/umbral-admin/tests/phase3_inline_edit.rs`
 
 - [ ] **Step 1: Write the test file**
 
@@ -2143,11 +2143,11 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 use tower::ServiceExt;
 
-use umbra_admin::{AdminModel, AdminPlugin};
-use umbra_auth::{AuthPlugin, AuthUser, create_user};
-use umbra_sessions::SessionsPlugin;
+use umbral_admin::{AdminModel, AdminPlugin};
+use umbral_auth::{AuthPlugin, AuthUser, create_user};
+use umbral_sessions::SessionsPlugin;
 
-#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct CellNote {
     id: i64,
     title: String,
@@ -2160,7 +2160,7 @@ static LOCK: Mutex<()> = Mutex::const_new(());
 
 async fn boot() -> &'static axum::Router {
     BOOT.get_or_init(|| async {
-        let settings = umbra::Settings::from_env().expect("settings");
+        let settings = umbral::Settings::from_env().expect("settings");
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("phase3_inline.sqlite");
         std::mem::forget(tmp);
@@ -2174,7 +2174,7 @@ async fn boot() -> &'static axum::Router {
             .readonly_fields(&["body"])
             .inline_edit_fields(&["title", "published"]);
 
-        let app = umbra::App::builder()
+        let app = umbral::App::builder()
             .settings(settings)
             .database("default", pool)
             .plugin(AuthPlugin::<AuthUser>::default())
@@ -2183,7 +2183,7 @@ async fn boot() -> &'static axum::Router {
             .model::<CellNote>()
             .build().expect("build");
 
-        let pool = umbra::db::pool();
+        let pool = umbral::db::pool();
         sqlx::query("CREATE TABLE auth_user (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE, email TEXT NOT NULL, password_hash TEXT NOT NULL, is_active INTEGER NOT NULL, is_staff INTEGER NOT NULL, is_superuser INTEGER NOT NULL, date_joined TEXT NOT NULL, last_login TEXT)")
             .execute(&pool).await.expect("auth_user");
         sqlx::query("CREATE TABLE session (id TEXT PRIMARY KEY, user_id INTEGER, data TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, expires_at TEXT NOT NULL)")
@@ -2230,7 +2230,7 @@ async fn login(router: axum::Router) -> String {
     let form = serde_urlencoded::to_string([("username","cell_admin"),("password","pass123"),("csrf_token",csrf.as_str()),("next","/admin/")]).unwrap();
     let resp2 = router.clone().oneshot(Request::builder().method("POST").uri("/admin/login")
         .header(header::CONTENT_TYPE,"application/x-www-form-urlencoded")
-        .header(header::COOKIE, format!("umbra_session={anon}"))
+        .header(header::COOKIE, format!("umbral_session={anon}"))
         .body(Body::from(form)).unwrap()).await.expect("post");
     resp2.headers().get(header::SET_COOKIE).and_then(|v| v.to_str().ok()).map(extract_cookie).unwrap_or(anon)
 }
@@ -2242,7 +2242,7 @@ async fn test_cell_edit_get_returns_editor_fragment() {
     let session = login(router.clone()).await;
     let (status, _h, body) = send(router, Request::builder()
         .uri("/admin/cell_note/1/cell/title/edit")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .body(Body::empty()).unwrap()
     ).await;
     assert_eq!(status, StatusCode::OK, "cell edit GET ok: {body}");
@@ -2259,14 +2259,14 @@ async fn test_cell_edit_post_updates_row() {
     let (status, _h, body) = send(router, Request::builder()
         .method("POST")
         .uri("/admin/cell_note/1/cell/title")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .body(Body::from("title=Updated+Cell+Title")).unwrap()
     ).await;
     assert_eq!(status, StatusCode::OK, "cell save ok: {body}");
     assert!(body.contains("Updated Cell Title"), "new value in response: {body}");
     // Verify DB updated.
-    let pool = umbra::db::pool();
+    let pool = umbral::db::pool();
     let title: String = sqlx::query_scalar("SELECT title FROM cell_note WHERE id = 1")
         .fetch_one(&pool).await.expect("query");
     assert_eq!(title, "Updated Cell Title");
@@ -2279,7 +2279,7 @@ async fn test_cell_edit_readonly_field_returns_403() {
     let session = login(router.clone()).await;
     let (status, _h, _body) = send(router, Request::builder()
         .uri("/admin/cell_note/1/cell/body/edit")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .body(Body::empty()).unwrap()
     ).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "readonly field blocked");
@@ -2293,7 +2293,7 @@ async fn test_cell_edit_post_nonexistent_row_returns_404() {
     let (status, _h, _body) = send(router, Request::builder()
         .method("POST")
         .uri("/admin/cell_note/9999/cell/title")
-        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::COOKIE, format!("umbral_session={session}"))
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .body(Body::from("title=X")).unwrap()
     ).await;
@@ -2306,7 +2306,7 @@ async fn test_cell_edit_post_nonexistent_row_returns_404() {
 - [ ] **Step 2: Run test compilation check**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo test -p umbra-admin phase3_inline 2>&1 | tail -30
+cd /home/dalmas/E/projects/umbral/crates && cargo test -p umbral-admin phase3_inline 2>&1 | tail -30
 ```
 
 ---
@@ -2316,13 +2316,13 @@ cd /home/dalmas/E/projects/umbra/crates && cargo test -p umbra-admin phase3_inli
 - [ ] **Step 1: Format**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo fmt
+cd /home/dalmas/E/projects/umbral/crates && cargo fmt
 ```
 
 - [ ] **Step 2: Clippy**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo clippy --all-targets 2>&1 | grep -E "^error" | head -30
+cd /home/dalmas/E/projects/umbral/crates && cargo clippy --all-targets 2>&1 | grep -E "^error" | head -30
 ```
 
 Fix any errors. Warnings are acceptable.
@@ -2330,7 +2330,7 @@ Fix any errors. Warnings are acceptable.
 - [ ] **Step 3: Build**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo build 2>&1 | tail -20
+cd /home/dalmas/E/projects/umbral/crates && cargo build 2>&1 | tail -20
 ```
 
 Expected: `Finished` line.
@@ -2338,7 +2338,7 @@ Expected: `Finished` line.
 - [ ] **Step 4: Test**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates && cargo test 2>&1 | tail -40
+cd /home/dalmas/E/projects/umbral/crates && cargo test 2>&1 | tail -40
 ```
 
 Expected: all tests pass including the three new phase3_* suites. If a test fails due to the `OnceCell` being shared between tests in the same binary, debug with `-- --test-threads=1` for that test file.
@@ -2362,7 +2362,7 @@ Add after the existing Phase 2 section (after line ~258):
 Phase 3 replaces the simple bulk-action shim with a full action descriptor. Each `Action` now carries icon, variant, scope, optional confirm message, and a typed `ActionResult`:
 
 ```rust
-use umbra_admin::{Action, ActionInvocation, ActionResult, ActionScope, ActionVariant, ToastLevel};
+use umbral_admin::{Action, ActionInvocation, ActionResult, ActionScope, ActionVariant, ToastLevel};
 
 let publish = Action::new(
     "publish",          // URL-safe key

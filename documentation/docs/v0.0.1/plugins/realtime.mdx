@@ -8,10 +8,10 @@ tags: [realtime, sse, websocket, push, presence, redis]
 
 # Realtime
 
-`umbra-realtime` pushes data to **one user** or a **named room** without hand-rolling connection bookkeeping. It ships two transports — Server-Sent Events (push-only) and WebSocket (bidirectional) — over one connection registry, plus a `GroupPolicy` auth seam, live model-change fan-out, presence, and a Redis backplane for horizontal scale.
+`umbral-realtime` pushes data to **one user** or a **named room** without hand-rolling connection bookkeeping. It ships two transports — Server-Sent Events (push-only) and WebSocket (bidirectional) — over one connection registry, plus a `GroupPolicy` auth seam, live model-change fan-out, presence, and a Redis backplane for horizontal scale.
 
 ```rust
-use umbra_realtime::Realtime;
+use umbral_realtime::Realtime;
 
 // Fire-and-forget; no-ops when RealtimePlugin isn't installed.
 Realtime::to_user("42").send("notification", &payload).await;  // the user's PK as a string
@@ -20,7 +20,7 @@ Realtime::to_group("public:lobby").send("message", &msg).await;
 
 ```js
 // One <script src="/realtime/client.js">, then — one shared connection across every tab:
-umbra.realtime.subscribe("public:lobby", { message: (m) => render(m) });
+umbral.realtime.subscribe("public:lobby", { message: (m) => render(m) });
 ```
 
 <Callout type="info">
@@ -32,7 +32,7 @@ This is the plugin overview. The full guides — **setup, room gating, model sub
 <CardGrid cols={2}>
   <Card icon="rocket" title="Getting started" href="/docs/v0.0.1/realtime/getting-started" description="Install RealtimePlugin, wire identity, add the client script, and send your first event end-to-end." />
   <Card icon="shield" title="Gating rooms" href="/docs/v0.0.1/realtime/gating" description="GroupPolicy + group_policy_fn — who may join which room. public:* is open by default; everything else is denied." />
-  <Card icon="database" title="Model subscriptions" href="/docs/v0.0.1/realtime/model-subscriptions" description="expose::<T>() pushes live model changes through a field whitelist (id-only by default). Subscribe with umbra.realtime.model(...)." />
+  <Card icon="database" title="Model subscriptions" href="/docs/v0.0.1/realtime/model-subscriptions" description="expose::<T>() pushes live model changes through a field whitelist (id-only by default). Subscribe with umbral.realtime.model(...)." />
   <Card icon="users" title="Presence" href="/docs/v0.0.1/realtime/presence" description="Who's online in a room — opt-in per group, identity projected to id-only by default, deduped by user." />
   <Card icon="radio" title="Transports" href="/docs/v0.0.1/realtime/transports" description="SSE vs WebSocket, the one-connection-per-browser SharedWorker model, and Last-Event-ID reconnect replay." />
   <Card icon="layers" title="Scaling" href="/docs/v0.0.1/realtime/scaling" description="A Redis backplane for multi-instance dispatch — proven non-starving to 10k connections." />

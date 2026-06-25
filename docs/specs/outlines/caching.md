@@ -8,7 +8,7 @@
 
 ## Purpose
 
-`umbra::cache` is the framework's uniform key/value cache surface, sitting in front of both an in-process backend (`moka`, the default) and a distributed one (`redis`, opt-in via feature). It exists as a core utility — not a plugin — because the same three Django-shaped use cases come up across the built-ins: caching whole responses (per-view), caching rendered HTML fragments (per-fragment), and caching arbitrary computed values (low-level). Sessions, the admin's expensive list queries, and REST's filter/serialize hot paths all want the same primitive; if each plugin shipped its own cache, swapping moka for redis would mean editing every plugin. Centralising the API while keeping backends pluggable is the Django shape, and it's the smallest surface that lets the same code run locally with moka and in production with redis.
+`umbral::cache` is the framework's uniform key/value cache surface, sitting in front of both an in-process backend (`moka`, the default) and a distributed one (`redis`, opt-in via feature). It exists as a core utility — not a plugin — because the same three Django-shaped use cases come up across the built-ins: caching whole responses (per-view), caching rendered HTML fragments (per-fragment), and caching arbitrary computed values (low-level). Sessions, the admin's expensive list queries, and REST's filter/serialize hot paths all want the same primitive; if each plugin shipped its own cache, swapping moka for redis would mean editing every plugin. Centralising the API while keeping backends pluggable is the Django shape, and it's the smallest surface that lets the same code run locally with moka and in production with redis.
 
 ## Key concepts
 
@@ -26,7 +26,7 @@ pub trait Cache: Send + Sync + 'static {
 
 **Built-in backends.** `MokaCache` wraps `moka::future::Cache` — bounded LRU with TTL, no external dependency, zero-config default. `RedisCache` wraps `redis::aio::ConnectionManager` and ships behind a `redis` feature flag so an app that never installs it pays no compile cost. Both implement the same trait; swapping happens in `Settings`, not in call sites.
 
-**Ambient handle.** The cache lives in the `umbra::cache` `OnceLock` from `01-app-and-settings.md` table — set during `App::build()`, never re-set, read through `umbra::cache::default()`. If no cache backend is configured, the builder publishes a `MokaCache` with framework defaults; the accessor never returns `None`, so plugin code can assume a cache is always present.
+**Ambient handle.** The cache lives in the `umbral::cache` `OnceLock` from `01-app-and-settings.md` table — set during `App::build()`, never re-set, read through `umbral::cache::default()`. If no cache backend is configured, the builder publishes a `MokaCache` with framework defaults; the accessor never returns `None`, so plugin code can assume a cache is always present.
 
 **Per-view caching.** A `CacheLayer` tower middleware (cross-link `web-layer.md`) keys responses on the request URL plus a configured `vary_on` set of headers (`Accept`, `Accept-Language`, `Cookie` when relevant), respects `Cache-Control: no-store`, and skips non-200 responses by default. Mounted globally or per-router scope.
 
@@ -35,7 +35,7 @@ pub trait Cache: Send + Sync + 'static {
 **Low-level API.** Direct calls from app code that wants explicit control. `get_or_set` is the canonical shape:
 
 ```rust
-let posts = umbra::cache::default()
+let posts = umbral::cache::default()
     .get_or_set("posts:recent", Duration::from_secs(60), || async {
         Post::objects().order_by("-created_at").limit(10).all().await
     }).await?;
@@ -45,7 +45,7 @@ let posts = umbra::cache::default()
 
 ## Promote-to-deep trigger
 
-Promote when the first built-in plugin needs caching beyond the in-process default — most likely `umbra-sessions` reaching for redis, `umbra-admin` caching expensive list queries, or `umbra-rest` caching serializer output. Whichever consumer first forces multi-backend support is the trigger.
+Promote when the first built-in plugin needs caching beyond the in-process default — most likely `umbral-sessions` reaching for redis, `umbral-admin` caching expensive list queries, or `umbral-rest` caching serializer output. Whichever consumer first forces multi-backend support is the trigger.
 
 ## Open questions
 

@@ -1,28 +1,28 @@
-# umbra-email — holistic review
+# umbral-email — holistic review
 
-Read-only review, 2026-06-16. Scope: `plugins/umbra-email/src/lib.rs` + `tests/`. Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`. The backlog's docs-audit said "`umbra-email` referenced as shipped (crate doesn't exist)" — **that is now stale; the crate exists, builds, and is a workspace member.** Findings already filed are tagged **(already #N)**; everything else is **NEW**.
+Read-only review, 2026-06-16. Scope: `plugins/umbral-email/src/lib.rs` + `tests/`. Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`. The backlog's docs-audit said "`umbral-email` referenced as shipped (crate doesn't exist)" — **that is now stale; the crate exists, builds, and is a workspace member.** Findings already filed are tagged **(already #N)**; everything else is **NEW**.
 
 ## Verdict
 
 **Complete and honest for a v1 transactional-email plugin: SMTP (STARTTLS) + console backend + template rendering + attachments + text/HTML alternatives, all real and tested.** Scope boundaries (no CC/BCC, no queue, no file backend) are *explicitly documented in the crate docs as v1 deferrals*, not silent stubs — which is exactly the right way to ship a thin slice. The one operational sharp edge (console backend printing full message bodies, incl. reset tokens, to stderr outside Dev) is *warned about loudly* rather than hidden. No `todo!()`, no swallowed errors, no broken paths.
 
-Completeness one-liner: **Core `send`/`compose`/templates/attachments are complete and tested; CC/BCC, a file backend, and queued/retried send (via umbra-tasks) are documented deferrals, not bugs.**
+Completeness one-liner: **Core `send`/`compose`/templates/attachments are complete and tested; CC/BCC, a file backend, and queued/retried send (via umbral-tasks) are documented deferrals, not bugs.**
 
 ## Completeness
 
 | Capability | State | Note |
 |---|---|---|
 | SMTP backend | **Complete** | `lettre` STARTTLS relay on port 587, optional SASL creds, rustls. |
-| Console backend (dev default) | Complete | prints rendered RFC822 to stderr; auto-selected when `email_smtp_host` unset or `UMBRA_EMAIL_BACKEND=console`. |
+| Console backend (dev default) | Complete | prints rendered RFC822 to stderr; auto-selected when `email_smtp_host` unset or `UMBRAL_EMAIL_BACKEND=console`. |
 | File backend | **Absent** | Django has `filebased.EmailBackend`. Not shipped; not documented as deferred either → small doc gap. |
 | Dummy / locmem backend | Absent | tests use console; no in-memory capture backend for assertions. |
 | `send` API | Complete | resolves From (message → `email_default_from` → error), validates recipients. |
 | `EmailMessage` builder | Complete | from/to/add_to/subject/text_body/html_body/reply_to/attach. Django `EmailMessage` parity for the common path. |
 | HTML + text alternatives | Complete | `multipart/alternative`, tested. |
 | Attachments | Complete | bytes-only, `multipart/mixed`, base64 by lettre, invalid-content-type → named error. Tested thoroughly (`tests/attachments.rs`). |
-| Templated emails | Complete | `render_email_body` → `umbra::templates::render`, tested against a real template file. |
+| Templated emails | Complete | `render_email_body` → `umbral::templates::render`, tested against a real template file. |
 | **CC / BCC** | **Absent** | documented v1 deferral. |
-| **Queued / retried send** (umbra-tasks) | **Absent** | documented v1 deferral; transient SMTP errors bubble as `EmailError::Smtp`. |
+| **Queued / retried send** (umbral-tasks) | **Absent** | documented v1 deferral; transient SMTP errors bubble as `EmailError::Smtp`. |
 | Inline images (`cid:`) | Absent | documented deferral. |
 | DKIM / S-MIME | Absent | documented deferral (use relay). |
 | Stubs / `todo!()` / no-ops | **None** | `ConsoleBackend::deliver` returns `Result` only for parity, documented; not a no-op. |
@@ -41,11 +41,11 @@ Completeness one-liner: **Core `send`/`compose`/templates/attachments are comple
 - **No backend abstraction trait.** The backend is a `BackendKind` enum dispatched in `send` (`lib.rs:433`). A third-party can't add (say) an SES-API backend without forking. Django exposes a pluggable `EmailBackend`. Fine for v1; note for the future. FYI.
 
 ### Already filed (cross-ref)
-- The docs-audit "`umbra-email` crate doesn't exist" entry in `backlog.md` P1 docs long-tail is **stale** — the crate ships. The doc page (`documentation/docs/v0.0.1/plugins/email.mdx`) exists. → flag for the doc-fix batch to drop that line.
+- The docs-audit "`umbral-email` crate doesn't exist" entry in `backlog.md` P1 docs long-tail is **stale** — the crate ships. The doc page (`documentation/docs/v0.0.1/plugins/email.mdx`) exists. → flag for the doc-fix batch to drop that line.
 
 ## Architecture / plugin-contract
 
-Clean. Facade-only (`use umbra::prelude::*`, `umbra::templates`, `umbra::Settings`) — no core internals, no other-plugin deps. Service-shaped plugin: no models, no migrations, no routes (correct — it's a send service). `Plugin` impl is minimal and honest (just `name()`). No raw `sqlx` (touches no DB). The one architectural observation (above): `BackendKind` enum vs a `Backend` trait — acceptable for the documented v1 scope. Error enum is thorough with `From` impls so `?` flows. `compose` is public so a future `umbra-tasks` queue path can serialise a `lettre::Message` — good forward-design.
+Clean. Facade-only (`use umbral::prelude::*`, `umbral::templates`, `umbral::Settings`) — no core internals, no other-plugin deps. Service-shaped plugin: no models, no migrations, no routes (correct — it's a send service). `Plugin` impl is minimal and honest (just `name()`). No raw `sqlx` (touches no DB). The one architectural observation (above): `BackendKind` enum vs a `Backend` trait — acceptable for the documented v1 scope. Error enum is thorough with `From` impls so `?` flows. `compose` is public so a future `umbral-tasks` queue path can serialise a `lettre::Message` — good forward-design.
 
 ## Tests
 

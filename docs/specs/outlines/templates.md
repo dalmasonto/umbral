@@ -8,7 +8,7 @@
 
 ## Purpose
 
-`umbra::templates` is the server-side rendering substrate. Its first consumers are the admin (auto CRUD pages) and the email plugin (text and HTML bodies for password reset, welcome mail, and anything else a built-in needs to send), with user-facing pages — any non-API endpoint a developer writes by hand — riding on the same surface. It lives as a cross-cutting outline rather than inside `umbra-admin` because two built-ins already reuse it, and a third (forms widget rendering) is about to: if the admin owned the engine, the email plugin would either depend on the admin or re-implement the same wiring, both of which the plugin contract from `02-plugin-contract.md` rules out. Templates therefore graduate to a shared facility — small, ambient, and rendered through one accessor — long before they become a "feature."
+`umbral::templates` is the server-side rendering substrate. Its first consumers are the admin (auto CRUD pages) and the email plugin (text and HTML bodies for password reset, welcome mail, and anything else a built-in needs to send), with user-facing pages — any non-API endpoint a developer writes by hand — riding on the same surface. It lives as a cross-cutting outline rather than inside `umbral-admin` because two built-ins already reuse it, and a third (forms widget rendering) is about to: if the admin owned the engine, the email plugin would either depend on the admin or re-implement the same wiring, both of which the plugin contract from `02-plugin-contract.md` rules out. Templates therefore graduate to a shared facility — small, ambient, and rendered through one accessor — long before they become a "feature."
 
 ## Key concepts
 
@@ -21,7 +21,7 @@
 **Custom tags and filters.** Filters and tests register as functions on the engine instance, not via a global registry — registration happens during `Plugin::on_ready()`, so a plugin's filters are scoped to that plugin's installation. Illustrative shape:
 
 ```rust
-umbra::templates::engine_mut().add_filter("currency", |v: f64| format!("${v:.2}"));
+umbral::templates::engine_mut().add_filter("currency", |v: f64| format!("${v:.2}"));
 ```
 
 **Template discovery.** Each plugin owns a `templates/` directory under its crate, and the engine search path is assembled in plugin dependency order at boot — same ordering rule the migration engine uses. The project's top-level `templates/` directory takes precedence over any plugin's, which is how user overrides of admin templates work without forking the admin.
@@ -29,14 +29,14 @@ umbra::templates::engine_mut().add_filter("currency", |v: f64| format!("${v:.2}"
 **Ambient handle.** Rendering goes through one accessor, set in the same `OnceLock` style as the DB pool and task queue from `01-app-and-settings.md`:
 
 ```rust
-let html = umbra::templates::render("admin/post_list.html", &ctx)?;
+let html = umbral::templates::render("admin/post_list.html", &ctx)?;
 ```
 
-`ctx` is a serde-serializable value; `Result` is the umbra error enum so `?` flows through handlers without ceremony.
+`ctx` is a serde-serializable value; `Result` is the umbral error enum so `?` flows through handlers without ceremony.
 
 ## Promote-to-deep trigger
 
-Promote at M11 entry, when the admin needs concrete templates wired through real plugin overrides. Promote earlier if `umbra-email` (M9) ships templated email bodies before the admin lands — whichever consumer touches the engine first forces the design.
+Promote at M11 entry, when the admin needs concrete templates wired through real plugin overrides. Promote earlier if `umbral-email` (M9) ships templated email bodies before the admin lands — whichever consumer touches the engine first forces the design.
 
 ## Open questions
 
@@ -44,7 +44,7 @@ Promote at M11 entry, when the admin needs concrete templates wired through real
 - **Template discovery model.** Per-plugin `templates/` directories assembled into one search path (Django's canonical shape) vs a configured-list-of-paths in `Settings` (askama's shape). The two engines bias the answer differently, so this question and the engine question resolve together.
 - **Admin base-template override path.** The admin ships `admin/base.html`; user projects override by placing the same path higher in the search path. Open: whether overrides can target individual blocks (`{% block branding %}`) without copying the whole base, or whether the user always copies-then-edits.
 - **Custom-tag namespace collisions.** Two plugins register a filter named `currency` — does the second registration shadow, error at boot via the system check, or namespace under the plugin name? Decision lives with the deep spec.
-- **i18n is out of scope.** Per PRD §14 umbra ships no `gettext` equivalent in the first iteration. The templates engine must not pretend to support i18n — no `{% trans %}` tag, no `_()` filter — so that adding it later is a clean addition rather than a redesign.
+- **i18n is out of scope.** Per PRD §14 umbral ships no `gettext` equivalent in the first iteration. The templates engine must not pretend to support i18n — no `{% trans %}` tag, no `_()` filter — so that adding it later is a clean addition rather than a redesign.
 
 ## Cross-links
 

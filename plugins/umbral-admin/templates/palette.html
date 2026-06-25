@@ -1,0 +1,230 @@
+{#
+  palette.html
+  ============
+  Command palette fragment — loaded into #umbral-palette-slot by ⌘K / Ctrl-K.
+
+  Two-tier search:
+  - Models + Commands: always visible at full opacity; client-side filter just
+    shows a "Nothing found" hint, never dims/disables items.
+  - Records: debounced 200ms hx-get to {{ admin_base }}/api/palette/search?q=... returns
+    up to 10 matching rows across all registered models with search_fields.
+
+  `models`   — list of {table, label, icon} for jump targets.
+  `commands` — list of {key, label, icon} for fixed commands.
+#}
+
+<div
+  id="umbral-palette"
+  class="fixed inset-0 z-[500] flex items-start justify-center pt-[15vh]"
+  role="dialog"
+  aria-modal="true"
+  aria-label="Command palette"
+  onclick="if(event.target===this)umbral.closePalette()"
+>
+  {# Scrim #}
+  <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" aria-hidden="true"></div>
+
+  {# Panel #}
+  <div
+    class="relative w-full max-w-[600px] mx-md bg-surface rounded-2xl border border-outline-variant shadow-2xl overflow-hidden"
+    style="border-radius: 14px;"
+  >
+    {# Search row: quiet token background; the inner input has no border. #}
+    <div class="flex items-center gap-sm bg-surface-container-high border border-transparent rounded-xl px-md py-sm m-sm">
+      <i data-lucide="search" class="w-5 h-5 text-outline flex-shrink-0 pointer-events-none"></i>
+      <input
+        id="umbral-palette-input"
+        type="text"
+        placeholder="Jump to model, run command, or search records..."
+        class="flex-1 border-0 bg-transparent text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:ring-0"
+        autocomplete="off"
+        aria-autocomplete="list"
+        aria-controls="umbral-palette-results"
+        oninput="umbral._paletteFilter(this.value)"
+        onkeydown="umbral._paletteKeydown(event)"
+        hx-get="{{ admin_base }}/api/palette/search"
+        hx-trigger="input changed delay:200ms"
+        hx-target="#umbral-palette-records"
+        hx-swap="innerHTML"
+        hx-include="this"
+        name="q"
+      />
+      <button
+        type="button"
+        title="Close palette (Esc)"
+        onclick="umbral.closePalette()"
+        class="hover:bg-surface-container-high rounded-md p-1 text-on-surface-variant hover:text-on-surface transition-colors flex-shrink-0"
+        aria-label="Close"
+      >
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+
+    {# Results list — scrollable, max 60vh #}
+    <ul
+      id="umbral-palette-results"
+      class="max-h-[60vh] overflow-y-auto py-xs"
+      role="listbox"
+    >
+      {#
+        Records section — populated by the backend search endpoint via HTMX.
+        Empty initially; filled after the user types 2+ chars.
+      #}
+      <li id="umbral-palette-records-header" class="hidden px-lg py-xs">
+        <span class="text-label-sm text-outline uppercase tracking-wider">Records</span>
+      </li>
+      <li id="umbral-palette-records" class="list-none"></li>
+
+      {# "Nothing found" banner — hidden by default, shown by JS when nothing matches static items #}
+      <li>
+        <div id="umbral-palette-empty" class="hidden px-lg py-sm bg-surface-container/50 border-b border-outline-variant">
+          <p class="text-body-sm text-outline italic">No matching models or commands.</p>
+        </div>
+      </li>
+
+      {# Jump targets: registered models — ALWAYS visible at full opacity.
+         Rendered as a 2-column grid of cards. `auto-rows-fr` + `h-full`
+         on each card keeps cards in the same row equal-height even when
+         one model's label wraps to two lines. `break-words` on the label
+         lets long table names wrap instead of overflowing. #}
+      {% if models %}
+      <li id="palette-header-models" class="px-lg py-xs">
+        <span class="text-label-sm text-outline uppercase tracking-wider">Models</span>
+      </li>
+      <li class="px-lg pb-xs">
+        <div class="grid grid-cols-2 gap-xs auto-rows-fr">
+          {% for m in models %}
+          <div
+            role="option"
+            data-palette-label="{{ m.label | lower }}"
+            data-palette-href="{{ admin_base }}/{{ m.table }}/"
+            class="palette-item flex flex-col h-full gap-sm p-sm cursor-pointer hover:bg-surface-container-high transition-colors group rounded-lg border border-outline-variant focus:outline-none focus:ring-2 focus:ring-primary"
+            onclick="umbral._paletteGo(this)"
+            tabindex="-1"
+          >
+            <div class="w-8 h-8 rounded-xl bg-surface-container border border-outline-variant flex items-center justify-center flex-shrink-0">
+              <i data-lucide="{{ m.icon | default('database') }}" class="w-4 h-4 text-on-surface-variant"></i>
+            </div>
+            <span class="text-body-md text-on-surface break-words">{{ m.label }}</span>
+          </div>
+          {% endfor %}
+        </div>
+      </li>
+      {% endif %}
+
+      {# Fixed commands — ALWAYS visible at full opacity #}
+      <li id="palette-header-commands" class="px-lg py-xs mt-xs border-t border-outline-variant">
+        <span class="text-label-sm text-outline uppercase tracking-wider">Commands</span>
+      </li>
+      {% for cmd in commands %}
+      <li
+        role="option"
+        data-palette-label="{{ cmd.label | lower }}"
+        data-palette-action="{{ cmd.key }}"
+        class="palette-item flex items-center gap-sm px-lg py-sm cursor-pointer hover:bg-surface-container-high transition-colors"
+        onclick="umbral._paletteAction('{{ cmd.key }}')"
+        tabindex="-1"
+      >
+        <div class="w-8 h-8 rounded-xl bg-surface-container border border-outline-variant flex items-center justify-center flex-shrink-0">
+          <i data-lucide="{{ cmd.icon }}" class="w-4 h-4 text-on-surface-variant"></i>
+        </div>
+        <span class="text-body-md text-on-surface">{{ cmd.label }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<script>
+(function() {
+  // Autofocus the input after insertion.
+  var inp = document.getElementById('umbral-palette-input');
+  if (inp) { inp.focus(); htmx.process(inp); }
+
+  if (window.lucide) lucide.createIcons({ el: document.getElementById('umbral-palette') });
+
+  umbral.closePalette = function() {
+    var slot = document.getElementById('umbral-palette-slot');
+    if (slot) slot.innerHTML = '';
+  };
+
+  // Filter static items (Models + Commands) client-side.
+  // Items are NEVER dimmed or disabled — they stay at full opacity always.
+  // A "Nothing found" hint appears only when static labels don't match.
+  // Record search is handled server-side via hx-get on the input (debounced).
+  umbral._paletteFilter = function(q) {
+    q = q.trim().toLowerCase();
+    var items = document.querySelectorAll('.palette-item');
+    var anyMatch = false;
+
+    items.forEach(function(li) {
+      var label = li.getAttribute('data-palette-label') || '';
+      var matches = (q === '' || label.indexOf(q) !== -1);
+      // Always keep items fully visible — no dimming (Bug 2a fix).
+      li.style.opacity = '';
+      li.style.pointerEvents = '';
+      if (matches) anyMatch = true;
+    });
+
+    // Show/hide the "Nothing found" hint for static list.
+    var emptyBanner = document.getElementById('umbral-palette-empty');
+    if (emptyBanner) {
+      if (q !== '' && !anyMatch) {
+        emptyBanner.classList.remove('hidden');
+      } else {
+        emptyBanner.classList.add('hidden');
+      }
+    }
+
+    // Show/hide the Records section header based on query length.
+    var recHeader = document.getElementById('umbral-palette-records-header');
+    if (recHeader) {
+      recHeader.classList.toggle('hidden', q.length < 2);
+    }
+    // Clear records immediately when query is too short.
+    if (q.length < 2) {
+      var rec = document.getElementById('umbral-palette-records');
+      if (rec) rec.innerHTML = '';
+    }
+  };
+
+  // After HTMX swaps the records section, re-init Lucide icons.
+  document.body.addEventListener('htmx:afterSwap', function(e) {
+    if (e.detail && e.detail.target && e.detail.target.id === 'umbral-palette-records') {
+      if (window.lucide) lucide.createIcons({ el: e.detail.target });
+    }
+  });
+
+  umbral._paletteKeydown = function(e) {
+    if (e.key === 'Escape') { umbral.closePalette(); e.preventDefault(); return; }
+    // Navigate through all visible palette items (records + static).
+    var results = document.getElementById('umbral-palette-results');
+    var items = Array.from(results.querySelectorAll('.palette-item'));
+    var focused = document.activeElement;
+    var idx = items.indexOf(focused);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      var next = items[idx + 1] || items[0];
+      if (next) next.focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      var prev = items[idx - 1] || items[items.length - 1];
+      if (prev) prev.focus();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (focused && focused.classList.contains('palette-item')) focused.click();
+    }
+  };
+
+  umbral._paletteGo = function(el) {
+    var href = el.getAttribute('data-palette-href');
+    if (href) { umbral.closePalette(); window.location.href = href; }
+  };
+
+  umbral._paletteAction = function(key) {
+    umbral.closePalette();
+    if (key === 'toggle_theme') { umbral.toggleTheme(); }
+    else if (key === 'logout') { window.location.href = '{{ admin_base }}/logout'; }
+  };
+})();
+</script>

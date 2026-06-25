@@ -5,8 +5,8 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use umbra::prelude::*;
-use umbra_auth::AuthUser;
+use umbral::prelude::*;
+use umbral_auth::AuthUser;
 
 // ---------------------------------------------------------------------------
 // Choice enums
@@ -61,16 +61,16 @@ pub enum PageTemplate {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Category {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub slug: String,
-    #[umbra(string)]
+    #[umbral(string)]
     pub name: String,
     pub description: Option<String>,
     pub image: Option<String>,
     pub parent: Option<ForeignKey<Category>>,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub position: i32,
-    #[umbra(default = "true")]
+    #[umbral(default = "true")]
     pub is_active: bool,
     pub test_field: Option<String>,
 }
@@ -78,9 +78,9 @@ pub struct Category {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Tag {
     pub id: i64,
-    #[umbra(unique, string)]
+    #[umbral(unique, string)]
     pub name: String,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub slug: String,
 }
 
@@ -91,13 +91,13 @@ pub struct Tag {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Post {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub slug: String,
-    #[umbra(string)]
+    #[umbral(string)]
     pub title: String,
     pub excerpt: Option<String>,
     pub body: String,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub status: PostStatus,
     pub author: ForeignKey<AuthUser>,
     pub category: Option<ForeignKey<Category>>,
@@ -109,18 +109,18 @@ pub struct Post {
     pub tags: M2M<Tag>,
     pub cover_image: Option<String>,
     pub attachment: Option<String>,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub is_featured: bool,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub reading_minutes: i32,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub view_count: i64,
     pub seo_title: Option<String>,
     pub seo_description: Option<String>,
     pub published_at: Option<DateTime<Utc>>,
-    #[umbra(auto_now_add)]
+    #[umbral(auto_now_add)]
     pub created_at: DateTime<Utc>,
-    #[umbra(auto_now)]
+    #[umbral(auto_now)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -133,7 +133,7 @@ pub struct Comment {
     pub author_name: Option<String>,
     pub author_email: Option<String>,
     pub body: String,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub is_approved: bool,
     pub created_at: DateTime<Utc>,
 }
@@ -145,17 +145,17 @@ pub struct Comment {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Page {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub slug: String,
-    #[umbra(string)]
+    #[umbral(string)]
     pub title: String,
     pub content: String,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub template: PageTemplate,
     pub parent: Option<ForeignKey<Page>>,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub position: i32,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub is_published: bool,
     pub seo_title: Option<String>,
     pub seo_description: Option<String>,
@@ -169,9 +169,9 @@ pub struct Faq {
     pub question: String,
     pub answer: String,
     pub category: Option<String>,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub position: i32,
-    #[umbra(default = "true")]
+    #[umbral(default = "true")]
     pub is_published: bool,
 }
 
@@ -182,9 +182,9 @@ pub struct Faq {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Menu {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub name: String,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub slug: String,
 }
 
@@ -196,11 +196,11 @@ pub struct MenuItem {
     pub label: String,
     pub url: Option<String>,
     pub page: Option<ForeignKey<Page>>,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub position: i32,
-    #[umbra(default = "_self")]
+    #[umbral(default = "_self")]
     pub target: String,
-    #[umbra(default = "true")]
+    #[umbral(default = "true")]
     pub is_active: bool,
 }
 
@@ -211,31 +211,31 @@ pub struct MenuItem {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Banner {
     pub id: i64,
-    #[umbra(string)]
+    #[umbral(string)]
     pub title: String,
     pub content: Option<String>,
     pub image: Option<String>,
     pub link_url: Option<String>,
     pub starts_at: Option<DateTime<Utc>>,
     pub ends_at: Option<DateTime<Utc>>,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub position: i32,
-    #[umbra(default = "true")]
+    #[umbral(default = "true")]
     pub is_active: bool,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Testimonial {
     pub id: i64,
-    #[umbra(string)]
+    #[umbral(string)]
     pub author_name: String,
     pub author_title: Option<String>,
     pub avatar: Option<String>,
     pub quote: String,
     pub rating: Option<i32>,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub is_featured: bool,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub position: i32,
 }
 
@@ -250,10 +250,10 @@ pub struct Testimonial {
 /// and skips the server-managed fields automatically:
 ///   - `id`: implicit PK skip (the `id`-named field is always
 ///     framework-managed)
-///   - `status`: `#[umbra(noform)]` — defaults to `ContactStatus::New`
-///   - `ip_address`: `#[umbra(noform)]` — handler stamps from the
+///   - `status`: `#[umbral(noform)]` — defaults to `ContactStatus::New`
+///   - `ip_address`: `#[umbral(noform)]` — handler stamps from the
 ///     request (currently `None`; future middleware can fill it)
-///   - `created_at`: `#[umbra(auto_now_add)]` — ORM stamps on insert
+///   - `created_at`: `#[umbral(auto_now_add)]` — ORM stamps on insert
 /// The remaining fields (`name`, `email`, `phone`, `subject`,
 /// `message`) carry `#[form(...)]` validation declarations.
 ///
@@ -261,11 +261,11 @@ pub struct Testimonial {
 /// fields via `..Default::default()` in the constructor; the
 /// `Choices` derive on `ContactStatus` provides `Default` itself,
 /// so the struct-level `Default` derive falls out for free.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Default, Model, umbra::forms::Form)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Default, Model, umbral::forms::Form)]
 #[form(normalize_strings)]
 pub struct ContactMessage {
     pub id: i64,
-    #[umbra(string)]
+    #[umbral(string)]
     #[form(required, length(min = 1, max = 100))]
     pub name: String,
     #[form(required, email, max_length = 254)]
@@ -282,18 +282,18 @@ pub struct ContactMessage {
     pub subject: String,
     #[form(required, length(min = 10, max = 5000))]
     pub message: String,
-    #[umbra(choices, noform)]
+    #[umbral(choices, noform)]
     pub status: ContactStatus,
-    #[umbra(noform)]
+    #[umbral(noform)]
     pub ip_address: Option<String>,
-    #[umbra(auto_now_add)]
+    #[umbral(auto_now_add)]
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Note {
     pub id: i64,
-    #[umbra(string)]
+    #[umbral(string)]
     pub title: String,
     pub description: String,
 }
@@ -301,9 +301,9 @@ pub struct Note {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Subscriber {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub email: String,
-    #[umbra(default = "false")]
+    #[umbral(default = "false")]
     pub is_confirmed: bool,
     pub confirmed_at: Option<DateTime<Utc>>,
     pub source: Option<String>,
@@ -334,21 +334,21 @@ pub struct MediaAsset {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Redirect {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub from_path: String,
     pub to_path: String,
-    #[umbra(choices)]
+    #[umbral(choices)]
     pub code: RedirectCode,
-    #[umbra(default = "true")]
+    #[umbral(default = "true")]
     pub is_active: bool,
-    #[umbra(default = "0")]
+    #[umbral(default = "0")]
     pub hits: i64,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct SiteSetting {
     pub id: i64,
-    #[umbra(string)]
+    #[umbral(string)]
     pub site_name: String,
     pub tagline: Option<String>,
     pub logo: Option<String>,

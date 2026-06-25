@@ -37,7 +37,7 @@ the loop runs normally from there.
 
 When the target database already holds the tables you just introspected,
 running the migration would fail on "table already exists". Pass
-`--mark-applied` to record the row in `umbra_migrations` without running
+`--mark-applied` to record the row in `umbral_migrations` without running
 the SQL:
 
 ```bash
@@ -64,7 +64,7 @@ The columns inspectdb's SQLite path knows about today (the Postgres path additio
 A `JSON` / `JSONB`-declared column maps to `serde_json::Value` and a `BLOB` / `BYTEA` column maps to a bytes field. A SQL type still outside the catalogue (NUMERIC, custom types) makes `inspectdb` stop with an `UnsupportedColumnType` error naming the offending column. Either add a matching `SqlType` variant or edit the generated `models.rs` by hand.
 
 <Callout type="info">
-`umbra_migrations`, every `sqlite_*` internal table, and any table with an
+`umbral_migrations`, every `sqlite_*` internal table, and any table with an
 SQL type the catalogue doesn't know are excluded automatically.
 </Callout>
 
@@ -78,6 +78,6 @@ SQL type the catalogue doesn't know are excluded automatically.
   `models.rs` you wire by hand. M7's full plugin shape ships the crate too.
 
 Postgres introspection has shipped (`introspect_pool_pg`, covered by
-`crates/umbra-core/tests/postgres_inspect.rs`); it is no longer on this list.
+`crates/umbral-core/tests/postgres_inspect.rs`); it is no longer on this list.
 
 The full target shape lives in `docs/specs/07-inspectdb.md`.

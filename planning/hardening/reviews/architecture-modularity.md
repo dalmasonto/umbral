@@ -1,6 +1,6 @@
 done hardening
 
-# Architecture & Modularity Review — umbra workspace
+# Architecture & Modularity Review — umbral workspace
 
 > Read-only review. No source files were modified.
 > Date: 2026-06-16
@@ -12,16 +12,16 @@ done hardening
 
 | Rank | File | LOC |
 |------|------|-----|
-| 1 | `crates/umbra-core/src/orm/queryset/mod.rs` | 4 846 |
-| 2 | `crates/umbra-core/src/migrate.rs` | 4 660 |
-| 3 | `crates/umbra-macros/src/lib.rs` | 4 521 |
-| 4 | `crates/umbra-core/src/orm/dynamic.rs` | 3 009 |
-| 5 | `crates/umbra-core/src/orm/column.rs` | 2 845 |
-| 6 | `plugins/umbra-rest/src/lib.rs` | 2 668 |
-| 7 | `plugins/umbra-openapi/src/lib.rs` | 1 658 |
-| 8 | `crates/umbra-core/src/forms.rs` | 1 561 |
-| 9 | `crates/umbra-cli/src/scaffold.rs` | 1 467 |
-| 10 | `crates/umbra-core/src/app.rs` | 1 409 |
+| 1 | `crates/umbral-core/src/orm/queryset/mod.rs` | 4 846 |
+| 2 | `crates/umbral-core/src/migrate.rs` | 4 660 |
+| 3 | `crates/umbral-macros/src/lib.rs` | 4 521 |
+| 4 | `crates/umbral-core/src/orm/dynamic.rs` | 3 009 |
+| 5 | `crates/umbral-core/src/orm/column.rs` | 2 845 |
+| 6 | `plugins/umbral-rest/src/lib.rs` | 2 668 |
+| 7 | `plugins/umbral-openapi/src/lib.rs` | 1 658 |
+| 8 | `crates/umbral-core/src/forms.rs` | 1 561 |
+| 9 | `crates/umbral-cli/src/scaffold.rs` | 1 467 |
+| 10 | `crates/umbral-core/src/app.rs` | 1 409 |
 
 ---
 
@@ -51,7 +51,7 @@ The file already spawned five sub-modules (`backend_pg.rs`, `backend_sqlite.rs`,
 
 This single file contains: the global plugin/model registry, the `ModelMeta`/`Column`/`Operation` types, the migration file system layer, the drift detection + diff engine, the SQL rendering layer, and the tracking table helpers. These are four logically independent responsibilities.
 
-**Proposed directory: `crates/umbra-core/src/migrate/`**
+**Proposed directory: `crates/umbral-core/src/migrate/`**
 
 | New sub-module | Contents | Key fns/types | Approx. lines |
 |---|---|---|---|
@@ -62,15 +62,15 @@ This single file contains: the global plugin/model registry, the `ModelMeta`/`Co
 | `migrate/render.rs` | SQL rendering for both backends | `render_operation`, `render_operation_for`, `render_operation_sqlite`, `render_operation_postgres`, `render_alter_column_dance_sqlite`, `render_alter_column_postgres`, `build_column_def_sqlite`, `build_column_def_postgres`, `postgres_type_name`, `quote_pg_ident`, `fk_target_pk`, `sqlite_bool_default`, `check_min_max_sql`, `fk_action_suffix`, `create_index_stmt`, `create_gin_index_stmt`, `create_multi_index_stmt`, `m2m_pk_sql_type_sqlite`, `m2m_pk_sql_type_postgres` | ~900 |
 | `migrate/tracking.rs` | Per-backend tracking tables | `ensure_tracking_table_sqlite`, `ensure_tracking_table_postgres`, `applied_names_sqlite`, `applied_names_postgres`, `record_applied`, helper backend-dispatch fns | ~200 |
 
-`migrate/mod.rs` retains only the top-level `pub use` re-exports to preserve the existing `umbra::migrate::*` public surface — roughly 40 lines.
+`migrate/mod.rs` retains only the top-level `pub use` re-exports to preserve the existing `umbral::migrate::*` public surface — roughly 40 lines.
 
 ---
 
-### 3. `umbra-macros/src/lib.rs` (4 521 lines) — **top priority**
+### 3. `umbral-macros/src/lib.rs` (4 521 lines) — **top priority**
 
 A single proc-macro crate `lib.rs` hosts four independent derive/attribute macros plus 15–20 private helper modules worth of code all flattened into one file. Cargo proc-macro crates require a single `lib.rs` entry point but nothing prevents using `mod` sub-modules within it.
 
-**Proposed directory: `crates/umbra-macros/src/`** (add sub-modules)
+**Proposed directory: `crates/umbral-macros/src/`** (add sub-modules)
 
 | New file | Contents | Key fns | Approx. lines |
 |---|---|---|---|
@@ -92,7 +92,7 @@ Key seam: `to_snake_case` at line 3167 is private to macros and used by both `co
 
 `dynamic.rs` fuses: the error type, the query builder (`DynQuerySet`), SQLite/Postgres row decoders, form/JSON coercion helpers, M2M hydration, select-related FK expansion, shared INSERT infrastructure, and CSV import.
 
-**Proposed directory: `crates/umbra-core/src/orm/dynamic/`**
+**Proposed directory: `crates/umbral-core/src/orm/dynamic/`**
 
 | New sub-module | Contents | Key fns | Approx. lines |
 |---|---|---|---|
@@ -111,7 +111,7 @@ Key seam: `to_snake_case` at line 3167 is private to macros and used by both `co
 
 `column.rs` is a catalogue of typed column sentinel structs, each with its own filter-builder methods. The file's structure is already logical (grouped by type family with section-header comments) but it is a flat 2 845-line file.
 
-**Proposed directory: `crates/umbra-core/src/orm/column/`**
+**Proposed directory: `crates/umbral-core/src/orm/column/`**
 
 | New sub-module | Contents | Approx. lines |
 |---|---|---|
@@ -130,11 +130,11 @@ Note: `scalar.rs` at ~1 330 lines is still large; a further split into `column/s
 
 ---
 
-### 6. `plugins/umbra-rest/src/lib.rs` (2 668 lines)
+### 6. `plugins/umbral-rest/src/lib.rs` (2 668 lines)
 
 Most of `lib.rs` is already modularized (`filtering.rs`, `pagination.rs`, `resource.rs`, `auth.rs`, `permission.rs`). The remaining oversized `lib.rs` conflates: the `RestPlugin` builder, static config bridge, JSON Schema mini-validator, CRUD handlers, CSV export, and custom action dispatch.
 
-**Proposed split within `plugins/umbra-rest/src/`:**
+**Proposed split within `plugins/umbral-rest/src/`:**
 
 | New file | Move from `lib.rs` | Key fns | Approx. lines |
 |---|---|---|---|
@@ -147,7 +147,7 @@ Most of `lib.rs` is already modularized (`filtering.rs`, `pagination.rs`, `resou
 
 ---
 
-### 7. `plugins/umbra-openapi/src/lib.rs` (1 658 lines)
+### 7. `plugins/umbral-openapi/src/lib.rs` (1 658 lines)
 
 The file is well-structured and its split value is lower. The one concrete improvement: extract the column schema logic into a dedicated module.
 
@@ -163,7 +163,7 @@ The file is well-structured and its split value is lower. The one concrete impro
 
 ---
 
-### 8. `crates/umbra-core/src/forms.rs` (1 561 lines)
+### 8. `crates/umbral-core/src/forms.rs` (1 561 lines)
 
 The file has a clean natural boundary around line 835: everything before is the form primitive layer (validators, fields, HTML rendering), everything after is the axum integration layer (`FormErrors`, `Form<T>` extractor, conversions).
 
@@ -180,16 +180,16 @@ This is the cleanest single-seam split of any file in the list: the boundary is 
 
 ---
 
-### 9. `crates/umbra-cli/src/scaffold.rs` (1 467 lines)
+### 9. `crates/umbral-cli/src/scaffold.rs` (1 467 lines)
 
 The bulk of the file is embedded string literals (generated `Cargo.toml`, `main.rs`, template files) inside the three scaffold functions. The code logic itself is modest.
 
 **Recommended approach (lower effort than a module split):**
 
-Extract the long embedded template strings into `include_str!` files under `crates/umbra-cli/templates/scaffold/`:
+Extract the long embedded template strings into `include_str!` files under `crates/umbral-cli/templates/scaffold/`:
 - `project/main_rs.template`
 - `project/cargo_toml.template`
-- `project/umbra_toml.template`
+- `project/umbral_toml.template`
 - `project/base_html.template`
 - `project/home_html.template`
 - `app/lib_rs.template`
@@ -209,7 +209,7 @@ This reduces `scaffold.rs` from ~1 467 to ~400 lines of pure logic with no conte
 
 ---
 
-### 10. `crates/umbra-core/src/app.rs` (1 409 lines)
+### 10. `crates/umbral-core/src/app.rs` (1 409 lines)
 
 `app.rs` is cohesive — `App`, `AppBuilder`, and `BuildError` all belong together. The maintainability issue is `AppBuilder::build` at ~628 lines (lines 503–1131). The function is a 10-phase sequential boot sequence; each phase is already clearly commented.
 
@@ -229,42 +229,42 @@ This reduces `scaffold.rs` from ~1 467 to ~400 lines of pure logic with no conte
 
 ### No core → plugin dependency violations (Clean)
 
-All 19 plugins depend only on the `umbra` facade crate. No plugin imports `umbra_core` directly in production source. The one occurrence (`umbra-media/src/lib.rs:68`) is a doc-comment reference, not a `use` statement. **The boundary is clean.**
+All 19 plugins depend only on the `umbral` facade crate. No plugin imports `umbral_core` directly in production source. The one occurrence (`umbral-media/src/lib.rs:68`) is a doc-comment reference, not a `use` statement. **The boundary is clean.**
 
 ### Plugin → plugin dependencies (Informational, not violations)
 
 Cross-plugin prod deps are:
 
 ```
-umbra-admin      → umbra-auth, umbra-permissions, umbra-sessions, umbra-security
-umbra-auth       → umbra-rest, umbra-sessions
-umbra-oauth      → umbra-auth, umbra-sessions
-umbra-openapi    → umbra-rest
-umbra-permissions → umbra-auth, umbra-rest (optional)
-umbra-realtime   → umbra-auth
+umbral-admin      → umbral-auth, umbral-permissions, umbral-sessions, umbral-security
+umbral-auth       → umbral-rest, umbral-sessions
+umbral-oauth      → umbral-auth, umbral-sessions
+umbral-openapi    → umbral-rest
+umbral-permissions → umbral-auth, umbral-rest (optional)
+umbral-realtime   → umbral-auth
 ```
 
 These are all legal directed edges (no cycles). However one edge deserves attention:
 
-### `umbra-auth → umbra-rest` (Important)
+### `umbral-auth → umbral-rest` (Important)
 
-`umbra-auth/Cargo.toml` lists `umbra-rest` as a prod dependency to get the `Authentication` and `Identity` traits. This means every app that uses `umbra-auth` (nearly all apps) also pulls in `umbra-rest` transitively — even apps that have no REST API. This contradicts the documented goal: "A REST-free app has to compile and run with zero serializer code."
+`umbral-auth/Cargo.toml` lists `umbral-rest` as a prod dependency to get the `Authentication` and `Identity` traits. This means every app that uses `umbral-auth` (nearly all apps) also pulls in `umbral-rest` transitively — even apps that have no REST API. This contradicts the documented goal: "A REST-free app has to compile and run with zero serializer code."
 
-The fix is to lift `Authentication` and `Identity` out of `umbra-rest` into the `umbra` facade (or `umbra-core`) and have `umbra-rest` import them from there. Then `umbra-auth` depends only on `umbra`, and `umbra-rest` can remain optional.
+The fix is to lift `Authentication` and `Identity` out of `umbral-rest` into the `umbral` facade (or `umbral-core`) and have `umbral-rest` import them from there. Then `umbral-auth` depends only on `umbral`, and `umbral-rest` can remain optional.
 
 **Severity: Important** — not a circular dep, but it breaks the "REST is truly optional" invariant stated in `CLAUDE.md`.
 
-### `umbra-admin` depends on `umbra-security` (Informational)
+### `umbral-admin` depends on `umbral-security` (Informational)
 
-`umbra-security` is a plugin. `umbra-admin` depending on it as a prod dep means the CSRF middleware is implicitly required. This should be documented as an explicit design decision (admin requires security) rather than left as an implicit transitive dep.
+`umbral-security` is a plugin. `umbral-admin` depending on it as a prod dep means the CSRF middleware is implicitly required. This should be documented as an explicit design decision (admin requires security) rather than left as an implicit transitive dep.
 
-### `umbra-core` dev-dep on `umbra` (Safe)
+### `umbral-core` dev-dep on `umbral` (Safe)
 
-`crates/umbra-core/Cargo.toml` has `umbra = { path = "../umbra" }` as a **dev-dependency** only. This is legal — Cargo dev-deps cannot create cycles. There is an explanatory comment in the Cargo.toml. No action needed.
+`crates/umbral-core/Cargo.toml` has `umbral = { path = "../umbral" }` as a **dev-dependency** only. This is legal — Cargo dev-deps cannot create cycles. There is an explanatory comment in the Cargo.toml. No action needed.
 
 ### Facade completeness check
 
-`crates/umbra/src/lib.rs` re-exports comprehensively. One gap found: `DynError` is re-exported via `umbra::orm` (from `umbra_core::orm::mod`) but is defined in `umbra_core::orm::dynamic`. The path resolves correctly. No missing public items were found.
+`crates/umbral/src/lib.rs` re-exports comprehensively. One gap found: `DynError` is re-exported via `umbral::orm` (from `umbral_core::orm::mod`) but is defined in `umbral_core::orm::dynamic`. The path resolves correctly. No missing public items were found.
 
 ---
 
@@ -276,35 +276,35 @@ Three camel-to-snake conversion functions exist:
 
 | Function | File | Line | Use |
 |---|---|---|---|
-| `to_snake_case(camel: &str) -> String` | `crates/umbra-macros/src/lib.rs` | 3167 | Table name generation in `#[derive(Model)]` |
-| `derive_table_name(camel: &str) -> String` | `crates/umbra-core/src/inspect.rs` | 582 | Table name inference in `inspectdb` |
-| `snake_case(name: &str) -> String` | `crates/umbra-core/src/orm/queryset/mod.rs` | 279 | Query alias generation |
+| `to_snake_case(camel: &str) -> String` | `crates/umbral-macros/src/lib.rs` | 3167 | Table name generation in `#[derive(Model)]` |
+| `derive_table_name(camel: &str) -> String` | `crates/umbral-core/src/inspect.rs` | 582 | Table name inference in `inspectdb` |
+| `snake_case(name: &str) -> String` | `crates/umbral-core/src/orm/queryset/mod.rs` | 279 | Query alias generation |
 
-`inspect.rs:582` has a comment explicitly documenting the duplication: *"Mirror of `umbra_macros::to_snake_case`. Kept identical to the derive's body so the two agree byte-for-byte."* The reason is that proc-macro crates cannot be called as libraries at compile time.
+`inspect.rs:582` has a comment explicitly documenting the duplication: *"Mirror of `umbral_macros::to_snake_case`. Kept identical to the derive's body so the two agree byte-for-byte."* The reason is that proc-macro crates cannot be called as libraries at compile time.
 
-The clean fix is to extract `to_snake_case` into a small non-proc-macro helper crate (e.g. `umbra-naming`) that both `umbra-macros` and `umbra-core` depend on. The queryset `snake_case` function could also move there. Until such a crate exists, the current arrangement with the documented comment is acceptable but creates a maintenance hazard: if the two implementations diverge, `inspectdb` will generate model definitions that map to different table names than `#[derive(Model)]` would.
+The clean fix is to extract `to_snake_case` into a small non-proc-macro helper crate (e.g. `umbral-naming`) that both `umbral-macros` and `umbral-core` depend on. The queryset `snake_case` function could also move there. Until such a crate exists, the current arrangement with the documented comment is acceptable but creates a maintenance hazard: if the two implementations diverge, `inspectdb` will generate model definitions that map to different table names than `#[derive(Model)]` would.
 
 ### D2. `pascal_case` — two independent implementations (Nit)
 
 | Function | File | Line |
 |---|---|---|
-| `fn pascal_case(s: &str) -> String` | `plugins/umbra-openapi/src/lib.rs` | 1144 |
-| `fn pascal_case(name: &str) -> String` | `crates/umbra-cli/src/scaffold.rs` | 131 |
+| `fn pascal_case(s: &str) -> String` | `plugins/umbral-openapi/src/lib.rs` | 1144 |
+| `fn pascal_case(name: &str) -> String` | `crates/umbral-cli/src/scaffold.rs` | 131 |
 
-Both convert snake/kebab identifiers to PascalCase. Both are private to their module. No immediate action needed, but if an `umbra-naming` helper crate is created (see D1), these belong there.
+Both convert snake/kebab identifiers to PascalCase. Both are private to their module. No immediate action needed, but if an `umbral-naming` helper crate is created (see D1), these belong there.
 
 ### D3. `classify_sql_error` vs `classify_or_sqlx` — partial overlap (Nit)
 
 | Function | File | Line |
 |---|---|---|
-| `pub fn classify_sql_error(e: &sqlx::Error, body: &Map<String, Value>) -> Option<WriteError>` | `crates/umbra-core/src/orm/validation.rs` | 167 |
-| `fn classify_or_sqlx(e: sqlx::Error, ...) -> DynError` | `crates/umbra-core/src/orm/dynamic.rs` | 2061 |
+| `pub fn classify_sql_error(e: &sqlx::Error, body: &Map<String, Value>) -> Option<WriteError>` | `crates/umbral-core/src/orm/validation.rs` | 167 |
+| `fn classify_or_sqlx(e: sqlx::Error, ...) -> DynError` | `crates/umbral-core/src/orm/dynamic.rs` | 2061 |
 
 `classify_or_sqlx` is a thin wrapper that calls `classify_sql_error` and then converts the result. No code duplication, but the naming divergence (`classify_sql_error` vs `classify_or_sqlx`) hides the relationship.
 
-### D4. Direct `sea-query` use in `umbra-rest/src/filtering.rs` (Important)
+### D4. Direct `sea-query` use in `umbral-rest/src/filtering.rs` (Important)
 
-`filtering.rs` builds `sea_query::Condition` objects directly (~26 call sites). The ORM's `Q` builder and `F` expressions exist precisely to avoid plugins writing raw sea-query. The filtering module is a grey area — it needs to compose complex filter conditions dynamically from URL parameters — but the dependency is currently hidden in plain sight: `umbra-rest` lists `sea-query = "0.32"` in its own `Cargo.toml`, duplicating the same version the core already pins. If the core upgrades sea-query, rest must follow. This is not a bug today, but it is a hidden coupling that will bite during a sea-query major version bump.
+`filtering.rs` builds `sea_query::Condition` objects directly (~26 call sites). The ORM's `Q` builder and `F` expressions exist precisely to avoid plugins writing raw sea-query. The filtering module is a grey area — it needs to compose complex filter conditions dynamically from URL parameters — but the dependency is currently hidden in plain sight: `umbral-rest` lists `sea-query = "0.32"` in its own `Cargo.toml`, duplicating the same version the core already pins. If the core upgrades sea-query, rest must follow. This is not a bug today, but it is a hidden coupling that will bite during a sea-query major version bump.
 
 ---
 
@@ -315,16 +315,16 @@ Both convert snake/kebab identifiers to PascalCase. Both are private to their mo
 One hit in production code (not test files):
 
 ```
-plugins/umbra-rest/src/filtering.rs:94
+plugins/umbral-rest/src/filtering.rs:94
 ```
 
 Read the surrounding code before the review closes to see what is suppressed. If it is a struct field that is parsed but never read, it is either a placeholder for future filter logic (which should be a `gaps2.md` entry) or a genuine unused field (remove it).
 
-### DC2. `fn on_ready` in `umbra-admin` does nothing (Nit)
+### DC2. `fn on_ready` in `umbral-admin` does nothing (Nit)
 
-`plugins/umbra-admin/src/lib.rs:788` — `on_ready` has a comment "No bootstrap DDL here" and returns `Ok(())`. The Plugin contract treats `on_ready` as the startup hook. If admin genuinely has no work to do at startup, this is fine. No action needed.
+`plugins/umbral-admin/src/lib.rs:788` — `on_ready` has a comment "No bootstrap DDL here" and returns `Ok(())`. The Plugin contract treats `on_ready` as the startup hook. If admin genuinely has no work to do at startup, this is fine. No action needed.
 
-### DC3. `#[allow(dead_code)]` in `umbra-macros/src/lib.rs:2041` and `:2083` (Nit)
+### DC3. `#[allow(dead_code)]` in `umbral-macros/src/lib.rs:2041` and `:2083` (Nit)
 
 Line 2041: a struct field in the macro expansion that is generated but not consumed by the expansion path for Cidr/NullableCidr (line 2083 comment: "Cidr / NullableCidr are matched but the derive..."). This is a known limitation documented inline. The suppression is intentional; the real fix is to use the field or remove it from the generated code.
 
@@ -338,7 +338,7 @@ The grep for `// TODO.*wire` returned zero hits. This is a positive finding — 
 
 ### A1. `AppBuilder::build` — one 628-line function (Important)
 
-`crates/umbra-core/src/app.rs:503–1131` is a single method doing 10 sequential phases. Each phase is clearly commented, but the function has no testable decomposition — its correctness is only verifiable by booting the full stack. If any phase fails, the error message must be cross-referenced back to the code by line number.
+`crates/umbral-core/src/app.rs:503–1131` is a single method doing 10 sequential phases. Each phase is clearly commented, but the function has no testable decomposition — its correctness is only verifiable by booting the full stack. If any phase fails, the error message must be cross-referenced back to the code by line number.
 
 Extracting three private helpers (`validate_plugins`, `publish_ambient_state`, `assemble_router`) would make each phase independently testable and reduce cognitive load when reading the boot sequence. No external API change.
 
@@ -346,13 +346,13 @@ Extracting three private helpers (`validate_plugins`, `publish_ambient_state`, `
 
 The 500-line chainable filter builder in `dynamic.rs:134–508` has 14 distinct filter methods each following the same pattern: validate field name → build `sea_query::Condition` → push to `where_clauses`. This pattern is repeated in both `DynQuerySet` and `QuerySet<T>`. There is no shared abstraction. A `WhereClauseBuilder` trait or common private helper that both types use would eliminate the parallel maintenance burden, but this requires care to avoid over-engineering — the two types differ materially in their type constraints.
 
-### A3. `validate_against_schema` in `umbra-rest/src/lib.rs:1133` — single caller (Optional)
+### A3. `validate_against_schema` in `umbral-rest/src/lib.rs:1133` — single caller (Optional)
 
 The mini JSON Schema validator (four functions, ~70 lines, lines 1133–1204) is called only from `custom_action_dispatch`. It is a small abstraction with one caller. However it does encapsulate a real concern (input validation for custom actions) and the code is unlikely to be called from a second site. Extracting it to `actions.rs` (see split proposal above) is sufficient; a separate crate is not justified.
 
 ### A4. `HideFields` trait — 8 identical impls (Nit)
 
-`plugins/umbra-rest/src/lib.rs:122–173` defines `HideFields` and 8 impls for different string container types (`&str`, `String`, `[&str; N]`, `[String; N]`, `&[&str]`, `&[String]`, `Vec<&str>`, `Vec<String>`). This is standard Rust ergonomics boilerplate — not over-engineering. The macro `impl_hide_fields!` would shrink the code but is unnecessary.
+`plugins/umbral-rest/src/lib.rs:122–173` defines `HideFields` and 8 impls for different string container types (`&str`, `String`, `[&str; N]`, `[String; N]`, `&[&str]`, `&[String]`, `Vec<&str>`, `Vec<String>`). This is standard Rust ergonomics boilerplate — not over-engineering. The macro `impl_hide_fields!` would shrink the code but is unnecessary.
 
 ### A5. `decode_to_string` + `decode_pg_to_string` + `decode_to_json` + `decode_pg_to_json` — four near-parallel decode functions (Important)
 
@@ -368,7 +368,7 @@ The pattern of `match col_type { SqlType::Integer => row.try_get::<i64, _>(alias
 |------|------|------|-----|
 | 1 | `orm/queryset/mod.rs` (4 846 L) | Highest | Every ORM change touches this file; the Manager write methods, the chainable builder, the annotation engine, the M2M dedup logic, and the read terminals are all in one namespace, making it impossible to navigate to any single concern without scrolling thousands of lines |
 | 2 | `migrate.rs` (4 660 L) | Highest | Registry state, type definitions, diff engine, SQL renderer, and tracking helpers are completely independent concerns sharing a file; the SQL rendering layer alone (~900 lines, 8 fns) is never touched when editing the diff logic, yet both live in the same scrollable surface |
-| 3 | `umbra-macros/src/lib.rs` (4 521 L) | High | Four derive/attribute macros, 15+ private helper modules worth of type predicates, and the case conversion utilities are all flattened; adding a new field type requires editing the same file as fixing a `#[derive(Form)]` bug |
+| 3 | `umbral-macros/src/lib.rs` (4 521 L) | High | Four derive/attribute macros, 15+ private helper modules worth of type predicates, and the case conversion utilities are all flattened; adding a new field type requires editing the same file as fixing a `#[derive(Form)]` bug |
 | 4 | `orm/dynamic.rs` (3 009 L) | High | The SQLite/Postgres decode functions (~495 L), M2M hydration (~485 L), and shared INSERT infrastructure (~283 L) are unrelated to the `DynQuerySet` chainable builder they share a file with; each of those blocks has its own internal state and helpers that are invisible from a function list |
 | 5 | `migrate.rs` rendering vs. `orm/column.rs` | Moderate | `column.rs` is already well-grouped by type family but at 2 845 lines with no sub-modules; the Postgres-only column families (array, network, full-text) could move to sub-modules that are only compiled when the Postgres feature is active, improving SQLite-only build times |
 
@@ -378,9 +378,9 @@ The pattern of `match col_type { SqlType::Integer => row.try_get::<i64, _>(alias
 
 | Check | Result |
 |---|---|
-| `use umbra_core::` in plugin prod source | **None** — clean |
-| `umbra-core` → plugin dep | **None** — clean |
+| `use umbral_core::` in plugin prod source | **None** — clean |
+| `umbral-core` → plugin dep | **None** — clean |
 | Circular deps | **None** found |
-| `umbra-auth → umbra-rest` (REST forced on all apps) | **Important** — breaks "REST optional" invariant |
-| Facade re-exports `umbra-core` internals correctly | **Yes** — no gaps found |
-| `sea-query` version pinned in both core and umbra-rest | **Important** — hidden upgrade coupling |
+| `umbral-auth → umbral-rest` (REST forced on all apps) | **Important** — breaks "REST optional" invariant |
+| Facade re-exports `umbral-core` internals correctly | **Yes** — no gaps found |
+| `sea-query` version pinned in both core and umbral-rest | **Important** — hidden upgrade coupling |

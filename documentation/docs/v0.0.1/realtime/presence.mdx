@@ -12,7 +12,7 @@ Show **who's online in a group** ("3 people in this room") with no polling. Pres
 Because presence exposes **user identity**, it is locked down by default. It is **off for every group** until you opt a group in, only **signed-in** users appear, and a present user is broadcast as **`{ "id": "<user_id>" }` and nothing else** (the id is the PK string) unless you supply a resolver.
 
 ```rust
-use umbra_realtime::{PresenceSpec, RealtimePlugin};
+use umbral_realtime::{PresenceSpec, RealtimePlugin};
 
 RealtimePlugin::new()
     // Enable presence ONLY for groups named `room:*`. Every other group emits nothing.
@@ -25,14 +25,14 @@ You can match groups with a predicate instead of a prefix set:
 PresenceSpec::matching(|group| group == "public:lobby" || group.starts_with("room:"))
 ```
 
-## The client: `umbra.realtime.presence`
+## The client: `umbral.realtime.presence`
 
 Sugar over [`subscribe`](transports#connecting-the-browser) that routes a group's `presence:sync` / `presence:join` / `presence:leave` events to handlers. It returns the same `{ unsubscribe }` and shares the one cross-tab connection.
 
 ```html
 <script src="/realtime/client.js"></script>
 <script>
-  umbra.realtime.presence('room:42', {
+  umbral.realtime.presence('room:42', {
     sync:  function (members) { /* [{id, ...}] — the current member list, sent on join */ },
     join:  function (member)  { /* one user became present */ },
     leave: function (member)  { /* one user fully left */ },

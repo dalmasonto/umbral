@@ -1,12 +1,12 @@
 ---
 title: Template filters & functions
-description: minijinja built-in filters, umbra's custom filters and template functions, and how to register your own from app or plugin code.
+description: minijinja built-in filters, umbral's custom filters and template functions, and how to register your own from app or plugin code.
 sidebar_position: 11
 icon: filter
 tags: [templates, filters, minijinja, plugins]
 ---
 
-Umbra templates run on [minijinja](https://docs.rs/minijinja/latest/minijinja/), a faithful Jinja2 port. Every filter and function minijinja ships is available without any setup. On top of that umbra registers its own filters and globals at engine-build time, and any plugin can contribute more through the `Plugin::template_registrars` hook.
+Umbral templates run on [minijinja](https://docs.rs/minijinja/latest/minijinja/), a faithful Jinja2 port. Every filter and function minijinja ships is available without any setup. On top of that umbral registers its own filters and globals at engine-build time, and any plugin can contribute more through the `Plugin::template_registrars` hook.
 
 ## minijinja built-in filters
 
@@ -40,14 +40,14 @@ The full list lives at [docs.rs/minijinja — filters](https://docs.rs/minijinja
 | `\| wordwrap(n)` | Wrap long lines at *n* characters. |
 
 <Callout type="info">
-  Umbra enables autoescape for every `.html` / `.htm` template. Values piped through `| safe` (or returned as `minijinja::Value::from_safe_string` in Rust) bypass the escaping — all other output is HTML-escaped automatically.
+  Umbral enables autoescape for every `.html` / `.htm` template. Values piped through `| safe` (or returned as `minijinja::Value::from_safe_string` in Rust) bypass the escaping — all other output is HTML-escaped automatically.
 </Callout>
 
-For date and time formatting, umbra registers its own `now()` global (see below), which accepts a chrono `strftime` format string for consistent, UTC-based rendering.
+For date and time formatting, umbral registers its own `now()` global (see below), which accepts a chrono `strftime` format string for consistent, UTC-based rendering.
 
-## Umbra filters and template functions
+## Umbral filters and template functions
 
-These are registered by umbra itself at engine-build time. They are available in every template, in every plugin, without any import or configuration.
+These are registered by umbral itself at engine-build time. They are available in every template, in every plugin, without any import or configuration.
 
 ### `| img` — lazy-loaded image tag
 
@@ -156,8 +156,8 @@ These are injected into every template by the renderer — no explicit context k
 
 | Variable | Description |
 |---|---|
-| `user` | The current request user. Always present: anonymous requests get `{ is_authenticated: false, is_staff: false, is_superuser: false }`. Attributes like `user.email`, `user.is_staff` are available when `umbra-auth` + sessions are installed. |
-| `csrf_token` | The CSRF token string (injected when `umbra-security`'s CSRF middleware is mounted). |
+| `user` | The current request user. Always present: anonymous requests get `{ is_authenticated: false, is_staff: false, is_superuser: false }`. Attributes like `user.email`, `user.is_staff` are available when `umbral-auth` + sessions are installed. |
+| `csrf_token` | The CSRF token string (injected when `umbral-security`'s CSRF middleware is mounted). |
 | `csrf_input` | A pre-built `<input type="hidden" name="csrf_token" value="...">` element (safe string). Drop into any POST form. |
 
 ## Registering a custom filter or function
@@ -165,8 +165,8 @@ These are injected into every template by the renderer — no explicit context k
 Plugins expose custom filters and functions through `Plugin::template_registrars`. The method returns a `Vec<TemplateRegistrar>` where each registrar is an owned, `'static` closure that receives a `&mut minijinja::Environment` and calls `env.add_filter` / `env.add_function` / `env.add_global`. The closures are stored process-wide and re-run on every dev-mode hot-reload so your filters are always live.
 
 ```rust
-use umbra::prelude::*;
-use umbra::templates::TemplateRegistrar;
+use umbral::prelude::*;
+use umbral::templates::TemplateRegistrar;
 
 pub struct ShopPlugin;
 
@@ -219,4 +219,4 @@ fn template_registrars(&self) -> Vec<TemplateRegistrar> {
 - [minijinja filter index](https://docs.rs/minijinja/latest/minijinja/filters/index.html) — the complete built-in filter reference.
 - [Syntax highlighting](/docs/v0.0.1/web/markdown-syntax-highlighting) — the `| markdown` filter's server-side code highlighting.
 - [Plugins are apps](/docs/v0.0.1/plugins/plugins-are-apps) — the Plugin trait and how plugins wire into the app builder.
-- [`crates/umbra-core/src/templates.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/crates/umbra-core/src/templates.rs) — source for all built-in filters and functions.
+- [`crates/umbral-core/src/templates.rs`](https://github.com/dalmas-ogembo/umbral/tree/main/crates/umbral-core/src/templates.rs) — source for all built-in filters and functions.

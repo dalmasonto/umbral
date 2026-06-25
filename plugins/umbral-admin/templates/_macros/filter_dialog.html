@@ -1,0 +1,483 @@
+{#
+  filter_dialog(model, facets, search_val, sort_col, sort_order, active_filter)
+  ------------------------------------------------------------------------------
+  Modal filter dialog. Opened by the "Filter" button in the DataTable toolbar.
+  Only renders controls for filterable field types:
+    - Boolean   → tri-state segmented control (any / true / false)
+    - Choice    → checkbox list of distinct values
+    - ForeignKey → searchable async picker (reuses FK options endpoint)
+    - Date/DateTime → date-range picker (from / to)
+  Text/numeric fields in list_filter are silently skipped (search covers them).
+#}
+
+{#
+  active_filters: dict { field: value } — the currently-committed
+  selections. Each facet pre-selects from this map. Pass {} from the
+  handler when none are active.
+#}
+{% macro filter_dialog(model, facets, columns, search_val, sort_col, sort_order, active_filters) %}
+<div
+  id="umbral-filter-dialog"
+  class="fixed inset-0 z-[400] flex items-center justify-center"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="filter-dialog-title"
+  onclick="if(event.target===this)umbral.closeFilterDialog()"
+>
+  {# Scrim #}
+  <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" aria-hidden="true"></div>
+
+  {# Panel #}
+  <div class="relative w-full max-w-lg mx-md bg-surface-container border border-outline-variant rounded-[14px] shadow-2xl overflow-hidden">
+    {# Header #}
+    <div class="flex items-center justify-between px-lg py-md border-b border-outline-variant">
+      <h2 id="filter-dialog-title" class="font-h3 text-h3 text-on-surface">Filter</h2>
+      <button
+        type="button"
+        onclick="umbral.closeFilterDialog()"
+        class="p-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high rounded-xl transition-colors"
+        aria-label="Close"
+      >
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+
+    {# Filter controls — one per filterable facet, plus an in-dialog
+       search input. The dialog is the single place to commit search +
+       every filter in one go. #}
+    <div class="px-lg py-md space-y-lg max-h-[60vh] overflow-y-auto" id="filter-dialog-body">
+      <div class="space-y-sm">
+        <p class="font-label-sm text-label-sm text-outline uppercase tracking-wider">Search</p>
+        <input
+          type="text"
+          id="filter-dialog-search"
+          value="{{ search_val }}"
+          placeholder="Search across {{ model.name | lower }}..."
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-outline/50"
+        />
+      </div>
+      {% set ns = namespace(has_filterable=false) %}
+      {% for facet in facets %}
+        {# Pull this facet's currently-committed value out of the map. #}
+        {% set active_val = active_filters[facet.field] | default("") %}
+        {# col_type is computed once on the server (FilterFacet.col_type).
+           Doing it in-template via `{% set col_type = ... %}` inside a
+           `{% for %}` over columns silently drops the value — Jinja's
+           for-loop scope doesn't write back to the parent. #}
+        {% set col_type = facet.col_type | default("") %}
+
+        {# Skip text/numeric — search covers those. col_type comes from ColumnView.sql_type #}
+        {% if col_type != "text" and col_type != "number" and col_type != "integer" and col_type != "bigint" %}
+          {% set ns.has_filterable = true %}
+          <div class="space-y-sm">
+            <p class="font-label-sm text-label-sm text-outline uppercase tracking-wider">
+              {{ facet.field | replace("_", " ") | title }}
+            </p>
+
+            {# Boolean: tri-state segmented control #}
+            {% if col_type == "boolean" %}
+            <div class="flex gap-xs" role="group" aria-label="{{ facet.field }} filter">
+              {% for opt in ["any", "true", "false"] %}
+              <button
+                type="button"
+                data-filter-field="{{ facet.field }}"
+                data-filter-value="{{ opt }}"
+                onclick="umbral._filterSelectBool(this)"
+                class="flex-1 px-md py-sm rounded-xl border font-label-md text-label-md transition-colors {% if (opt == 'any' and not active_val) or active_val == opt %}bg-primary text-on-primary border-primary{% else %}border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary{% endif %}"
+              >{{ opt | title }}</button>
+              {% endfor %}
+            </div>
+
+            {# Date / DateTime: range picker #}
+            {% elif col_type == "date" or col_type == "datetime" or col_type == "time" %}
+            <div class="flex items-center gap-sm">
+              <input
+                type="date"
+                id="filter-date-from-{{ facet.field }}"
+                data-filter-field="{{ facet.field }}"
+                data-filter-op="from"
+                class="flex-1 bg-surface-container-low border border-outline-variant rounded-xl px-sm py-xs text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                placeholder="From"
+              />
+              <span class="text-on-surface-variant font-label-sm">to</span>
+              <input
+                type="date"
+                id="filter-date-to-{{ facet.field }}"
+                data-filter-field="{{ facet.field }}"
+                data-filter-op="to"
+                class="flex-1 bg-surface-container-low border border-outline-variant rounded-xl px-sm py-xs text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                placeholder="To"
+              />
+            </div>
+
+            {# FK / M2M: searchable async picker. Reuses the same
+               /options endpoint the edit-form combobox hits, so 1000
+               brands (FK) or 1000 tags (M2M) paginate server-side.
+               The picker UX is identical for both — only the SQL
+               underneath differs (col = ? / IN vs. junction subquery)
+               and the handler dispatches per `col_type` already. #}
+            {% elif col_type == "fk" or col_type == "m2m" %}
+            <div class="space-y-xs"
+                 data-fk-facet
+                 data-fk-field="{{ facet.field }}"
+                 data-fk-table="{{ model.table }}"
+                 data-fk-related="{{ facet.related_table }}"
+                 data-fk-active-ids="{{ active_val }}">
+              {# Pills row: one pill per currently-selected id. JS
+                 resolves labels via /options/resolve on open. Each
+                 pill's × removes only that id. The trailing "Clear
+                 all" button drops every pill in one click. #}
+              <div id="filter-fk-pills-{{ facet.field }}" class="flex flex-wrap items-center gap-xs"></div>
+              <div class="relative">
+                <input
+                  type="text"
+                  id="filter-fk-search-{{ facet.field }}"
+                  data-filter-field="{{ facet.field }}"
+                  placeholder="Search {{ facet.related_table | replace('_', ' ') }}..."
+                  class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-sm py-xs text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                  oninput="umbral._filterFkSearch('{{ facet.field }}', '{{ model.table }}', this.value)"
+                />
+              </div>
+              <div
+                id="filter-fk-results-{{ facet.field }}"
+                class="max-h-40 overflow-y-auto border border-outline-variant rounded-xl bg-surface-container-low"
+              >
+                <p class="px-md py-sm text-outline text-body-sm italic">Loading…</p>
+              </div>
+            </div>
+
+            {# Choice / enum: checkbox list. Multi-select — pick any
+               number of values; the URL emits `filter_<field>=a,b,c`
+               and the backend ANDs each comma-joined IN clause. #}
+            {% else %}
+            {# Pre-split the comma list so each value's check state
+               can be evaluated independently. #}
+            {% set active_vals = active_val.split(",") if active_val else [] %}
+            <div class="space-y-xs">
+              {% for val in facet.values %}
+              <label class="flex items-center gap-sm cursor-pointer hover:bg-surface-container-high px-sm py-xs rounded-lg transition-colors">
+                <input
+                  type="checkbox"
+                  name="filter_choice_{{ facet.field }}"
+                  value="{{ val }}"
+                  data-filter-field="{{ facet.field }}"
+                  {% if val in active_vals %}checked{% endif %}
+                  class="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
+                  onchange="umbral._filterChoiceChange(this)"
+                />
+                <span class="text-body-md text-on-surface">{{ val }}</span>
+              </label>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endfor %}
+
+      {% if not ns.has_filterable %}
+      <p class="text-body-sm text-on-surface-variant italic py-md text-center">No filterable fields configured for this model.</p>
+      {% endif %}
+    </div>
+
+    {# Footer buttons #}
+    <div class="flex items-center justify-between gap-md px-lg py-md border-t border-outline-variant">
+      <button
+        type="button"
+        onclick="umbral._filterClear('{{ model.table }}', '{{ search_val }}', '{{ sort_col }}', '{{ sort_order }}')"
+        class="px-lg py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all"
+      >Clear</button>
+      <div class="flex gap-sm">
+        <button
+          type="button"
+          onclick="umbral.closeFilterDialog()"
+          class="px-lg py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all"
+        >Cancel</button>
+        <button
+          type="button"
+          id="filter-apply-btn"
+          onclick="umbral._filterApply('{{ model.table }}', '{{ search_val }}', '{{ sort_col }}', '{{ sort_order }}')"
+          class="px-lg py-sm rounded-xl bg-primary text-on-primary hover:opacity-90 font-label-md text-label-md transition-all"
+        >Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  if (window.lucide) lucide.createIcons({ el: document.getElementById('umbral-filter-dialog') });
+
+  // Pending selections, keyed by field. Pre-seeded from the
+  // currently-active filters so an already-applied selection survives
+  // re-opening the dialog. Values are strings for single-select facets
+  // (boolean) and arrays for multi-select facets (choice, fk, m2m).
+  // The serialiser below treats anything array-shaped as a comma list.
+  var _pending = (function seed() {
+    var m = {};
+    {% for key, val in active_filters | items %}
+    m[{{ key | tojson }}] = {{ val | tojson }};
+    {% endfor %}
+    return m;
+  })();
+
+  // Coerce a pending entry to an array. Boolean facets stay scalar;
+  // every other facet is normalised to a list so we can push/remove
+  // values without branching everywhere.
+  function asArray(v) {
+    if (Array.isArray(v)) return v;
+    if (v == null || v === '') return [];
+    return String(v).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  }
+
+  umbral.closeFilterDialog = function() {
+    var el = document.getElementById('umbral-filter-dialog');
+    if (el) el.remove();
+  };
+
+  umbral._filterSelectBool = function(btn) {
+    var field = btn.getAttribute('data-filter-field');
+    var val   = btn.getAttribute('data-filter-value');
+    _pending[field] = val;
+    btn.closest('[role="group"]').querySelectorAll('button').forEach(function(b) {
+      b.className = b.className
+        .replace('bg-primary text-on-primary border-primary', '')
+        .replace('border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary', '')
+        .trim();
+      b.classList.add('border-outline-variant', 'text-on-surface-variant', 'hover:border-primary', 'hover:text-primary');
+    });
+    btn.classList.remove('border-outline-variant', 'text-on-surface-variant', 'hover:border-primary', 'hover:text-primary');
+    btn.classList.add('bg-primary', 'text-on-primary', 'border-primary');
+  };
+
+  umbral._filterSelectValue = function(btn) {
+    var field = btn.getAttribute('data-filter-field');
+    var val   = btn.getAttribute('data-filter-value');
+    _pending[field] = val;
+    btn.parentElement.querySelectorAll('button').forEach(function(b) {
+      b.classList.remove('bg-primary/10', 'text-primary');
+    });
+    btn.classList.add('bg-primary/10', 'text-primary');
+  };
+
+  umbral._filterChoiceChange = function(cb) {
+    var field = cb.getAttribute('data-filter-field');
+    var arr   = asArray(_pending[field]);
+    if (cb.checked) {
+      if (arr.indexOf(cb.value) === -1) arr.push(cb.value);
+    } else {
+      arr = arr.filter(function(v) { return v !== cb.value; });
+    }
+    if (arr.length === 0) delete _pending[field];
+    else _pending[field] = arr;
+  };
+
+  // Track labels per (field, value) so we don't have to re-resolve a
+  // pill's label every time the user toggles selections.
+  var _fkLabels = {};
+  function setFkLabel(field, value, label) {
+    if (!_fkLabels[field]) _fkLabels[field] = {};
+    _fkLabels[field][String(value)] = label || ('#' + value);
+  }
+  function getFkLabel(field, value) {
+    return (_fkLabels[field] && _fkLabels[field][String(value)]) || ('#' + value);
+  }
+
+  // Centralised FK option fetcher. Pulls results in HTML form from the
+  // FK picker endpoint, then rewires each <button data-fk-value="..."
+  // data-fk-label="..."> to commit/toggle a filter selection instead
+  // of the edit-form's "set the combobox" semantics.
+  umbral._filterFkSearch = function(field, table, query) {
+    var url = '{{ admin_base }}/api/' + table + '/' + field + '/options?search=' + encodeURIComponent(query) + '&page_size=20';
+    var container = document.getElementById('filter-fk-results-' + field);
+    if (!container) return;
+    fetch(url, { headers: { 'HX-Request': 'true' } })
+      .then(function(r) { return r.text(); })
+      .then(function(html) {
+        container.innerHTML = html;
+        container.querySelectorAll('button[data-fk-value]').forEach(function(btn) {
+          var value = btn.getAttribute('data-fk-value');
+          var label = btn.getAttribute('data-fk-label') || '';
+          setFkLabel(field, value, label);
+          btn.onclick = function() { umbral._filterFkToggle(field, value, label); };
+        });
+        _filterFkRefreshHighlights(field);
+      })
+      .catch(function() {
+        container.innerHTML = '<p class="px-md py-sm text-outline text-body-sm italic">Failed to load.</p>';
+      });
+  };
+
+  // Toggle a single value in the field's selection array. Same handler
+  // for both "user clicked a result row" and "user clicked a pill's ×".
+  umbral._filterFkToggle = function(field, value, label) {
+    var arr = asArray(_pending[field]);
+    var idx = arr.indexOf(String(value));
+    if (idx === -1) {
+      arr.push(String(value));
+      setFkLabel(field, value, label);
+    } else {
+      arr.splice(idx, 1);
+    }
+    if (arr.length === 0) delete _pending[field];
+    else _pending[field] = arr;
+    _filterFkRenderPills(field);
+    _filterFkRefreshHighlights(field);
+  };
+
+  // Drop every selection on a field (the "Clear all" affordance after
+  // the pills row).
+  umbral._filterFkClear = function(field) {
+    delete _pending[field];
+    _filterFkRenderPills(field);
+    _filterFkRefreshHighlights(field);
+  };
+
+  // Re-render the pills row from _pending[field]. Each pill carries
+  // its value so the × can toggle it back off without re-resolving.
+  function _filterFkRenderPills(field) {
+    var host = document.getElementById('filter-fk-pills-' + field);
+    if (!host) return;
+    var arr = asArray(_pending[field]);
+    if (arr.length === 0) { host.innerHTML = ''; return; }
+    var html = '';
+    arr.forEach(function(value) {
+      var label = getFkLabel(field, value);
+      html += '<span class="inline-flex items-center gap-xs bg-primary/10 text-primary border border-primary/20 px-sm py-xs rounded-full font-label-sm text-label-sm">'
+        + '<span>' + escapeHtml(label) + '</span>'
+        + '<button type="button" data-pill-value="' + escapeAttr(value) + '" class="text-on-surface-variant hover:text-on-surface text-label-sm" aria-label="Remove">×</button>'
+        + '</span>';
+    });
+    if (arr.length > 1) {
+      html += '<button type="button" data-fk-clear class="ml-xs text-label-sm text-on-surface-variant hover:text-on-surface underline">Clear all</button>';
+    }
+    host.innerHTML = html;
+    host.querySelectorAll('button[data-pill-value]').forEach(function(btn) {
+      btn.onclick = function() {
+        umbral._filterFkToggle(field, btn.getAttribute('data-pill-value'), '');
+      };
+    });
+    var clearBtn = host.querySelector('button[data-fk-clear]');
+    if (clearBtn) clearBtn.onclick = function() { umbral._filterFkClear(field); };
+  }
+
+  // Mark every currently-selected result button with the active style.
+  function _filterFkRefreshHighlights(field) {
+    var container = document.getElementById('filter-fk-results-' + field);
+    if (!container) return;
+    var arr = asArray(_pending[field]);
+    container.querySelectorAll('button[data-fk-value]').forEach(function(b) {
+      var active = arr.indexOf(b.getAttribute('data-fk-value')) !== -1;
+      b.classList.toggle('bg-primary/10', active);
+      b.classList.toggle('text-primary',  active);
+    });
+  }
+
+  function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  // Per-FK init: render pills SYNCHRONOUSLY with placeholder labels
+  // first so the user sees their selection the instant the dialog
+  // opens — even if the /options/resolve fetch errors, hangs, or
+  // returns an empty items array (which would happen if the labels
+  // table got truncated mid-session). The fetch then upgrades each
+  // `#<id>` placeholder to the real label in-place.
+  function initFkFacet(node) {
+    var field      = node.getAttribute('data-fk-field');
+    var table      = node.getAttribute('data-fk-table');
+    var activeRaw  = node.getAttribute('data-fk-active-ids') || '';
+    var activeIds  = activeRaw.split(',').map(function(s){return s.trim();}).filter(Boolean);
+
+    // 1. Commit the selection to _pending and render pills NOW with
+    //    `#<id>` placeholder labels. Anything Apply / Clear reads
+    //    from _pending sees the right shape immediately.
+    if (activeIds.length > 0) {
+      _pending[field] = activeIds.slice();
+      activeIds.forEach(function(id) { setFkLabel(field, id, '#' + id); });
+    }
+    _filterFkRenderPills(field);
+
+    // 2. Kick off the search-results panel (loads the first 20 options).
+    umbral._filterFkSearch(field, table, '');
+
+    // 3. Background label-resolve to upgrade the pills. No-op when
+    //    nothing's selected.
+    if (activeIds.length === 0) return;
+    var resolveUrl = '{{ admin_base }}/api/' + table + '/' + field
+      + '/options/resolve?ids=' + encodeURIComponent(activeIds.join(','));
+    fetch(resolveUrl, { headers: { 'Accept': 'application/json' } })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        var items = (j && j.items) || [];
+        if (items.length === 0) return;
+        items.forEach(function(it) { setFkLabel(field, it.value, it.label); });
+        _filterFkRenderPills(field);
+        _filterFkRefreshHighlights(field);
+      })
+      .catch(function() { /* keep the #<id> placeholders */ });
+  }
+  document.querySelectorAll('#umbral-filter-dialog [data-fk-facet]').forEach(initFkFacet);
+
+  // Build `&filter_<field>=<value>` per pending entry. Array-valued
+  // entries (choice / fk / m2m multi-select) join on `,`, matching
+  // the backend's comma-split parser. Empty / `"any"` / empty-array
+  // entries are dropped so a cleared selection doesn't leak into the
+  // URL.
+  function buildFilterQs() {
+    var qs = '';
+    Object.keys(_pending).forEach(function(field) {
+      var v = _pending[field];
+      if (v == null || v === '' || v === 'any') return;
+      var serialised;
+      if (Array.isArray(v)) {
+        if (v.length === 0) return;
+        serialised = v.join(',');
+      } else {
+        serialised = String(v);
+      }
+      qs += '&filter_' + encodeURIComponent(field) + '=' + encodeURIComponent(serialised);
+    });
+    return qs;
+  }
+
+  umbral._filterApply = function(table, _search, sort, order) {
+    // The in-dialog search input overrides the toolbar's search so the
+    // user can commit search + filters atomically.
+    var searchEl = document.getElementById('filter-dialog-search');
+    var search   = searchEl ? searchEl.value : (_search || '');
+    var qs = '?search=' + encodeURIComponent(search)
+      + buildFilterQs()
+      + '&sort=' + encodeURIComponent(sort)
+      + '&order=' + encodeURIComponent(order)
+      + '&page=1';
+    // Fetch the rows fragment for the HTMX swap, but push the
+    // changelist URL (not the /rows endpoint) so refresh / share /
+    // bookmarks land back on the full page with the same filters.
+    var fetchUrl = '{{ admin_base }}/' + table + '/rows' + qs;
+    var pushUrl  = '{{ admin_base }}/' + table + '/'      + qs;
+    umbral.closeFilterDialog();
+    htmx.ajax('GET', fetchUrl, { target: '#table-body', swap: 'innerHTML', pushUrl: pushUrl });
+  };
+
+  umbral._filterClear = function(table, _search, sort, order) {
+    // Clear both search and every filter — Clear is the "back to
+    // square one" button per the dialog's footer affordance.
+    var qs = '?search='
+      + '&sort=' + encodeURIComponent(sort)
+      + '&order=' + encodeURIComponent(order)
+      + '&page=1';
+    var fetchUrl = '{{ admin_base }}/' + table + '/rows' + qs;
+    var pushUrl  = '{{ admin_base }}/' + table + '/'      + qs;
+    umbral.closeFilterDialog();
+    htmx.ajax('GET', fetchUrl, { target: '#table-body', swap: 'innerHTML', pushUrl: pushUrl });
+  };
+
+  // Escape to close.
+  (function() {
+    function onEsc(e) {
+      if (e.key === 'Escape') { umbral.closeFilterDialog(); document.removeEventListener('keydown', onEsc); }
+    }
+    document.addEventListener('keydown', onEsc);
+  })();
+})();
+</script>
+{% endmacro %}

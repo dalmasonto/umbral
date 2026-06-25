@@ -1,4 +1,4 @@
-# Manual, dependency-ordered publish of every umbra crate to crates.io.
+# Manual, dependency-ordered publish of every umbral crate to crates.io.
 #
 # Deliberately NOT on push — this is a "slow, silent" release that a maintainer
 # dispatches by hand from the Actions tab. The two-step flow:

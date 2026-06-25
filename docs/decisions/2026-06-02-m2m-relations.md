@@ -8,11 +8,11 @@ Status: Design only. Filed in gaps.md #61.2 as deferred. Targeting a focused fut
 A model declares an `M2M<T>` field. The owning struct gains no SQL column on its own table; the framework auto-generates a junction table at migration time, exposes a collection accessor on the parent model, and the admin renders a multi-select FK picker against the related table.
 
 ```rust
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-#[umbra(table = "permissions_group")]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "permissions_group")]
 pub struct Group {
     pub id: i64,
-    #[umbra(string, max_length = 150)]
+    #[umbral(string, max_length = 150)]
     pub name: String,
     pub description: Option<String>,
     /// Auto-generated junction table `permissions_group_permissions`
@@ -43,7 +43,7 @@ Comparable in scope to gap #60's full `ForeignKey<T>` PK generalisation. Single-
 ### Field type
 
 ```rust
-// In crates/umbra-core/src/orm/m2m.rs
+// In crates/umbral-core/src/orm/m2m.rs
 pub struct M2M<T: Model> {
     /// Resolved related rows when the parent was loaded with
     /// `.prefetch_related("field_name")`. `None` = not loaded.

@@ -1,4 +1,4 @@
-=== Postgres API Tests (umbra_shop/umbra_shop) ===
+=== Postgres API Tests (umbral_shop/umbral_shop) ===
 
 --- GET /api/post/ | c=1 n=1000 (Postgres) ---
 Time per request:       8.740 [ms] (mean, across all concurrent requests)

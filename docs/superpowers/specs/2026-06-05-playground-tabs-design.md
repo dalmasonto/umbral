@@ -6,7 +6,7 @@
 
 ## 1. Goal
 
-Give the `umbra-playground` UI a browser-style tab strip so users can keep multiple endpoints open at once, see at a glance which one is active, and have that state survive a reload. Pin the request and response panels to a known minimum height so the layout doesn't reflow when switching between tabs, switching between body types, or seeding a fresh draft. Bundle a snapshot export/import so a workspace can move between browsers or be shared between colleagues.
+Give the `umbral-playground` UI a browser-style tab strip so users can keep multiple endpoints open at once, see at a glance which one is active, and have that state survive a reload. Pin the request and response panels to a known minimum height so the layout doesn't reflow when switching between tabs, switching between body types, or seeding a fresh draft. Bundle a snapshot export/import so a workspace can move between browsers or be shared between colleagues.
 
 This is a frontend-only change. The Rust plugin crate is untouched.
 
@@ -20,7 +20,7 @@ This is a frontend-only change. The Rust plugin crate is untouched.
 
 ## 3. Architecture
 
-The change touches four layers inside `plugins/umbra-playground/frontend/`:
+The change touches four layers inside `plugins/umbral-playground/frontend/`:
 
 | Layer | What gets added | Why |
 |---|---|---|
@@ -76,7 +76,7 @@ db.version(5).stores({
 });
 ```
 
-The singleton-row shape matches the `settings` table. We get per-app isolation from the per-app DB name (`umbra-playground:<scope>`) for free. The shape is small enough that one write per change is fine.
+The singleton-row shape matches the `settings` table. We get per-app isolation from the per-app DB name (`umbral-playground:<scope>`) for free. The shape is small enough that one write per change is fine.
 
 ### 4.3 The Zustand slice
 
@@ -160,7 +160,7 @@ Two icon buttons (`Download`, `Upload` from `lucide-react`) at the right end of 
    }
    ```
 2. `JSON.stringify(snapshot, null, 2)` → `Blob` → hidden `<a download>` click.
-3. Filename: `umbra-playground-<appScope>-<YYYY-MM-DD>.json`.
+3. Filename: `umbral-playground-<appScope>-<YYYY-MM-DD>.json`.
 
 **Import flow** (`onFile`):
 
@@ -210,23 +210,23 @@ The Monaco editor inside the JSON body tab currently uses `height="100%"` agains
 
 **New files**
 
-- `plugins/umbra-playground/frontend/src/state/tabsStorage.ts` — `loadTabs()` / `saveTabs()` Dexie helpers.
-- `plugins/umbra-playground/frontend/src/components/TabStrip.tsx` — the tab bar.
-- `plugins/umbra-playground/frontend/src/components/OpenTabPopover.tsx` — the `+` popover.
-- `plugins/umbra-playground/frontend/src/components/ExportImportControls.tsx` — export/import buttons.
-- `plugins/umbra-playground/frontend/src/__tests__/tabs.test.ts` — slice and persistence tests.
+- `plugins/umbral-playground/frontend/src/state/tabsStorage.ts` — `loadTabs()` / `saveTabs()` Dexie helpers.
+- `plugins/umbral-playground/frontend/src/components/TabStrip.tsx` — the tab bar.
+- `plugins/umbral-playground/frontend/src/components/OpenTabPopover.tsx` — the `+` popover.
+- `plugins/umbral-playground/frontend/src/components/ExportImportControls.tsx` — export/import buttons.
+- `plugins/umbral-playground/frontend/src/__tests__/tabs.test.ts` — slice and persistence tests.
 
 **Modified files**
 
-- `plugins/umbra-playground/frontend/src/state/db.ts` — add `TabsRow` interface, bump schema to v5, register the `tabs` table, export `TABS_SCHEMA_VERSION = 1`.
-- `plugins/umbra-playground/frontend/src/state/store.ts` — add the `Tab` interface, the `TabsSlice` interface, the new state and actions on `usePlayground`, and the `scheduleTabsSave` debounced persist.
-- `plugins/umbra-playground/frontend/src/App.tsx` — render `<TabStrip />` between the stats row and the request/response grid; add `min-h-[640px] lg:min-h-[720px]` to the request/response row; add the `useEffect` that calls `loadTabs()` on mount.
-- `plugins/umbra-playground/frontend/src/components/RequestBuilder.tsx` — change `min-h-[12rem]` on the Monaco wrap to `min-h-full` so the editor fills the new fixed-height parent.
-- `plugins/umbra-playground/frontend/src/components/EndpointTree.tsx` — change the `onClick` handler to call `openTab(operationId)` instead of `selectEndpoint(id)`. Single line. The existing active-entry highlight in the sidebar (which subscribes to `selectedOperationId`) keeps working unchanged because `selectedOperationId` becomes derived from the active tab's `operationId` — when the user activates a tab, the highlight in the sidebar follows automatically.
+- `plugins/umbral-playground/frontend/src/state/db.ts` — add `TabsRow` interface, bump schema to v5, register the `tabs` table, export `TABS_SCHEMA_VERSION = 1`.
+- `plugins/umbral-playground/frontend/src/state/store.ts` — add the `Tab` interface, the `TabsSlice` interface, the new state and actions on `usePlayground`, and the `scheduleTabsSave` debounced persist.
+- `plugins/umbral-playground/frontend/src/App.tsx` — render `<TabStrip />` between the stats row and the request/response grid; add `min-h-[640px] lg:min-h-[720px]` to the request/response row; add the `useEffect` that calls `loadTabs()` on mount.
+- `plugins/umbral-playground/frontend/src/components/RequestBuilder.tsx` — change `min-h-[12rem]` on the Monaco wrap to `min-h-full` so the editor fills the new fixed-height parent.
+- `plugins/umbral-playground/frontend/src/components/EndpointTree.tsx` — change the `onClick` handler to call `openTab(operationId)` instead of `selectEndpoint(id)`. Single line. The existing active-entry highlight in the sidebar (which subscribes to `selectedOperationId`) keeps working unchanged because `selectedOperationId` becomes derived from the active tab's `operationId` — when the user activates a tab, the highlight in the sidebar follows automatically.
 
 **Untouched**
 
-- `crates/umbra-playground/src/**` (no Rust changes).
+- `crates/umbral-playground/src/**` (no Rust changes).
 - `RequestBuilder.tsx` body content beyond the height tweak.
 - `ResponseViewer.tsx` (its `flex-1 min-h-0 overflow-y-auto` already composes with the new parent).
 - `state/history.ts`, `state/draftStorage.ts`, `state/settingsStorage.ts`, `state/editorState.ts` — all their public APIs stay.

@@ -1,6 +1,6 @@
 ---
 title: Scaling across instances
-description: Run umbra-realtime behind a load balancer with a Redis pub/sub backplane so targeted sends reach sockets on any instance — and the proven single-instance numbers.
+description: Run umbral-realtime behind a load balancer with a Redis pub/sub backplane so targeted sends reach sockets on any instance — and the proven single-instance numbers.
 sidebar_position: 6
 tags: [realtime, scaling, redis, websocket, sse]
 ---
@@ -33,7 +33,7 @@ Cap the total with [`max_connections`](transports#connection-limits-maxconnectio
 
 ## How it works (multi-instance)
 
-Every instance runs one background pump on a shared Redis channel (`umbra:realtime:events`):
+Every instance runs one background pump on a shared Redis channel (`umbral:realtime:events`):
 
 1. **Publish.** When your code calls `.send(...)`, the envelope is `PUBLISH`ed to Redis instead of dispatched locally.
 2. **Subscribe.** Every instance (including the one that published) `SUBSCRIBE`s and dispatches each received envelope to its own connection registry.
@@ -46,13 +46,13 @@ The Redis backend is behind a cargo feature so single-instance apps carry no Red
 
 ```toml
 # Cargo.toml
-umbra-realtime = { version = "0.0.1", features = ["redis"] }
+umbral-realtime = { version = "0.0.1", features = ["redis"] }
 ```
 
 Then point every instance at the same Redis:
 
 ```rust
-use umbra_realtime::RealtimePlugin;
+use umbral_realtime::RealtimePlugin;
 
 App::builder()
     .plugin(
@@ -86,6 +86,6 @@ As in the single-instance case, a connection whose buffer is full drops events r
 
 - [Transports](transports) for the push transports and the one-connection-per-browser model.
 - [Model subscriptions](model-subscriptions) for the `on_model` / `expose` bridge used above.
-- `plugins/umbra-realtime/src/lib.rs` (`RedisBroker`) for the pump implementation.
-- The integration test `plugins/umbra-realtime/tests/broker.rs` (run with `REDIS_URL=... cargo test --features redis -p umbra-realtime`).
+- `plugins/umbral-realtime/src/lib.rs` (`RedisBroker`) for the pump implementation.
+- The integration test `plugins/umbral-realtime/tests/broker.rs` (run with `REDIS_URL=... cargo test --features redis -p umbral-realtime`).
 </content>

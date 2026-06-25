@@ -1,0 +1,945 @@
+{% extends "base.html" %}
+
+{% block title %}Roadmap - Umbral{% endblock %}
+{% block meta_description %}The Umbral project roadmap: what has shipped, what is being hardened for v0.1, and what comes next for the Rust web framework and plugin ecosystem.{% endblock %}
+
+{% block extra_head %}
+<style>
+  .roadmap-page {
+    overflow: hidden;
+  }
+
+  .roadmap-hero {
+    position: relative;
+    isolation: isolate;
+    padding: clamp(58px, 8vw, 96px) 28px clamp(34px, 5vw, 58px);
+  }
+
+  .roadmap-hero::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    background:
+      linear-gradient(115deg, color-mix(in srgb, var(--surface-2) 78%, transparent), transparent 58%),
+      radial-gradient(circle at 18% 28%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 30%),
+      radial-gradient(circle at 86% 18%, color-mix(in srgb, var(--ok) 10%, transparent), transparent 28%),
+      radial-gradient(circle at 70% 80%, color-mix(in srgb, var(--tan) 13%, transparent), transparent 28%);
+  }
+
+  .roadmap-hero__inner {
+    width: min(1200px, 100%);
+    margin: 0 auto;
+  }
+
+  .roadmap-hero__copy {
+    max-width: 790px;
+  }
+
+  .roadmap-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 20px;
+    padding: 7px 12px;
+    border: 1px solid var(--accent-line);
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-2);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .roadmap-kicker::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--accent);
+  }
+
+  .roadmap-title {
+    margin: 0;
+    max-width: 760px;
+    color: var(--ink);
+    font-size: clamp(42px, 7vw, 76px);
+    font-weight: 800;
+    line-height: 0.98;
+    letter-spacing: 0;
+  }
+
+  .roadmap-lede {
+    max-width: 690px;
+    margin: 24px 0 0;
+    color: var(--muted);
+    font-size: clamp(17px, 2vw, 20px);
+    line-height: 1.62;
+  }
+
+  .roadmap-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 32px;
+  }
+
+  .roadmap-ledger {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1px;
+    margin-top: clamp(38px, 6vw, 64px);
+    overflow: hidden;
+    border: 1px solid var(--hairline);
+    border-radius: 18px;
+    background: var(--hairline);
+    box-shadow: 0 26px 70px -50px rgba(27, 23, 20, 0.35);
+  }
+
+  .roadmap-ledger__cell {
+    min-height: 132px;
+    padding: 20px;
+    background: color-mix(in srgb, var(--surface) 92%, transparent);
+  }
+
+  .roadmap-ledger__value {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--ink);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 18px;
+    font-weight: 800;
+  }
+
+  .roadmap-ledger__value svg {
+    flex: 0 0 auto;
+    color: var(--accent);
+  }
+
+  .roadmap-ledger__label {
+    margin-top: 12px;
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+
+  .roadmap-wrap {
+    width: min(1200px, calc(100% - 56px));
+    margin: 0 auto;
+  }
+
+  .roadmap-section {
+    padding: clamp(38px, 6vw, 74px) 0;
+  }
+
+  .roadmap-section__head {
+    max-width: 720px;
+    margin-bottom: 28px;
+  }
+
+  .roadmap-section__eyebrow {
+    margin: 0 0 10px;
+    color: var(--accent-2);
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .roadmap-section__title {
+    margin: 0;
+    color: var(--ink);
+    font-size: clamp(28px, 4vw, 42px);
+    font-weight: 800;
+    line-height: 1.08;
+    letter-spacing: 0;
+  }
+
+  .roadmap-section__copy {
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: 16.5px;
+    line-height: 1.6;
+  }
+
+  .milestone-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .milestone {
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    padding: 24px;
+    border: 1px solid var(--hairline);
+    border-radius: 18px;
+    background: var(--surface);
+  }
+
+  .milestone--active {
+    border-color: var(--accent-line);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 62%, var(--surface)), var(--surface) 56%);
+  }
+
+  .milestone__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+
+  .milestone__index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    color: var(--ink-2);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .milestone--active .milestone__index {
+    background: var(--accent);
+    color: var(--surface);
+  }
+
+  .status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .status-chip::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+
+  .status-chip--done {
+    background: var(--ok-soft);
+    color: var(--ok);
+  }
+
+  .status-chip--now {
+    background: var(--accent-soft);
+    color: var(--accent-2);
+  }
+
+  .status-chip--planned {
+    background: var(--tan-soft);
+    color: var(--tan);
+  }
+
+  .milestone__title {
+    margin: 24px 0 8px;
+    color: var(--ink);
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.16;
+  }
+
+  .milestone__summary {
+    margin: 0 0 18px;
+    color: var(--muted);
+    font-size: 14.5px;
+    line-height: 1.58;
+  }
+
+  .milestone__list {
+    display: grid;
+    gap: 10px;
+    margin: auto 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .milestone__list li {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    gap: 10px;
+    color: var(--ink-2);
+    font-size: 13.5px;
+    line-height: 1.45;
+  }
+
+  .milestone__list svg {
+    margin-top: 1px;
+    color: var(--accent);
+  }
+
+  .roadmap-map {
+    position: relative;
+    overflow: hidden;
+    border-radius: 22px;
+    background: var(--shade);
+    color: var(--shade-ink);
+    box-shadow: 0 30px 70px -42px rgba(27, 23, 20, 0.5);
+  }
+
+  .roadmap-map__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 22px 24px;
+    border-bottom: 1px solid var(--shade-2);
+  }
+
+  .roadmap-map__title {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 800;
+  }
+
+  .roadmap-map__meta {
+    color: var(--shade-muted);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+  }
+
+  .roadmap-map__body {
+    position: relative;
+    padding: 30px 24px 34px;
+  }
+
+  .capability-timeline {
+    position: relative;
+    display: grid;
+    gap: 2px;
+  }
+
+  .capability-timeline::before {
+    content: "";
+    position: absolute;
+    top: 14px;
+    bottom: 14px;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    border-radius: 999px;
+    background: linear-gradient(
+      to bottom,
+      var(--ok),
+      var(--accent-ghost) 48%,
+      var(--code-amber)
+    );
+  }
+
+  .capability-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 72px minmax(0, 1fr);
+    align-items: center;
+    min-height: 124px;
+  }
+
+  .capability-node {
+    position: relative;
+    z-index: 2;
+    grid-column: 2;
+    justify-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border: 1px solid color-mix(in srgb, currentColor 35%, var(--shade-2));
+    border-radius: 13px;
+    background: var(--shade);
+    color: var(--accent-ghost);
+    box-shadow: 0 0 0 7px var(--shade);
+  }
+
+  .capability-node--done {
+    color: var(--ok);
+  }
+
+  .capability-node--planned {
+    color: var(--code-amber);
+  }
+
+  .capability-card {
+    position: relative;
+    z-index: 1;
+    padding: 17px 18px;
+    border: 1px solid var(--shade-2);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--shade-2) 62%, transparent);
+  }
+
+  .capability-row--left .capability-card {
+    grid-column: 1;
+  }
+
+  .capability-row--right .capability-card {
+    grid-column: 3;
+  }
+
+  .capability-card__top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .capability-card__version {
+    color: var(--shade-ink);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12.5px;
+    font-weight: 800;
+  }
+
+  .capability-card__status {
+    border-radius: 999px;
+    padding: 3px 8px;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    color: var(--accent-ghost);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+
+  .capability-card__status--done {
+    color: var(--ok);
+  }
+
+  .capability-card__status--planned {
+    color: var(--code-amber);
+  }
+
+  .capability-card__title {
+    margin: 0;
+    color: var(--shade-ink);
+    font-size: 16px;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .capability-card__copy {
+    margin: 7px 0 0;
+    color: var(--shade-muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+
+  .workstream-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .workstream {
+    display: grid;
+    grid-template-columns: 42px 1fr;
+    gap: 15px;
+    padding: 20px;
+    border: 1px solid var(--hairline);
+    border-radius: 16px;
+    background: var(--surface);
+  }
+
+  .workstream__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: var(--accent-soft);
+    color: var(--accent-2);
+  }
+
+  .workstream:nth-child(2) .workstream__icon {
+    background: var(--ok-soft);
+    color: var(--ok);
+  }
+
+  .workstream:nth-child(3) .workstream__icon {
+    background: var(--tan-soft);
+    color: var(--tan);
+  }
+
+  .workstream:nth-child(4) .workstream__icon {
+    background: var(--surface-2);
+    color: var(--ink-2);
+  }
+
+  .workstream__title {
+    margin: 0;
+    color: var(--ink);
+    font-size: 16px;
+    font-weight: 800;
+  }
+
+  .workstream__copy {
+    margin: 6px 0 0;
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+
+  .principles {
+    display: grid;
+    grid-template-columns: 0.92fr 1.08fr;
+    gap: 18px;
+    align-items: stretch;
+  }
+
+  .principles__panel {
+    padding: 28px;
+    border-radius: 22px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+  }
+
+  .principles__panel--accent {
+    background:
+      linear-gradient(145deg, color-mix(in srgb, var(--accent-soft) 78%, var(--surface)), var(--surface));
+    border-color: var(--accent-line);
+  }
+
+  .principles__title {
+    margin: 0;
+    color: var(--ink);
+    font-size: 24px;
+    font-weight: 800;
+    line-height: 1.16;
+  }
+
+  .principles__copy {
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: 14.5px;
+    line-height: 1.58;
+  }
+
+  .principles__list {
+    display: grid;
+    gap: 12px;
+    margin: 22px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .principles__list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    color: var(--ink-2);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .principles__list svg {
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--accent);
+  }
+
+  .roadmap-cta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 22px;
+    padding: 28px;
+    border-radius: 22px;
+    background: var(--shade);
+    color: var(--shade-ink);
+  }
+
+  .roadmap-cta__title {
+    margin: 0;
+    font-size: 23px;
+    font-weight: 800;
+    line-height: 1.16;
+  }
+
+  .roadmap-cta__copy {
+    max-width: 620px;
+    margin: 8px 0 0;
+    color: var(--shade-muted);
+    font-size: 14.5px;
+    line-height: 1.55;
+  }
+
+  .roadmap-cta__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .roadmap-cta__link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 15px;
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--shade);
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .roadmap-cta__link--ghost {
+    border: 1px solid var(--shade-2);
+    background: transparent;
+    color: var(--shade-ink);
+  }
+
+  @media (max-width: 860px) {
+    .roadmap-ledger,
+    .milestone-grid,
+    .workstream-grid,
+    .principles {
+      grid-template-columns: 1fr;
+    }
+
+    .roadmap-ledger__cell {
+      min-height: auto;
+    }
+
+    .roadmap-map__head {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .capability-timeline::before {
+      left: 19px;
+    }
+
+    .capability-row {
+      grid-template-columns: 38px minmax(0, 1fr);
+      min-height: auto;
+      gap: 14px;
+      padding: 0 0 16px;
+    }
+
+    .capability-row:last-child {
+      padding-bottom: 0;
+    }
+
+    .capability-node {
+      grid-column: 1;
+      align-self: start;
+      margin-top: 4px;
+      width: 32px;
+      height: 32px;
+      border-radius: 11px;
+      box-shadow: 0 0 0 5px var(--shade);
+    }
+
+    .capability-row--left .capability-card,
+    .capability-row--right .capability-card {
+      grid-column: 2;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .roadmap-wrap {
+      width: min(100% - 32px, 1200px);
+    }
+
+    .roadmap-hero {
+      padding-left: 16px;
+      padding-right: 16px;
+    }
+
+    .milestone,
+    .principles__panel,
+    .roadmap-cta {
+      padding: 20px;
+      border-radius: 18px;
+    }
+
+    .roadmap-map__body {
+      padding: 18px 14px 20px;
+    }
+
+    .capability-card {
+      padding: 15px;
+      border-radius: 14px;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="roadmap-page">
+  <section class="roadmap-hero">
+    <div class="roadmap-hero__inner">
+      <div class="roadmap-hero__copy">
+        <div class="roadmap-kicker">Project roadmap, June 2026</div>
+        <h1 class="roadmap-title">The path to a boringly productive v0.1.</h1>
+        <p class="roadmap-lede">
+          Umbral is moving from a working framework loop into the hardening pass: fewer sharp edges,
+          stronger defaults, better plugin contracts, and the operations pieces real apps need before launch.
+        </p>
+        <div class="roadmap-actions">
+          <a href="/changelog" class="btn-accent btn-accent--lg">
+            View changelog
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+          <a href="/features" class="btn-ghost btn-ghost--lg">Browse feature status</a>
+        </div>
+      </div>
+
+      <div class="roadmap-ledger" aria-label="Roadmap summary">
+        <div class="roadmap-ledger__cell">
+          <div class="roadmap-ledger__value">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+            v0.0.1
+          </div>
+          <div class="roadmap-ledger__label">Core loop released: ORM, migrations, admin, REST, auth, storage, and security defaults.</div>
+        </div>
+        <div class="roadmap-ledger__cell">
+          <div class="roadmap-ledger__value">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M12 2v20M2 12h20"/></svg>
+            v0.1
+          </div>
+          <div class="roadmap-ledger__label">Current milestone: email, tasks, testing, import and export, logging, metrics, and rate limits.</div>
+        </div>
+        <div class="roadmap-ledger__cell">
+          <div class="roadmap-ledger__value">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M4 12h16"/><path d="M14 6l6 6-6 6"/></svg>
+            Next
+          </div>
+          <div class="roadmap-ledger__label">Realtime and deeper API ergonomics, including SSE and nested writable serializers.</div>
+        </div>
+        <div class="roadmap-ledger__cell">
+          <div class="roadmap-ledger__value">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>
+            Always
+          </div>
+          <div class="roadmap-ledger__label">Plugin-first architecture: official batteries use the same boundary as community extensions.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap-section">
+    <div class="roadmap-wrap">
+      <div class="roadmap-section__head">
+        <p class="roadmap-section__eyebrow">Milestones</p>
+        <h2 class="roadmap-section__title">What shipped, what is being hardened, and what waits behind it.</h2>
+        <p class="roadmap-section__copy">The roadmap is grouped by outcome rather than date. Work moves forward when the capability is useful enough to dogfood in this site and boring enough to document.</p>
+      </div>
+
+      <div class="milestone-grid">
+        <article class="milestone">
+          <div class="milestone__top">
+            <span class="milestone__index">01</span>
+            <span class="status-chip status-chip--done">Released</span>
+          </div>
+          <h3 class="milestone__title">The app loop</h3>
+          <p class="milestone__summary">Umbral can already build and run a real website with model-backed content, admin tools, uploads, auth, and API surfaces.</p>
+          <ul class="milestone__list">
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span>Model derive, QuerySet, relations, migrations, soft deletes, and signals.</span></li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span>Auto admin with CRUD, search, filters, relation pickers, and dashboard widgets.</span></li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span>REST, OpenAPI, playground, auth, sessions, OAuth, storage, and security middleware.</span></li>
+          </ul>
+        </article>
+
+        <article class="milestone milestone--active">
+          <div class="milestone__top">
+            <span class="milestone__index">02</span>
+            <span class="status-chip status-chip--now">Toward v0.1</span>
+          </div>
+          <h3 class="milestone__title">Production hardening</h3>
+          <p class="milestone__summary">The current work is about completing the everyday rails a deployed application expects around the already-shipped core.</p>
+          <ul class="milestone__list">
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Email sending through SMTP and API backends, plus a hardened background task queue.</span></li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Testing and factory helpers for models, handlers, forms, fixtures, and pages.</span></li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Caching, rate limiting, structured logging, and metrics that can be enabled as plugins.</span></li>
+          </ul>
+        </article>
+
+        <article class="milestone">
+          <div class="milestone__top">
+            <span class="milestone__index">03</span>
+            <span class="status-chip status-chip--planned">Planned</span>
+          </div>
+          <h3 class="milestone__title">Ecosystem depth</h3>
+          <p class="milestone__summary">After the v0.1 baseline, the focus shifts to better realtime surfaces, richer APIs, and stronger community plugin workflows.</p>
+          <ul class="milestone__list">
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg><span>WebSockets and SSE for user-targeted and room-targeted realtime updates.</span></li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg><span>Nested writable serializers, CSV and Excel import-export, and deeper API docs.</span></li>
+            <li><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg><span>Plugin review workflows, compatibility signals, security reports, and directory trust data.</span></li>
+          </ul>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap-section">
+    <div class="roadmap-wrap">
+      <div class="roadmap-map">
+        <div class="roadmap-map__head">
+          <h2 class="roadmap-map__title">Umbral capability map</h2>
+          <div class="roadmap-map__meta">released -> hardening -> planned</div>
+        </div>
+        <div class="roadmap-map__body">
+          <div class="capability-timeline" aria-label="Top-down Umbral capability sequence">
+            <article class="capability-row capability-row--left">
+              <div class="capability-card">
+                <div class="capability-card__top">
+                  <span class="capability-card__version">v0.0.1</span>
+                  <span class="capability-card__status capability-card__status--done">Released</span>
+                </div>
+                <h3 class="capability-card__title">Core app loop</h3>
+                <p class="capability-card__copy">Models, migrations, templates, routing, storage, auth, sessions, and security defaults.</p>
+              </div>
+              <div class="capability-node capability-node--done" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+            </article>
+
+            <article class="capability-row capability-row--right">
+              <div class="capability-node capability-node--done" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>
+              </div>
+              <div class="capability-card">
+                <div class="capability-card__top">
+                  <span class="capability-card__version">v0.0.1</span>
+                  <span class="capability-card__status capability-card__status--done">Released</span>
+                </div>
+                <h3 class="capability-card__title">Admin and REST</h3>
+                <p class="capability-card__copy">Auto CRUD, filters, relation pickers, OpenAPI, playground, serializers, and auth-gated APIs.</p>
+              </div>
+            </article>
+
+            <article class="capability-row capability-row--left">
+              <div class="capability-card">
+                <div class="capability-card__top">
+                  <span class="capability-card__version">v0.1</span>
+                  <span class="capability-card__status">Hardening</span>
+                </div>
+                <h3 class="capability-card__title">Tasks and email</h3>
+                <p class="capability-card__copy">A production-grade task queue, retries, scheduled jobs, and transactional email backends.</p>
+              </div>
+              <div class="capability-node" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+              </div>
+            </article>
+
+            <article class="capability-row capability-row--right">
+              <div class="capability-node" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+              </div>
+              <div class="capability-card">
+                <div class="capability-card__top">
+                  <span class="capability-card__version">v0.1</span>
+                  <span class="capability-card__status">Hardening</span>
+                </div>
+                <h3 class="capability-card__title">Operations baseline</h3>
+                <p class="capability-card__copy">Caching, rate limits, structured logs, metrics, testing helpers, factories, and import-export.</p>
+              </div>
+            </article>
+
+            <article class="capability-row capability-row--left">
+              <div class="capability-card">
+                <div class="capability-card__top">
+                  <span class="capability-card__version">Next</span>
+                  <span class="capability-card__status capability-card__status--planned">Planned</span>
+                </div>
+                <h3 class="capability-card__title">Realtime and API depth</h3>
+                <p class="capability-card__copy">WebSockets, SSE, nested writable serializers, richer API docs, and stronger plugin review signals.</p>
+              </div>
+              <div class="capability-node capability-node--planned" aria-hidden="true">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M9 18l6-6-6-6"/></svg>
+              </div>
+            </article>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap-section">
+    <div class="roadmap-wrap">
+      <div class="roadmap-section__head">
+        <p class="roadmap-section__eyebrow">Workstreams</p>
+        <h2 class="roadmap-section__title">The roadmap is split across four tracks.</h2>
+      </div>
+
+      <div class="workstream-grid">
+        <article class="workstream">
+          <div class="workstream__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div>
+          <div>
+            <h3 class="workstream__title">Framework core</h3>
+            <p class="workstream__copy">ORM, migrations, routing, forms, templates, storage, security, and the plugin lifecycle.</p>
+          </div>
+        </article>
+        <article class="workstream">
+          <div class="workstream__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
+          <div>
+            <h3 class="workstream__title">Developer experience</h3>
+            <p class="workstream__copy">Testing helpers, factories, fixtures, examples, docs, project templates, and clearer errors.</p>
+          </div>
+        </article>
+        <article class="workstream">
+          <div class="workstream__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M3 12h18"/><path d="M12 3v18"/><path d="M5 5l14 14"/><path d="M19 5L5 19"/></svg></div>
+          <div>
+            <h3 class="workstream__title">Operations</h3>
+            <p class="workstream__copy">Tasks, email, caching, rate limiting, logging, metrics, health checks, and realtime push.</p>
+          </div>
+        </article>
+        <article class="workstream">
+          <div class="workstream__icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12l8.73-5.04M12 22V12"/></svg></div>
+          <div>
+            <h3 class="workstream__title">Plugin ecosystem</h3>
+            <p class="workstream__copy">Prebuilt plugins, community directory, review data, security reports, and compatibility signals.</p>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap-section">
+    <div class="roadmap-wrap">
+      <div class="principles">
+        <div class="principles__panel principles__panel--accent">
+          <h2 class="principles__title">Roadmap rules</h2>
+          <p class="principles__copy">The project stays useful by refusing fake certainty. A capability graduates when it is dogfooded, documented, and replaceable through the plugin contract.</p>
+        </div>
+        <div class="principles__panel">
+          <ul class="principles__list">
+            <li><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span>Dogfood first: this website should prove framework features before the page claims them.</span></li>
+            <li><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span>Plugins are the boundary: official batteries do not get a private path through the framework.</span></li>
+            <li><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg><span>Status is honest: planned work is marked planned, missing numbers stay missing, and shipped means documented enough to use.</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="roadmap-section">
+    <div class="roadmap-wrap">
+      <div class="roadmap-cta">
+        <div>
+          <h2 class="roadmap-cta__title">Follow the work where it happens.</h2>
+          <p class="roadmap-cta__copy">The public roadmap summarizes direction. The changelog, feature catalog, and GitHub repository carry the details as work ships.</p>
+        </div>
+        <div class="roadmap-cta__actions">
+          <a href="https://github.com/dalmasonto/umbral" target="_blank" rel="noopener" class="roadmap-cta__link">
+            GitHub
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+          <a href="/community" class="roadmap-cta__link roadmap-cta__link--ghost">Community</a>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

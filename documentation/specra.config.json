@@ -1,13 +1,13 @@
 {
   "$schema": "https://raw.githubusercontent.com/SpecraDocs/specra-sdk/main/config/specra.config.schema.json",
   "site": {
-    "title": "Umbra",
+    "title": "Umbral",
     "description": "Batteries-included Rust web framework: ORM, managed migrations, REST API, admin, auth, sessions, tasks, email. Built on axum + sqlx.",
     "url": "http://localhost:5173",
     "baseUrl": "/",
     "language": "en",
-    "organizationName": "umbra",
-    "projectName": "umbra",
+    "organizationName": "umbral",
+    "projectName": "umbral",
     "activeVersion": "v0.0.1",
     "defaultProduct": {
       "label": "Docs",
@@ -27,19 +27,19 @@
     "tocMaxDepth": 3
   },
   "social": {
-    "github": "https://github.com/dalmasonto/umbra"
+    "github": "https://github.com/dalmasonto/umbral"
   },
   "search": {
     "enabled": false
   },
   "footer": {
-    "copyright": "Copyright © 2026 Umbra. MIT licensed.",
+    "copyright": "Copyright © 2026 Umbral. MIT licensed.",
     "links": [
       {
         "title": "Documentation",
         "items": [
           {
-            "label": "What is Umbra?",
+            "label": "What is Umbral?",
             "href": "/docs/v0.0.1/about"
           }
         ]
@@ -49,14 +49,14 @@
         "items": [
           {
             "label": "GitHub",
-            "href": "https://github.com/dalmasonto/umbra"
+            "href": "https://github.com/dalmasonto/umbral"
           }
         ]
       }
     ]
   },
   "features": {
-    "editUrl": "https://github.com/dalmasonto/umbra/edit/main/documentation/docs",
+    "editUrl": "https://github.com/dalmasonto/umbral/edit/main/documentation/docs",
     "showLastUpdated": true,
     "showReadingTime": true,
     "showAuthors": false,

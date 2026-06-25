@@ -32,7 +32,7 @@
 //!
 //! ```text
 //! cd examples/starknet-explorer
-//! export UMBRA_DATABASE_URL=postgres://user:pass@localhost/starknet_explorer
+//! export UMBRAL_DATABASE_URL=postgres://user:pass@localhost/starknet_explorer
 //!
 //! cargo run -- makemigrations      # generate migration files for all 4 apps
 //! cargo run -- migrate             # run_shared: SHARED apps (tenants/access/content) -> public ONLY
@@ -48,10 +48,10 @@
 //!
 //! ## Why `run_shared` and not `migrate`/`run`
 //!
-//! The plain `migrate` (`umbra::migrate::run()`) would migrate **every** app
+//! The plain `migrate` (`umbral::migrate::run()`) would migrate **every** app
 //! into `public`, including the `explorer` tenant tables — exactly what we do
 //! NOT want, because `transaction`/`address`/`token` must exist only inside each
-//! network's schema. `umbra::migrate::run_shared(&shared_set)` migrates ONLY the
+//! network's schema. `umbral::migrate::run_shared(&shared_set)` migrates ONLY the
 //! shared apps into `public`. The `explorer` tenant tables are then created
 //! per-network by `create_tenant` (CREATE SCHEMA + migrate the tenant apps into
 //! that schema) on boot.
@@ -62,8 +62,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use umbra::prelude::*;
-use umbra_tenants::{MissingTenant, TenantsPlugin};
+use umbral::prelude::*;
+use umbral_tenants::{MissingTenant, TenantsPlugin};
 
 // ---------------------------------------------------------------------------
 // `explorer` — the TENANT app. The one app named in `tenant_apps`, so these
@@ -72,11 +72,11 @@ use umbra_tenants::{MissingTenant, TenantsPlugin};
 
 /// A Starknet transaction. Per-network: Sepolia's txs and Mainnet's txs live in
 /// separate schemas and never mix.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "transaction")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "transaction")]
 pub struct Transaction {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub hash: String,
     pub block_number: i64,
     pub sender_address: String,
@@ -88,22 +88,22 @@ pub struct Transaction {
 }
 
 /// A Starknet account / contract address. Per-network.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "address")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "address")]
 pub struct Address {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub address: String,
     pub class_hash: String,
     pub nonce: i64,
 }
 
 /// A token deployed on this network. Per-network.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "token")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "token")]
 pub struct Token {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub contract_address: String,
     pub name: String,
     pub symbol: String,
@@ -120,8 +120,8 @@ impl Plugin for ExplorerPlugin {
         "explorer"
     }
 
-    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
-        use umbra::migrate::ModelMeta;
+    fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
+        use umbral::migrate::ModelMeta;
         vec![
             ModelMeta::for_::<Transaction>(),
             ModelMeta::for_::<Address>(),
@@ -136,11 +136,11 @@ impl Plugin for ExplorerPlugin {
 
 /// An API key. Cross-network: the same keys authorize requests on every
 /// network, so they live once in `public`.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "api_key")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "api_key")]
 pub struct ApiKey {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub key: String,
     pub label: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -154,8 +154,8 @@ impl Plugin for AccessPlugin {
         "access"
     }
 
-    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
-        use umbra::migrate::ModelMeta;
+    fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
+        use umbral::migrate::ModelMeta;
         vec![ModelMeta::for_::<ApiKey>()]
     }
 }
@@ -165,11 +165,11 @@ impl Plugin for AccessPlugin {
 // ---------------------------------------------------------------------------
 
 /// A blog post. Cross-network marketing content: identical under every network.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "blog_post")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "blog_post")]
 pub struct BlogPost {
     pub id: i64,
-    #[umbra(unique)]
+    #[umbral(unique)]
     pub slug: String,
     pub title: String,
     pub body: String,
@@ -184,8 +184,8 @@ impl Plugin for ContentPlugin {
         "content"
     }
 
-    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
-        use umbra::migrate::ModelMeta;
+    fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
+        use umbral::migrate::ModelMeta;
         vec![ModelMeta::for_::<BlogPost>()]
     }
 }
@@ -204,12 +204,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !settings.database_url.starts_with("postgres") {
         eprintln!(
             "starknet-explorer example: schema-per-tenant (networks as tenants) is \
-             Postgres-only. Set UMBRA_DATABASE_URL=postgres://… and run again."
+             Postgres-only. Set UMBRAL_DATABASE_URL=postgres://… and run again."
         );
         return Ok(());
     }
 
-    let pool = umbra::db::connect(&settings.database_url).await?;
+    let pool = umbral::db::connect(&settings.database_url).await?;
 
     let args: Vec<String> = std::env::args().collect();
     let is_serve = args.len() <= 1;
@@ -260,8 +260,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // tables (transaction/address/token) are NEVER created in `public` —
         // they exist only inside each network's schema (created by
         // `create_tenant` on boot, or by `migrate_schemas`).
-        match umbra::cli::dispatch(app.plugins(), args.clone()).await? {
-            umbra::cli::DispatchOutcome::Matched(name) => {
+        match umbral::cli::dispatch(app.plugins(), args.clone()).await? {
+            umbral::cli::DispatchOutcome::Matched(name) => {
                 tracing::info!(%name, "command done");
                 return Ok(());
             }
@@ -273,12 +273,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     // this AND the tenant schemas in one go; on a first run
                     // there are no tenants yet, so the public step is enough.)
                     let shared = TenantsPlugin::new().tenant_app(&ExplorerPlugin).shared_app_set();
-                    let n = umbra::migrate::run_shared(&shared).await?;
+                    let n = umbral::migrate::run_shared(&shared).await?;
                     tracing::info!(applied = n, "migrate (shared apps → public) done");
                     return Ok(());
                 }
                 if args.get(1).map(String::as_str) == Some("makemigrations") {
-                    let written = umbra::migrate::make().await?;
+                    let written = umbral::migrate::make().await?;
                     tracing::info!(?written, "makemigrations done");
                     return Ok(());
                 }
@@ -306,9 +306,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    // Bind address is configurable via `UMBRA_BIND` (default `127.0.0.1:3000`)
+    // Bind address is configurable via `UMBRAL_BIND` (default `127.0.0.1:3000`)
     // so two examples can run side by side without colliding on a port.
-    let bind = std::env::var("UMBRA_BIND").unwrap_or_else(|_| "127.0.0.1:3000".into());
+    let bind = std::env::var("UMBRAL_BIND").unwrap_or_else(|_| "127.0.0.1:3000".into());
     tracing::info!(
         "serving on http://{bind}  (try: curl -H 'X-Network: sepolia.localhost' {bind}/txs/seed)"
     );
@@ -322,14 +322,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 // ---------------------------------------------------------------------------
 
 /// Which network is active + the curl hints.
-async fn root() -> Json<umbra::_serde_json::Value> {
-    let ctx = umbra::db::route_context();
+async fn root() -> Json<umbral::_serde_json::Value> {
+    let ctx = umbral::db::route_context();
     let active = ctx
         .tenant()
         .map(|t| t.as_str().to_string())
         .unwrap_or_else(|| "(none — falling through to public)".into());
-    Json(umbra::_serde_json::json!({
-        "app": "umbra starknet explorer — networks are tenants",
+    Json(umbral::_serde_json::json!({
+        "app": "umbral starknet explorer — networks are tenants",
         "active_network": active,
         "hint": "Resolve a network with the X-Network header (or an *.localhost subdomain).",
         "per_network_isolated": ["/txs", "/txs/seed", "/tokens", "/tokens/seed"],
@@ -344,17 +344,17 @@ async fn root() -> Json<umbra::_serde_json::Value> {
 }
 
 /// TENANT-ISOLATED read: only this network's transactions.
-async fn list_txs() -> Json<umbra::_serde_json::Value> {
+async fn list_txs() -> Json<umbral::_serde_json::Value> {
     match Transaction::objects().fetch().await {
-        Ok(txs) => Json(umbra::_serde_json::json!({ "count": txs.len(), "transactions": txs })),
-        Err(e) => Json(umbra::_serde_json::json!({ "error": format!("did you send X-Network? {e}") })),
+        Ok(txs) => Json(umbral::_serde_json::json!({ "count": txs.len(), "transactions": txs })),
+        Err(e) => Json(umbral::_serde_json::json!({ "error": format!("did you send X-Network? {e}") })),
     }
 }
 
 /// TENANT-ISOLATED write: seed one demo tx into the ACTIVE network's schema.
 /// Run it under Sepolia and under Mainnet and the two networks accumulate
 /// DIFFERENT transactions.
-async fn seed_tx() -> Json<umbra::_serde_json::Value> {
+async fn seed_tx() -> Json<umbral::_serde_json::Value> {
     let now = chrono::Utc::now();
     let tx = Transaction {
         id: 0,
@@ -366,21 +366,21 @@ async fn seed_tx() -> Json<umbra::_serde_json::Value> {
         timestamp: now,
     };
     match Transaction::objects().create(tx).await {
-        Ok(saved) => Json(umbra::_serde_json::json!({ "created": saved })),
-        Err(e) => Json(umbra::_serde_json::json!({ "error": format!("did you send X-Network? {e}") })),
+        Ok(saved) => Json(umbral::_serde_json::json!({ "created": saved })),
+        Err(e) => Json(umbral::_serde_json::json!({ "error": format!("did you send X-Network? {e}") })),
     }
 }
 
 /// TENANT-ISOLATED read: only this network's tokens.
-async fn list_tokens() -> Json<umbra::_serde_json::Value> {
+async fn list_tokens() -> Json<umbral::_serde_json::Value> {
     match Token::objects().fetch().await {
-        Ok(tokens) => Json(umbra::_serde_json::json!({ "count": tokens.len(), "tokens": tokens })),
-        Err(e) => Json(umbra::_serde_json::json!({ "error": format!("did you send X-Network? {e}") })),
+        Ok(tokens) => Json(umbral::_serde_json::json!({ "count": tokens.len(), "tokens": tokens })),
+        Err(e) => Json(umbral::_serde_json::json!({ "error": format!("did you send X-Network? {e}") })),
     }
 }
 
 /// TENANT-ISOLATED write: seed one demo token into the ACTIVE network's schema.
-async fn seed_token() -> Json<umbra::_serde_json::Value> {
+async fn seed_token() -> Json<umbral::_serde_json::Value> {
     let now = chrono::Utc::now();
     let token = Token {
         id: 0,
@@ -390,21 +390,21 @@ async fn seed_token() -> Json<umbra::_serde_json::Value> {
         decimals: 18,
     };
     match Token::objects().create(token).await {
-        Ok(saved) => Json(umbra::_serde_json::json!({ "created": saved })),
-        Err(e) => Json(umbra::_serde_json::json!({ "error": format!("did you send X-Network? {e}") })),
+        Ok(saved) => Json(umbral::_serde_json::json!({ "created": saved })),
+        Err(e) => Json(umbral::_serde_json::json!({ "error": format!("did you send X-Network? {e}") })),
     }
 }
 
 /// SHARED read: blog posts are identical under every network (live in public).
-async fn list_blog() -> Json<umbra::_serde_json::Value> {
+async fn list_blog() -> Json<umbral::_serde_json::Value> {
     match BlogPost::objects().fetch().await {
-        Ok(posts) => Json(umbra::_serde_json::json!({ "count": posts.len(), "posts": posts })),
-        Err(e) => Json(umbra::_serde_json::json!({ "error": e.to_string() })),
+        Ok(posts) => Json(umbral::_serde_json::json!({ "count": posts.len(), "posts": posts })),
+        Err(e) => Json(umbral::_serde_json::json!({ "error": e.to_string() })),
     }
 }
 
 /// SHARED write: a blog post lands in public — visible under every network.
-async fn seed_blog() -> Json<umbra::_serde_json::Value> {
+async fn seed_blog() -> Json<umbral::_serde_json::Value> {
     let now = chrono::Utc::now();
     let post = BlogPost {
         id: 0,
@@ -414,15 +414,15 @@ async fn seed_blog() -> Json<umbra::_serde_json::Value> {
         published_at: now,
     };
     match BlogPost::objects().create(post).await {
-        Ok(saved) => Json(umbra::_serde_json::json!({ "created": saved })),
-        Err(e) => Json(umbra::_serde_json::json!({ "error": e.to_string() })),
+        Ok(saved) => Json(umbral::_serde_json::json!({ "created": saved })),
+        Err(e) => Json(umbral::_serde_json::json!({ "error": e.to_string() })),
     }
 }
 
 /// SHARED read: API keys are identical under every network (live in public).
-async fn list_apikeys() -> Json<umbra::_serde_json::Value> {
+async fn list_apikeys() -> Json<umbral::_serde_json::Value> {
     match ApiKey::objects().fetch().await {
-        Ok(keys) => Json(umbra::_serde_json::json!({ "count": keys.len(), "api_keys": keys })),
-        Err(e) => Json(umbra::_serde_json::json!({ "error": e.to_string() })),
+        Ok(keys) => Json(umbral::_serde_json::json!({ "count": keys.len(), "api_keys": keys })),
+        Err(e) => Json(umbral::_serde_json::json!({ "error": e.to_string() })),
     }
 }

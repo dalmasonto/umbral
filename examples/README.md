@@ -1,23 +1,23 @@
 # Examples
 
-Standalone test apps that exercise umbra as a consumer would.
+Standalone test apps that exercise umbral as a consumer would.
 
-Each subdirectory is its own Cargo project, **not** a member of the umbra workspace. They depend on the local umbra via a relative path:
+Each subdirectory is its own Cargo project, **not** a member of the umbral workspace. They depend on the local umbral via a relative path:
 
 ```toml
 # examples/<name>/Cargo.toml
 [dependencies]
-umbra = { path = "../../crates/umbra" }
+umbral = { path = "../../crates/umbral" }
 ```
 
-Running this way preserves the experience of `cargo add umbra` from a real downstream project: the example only sees what the facade re-exports, and missing prelude entries fail loudly at the example boundary rather than silently inside the workspace.
+Running this way preserves the experience of `cargo add umbral` from a real downstream project: the example only sees what the facade re-exports, and missing prelude entries fail loudly at the example boundary rather than silently inside the workspace.
 
 ## Adding a new example
 
 ```bash
 cd examples
 cargo new <name>
-# edit examples/<name>/Cargo.toml to add the umbra path dep
+# edit examples/<name>/Cargo.toml to add the umbral path dep
 ```
 
 The example then runs standalone:

@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **umbra** (15583 symbols, 32946 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **umbral** (15583 symbols, 32946 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -24,10 +24,10 @@ This project is indexed by GitNexus as **umbra** (15583 symbols, 32946 relations
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/umbra/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/umbra/clusters` | All functional areas |
-| `gitnexus://repo/umbra/processes` | All execution flows |
-| `gitnexus://repo/umbra/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/umbral/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/umbral/clusters` | All functional areas |
+| `gitnexus://repo/umbral/processes` | All execution flows |
+| `gitnexus://repo/umbral/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

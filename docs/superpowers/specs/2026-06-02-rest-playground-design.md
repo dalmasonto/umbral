@@ -1,30 +1,30 @@
-# umbra-playground — design spec
+# umbral-playground — design spec
 
 **Status:** approved design, ready for implementation planning
 **Date:** 2026-06-02
-**Scope:** MVP frontend, reuses the existing `umbra-openapi` JSON spec, no auth-aware spec extensions, no server-side persistence.
+**Scope:** MVP frontend, reuses the existing `umbral-openapi` JSON spec, no auth-aware spec extensions, no server-side persistence.
 
 ## 1. Goal
 
-Ship a new plugin `umbra-playground` that mounts a Postman-style API playground UI at `/api/playground/`. The plugin takes its input from the existing `umbra-openapi` plugin's JSON spec, fetched at runtime over HTTP. The UI is a 3-pane React app bundled at compile time by esbuild and tailwindcss, both invoked from `build.rs`.
+Ship a new plugin `umbral-playground` that mounts a Postman-style API playground UI at `/api/playground/`. The plugin takes its input from the existing `umbral-openapi` plugin's JSON spec, fetched at runtime over HTTP. The UI is a 3-pane React app bundled at compile time by esbuild and tailwindcss, both invoked from `build.rs`.
 
 This is the MVP for `bugs/features.md` item 6. Auth-aware spec extensions, schema-driven form body editors, and a server-side `SavedRequest` model are explicit non-goals for v1 — they are listed in §11 as follow-up work.
 
 ## 2. Architecture
 
-**New crate:** `plugins/umbra-playground/`, added to `crates/Cargo.toml` `[workspace.members]`.
+**New crate:** `plugins/umbral-playground/`, added to `crates/Cargo.toml` `[workspace.members]`.
 
 **Dependency graph (after this change):**
 
 ```
-umbra-playground  →  umbra (facade)         (no umbra-openapi dep)
-umbra-openapi     →  umbra, umbra-rest      (unchanged)
-umbra-rest        →  umbra                  (unchanged)
+umbral-playground  →  umbral (facade)         (no umbral-openapi dep)
+umbral-openapi     →  umbral, umbral-rest      (unchanged)
+umbral-rest        →  umbral                  (unchanged)
 ```
 
-`umbra-core` continues to depend on no plugins. The architectural rule that the framework's center has no edges to plugin crates is preserved.
+`umbral-core` continues to depend on no plugins. The architectural rule that the framework's center has no edges to plugin crates is preserved.
 
-**Cross-plugin integration:** the playground reads the spec at runtime via `fetch('/openapi/openapi.json')`. It does not import the `umbra-openapi` Rust crate. This keeps the two plugins coupled at the data layer (JSON over HTTP) rather than the Rust code layer, and means the playground renders any OpenAPI 3.0 spec, not just `umbra-openapi`'s output.
+**Cross-plugin integration:** the playground reads the spec at runtime via `fetch('/openapi/openapi.json')`. It does not import the `umbral-openapi` Rust crate. This keeps the two plugins coupled at the data layer (JSON over HTTP) rather than the Rust code layer, and means the playground renders any OpenAPI 3.0 spec, not just `umbral-openapi`'s output.
 
 **Mount points:**
 
@@ -36,7 +36,7 @@ Both are configurable via `PlaygroundPlugin::new().at("/api/playground/")`, matc
 ## 3. Crate layout
 
 ```
-plugins/umbra-playground/
+plugins/umbral-playground/
   Cargo.toml
   build.rs                     # esbuild + tailwind CLI invocations
   README.md
@@ -83,8 +83,8 @@ plugins/umbra-playground/
 **Generated, gitignored:**
 
 ```
-plugins/umbra-playground/dist/playground.<hash>.js
-plugins/umbra-playground/dist/playground.<hash>.css
+plugins/umbral-playground/dist/playground.<hash>.js
+plugins/umbral-playground/dist/playground.<hash>.css
 ```
 
 ## 4. Build pipeline
@@ -105,8 +105,8 @@ plugins/umbra-playground/dist/playground.<hash>.css
 **`.gitignore` updates:**
 
 ```
-plugins/umbra-playground/dist/
-plugins/umbra-playground/src/generated_assets.rs
+plugins/umbral-playground/dist/
+plugins/umbral-playground/src/generated_assets.rs
 ```
 
 ## 5. Component model
@@ -150,7 +150,7 @@ Resizable panes are a v2 candidate. v1 is a fixed grid.
 
 ## 6. State
 
-A single zustand store (`state/store.ts`) with `persist` middleware writing to `localStorage` under `umbra-playground:history:v1`.
+A single zustand store (`state/store.ts`) with `persist` middleware writing to `localStorage` under `umbral-playground:history:v1`.
 
 ```ts
 interface PlaygroundState {
@@ -245,7 +245,7 @@ Vitest is invoked from `cargo test` via `build.rs`-driven `npx vitest run` in te
 
 **Internal:**
 
-- `plugins/umbra-playground/README.md` — what it is, install steps, builder shape, v1 limitations.
+- `plugins/umbral-playground/README.md` — what it is, install steps, builder shape, v1 limitations.
 - This spec lives at `docs/superpowers/specs/2026-06-02-rest-playground-design.md`.
 
 **User-facing (per project rule "ship a feature, ship its doc page"):**
@@ -257,7 +257,7 @@ Vitest is invoked from `cargo test` via `build.rs`-driven `npx vitest run` in te
 
 Explicitly deferred:
 
-- **Auth-aware spec extensions.** v1 has a manual bearer-token input. v2 will extend `umbra-openapi` to emit `securitySchemes`/`security` from the registered `Authentication` trait, and the playground will render scheme-specific UIs.
+- **Auth-aware spec extensions.** v1 has a manual bearer-token input. v2 will extend `umbral-openapi` to emit `securitySchemes`/`security` from the registered `Authentication` trait, and the playground will render scheme-specific UIs.
 - **Schema-driven form body editor.** v1 is a JSON `<textarea>` with Format. v2 could use a generated form from the spec's schema.
 - **Server-side request history.** v1 is localStorage only. A `SavedRequest` model + migration is a future plugin.
 - **CORS proxy / cross-origin API targets.** v1 is same-origin only.
@@ -269,7 +269,7 @@ Explicitly deferred:
 
 Each milestone ships as one commit. Total: 6 commits, each independently revertable.
 
-**M1 — Plugin skeleton.** Crate scaffolds, builds, registers 0 routes. `cargo build -p umbra-playground` succeeds. Workspace members updated. Cargo.toml committed.
+**M1 — Plugin skeleton.** Crate scaffolds, builds, registers 0 routes. `cargo build -p umbral-playground` succeeds. Workspace members updated. Cargo.toml committed.
 
 **M2 — `build.rs` + esbuild + tailwind + placeholder HTML.** Build pipeline proven. `/api/playground/` returns a styled "Hello, playground" page on a machine with the tools, and a degraded placeholder without. Degrades gracefully.
 
@@ -285,7 +285,7 @@ Each milestone ships as one commit. Total: 6 commits, each independently reverta
 
 - `cargo build` succeeds with Node + esbuild + tailwindcss installed.
 - `cargo build` succeeds *with a warning* (and a degraded UI) without them.
-- `cargo test -p umbra-playground` passes.
+- `cargo test -p umbral-playground` passes.
 - `npx vitest run` in the plugin dir passes.
 - A user can register `PlaygroundPlugin::new().at("/api/playground/")` next to `RestPlugin` and `OpenApiPlugin`, and `GET /api/playground/` returns a working 3-pane UI.
 - The MDX page is linked from the sidebar and renders.

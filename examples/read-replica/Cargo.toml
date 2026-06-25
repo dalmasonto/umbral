@@ -1,12 +1,12 @@
 [package]
-name = "umbra-read-replica"
+name = "umbral-read-replica"
 version = "0.1.0"
 edition = "2024"
-description = "Standalone umbra example: a DatabaseRouter that splits reads to a replica pool and writes to the primary."
+description = "Standalone umbral example: a DatabaseRouter that splits reads to a replica pool and writes to the primary."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-umbra = { path = "../../crates/umbra" }
+umbral = { path = "../../crates/umbral" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # The model derives sqlx::FromRow + serde; the schema bootstrap runs a raw
 # CREATE TABLE on the pool (an example shortcut — a real app uses migrations).

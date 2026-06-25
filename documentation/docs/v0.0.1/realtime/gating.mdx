@@ -41,9 +41,9 @@ Every policy receives `user_id: Option<&str>` — the authenticated user's PK st
 Two ways to populate it:
 
 <Tabs>
-<Tab title="umbra-auth sessions">
+<Tab title="umbral-auth sessions">
 
-If you use `umbra-auth`, enable the `auth` feature and call `with_auth_sessions()`. It reads the session cookie at the handshake and resolves the logged-in user's id:
+If you use `umbral-auth`, enable the `auth` feature and call `with_auth_sessions()`. It reads the session cookie at the handshake and resolves the logged-in user's id:
 
 ```rust
 RealtimePlugin::new()
@@ -142,7 +142,7 @@ A clean pattern for sensitive data that avoids gating logic entirely: never put 
 When a closure isn't enough (you want state, or shared helpers across methods), implement the `GroupPolicy` trait on your own type and pass it to `group_policy`:
 
 ```rust
-use umbra_realtime::{GroupPolicy, RealtimePlugin};
+use umbral_realtime::{GroupPolicy, RealtimePlugin};
 
 struct AppPolicy {
     // ... any state you need

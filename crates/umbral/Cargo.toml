@@ -1,0 +1,40 @@
+[package]
+name = "umbral"
+description = "A Django-shape web framework for Rust. The facade: re-exports umbral-core and umbral-macros as one stable surface (`use umbral::prelude::*`)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbral-core = { path = "../umbral-core", version = "0.0.1" }
+umbral-macros = { path = "../umbral-macros", version = "0.0.1" }
+# Re-exported by the facade as `umbral::templates::context!` so user
+# crates don't need a direct minijinja dep just to build a render
+# context. The engine itself lives in umbral-core; this is the macro
+# only.
+minijinja = "2"
+# Re-exported as `umbral::_serde_json` so macro-generated code (the
+# `HydrateRelated` impl from `#[derive(Model)]`) can reference
+# `serde_json::Value` and `from_value` without requiring user crates
+# to declare a direct `serde_json` dep.
+serde_json = "1"
+# Re-exported as `umbral::_sqlx` so macro-generated code from
+# `#[derive(Choices)]` (sqlx::Type / Encode / Decode impls) compiles
+# in user crates without forcing them to declare a direct sqlx dep
+# with matching feature flags. Feature set mirrors umbral-core: native
+# Sqlite + Postgres + chrono / uuid / json.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "chrono", "uuid", "json"] }
+# Re-exported as `umbral::async_trait` so plugin authors can write
+# `#[umbral::async_trait] impl Middleware for ...` (feature #68) without a
+# direct async-trait dependency. The trait it desugars is dyn-compatible,
+# which native `async fn` in traits is not — hence the macro.
+async-trait = "0.1"
+
+[dev-dependencies]
+# `tests/models_macro.rs` declares throwaway `#[derive(Model)]`
+# structs to exercise the `models![T, U, V]` macro expansion.
+# `Model` requires `serde::{Serialize, Deserialize} + sqlx::FromRow`.
+serde = { version = "1", features = ["derive"] }

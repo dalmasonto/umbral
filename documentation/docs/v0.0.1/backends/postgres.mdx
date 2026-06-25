@@ -1,24 +1,24 @@
 ---
 title: PostgreSQL
-description: Point an umbra app at Postgres - connection URL, migrations, queries, and the Postgres-only field types.
+description: Point an umbral app at Postgres - connection URL, migrations, queries, and the Postgres-only field types.
 sidebar_position: 1
 icon: database
 tags: [postgres, backends, database]
 ---
 
-PostgreSQL is umbra's first-class production backend. The plain `Article::objects().fetch()` you write against SQLite runs unchanged against Postgres; the migration engine emits Postgres-flavoured DDL; and a set of Postgres-only field types (arrays, INET/CIDR/MACADDR, JSONB operators, full-text search) opens up the engine where the workload calls for it.
+PostgreSQL is umbral's first-class production backend. The plain `Article::objects().fetch()` you write against SQLite runs unchanged against Postgres; the migration engine emits Postgres-flavoured DDL; and a set of Postgres-only field types (arrays, INET/CIDR/MACADDR, JSONB operators, full-text search) opens up the engine where the workload calls for it.
 
 ## Configure
 
-Point `DATABASE_URL` (env or `umbra.toml`) at a `postgres://` (or `postgresql://`) URL. `umbra::db::connect` dispatches on the URL scheme and returns the matching [`DbPool`] variant.
+Point `DATABASE_URL` (env or `umbral.toml`) at a `postgres://` (or `postgresql://`) URL. `umbral::db::connect` dispatches on the URL scheme and returns the matching [`DbPool`] variant.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::from_env()?;
-    let pool = umbra::db::connect(&settings.database_url).await?;
+    let pool = umbral::db::connect(&settings.database_url).await?;
 
     let app = App::builder()
         .settings(settings)
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `App::build()` cross-checks `settings.database_url` against the pool's runtime backend. A mismatch (URL says `postgres://` but the pool is `DbPool::Sqlite`, or vice versa) is a hard `BuildError::DatabaseBackendMismatch` at boot, not a silent failure on the first query.
 
 <Callout type="info">
-**Pooling.** `connect` returns a sqlx `PgPool` wrapped in the `DbPool` enum, with umbra's pool configuration already applied — `max_connections`, `min_connections`, a bounded `acquire_timeout` (so a saturated pool fails fast instead of blocking forever), `idle_timeout`, `max_lifetime`, and `test_before_acquire`. Tune all of them from settings (`UMBRA_DB_*` env vars or `umbra.toml`) — see [Connection pooling](../orm/connection-pooling) for the full knob list and defaults. The pool is process-wide, shared between every handler, and emits one boot-log line with its effective configuration.
+**Pooling.** `connect` returns a sqlx `PgPool` wrapped in the `DbPool` enum, with umbral's pool configuration already applied — `max_connections`, `min_connections`, a bounded `acquire_timeout` (so a saturated pool fails fast instead of blocking forever), `idle_timeout`, `max_lifetime`, and `test_before_acquire`. Tune all of them from settings (`UMBRAL_DB_*` env vars or `umbral.toml`) — see [Connection pooling](../orm/connection-pooling) for the full knob list and defaults. The pool is process-wide, shared between every handler, and emits one boot-log line with its effective configuration.
 </Callout>
 
 ## Migrations
@@ -71,20 +71,20 @@ let articles = Article::objects().on_pg(&pg_pool).fetch().await?;
 
 ## Postgres-only field types
 
-Some workloads benefit enough from native PG features to make the SQLite story irrelevant. Umbra exposes them as first-class field types; the boot-time system check refuses to start if you register one against a SQLite pool, with a clear error pointing at the offending model.
+Some workloads benefit enough from native PG features to make the SQLite story irrelevant. Umbral exposes them as first-class field types; the boot-time system check refuses to start if you register one against a SQLite pool, with a clear error pointing at the offending model.
 
 | Type | Rust field | Postgres column | Notes |
 |------|------------|-----------------|-------|
 | Array | `Vec<T>` / `Option<Vec<T>>` | `T[]` | Element type is one of `i32`, `i64`, `String`, `Uuid`, `bool`. See [orm/models - Array columns](../orm/models#array-columns). |
 | JSONB | `serde_json::Value` (M3 `Json` SqlType) | `JSONB` | Indexed `->`, `->>` operator surface; the QuerySet exposes them as `.has_key("key")` and `.path_text(&["a", "b"]).eq("v")`. See [orm/querying - JSON column ops](../orm/querying#json-column-ops). |
 | INET / CIDR / MACADDR | `IpNet`-style newtypes | `INET`, `CIDR`, `MACADDR` | Networking fields. [orm/models - Network address columns](../orm/models#network-address-columns). |
-| TSVECTOR | `umbra::orm::TsVector` | `TSVECTOR` | Full-text search. Populate via trigger or `GENERATED ALWAYS AS (to_tsvector(...))`. [orm/models - Full-text search columns](../orm/models#full-text-search-columns). |
+| TSVECTOR | `umbral::orm::TsVector` | `TSVECTOR` | Full-text search. Populate via trigger or `GENERATED ALWAYS AS (to_tsvector(...))`. [orm/models - Full-text search columns](../orm/models#full-text-search-columns). |
 
 Plus the standard cross-backend types (`Boolean`, `Uuid`, `Timestamptz`, etc.) all map to their native Postgres equivalents (`BOOLEAN`, `UUID`, `TIMESTAMP WITH TIME ZONE`) on this backend.
 
 ## inspectdb (Postgres)
 
-`inspectdb` walks `pg_catalog` and `information_schema` to produce umbra `Model` definitions for every table in an existing database:
+`inspectdb` walks `pg_catalog` and `information_schema` to produce umbral `Model` definitions for every table in an existing database:
 
 ```bash
 cargo run -- inspectdb --output src/legacy
@@ -92,15 +92,15 @@ cargo run -- inspectdb --output src/legacy
 # -> Wrote src/legacy/migrations/app/0001_initial.json
 ```
 
-`--output` is a directory: inspectdb writes a `models.rs` with one `#[derive(Model)]` struct per table plus a `0001_initial.json` migration, ready to drop into a module and register from a plugin (or via `.model::<T>()`). Round-trip integration coverage lives in `crates/umbra-core/tests/postgres_inspect.rs`. See the [inspectdb page](../migrations/inspectdb) for the full flag set (`--mark-applied`, adopting a populated DB).
+`--output` is a directory: inspectdb writes a `models.rs` with one `#[derive(Model)]` struct per table plus a `0001_initial.json` migration, ready to drop into a module and register from a plugin (or via `.model::<T>()`). Round-trip integration coverage lives in `crates/umbral-core/tests/postgres_inspect.rs`. See the [inspectdb page](../migrations/inspectdb) for the full flag set (`--mark-applied`, adopting a populated DB).
 
 ## Row-Level Security
 
-Postgres's Row-Level Security is the right tool for per-row access control that the database enforces regardless of how the row is queried. The `umbra-rls` plugin ([Row-Level Security (umbra-rls)](../plugins/rls)) wraps the `CREATE POLICY` shape and runs at `Plugin::on_ready` time. On a SQLite backend the plugin logs and skips, so RLS-using apps stay dev-portable.
+Postgres's Row-Level Security is the right tool for per-row access control that the database enforces regardless of how the row is queried. The `umbral-rls` plugin ([Row-Level Security (umbral-rls)](../plugins/rls)) wraps the `CREATE POLICY` shape and runs at `Plugin::on_ready` time. On a SQLite backend the plugin logs and skips, so RLS-using apps stay dev-portable.
 
 ## Type catalogue
 
-The complete `SqlType` → Postgres column-type mapping lives in `crates/umbra-core/src/backend.rs`. Highlights:
+The complete `SqlType` → Postgres column-type mapping lives in `crates/umbral-core/src/backend.rs`. Highlights:
 
 | `SqlType` | Postgres column |
 |-----------|-----------------|
@@ -118,5 +118,5 @@ The complete `SqlType` → Postgres column-type mapping lives in `crates/umbra-c
 ## See also
 
 - [SQLite backend](./sqlite) - the dev / test counterpart.
-- [Row-Level Security (umbra-rls)](../plugins/rls) - Postgres-only policy plugin.
+- [Row-Level Security (umbral-rls)](../plugins/rls) - Postgres-only policy plugin.
 - [orm/models - Postgres-only column types](../orm/models#json-columns) - array / JSON / network / full-text field declarations and operator surface.

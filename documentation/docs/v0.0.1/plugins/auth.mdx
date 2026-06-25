@@ -1,24 +1,24 @@
 ---
 title: Authentication
-description: umbra-auth plugin - AuthUser model, argon2 password hashing, session login helpers, and the custom user model swap.
+description: umbral-auth plugin - AuthUser model, argon2 password hashing, session login helpers, and the custom user model swap.
 sidebar_position: 3
 tags: [auth, users, passwords, custom-user-model]
 ---
 
 # Authentication
 
-The `umbra-auth` plugin is the built-in authentication layer. It ships a ready-to-use `AuthUser` model, argon2 password hashing, and the helpers that power the login flow. Structurally it is a plugin like any other: registering it with `App::builder().plugin(AuthPlugin::default())` is all you need.
+The `umbral-auth` plugin is the built-in authentication layer. It ships a ready-to-use `AuthUser` model, argon2 password hashing, and the helpers that power the login flow. Structurally it is a plugin like any other: registering it with `App::builder().plugin(AuthPlugin::default())` is all you need.
 
 ## Quick start
 
 ```toml
 # Cargo.toml
-umbra-auth = { path = "../../plugins/umbra-auth" }
+umbral-auth = { path = "../../plugins/umbral-auth" }
 ```
 
 ```rust
-use umbra::prelude::*;
-use umbra_auth::AuthPlugin;
+use umbral::prelude::*;
+use umbral_auth::AuthPlugin;
 
 let app = App::builder()
     .settings(settings)
@@ -50,7 +50,7 @@ pub struct AuthUser {
 ## Password helpers
 
 ```rust
-use umbra_auth::{hash_password, verify_password};
+use umbral_auth::{hash_password, verify_password};
 
 // Hash before storing.
 let hash = hash_password("hunter2")?;
@@ -65,7 +65,7 @@ let ok: bool = verify_password("hunter2", &hash)?;
 ## Create and authenticate users
 
 ```rust
-use umbra_auth::{create_user, authenticate, set_password};
+use umbral_auth::{create_user, authenticate, set_password};
 
 // Create a regular user.
 let user = create_user("alice", "alice@example.com", "s3cret").await?;
@@ -83,12 +83,12 @@ set_password(&mut user, "new-s3cret").await?;
 
 ## Sessions integration
 
-`umbra-auth` provides the `AuthUser`-aware login / logout bundle (it builds on `umbra-sessions`' user-agnostic primitives but lives in `umbra-auth` so it can name `AuthUser`):
+`umbral-auth` provides the `AuthUser`-aware login / logout bundle (it builds on `umbral-sessions`' user-agnostic primitives but lives in `umbral-auth` so it can name `AuthUser`):
 
 ```rust
-use umbra_auth::authenticate;
-use umbra_auth::AuthUser;
-use umbra_auth::login;
+use umbral_auth::authenticate;
+use umbral_auth::AuthUser;
+use umbral_auth::login;
 
 async fn login_handler(Form(form): Form<LoginForm>) -> Result<Response, StatusCode> {
     let user = authenticate::<AuthUser>(&form.username, &form.password)
@@ -102,7 +102,7 @@ async fn login_handler(Form(form): Form<LoginForm>) -> Result<Response, StatusCo
 }
 ```
 
-`umbra_auth::current_user(&headers)` and the `umbra_auth::{User, OptionalUser}` extractors resolve the session cookie back to an `AuthUser`. (`login_with_request` is the variant that also preserves an anonymous session's `data` across the login and bumps `last_login`.) See the [Sessions page](./sessions) for the session-row mechanics.
+`umbral_auth::current_user(&headers)` and the `umbral_auth::{User, OptionalUser}` extractors resolve the session cookie back to an `AuthUser`. (`login_with_request` is the variant that also preserves an anonymous session's `data` across the login and bumps `last_login`.) See the [Sessions page](./sessions) for the session-row mechanics.
 
 ## The `createsuperuser` management command
 
@@ -110,7 +110,7 @@ async fn login_handler(Form(form): Form<LoginForm>) -> Result<Response, StatusCo
 
 ```bash
 cargo run -- createsuperuser --username admin --email admin@example.com --noinput
-# reads password from UMBRA_SUPERUSER_PASSWORD
+# reads password from UMBRAL_SUPERUSER_PASSWORD
 ```
 
 ## The `AuthPlugin` builder surface
@@ -132,7 +132,7 @@ Password strength and rate limiting are both **on by default** and run at the re
 
 ## Guarding views
 
-Django has a `@login_required` decorator that gates a view behind authentication. umbra ships the same idea in two complementary shapes: a per-handler extractor and a per-Router layer. Both share one config struct that controls the unauthenticated response.
+Django has a `@login_required` decorator that gates a view behind authentication. umbral ships the same idea in two complementary shapes: a per-handler extractor and a per-Router layer. Both share one config struct that controls the unauthenticated response.
 
 ### The `LoginRequired` config
 
@@ -153,7 +153,7 @@ LoginRequired::html("/login")
 Drop `LoggedIn<U>` into a handler signature. The handler only runs when the request carries a valid, non-expired, authenticated session. On failure the extractor returns the configured rejection response.
 
 ```rust
-use umbra_auth::{AuthUser, login_required::LoggedIn};
+use umbral_auth::{AuthUser, login_required::LoggedIn};
 
 // REST handler - 401 JSON when unauthenticated (default config).
 async fn me(LoggedIn(user): LoggedIn<AuthUser>) -> Json<serde_json::Value> {
@@ -176,8 +176,8 @@ When used without a layer, the extractor falls back to `LoginRequired::API` (401
 Wrap a Router subtree with `LoginRequiredLayer` to gate every route in one call. Unauthenticated requests are rejected before the inner handler is called at all.
 
 ```rust
-use umbra_auth::login_required::{login_required, login_required_html};
-use umbra::web::{Router, get};
+use umbral_auth::login_required::{login_required, login_required_html};
+use umbral::web::{Router, get};
 
 // API subtree - 401 JSON.
 let api_routes = Router::new()
@@ -204,7 +204,7 @@ let router = public_routes.merge(api_routes).merge(app_routes);
 If you need to build the layer explicitly:
 
 ```rust
-use umbra_auth::login_required::{LoginRequired, LoginRequiredLayer};
+use umbral_auth::login_required::{LoginRequired, LoginRequiredLayer};
 
 let layer = LoginRequiredLayer::new(LoginRequired::html("/auth/login").no_next());
 let router = LoginRequiredLayer::new(LoginRequired::html("/auth/login"))
@@ -216,8 +216,8 @@ let router = LoginRequiredLayer::new(LoginRequired::html("/auth/login"))
 The two shapes compose naturally. A Router subtree can use the layer for the broad gate and then use the extractor in specific handlers for fine-grained access to the user:
 
 ```rust
-use umbra_auth::{AuthUser, login_required::{LoggedIn, login_required_html}};
-use umbra::web::{Router, get, Html};
+use umbral_auth::{AuthUser, login_required::{LoggedIn, login_required_html}};
+use umbral::web::{Router, get, Html};
 
 // Layer gates the whole subtree (unauthenticated → 302 /login).
 // LoggedIn in the handler gives us the authenticated user.
@@ -248,12 +248,12 @@ Mix both in one app: wrap the `/api/*` subtree with `login_required()` and the `
 
 ### See also
 
-- `plugins/umbra-auth/src/login_required.rs` - implementation with inline docs.
+- `plugins/umbral-auth/src/login_required.rs` - implementation with inline docs.
 - [Sessions](./sessions) - how the session cookie is created and how `current_user` works.
 
 ## Swapping the user model
 
-This is umbra's equivalent of Django's `AUTH_USER_MODEL`. In Django you set a string (`AUTH_USER_MODEL = "myapp.CustomUser"`); in umbra you use the type parameter directly, so the swap is validated at compile time with no runtime reflection involved.
+This is umbral's equivalent of Django's `AUTH_USER_MODEL`. In Django you set a string (`AUTH_USER_MODEL = "myapp.CustomUser"`); in umbral you use the type parameter directly, so the swap is validated at compile time with no runtime reflection involved.
 
 ### Why it exists
 
@@ -263,10 +263,10 @@ The built-in `AuthUser` covers 90% of projects but forces you into its fixed col
 
 ```rust
 use serde::{Deserialize, Serialize};
-use umbra::orm::Model;
-use umbra_auth::UserModel;
+use umbral::orm::Model;
+use umbral_auth::UserModel;
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 pub struct TenantUser {
     pub id: i64,
     pub username: String,
@@ -285,7 +285,7 @@ pub struct TenantUser {
 
 ```rust
 impl UserModel for TenantUser {
-    fn id(&self) -> <Self as umbra::orm::Model>::PrimaryKey { self.id }
+    fn id(&self) -> <Self as umbral::orm::Model>::PrimaryKey { self.id }
     fn username(&self) -> &str { &self.username }
     fn password_hash(&self) -> &str { &self.password_hash }
     fn set_password_hash(&mut self, hash: String) { self.password_hash = hash; }
@@ -314,17 +314,17 @@ The full `UserModel` surface:
 `username()` returns the value `authenticate(handle, password)` matches against. It is *the user-supplied login handle*, not literally a column called `username`. If your app logs in by email, return the email:
 
 ```rust
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 pub struct EmailUser {
     pub id: i64,
-    #[umbra(unique, max_length = 320)]
+    #[umbral(unique, max_length = 320)]
     pub email: String,            // the login handle
     pub password_hash: String,
     pub is_active: bool,
 }
 
 impl UserModel for EmailUser {
-    fn id(&self) -> <Self as umbra::orm::Model>::PrimaryKey { self.id }
+    fn id(&self) -> <Self as umbral::orm::Model>::PrimaryKey { self.id }
     fn username(&self) -> &str { &self.email }   // ← email-as-handle
     fn password_hash(&self) -> &str { &self.password_hash }
     fn set_password_hash(&mut self, hash: String) { self.password_hash = hash; }
@@ -332,15 +332,15 @@ impl UserModel for EmailUser {
 }
 ```
 
-Then `authenticate::<EmailUser>("alice@example.com", "s3cret").await?` looks the row up by `email`. This is the same role Django's `USERNAME_FIELD` setting plays - except in umbra it's a trait method on your struct, not a separate config string.
+Then `authenticate::<EmailUser>("alice@example.com", "s3cret").await?` looks the row up by `email`. This is the same role Django's `USERNAME_FIELD` setting plays - except in umbral it's a trait method on your struct, not a separate config string.
 
 The framework never assumes your handle column is called `username`. The only requirement: a unique column the user supplies at login time, and you point `username()` at it.
 
 ### User-id type and the permissions plugin
 
-`UserModel::id()` returns the model's typed `PrimaryKey`, so a `uuid::Uuid` or `String` PK is supported directly. The stored-id surfaces are PK-agnostic: `umbra-sessions` stores `user_id` as `Option<String>` (the PK stringified, so a UUID or i64 both round-trip), and `Identity` from `umbra-rest` carries `user_id: String`. The trait's `id_string()` does that stringification for you using the PK's `Display`.
+`UserModel::id()` returns the model's typed `PrimaryKey`, so a `uuid::Uuid` or `String` PK is supported directly. The stored-id surfaces are PK-agnostic: `umbral-sessions` stores `user_id` as `Option<String>` (the PK stringified, so a UUID or i64 both round-trip), and `Identity` from `umbral-rest` carries `user_id: String`. The trait's `id_string()` does that stringification for you using the PK's `Display`.
 
-`umbra-permissions` is PK-agnostic too: its `user_id` columns are `TEXT`, and `has_perm` / `user_perms` take `&str`. Pass the stringified PK at the perm-call boundary:
+`umbral-permissions` is PK-agnostic too: its `user_id` columns are `TEXT`, and `has_perm` / `user_perms` take `&str`. Pass the stringified PK at the perm-call boundary:
 
 ```rust
 has_perm(&user.id_string(), "blog.publish_post").await?;
@@ -349,7 +349,7 @@ has_perm(&user.id_string(), "blog.publish_post").await?;
 ### Step 3 - wire the plugin
 
 ```rust
-use umbra_auth::AuthPlugin;
+use umbral_auth::AuthPlugin;
 
 let app = App::builder()
     .settings(settings)
@@ -370,9 +370,9 @@ pub async fn create_tenant_user(
     display_name: &str,
     tenant_id: i64,
     plaintext: &str,
-) -> Result<TenantUser, umbra_auth::AuthError> {
-    let hash = umbra_auth::hash_password(plaintext)?;
-    let pool = umbra::db::pool();
+) -> Result<TenantUser, umbral_auth::AuthError> {
+    let hash = umbral_auth::hash_password(plaintext)?;
+    let pool = umbral::db::pool();
     let row = sqlx::query_as::<_, TenantUser>(
         "INSERT INTO tenant_user
            (username, password_hash, display_name, tenant_id, is_active)
@@ -391,7 +391,7 @@ pub async fn create_tenant_user(
 Authenticate with the generic helper:
 
 ```rust
-use umbra_auth::authenticate;
+use umbral_auth::authenticate;
 
 let user = authenticate::<TenantUser>("alice", "s3cret").await?;
 // Returns TenantUser on success; AuthError::InvalidCredentials on failure.
@@ -400,7 +400,7 @@ let user = authenticate::<TenantUser>("alice", "s3cret").await?;
 `set_password` is also generic:
 
 ```rust
-use umbra_auth::set_password;
+use umbral_auth::set_password;
 
 set_password(&mut user, "new-s3cret").await?;
 ```
@@ -425,14 +425,14 @@ After swapping the user model:
 
 ### What requires manual adjustment
 
-The `AuthUser`-aware helpers in `umbra-auth` and `umbra-admin` reference `AuthUser` concretely:
+The `AuthUser`-aware helpers in `umbral-auth` and `umbral-admin` reference `AuthUser` concretely:
 
-- `umbra_auth::current_user(&headers) -> Option<AuthUser>` - queries `auth_user` by id. With a custom user model you replace this call with your own lookup against `tenant_user`.
-- `umbra_auth::login(headers, &user)` - takes `&AuthUser`. Call `umbra_sessions::create_session(Some(user.id().to_string()), None)` and `umbra_sessions::set_cookie_header(...)` directly instead.
-- `umbra_auth::{User, OptionalUser}` extractors (in `umbra_auth::session_user`) resolve `AuthUser` from the session. Replace with your own extractor that queries `tenant_user`.
-- `umbra_admin` - its `require_staff` check calls `umbra_auth::authenticate` which returns `AuthUser`. The admin plugin is not yet generic over the user model; this is a known limitation and a follow-up item.
+- `umbral_auth::current_user(&headers) -> Option<AuthUser>` - queries `auth_user` by id. With a custom user model you replace this call with your own lookup against `tenant_user`.
+- `umbral_auth::login(headers, &user)` - takes `&AuthUser`. Call `umbral_sessions::create_session(Some(user.id().to_string()), None)` and `umbral_sessions::set_cookie_header(...)` directly instead.
+- `umbral_auth::{User, OptionalUser}` extractors (in `umbral_auth::session_user`) resolve `AuthUser` from the session. Replace with your own extractor that queries `tenant_user`.
+- `umbral_admin` - its `require_staff` check calls `umbral_auth::authenticate` which returns `AuthUser`. The admin plugin is not yet generic over the user model; this is a known limitation and a follow-up item.
 
-The `Identity` concept from `umbra-rest` carries `user_id: String` (the session user PK stringified), so REST permission checks continue to work without changes. Only code that explicitly hydrates an `AuthUser` struct needs updating.
+The `Identity` concept from `umbral-rest` carries `user_id: String` (the session user PK stringified), so REST permission checks continue to work without changes. Only code that explicitly hydrates an `AuthUser` struct needs updating.
 
 ## Security notes
 

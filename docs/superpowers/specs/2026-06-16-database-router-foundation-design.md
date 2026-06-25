@@ -4,7 +4,7 @@
 
 ## Goal
 
-Extract umbra's database-routing decisions out of inline ORM logic into a single swappable `DatabaseRouter` trait, and add the one primitive the framework lacks: a **request-scoped routing context**. This is the keystone that later unblocks read/write replica split (#23), database-per-tenant, schema-per-tenant multitenancy, and alternate backends — each as a custom router, with no further ORM surgery.
+Extract umbral's database-routing decisions out of inline ORM logic into a single swappable `DatabaseRouter` trait, and add the one primitive the framework lacks: a **request-scoped routing context**. This is the keystone that later unblocks read/write replica split (#23), database-per-tenant, schema-per-tenant multitenancy, and alternate backends — each as a custom router, with no further ORM surgery.
 
 This spec is the **foundation only**, but a *complete* one: every trait method ships with a working consumer (no defined-but-dead surface). What it deliberately defers is the multitenancy *management ergonomics*, not the routing *mechanism* (see Non-goals).
 
@@ -21,17 +21,17 @@ The foundation delivers a complete, working routing+schema *mechanism*. The foll
 
 ## Current state (what already exists)
 
-- Pools: `static POOLS: OnceLock<HashMap<String, DbPool>>` (`crates/umbra-core/src/db.rs`), keyed by alias, published once in `App::build`. `DbPool` is `Sqlite(SqlitePool) | Postgres(PgPool)`.
-- Routing today: `resolve_pool<T>(explicit) -> DbPool` (`crates/umbra-core/src/orm/queryset/mod.rs:1116`), called by ~15 read/write terminals. Precedence: `.on(&pool)` → `Model::DATABASE` (`#[umbra(database="…")]`) → `Plugin::database()` → `"default"`. Keyed by **model**, resolved at **build time**. No request/tenant awareness, no swappable seam.
-- Cross-DB FK guard (#22, done): boot-time check in `App::build` (`crates/umbra-core/src/app.rs`, Phase 2.5b) → `BuildError::CrossDatabaseForeignKey`, opt-out `#[umbra(db_constraint=false)]`.
-- Per-DB migrations: the migrate engine walks operations per `table_alias`, one `umbra_migrations` table per database.
+- Pools: `static POOLS: OnceLock<HashMap<String, DbPool>>` (`crates/umbral-core/src/db.rs`), keyed by alias, published once in `App::build`. `DbPool` is `Sqlite(SqlitePool) | Postgres(PgPool)`.
+- Routing today: `resolve_pool<T>(explicit) -> DbPool` (`crates/umbral-core/src/orm/queryset/mod.rs:1116`), called by ~15 read/write terminals. Precedence: `.on(&pool)` → `Model::DATABASE` (`#[umbral(database="…")]`) → `Plugin::database()` → `"default"`. Keyed by **model**, resolved at **build time**. No request/tenant awareness, no swappable seam.
+- Cross-DB FK guard (#22, done): boot-time check in `App::build` (`crates/umbral-core/src/app.rs`, Phase 2.5b) → `BuildError::CrossDatabaseForeignKey`, opt-out `#[umbral(db_constraint=false)]`.
+- Per-DB migrations: the migrate engine walks operations per `table_alias`, one `umbral_migrations` table per database.
 - Middleware contract (#68, shipped): `middleware::Middleware` async trait (`before_request`/`after_response`), `AppBuilder::middleware` / `Plugin::middleware`. This is the seam the request-context layer plugs into.
 
 ## Design
 
 ### 1. The `DatabaseRouter` trait
 
-Lives in `crates/umbra-core/src/db/router.rs`; re-exported as `umbra::db::DatabaseRouter` and in the prelude.
+Lives in `crates/umbral-core/src/db/router.rs`; re-exported as `umbral::db::DatabaseRouter` and in the prelude.
 
 ```rust
 pub trait DatabaseRouter: Send + Sync {
@@ -67,7 +67,7 @@ pub trait DatabaseRouter: Send + Sync {
 - `allow_migrate` returns `true` for a model on its own assigned alias.
 - `schema_for` returns `None`.
 
-The non-regression bar: the entire existing test suite (935 umbra-core tests + plugin suites) passes unchanged with `DefaultRouter` active.
+The non-regression bar: the entire existing test suite (935 umbral-core tests + plugin suites) passes unchanged with `DefaultRouter` active.
 
 ### 3. `RouteContext` and propagation
 
@@ -82,15 +82,15 @@ pub struct RouteContext {
 
 A router reads `ctx.tenant()` or downcasts a typed extension. The default router ignores it. This keeps the trait generic across strategies: read-replica routers key on nothing, db/schema-per-tenant routers key on `tenant`, bespoke routers on whatever they stashed.
 
-Propagation uses `tokio::task_local!` — the per-request twin of umbra's ambient-`OnceLock` pool pattern:
+Propagation uses `tokio::task_local!` — the per-request twin of umbral's ambient-`OnceLock` pool pattern:
 
-- `crates/umbra-core/src/db/route_context.rs` owns the task-local plus `current() -> RouteContext` (returns the default context when unset) and `scope(ctx, fut)` (runs a future inside a context).
+- `crates/umbral-core/src/db/route_context.rs` owns the task-local plus `current() -> RouteContext` (returns the default context when unset) and `scope(ctx, fut)` (runs a future inside a context).
 - `RouteContextLayer` (a `Middleware` from the #68 contract) builds a `RouteContext` from the request via an app-supplied resolver and runs the downstream request inside `scope(...)`. Installed via `App::builder().route_context(|req| RouteContext { … })`.
 - The router reads `route_context::current()` ambiently in `resolve_pool` — no threading through call signatures.
 
 ### 4. Spawned-task safety (hard rule)
 
-`route_context::current()` returns the **default** context whenever no task-local is set: background `umbra-tasks` jobs, boot, CLI, and tests. The router then falls back to the default database and `public` schema. It **never** silently inherits or guesses a tenant. A background job that must run as a tenant opts in explicitly via `route_context::scope(ctx, fut)`. This prevents the classic multitenancy data-leak (a pooled worker running tenant A's job against tenant B's context).
+`route_context::current()` returns the **default** context whenever no task-local is set: background `umbral-tasks` jobs, boot, CLI, and tests. The router then falls back to the default database and `public` schema. It **never** silently inherits or guesses a tenant. A background job that must run as a tenant opts in explicitly via `route_context::scope(ctx, fut)`. This prevents the classic multitenancy data-leak (a pooled worker running tenant A's job against tenant B's context).
 
 ### 5. The resolve seam (read/write split — folds in #23)
 
@@ -110,7 +110,7 @@ When the active router returns `schema_for(ctx) = Some(schema)`, the **SQL build
 Mechanics:
 
 - A single schema-aware "table ref" helper is introduced; every place the ORM emits a table identifier routes through it: the typed `build_query_for` (`T::TABLE`), joins, M2M junction tables, subqueries, aggregates, and the dynamic path (`meta.table`). When `current()`'s active router yields a schema, the helper emits a sea-query schema-qualified `TableRef`; otherwise it emits the bare table (today's output, byte-identical).
-- SQLite has no schemas → `schema_for` is ignored with a one-time `tracing::warn!` (mirrors how `umbra-rls` already skips SQLite).
+- SQLite has no schemas → `schema_for` is ignored with a one-time `tracing::warn!` (mirrors how `umbral-rls` already skips SQLite).
 - Foundation scope: when a schema is active, **all** model tables are qualified with it. The tenant-vs-shared (`public`) split is the Phase 2 refinement. **Known foundation limitation, stated plainly:** while a schema is active, the foundation cannot mix shared-`public` tables into the same request — every table is qualified with the tenant schema. The common pattern still works (the tenant registry is resolved *before* a schema is active, so that lookup is unqualified `public`), but a tenant request that needs to also read a genuinely shared/global table is exactly what the Phase 2 `SHARED_APPS` per-model classification handles. The foundation does not pretend to solve it.
 - The schema is always emitted as a **quoted identifier** built from the validated `Schema` newtype, so it is never an injection vector.
 
@@ -148,7 +148,7 @@ A `SET search_path` is one network round-trip (sub-ms localhost, 1–5ms cross-A
 - Default-router non-regression: the full existing suite stays green (proves zero behavior change).
 - Read/write split: a custom router routing reads → replica alias, writes → primary alias; assert each terminal hits the right pool (proves #23).
 - Context seam: a db-per-tenant router keyed on `ctx.tenant`; set the tenant via `scope`, assert routing follows.
-- Schema qualification (Postgres-gated, `#[ignore]` + `UMBRA_TEST_POSTGRES_URL`, like `pk_uuid_postgres.rs`): two schemas, same model, rows isolated; assert generated SQL is schema-qualified and a query in schema A never sees schema B's rows.
+- Schema qualification (Postgres-gated, `#[ignore]` + `UMBRAL_TEST_POSTGRES_URL`, like `pk_uuid_postgres.rs`): two schemas, same model, rows isolated; assert generated SQL is schema-qualified and a query in schema A never sees schema B's rows.
 - Spawned-task safety: a task with no context resolves to the default DB/`public` (proves the hard rule).
 - `allow_relation` / `allow_migrate`: a vetoing router rejects a cross-DB relation / skips a migration.
 
@@ -161,7 +161,7 @@ A `SET search_path` is one network round-trip (sub-ms localhost, 1–5ms cross-A
 
 ## File-level change map (indicative)
 
-- New: `crates/umbra-core/src/db/router.rs` (trait + `DefaultRouter` + `Alias`/`Schema`), `crates/umbra-core/src/db/route_context.rs` (`RouteContext` + task-local + `current`/`scope`), `RouteContextLayer` middleware.
+- New: `crates/umbral-core/src/db/router.rs` (trait + `DefaultRouter` + `Alias`/`Schema`), `crates/umbral-core/src/db/route_context.rs` (`RouteContext` + task-local + `current`/`scope`), `RouteContextLayer` middleware.
 - Modified: `orm/queryset/mod.rs` (`resolve_pool` → read/write split + router call; table-ref helper), the dynamic path (`orm/dynamic.rs`), `app.rs` (router/route_context builder methods + publish; Phase 2.5b → `allow_relation`), the migrate engine (per-alias walk → `allow_migrate`), facade re-exports + prelude.
 - The schema-aware table-ref helper is the central new chokepoint both the typed and dynamic builders call.
 

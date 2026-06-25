@@ -1,21 +1,21 @@
 ---
 title: Permissions (RBAC)
-description: Django-style groups, permissions, and content types for umbra. The has_perm query layer.
+description: Django-style groups, permissions, and content types for umbral. The has_perm query layer.
 sidebar_position: 5
 icon: shield-check
 tags: [plugins, auth, permissions, rbac]
 ---
 
-`umbra-permissions` ships the role-based access control primitives - `ContentType`, `Permission`, `Group`, and the three M2M tables linking users to permissions both directly and via groups. The `has_perm` query layer lets any handler check `has_perm(user_id, "blog.publish_post")` against the union of direct and group-mediated grants. A `permission_required(perm)` axum layer wraps the lookup so a Router subtree can be gated declaratively without the handler touching `has_perm` directly.
+`umbral-permissions` ships the role-based access control primitives - `ContentType`, `Permission`, `Group`, and the three M2M tables linking users to permissions both directly and via groups. The `has_perm` query layer lets any handler check `has_perm(user_id, "blog.publish_post")` against the union of direct and group-mediated grants. A `permission_required(perm)` axum layer wraps the lookup so a Router subtree can be gated declaratively without the handler touching `has_perm` directly.
 
-RLS predicate injection - using permissions to constrain DB rows - is `umbra-rls`'s job; this plugin provides the data the RLS layer reads.
+RLS predicate injection - using permissions to constrain DB rows - is `umbral-rls`'s job; this plugin provides the data the RLS layer reads.
 
 ## Register the plugin
 
 ```rust
-use umbra::prelude::*;
-use umbra_auth::AuthPlugin;
-use umbra_permissions::PermissionsPlugin;
+use umbral::prelude::*;
+use umbral_auth::AuthPlugin;
+use umbral_permissions::PermissionsPlugin;
 
 App::builder()
     .plugin(AuthPlugin::default())
@@ -32,7 +32,7 @@ App::builder()
 | `ContentType` | One row per registered Model. Holds `app_label` (plugin name) and `model` (lowercased struct name). |
 | `Permission` | One row per permission. The **primary key is the composite `codename` string** (`<app_label>.<verb>_<model>`, e.g. `blog.add_post`) - there is no separate integer `id`. Carries `content_type_id` (a `ForeignKey<ContentType>`) and a human-readable `name`. The four standard ones auto-create; custom ones land via direct INSERT or future `Meta.permissions` declarations. |
 
-The standard codename is `<app_label>.<verb>_<model>` (e.g. `blog.add_post`). The `app_label` is the model's `#[umbra(plugin = "...")]` value, surfaced via `Model::APP_LABEL`; a model with no `plugin` attribute defaults to `"app"`. Because the label comes from the attribute rather than from splitting the table name, two distinct models never collide on a codename.
+The standard codename is `<app_label>.<verb>_<model>` (e.g. `blog.add_post`). The `app_label` is the model's `#[umbral(plugin = "...")]` value, surfaced via `Model::APP_LABEL`; a model with no `plugin` attribute defaults to `"app"`. Because the label comes from the attribute rather than from splitting the table name, two distinct models never collide on a codename.
 
 | `Group` | Named permission bundle. Users in a group inherit every permission the group holds. |
 | `UserGroup` | M2M: which users belong to which groups. `user_id: String` (PK-agnostic). |
@@ -51,7 +51,7 @@ The plugin doesn't own a `User` struct. Different apps wire different user model
 ## Checking permissions
 
 ```rust
-use umbra_permissions::{has_perm, user_perms};
+use umbral_permissions::{has_perm, user_perms};
 
 // One specific permission. `&user.id().to_string()` for an i64 PK;
 // for a Uuid PK the same `.to_string()` gives the canonical
@@ -72,7 +72,7 @@ if perms.contains("blog.publish_post") && perms.contains("blog.delete_post") {
 
 ### Superuser shortcut
 
-`has_perm` does NOT read `is_superuser` from the user row - this crate doesn't depend on `umbra-auth` (see "Design notes" below). The caller is responsible for the superuser bypass at the handler level:
+`has_perm` does NOT read `is_superuser` from the user row - this crate doesn't depend on `umbral-auth` (see "Design notes" below). The caller is responsible for the superuser bypass at the handler level:
 
 ```rust
 if user.is_superuser() {
@@ -85,7 +85,7 @@ if user.is_superuser() {
 Or use the convenience wrapper:
 
 ```rust
-use umbra_permissions::has_perm_for_superuser;
+use umbral_permissions::has_perm_for_superuser;
 
 let allowed = has_perm_for_superuser(
     &user.id().to_string(),
@@ -101,8 +101,8 @@ In practice you'd wrap this in a helper function on your app side.
 Standard permissions auto-create. Custom ones (e.g., `"blog.feature_post"` for a non-CRUD action) need a manual INSERT, typically in a data migration:
 
 ```rust
-use umbra_permissions::{Permission, ContentType};
-use umbra::orm::ForeignKey;
+use umbral_permissions::{Permission, ContentType};
+use umbral::orm::ForeignKey;
 
 let ct = ContentType::objects()
     .filter(content_type::APP_LABEL.eq("blog"))
@@ -122,9 +122,9 @@ Permission::objects().on(&pool).create(Permission {
 
 ### Why `has_perm` is a free function, not a `UserModel` trait method
 
-Putting `has_perm` on the [`UserModel`](/docs/v0.0.1/plugins/auth#swapping-the-user-model) trait would require `umbra-auth` to call into `umbra-permissions` (to query permissions) *and* `umbra-permissions` to read `UserModel` from `umbra-auth` (for the receiver type). That's a circular crate dependency Cargo refuses to compile.
+Putting `has_perm` on the [`UserModel`](/docs/v0.0.1/plugins/auth#swapping-the-user-model) trait would require `umbral-auth` to call into `umbral-permissions` (to query permissions) *and* `umbral-permissions` to read `UserModel` from `umbral-auth` (for the receiver type). That's a circular crate dependency Cargo refuses to compile.
 
-The clean resolution: `has_perm(user_id: &str, codename: &str)` is a free function that takes the stringified user ID. The dependency arrow stays one-way (`umbra-permissions` → `umbra-auth` would be needed if at all, but isn't). Apps using a [custom user model](/docs/v0.0.1/plugins/auth#swapping-the-user-model) work without adapters - including ones with UUID, slug, or any other PK type, because the `&str` parameter accepts whatever stringified form the caller passes.
+The clean resolution: `has_perm(user_id: &str, codename: &str)` is a free function that takes the stringified user ID. The dependency arrow stays one-way (`umbral-permissions` → `umbral-auth` would be needed if at all, but isn't). Apps using a [custom user model](/docs/v0.0.1/plugins/auth#swapping-the-user-model) work without adapters - including ones with UUID, slug, or any other PK type, because the `&str` parameter accepts whatever stringified form the caller passes.
 
 ### Three different M2M shapes, three different reasons
 
@@ -136,8 +136,8 @@ The clean resolution: `has_perm(user_id: &str, codename: &str)` is a free functi
 Mount the layer on any Router subtree to require a specific permission for every route inside it. The layer resolves the session cookie, looks up the user id, and calls `has_perm` - no handler-level boilerplate.
 
 ```rust
-use umbra::prelude::*;
-use umbra_permissions::{permission_required, permission_required_html};
+use umbral::prelude::*;
+use umbral_permissions::{permission_required, permission_required_html};
 
 // REST subtree - 401 JSON if not logged in, 403 JSON if logged-in but lacks perm.
 let api = Router::new()
@@ -173,11 +173,11 @@ In practice the single-layer form `permission_required_html(perm, login_url)` is
 
 - Built-in admin UI for editing group → permission and user → group assignments. The RBAC tables (`permissions_contenttype`, `permissions_permission`, `permissions_group`, `permissions_usergroup`, `permissions_userpermission`, plus the framework-managed `permissions_group_permissions` M2M junction) are visible to the admin as standard models; an assignment-matrix UI (Django's "permission widget") lands in a follow-up.
 - `Meta.permissions = [...]` syntax for declaring custom perms on a model - custom perms ship via direct INSERT in a data migration today.
-- RLS predicate injection from permissions - that's `umbra-rls`'s responsibility.
+- RLS predicate injection from permissions - that's `umbral-rls`'s responsibility.
 - Object-level permissions (per-row grants) - Django needs `django-guardian` for this; same shape would land as a follow-up crate.
 
 ## See also
 
-- [`umbra-auth` plugin docs](/docs/v0.0.1/plugins/auth) - the `UserModel` trait and the `LoggedIn<U>` extractor this composes with.
-- [`umbra-rls` plugin docs](/docs/v0.0.1/plugins/rls) - row-level security; reads permissions for predicate injection.
+- [`umbral-auth` plugin docs](/docs/v0.0.1/plugins/auth) - the `UserModel` trait and the `LoggedIn<U>` extractor this composes with.
+- [`umbral-rls` plugin docs](/docs/v0.0.1/plugins/rls) - row-level security; reads permissions for predicate injection.
 - [Web → Auth gating](/docs/v0.0.1/web/auth-gating) - `login_required` patterns.

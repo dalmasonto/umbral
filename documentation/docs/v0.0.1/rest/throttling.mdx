@@ -11,7 +11,7 @@ A throttle answers *how often may this caller hit this resource?*. It's the thir
 Throttling is **opt-in**: a `RestPlugin` with no throttle configured imposes no limits, so adding it never surprises an existing API with a rate cap.
 
 <Callout type="info">
-Throttles are backed by an in-memory sliding-window limiter (`umbra::ratelimit::RateLimiter`). State lives in the process, so a multi-instance deployment behind a load balancer gives each replica its own counters (effective limit `rate × replicas`). A Redis-backed store is the multi-instance follow-up.
+Throttles are backed by an in-memory sliding-window limiter (`umbral::ratelimit::RateLimiter`). State lives in the process, so a multi-instance deployment behind a load balancer gives each replica its own counters (effective limit `rate × replicas`). A Redis-backed store is the multi-instance follow-up.
 </Callout>
 
 ## Adding a throttle
@@ -19,7 +19,7 @@ Throttles are backed by an in-memory sliding-window limiter (`umbra::ratelimit::
 Use `RestPlugin::default_throttle(...)` to limit **every** resource, or `ResourceConfig::throttle(...)` for one table. Throttles **stack** — call either more than once and *all* of them must pass; the first to deny wins.
 
 ```rust
-use umbra_rest::{AnonRateThrottle, UserRateThrottle, ResourceConfig, RestPlugin, ScopedRateThrottle};
+use umbral_rest::{AnonRateThrottle, UserRateThrottle, ResourceConfig, RestPlugin, ScopedRateThrottle};
 
 RestPlugin::default()
     // Plugin-wide: anonymous callers get 100/hour, signed-in users 1000/day.
@@ -78,7 +78,7 @@ On the first throttle that denies, the request short-circuits to **429 Too Many 
 Implement the `Throttle` trait for anything the built-ins don't cover (per-org quotas, burst-vs-sustained tiers):
 
 ```rust
-use umbra_rest::{Throttle, ThrottleContext, ThrottleDenied};
+use umbral_rest::{Throttle, ThrottleContext, ThrottleDenied};
 
 struct AllowList;
 
@@ -90,9 +90,9 @@ impl Throttle for AllowList {
 }
 ```
 
-Wrap a `umbra::ratelimit::RateLimiter` to reuse the sliding-window counting the built-ins use.
+Wrap a `umbral::ratelimit::RateLimiter` to reuse the sliding-window counting the built-ins use.
 
 ## See also
 
-- Design rationale: the `umbra-rest` throttle module (`plugins/umbra-rest/src/throttle.rs`) and the core primitive (`crates/umbra-core/src/ratelimit.rs`).
+- Design rationale: the `umbral-rest` throttle module (`plugins/umbral-rest/src/throttle.rs`) and the core primitive (`crates/umbral-core/src/ratelimit.rs`).
 - The two gates that run before throttling: [authentication](/docs/v0.0.1/rest/authentication) and [permissions](/docs/v0.0.1/rest/permissions).

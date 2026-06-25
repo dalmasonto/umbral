@@ -1,0 +1,38 @@
+[package]
+name = "umbral-macros"
+description = "Derive macros for umbral (`#[derive(Model)]`, `#[task]`, etc.). Do not depend on this directly; use the `umbral` facade."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+# Shared casing helpers — no deps, safe to use from a proc-macro crate.
+umbral-casing = { path = "../umbral-casing", version = "0.0.1" }
+# Standard proc-macro toolkit. syn parses the input; quote emits the
+# output tokens; proc-macro2 bridges the proc_macro / syn type space.
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+# Doctests in this crate need umbral in scope so the `::umbral::orm::Model`
+# paths the derive emits resolve at expansion time. Dev-dep only: doesn't
+# propagate to release builds, so there's no real cycle even though the
+# dependency graph looks circular on paper.
+umbral = { path = "../umbral" }
+# umbral-tasks is needed for the `#[task]` macro expansion tests: the
+# generated code calls `::umbral_tasks::register_handler`.
+umbral-tasks = { path = "../../plugins/umbral-tasks" }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+# UI-style reject tests for the `#[task]` attribute macro.
+trybuild = { version = "1", features = ["diff"] }

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `#[derive(umbra::forms::Form)]` accept `ForeignKey<T>` / forward `OneToOne<T>` (→ `ModelChoice`), `M2M<T>` (→ `ModelMultiChoice` + post-insert junction write), and `#[umbra(choices)]` enums (→ `Select`), auto-skip reverse relations (`ReverseSet`, reverse `OneToOne`), and turn `FormValidate` async so FK/M2M existence checks and option fetches resolve through the ORM.
+**Goal:** Make `#[derive(umbral::forms::Form)]` accept `ForeignKey<T>` / forward `OneToOne<T>` (→ `ModelChoice`), `M2M<T>` (→ `ModelMultiChoice` + post-insert junction write), and `#[umbral(choices)]` enums (→ `Select`), auto-skip reverse relations (`ReverseSet`, reverse `OneToOne`), and turn `FormValidate` async so FK/M2M existence checks and option fetches resolve through the ORM.
 
 **Architecture:** Three `InputKind` variants (`Select`, `ModelChoice`, `ModelMultiChoice`) carry the metadata each relation field needs; the `Field` struct grows a parallel set of constructors. `FormValidate` goes `#[async_trait]` so `validate`/`render_html` can run ORM existence/option queries through the ambient `pool_dispatched()`. The macro (`expand_form`) reuses the Model derive's existing field-kind detection (`foreign_key_inner`/`one_to_one_inner`/`m2m_inner`/`reverse_set_inner`/`has_sqlx_skip`/`choices_ty`) so the two derives agree on what each field *is*, and emits the M2M junction write through the existing `set_junction_dynamic` machinery via a new `HydrateRelated::write_pending_m2m` hook called at the tail of the typed `create()` path.
 
@@ -14,18 +14,18 @@
 
 | File | Create/Modify | Responsibility |
 |---|---|---|
-| `crates/umbra-core/src/forms.rs` | Modify | `FormValidate` → `#[async_trait]`; new `InputKind::{Select, ModelChoice, ModelMultiChoice}` variants + `PkKind` enum; `Field` constructors (`Field::select`, `Field::model_choice`, `Field::model_multi_choice`); async `render_html` walk + per-field async option fetch helper; `Form<T>` extractor awaits async `validate`; inline unit tests gain `.await` / `#[tokio::test]`. |
-| `crates/umbra-core/src/orm/forms_runtime.rs` | Create | Runtime helpers the macro-generated `validate`/`render_html` call: `choice_is_member`, `fk_id_exists` (ORM existence probe via `DynQuerySet`), `fetch_choice_options` (compile-time, choices), `fetch_model_options` (async `(id,label)` fetch through `DynQuerySet`), `parse_multi_ids`. Keeps emitted macro code terse and the SQL out of `plugins/`. |
-| `crates/umbra-core/src/orm/m2m.rs` | Modify | Add a `pending: Vec<sea_query::Value>` slot to `M2M<T,P>` plus `set_pending_ids` / `take_pending_ids`; a free `child_pk_kind_for_table` reuse of `pk_meta_for_table`. |
-| `crates/umbra-core/src/orm/model.rs` | Modify | Add `HydrateRelated::write_pending_m2m(&mut self) -> impl Future` hook (default no-op) called by typed `create()` after insert. |
-| `crates/umbra-core/src/orm/queryset/mod.rs` | Modify | After the post-INSERT `set_m2m_parent_ids()` in `create()` (line ~3064 / ~3093), call `row.write_pending_m2m().await?` so form-submitted M2M ids land as junction rows atomically. |
-| `crates/umbra-macros/src/lib.rs` | Modify | `expand_form`: skip reverse relations before classification; classify FK/forward-O2O → `Field::model_choice`; choices → `Field::select`; M2M → `Field::model_multi_choice` + pending-id stuffing; emit async `validate`/`render_html` bodies; emit `write_pending_m2m` arms for M2M form fields on the Model derive's `HydrateRelated` impl. |
-| `crates/umbra-core/src/orm/mod.rs` | Modify | `pub mod forms_runtime;` + re-export the runtime helpers used by emitted code. |
-| `crates/umbra-core/tests/form_derive.rs` | Modify | Existing tests gain `.await` + `#[tokio::test]`; new tests: reverse-skip absent from `fields()`; choices round-trip + reject. |
-| `crates/umbra-core/tests/form_fk.rs` | Create | FK + forward-O2O behavioral round-trip, existence reject (no row inserted), forward-O2O UNIQUE violation surfaces. |
-| `crates/umbra-core/tests/form_m2m.rs` | Create | M2M junction-row round-trip, atomicity on bad id (zero junction rows). |
-| `crates/umbra-core/tests/csrf_context.rs` | Modify | If any `FormValidate::validate` call exists here, add `.await` (the file is already async/`#[tokio::test]`). |
-| `umbra_website/plugins/plugin_directory/src/models.rs` | Modify | Enable `#[derive(... umbra::forms::Form)]` on `PluginComment`, restore `#[form(...)]` attrs, delete the hand-rolled `Default`. |
+| `crates/umbral-core/src/forms.rs` | Modify | `FormValidate` → `#[async_trait]`; new `InputKind::{Select, ModelChoice, ModelMultiChoice}` variants + `PkKind` enum; `Field` constructors (`Field::select`, `Field::model_choice`, `Field::model_multi_choice`); async `render_html` walk + per-field async option fetch helper; `Form<T>` extractor awaits async `validate`; inline unit tests gain `.await` / `#[tokio::test]`. |
+| `crates/umbral-core/src/orm/forms_runtime.rs` | Create | Runtime helpers the macro-generated `validate`/`render_html` call: `choice_is_member`, `fk_id_exists` (ORM existence probe via `DynQuerySet`), `fetch_choice_options` (compile-time, choices), `fetch_model_options` (async `(id,label)` fetch through `DynQuerySet`), `parse_multi_ids`. Keeps emitted macro code terse and the SQL out of `plugins/`. |
+| `crates/umbral-core/src/orm/m2m.rs` | Modify | Add a `pending: Vec<sea_query::Value>` slot to `M2M<T,P>` plus `set_pending_ids` / `take_pending_ids`; a free `child_pk_kind_for_table` reuse of `pk_meta_for_table`. |
+| `crates/umbral-core/src/orm/model.rs` | Modify | Add `HydrateRelated::write_pending_m2m(&mut self) -> impl Future` hook (default no-op) called by typed `create()` after insert. |
+| `crates/umbral-core/src/orm/queryset/mod.rs` | Modify | After the post-INSERT `set_m2m_parent_ids()` in `create()` (line ~3064 / ~3093), call `row.write_pending_m2m().await?` so form-submitted M2M ids land as junction rows atomically. |
+| `crates/umbral-macros/src/lib.rs` | Modify | `expand_form`: skip reverse relations before classification; classify FK/forward-O2O → `Field::model_choice`; choices → `Field::select`; M2M → `Field::model_multi_choice` + pending-id stuffing; emit async `validate`/`render_html` bodies; emit `write_pending_m2m` arms for M2M form fields on the Model derive's `HydrateRelated` impl. |
+| `crates/umbral-core/src/orm/mod.rs` | Modify | `pub mod forms_runtime;` + re-export the runtime helpers used by emitted code. |
+| `crates/umbral-core/tests/form_derive.rs` | Modify | Existing tests gain `.await` + `#[tokio::test]`; new tests: reverse-skip absent from `fields()`; choices round-trip + reject. |
+| `crates/umbral-core/tests/form_fk.rs` | Create | FK + forward-O2O behavioral round-trip, existence reject (no row inserted), forward-O2O UNIQUE violation surfaces. |
+| `crates/umbral-core/tests/form_m2m.rs` | Create | M2M junction-row round-trip, atomicity on bad id (zero junction rows). |
+| `crates/umbral-core/tests/csrf_context.rs` | Modify | If any `FormValidate::validate` call exists here, add `.await` (the file is already async/`#[tokio::test]`). |
+| `umbral_website/plugins/plugin_directory/src/models.rs` | Modify | Enable `#[derive(... umbral::forms::Form)]` on `PluginComment`, restore `#[form(...)]` attrs, delete the hand-rolled `Default`. |
 
 ---
 
@@ -34,14 +34,14 @@
 Turn the trait async via `#[async_trait]`, update the macro's emitted impl, the `Form<T>` extractor, and every existing caller/test to `.await`. No new field kinds yet — the suite must stay green on a pure async-ification.
 
 **Files:**
-- Modify: `crates/umbra-core/src/forms.rs` (`FormValidate` trait ~71; `Form<T>` `FromRequest` ~954; inline tests ~979-1143)
-- Modify: `crates/umbra-macros/src/lib.rs` (`expand_form` emitted impl ~3636-3654)
-- Modify: `crates/umbra-core/tests/form_derive.rs` (every `::validate(` / `::render_html(` call)
-- Test: `crates/umbra-core/tests/form_derive.rs`
+- Modify: `crates/umbral-core/src/forms.rs` (`FormValidate` trait ~71; `Form<T>` `FromRequest` ~954; inline tests ~979-1143)
+- Modify: `crates/umbral-macros/src/lib.rs` (`expand_form` emitted impl ~3636-3654)
+- Modify: `crates/umbral-core/tests/form_derive.rs` (every `::validate(` / `::render_html(` call)
+- Test: `crates/umbral-core/tests/form_derive.rs`
 
 Steps:
 
-- [ ] Write the failing test. Append to `crates/umbra-core/tests/form_derive.rs` (it currently has no async runtime; this forces the trait to be awaitable):
+- [ ] Write the failing test. Append to `crates/umbral-core/tests/form_derive.rs` (it currently has no async runtime; this forces the trait to be awaitable):
   ```rust
   #[tokio::test]
   async fn async_validate_minimal_form_round_trips() {
@@ -53,10 +53,10 @@ Steps:
   ```
 - [ ] Run it, expect FAIL (compile error — `validate` is sync, `.await` on a non-future):
   ```bash
-  cd crates && cargo test -p umbra-core --test form_derive async_validate_minimal_form_round_trips
+  cd crates && cargo test -p umbral-core --test form_derive async_validate_minimal_form_round_trips
   ```
   Expect: `error[E0277]: ... is not a future` (or `method not found .await`).
-- [ ] Implement the trait change in `crates/umbra-core/src/forms.rs`. Add the import near the top (after `use std::collections::HashMap;`):
+- [ ] Implement the trait change in `crates/umbral-core/src/forms.rs`. Add the import near the top (after `use std::collections::HashMap;`):
   ```rust
   use async_trait::async_trait;
   ```
@@ -112,36 +112,36 @@ Steps:
               }
           }
   ```
-- [ ] Update the macro emitted impl in `crates/umbra-macros/src/lib.rs` (~3636). Wrap the impl in `#[::async_trait::async_trait]` and make the two methods async:
+- [ ] Update the macro emitted impl in `crates/umbral-macros/src/lib.rs` (~3636). Wrap the impl in `#[::async_trait::async_trait]` and make the two methods async:
   ```rust
       let output = quote! {
-          #[::umbra::forms::async_trait]
-          impl ::umbra::forms::FormValidate for #struct_name {
+          #[::umbral::forms::async_trait]
+          impl ::umbral::forms::FormValidate for #struct_name {
               async fn validate(
                   data: &::std::collections::HashMap<::std::string::String, ::std::string::String>,
-              ) -> ::std::result::Result<Self, ::umbra::forms::ValidationErrors> {
-                  let mut errs = ::umbra::forms::ValidationErrors::new();
+              ) -> ::std::result::Result<Self, ::umbral::forms::ValidationErrors> {
+                  let mut errs = ::umbral::forms::ValidationErrors::new();
                   #(#field_builders_iter)*
                   #(#validate_body)*
                   errs.into_result()?;
                   Ok(Self { #(#struct_inits),* #default_tail })
               }
 
-              fn fields() -> ::std::vec::Vec<::umbra::forms::Field> {
+              fn fields() -> ::std::vec::Vec<::umbral::forms::Field> {
                   #(#field_builders_iter2)*
                   vec![ #(#field_var_idents),* ]
               }
           }
       };
   ```
-  Re-export `async_trait` from the forms module so `::umbra::forms::async_trait` resolves: in `crates/umbra-core/src/forms.rs` add near the top, below the import:
+  Re-export `async_trait` from the forms module so `::umbral::forms::async_trait` resolves: in `crates/umbral-core/src/forms.rs` add near the top, below the import:
   ```rust
   #[doc(hidden)]
   pub use async_trait::async_trait;
   ```
-  Confirm the facade re-exports `forms` (it does — `umbra::forms`); no facade edit needed because the path goes through `forms::async_trait`.
-- [ ] Update the inline unit tests in `crates/umbra-core/src/forms.rs`. The `LoginForm` demo (~1113) impls `validate` by hand and isn't the trait — leave it sync (it does not impl `FormValidate`). Only tests that call a *derived* `validate`/`render_html` need `.await`; there are none inline (the `LoginForm` is a plain inherent method). No change to inline tests required for Task 1.
-- [ ] Update `crates/umbra-core/tests/form_derive.rs`: convert every `#[test]` that calls `::validate(...)` or `::render_html(...)` to `#[tokio::test] async fn`, and add `.await` after each `::validate(...)` / `::render_html(...)` call. Example conversion for the first test:
+  Confirm the facade re-exports `forms` (it does — `umbral::forms`); no facade edit needed because the path goes through `forms::async_trait`.
+- [ ] Update the inline unit tests in `crates/umbral-core/src/forms.rs`. The `LoginForm` demo (~1113) impls `validate` by hand and isn't the trait — leave it sync (it does not impl `FormValidate`). Only tests that call a *derived* `validate`/`render_html` need `.await`; there are none inline (the `LoginForm` is a plain inherent method). No change to inline tests required for Task 1.
+- [ ] Update `crates/umbral-core/tests/form_derive.rs`: convert every `#[test]` that calls `::validate(...)` or `::render_html(...)` to `#[tokio::test] async fn`, and add `.await` after each `::validate(...)` / `::render_html(...)` call. Example conversion for the first test:
   ```rust
   #[tokio::test]
   async fn minimal_string_form_round_trips_a_valid_input() {
@@ -152,10 +152,10 @@ Steps:
   }
   ```
   Apply the same `#[tokio::test] async` + `.await` mechanical change to: `minimal_string_form_rejects_empty_input`, `signup_form_*`, `product_form_*`, the `render_html` tests (`SignupForm::render_html(&prefill).await`, `MinimalForm::render_html(&prefill).await`), and any other `::validate`/`::render_html` call site in the file.
-- [ ] Check `crates/umbra-core/tests/csrf_context.rs` for any derived-form `::validate`/`::render_html` call; if present add `.await` (the file is already `#[tokio::test]`). If none, no change.
+- [ ] Check `crates/umbral-core/tests/csrf_context.rs` for any derived-form `::validate`/`::render_html` call; if present add `.await` (the file is already `#[tokio::test]`). If none, no change.
 - [ ] Run, expect PASS:
   ```bash
-  cd crates && cargo test -p umbra-core --test form_derive
+  cd crates && cargo test -p umbral-core --test form_derive
   ```
   Expect: all green including `async_validate_minimal_form_round_trips`.
 - [ ] Full workspace gate then commit:
@@ -178,40 +178,40 @@ EOF
 
 ## Task 2 — Reverse relations auto-skip in the Form derive (spec Part 1a)
 
-`ReverseSet<C>` and reverse `OneToOne<T>` (the `#[sqlx(skip)]` variant) are back-pointers — never user-submittable. The Model derive already drops them; the Form derive must skip them before type classification, and they must be absent from `fields()` — without requiring `#[umbra(noform)]`.
+`ReverseSet<C>` and reverse `OneToOne<T>` (the `#[sqlx(skip)]` variant) are back-pointers — never user-submittable. The Model derive already drops them; the Form derive must skip them before type classification, and they must be absent from `fields()` — without requiring `#[umbral(noform)]`.
 
 **Files:**
-- Modify: `crates/umbra-macros/src/lib.rs` (`expand_form` skip logic ~3430-3445; `field_var_idents` filter ~3607-3624)
-- Test: `crates/umbra-core/tests/form_derive.rs`
+- Modify: `crates/umbral-macros/src/lib.rs` (`expand_form` skip logic ~3430-3445; `field_var_idents` filter ~3607-3624)
+- Test: `crates/umbral-core/tests/form_derive.rs`
 
 Steps:
 
-- [ ] Write the failing test. Append to `crates/umbra-core/tests/form_derive.rs`:
+- [ ] Write the failing test. Append to `crates/umbral-core/tests/form_derive.rs`:
   ```rust
   // Reverse relations are back-pointers — the Form derive skips them
-  // WITHOUT requiring #[umbra(noform)], and they're absent from fields().
-  #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-  #[umbra(table = "fd_skip_child")]
+  // WITHOUT requiring #[umbral(noform)], and they're absent from fields().
+  #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+  #[umbral(table = "fd_skip_child")]
   struct SkipChild {
       pub id: i64,
       pub title: String,
-      pub parent: umbra::orm::ForeignKey<SkipParent>,
+      pub parent: umbral::orm::ForeignKey<SkipParent>,
   }
 
-  #[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model, umbra::forms::Form)]
-  #[umbra(table = "fd_skip_parent")]
+  #[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model, umbral::forms::Form)]
+  #[umbral(table = "fd_skip_parent")]
   struct SkipParent {
       pub id: i64,
       pub name: String,
-      // Reverse FK collection — NO #[umbra(noform)].
+      // Reverse FK collection — NO #[umbral(noform)].
       #[sqlx(skip)]
       #[serde(skip)]
-      #[umbra(reverse_fk = "parent")]
-      pub child_set: umbra::orm::ReverseSet<SkipChild>,
-      // Reverse OneToOne back-pointer — NO #[umbra(noform)].
+      #[umbral(reverse_fk = "parent")]
+      pub child_set: umbral::orm::ReverseSet<SkipChild>,
+      // Reverse OneToOne back-pointer — NO #[umbral(noform)].
       #[sqlx(skip)]
       #[serde(skip)]
-      pub profile: umbra::orm::OneToOne<SkipChild>,
+      pub profile: umbral::orm::OneToOne<SkipChild>,
   }
 
   #[test]
@@ -224,13 +224,13 @@ Steps:
   ```
 - [ ] Run it, expect FAIL (the Form derive currently rejects `ReverseSet`/`OneToOne` at the `classify_form_field_type` reject site ~3447):
   ```bash
-  cd crates && cargo test -p umbra-core --test form_derive reverse_relations_absent_from_fields
+  cd crates && cargo test -p umbral-core --test form_derive reverse_relations_absent_from_fields
   ```
-  Expect: `error: umbra::Form derive: unsupported field type ...` at the `child_set` field span.
-- [ ] Implement. In `crates/umbra-macros/src/lib.rs`, add a shared helper near the other `*_inner` helpers (~2473):
+  Expect: `error: umbral::Form derive: unsupported field type ...` at the `child_set` field span.
+- [ ] Implement. In `crates/umbral-macros/src/lib.rs`, add a shared helper near the other `*_inner` helpers (~2473):
   ```rust
   /// True when this field is a reverse relation the Form derive must
-  /// skip silently (no `#[umbra(noform)]` required): a `ReverseSet<C>`
+  /// skip silently (no `#[umbral(noform)]` required): a `ReverseSet<C>`
   /// or a reverse `OneToOne<T>` (the `#[sqlx(skip)]` back-pointer
   /// variant). A forward `OneToOne<T>` (no `#[sqlx(skip)]`) is a
   /// unique FK and is NOT skipped — it becomes a ModelChoice (Task 4).
@@ -264,7 +264,7 @@ Steps:
   And mirror it in the `field_var_idents` filter (~3607). Replace the closure body's condition:
   ```rust
           .filter_map(|f| {
-              let attr = parse_umbra_field_attr(&f.attrs).unwrap_or_default();
+              let attr = parse_umbral_field_attr(&f.attrs).unwrap_or_default();
               let ident = f.ident.as_ref()?;
               let is_implicit_pk = ident == "id";
               if attr.noform
@@ -283,7 +283,7 @@ Steps:
   Note: reverse-relation fields are skipped via `continue` so they never produce a `_<ident>_field` binding, and `any_skipped` is already set — the `..Default::default()` tail fills them.
 - [ ] Run, expect PASS:
   ```bash
-  cd crates && cargo test -p umbra-core --test form_derive reverse_relations_absent_from_fields
+  cd crates && cargo test -p umbral-core --test form_derive reverse_relations_absent_from_fields
   ```
 - [ ] Gate + commit:
   ```bash
@@ -294,7 +294,7 @@ feat(forms): Form derive auto-skips reverse relations
 ReverseSet<C> and reverse OneToOne<T> (#[sqlx(skip)]) are back-pointers,
 never user-submittable. Skip them before type classification — like the
 Model derive already does for FIELDS — so they no longer need a manual
-#[umbra(noform)] and are absent from the derived fields().
+#[umbral(noform)] and are absent from the derived fields().
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 EOF
@@ -303,22 +303,22 @@ EOF
 
 ---
 
-## Task 3 — `#[umbra(choices)]` enum → a `Select` field (spec Part 1b)
+## Task 3 — `#[umbral(choices)]` enum → a `Select` field (spec Part 1b)
 
-A `#[umbra(choices)]` field becomes a `Select` whose options are the enum's compile-time `VALUES`/`LABELS`. `validate()` checks membership (no DB). A non-member produces a field-keyed error and no row.
+A `#[umbral(choices)]` field becomes a `Select` whose options are the enum's compile-time `VALUES`/`LABELS`. `validate()` checks membership (no DB). A non-member produces a field-keyed error and no row.
 
 **Files:**
-- Modify: `crates/umbra-core/src/forms.rs` (`InputKind` ~319; `Field` ctors ~368; `render_html` ~539)
-- Create: `crates/umbra-core/src/orm/forms_runtime.rs` (membership helper)
-- Modify: `crates/umbra-core/src/orm/mod.rs` (`pub mod forms_runtime;`)
-- Modify: `crates/umbra-macros/src/lib.rs` (`expand_form` choices arm)
-- Test: `crates/umbra-core/tests/form_derive.rs`
+- Modify: `crates/umbral-core/src/forms.rs` (`InputKind` ~319; `Field` ctors ~368; `render_html` ~539)
+- Create: `crates/umbral-core/src/orm/forms_runtime.rs` (membership helper)
+- Modify: `crates/umbral-core/src/orm/mod.rs` (`pub mod forms_runtime;`)
+- Modify: `crates/umbral-macros/src/lib.rs` (`expand_form` choices arm)
+- Test: `crates/umbral-core/tests/form_derive.rs`
 
 Steps:
 
-- [ ] Write the failing test. Append to `crates/umbra-core/tests/form_derive.rs` (round-trip each variant, decode back as the enum; reject out-of-set; no row needs a DB so this is a pure validate test):
+- [ ] Write the failing test. Append to `crates/umbral-core/tests/form_derive.rs` (round-trip each variant, decode back as the enum; reject out-of-set; no row needs a DB so this is a pure validate test):
   ```rust
-  #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, umbra::orm::Choices, serde::Serialize, serde::Deserialize)]
+  #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, umbral::orm::Choices, serde::Serialize, serde::Deserialize)]
   #[choices(rename_all = "lowercase")]
   enum Mood {
       #[default]
@@ -327,12 +327,12 @@ Steps:
       Neutral,
   }
 
-  #[derive(Debug, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model, umbra::forms::Form)]
-  #[umbra(table = "fd_choice_form")]
+  #[derive(Debug, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model, umbral::forms::Form)]
+  #[umbral(table = "fd_choice_form")]
   struct ChoiceForm {
       pub id: i64,
       pub body: String,
-      #[umbra(choices)]
+      #[umbral(choices)]
       pub mood: Mood,
   }
 
@@ -362,12 +362,12 @@ Steps:
   ```
 - [ ] Run it, expect FAIL (macro rejects the `Mood` field type — `classify_form_field_type` returns `None` for a choices enum):
   ```bash
-  cd crates && cargo test -p umbra-core --test form_derive choices_field_round_trips_every_variant
+  cd crates && cargo test -p umbral-core --test form_derive choices_field_round_trips_every_variant
   ```
-  Expect: `error: umbra::Form derive: unsupported field type ...` at the `mood` field.
-- [ ] Implement the `InputKind::Select` variant + `Field::select` in `crates/umbra-core/src/forms.rs`. Add to the `InputKind` enum (~339, before the closing `}`):
+  Expect: `error: umbral::Form derive: unsupported field type ...` at the `mood` field.
+- [ ] Implement the `InputKind::Select` variant + `Field::select` in `crates/umbral-core/src/forms.rs`. Add to the `InputKind` enum (~339, before the closing `}`):
   ```rust
-      /// Closed-set enum (`#[umbra(choices)]`). Options are
+      /// Closed-set enum (`#[umbral(choices)]`). Options are
       /// compile-time `(value, label)` pairs from `ChoiceField`.
       Select,
   ```
@@ -425,7 +425,7 @@ Steps:
                   s
               }
   ```
-- [ ] Create `crates/umbra-core/src/orm/forms_runtime.rs` with the membership helper:
+- [ ] Create `crates/umbral-core/src/orm/forms_runtime.rs` with the membership helper:
   ```rust
   //! Runtime helpers the `#[derive(Form)]`-generated `validate` /
   //! `render_html` call. Keeps SQL + ORM access in core (never in
@@ -467,10 +467,10 @@ Steps:
           .collect()
   }
   ```
-  Register it in `crates/umbra-core/src/orm/mod.rs` — add `pub mod forms_runtime;` alongside the other `pub mod` lines.
-- [ ] Implement the macro choices arm in `crates/umbra-macros/src/lib.rs` `expand_form`. The choices signal is `parse_umbra_field_attr(&field.attrs).choices_ty.is_some()`. Read it before the `classify_form_field_type` call (~3447) and branch. Add, just above the `let Some((kind, is_option)) = classify_form_field_type(...)` line:
+  Register it in `crates/umbral-core/src/orm/mod.rs` — add `pub mod forms_runtime;` alongside the other `pub mod` lines.
+- [ ] Implement the macro choices arm in `crates/umbral-macros/src/lib.rs` `expand_form`. The choices signal is `parse_umbral_field_attr(&field.attrs).choices_ty.is_some()`. Read it before the `classify_form_field_type` call (~3447) and branch. Add, just above the `let Some((kind, is_option)) = classify_form_field_type(...)` line:
   ```rust
-          // #[umbra(choices)] enum field → a Select. Options are the
+          // #[umbral(choices)] enum field → a Select. Options are the
           // enum's compile-time VALUES/LABELS; membership checked in
           // validate (no DB). Nullable (Option<T>) drops Required and
           // prepends an empty option.
@@ -484,11 +484,11 @@ Steps:
               let field_var = format_ident!("_{}_field", field_ident);
               let nullable_lit = if is_nullable { quote!(true) } else { quote!(false) };
               field_builders.push(quote! {
-                  let #field_var: ::umbra::forms::Field = ::umbra::forms::Field::select(
+                  let #field_var: ::umbral::forms::Field = ::umbral::forms::Field::select(
                       #field_name,
-                      ::umbra::orm::forms_runtime::choice_options(
-                          <#choice_ty as ::umbra::orm::ChoiceField>::VALUES,
-                          <#choice_ty as ::umbra::orm::ChoiceField>::LABELS,
+                      ::umbral::orm::forms_runtime::choice_options(
+                          <#choice_ty as ::umbral::orm::ChoiceField>::VALUES,
+                          <#choice_ty as ::umbral::orm::ChoiceField>::LABELS,
                       ),
                       #nullable_lit,
                   );
@@ -498,10 +498,10 @@ Steps:
               validate_body.push(quote! {
                   let #raw_var: ::std::string::String =
                       data.get(#field_name).cloned().unwrap_or_default();
-                  ::umbra::orm::forms_runtime::validate_choice_member(
+                  ::umbral::orm::forms_runtime::validate_choice_member(
                       #field_name,
                       &#raw_var,
-                      <#choice_ty as ::umbra::orm::ChoiceField>::VALUES,
+                      <#choice_ty as ::umbral::orm::ChoiceField>::VALUES,
                       #nullable_lit,
                       &mut errs,
                   );
@@ -516,12 +516,12 @@ Steps:
                       if #raw_var.is_empty() {
                           ::core::option::Option::None
                       } else {
-                          <#choice_ty as ::umbra::orm::ChoiceField>::from_str_ok(&#raw_var)
+                          <#choice_ty as ::umbral::orm::ChoiceField>::from_str_ok(&#raw_var)
                       }
                   }
               } else {
                   quote! {
-                      <#choice_ty as ::umbra::orm::ChoiceField>::from_str_ok(&#raw_var)
+                      <#choice_ty as ::umbral::orm::ChoiceField>::from_str_ok(&#raw_var)
                           .unwrap_or_default()
                   }
               };
@@ -532,16 +532,16 @@ Steps:
               continue;
           }
   ```
-  Note: the non-nullable branch uses `.unwrap_or_default()` which requires the enum to be `Default`. Every `#[derive(Choices)]` enum in the codebase already derives `Default` (verified on `PluginComment`'s `CommentKind`); the test's `Mood` derives `Default` too. Confirm `ChoiceField` is re-exported as `umbra::orm::ChoiceField` (it is — `orm::choices::ChoiceField`).
+  Note: the non-nullable branch uses `.unwrap_or_default()` which requires the enum to be `Default`. Every `#[derive(Choices)]` enum in the codebase already derives `Default` (verified on `PluginComment`'s `CommentKind`); the test's `Mood` derives `Default` too. Confirm `ChoiceField` is re-exported as `umbral::orm::ChoiceField` (it is — `orm::choices::ChoiceField`).
 - [ ] Run, expect PASS:
   ```bash
-  cd crates && cargo test -p umbra-core --test form_derive choices_field
+  cd crates && cargo test -p umbral-core --test form_derive choices_field
   ```
 - [ ] Gate + commit:
   ```bash
   cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test
   git add -A && git commit -m "$(cat <<'EOF'
-feat(forms): #[umbra(choices)] fields become a Select in Form derive
+feat(forms): #[umbral(choices)] fields become a Select in Form derive
 
 Options come from the enum's compile-time VALUES/LABELS (no DB).
 validate() checks membership and decodes the value back into the enum;
@@ -560,33 +560,33 @@ EOF
 Classify FK and forward-O2O fields into a `ModelChoice` `InputKind` carrying the target table, optional label field, and PK kind. This task wires the *field descriptor + id parsing*; the async existence check lands in Task 5 and the async option fetch in Task 6.
 
 **Files:**
-- Modify: `crates/umbra-core/src/forms.rs` (`PkKind` enum; `InputKind::ModelChoice`; `Field::model_choice`)
-- Modify: `crates/umbra-macros/src/lib.rs` (`expand_form` FK arm; `#[form(label_field="...")]` parse)
-- Modify: `crates/umbra-core/src/orm/forms_runtime.rs` (id-parse helper)
-- Test: `crates/umbra-core/tests/form_fk.rs` (Create)
+- Modify: `crates/umbral-core/src/forms.rs` (`PkKind` enum; `InputKind::ModelChoice`; `Field::model_choice`)
+- Modify: `crates/umbral-macros/src/lib.rs` (`expand_form` FK arm; `#[form(label_field="...")]` parse)
+- Modify: `crates/umbral-core/src/orm/forms_runtime.rs` (id-parse helper)
+- Test: `crates/umbral-core/tests/form_fk.rs` (Create)
 
 Steps:
 
-- [ ] Write the failing test. Create `crates/umbra-core/tests/form_fk.rs` with a real SQLite ambient pool (copy the `annotate_count.rs` boot pattern) and a parent + FK-child form. This task asserts the *happy-path round-trip* (FK id parsed, child created, `resolve()` returns the real parent):
+- [ ] Write the failing test. Create `crates/umbral-core/tests/form_fk.rs` with a real SQLite ambient pool (copy the `annotate_count.rs` boot pattern) and a parent + FK-child form. This task asserts the *happy-path round-trip* (FK id parsed, child created, `resolve()` returns the real parent):
   ```rust
   #![allow(dead_code)]
   use std::collections::HashMap;
   use tokio::sync::OnceCell;
-  use umbra::orm::{ForeignKey, Model};
-  use umbra::forms::FormValidate;
-  use umbra_core::db;
+  use umbral::orm::{ForeignKey, Model};
+  use umbral::forms::FormValidate;
+  use umbral_core::db;
 
-  #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-  #[umbra(table = "ffk_author")]
+  #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+  #[umbral(table = "ffk_author")]
   struct Author {
       pub id: i64,
       pub name: String,
   }
 
-  #[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model, umbra::forms::Form)]
-  #[umbra(table = "ffk_book")]
+  #[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model, umbral::forms::Form)]
+  #[umbral(table = "ffk_book")]
   struct Book {
-      #[umbra(primary_key)]
+      #[umbral(primary_key)]
       pub id: i64,
       #[form(required, length(min = 1, max = 200))]
       pub title: String,
@@ -600,9 +600,9 @@ Steps:
   static BOOT: OnceCell<()> = OnceCell::const_new();
   async fn boot() {
       BOOT.get_or_init(|| async {
-          let settings = umbra::Settings::from_env().expect("figment defaults");
+          let settings = umbral::Settings::from_env().expect("figment defaults");
           let pool = db::connect_sqlite("sqlite::memory:").await.expect("sqlite");
-          umbra::App::builder()
+          umbral::App::builder()
               .settings(settings)
               .database("default", pool.clone())
               .model::<Author>()
@@ -634,10 +634,10 @@ Steps:
   ```
 - [ ] Run it, expect FAIL (the `author: ForeignKey<Author>` field is rejected by the Form derive):
   ```bash
-  cd crates && cargo test -p umbra-core --test form_fk fk_field_parses_and_links_real_parent
+  cd crates && cargo test -p umbral-core --test form_fk fk_field_parses_and_links_real_parent
   ```
-  Expect: `error: umbra::Form derive: unsupported field type ...` at the `author` field.
-- [ ] Implement `PkKind` + `InputKind::ModelChoice` + `Field::model_choice` in `crates/umbra-core/src/forms.rs`. Add the `PkKind` enum (above `InputKind`, ~317):
+  Expect: `error: umbral::Form derive: unsupported field type ...` at the `author` field.
+- [ ] Implement `PkKind` + `InputKind::ModelChoice` + `Field::model_choice` in `crates/umbral-core/src/forms.rs`. Add the `PkKind` enum (above `InputKind`, ~317):
   ```rust
   /// How to parse a submitted FK id string. Resolved from the target
   /// model's PK SqlType at render/validate time.
@@ -679,7 +679,7 @@ Steps:
           }
       }
   ```
-- [ ] Add the id-parse helper to `crates/umbra-core/src/orm/forms_runtime.rs`:
+- [ ] Add the id-parse helper to `crates/umbral-core/src/orm/forms_runtime.rs`:
   ```rust
   use crate::forms::PkKind;
 
@@ -716,12 +716,12 @@ Steps:
               let nullable_lit = if is_nullable { quote!(true) } else { quote!(false) };
               let field_var = format_ident!("_{}_field", field_ident);
               field_builders.push(quote! {
-                  let #field_var: ::umbra::forms::Field = ::umbra::forms::Field::model_choice(
+                  let #field_var: ::umbral::forms::Field = ::umbral::forms::Field::model_choice(
                       #field_name,
-                      <#target_ty as ::umbra::orm::Model>::TABLE,
+                      <#target_ty as ::umbral::orm::Model>::TABLE,
                       #label_field_tokens,
-                      ::umbra::orm::forms_runtime::pk_kind_for_table(
-                          <#target_ty as ::umbra::orm::Model>::TABLE,
+                      ::umbral::orm::forms_runtime::pk_kind_for_table(
+                          <#target_ty as ::umbral::orm::Model>::TABLE,
                       ),
                       #nullable_lit,
                   );
@@ -744,7 +744,7 @@ Steps:
                       } else {
                           match #raw_var.parse::<i64>() {
                               ::core::result::Result::Ok(v) =>
-                                  ::core::option::Option::Some(::umbra::orm::ForeignKey::new(v)),
+                                  ::core::option::Option::Some(::umbral::orm::ForeignKey::new(v)),
                               ::core::result::Result::Err(_) => {
                                   errs.add(#field_name, format!("{} must be a valid id", #field_name));
                                   ::core::option::Option::None
@@ -755,10 +755,10 @@ Steps:
               } else {
                   quote! {
                       match #raw_var.parse::<i64>() {
-                          ::core::result::Result::Ok(v) => ::umbra::orm::ForeignKey::new(v),
+                          ::core::result::Result::Ok(v) => ::umbral::orm::ForeignKey::new(v),
                           ::core::result::Result::Err(_) => {
                               errs.add(#field_name, format!("{} must be a valid id", #field_name));
-                              ::umbra::orm::ForeignKey::new(0)
+                              ::umbral::orm::ForeignKey::new(0)
                           }
                       }
                   }
@@ -771,10 +771,10 @@ Steps:
           }
   ```
   Note: the non-nullable `ForeignKey::new(0)` placeholder is only reached when the id failed to parse — `errs` is already non-empty so `errs.into_result()?` short-circuits before the `Self { .. }` literal is constructed. No invalid FK ever reaches a created row.
-- [ ] Add `label_field` parsing to the form-field attr parser. In `crates/umbra-macros/src/lib.rs`, find the `#[form(...)]` attr struct (`parse_form_attrs`) and add a `label_field: Option<String>` field, parsing `#[form(label_field = "name")]` the same way `regex`/`message` are parsed. (Locate by `grep -n "fn parse_form_attrs" crates/umbra-macros/src/lib.rs` and add a `meta.path.is_ident("label_field")` arm reading a `LitStr`.)
+- [ ] Add `label_field` parsing to the form-field attr parser. In `crates/umbral-macros/src/lib.rs`, find the `#[form(...)]` attr struct (`parse_form_attrs`) and add a `label_field: Option<String>` field, parsing `#[form(label_field = "name")]` the same way `regex`/`message` are parsed. (Locate by `grep -n "fn parse_form_attrs" crates/umbral-macros/src/lib.rs` and add a `meta.path.is_ident("label_field")` arm reading a `LitStr`.)
 - [ ] Run, expect PASS:
   ```bash
-  cd crates && cargo test -p umbra-core --test form_fk fk_field_parses_and_links_real_parent
+  cd crates && cargo test -p umbral-core --test form_fk fk_field_parses_and_links_real_parent
   ```
 - [ ] Gate + commit:
   ```bash
@@ -800,13 +800,13 @@ EOF
 `validate()` must verify the submitted FK id points at a live row through the ORM (`DynQuerySet`, never raw SQL). A miss is a field-keyed error and no row is inserted. Forward-O2O additionally relies on the DB UNIQUE constraint surfacing a `WriteError` on a duplicate.
 
 **Files:**
-- Modify: `crates/umbra-core/src/orm/forms_runtime.rs` (async existence probe)
-- Modify: `crates/umbra-macros/src/lib.rs` (FK arm emits the await call)
-- Test: `crates/umbra-core/tests/form_fk.rs`
+- Modify: `crates/umbral-core/src/orm/forms_runtime.rs` (async existence probe)
+- Modify: `crates/umbral-macros/src/lib.rs` (FK arm emits the await call)
+- Test: `crates/umbral-core/tests/form_fk.rs`
 
 Steps:
 
-- [ ] Write the failing tests. Append to `crates/umbra-core/tests/form_fk.rs`:
+- [ ] Write the failing tests. Append to `crates/umbral-core/tests/form_fk.rs`:
   ```rust
   #[tokio::test]
   async fn fk_field_rejects_nonexistent_parent_and_inserts_no_row() {
@@ -822,12 +822,12 @@ Steps:
 
   // Forward O2O is a unique FK — a duplicate target surfaces as a
   // WriteError from the DB UNIQUE constraint, not a silent second row.
-  #[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model, umbra::forms::Form)]
-  #[umbra(table = "ffk_passport")]
+  #[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model, umbral::forms::Form)]
+  #[umbral(table = "ffk_passport")]
   struct Passport {
-      #[umbra(primary_key)]
+      #[umbral(primary_key)]
       pub id: i64,
-      #[umbra(unique)]
+      #[umbral(unique)]
       pub holder: ForeignKey<Author>,
       #[form(required, length(min = 1, max = 40))]
       pub number: String,
@@ -846,19 +846,19 @@ Steps:
       let err = Passport::objects().create(p2).await.expect_err("duplicate target");
       // A unique violation, not a silent second row. (WriteError variants
       // verified at write.rs:48 — UniqueViolation / Multiple / Sqlx.)
-      assert!(matches!(err, umbra::orm::write::WriteError::UniqueViolation { .. }
-          | umbra::orm::write::WriteError::Multiple { .. }
-          | umbra::orm::write::WriteError::Sqlx(_)),
+      assert!(matches!(err, umbral::orm::write::WriteError::UniqueViolation { .. }
+          | umbral::orm::write::WriteError::Multiple { .. }
+          | umbral::orm::write::WriteError::Sqlx(_)),
           "duplicate forward-O2O surfaces a WriteError: {err:?}");
   }
   ```
-  Note: `Passport` needs registration. Extend `boot()`'s builder with `.model::<Passport>()`. `umbra::orm::write::WriteError` is the canonical path (re-exported from `crate::orm::write::WriteError`); the real variants are `UniqueViolation { .. }`, `ForeignKeyViolation { .. }`, `ForeignKeyNotFound { .. }`, `Multiple { errors }`, `Validator { field, message }`, `Sqlx(_)`.
+  Note: `Passport` needs registration. Extend `boot()`'s builder with `.model::<Passport>()`. `umbral::orm::write::WriteError` is the canonical path (re-exported from `crate::orm::write::WriteError`); the real variants are `UniqueViolation { .. }`, `ForeignKeyViolation { .. }`, `ForeignKeyNotFound { .. }`, `Multiple { errors }`, `Validator { field, message }`, `Sqlx(_)`.
 - [ ] Run, expect FAIL (existence isn't checked yet — a nonexistent id validates and inserts a dangling-FK row, or the count assertion fails):
   ```bash
-  cd crates && cargo test -p umbra-core --test form_fk fk_field_rejects_nonexistent_parent_and_inserts_no_row
+  cd crates && cargo test -p umbral-core --test form_fk fk_field_rejects_nonexistent_parent_and_inserts_no_row
   ```
   Expect: `before != after` assertion failure (a row got inserted) OR the FK-error key is missing.
-- [ ] Implement the async existence probe in `crates/umbra-core/src/orm/forms_runtime.rs`:
+- [ ] Implement the async existence probe in `crates/umbral-core/src/orm/forms_runtime.rs`:
   ```rust
   /// Verify a row with PK == `id` exists in `target_table`, through
   /// the ORM (never raw SQL). On a miss, push a field-keyed error.
@@ -905,10 +905,10 @@ Steps:
               validate_body.push(quote! {
                   let #raw_var: ::std::string::String =
                       data.get(#field_name).cloned().unwrap_or_default();
-                  ::umbra::orm::forms_runtime::validate_fk_exists(
+                  ::umbral::orm::forms_runtime::validate_fk_exists(
                       #field_name,
                       &#raw_var,
-                      <#target_ty as ::umbra::orm::Model>::TABLE,
+                      <#target_ty as ::umbral::orm::Model>::TABLE,
                       #nullable_lit,
                       &mut errs,
                   ).await;
@@ -917,7 +917,7 @@ Steps:
   The `.await` is now legal because `validate` is async (Task 1). The parse step is unchanged — it still runs so the `ForeignKey` is constructed, but `errs.into_result()?` short-circuits before the `Self { .. }` literal when existence failed.
 - [ ] Run, expect PASS:
   ```bash
-  cd crates && cargo test -p umbra-core --test form_fk
+  cd crates && cargo test -p umbral-core --test form_fk
   ```
 - [ ] Gate + commit:
   ```bash
@@ -942,13 +942,13 @@ EOF
 `render_html` must emit a populated `<select>` for `ModelChoice` / (Task 7) `ModelMultiChoice` fields by fetching `(id, label)` rows from the target table through the ORM.
 
 **Files:**
-- Modify: `crates/umbra-core/src/orm/forms_runtime.rs` (async option fetch)
-- Modify: `crates/umbra-core/src/forms.rs` (`Field::render_html_async` override for `ModelChoice`)
-- Test: `crates/umbra-core/tests/form_fk.rs`
+- Modify: `crates/umbral-core/src/orm/forms_runtime.rs` (async option fetch)
+- Modify: `crates/umbral-core/src/forms.rs` (`Field::render_html_async` override for `ModelChoice`)
+- Test: `crates/umbral-core/tests/form_fk.rs`
 
 Steps:
 
-- [ ] Write the failing test. Append to `crates/umbra-core/tests/form_fk.rs`:
+- [ ] Write the failing test. Append to `crates/umbral-core/tests/form_fk.rs`:
   ```rust
   #[tokio::test]
   async fn fk_field_renders_select_with_seeded_options() {
@@ -962,10 +962,10 @@ Steps:
   ```
 - [ ] Run, expect FAIL (the default `render_html_async` shim from Task 1 just calls sync `render_html`, which renders a `ModelChoice` as a bare `<input type="text">` with no options):
   ```bash
-  cd crates && cargo test -p umbra-core --test form_fk fk_field_renders_select_with_seeded_options
+  cd crates && cargo test -p umbral-core --test form_fk fk_field_renders_select_with_seeded_options
   ```
   Expect: `renders a select` assertion fails (no `<select name="author"`).
-- [ ] Implement the async option fetch in `crates/umbra-core/src/orm/forms_runtime.rs`:
+- [ ] Implement the async option fetch in `crates/umbral-core/src/orm/forms_runtime.rs`:
   ```rust
   /// Fetch `(id, label)` option rows for a ModelChoice/ModelMultiChoice
   /// `<select>` through the ORM. `label_field` overrides the label
@@ -1024,7 +1024,7 @@ Steps:
   }
   ```
   `DynQuerySet::fetch_as_json` returns `Result<Vec<serde_json::Map<String, serde_json::Value>>, DynError>` (verified at `dynamic.rs:898`); `.unwrap_or_default()` yields `Vec<Map<..>>`, which the `filter_map` iterates directly.
-- [ ] Implement the `Field::render_html_async` override in `crates/umbra-core/src/forms.rs`. Replace the Task-1 shim with a real dispatch:
+- [ ] Implement the `Field::render_html_async` override in `crates/umbral-core/src/forms.rs`. Replace the Task-1 shim with a real dispatch:
   ```rust
   impl Field {
       /// Async render entry point. ModelChoice / ModelMultiChoice
@@ -1073,7 +1073,7 @@ Steps:
   ```
 - [ ] Run, expect PASS:
   ```bash
-  cd crates && cargo test -p umbra-core --test form_fk fk_field_renders_select_with_seeded_options
+  cd crates && cargo test -p umbral-core --test form_fk fk_field_renders_select_with_seeded_options
   ```
 - [ ] Gate + commit:
   ```bash
@@ -1098,39 +1098,39 @@ EOF
 `M2M<T>` has no parent column. The Form derive emits a `ModelMultiChoice` whose `validate()` parses the submitted id *list* (multi-value), verifies each id exists, and stuffs the validated ids onto the `M2M` field's pending slot; the typed `create()` writes them as junction rows after the parent insert, atomically, reusing `set_junction_dynamic`.
 
 **Files:**
-- Modify: `crates/umbra-core/src/orm/m2m.rs` (pending-ids slot + accessors)
-- Modify: `crates/umbra-core/src/orm/model.rs` (`HydrateRelated::write_pending_m2m` hook)
-- Modify: `crates/umbra-core/src/orm/queryset/mod.rs` (`create()` calls the hook after insert)
-- Modify: `crates/umbra-core/src/forms.rs` (`InputKind::ModelMultiChoice`, `Field::model_multi_choice`)
-- Modify: `crates/umbra-core/src/orm/forms_runtime.rs` (multi-id parse + per-id existence)
-- Modify: `crates/umbra-macros/src/lib.rs` (`expand_form` M2M arm + `write_pending_m2m` arms on the Model derive's HydrateRelated impl)
-- Test: `crates/umbra-core/tests/form_m2m.rs` (Create)
+- Modify: `crates/umbral-core/src/orm/m2m.rs` (pending-ids slot + accessors)
+- Modify: `crates/umbral-core/src/orm/model.rs` (`HydrateRelated::write_pending_m2m` hook)
+- Modify: `crates/umbral-core/src/orm/queryset/mod.rs` (`create()` calls the hook after insert)
+- Modify: `crates/umbral-core/src/forms.rs` (`InputKind::ModelMultiChoice`, `Field::model_multi_choice`)
+- Modify: `crates/umbral-core/src/orm/forms_runtime.rs` (multi-id parse + per-id existence)
+- Modify: `crates/umbral-macros/src/lib.rs` (`expand_form` M2M arm + `write_pending_m2m` arms on the Model derive's HydrateRelated impl)
+- Test: `crates/umbral-core/tests/form_m2m.rs` (Create)
 
 Steps:
 
-- [ ] Write the failing test. Create `crates/umbra-core/tests/form_m2m.rs` (junction-row round-trip + atomicity on bad id):
+- [ ] Write the failing test. Create `crates/umbral-core/tests/form_m2m.rs` (junction-row round-trip + atomicity on bad id):
   ```rust
   #![allow(dead_code)]
   use std::collections::HashMap;
   use tokio::sync::OnceCell;
-  use umbra::orm::Model;
-  use umbra::forms::FormValidate;
-  use umbra_core::db;
+  use umbral::orm::Model;
+  use umbral::forms::FormValidate;
+  use umbral_core::db;
 
-  #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-  #[umbra(table = "fm_tag")]
+  #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+  #[umbral(table = "fm_tag")]
   struct Tag { pub id: i64, pub name: String }
 
-  #[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model, umbra::forms::Form)]
-  #[umbra(table = "fm_article")]
+  #[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model, umbral::forms::Form)]
+  #[umbral(table = "fm_article")]
   struct Article {
-      #[umbra(primary_key)]
+      #[umbral(primary_key)]
       pub id: i64,
       #[form(required, length(min = 1, max = 200))]
       pub title: String,
       #[sqlx(skip)]
       #[serde(skip)]
-      pub tags: umbra::orm::M2M<Tag>,
+      pub tags: umbral::orm::M2M<Tag>,
   }
 
   fn data(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -1149,9 +1149,9 @@ Steps:
   static BOOT: OnceCell<()> = OnceCell::const_new();
   async fn boot() {
       BOOT.get_or_init(|| async {
-          let settings = umbra::Settings::from_env().expect("figment defaults");
+          let settings = umbral::Settings::from_env().expect("figment defaults");
           let pool = db::connect_sqlite("sqlite::memory:").await.expect("sqlite");
-          umbra::App::builder().settings(settings).database("default", pool.clone())
+          umbral::App::builder().settings(settings).database("default", pool.clone())
               .model::<Tag>().model::<Article>().build().expect("App::build");
           sqlx::query("CREATE TABLE fm_tag (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
               .execute(&pool).await.expect("create tag");
@@ -1198,10 +1198,10 @@ Steps:
   ```
 - [ ] Run, expect FAIL (the `tags: M2M<Tag>` field is rejected by the Form derive):
   ```bash
-  cd crates && cargo test -p umbra-core --test form_m2m m2m_form_writes_exactly_the_selected_junction_rows
+  cd crates && cargo test -p umbral-core --test form_m2m m2m_form_writes_exactly_the_selected_junction_rows
   ```
-  Expect: `error: umbra::Form derive: unsupported field type ...` at the `tags` field.
-- [ ] Implement the pending slot on `M2M<T,P>` in `crates/umbra-core/src/orm/m2m.rs`. Add to the struct (~82):
+  Expect: `error: umbral::Form derive: unsupported field type ...` at the `tags` field.
+- [ ] Implement the pending slot on `M2M<T,P>` in `crates/umbral-core/src/orm/m2m.rs`. Add to the struct (~82):
   ```rust
       /// Child PKs submitted through a form, awaiting the post-insert
       /// junction write. Drained by `take_pending_ids` in the typed
@@ -1222,7 +1222,7 @@ Steps:
       }
   ```
   Confirm `Default` for `M2M` (~103) still works — it calls `empty()` which now sets `pending: Vec::new()`.
-- [ ] Add the `write_pending_m2m` hook to `HydrateRelated` in `crates/umbra-core/src/orm/model.rs` (~83, after `set_m2m_parent_ids`):
+- [ ] Add the `write_pending_m2m` hook to `HydrateRelated` in `crates/umbral-core/src/orm/model.rs` (~83, after `set_m2m_parent_ids`):
   ```rust
       /// Flush form-staged M2M selections to their junction tables
       /// after the parent row was inserted. The macro emits a body that
@@ -1241,14 +1241,14 @@ Steps:
       }
   ```
   (A hand-rolled boxed-future default keeps `HydrateRelated` object-safe-compatible with its existing non-async methods without pulling `#[async_trait]` onto the whole trait.)
-- [ ] Call the hook in typed `create()` in `crates/umbra-core/src/orm/queryset/mod.rs`. After each `row.set_m2m_parent_ids();` (the SQLite arm ~3064 and the Postgres arm ~3093), add the flush before `Ok(row)`:
+- [ ] Call the hook in typed `create()` in `crates/umbral-core/src/orm/queryset/mod.rs`. After each `row.set_m2m_parent_ids();` (the SQLite arm ~3064 and the Postgres arm ~3093), add the flush before `Ok(row)`:
   ```rust
                   row.set_m2m_parent_ids();
                   row.write_pending_m2m().await?;
                   Ok(row)
   ```
   Apply to both arms.
-- [ ] Add `InputKind::ModelMultiChoice` + `Field::model_multi_choice` in `crates/umbra-core/src/forms.rs`. Add to `InputKind`:
+- [ ] Add `InputKind::ModelMultiChoice` + `Field::model_multi_choice` in `crates/umbral-core/src/forms.rs`. Add to `InputKind`:
   ```rust
       /// M2M relation. Submits a list of child ids; written as junction
       /// rows after the parent insert.
@@ -1277,7 +1277,7 @@ Steps:
       }
   ```
   The `render_html_async` `ModelMultiChoice` arm is already wired in Task 6.
-- [ ] Add the multi-id parse + per-id existence helper to `crates/umbra-core/src/orm/forms_runtime.rs`:
+- [ ] Add the multi-id parse + per-id existence helper to `crates/umbral-core/src/orm/forms_runtime.rs`:
   ```rust
   /// Split a submitted M2M value into ids. The form layer joins
   /// repeated keys with `,`; we also accept whitespace. Empty pieces
@@ -1360,12 +1360,12 @@ Steps:
               };
               let field_var = format_ident!("_{}_field", field_ident);
               field_builders.push(quote! {
-                  let #field_var: ::umbra::forms::Field = ::umbra::forms::Field::model_multi_choice(
+                  let #field_var: ::umbral::forms::Field = ::umbral::forms::Field::model_multi_choice(
                       #field_name,
-                      <#target_ty as ::umbra::orm::Model>::TABLE,
+                      <#target_ty as ::umbral::orm::Model>::TABLE,
                       #label_field_tokens,
-                      ::umbra::orm::forms_runtime::pk_kind_for_table(
-                          <#target_ty as ::umbra::orm::Model>::TABLE,
+                      ::umbral::orm::forms_runtime::pk_kind_for_table(
+                          <#target_ty as ::umbral::orm::Model>::TABLE,
                       ),
                   );
               });
@@ -1376,11 +1376,11 @@ Steps:
               validate_body.push(quote! {
                   let #raw_var: ::std::string::String =
                       data.get(#field_name).cloned().unwrap_or_default();
-                  let #ids_var = ::umbra::orm::forms_runtime::parse_multi_ids(&#raw_var);
-                  let #pending_var = ::umbra::orm::forms_runtime::validate_multi_fk_exists(
+                  let #ids_var = ::umbral::orm::forms_runtime::parse_multi_ids(&#raw_var);
+                  let #pending_var = ::umbral::orm::forms_runtime::validate_multi_fk_exists(
                       #field_name,
                       &#ids_var,
-                      <#target_ty as ::umbra::orm::Model>::TABLE,
+                      <#target_ty as ::umbral::orm::Model>::TABLE,
                       &mut errs,
                   ).await;
                   // Build the M2M field with its pending ids staged.
@@ -1396,7 +1396,7 @@ Steps:
           let target_field_ty = &field.ty;
   ```
   (Place the `let target_field_ty = &field.ty;` at the top of the per-field loop body so it's in scope.) For an `Option<M2M<T>>` field, `Default::default()` yields `None`, and `set_pending_ids` won't exist on `Option` — so restrict the M2M *form* arm to the non-Option shape: gate `if let Some(target_ty) = m2m_inner(&field.ty).cloned()` only (drop the `Option<M2M>` branch in the form arm). A form-submittable M2M is always the bare `M2M<T>` shape; `Option<M2M<T>>` on a Model is a Model-side ergonomic, not a form field. Document this in a `// ` comment on the arm.
-- [ ] Emit the `write_pending_m2m` body on the Model derive's `HydrateRelated` impl. In `crates/umbra-macros/src/lib.rs`, locate where `set_m2m_parent_ids` arms are collected (`m2m_parent_arms`, ~895) and the `HydrateRelated` impl emission (~1781-1810). Collect a parallel `write_pending_m2m_arms` for each M2M field (the macro already has `(field_name_str, inner_ty)` pairs for M2M at ~1327). For each M2M field push:
+- [ ] Emit the `write_pending_m2m` body on the Model derive's `HydrateRelated` impl. In `crates/umbral-macros/src/lib.rs`, locate where `set_m2m_parent_ids` arms are collected (`m2m_parent_arms`, ~895) and the `HydrateRelated` impl emission (~1781-1810). Collect a parallel `write_pending_m2m_arms` for each M2M field (the macro already has `(field_name_str, inner_ty)` pairs for M2M at ~1327). For each M2M field push:
   ```rust
   write_pending_m2m_arms.push(quote! {
       {
@@ -1405,13 +1405,13 @@ Steps:
               if let (Some(parent_id), Some(junction)) =
                   (self.#field_ident.parent_id().copied(), self.#field_ident.junction_table())
               {
-                  ::umbra::orm::m2m::set_junction_dynamic(
+                  ::umbral::orm::m2m::set_junction_dynamic(
                       junction,
                       ::sea_query::Value::BigInt(::core::option::Option::Some(parent_id)),
                       pending,
                   )
                   .await
-                  .map_err(::umbra::orm::write::WriteError::Sqlx)?;
+                  .map_err(::umbral::orm::write::WriteError::Sqlx)?;
               }
           }
       }
@@ -1421,7 +1421,7 @@ Steps:
   ```rust
       fn write_pending_m2m<'a>(
           &'a mut self,
-      ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::core::result::Result<(), ::umbra::orm::write::WriteError>> + ::core::marker::Send + 'a>>
+      ) -> ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = ::core::result::Result<(), ::umbral::orm::write::WriteError>> + ::core::marker::Send + 'a>>
       {
           ::std::boxed::Box::pin(async move {
               #(#write_pending_m2m_arms)*
@@ -1429,10 +1429,10 @@ Steps:
           })
       }
   ```
-  Confirm `parent_id()` returns `Option<&P>` where `P = i64`; `.copied()` yields `Option<i64>`. The `set_junction_dynamic` and `M2M` accessors are `pub` (verified). Re-export `set_junction_dynamic` path as `umbra::orm::m2m::set_junction_dynamic` (it's `pub` in `orm::m2m`).
+  Confirm `parent_id()` returns `Option<&P>` where `P = i64`; `.copied()` yields `Option<i64>`. The `set_junction_dynamic` and `M2M` accessors are `pub` (verified). Re-export `set_junction_dynamic` path as `umbral::orm::m2m::set_junction_dynamic` (it's `pub` in `orm::m2m`).
 - [ ] Run, expect PASS:
   ```bash
-  cd crates && cargo test -p umbra-core --test form_m2m
+  cd crates && cargo test -p umbral-core --test form_m2m
   ```
 - [ ] Gate + commit:
   ```bash
@@ -1456,23 +1456,23 @@ EOF
 
 ## Task 8 — End-to-end: derive `Form` on `PluginComment`, delete hand-rolled `Default` (spec acceptance case)
 
-The primary acceptance case: `PluginComment` (FK + `Option<FK>` + choices + reverse-skip, no M2M) compiles with `#[derive(umbra::forms::Form)]`, drops its hand-rolled `Default`, and a behavioral submit test confirms a comment saves with the FK bound correctly.
+The primary acceptance case: `PluginComment` (FK + `Option<FK>` + choices + reverse-skip, no M2M) compiles with `#[derive(umbral::forms::Form)]`, drops its hand-rolled `Default`, and a behavioral submit test confirms a comment saves with the FK bound correctly.
 
 **Files:**
-- Modify: `umbra_website/plugins/plugin_directory/src/models.rs` (`PluginComment` ~347-452)
-- Test: a behavioral submit test colocated with the website plugin crate, or `crates/umbra-core/tests/form_fk.rs` if the website crate has no test harness. (Prefer the website crate; check `umbra_website/plugins/plugin_directory/` for an existing `tests/` dir or `#[cfg(test)]` module.)
+- Modify: `umbral_website/plugins/plugin_directory/src/models.rs` (`PluginComment` ~347-452)
+- Test: a behavioral submit test colocated with the website plugin crate, or `crates/umbral-core/tests/form_fk.rs` if the website crate has no test harness. (Prefer the website crate; check `umbral_website/plugins/plugin_directory/` for an existing `tests/` dir or `#[cfg(test)]` module.)
 
-Note: `umbra_website` is a standalone Cargo project outside the framework workspace. Its build/test runs from `umbra_website/`, not `crates/`. The framework-side behavior is already proven by Tasks 3-5 (FK + choices through a real DB); this task proves the real consumer compiles and submits.
+Note: `umbral_website` is a standalone Cargo project outside the framework workspace. Its build/test runs from `umbral_website/`, not `crates/`. The framework-side behavior is already proven by Tasks 3-5 (FK + choices through a real DB); this task proves the real consumer compiles and submits.
 
 Steps:
 
-- [ ] Write the failing test. In `umbra_website/plugins/plugin_directory/src/models.rs`, add a `#[cfg(test)] mod tests` (or a `tests/` integration file) that boots a SQLite pool, seeds a `Plugin`, submits a `PluginComment` form, and reads the FK back:
+- [ ] Write the failing test. In `umbral_website/plugins/plugin_directory/src/models.rs`, add a `#[cfg(test)] mod tests` (or a `tests/` integration file) that boots a SQLite pool, seeds a `Plugin`, submits a `PluginComment` form, and reads the FK back:
   ```rust
   #[cfg(test)]
   mod form_tests {
       use super::*;
-      use umbra::forms::FormValidate;
-      use umbra::orm::Model;
+      use umbral::forms::FormValidate;
+      use umbral::orm::Model;
       use std::collections::HashMap;
 
       fn data(pairs: &[(&str, &str)]) -> HashMap<String, String> {
@@ -1481,9 +1481,9 @@ Steps:
 
       #[tokio::test]
       async fn plugin_comment_form_submits_with_fk_and_choices() {
-          let pool = umbra_core::db::connect_sqlite("sqlite::memory:").await.unwrap();
-          umbra::App::builder()
-              .settings(umbra::Settings::from_env().unwrap())
+          let pool = umbral_core::db::connect_sqlite("sqlite::memory:").await.unwrap();
+          umbral::App::builder()
+              .settings(umbral::Settings::from_env().unwrap())
               .database("default", pool.clone())
               .model::<Plugin>()
               .model::<PluginComment>()
@@ -1492,7 +1492,7 @@ Steps:
           // Minimal tables for the two models (test-only DDL).
           sqlx::query("CREATE TABLE plugin (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, slug TEXT, crate_name TEXT, author TEXT, short_description TEXT, full_content TEXT, installation_commands TEXT)")
               .execute(&pool).await.unwrap();
-          sqlx::query("CREATE TABLE plugin_comment (id INTEGER PRIMARY KEY AUTOINCREMENT, plugin INTEGER NOT NULL REFERENCES plugin(id), author INTEGER, body TEXT NOT NULL, kind TEXT NOT NULL, moderation TEXT NOT NULL, pinned BOOLEAN NOT NULL DEFAULT 0, author_label TEXT, parent INTEGER, plugin_version TEXT, umbra_version TEXT, database_backend TEXT, operating_system TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT)")
+          sqlx::query("CREATE TABLE plugin_comment (id INTEGER PRIMARY KEY AUTOINCREMENT, plugin INTEGER NOT NULL REFERENCES plugin(id), author INTEGER, body TEXT NOT NULL, kind TEXT NOT NULL, moderation TEXT NOT NULL, pinned BOOLEAN NOT NULL DEFAULT 0, author_label TEXT, parent INTEGER, plugin_version TEXT, umbral_version TEXT, database_backend TEXT, operating_system TEXT, created_at TEXT, updated_at TEXT, deleted_at TEXT)")
               .execute(&pool).await.unwrap();
           sqlx::query("INSERT INTO plugin (id, name) VALUES (1, 'demo')").execute(&pool).await.unwrap();
 
@@ -1506,39 +1506,39 @@ Steps:
       }
   }
   ```
-  (Adjust the test DDL columns to whatever the real migration produces; the point is FK `plugin` is bound as INTEGER and `kind` decodes to the enum. Add `tokio` + `sqlx` to the plugin crate's `[dev-dependencies]` if absent — check `umbra_website/plugins/plugin_directory/Cargo.toml`.)
+  (Adjust the test DDL columns to whatever the real migration produces; the point is FK `plugin` is bound as INTEGER and `kind` decodes to the enum. Add `tokio` + `sqlx` to the plugin crate's `[dev-dependencies]` if absent — check `umbral_website/plugins/plugin_directory/Cargo.toml`.)
 - [ ] Run, expect FAIL (the derive is commented out; `PluginComment::validate` doesn't exist):
   ```bash
-  cd umbra_website && cargo test -p plugin_directory plugin_comment_form_submits_with_fk_and_choices
+  cd umbral_website && cargo test -p plugin_directory plugin_comment_form_submits_with_fk_and_choices
   ```
   Expect: `error[E0599]: no function or associated item named 'validate' found for struct 'PluginComment'`.
-- [ ] Implement. In `umbra_website/plugins/plugin_directory/src/models.rs`:
+- [ ] Implement. In `umbral_website/plugins/plugin_directory/src/models.rs`:
   - Replace the commented derive line and the active one (~347-348) with the single enabled derive:
     ```rust
-    #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
+    #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbral::forms::Form)]
     ```
-  - Restore the `#[form(...)]` attrs on the user-submittable fields (uncomment): `body` (`#[form(required, length(min = 5, max = 5_000))]`), `plugin_version` / `umbra_version` / `database_backend` / `operating_system` (`#[form(optional, length(max = 40))]`).
-  - Leave `#[umbra(on_delete = "cascade")] pub plugin: ForeignKey<Plugin>` WITHOUT `#[umbra(noform)]` — it's now a `ModelChoice` form field (the FK the test submits). Keep `author` as `#[umbra(noform, on_delete = "set_null")]` (handler fills it from auth context), and `parent` as `#[umbra(on_delete = "set_null")]` — it's `Option<ForeignKey<PluginComment>>`, a nullable `ModelChoice`; if the public form shouldn't expose it, add `#[umbra(noform)]` to `parent`.
-  - For `kind` and `moderation`: `kind` becomes a public `Select` (uncomment to `#[umbra(choices, default = "general")]`). `moderation` should stay server-managed → `#[umbra(noform, choices, default = "pending")]` (the public form must not let a submitter pick their own moderation status).
+  - Restore the `#[form(...)]` attrs on the user-submittable fields (uncomment): `body` (`#[form(required, length(min = 5, max = 5_000))]`), `plugin_version` / `umbral_version` / `database_backend` / `operating_system` (`#[form(optional, length(max = 40))]`).
+  - Leave `#[umbral(on_delete = "cascade")] pub plugin: ForeignKey<Plugin>` WITHOUT `#[umbral(noform)]` — it's now a `ModelChoice` form field (the FK the test submits). Keep `author` as `#[umbral(noform, on_delete = "set_null")]` (handler fills it from auth context), and `parent` as `#[umbral(on_delete = "set_null")]` — it's `Option<ForeignKey<PluginComment>>`, a nullable `ModelChoice`; if the public form shouldn't expose it, add `#[umbral(noform)]` to `parent`.
+  - For `kind` and `moderation`: `kind` becomes a public `Select` (uncomment to `#[umbral(choices, default = "general")]`). `moderation` should stay server-managed → `#[umbral(noform, choices, default = "pending")]` (the public form must not let a submitter pick their own moderation status).
   - Delete the hand-rolled `impl Default for PluginComment { ... }` block (~431-452) and its preceding explanatory comment (~422-430). The Form macro's `..Default::default()` tail now needs `Default` — but `ForeignKey` has no `Default`. Since `plugin` is now a form field (not skipped), and `author`/`parent`/timestamps/`deleted_at` ARE skipped, the struct still needs `Default` for the tail. Resolve this: the skipped `author: Option<ForeignKey<AuthUser>>` and `parent: Option<ForeignKey<PluginComment>>` are `Option`, which IS `Default` (→ `None`); the only non-Default skipped fields are the timestamps and `deleted_at` (all `Default`). With `plugin` no longer skipped, no bare `ForeignKey` field remains in the `..Default::default()` set — so `#[derive(Default)]` becomes derivable IF every remaining field is `Default`. Add `Default` to the derive list and delete the manual impl:
     ```rust
-    #[derive(Debug, Clone, Default, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
+    #[derive(Debug, Clone, Default, sqlx::FromRow, Serialize, Deserialize, Model, umbral::forms::Form)]
     ```
     Verify by build: if any skipped field still isn't `Default`, the derive errors and names it — fix by making that field skipped-and-Option or marking it a form field.
   - Delete the `TODO: ENABLE FORM HERE ...` comment (~346).
 - [ ] Run, expect PASS:
   ```bash
-  cd umbra_website && cargo test -p plugin_directory plugin_comment_form_submits_with_fk_and_choices
+  cd umbral_website && cargo test -p plugin_directory plugin_comment_form_submits_with_fk_and_choices
   ```
 - [ ] Build the whole website to confirm no downstream breakage (handlers that constructed `PluginComment::default()` or referenced the old form-commented fields):
   ```bash
-  cd umbra_website && cargo build && cargo test
+  cd umbral_website && cargo build && cargo test
   ```
   Fix any consumer that relied on the deleted manual `Default` or the old field attrs.
 - [ ] Framework gate (the macro + core changes), then commit:
   ```bash
   cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test
-  cd ../umbra_website && cargo fmt && cargo build
+  cd ../umbral_website && cargo fmt && cargo build
   git add -A && git commit -m "$(cat <<'EOF'
 feat(website): derive Form on PluginComment, delete hand-rolled Default
 

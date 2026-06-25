@@ -1,66 +1,66 @@
 ---
 title: Scaffolding (startproject, startapp, startplugin)
-description: The `umbra` global binary creates new projects (`startproject`), minimal plugin stubs (`startapp`), and richer distributable-plugin scaffolds (`startplugin`). Like `django-admin startproject` and `python manage.py startapp`.
+description: The `umbral` global binary creates new projects (`startproject`), minimal plugin stubs (`startapp`), and richer distributable-plugin scaffolds (`startplugin`). Like `django-admin startproject` and `python manage.py startapp`.
 sidebar_position: 1
 icon: layers
 ---
 
 ## Three names, what each one is
 
-Three Cargo entities share the umbra name. Worth pinning down before
+Three Cargo entities share the umbral name. Worth pinning down before
 the install commands below:
 
 | Name | Kind | Where you see it | What it is |
 |------|------|------------------|-----------|
-| `umbra` | Library crate (framework) | `Cargo.toml` dep, `use umbra::prelude::*` | The framework itself - `App::builder`, ORM, web, plugins. |
-| `umbra-cli` | Library + binary crate | `Cargo.toml` dep + `cargo install umbra-cli` | The CLI tooling. The **library half** exposes `umbra_cli::dispatch(app)` that your `main.rs` calls so `cargo run -- <cmd>` works. The **binary half** is what gets installed globally as `umbra` (next row). |
-| `umbra` | Executable on PATH | After `cargo install umbra-cli` | The scaffolding tool - `umbra startproject` / `umbra startapp`. Yes, the binary is called `umbra` but its crate is `umbra-cli`; same Cargo convention as `cargo` (crate name) vs `cargo-something` (subcommand). |
+| `umbral` | Library crate (framework) | `Cargo.toml` dep, `use umbral::prelude::*` | The framework itself - `App::builder`, ORM, web, plugins. |
+| `umbral-cli` | Library + binary crate | `Cargo.toml` dep + `cargo install umbral-cli` | The CLI tooling. The **library half** exposes `umbral_cli::dispatch(app)` that your `main.rs` calls so `cargo run -- <cmd>` works. The **binary half** is what gets installed globally as `umbral` (next row). |
+| `umbral` | Executable on PATH | After `cargo install umbral-cli` | The scaffolding tool - `umbral startproject` / `umbral startapp`. Yes, the binary is called `umbral` but its crate is `umbral-cli`; same Cargo convention as `cargo` (crate name) vs `cargo-something` (subcommand). |
 
-So a real user touches umbra in **two distinct places**:
+So a real user touches umbral in **two distinct places**:
 
 ```bash
-# 1. ONCE globally - installs the `umbra` scaffolding binary on PATH:
-cargo install umbra-cli
+# 1. ONCE globally - installs the `umbral` scaffolding binary on PATH:
+cargo install umbral-cli
 ```
 
 ```toml
 # 2. Every project - both crates as deps in `Cargo.toml`
-#    (the project that `umbra startproject` generates already lists them):
+#    (the project that `umbral startproject` generates already lists them):
 [dependencies]
-umbra = "..."        # the framework library
-umbra-cli = "..."    # for `umbra_cli::dispatch(app)` in main.rs
+umbral = "..."        # the framework library
+umbral-cli = "..."    # for `umbral_cli::dispatch(app)` in main.rs
 ```
 
-There's no separate `cargo install umbra` step - the `umbra` *binary*
-comes from the `umbra-cli` *crate*. The `umbra` *crate* is a library
+There's no separate `cargo install umbral` step - the `umbral` *binary*
+comes from the `umbral-cli` *crate*. The `umbral` *crate* is a library
 you only ever depend on, never install.
 
-## What the global `umbra` binary does
+## What the global `umbral` binary does
 
 It does three things: `startproject`, `startapp`, and `startplugin`. Everything else (`serve`, `migrate`, `createsuperuser`, …) runs against your project's own binary via [`cargo run -- <command>`](./management-commands).
 
 <Callout type="info">
-**Two CLIs, one mental model.** The global `umbra` binary scaffolds
+**Two CLIs, one mental model.** The global `umbral` binary scaffolds
 projects and plugins - it doesn't need a project to run because it
 *creates* one. Every other command (`serve`, `migrate`,
 `makemigrations`, `inspectdb`, `dumpdata`, `loaddata`,
 `createsuperuser`, `tasks-worker`, and any custom subcommand a
 plugin contributes) runs **inside your project** via
 `cargo run -- <command>`. Your binary hosts those by ending
-`main()` with `umbra_cli::dispatch(app).await`.
+`main()` with `umbral_cli::dispatch(app).await`.
 
 ```text
-GLOBAL  (cargo install umbra-cli; nothing else needed)
-  umbra startproject <name>
-  umbra startapp <name>
-  umbra startplugin <name>
+GLOBAL  (cargo install umbral-cli; nothing else needed)
+  umbral startproject <name>
+  umbral startapp <name>
+  umbral startplugin <name>
 
-PROJECT (inside a project, after umbra startproject)
+PROJECT (inside a project, after umbral startproject)
   cargo run -- serve
   cargo run -- migrate / makemigrations / showmigrations
   cargo run -- inspectdb / dumpdata / loaddata
-  cargo run -- createsuperuser            (from umbra-auth)
-  cargo run -- tasks-worker               (from umbra-tasks)
+  cargo run -- createsuperuser            (from umbral-auth)
+  cargo run -- tasks-worker               (from umbral-tasks)
   cargo run -- <your-custom-command>      (from any plugin you write)
 ```
 </Callout>
@@ -68,7 +68,7 @@ PROJECT (inside a project, after umbra startproject)
 ## startproject
 
 ```bash
-umbra startproject myblog
+umbral startproject myblog
 cd myblog
 cargo run -- migrate   # apply auth, sessions, and Post migrations
 cargo run -- serve     # boot at http://127.0.0.1:8000
@@ -76,13 +76,13 @@ cargo run -- serve     # boot at http://127.0.0.1:8000
 
 What you get is a **complete blog-style demo** - not a hello-world skeleton.
 The first `cargo run -- serve` boots into a working application that exercises
-every major umbra surface.
+every major umbral surface.
 
 The layout follows the **per-concern convention** the framework dogfoods in `examples/shop`: `main.rs` stays a thin wiring layer that reads like a table of contents, and every subsystem lives behind a `mod.rs` re-export/orchestrator file. You open day one to a project that already scales past 1000 lines instead of a single ballooning `main.rs`.
 
 ```
 myblog/
-├── Cargo.toml          # umbra + all built-in plugins + tokio
+├── Cargo.toml          # umbral + all built-in plugins + tokio
 ├── src/
 │   ├── main.rs         # App builder + route table + boot helpers
 │   ├── views/          # HTTP handlers, one file per resource grouping
@@ -94,10 +94,10 @@ myblog/
 │   └── widgets/        # admin dashboard widgets, one file per kind
 │       ├── mod.rs      # per-kind re-export layer
 │       └── cards.rs    # one builtin widget so the dashboard isn't empty
-├── plugins/            # local app plugins land here (umbra startapp <name>)
+├── plugins/            # local app plugins land here (umbral startapp <name>)
 │   ├── .gitkeep
 │   └── README.md
-├── umbra.toml          # framework settings
+├── umbral.toml          # framework settings
 ├── .env                # working dev env file (do not commit)
 ├── .env.example        # env-variable cheat sheet
 ├── .gitignore
@@ -125,7 +125,7 @@ These directories are a **recommended convention, not a requirement**. The runti
 | JSON API endpoint | `GET /api/posts` → `views::public::api_list_posts` |
 | `login_required_html("/login")` layer | `/dashboard` route in the router (`main.rs`) |
 | `LoggedIn<AuthUser>` extractor | `views::public::dashboard` handler signature |
-| `umbra::transaction` | inside `dashboard` wrapping the ORM fetch |
+| `umbral::transaction` | inside `dashboard` wrapping the ORM fetch |
 | Shared `internal_error` 500 helper | `src/views/mod.rs` |
 | `AuthPlugin` + `SessionsPlugin` | `.plugin(...)` in the builder |
 | `RestPlugin` with a `post` resource | `.plugin(RestPlugin::default().resource(...))` |
@@ -140,7 +140,7 @@ Flags:
 | Flag | Effect |
 |---|---|
 | `--path <dir>` | Parent directory the new project goes under. Defaults to `.`. |
-| `--local <path>` | Path-dep every umbra crate against a local repo checkout instead of the public `git = "..."` URL. For framework contributors iterating without a remote push. `startapp` and `startplugin` accept the same flag. |
+| `--local <path>` | Path-dep every umbral crate against a local repo checkout instead of the public `git = "..."` URL. For framework contributors iterating without a remote push. `startapp` and `startplugin` accept the same flag. |
 
 The command refuses to overwrite an existing directory - pick a
 different name or move the old one aside.
@@ -169,7 +169,7 @@ The `App::builder()` chain registers every plugin in order: `AuthPlugin`, `Sessi
 
 ### plugins/
 
-An empty home for your local app plugins. Run `umbra startapp <name>` (below) to create one - it scaffolds the crate under `plugins/<name>/` and auto-wires it into your project's `Cargo.toml`.
+An empty home for your local app plugins. Run `umbral startapp <name>` (below) to create one - it scaffolds the crate under `plugins/<name>/` and auto-wires it into your project's `Cargo.toml`.
 
 ### templates/
 
@@ -178,24 +178,24 @@ a build step. Replace the CDN tag with a compiled stylesheet for production.
 `home.html` and `dashboard.html` demonstrate template inheritance (`{% extends
 "base.html" %}`), context variables (`{{ post_count }}`), and Jinja-style loops.
 
-### .env vs umbra.toml
+### .env vs umbral.toml
 
-`umbra.toml` holds configuration that is safe to commit (bind address, dev environment flag, dev secret key). `.env` holds the same values but is listed in `.gitignore` - it is the working override file you never check in. `Settings::from_env()` reads `.env` automatically, and real process environment variables still win over duplicate keys from the file. In production, set `UMBRA_SECRET_KEY`, `UMBRA_DATABASE_URL`, and `UMBRA_ENVIRONMENT=prod` in your environment directly.
+`umbral.toml` holds configuration that is safe to commit (bind address, dev environment flag, dev secret key). `.env` holds the same values but is listed in `.gitignore` - it is the working override file you never check in. `Settings::from_env()` reads `.env` automatically, and real process environment variables still win over duplicate keys from the file. In production, set `UMBRAL_SECRET_KEY`, `UMBRAL_DATABASE_URL`, and `UMBRAL_ENVIRONMENT=prod` in your environment directly.
 
 ## startapp
 
-A plugin in umbra is what Django calls an app. `startapp` scaffolds a
+A plugin in umbral is what Django calls an app. `startapp` scaffolds a
 new plugin crate at `plugins/<name>/`:
 
 ```bash
-umbra startapp posts
+umbral startapp posts
 ```
 
 Generates a **Django-app-style per-concern layout** - one file per concern, so a new plugin opens to obvious "what's in which file" structure:
 
 ```
 plugins/posts/
-├── Cargo.toml          # umbra dep
+├── Cargo.toml          # umbral dep
 └── src/
     ├── lib.rs          # the Plugin impl (name/models/routes/on_ready)
     ├── models.rs       # #[derive(Model)] structs (this app's tables)
@@ -210,8 +210,8 @@ pub mod models;
 pub mod urls;
 pub mod views;
 
-use umbra::plugin::{AppContext, Plugin, PluginError};
-use umbra::web::Router;
+use umbral::plugin::{AppContext, Plugin, PluginError};
+use umbral::web::Router;
 
 #[derive(Debug, Default, Clone)]
 pub struct PostsPlugin;
@@ -221,11 +221,11 @@ impl Plugin for PostsPlugin {
         "posts"
     }
 
-    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
+    fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
         // Register every model the plugin owns so makemigrations
         // picks them up. Uncomment + extend once you've defined one
         // in src/models.rs.
-        // vec![umbra::migrate::ModelMeta::for_::<models::Example>()]
+        // vec![umbral::migrate::ModelMeta::for_::<models::Example>()]
         Vec::new()
     }
 
@@ -243,7 +243,7 @@ impl Plugin for PostsPlugin {
 `urls.rs` is the app's URL conf - the route table that maps paths to `views::` handlers, like Django's `urls.py`:
 
 ```rust
-use umbra::web::{Router, routing::get};
+use umbral::web::{Router, routing::get};
 use crate::views;
 
 pub fn router() -> Router {
@@ -274,12 +274,12 @@ struct name is `pascal_case(name) + "Plugin"`, so `blog-engine`
 becomes `BlogEnginePlugin`.
 </Callout>
 
-### Names umbra refuses to scaffold
+### Names umbral refuses to scaffold
 
 `startapp` (and `startplugin` below) reject two classes of names up front so you don't get a half-broken plugin you have to delete and recreate:
 
 1. **A plugin with the same name already exists** at `plugins/<name>/`. Move it aside or pick a different name.
-2. **The name collides with a built-in umbra plugin.** Scaffolding refuses these so you can never end up trying to register both `.plugin(my_auth::AuthPlugin)` and `.plugin(umbra_auth::AuthPlugin)` in the same builder chain (the route mounts and migration table names would collide at boot). Reserved names: `admin`, `app`, `auth`, `cache`, `email`, `openapi`, `permissions`, `rest`, `rls`, `security`, `sessions`, `signals`, `static`, `tasks`.
+2. **The name collides with a built-in umbral plugin.** Scaffolding refuses these so you can never end up trying to register both `.plugin(my_auth::AuthPlugin)` and `.plugin(umbral_auth::AuthPlugin)` in the same builder chain (the route mounts and migration table names would collide at boot). Reserved names: `admin`, `app`, `auth`, `cache`, `email`, `openapi`, `permissions`, `rest`, `rls`, `security`, `sessions`, `signals`, `static`, `tasks`.
 
 Pick a name that names your domain (`blog`, `billing`, `inventory`) rather than the capability the built-in already provides.
 
@@ -288,14 +288,14 @@ Pick a name that names your domain (`blog`, `billing`, `inventory`) rather than 
 `startapp` is the minimal stub. `startplugin` is the richer version - same destination (`plugins/<name>/`), but the generated scaffold is shaped for a plugin you intend to publish or share across projects:
 
 ```bash
-umbra startplugin widgets
+umbral startplugin widgets
 ```
 
 Generates:
 
 ```
 plugins/widgets/
-├── Cargo.toml              # real deps: umbra, serde, sqlx, chrono, async-trait
+├── Cargo.toml              # real deps: umbral, serde, sqlx, chrono, async-trait
 ├── README.md               # file-structure tour + wiring instructions
 └── src/
     ├── lib.rs              # WidgetsPlugin with the full Plugin impl
@@ -308,16 +308,16 @@ The generated `src/lib.rs` is the full Plugin impl, not the stub - `models()` re
 The generated `src/models.rs` shows the field-type attributes most plugin authors hit on day one:
 
 ```rust
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 pub struct WidgetsItem {
     pub id: i64,
 
-    #[umbra(string, max_length = 200)]
+    #[umbral(string, max_length = 200)]
     pub title: String,
 
     pub status: WidgetsStatus,           // a #[derive(sqlx::Type)] choice enum
 
-    #[umbra(noedit)]
+    #[umbral(noedit)]
     pub published_at: Option<DateTime<Utc>>,
 }
 ```

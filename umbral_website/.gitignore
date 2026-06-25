@@ -1,0 +1,5 @@
+/target
+/styles/node_modules
+/umbral_website.db*
+.env
+Cargo.lock

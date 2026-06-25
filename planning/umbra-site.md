@@ -1,32 +1,32 @@
-# Umbra Framework Website
+# Umbral Framework Website
 
 ## Goal
 
-Build the official Umbra website as an Umbra project, using Umbra itself as the proof of the framework.
+Build the official Umbral website as an Umbral project, using Umbral itself as the proof of the framework.
 
-The website should not be a thin landing page. It should be a complete information hub for developers who want to understand what Umbra is, what is already usable, what is coming next, how apps and plugins work, what can be extended, and what real projects are using it.
+The website should not be a thin landing page. It should be a complete information hub for developers who want to understand what Umbral is, what is already usable, what is coming next, how apps and plugins work, what can be extended, and what real projects are using it.
 
-The site should make Umbra feel more transparent than other Rust web framework sites. A visitor should be able to answer practical questions without hunting through the repository: what features exist, what is planned, which prebuilt plugins exist, which community plugins are available, what developers are saying about each plugin, how safe a plugin is, how to start a project, how to add an app, and where to read deeper examples.
+The site should make Umbral feel more transparent than other Rust web framework sites. A visitor should be able to answer practical questions without hunting through the repository: what features exist, what is planned, which prebuilt plugins exist, which community plugins are available, what developers are saying about each plugin, how safe a plugin is, how to start a project, how to add an app, and where to read deeper examples.
 
 ## Positioning
 
-The homepage should not lead with a generic familiar-framework-for-Rust message as the whole pitch. That space overlaps with cot.rs, and Umbra needs a sharper public position.
+The homepage should not lead with a generic familiar-framework-for-Rust message as the whole pitch. That space overlaps with cot.rs, and Umbral needs a sharper public position.
 
-The stronger Umbra message is that it is a highly modular Rust web framework where the batteries are real plugins. Official batteries should be presented as swappable pieces rather than as one fixed monolith.
+The stronger Umbral message is that it is a highly modular Rust web framework where the batteries are real plugins. Official batteries should be presented as swappable pieces rather than as one fixed monolith.
 
-The site can still explain the familiar workflow: models, migrations, admin, forms, REST, and background work. The public framing should emphasize that Umbra gives that productive app shape while keeping each major capability behind the same plugin boundary a third-party developer can use.
+The site can still explain the familiar workflow: models, migrations, admin, forms, REST, and background work. The public framing should emphasize that Umbral gives that productive app shape while keeping each major capability behind the same plugin boundary a third-party developer can use.
 
 The homepage should communicate three ideas quickly:
 
-1. Umbra gives Rust developers a complete app framework, not only HTTP routing.
-2. Umbra's batteries are prebuilt plugins that can be enabled, replaced, or extended.
-3. The website itself is built with Umbra, using the same project, app, migration, form, admin, and plugin systems it documents.
+1. Umbral gives Rust developers a complete app framework, not only HTTP routing.
+2. Umbral's batteries are prebuilt plugins that can be enabled, replaced, or extended.
+3. The website itself is built with Umbral, using the same project, app, migration, form, admin, and plugin systems it documents.
 
 ## Project Rules
 
-The website project directory should be created at the repository root as `umbra_website`.
+The website project directory should be created at the repository root as `umbral_website`.
 
-Use `umbra-cli startproject` to start the website project.
+Use `umbral-cli startproject` to start the website project.
 
 Use `startapp` for each website app or plugin area. Models should live in the generated plugin folders, not in `main.rs`.
 
@@ -38,7 +38,7 @@ Use `makemigrations` and `migrate` for schema changes. The website should dogfoo
 
 Use Tailwind CSS for styling, compiled into static CSS for the website.
 
-Use Umbra Forms for every public form on the site. Contact forms, plugin submission, review submission, plugin reporting, showcase submission, and account connection flows should all use Forms.
+Use Umbral Forms for every public form on the site. Contact forms, plugin submission, review submission, plugin reporting, showcase submission, and account connection flows should all use Forms.
 
 Content, features, plugins, social links, reviews, showcase entries, and moderation data should be managed through the database and the admin, not hardcoded into HTML templates.
 
@@ -46,21 +46,21 @@ Content, features, plugins, social links, reviews, showcase entries, and moderat
 
 The primary navigation should include Home, Features, Prebuilt Plugins, Plugin Directory, Docs, Blog, Showcase, Reviews, Security, Community, and Changelog.
 
-Home should introduce Umbra, show the built-with-Umbra proof point, surface the strongest framework capabilities, and link into the deeper sections.
+Home should introduce Umbral, show the built-with-Umbral proof point, surface the strongest framework capabilities, and link into the deeper sections.
 
 Features should explain framework-level capabilities that are not better represented as individual prebuilt plugins.
 
-Prebuilt Plugins should explain official Umbra plugins maintained by the Umbra team.
+Prebuilt Plugins should explain official Umbral plugins maintained by the Umbral team.
 
 Plugin Directory should list first-party plugins, community plugins, experimental plugins, deprecated plugins, flagged plugins, and plugin-specific discussion threads.
 
 Docs should link into the existing user documentation and expose curated learning paths: quick start, project structure, models and migrations, forms, plugins are apps, admin, auth, permissions, REST, deployment, and building a reusable plugin.
 
-Blog should publish release notes, design notes, tutorials, plugin announcements, migration guides, security advisories, and "building Umbra with Umbra" posts.
+Blog should publish release notes, design notes, tutorials, plugin announcements, migration guides, security advisories, and "building Umbral with Umbral" posts.
 
-Showcase should list websites and applications using Umbra.
+Showcase should list websites and applications using Umbral.
 
-Reviews should show verified developer reviews of the Umbra project.
+Reviews should show verified developer reviews of the Umbral project.
 
 Security should explain plugin safety, malicious plugin reporting, audit status, responsible disclosure, and ecosystem maintainer workflows.
 
@@ -80,7 +80,7 @@ Each feature should have a name, slug, short summary, full description, category
 
 Feature statuses should make it clear what developers can rely on now and what is still planned.
 
-Feature pages should explain how the feature works in Umbra, why it exists, and where to find the docs or example.
+Feature pages should explain how the feature works in Umbral, why it exists, and where to find the docs or example.
 
 The homepage should show a curated subset of features. The full Features page should show the complete database-backed list.
 
@@ -88,9 +88,9 @@ The admin should let maintainers mark features as shipped, usable, experimental,
 
 ## Prebuilt Plugins
 
-Prebuilt plugins are one of Umbra's strongest public arguments and deserve their own section.
+Prebuilt plugins are one of Umbral's strongest public arguments and deserve their own section.
 
-This section should explain that official Umbra capabilities are delivered through the same plugin contract community developers can use.
+This section should explain that official Umbral capabilities are delivered through the same plugin contract community developers can use.
 
 Each prebuilt plugin should have its own database record, public page, status, documentation links, setup notes, compatibility notes, and feature list.
 
@@ -100,19 +100,19 @@ Each plugin-owned feature should have a name, slug, description, status, maturit
 
 The plugin detail page should show the plugin's own feature tracker so users can see what is shipped, what is experimental, and what is planned inside that plugin.
 
-The website should make swapping clear: an Umbra app can use the official plugin, replace it with another plugin, or build a project-specific plugin through `startapp`.
+The website should make swapping clear: an Umbral app can use the official plugin, replace it with another plugin, or build a project-specific plugin through `startapp`.
 
-The seed command should seed default records for the official Umbra plugins and their initial feature lists.
+The seed command should seed default records for the official Umbral plugins and their initial feature lists.
 
-The initial prebuilt plugin list should be generated from the existing top-level Umbra plugins, then maintained through the database.
+The initial prebuilt plugin list should be generated from the existing top-level Umbral plugins, then maintained through the database.
 
 ## Community Plugin Directory
 
-Umbra should expose the plugin ecosystem clearly on the website.
+Umbral should expose the plugin ecosystem clearly on the website.
 
 The plugin directory should include first-party plugins, community plugins, experimental plugins, deprecated plugins, and flagged plugins, but the public UI should distinguish official prebuilt plugins from community plugins.
 
-Each plugin listing should include plugin name, slug, author, package or repository URL, short description, full rich text content, installation commands, setup notes, version, license, supported Umbra versions, supported database backends, documentation URL, source URL, issue tracker URL, categories, tags, status, audit status, security status, and last verified date.
+Each plugin listing should include plugin name, slug, author, package or repository URL, short description, full rich text content, installation commands, setup notes, version, license, supported Umbral versions, supported database backends, documentation URL, source URL, issue tracker URL, categories, tags, status, audit status, security status, and last verified date.
 
 Plugin install commands and setup notes should be stored as database content so maintainers can update them without changing templates.
 
@@ -128,13 +128,13 @@ Until OAuth exists, plugin submission can be admin-only or manually reviewed fro
 
 ## Plugin Comments And Discussions
 
-Umbra should provide a central place for plugin-specific comments and discussions across official and community plugins.
+Umbral should provide a central place for plugin-specific comments and discussions across official and community plugins.
 
-This is a major ecosystem gap. In many framework ecosystems, there is no single place to read practical comments about plugins such as REST frameworks, multitenancy packages, admin extensions, task queues, or auth replacements. Umbra should make this visible from the beginning.
+This is a major ecosystem gap. In many framework ecosystems, there is no single place to read practical comments about plugins such as REST frameworks, multitenancy packages, admin extensions, task queues, or auth replacements. Umbral should make this visible from the beginning.
 
 Every plugin detail page should have a discussion area where developers can leave usage notes, installation gotchas, compatibility reports, migration notes, questions, maintainer replies, and general feedback.
 
-Plugin comments are not the same as developer reviews of Umbra itself, and they are not the same as malicious plugin reports. Reviews measure trust in the framework. Security reports go to an auditor workflow. Plugin comments are public, contextual discussion around a specific plugin.
+Plugin comments are not the same as developer reviews of Umbral itself, and they are not the same as malicious plugin reports. Reviews measure trust in the framework. Security reports go to an auditor workflow. Plugin comments are public, contextual discussion around a specific plugin.
 
 Comments should be attached to a plugin record, not scattered through blog posts or external issue trackers.
 
@@ -142,15 +142,15 @@ Comments should support replies or threads so maintainers can answer questions i
 
 Comments should support moderation states such as pending, visible, hidden, flagged, deleted, and locked.
 
-Comments should support pinned maintainer notes so a plugin author or Umbra maintainer can surface important compatibility warnings or migration guidance.
+Comments should support pinned maintainer notes so a plugin author or Umbral maintainer can surface important compatibility warnings or migration guidance.
 
-Comments should support lightweight metadata such as plugin version, Umbra version, database backend, operating system, and whether the comment is a question, usage note, compatibility note, maintainer response, or migration note.
+Comments should support lightweight metadata such as plugin version, Umbral version, database backend, operating system, and whether the comment is a question, usage note, compatibility note, maintainer response, or migration note.
 
 Comments should support abuse reporting and moderator review.
 
 Comments should be searchable and filterable from plugin pages and from a cross-plugin discussion view.
 
-Commenting can start as a normal Umbra Forms workflow with server-rendered updates after submit.
+Commenting can start as a normal Umbral Forms workflow with server-rendered updates after submit.
 
 The data model should be designed so an SSE and WebSockets plugin can later add live interactions without redesigning comments.
 
@@ -164,7 +164,7 @@ The content plugin from `examples/shop/plugins/content` should be copied or move
 
 That reusable content plugin should become the starting point for blog posts, pages, FAQ, navigation, media assets, redirects, site settings, contact messages, banners, and testimonials.
 
-The Umbra website can extend the reusable content plugin when it needs website-specific models, but the generic content functionality should not be rebuilt from scratch inside `umbra_website`.
+The Umbral website can extend the reusable content plugin when it needs website-specific models, but the generic content functionality should not be rebuilt from scratch inside `umbral_website`.
 
 Blog posts should support draft, published, and scheduled states.
 
@@ -190,15 +190,15 @@ Each social link should have a name, URL, icon key, display order, active flag, 
 
 The footer, community page, blog sidebar, and homepage community section should all read from the same database-managed social links.
 
-Newsletter subscription should point outward to Sentinmail instead of storing local subscribers in the Umbra website database.
+Newsletter subscription should point outward to Sentinmail instead of storing local subscribers in the Umbral website database.
 
-The newsletter form can still use Umbra Forms for validation and user experience, but the submitted data should be sent to the Sentinmail subscribe endpoint documented at `https://docs.sentinmail.app/docs/v1.0.0/dev-guide/subscribe-page`.
+The newsletter form can still use Umbral Forms for validation and user experience, but the submitted data should be sent to the Sentinmail subscribe endpoint documented at `https://docs.sentinmail.app/docs/v1.0.0/dev-guide/subscribe-page`.
 
-The website should support either a hosted Sentinmail subscribe page link or a local Umbra Form that forwards to Sentinmail, depending on the final integration choice.
+The website should support either a hosted Sentinmail subscribe page link or a local Umbral Form that forwards to Sentinmail, depending on the final integration choice.
 
 ## Reviews And Trust
 
-The website should include developer reviews for the Umbra project itself.
+The website should include developer reviews for the Umbral project itself.
 
 A developer review should require the reviewer to connect a GitHub account.
 
@@ -208,7 +208,7 @@ The GitHub OAuth and account age verification are deferred because the OAuth plu
 
 The rest of the review system should still be designed now: review model, moderation status, admin workflow, public display, and abuse prevention.
 
-Each review should include developer name, GitHub username, optional avatar, rating, review title, review body, developer role, company or project type, Umbra version used, usage context, verified GitHub status, moderation status, and publish date.
+Each review should include developer name, GitHub username, optional avatar, rating, review title, review body, developer role, company or project type, Umbral version used, usage context, verified GitHub status, moderation status, and publish date.
 
 Only one active review per GitHub account should be allowed.
 
@@ -218,31 +218,31 @@ Reviews should not be anonymous on the public site. If a review influences trust
 
 The homepage should show a small curated set of approved reviews. The Reviews page should show the full approved list with filters by usage type, version, and rating.
 
-## Websites Using Umbra
+## Websites Using Umbral
 
-The website should have a "Websites using Umbra" section.
+The website should have a "Websites using Umbral" section.
 
-This section should list real sites, apps, dashboards, APIs, internal tools, and demos built with Umbra.
+This section should list real sites, apps, dashboards, APIs, internal tools, and demos built with Umbral.
 
-Each showcase entry should include project name, URL, owner or organization, short description, long case study content, screenshot or logo, project type, Umbra version, plugins used, database backend, deployment platform, launch date, source URL if public, and verification status.
+Each showcase entry should include project name, URL, owner or organization, short description, long case study content, screenshot or logo, project type, Umbral version, plugins used, database backend, deployment platform, launch date, source URL if public, and verification status.
 
 Showcase entries should support statuses such as draft, submitted, verified, featured, archived, and rejected.
 
 The homepage should show featured showcase entries. The full Showcase page should show the complete verified list.
 
-Showcase submission should use Umbra Forms.
+Showcase submission should use Umbral Forms.
 
 Showcase submission can be public later, but it should be moderated before publishing.
 
 If GitHub OAuth is available later, showcase submitters can connect GitHub to prove ownership or maintainer identity.
 
-The first showcase entry should be the Umbra website itself.
+The first showcase entry should be the Umbral website itself.
 
 ## Malicious Plugin Reporting
 
 The website should have a serious plugin safety section.
 
-Umbra plugins can run application code, define models, add routes, and access data. A malicious plugin could leak data, weaken authentication, add unsafe routes, exfiltrate secrets, or hide behavior inside migrations.
+Umbral plugins can run application code, define models, add routes, and access data. A malicious plugin could leak data, weaken authentication, add unsafe routes, exfiltrate secrets, or hide behavior inside migrations.
 
 Every plugin page should have a visible way to report a security concern.
 
@@ -266,19 +266,19 @@ There should be a dedicated role or permission group for plugin auditors and sec
 
 ## Forms To Build
 
-The contact form should use Umbra Forms and store contact messages in the database.
+The contact form should use Umbral Forms and store contact messages in the database.
 
-The newsletter form should use Umbra Forms and forward valid submissions to Sentinmail.
+The newsletter form should use Umbral Forms and forward valid submissions to Sentinmail.
 
-The plugin submission form should use Umbra Forms and store plugin submissions for moderation.
+The plugin submission form should use Umbral Forms and store plugin submissions for moderation.
 
-The plugin report form should use Umbra Forms and store security reports for auditor review.
+The plugin report form should use Umbral Forms and store security reports for auditor review.
 
-The plugin comment form should use Umbra Forms and store comments or replies for moderation and public display.
+The plugin comment form should use Umbral Forms and store comments or replies for moderation and public display.
 
-The developer review form should use Umbra Forms and store reviews for moderation.
+The developer review form should use Umbral Forms and store reviews for moderation.
 
-The showcase submission form should use Umbra Forms and store site submissions for moderation.
+The showcase submission form should use Umbral Forms and store site submissions for moderation.
 
 Every public form should have server-side validation, friendly validation errors, spam resistance, and a clear moderation state where needed.
 
@@ -296,7 +296,7 @@ The plugin directory app should own community plugin listings, plugin categories
 
 The reviews app should own verified developer reviews.
 
-The showcase app should own websites and applications using Umbra.
+The showcase app should own websites and applications using Umbral.
 
 The security app should own malicious plugin reports, advisory state, auditor workflow, plugin comment abuse reports, and plugin warnings.
 
@@ -328,9 +328,9 @@ The seed command should seed the first social links: GitHub, Discord, Reddit, X,
 
 The seed command should seed the first framework feature categories: Core, ORM, Migrations, Templates, Forms, Project Structure, Developer Experience, Security, Deployment, and Plugin System.
 
-The seed command should seed the initial framework feature list from the current Umbra capabilities and mark each one with an honest status.
+The seed command should seed the initial framework feature list from the current Umbral capabilities and mark each one with an honest status.
 
-The seed command should seed official prebuilt plugin records for the existing top-level Umbra plugins.
+The seed command should seed official prebuilt plugin records for the existing top-level Umbral plugins.
 
 The seed command should seed each official plugin's initial feature list from the database model designed for plugin-owned features.
 
@@ -338,11 +338,11 @@ The seed command should seed default plugin comment categories such as question,
 
 The seed command should seed the reusable content plugin once it is promoted from the shop example.
 
-The seed command should seed the first showcase entry as the Umbra website itself.
+The seed command should seed the first showcase entry as the Umbral website itself.
 
 The seed command should seed initial blog categories: Releases, Tutorials, Design Notes, Plugins, Security, Community.
 
-The seed command should seed an initial "Why Umbra exists" post and a "Building the Umbra website with Umbra" post.
+The seed command should seed an initial "Why Umbral exists" post and a "Building the Umbral website with Umbral" post.
 
 ## Deferred Open Areas
 
@@ -362,11 +362,11 @@ SSE and WebSockets support is not required for the first plugin comments release
 
 The website should feel like a serious developer tool, not a generic SaaS landing page.
 
-It should be dense enough for experienced developers but still approachable for someone evaluating Umbra for the first time.
+It should be dense enough for experienced developers but still approachable for someone evaluating Umbral for the first time.
 
 The visual system should prioritize readable technical content, clear navigation, good comparison tables, strong search and filtering, and polished long-form documentation pages.
 
-The first viewport should clearly communicate Umbra's identity, the plugin-first architecture, and the fact that the website is built with Umbra.
+The first viewport should clearly communicate Umbral's identity, the plugin-first architecture, and the fact that the website is built with Umbral.
 
 Use Tailwind CSS for layout, typography, forms, tables, badges, filters, and responsive behavior.
 
@@ -374,9 +374,9 @@ Avoid making the whole site a static marketing surface. The important sections s
 
 ## Build Sequence After Review
 
-First, make sure the Umbra core and CLI are capable of creating the project and apps needed for the website.
+First, make sure the Umbral core and CLI are capable of creating the project and apps needed for the website.
 
-Use `umbra-cli startproject` to create the root-level `umbra_website` project.
+Use `umbral-cli startproject` to create the root-level `umbral_website` project.
 
 Use `startapp` to create the website apps instead of putting models in `main.rs`.
 
@@ -390,11 +390,11 @@ Run `makemigrations`, review the generated migrations, and run `migrate`.
 
 Build the Tailwind styling, templates, forms, plugin comments, admin configuration, moderation workflows, seed data, and Sentinmail newsletter integration.
 
-Use the website itself as the first public proof that Umbra can build a real content-heavy framework site.
+Use the website itself as the first public proof that Umbral can build a real content-heavy framework site.
 
 ## Good features
 
-1. Plugin ordering - since it might be hard to track installs as they happen through cargo add, it might be useful to use plugin reviews, rating, to order plugins by popularity or relevance. Actually to track plugin installs, we can provide an installation command like `umbra install <plugin>` that adds the plugin to the project using cargo add but sends a tracking event to the umbra backend. This means, whenever umbra cli is used to install a plugin, we instantiate like a config in the user root that is saved and signed by our server, its like an auth key but in this it will be specifically an identification key to track plugin installs from different devices. We can make this opt in only but this means we don't use installs as a metric. When we have a given device id which is only known to our server means that regardless the user installing the plugin 10x, it can only be recorded once till that code changes! Actually we can also use crates.io site `https://crates.io{crate_name}/{version}/downloads`
+1. Plugin ordering - since it might be hard to track installs as they happen through cargo add, it might be useful to use plugin reviews, rating, to order plugins by popularity or relevance. Actually to track plugin installs, we can provide an installation command like `umbral install <plugin>` that adds the plugin to the project using cargo add but sends a tracking event to the umbral backend. This means, whenever umbral cli is used to install a plugin, we instantiate like a config in the user root that is saved and signed by our server, its like an auth key but in this it will be specifically an identification key to track plugin installs from different devices. We can make this opt in only but this means we don't use installs as a metric. When we have a given device id which is only known to our server means that regardless the user installing the plugin 10x, it can only be recorded once till that code changes! Actually we can also use crates.io site `https://crates.io{crate_name}/{version}/downloads`
 
 
 ## Required Quick fixes 
@@ -408,14 +408,14 @@ Use the website itself as the first public proof that Umbra can build a real con
 4. ✅ DONE. The reviews on the home page are a sharm, use backend to fill this
    — homepage trust strip now renders `reviews::featured_reviews(2)` (featured-first, live), with an honest empty state. The hardcoded "Rosa/Theo" cards are gone (asserted in `public/tests/render_home.rs`).
 5. ✅ DONE. The tabs under the plugin section for all, official, community, audited don't work…
-   — homepage tabs are now links into the directory facets. Added an `?audited=1` facet to `/plugins` (count + clickable, OR of umbra/third-party-reviewed). The `Plugin.featured` flag already existed; the homepage preview now orders featured-first.
-6. ✅ DONE. The homepage source code says "umbra-cli" but should be umbra…
-   — hero terminal now uses `umbra startproject/startapp`, `cargo run -- makemigrations && migrate`, and shows plugins wired via `App::builder().plugin(...)` (the `plugins = [...]` TOML snippet was wrong — plugins are wired in main.rs, not a config array). Footer label → `umbra v0.1.0`.
+   — homepage tabs are now links into the directory facets. Added an `?audited=1` facet to `/plugins` (count + clickable, OR of umbral/third-party-reviewed). The `Plugin.featured` flag already existed; the homepage preview now orders featured-first.
+6. ✅ DONE. The homepage source code says "umbral-cli" but should be umbral…
+   — hero terminal now uses `umbral startproject/startapp`, `cargo run -- makemigrations && migrate`, and shows plugins wired via `App::builder().plugin(...)` (the `plugins = [...]` TOML snippet was wrong — plugins are wired in main.rs, not a config array). Footer label → `umbral v0.1.0`.
 7. ✅ DONE. …post refreshes the whole page; want SSE to work…
    — the note form now submits via `fetch()` (handler returns JSON for `Accept: application/json`, redirects for no-JS). The page no longer reloads; an in-place success banner shows and the existing SSE live-note feed updates.
 8. ✅ DONE. Sponsor button on the header + Sponsor plugin + Partners model…
-   — new `sponsor` plugin: `Partner` + `SponsorInquiry` models, `/sponsor` page (GitHub Sponsors card + "Talk to us" Umbra Form + partners grid), header Sponsor dropdown (GitHub / Talk to us), footer link. **Action required: run `cargo run -- makemigrations && cargo run -- migrate` to create the `sponsor_partner` / `sponsor_sponsorinquiry` tables** (left for the operator per the no-auto-migrate rule; the page degrades to an empty state until then).
+   — new `sponsor` plugin: `Partner` + `SponsorInquiry` models, `/sponsor` page (GitHub Sponsors card + "Talk to us" Umbral Form + partners grid), header Sponsor dropdown (GitHub / Talk to us), footer link. **Action required: run `cargo run -- makemigrations && cargo run -- migrate` to create the `sponsor_partner` / `sponsor_sponsorinquiry` tables** (left for the operator per the no-auto-migrate rule; the page degrades to an empty state until then).
 9. ✅ DONE. Link up the SSE for admin notifications (is_superuser only)…
    — `RealtimePlugin.on_model(...)` fires on create of plugin notes, reviews, plugin submissions, contact messages, and sponsor inquiries; `notify_admins` pushes an `admin_notification` event targeted by user id to active superusers only (a true superuser-only channel — no public group). The superuser dashboard subscribes over SSE and shows a live feed + toasts.
 10. ✅ DONE. Markdown blogs + custom code/image components…
-    — seeded 5 lengthy markdown posts (`site_content/src/seed.rs`, runs on `on_ready`); added the `/blog/{slug}` detail page rendering markdown. New `static/js/md-enhance.js` + `static/css/md-enhance.css` (loaded globally) enhance any `[data-md]` container: code blocks get a language label + copy button + preview frame, images get a click-to-zoom lightbox gallery. Applied on blog posts and plugin notes. (The framework `| markdown` filter itself was left untouched — it lives outside `umbra_website` — so enhancement is post-render in the browser.)
+    — seeded 5 lengthy markdown posts (`site_content/src/seed.rs`, runs on `on_ready`); added the `/blog/{slug}` detail page rendering markdown. New `static/js/md-enhance.js` + `static/css/md-enhance.css` (loaded globally) enhance any `[data-md]` container: code blocks get a language label + copy button + preview frame, images get a click-to-zoom lightbox gallery. Applied on blog posts and plugin notes. (The framework `| markdown` filter itself was left untouched — it lives outside `umbral_website` — so enhancement is post-render in the browser.)

@@ -1,11 +1,11 @@
-# Masked field encryption + `umbra-oauth` — design
+# Masked field encryption + `umbral-oauth` — design
 
-Status: approved 2026-06-13. Drives the implementation of two coupled features: a framework-level encrypt-at-rest field type (`Masked<T>`) and an OAuth/social-auth plugin (`umbra-oauth`) that stores provider tokens in `Masked` columns.
+Status: approved 2026-06-13. Drives the implementation of two coupled features: a framework-level encrypt-at-rest field type (`Masked<T>`) and an OAuth/social-auth plugin (`umbral-oauth`) that stores provider tokens in `Masked` columns.
 
 ## Goals
 
 - A reusable **field-encryption primitive** so any model can mark a column as encrypted-at-rest (`phone: Masked<String>`), for GDPR-style PII protection. Public-key encryption (encrypt with a public key, decrypt with a private key) so a write-only tier can store data it can't read, and so erasure can be done by crypto-shredding (dropping the private key).
-- An **OAuth plugin** that does both **social login** ("Sign in with Google") and **account connection** ("Connect your GitHub"), layered on the existing `umbra-auth` `AuthUser` — extending it through a linked row, never replacing `username`.
+- An **OAuth plugin** that does both **social login** ("Sign in with Google") and **account connection** ("Connect your GitHub"), layered on the existing `umbral-auth` `AuthUser` — extending it through a linked row, never replacing `username`.
 - **Extensible** to new providers (and later to API-scoped connections like Google Drive) by implementing one trait.
 
 ## Non-goals (this pass)
@@ -41,7 +41,7 @@ This is the single highest-risk integration point and gets a focused round-trip 
 
 ### Key management
 
-- `UMBRA_MASK_PUBLIC_KEY` (base64 X25519 public) and `UMBRA_MASK_PRIVATE_KEY` (base64 X25519 secret, optional), resolved once into a `OnceLock` mask keyring — the same ambient-global pattern as the DB pool, with an explicit override available for tests.
+- `UMBRAL_MASK_PUBLIC_KEY` (base64 X25519 public) and `UMBRAL_MASK_PRIVATE_KEY` (base64 X25519 secret, optional), resolved once into a `OnceLock` mask keyring — the same ambient-global pattern as the DB pool, with an explicit override available for tests.
 - CLI command **`maskkeygen`**: generates a keypair and prints the two env lines plus a one-line GDPR note.
 - Encryption needs only the public key; reveal needs the private key. A tier configured with only the public key can store but not read masked data.
 
@@ -52,11 +52,11 @@ This is the single highest-risk integration point and gets a focused round-trip 
 
 ### Deliverables
 
-`crates/umbra-core`: `orm/masked.rs` (type + crypto + keyring), facade re-export (`umbra::orm::Masked`, prelude). `crates/umbra-macros`: derive recognizes `Masked`. `crates/umbra-cli`: `maskkeygen`. Tests: encrypt→store→load→reveal round-trip; redaction in Debug/serde; public-key-only reveal error; migration column type is `Text`. Doc: `documentation/docs/v0.0.1/orm/masked.mdx`.
+`crates/umbral-core`: `orm/masked.rs` (type + crypto + keyring), facade re-export (`umbral::orm::Masked`, prelude). `crates/umbral-macros`: derive recognizes `Masked`. `crates/umbral-cli`: `maskkeygen`. Tests: encrypt→store→load→reveal round-trip; redaction in Debug/serde; public-key-only reveal error; migration column type is `Text`. Doc: `documentation/docs/v0.0.1/orm/masked.mdx`.
 
-## Component B — `umbra-oauth`
+## Component B — `umbral-oauth`
 
-Depends on the `auth` plugin. Crate `plugins/umbra-oauth`, `Plugin::name() == "oauth"`, `dependencies() == ["auth"]`.
+Depends on the `auth` plugin. Crate `plugins/umbral-oauth`, `Plugin::name() == "oauth"`, `dependencies() == ["auth"]`.
 
 ### Model
 
@@ -87,11 +87,11 @@ On callback with no existing `SocialAccount` for `(provider, uid)`:
 2. Else if the provider asserts a **verified** email matching an existing `AuthUser.email` → link to that user and log in.
 3. Else → auto-create a new `AuthUser` (username derived from email/provider, uniqueness-guarded), link, and log in.
 
-Email-based auto-linking happens **only** when `email_verified` is true (prevents account takeover via an unverified provider email). Login establishes the session via `umbra_sessions::login_user_id`.
+Email-based auto-linking happens **only** when `email_verified` is true (prevents account takeover via an unverified provider email). Login establishes the session via `umbral_sessions::login_user_id`.
 
 ### Settings
 
-`OAuthSettings`: per-provider `{ client_id, client_secret, redirect_url, scopes }` from env (`UMBRA_OAUTH_GOOGLE_CLIENT_ID`, …). `OAuthPlugin::default().google(...).github(...)` builder, or `from_env()`.
+`OAuthSettings`: per-provider `{ client_id, client_secret, redirect_url, scopes }` from env (`UMBRAL_OAUTH_GOOGLE_CLIENT_ID`, …). `OAuthPlugin::default().google(...).github(...)` builder, or `from_env()`.
 
 ### Deliverables
 
@@ -99,7 +99,7 @@ Crate, model + migration, provider trait + Google/GitHub, routes, settings, beha
 
 ## Component C — website wiring
 
-Add a "Connected accounts" section to `umbra_website`'s accounts page: a **Sign in with Google** entry point, and **Connect / Disconnect** controls for GitHub and Google for logged-in users. Register `OAuthPlugin` in `umbra_website/src/main.rs` with credentials from env. No fabricated secrets committed.
+Add a "Connected accounts" section to `umbral_website`'s accounts page: a **Sign in with Google** entry point, and **Connect / Disconnect** controls for GitHub and Google for logged-in users. Register `OAuthPlugin` in `umbral_website/src/main.rs` with credentials from env. No fabricated secrets committed.
 
 ## Sequencing
 
@@ -108,5 +108,5 @@ Execute A → B → C. Each lands as its own gated commit(s) (`fmt`/`clippy`/`bu
 ## Risks / open questions
 
 - **sqlx `Encode`/`Decode` for `Masked`** across SQLite + Postgres: the write path must distinguish freshly-constructed (encrypt) from loaded (pass-through) values. Resolved in the plan with an internal enum state; verified by the first round-trip test.
-- **Derive recognition of `Masked`**: the macro currently keys field handling off known type names (`ImageField` precedent). `Masked<String>` is generic — confirm the macro can match a generic path, else fall back to a `#[umbra(masked)]` attribute.
+- **Derive recognition of `Masked`**: the macro currently keys field handling off known type names (`ImageField` precedent). `Masked<String>` is generic — confirm the macro can match a generic path, else fall back to a `#[umbral(masked)]` attribute.
 - **`crypto_box` vs `dryoc` vs `age`**: pinned at implementation start by which exposes a clean sealed-box API on stable Rust with minimal deps.

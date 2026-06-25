@@ -1,6 +1,6 @@
-# umbra-permissions — holistic review
+# umbral-permissions — holistic review
 
-Read-only review, 2026-06-16. Scope: `plugins/umbra-permissions/src/{lib,models,perm,membership,middleware,rest}.rs` + `tests/{integration,middleware}.rs`. Citations are `file:line` against real code. Nothing modified. NET-NEW findings are marked **NEW**; already-filed items (#71 `set_user_groups`/`add_user_to_group`, #72 serial-perm-query storm, #75 inactive-superuser) are noted as **ALREADY FILED** and not re-counted.
+Read-only review, 2026-06-16. Scope: `plugins/umbral-permissions/src/{lib,models,perm,membership,middleware,rest}.rs` + `tests/{integration,middleware}.rs`. Citations are `file:line` against real code. Nothing modified. NET-NEW findings are marked **NEW**; already-filed items (#71 `set_user_groups`/`add_user_to_group`, #72 serial-perm-query storm, #75 inactive-superuser) are noted as **ALREADY FILED** and not re-counted.
 
 ## Verdict
 
@@ -12,7 +12,7 @@ Read-only review, 2026-06-16. Scope: `plugins/umbra-permissions/src/{lib,models,
 
 Mapping against Django `django.contrib.auth` permissions:
 
-| Django capability | umbra-permissions | Status |
+| Django capability | umbral-permissions | Status |
 |---|---|---|
 | `ContentType` (app_label, model) | `ContentType` model, `unique_together` | ✅ shipped |
 | `Permission` (codename, content_type, name) | `Permission`, PK = composite codename string | ✅ shipped (codename-as-PK is a deliberate divergence, gap #60) |
@@ -46,7 +46,7 @@ The M2M membership API (`add_user_to_group`, `set_user_groups`, `grant_user_perm
 
 ### NEW — Robustness
 
-- **NEW · Important · `lib.rs:150-163` + `middleware.rs` / `rest.rs` — three divergent on_ready/async-bridge patterns across the plugin family.** `PermissionsPlugin::on_ready` uses `block_in_place` + `Handle::current().block_on` with a fallback to a fresh `Runtime` (correct, tolerates tokio-test). The sibling `umbra-rls` uses bare `Handle::current().block_on` (panics under `#[tokio::test]`, as its own docstring admits, `rls/lib.rs:43-46`). The permissions plugin's own comment (`lib.rs:147-149`) explicitly calls out that rls does it the panicking way. This is a real inconsistency: the *correct* bridge (the one permissions uses) should be a framework helper (`umbra::plugin::block_on_ready(fut)`) so every plugin's `on_ready` gets the runtime-tolerant form for free. As-is, each plugin re-implements it and one of them (rls) is wrong. → **NEW gap** (framework: a shared sync→async `on_ready` bridge helper; would also fix the rls finding in its report).
+- **NEW · Important · `lib.rs:150-163` + `middleware.rs` / `rest.rs` — three divergent on_ready/async-bridge patterns across the plugin family.** `PermissionsPlugin::on_ready` uses `block_in_place` + `Handle::current().block_on` with a fallback to a fresh `Runtime` (correct, tolerates tokio-test). The sibling `umbral-rls` uses bare `Handle::current().block_on` (panics under `#[tokio::test]`, as its own docstring admits, `rls/lib.rs:43-46`). The permissions plugin's own comment (`lib.rs:147-149`) explicitly calls out that rls does it the panicking way. This is a real inconsistency: the *correct* bridge (the one permissions uses) should be a framework helper (`umbral::plugin::block_on_ready(fut)`) so every plugin's `on_ready` gets the runtime-tolerant form for free. As-is, each plugin re-implements it and one of them (rls) is wrong. → **NEW gap** (framework: a shared sync→async `on_ready` bridge helper; would also fix the rls finding in its report).
 
 - **NEW · Optional · `lib.rs:189-192` (`seed_standard_permissions_for_tests`)** — `#[doc(hidden)] pub`. It reads the ambient pool via `pool_dispatched()` and re-runs the seed. It's only needed because `on_ready` fires before `migrate` in the boot order, so a fresh DB never gets seeded on first boot — the user must boot **twice** (`lib.rs:185-187` documents "seeds on the second boot"). This double-boot requirement is a real UX wart: a brand-new `cargo run -- migrate && cargo run -- serve` leaves zero standard permissions after the *first* serve, because `migrate` (a separate process) created the tables but the seed only runs inside `App::build`'s `on_ready`, which in the `migrate` process skip-graced (tables didn't exist yet at build time) and in the `serve` process now sees the tables and seeds. So it does work by the second process — but a single-process `App::build` that runs migrate inline never seeds. Not a bug in the documented flow, but the seed-timing coupling is fragile. → noting; fold into #59 (the broader "permissions auto-wiring" rework should move seeding to a post-migrate hook).
 
@@ -62,10 +62,10 @@ The M2M membership API (`add_user_to_group`, `set_user_groups`, `grant_user_perm
 
 ### Plugin-contract assessment (clean)
 
-- **Facade-only imports:** ✅ All `src/` files import via the `umbra` facade (`umbra::orm`, `umbra::plugin`, `umbra::migrate`, `umbra::web`, `umbra::db`) or sibling plugin crates (`umbra_auth`, `umbra_rest`). No `umbra_core::` internal path anywhere.
+- **Facade-only imports:** ✅ All `src/` files import via the `umbral` facade (`umbral::orm`, `umbral::plugin`, `umbral::migrate`, `umbral::web`, `umbral::db`) or sibling plugin crates (`umbral_auth`, `umbral_rest`). No `umbral_core::` internal path anywhere.
 - **Owns its migrations:** ✅ Contributes 5 models via `Plugin::models()` (`lib.rs:116-128`); the 6th table (`permissions_group_permissions`) is the framework-emitted M2M junction. No hand-rolled DDL in `src/` — the historical SQLite-only `CREATE TABLE IF NOT EXISTS` bootstrap was correctly retired (`lib.rs:208-211`).
-- **`umbra-permissions → umbra-auth` dep:** ✅ Clean, not a cycle risk. The arrow is intentional and correct (permissions sit above auth in the layering; `Cargo.toml:14-18` documents it). `has_perm`/`user_perms` are deliberately *free functions taking `user_id: &str`* precisely to avoid the reverse arrow that would create a cycle (`perm.rs:1-9`, `lib.rs:29-41`). The only `umbra-auth` consumers are `middleware.rs` (`current_session_user_id`, `AuthUser` for the superuser probe) and `rest.rs` (`AuthUser`). Both are AuthUser-specific by construction.
-- **`rest` feature gating:** ✅ `umbra-rest` is an *optional* dep behind `features = ["rest"]` (`Cargo.toml:30-40`), so a REST-free app depending on permissions does not drag in the serializer crate. Honors the "REST-free app compiles with zero serializer code" contract.
+- **`umbral-permissions → umbral-auth` dep:** ✅ Clean, not a cycle risk. The arrow is intentional and correct (permissions sit above auth in the layering; `Cargo.toml:14-18` documents it). `has_perm`/`user_perms` are deliberately *free functions taking `user_id: &str`* precisely to avoid the reverse arrow that would create a cycle (`perm.rs:1-9`, `lib.rs:29-41`). The only `umbral-auth` consumers are `middleware.rs` (`current_session_user_id`, `AuthUser` for the superuser probe) and `rest.rs` (`AuthUser`). Both are AuthUser-specific by construction.
+- **`rest` feature gating:** ✅ `umbral-rest` is an *optional* dep behind `features = ["rest"]` (`Cargo.toml:30-40`), so a REST-free app depending on permissions does not drag in the serializer crate. Honors the "REST-free app compiles with zero serializer code" contract.
 - **No raw `sqlx::query` in `src/`:** ✅ Verified — every row read/write goes through the ORM (`.objects()`, `.create()`, `.bulk_create()`, `.delete()`, `.exists()`, `.fetch()`, `get_or_create`, the macro-emitted M2M helpers). Raw SQL appears only in `tests/` (the allowed test exception).
 
 ## Tests

@@ -7,7 +7,7 @@ tags: [web, middleware, plugins]
 
 # Middleware
 
-axum and tower already give you `Layer` + `Service`, but writing one means learning poll-readiness, boxed futures, and the `Service` ownership rules. Most application middleware only wants two things: look at the request before the handler, and look at the response after. umbra's `Middleware` trait is exactly that: Django's `process_request` / `process_response`, typed for Rust.
+axum and tower already give you `Layer` + `Service`, but writing one means learning poll-readiness, boxed futures, and the `Service` ownership rules. Most application middleware only wants two things: look at the request before the handler, and look at the response after. umbral's `Middleware` trait is exactly that: Django's `process_request` / `process_response`, typed for Rust.
 
 <Callout type="info">
 Reach for `Middleware` for the common "inspect/modify every request or response" case. When you genuinely need a tower `Layer` (timeouts, body-size limits, tracing spans), use a plugin's `wrap_router` to layer the raw axum router instead.
@@ -16,14 +16,14 @@ Reach for `Middleware` for the common "inspect/modify every request or response"
 ## The trait
 
 ```rust
-use umbra::prelude::*;          // brings in Middleware
+use umbral::prelude::*;          // brings in Middleware
 use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
 use http::StatusCode;
 
 struct RequireApiKey;
 
-#[umbra::async_trait]
+#[umbral::async_trait]
 impl Middleware for RequireApiKey {
     async fn before_request(&self, req: Request) -> Result<Request, Response> {
         if req.headers().get("x-api-key").is_some() {
@@ -34,13 +34,13 @@ impl Middleware for RequireApiKey {
     }
 
     async fn after_response(&self, mut res: Response) -> Response {
-        res.headers_mut().insert("x-powered-by", "umbra".parse().unwrap());
+        res.headers_mut().insert("x-powered-by", "umbral".parse().unwrap());
         res
     }
 }
 ```
 
-Both hooks have a default pass-through, so implement only the one you need. `#[umbra::async_trait]` is re-exported from the facade, so no direct `async-trait` dependency is required.
+Both hooks have a default pass-through, so implement only the one you need. `#[umbral::async_trait]` is re-exported from the facade, so no direct `async-trait` dependency is required.
 
 ## Registering it
 
@@ -110,10 +110,10 @@ A.before → B.before (Err) → A.after → (response returned)
 
 ## Where it sits in the layer stack
 
-The middleware stack is installed so that umbra's own security and transport layers stay outermost: host-header validation, CORS, and compression all run **before** your middleware ever sees the request, and the 404 fallback is **inside** it (so your middleware observes misses too). You don't configure this; it's wired at `App::build`.
+The middleware stack is installed so that umbral's own security and transport layers stay outermost: host-header validation, CORS, and compression all run **before** your middleware ever sees the request, and the 404 fallback is **inside** it (so your middleware observes misses too). You don't configure this; it's wired at `App::build`.
 
 ## See also
 
 - [Routes](routes) - declaring the handlers your middleware wraps.
 - [Auth gating](auth-gating) - the built-in login-required guard.
-- `crates/umbra-core/src/middleware.rs` for the trait + stack implementation.
+- `crates/umbral-core/src/middleware.rs` for the trait + stack implementation.

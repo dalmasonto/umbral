@@ -5,7 +5,7 @@ sidebar_position: 11
 icon: mail
 ---
 
-`umbra-email` ships a single `send(&EmailMessage)` call backed by a
+`umbral-email` ships a single `send(&EmailMessage)` call backed by a
 configured SMTP transport. The dev default is a console backend that
 prints messages to stderr instead of opening connections - password
 reset and welcome flows work on a fresh `cargo run` without anyone
@@ -14,8 +14,8 @@ wiring credentials.
 ## Quickstart
 
 ```rust
-use umbra::prelude::*;
-use umbra_email::{EmailMessage, EmailPlugin, send};
+use umbral::prelude::*;
+use umbral_email::{EmailMessage, EmailPlugin, send};
 
 let app = App::builder()
     .plugin(EmailPlugin::default())
@@ -40,51 +40,51 @@ models.
 | `email_smtp_host` unset | **Console backend** (default). Messages render to stderr; no network. |
 | `email_smtp_host` set | **SMTP backend**. Connects to the configured relay with STARTTLS. |
 | `email_api_provider` + `email_api_key` set | **HTTP API backend** (requires the `api` cargo feature). POSTs JSON to Resend / SendGrid. |
-| `UMBRA_EMAIL_BACKEND=api` | Forces the HTTP API backend (still needs `email_api_provider` + `email_api_key`). |
-| `UMBRA_EMAIL_BACKEND=console` | Forces the console backend even when SMTP / API keys exist. Useful in CI / tests. |
+| `UMBRAL_EMAIL_BACKEND=api` | Forces the HTTP API backend (still needs `email_api_provider` + `email_api_key`). |
+| `UMBRAL_EMAIL_BACKEND=console` | Forces the console backend even when SMTP / API keys exist. Useful in CI / tests. |
 
-**Selection order:** `UMBRA_EMAIL_BACKEND=console` wins above everything (the safety valve). Otherwise: API (env-forced, or both `email_api_provider` + `email_api_key` set) → SMTP (`email_smtp_host` set) → console.
+**Selection order:** `UMBRAL_EMAIL_BACKEND=console` wins above everything (the safety valve). Otherwise: API (env-forced, or both `email_api_provider` + `email_api_key` set) → SMTP (`email_smtp_host` set) → console.
 
-SMTP settings (all read from `UMBRA_<KEY>` env vars or `umbra.toml`):
+SMTP settings (all read from `UMBRAL_<KEY>` env vars or `umbral.toml`):
 
 ```bash
-export UMBRA_EMAIL_SMTP_HOST=smtp.example.com
-export UMBRA_EMAIL_SMTP_PORT=587
-export UMBRA_EMAIL_SMTP_USER=acme@example.com
-export UMBRA_EMAIL_SMTP_PASSWORD=secret
-export UMBRA_EMAIL_DEFAULT_FROM=noreply@acme.test
-export UMBRA_EMAIL_SMTP_TIMEOUT_SECS=10   # optional; default 10 s
+export UMBRAL_EMAIL_SMTP_HOST=smtp.example.com
+export UMBRAL_EMAIL_SMTP_PORT=587
+export UMBRAL_EMAIL_SMTP_USER=acme@example.com
+export UMBRAL_EMAIL_SMTP_PASSWORD=secret
+export UMBRAL_EMAIL_DEFAULT_FROM=noreply@acme.test
+export UMBRAL_EMAIL_SMTP_TIMEOUT_SECS=10   # optional; default 10 s
 ```
 
 <Callout type="warning">
 **The console backend is dev-only.** In `Environment::Prod` (or when settings are absent), `send()` returns `EmailError::ConsoleBackendInProduction` instead of printing the message body. Printing full message bodies — including password-reset tokens and magic-link URLs — to stderr would expose secrets to log aggregators.
 
-To fix: set `UMBRA_EMAIL_SMTP_HOST` in production. If you intentionally want console output in a staging environment, set `UMBRA_EMAIL_BACKEND=console` explicitly and use `Environment::Dev` or `Environment::Test`.
+To fix: set `UMBRAL_EMAIL_SMTP_HOST` in production. If you intentionally want console output in a staging environment, set `UMBRAL_EMAIL_BACKEND=console` explicitly and use `Environment::Dev` or `Environment::Test`.
 </Callout>
 
 ### SMTP send timeout
 
-The SMTP transport applies a configurable per-send timeout (default: **10 seconds**). A hung relay will surface as `EmailError::Smtp` after that deadline rather than blocking the request indefinitely. Override via `email_smtp_timeout_secs` in `umbra.toml` or `UMBRA_EMAIL_SMTP_TIMEOUT_SECS`. Set to `0` to remove the cap (not recommended in production).
+The SMTP transport applies a configurable per-send timeout (default: **10 seconds**). A hung relay will surface as `EmailError::Smtp` after that deadline rather than blocking the request indefinitely. Override via `email_smtp_timeout_secs` in `umbral.toml` or `UMBRAL_EMAIL_SMTP_TIMEOUT_SECS`. Set to `0` to remove the cap (not recommended in production).
 
 ## HTTP API backend (Resend / SendGrid)
 
-For deployments that prefer a transactional-email provider's HTTP API over an SMTP relay, `umbra-email` ships an API backend behind the optional `api` cargo feature. It POSTs the message as JSON over HTTPS — no SMTP connection, no relay to operate. It **complements** SMTP rather than replacing it; pick whichever your provider exposes.
+For deployments that prefer a transactional-email provider's HTTP API over an SMTP relay, `umbral-email` ships an API backend behind the optional `api` cargo feature. It POSTs the message as JSON over HTTPS — no SMTP connection, no relay to operate. It **complements** SMTP rather than replacing it; pick whichever your provider exposes.
 
 Enable the feature in your app's `Cargo.toml`:
 
 ```toml
-umbra-email = { version = "0.0.1", features = ["api"] }
+umbral-email = { version = "0.0.1", features = ["api"] }
 ```
 
 Then configure the provider and key:
 
 ```bash
-export UMBRA_EMAIL_API_PROVIDER=resend     # or: sendgrid
-export UMBRA_EMAIL_API_KEY=re_xxxxxxxxxxxx  # the provider's bearer token
-export UMBRA_EMAIL_DEFAULT_FROM=noreply@acme.test
+export UMBRAL_EMAIL_API_PROVIDER=resend     # or: sendgrid
+export UMBRAL_EMAIL_API_KEY=re_xxxxxxxxxxxx  # the provider's bearer token
+export UMBRAL_EMAIL_DEFAULT_FROM=noreply@acme.test
 ```
 
-With both `email_api_provider` and `email_api_key` set, the API backend is selected automatically (or force it with `UMBRA_EMAIL_BACKEND=api`). The `send(&EmailMessage)` call is unchanged — the same message you'd send over SMTP goes through the API path:
+With both `email_api_provider` and `email_api_key` set, the API backend is selected automatically (or force it with `UMBRAL_EMAIL_BACKEND=api`). The `send(&EmailMessage)` call is unchanged — the same message you'd send over SMTP goes through the API path:
 
 ```rust
 let msg = EmailMessage::new("Welcome to Acme", vec!["alice@example.com".into()])
@@ -107,7 +107,7 @@ Both authenticate with `Authorization: Bearer <email_api_key>`. The `email_defau
 </Callout>
 
 <Callout type="warning">
-Without the `api` feature, `umbra-email` compiles exactly as before (SMTP + console only) and pulls in no HTTP client. Selecting the API backend without the feature enabled returns an error at send time pointing you at `--features api` rather than failing to compile.
+Without the `api` feature, `umbral-email` compiles exactly as before (SMTP + console only) and pulls in no HTTP client. Selecting the API backend without the feature enabled returns an error at send time pointing you at `--features api` rather than failing to compile.
 </Callout>
 
 ## Building messages
@@ -140,7 +140,7 @@ yourself - the plugin doesn't take paths because it doesn't want to
 guess at sync vs async I/O or content-type detection on your behalf.
 
 ```rust
-use umbra_email::EmailMessage;
+use umbral_email::EmailMessage;
 
 let pdf = std::fs::read("invoice.pdf")?;
 
@@ -186,13 +186,13 @@ non-breaking.
 
 ## Templates
 
-The `render_email_body` helper renders an umbra template into a
+The `render_email_body` helper renders an umbral template into a
 string and maps `TemplateError` into `EmailError`. Useful for the
 HTML half of a multipart message:
 
 ```rust
 use serde::Serialize;
-use umbra_email::render_email_body;
+use umbral_email::render_email_body;
 
 #[derive(Serialize)]
 struct WelcomeContext<'a> { name: &'a str }
@@ -210,7 +210,7 @@ let msg = EmailMessage::new("Welcome", vec!["alice@example.com".into()])
 ## What's not in v1
 
 - **No retry queue.** Transient SMTP failures bubble up. Wiring sends
-  through `umbra-tasks` is the natural follow-on.
+  through `umbral-tasks` is the natural follow-on.
 - **No inline images** (`cid:` references from HTML). Use a hosted
   URL for embedded logos / branding.
 - **No CC / BCC.** Single `to:` list only.

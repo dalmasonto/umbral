@@ -1,4 +1,4 @@
-//! Schema-per-tenant multitenancy with `umbra-tenants`.
+//! Schema-per-tenant multitenancy with `umbral-tenants`.
 //!
 //! One Postgres database, one schema per tenant, a shared `public` for the
 //! tenant registry. A `Note` model is tenant-owned: each tenant's notes live in
@@ -8,10 +8,10 @@
 //!
 //! ## Run it
 //!
-//! Schema-per-tenant is Postgres-only. Point `UMBRA_DATABASE_URL` at a Postgres:
+//! Schema-per-tenant is Postgres-only. Point `UMBRAL_DATABASE_URL` at a Postgres:
 //! ```text
-//! cd examples/umbra-tenants
-//! export UMBRA_DATABASE_URL=postgres://user:pass@localhost/umbra_tenants_demo
+//! cd examples/umbral-tenants
+//! export UMBRAL_DATABASE_URL=postgres://user:pass@localhost/umbral_tenants_demo
 //!
 //! # 1. Migrate the SHARED apps (the `tenant` registry) into public:
 //! cargo run -- migrate
@@ -41,7 +41,7 @@
 //! row + migrating the tenant apps into that database:
 //!
 //! ```ignore
-//! use umbra_tenants::{TenantStrategy, TenantsPlugin};
+//! use umbral_tenants::{TenantStrategy, TenantsPlugin};
 //!
 //! let plugin = TenantsPlugin::new()
 //!     .strategy(TenantStrategy::Database)   // many DBs, not many schemas
@@ -50,24 +50,24 @@
 //! // …App::builder().plugin(plugin)…build()…
 //!
 //! // Operator created the `acme_db` Postgres database and opened a pool for it:
-//! let acme_pool = umbra::db::connect("postgres://user:pass@host/acme_db").await?;
+//! let acme_pool = umbral::db::connect("postgres://user:pass@host/acme_db").await?;
 //! plugin
 //!     .register_tenant_database("Acme", "acme_db", "acme.localhost", acme_pool)
 //!     .await?;
 //! // The registry row lands in the default DB; `acme_db` gets its own
-//! // `umbra_migrations` ledger + the tenant tables. A request resolving to
+//! // `umbral_migrations` ledger + the tenant tables. A request resolving to
 //! // `acme.localhost` then routes its tenant-owned queries to the `acme_db` pool.
 //! ```
 
 use serde::{Deserialize, Serialize};
 
-use umbra::prelude::*;
-use umbra_tenants::{MissingTenant, TenantsPlugin};
+use umbral::prelude::*;
+use umbral_tenants::{MissingTenant, TenantsPlugin};
 
 /// A tenant-owned model. NOT a shared app, so its `note` table is created in
 /// each tenant's schema and its rows are isolated per tenant.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "note")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "note")]
 pub struct Note {
     pub id: i64,
     pub body: String,
@@ -83,13 +83,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let settings = Settings::from_env()?;
     if !settings.database_url.starts_with("postgres") {
         eprintln!(
-            "umbra-tenants example: schema-per-tenant is Postgres-only. \
-             Set UMBRA_DATABASE_URL=postgres://… and run again."
+            "umbral-tenants example: schema-per-tenant is Postgres-only. \
+             Set UMBRAL_DATABASE_URL=postgres://… and run again."
         );
         return Ok(());
     }
 
-    let pool = umbra::db::connect(&settings.database_url).await?;
+    let pool = umbral::db::connect(&settings.database_url).await?;
 
     // Dispatch CLI subcommands (`migrate`, `migrate_schemas`, …) before serving.
     // The framework binary normally owns this; the example wires the minimum.
@@ -121,20 +121,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Plugin CLI dispatch (`migrate`, `makemigrations`, `migrate_schemas`).
     if !is_serve {
-        match umbra::cli::dispatch(app.plugins(), args.clone()).await? {
-            umbra::cli::DispatchOutcome::Matched(name) => {
+        match umbral::cli::dispatch(app.plugins(), args.clone()).await? {
+            umbral::cli::DispatchOutcome::Matched(name) => {
                 tracing::info!(%name, "command done");
                 return Ok(());
             }
             // `migrate` / `makemigrations` aren't plugin commands; run them here.
             _ => {
                 if args.get(1).map(String::as_str) == Some("migrate") {
-                    let n = umbra::migrate::run().await?;
+                    let n = umbral::migrate::run().await?;
                     tracing::info!(applied = n, "migrate (public) done");
                     return Ok(());
                 }
                 if args.get(1).map(String::as_str) == Some("makemigrations") {
-                    let written = umbra::migrate::make().await?;
+                    let written = umbral::migrate::make().await?;
                     tracing::info!(?written, "makemigrations done");
                     return Ok(());
                 }
@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 async fn root() -> &'static str {
-    "umbra schema-per-tenant demo\n\n\
+    "umbral schema-per-tenant demo\n\n\
      Resolve a tenant with the X-Tenant header (or an *.localhost subdomain):\n\
        curl -H 'X-Tenant: acme.localhost' localhost:3000/notes/add\n\
        curl -H 'X-Tenant: acme.localhost' localhost:3000/notes\n\n\

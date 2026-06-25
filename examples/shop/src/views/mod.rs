@@ -15,7 +15,7 @@ pub mod public;
 pub use account::*;
 pub use public::*;
 
-use umbra::web::StatusCode;
+use umbral::web::StatusCode;
 
 /// Convert any displayable error into a 500 response. Shared by
 /// every handler that bubbles a `?` through `.map_err(...)`.

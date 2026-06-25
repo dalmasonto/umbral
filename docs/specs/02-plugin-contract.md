@@ -8,7 +8,7 @@
 
 ## Purpose
 
-The `Plugin` trait is umbra's only mechanism for extending the framework. Auth, sessions, admin, tasks, REST, and OpenAPI are all plugins; so is every third-party crate that wants to ship models, routes, or commands. This spec defines the contract those plugins implement, the registration mechanism (explicit, plus opt-in auto-registration via `inventory`), the `on_ready` lifecycle hook, and the prelude surface plugins author against.
+The `Plugin` trait is umbral's only mechanism for extending the framework. Auth, sessions, admin, tasks, REST, and OpenAPI are all plugins; so is every third-party crate that wants to ship models, routes, or commands. This spec defines the contract those plugins implement, the registration mechanism (explicit, plus opt-in auto-registration via `inventory`), the `on_ready` lifecycle hook, and the prelude surface plugins author against.
 
 The contract is the architectural keystone. If a built-in can't be expressed as a plugin without special-casing, the contract is wrong; that's why every built-in is structurally identical to a third-party plugin.
 
@@ -45,11 +45,11 @@ Every method except `name()` has a default that returns the empty contribution. 
 | `migrations()` | Plugin-owned migrations. Each plugin owns its tables; no special-casing. | `06-migration-engine.md`'s tracking table, ordered by `dependencies()`. |
 | `routes()` | An axum-shape `Router` that mounts under the plugin's path (e.g. `/auth/...`). | The `App`'s top-level Router. |
 | `middleware()` | tower layers added to the global middleware chain. | The middleware chain (see open questions for cross-plugin ordering). |
-| `commands()` | clap-shape subcommands extending the `manage.py`-equivalent CLI. | The `umbra-cli` binary. |
+| `commands()` | clap-shape subcommands extending the `manage.py`-equivalent CLI. | The `umbral-cli` binary. |
 | `system_checks()` | Boot-time checks the plugin needs to pass before `on_ready` fires (settings validation, custom invariants). | The system-check phase in `01-app-and-settings.md` §Lifecycle phases. |
 | `on_ready()` | Wire signals, start background work, seal admin registrations. | Called after system checks pass, in dependency order. |
 
-`dependencies()` lets a plugin declare which other plugins must load first (`umbra-admin` depends on `umbra-auth`; `umbra-openapi` depends on `umbra-rest`). The builder uses it for topological ordering. Cycles are caught at boot as a `BuildError`.
+`dependencies()` lets a plugin declare which other plugins must load first (`umbral-admin` depends on `umbral-auth`; `umbral-openapi` depends on `umbral-rest`). The builder uses it for topological ordering. Cycles are caught at boot as a `BuildError`.
 
 ### What shipped at M7 v1
 
@@ -66,10 +66,10 @@ The M7 v1 trait ships the keystone subset:
 - `middleware()` (no built-in plugin needs it until sessions land at M8 / M9; cross-plugin ordering open question is still open).
 - `commands()` (clap's dynamic-subcommand surface isn't ergonomic enough to ship a clean shape yet; revisit when tasks adds a `worker` subcommand at M9).
 - `inventory` / `linkme` auto-registration (`with_auto_plugins`). The spec already recommends explicit `.plugin(...)` as the default; the opt-in path lands when a built-in needs it.
-- A typed settings schema on the trait (open question §Settings schema validation; resolve when `umbra-tasks` lands at M9).
+- A typed settings schema on the trait (open question §Settings schema validation; resolve when `umbral-tasks` lands at M9).
 - Signal subscriptions inside `on_ready` (outline `signals.md` owns the API; this is parked).
 
-The existing `AppBuilder::model::<T>()` keeps working: those models register under an implicit `"app"` plugin so a single-binary umbra app needs no explicit `Plugin` impl. M8's auth / sessions extraction moves them into their own plugins; the implicit `"app"` plugin stays for user-binary models that don't earn their own plugin crate.
+The existing `AppBuilder::model::<T>()` keeps working: those models register under an implicit `"app"` plugin so a single-binary umbral app needs no explicit `Plugin` impl. M8's auth / sessions extraction moves them into their own plugins; the implicit `"app"` plugin stays for user-binary models that don't earn their own plugin crate.
 
 ### Registration: explicit by default, inventory by opt-in
 
@@ -88,10 +88,10 @@ For plugin authors who want the `cargo add`-and-it-works experience, an opt-in m
 
 ```rust
 // in the plugin's lib.rs
-umbra::register_plugin!(BlogPlugin);
+umbral::register_plugin!(BlogPlugin);
 ```
 
-…and the user's binary calls `App::builder().with_auto_plugins().build()` to walk the inventory slice. The only thing the user still has to do is `use umbra_blog;` somewhere (typically `main.rs`) so the linker keeps the crate.
+…and the user's binary calls `App::builder().with_auto_plugins().build()` to walk the inventory slice. The only thing the user still has to do is `use umbral_blog;` somewhere (typically `main.rs`) so the linker keeps the crate.
 
 Default recommendation: **explicit `.plugin(...)`**. Reasons in §Trade-offs. Auto-registration is layered on top, not the default.
 
@@ -100,24 +100,24 @@ Default recommendation: **explicit `.plugin(...)`**. Reasons in §Trade-offs. Au
 Plugins import the facade and nothing else:
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 ```
 
-`umbra::prelude` re-exports:
+`umbral::prelude` re-exports:
 
 - The trait surface: `Plugin`, `AppContext`, `Router`, `Migration`, `BoxedLayer`, `BoxedCommand`, `SystemCheck`.
 - The ORM surface: `Model`, `QuerySet`, `Manager`, common field types.
 - Common error types: `Result`, `Error`.
 - Common request/response and extractor types: `Request`, `Response`, `Json`, `Path`, `Query`, `Form`, `Auth`, `Session`.
 
-The prelude is the single stable import surface. Authors never reach into `umbra-core::*` internals; the internal crate boundaries can refactor without breaking a single plugin (`arch.md §1`).
+The prelude is the single stable import surface. Authors never reach into `umbral-core::*` internals; the internal crate boundaries can refactor without breaking a single plugin (`arch.md §1`).
 
 ## API-shape sketch
 
 A complete third-party plugin, end-to-end:
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(Model)]
 pub struct Post {
@@ -136,11 +136,11 @@ impl Plugin for BlogPlugin {
     fn name(&self) -> &'static str { "blog" }
 
     fn dependencies(&self) -> &'static [&'static str] {
-        &["auth"]   // needs umbra-auth's User table
+        &["auth"]   // needs umbral-auth's User table
     }
 
     fn migrations(&self) -> Vec<Migration> {
-        umbra::migrations::generated!("blog")
+        umbral::migrations::generated!("blog")
     }
 
     fn routes(&self) -> Router {
@@ -172,7 +172,7 @@ The order shows up in three places:
 
 ### Plugin-owned migrations
 
-Each plugin returns its own migrations from `migrations()`. They get tracked in the umbra-owned table designed in `06-migration-engine.md`, keyed by `(plugin_name, migration_name)`. No plugin's migrations are special-cased: `umbra-auth`'s `0001_initial.sql` is recorded with the same row shape as `my-blog`'s `0001_initial.sql`.
+Each plugin returns its own migrations from `migrations()`. They get tracked in the umbral-owned table designed in `06-migration-engine.md`, keyed by `(plugin_name, migration_name)`. No plugin's migrations are special-cased: `umbral-auth`'s `0001_initial.sql` is recorded with the same row shape as `my-blog`'s `0001_initial.sql`.
 
 This is the structural proof of dogfooding. If the built-ins required a parallel migration path, the trait would have to know about them, and dependency-inversion would break.
 
@@ -196,12 +196,12 @@ Signals (`pre_save`, `post_save`, custom events) are a separate concern owned by
 When a plugin author opts in:
 
 ```rust
-umbra::register_plugin!(BlogPlugin);
+umbral::register_plugin!(BlogPlugin);
 ```
 
 …the macro expands to an `inventory::submit!` that pushes a `Box<dyn Plugin>` constructor closure into a distributed slice. `App::builder().with_auto_plugins()` walks the slice, calls each constructor, and registers the result like any other plugin.
 
-The linker caveat is unavoidable: Rust's linker drops crates that nothing references. The user's binary must `use umbra_blog;` somewhere so the crate's static items survive. That `use` *is* the registration; the user just doesn't have to name the plugin twice.
+The linker caveat is unavoidable: Rust's linker drops crates that nothing references. The user's binary must `use umbral_blog;` somewhere so the crate's static items survive. That `use` *is* the registration; the user just doesn't have to name the plugin twice.
 
 ## Trade-offs and alternatives considered
 
@@ -221,7 +221,7 @@ The opt-in `with_auto_plugins()` mode is for plugin *authors* who want their use
 
 ## Open questions
 
-- **Settings schema validation.** `system_checks()` includes settings validation, but the API for declaring a settings schema is unresolved. Two options: the plugin returns a `serde_json::Schema` (works for any settings struct that derives `JsonSchema`), or `Plugin` gains an associated type `type Settings`. Resolve by M9 when `umbra-tasks` is the first plugin to need real validation.
+- **Settings schema validation.** `system_checks()` includes settings validation, but the API for declaring a settings schema is unresolved. Two options: the plugin returns a `serde_json::Schema` (works for any settings struct that derives `JsonSchema`), or `Plugin` gains an associated type `type Settings`. Resolve by M9 when `umbral-tasks` is the first plugin to need real validation.
 - **Plugin-to-plugin signal subscription.** Once `signals.md` defines the API, a plugin that wants to subscribe to *another plugin's* signal needs the signal type reachable. Simplest path: signal types declared in the publishing plugin's public API. Revisit when the admin needs to listen for auth's post-login signal.
 - **Cross-plugin middleware ordering.** Each plugin returns its own middleware layers; the builder concatenates them in topological order. If two plugins both add a rate limiter, there's no way for the user to interleave them. Likely needs a `priority` on the layer or an explicit `App::builder().middleware_order(...)` override. Defer until a real ordering conflict surfaces in M9–M11.
 
@@ -229,7 +229,7 @@ The opt-in `with_auto_plugins()` mode is for plugin *authors* who want their use
 
 - The author-side how-to guide for writing a plugin against this contract: `08-authoring-plugins.md`.
 - The dependency-inversion model this spec rests on: `arch.md §3`.
-- The prelude's physical exports: `umbra-core` and the facade crate (no spec; tracked at the workspace level).
+- The prelude's physical exports: `umbral-core` and the facade crate (no spec; tracked at the workspace level).
 - Plugin-owned migrations are collected by: `06-migration-engine.md`.
 - The system check `system_checks()` feeds: `05-backends-and-system-check.md`.
 - The signal API plugins connect inside `on_ready`: outline `signals.md`.

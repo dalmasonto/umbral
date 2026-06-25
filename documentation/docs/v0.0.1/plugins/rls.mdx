@@ -5,7 +5,7 @@ sidebar_position: 16
 icon: shield
 ---
 
-`umbra-rls` lets you declare Postgres Row-Level Security policies once, at
+`umbral-rls` lets you declare Postgres Row-Level Security policies once, at
 `App::build()` time, and have them applied automatically every boot. The plugin
 handles `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` and the idempotent
 `DROP POLICY IF EXISTS` + `CREATE POLICY` cycle so you never hand-write
@@ -14,11 +14,11 @@ environments.
 
 ## Quickstart
 
-Add `umbra-rls` to your `Cargo.toml`, then wire it in the builder:
+Add `umbral-rls` to your `Cargo.toml`, then wire it in the builder:
 
 ```rust
-use umbra::prelude::*;
-use umbra_rls::{Action, RlsPlugin};
+use umbral::prelude::*;
+use umbral_rls::{Action, RlsPlugin};
 
 let app = App::builder()
     .settings(settings)
@@ -100,7 +100,7 @@ setups you want `true` so the value doesn't bleed across requests that reuse
 the same connection.
 
 <Callout type="info">
-The auth integration is your responsibility today. `umbra-rls` sets up the
+The auth integration is your responsibility today. `umbral-rls` sets up the
 policy DDL; wiring your auth layer to the GUC is application code, not
 framework code.
 </Callout>
@@ -108,7 +108,7 @@ framework code.
 ## SQLite story
 
 <Callout type="warning">
-`umbra-rls` is Postgres-only. When the active backend is SQLite, the plugin
+`umbral-rls` is Postgres-only. When the active backend is SQLite, the plugin
 logs a `tracing::warn` and returns `Ok(())` from `on_ready` - it does not
 refuse to boot. All declared tables and policies are silently skipped.
 
@@ -117,7 +117,7 @@ is absent, not fatal, on an incompatible backend. If you want a hard failure
 on misconfiguration, check the pool variant yourself in your boot path:
 
 ```rust
-use umbra::db::{pool_dispatched, DbPool};
+use umbral::db::{pool_dispatched, DbPool};
 
 match pool_dispatched() {
     DbPool::Postgres(_) => { /* ok */ }
@@ -142,5 +142,5 @@ have. Treating RLS policies like schema migrations - where removals produce
 `DROP` operations - is a planned enhancement; for now, explicit cleanup is the
 safe shape.
 
-The spec and implementation live in `plugins/umbra-rls/src/lib.rs` and
+The spec and implementation live in `plugins/umbral-rls/src/lib.rs` and
 `docs/specs/` (Phase 4.5).

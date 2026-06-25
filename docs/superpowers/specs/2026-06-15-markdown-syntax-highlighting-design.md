@@ -1,12 +1,12 @@
 # Markdown syntax highlighting: server-side, class-based, safe
 
 Date: 2026-06-15
-Area: `umbra-core` (the `| markdown` filter) + `umbra_website` (stylesheet wiring)
+Area: `umbral-core` (the `| markdown` filter) + `umbral_website` (stylesheet wiring)
 Status: approved (design)
 
 ## Problem
 
-The framework's `| markdown` filter (`crates/umbra-core/src/templates.rs`, `render_markdown`) parses CommonMark + GFM with pulldown-cmark, renders to HTML, then sanitizes with `ammonia::clean`. Fenced code blocks come out as plain `<pre><code>…</code></pre>` — and ammonia's default allowlist strips the `language-*` class, so even the language hint is gone. There is no syntax highlighting. The code comment at `templates.rs:249` records this as deliberately deferred: "syntax highlighting on fenced code blocks (ammonia strips the `language-*` class today)".
+The framework's `| markdown` filter (`crates/umbral-core/src/templates.rs`, `render_markdown`) parses CommonMark + GFM with pulldown-cmark, renders to HTML, then sanitizes with `ammonia::clean`. Fenced code blocks come out as plain `<pre><code>…</code></pre>` — and ammonia's default allowlist strips the `language-*` class, so even the language hint is gone. There is no syntax highlighting. The code comment at `templates.rs:249` records this as deliberately deferred: "syntax highlighting on fenced code blocks (ammonia strips the `language-*` class today)".
 
 Every markdown surface wants colored code: the blog (`site_content/blog_post.html`), plugin bodies and usage docs, and — imminently — the community-notes thread, which becomes a chat surface where people paste Rust/TOML/SQL. Because notes publish the instant they post, the highlighting has to be **safe**: it must not become an XSS vector.
 
@@ -23,16 +23,16 @@ Today's only enhancement is client-side: `static/js/md-enhance.js` wraps each `<
 - **Pure-Rust regex.** Pull syntect with `default-features = false` + the fancy-regex backend so it brings no C/onig dependency, matching the framework's pure-Rust posture.
 - **No render caching (deferred).** `SyntaxSet`/`ThemeSet` load once into a `OnceLock` (the loads are the expensive part). Per-render highlighting is acceptable for blog/notes volumes. Memoizing rendered markdown is a separate, later optimization.
 
-## Framework changes (`crates/umbra-core`)
+## Framework changes (`crates/umbral-core`)
 
 1. **Cargo.toml**: add `syntect` (default-features off, fancy-regex backend).
 2. **`render_markdown`**: keep the pulldown options, but iterate the event stream instead of piping straight to `push_html`. On `Start(CodeBlock(Fenced(lang)))…Text…End(CodeBlock)`, buffer the code text, call the new helper, and splice the result in as a single `Event::Html`. All other events pass through unchanged.
 3. **`highlight_code_block(lang: &str, src: &str) -> String`** (new, private, unit-testable): resolve the syntax by token (fallback to plain text when unknown), run `ClassedHTMLGenerator` over `LinesWithEndings`, and wrap the spans in `<pre><code class="language-{lang}">…</code></pre>`. Returns escaped-plain HTML when there's no language or no syntax match.
 4. **Markdown `ammonia::Builder`** (built per call inside `render_markdown`): the default allowlist plus the inert `class` attribute on `pre`/`code`/`span`. `span`/`pre`/`code` are already default-allowed *tags*, so only the *attribute* is widened — that is the precise security statement. (Per-call, not a shared static — see the ammonia decision above.) `sanitize_html` (the RTE path) is unchanged — it doesn't need highlight classes.
-5. **`pub fn highlight_css() -> &'static str`**: the `base16-ocean.dark` stylesheet, generated once via `css_for_theme_with_class_style` with the `hl-` prefix and cached in a `OnceLock`. Re-exported from the `umbra` facade (`umbra::templates::highlight_css`).
+5. **`pub fn highlight_css() -> &'static str`**: the `base16-ocean.dark` stylesheet, generated once via `css_for_theme_with_class_style` with the `hl-` prefix and cached in a `OnceLock`. Re-exported from the `umbral` facade (`umbral::templates::highlight_css`).
 6. **Template global `highlight_styles()`**: returns `Value::from_safe_string("<style>…</style>")` wrapping `highlight_css()`, registered on the core environment so any template can emit it.
 
-## Website changes (`umbra_website`)
+## Website changes (`umbral_website`)
 
 - **`templates/base.html`**: add `{{ highlight_styles() }}` once in `<head>`. The token colors render on top of the existing dark `.md-code` frame; `md-enhance.js` is untouched (it still reads the preserved `language-*` class for the label and wraps the `<pre>`).
 
@@ -40,7 +40,7 @@ Today's only enhancement is client-side: `static/js/md-enhance.js` wraps each `<
 
 Unchanged. The enhancer keys off the `<code class="language-…">` class (now preserved through ammonia) and wraps the `<pre>`; the inner `hl-*` token spans are inert content it never inspects. Server highlight + client frame/copy/lightbox compose cleanly.
 
-## Tests (`crates/umbra-core`)
+## Tests (`crates/umbral-core`)
 
 - A fenced `rust` block renders `hl-` token spans and keeps `class="language-rust"`.
 - XSS guard: `<script>alert(1)</script>` **inside** a fenced block is escaped as text (visible, inert), and a literal `<script>` in prose is still stripped — the security boundary holds with the widened allowlist.
@@ -62,8 +62,8 @@ Bundled into this change to close the visible markdown quality in one pass. Thes
 
 ### Website changes (this section)
 
-- `umbra_website/static/js/md-enhance.js`: add `enhanceTables(root)` and call it in the existing `[data-md]` root loop, next to `enhanceCodeBlocks`.
-- `umbra_website/static/css/md-enhance.css`: add a `.md-table` block (frame, border, radius, header background, row borders, mobile scroll) and a `border-radius` on `.md-img`.
+- `umbral_website/static/js/md-enhance.js`: add `enhanceTables(root)` and call it in the existing `[data-md]` root loop, next to `enhanceCodeBlocks`.
+- `umbral_website/static/css/md-enhance.css`: add a `.md-table` block (frame, border, radius, header background, row borders, mobile scroll) and a `border-radius` on `.md-img`.
 
 ## Out of scope
 

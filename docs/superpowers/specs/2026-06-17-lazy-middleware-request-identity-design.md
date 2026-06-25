@@ -2,15 +2,15 @@
 
 **Status:** approved (brainstorm), pending implementation
 **Date:** 2026-06-17
-**Goal:** Make umbra's auth/session middleware cheap by turning it from *eager per-request I/O* into *lazy capability injection*: a request pays for identity only if it actually uses it, resolves it at most once, and never blocks the response on bookkeeping writes.
+**Goal:** Make umbral's auth/session middleware cheap by turning it from *eager per-request I/O* into *lazy capability injection*: a request pays for identity only if it actually uses it, resolves it at most once, and never blocks the response on bookkeeping writes.
 
 ---
 
 ## 1. Motivation (measured)
 
-With proper load tools (`wrk`/`oha`, core-pinned, warmed), minimal-vs-maximalist umbra diverges hard:
+With proper load tools (`wrk`/`oha`, core-pinned, warmed), minimal-vs-maximalist umbral diverges hard:
 
-| | umbra-hello (model only) | shop (full stack) |
+| | umbral-hello (model only) | shop (full stack) |
 |---|---|---|
 | `/bench/text` | 640k req/s | 189k |
 | `/bench/notes/read` (40k rows) | 18.2k | **1.3k** |
@@ -38,14 +38,14 @@ Four components, built and shipped in dependency order. Each is independently va
 
 ### Component 1 — `RequestIdentity`: lazy, memoized, shared *(keystone)*
 
-**Where it lives.** The memoized identity lives in **umbra-auth**, not umbra-core. `RouteContext` (core) demonstrates the pattern (per-request task-local + typed extensions + a scope layer), but `Identity` is an umbra-auth type and core must not depend on a plugin. umbra-auth therefore owns a sibling task-local that mirrors `RouteContext`'s mechanics.
+**Where it lives.** The memoized identity lives in **umbral-auth**, not umbral-core. `RouteContext` (core) demonstrates the pattern (per-request task-local + typed extensions + a scope layer), but `Identity` is an umbral-auth type and core must not depend on a plugin. umbral-auth therefore owns a sibling task-local that mirrors `RouteContext`'s mechanics.
 
-**Types (umbra-auth):**
+**Types (umbral-auth):**
 - `ResolvedIdentity` — reuse the existing `Identity` (`user_id: String` polymorphic PK, `is_staff`, `is_authenticated`, `extra`). Model-agnostic, cheap.
 - `LazyIdentity` — `Arc<tokio::sync::OnceCell<Option<Identity>>>` plus the request `HeaderMap` (clone) needed to resolve. Resolution runs the existing chain: session-first (`current_user_id_str` → user existence/staff), then bearer fallback. The `OnceCell` guarantees **at most one** resolution per request.
 
 **Reachability (two mirrors, one value):**
-1. A task-local `CURRENT_IDENTITY: Arc<LazyIdentity>`, scoped per request by a new `identity_layer` (umbra-auth middleware), so deep code (templates, ORM-adjacent) can call `umbra_auth::identity::current().await` and get the memoized value.
+1. A task-local `CURRENT_IDENTITY: Arc<LazyIdentity>`, scoped per request by a new `identity_layer` (umbral-auth middleware), so deep code (templates, ORM-adjacent) can call `umbral_auth::identity::current().await` and get the memoized value.
 2. The same `Arc<LazyIdentity>` inserted into `request.extensions()` so `FromRequestParts` extractors (which see `Parts`, not the task-local cleanly) read the same handle.
 
 **Consumers rewired to read the memoized handle first, query only on miss:**
@@ -57,7 +57,7 @@ Four components, built and shipped in dependency order. Each is independently va
 
 ### Component 2 — `SessionStore` trait: pluggable backend
 
-Today session storage is hardcoded to DB rows via the ambient ORM pool (`umbra-sessions/src/lib.rs`). Introduce:
+Today session storage is hardcoded to DB rows via the ambient ORM pool (`umbral-sessions/src/lib.rs`). Introduce:
 
 ```rust
 #[async_trait]
@@ -78,7 +78,7 @@ App selects: `SessionsPlugin::default().store(RedisStore::new(url))` / `.cookie_
 
 ### Component 3 — Deferred side-effects: off the response path
 
-A small primitive in umbra-core:
+A small primitive in umbral-core:
 
 ```rust
 /// Run `fut` after the current response is produced, without blocking it.
@@ -112,7 +112,7 @@ Each phase: implement → unit/behavioral tests → wrk benchmark on the shop �
   - `user_context_layer` mounted but template doesn't read `user` → **0** identity queries.
 - **wrk before/after** each phase on the shop read/write (real-world proof, the numbers in §1).
 - **Correctness regressions:** identity is consistent within a request (same value on repeated access); logout/destroy invalidates; cookie store round-trips a session across requests; deferred effects actually execute (await a signal in a test); bearer + session precedence unchanged.
-- **No-plugin regression:** umbra-hello numbers must not drop (the lazy machinery is auth-plugin-only; core stays free).
+- **No-plugin regression:** umbral-hello numbers must not drop (the lazy machinery is auth-plugin-only; core stays free).
 
 ---
 
@@ -120,7 +120,7 @@ Each phase: implement → unit/behavioral tests → wrk benchmark on the shop �
 
 1. **Lazy template `user`.** minijinja renders synchronously, but resolution is async. Default approach: `user_context_layer` resolves the `LazyIdentity` **once, lazily, just-in-time before the first template render in the handler** via a render hook that checks whether the template references `user`; if the engine can't tell, fall back to resolving on first `get` of the `user` global through a custom `Object`/dynamic value that triggers a `block_in_place`-free pre-resolution. **Fallback if neither is clean:** keep `user_context_layer` resolving eagerly *but only when the response is HTML* (cheap content-type gate) — still removes the cost from all JSON/API routes, which is where the measured collapse is. This fallback alone captures most of the win; the fully-lazy template value is a stretch goal.
 2. **Generic user model.** Identity is model-agnostic (good). `LoggedIn<U>` row memoization is keyed by `U` via `request.extensions().insert::<U>()`.
-3. **Redis dependency.** Gated behind a `redis` feature on umbra-sessions; not pulled by default.
+3. **Redis dependency.** Gated behind a `redis` feature on umbral-sessions; not pulled by default.
 4. **Cookie store size/invalidation.** Documented limits; not the default. Signing key sourced from the security plugin; error if absent.
 5. **Always-on identity scope layer.** `identity_layer` is installed by the auth plugin's `wrap_router` (only when the auth plugin is present), so non-auth apps (hello) are untouched.
 
@@ -128,9 +128,9 @@ Each phase: implement → unit/behavioral tests → wrk benchmark on the shop �
 
 ## 7. Crate touchpoints
 
-- **umbra-auth:** `identity` module (task-local + `LazyIdentity` + `identity_layer`); rewire `session_user.rs` (`user_context_layer`, `current_user`), `extractors.rs` (`resolve_identity`, `Optional/CurrentIdentity`), `login_required.rs` (`LoggedIn<U>`, `resolve_user`), `bearer_auth.rs` (consult memo + defer touch).
-- **umbra-sessions:** `SessionStore` trait + `DbStore`/`CookieStore`/`RedisStore`; route `set_data`/`read_session`/`create_session`/`touch` through the active store; defer expiry-touch.
-- **umbra-core:** `defer()` primitive (Component 3); per-route middleware grouping (Component 4). No dependency on any plugin.
+- **umbral-auth:** `identity` module (task-local + `LazyIdentity` + `identity_layer`); rewire `session_user.rs` (`user_context_layer`, `current_user`), `extractors.rs` (`resolve_identity`, `Optional/CurrentIdentity`), `login_required.rs` (`LoggedIn<U>`, `resolve_user`), `bearer_auth.rs` (consult memo + defer touch).
+- **umbral-sessions:** `SessionStore` trait + `DbStore`/`CookieStore`/`RedisStore`; route `set_data`/`read_session`/`create_session`/`touch` through the active store; defer expiry-touch.
+- **umbral-core:** `defer()` primitive (Component 3); per-route middleware grouping (Component 4). No dependency on any plugin.
 - **examples/shop:** the benchmark target; no code change required to measure (uses the plugins).
 
 ---

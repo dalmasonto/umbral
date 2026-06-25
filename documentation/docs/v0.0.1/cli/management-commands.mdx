@@ -7,12 +7,12 @@ icon: terminal
 
 Every management subcommand runs **against your project's own
 binary**. Your `main.rs` hosts the commands via
-[`umbra_cli::dispatch`](#how-it-works); `cargo run -- <command>` is
+[`umbral_cli::dispatch`](#how-it-works); `cargo run -- <command>` is
 how you invoke them.
 
 This is the Django `manage.py` shape: a project-local script that
 imports project code, so the commands see your models and your
-plugins. The framework-global [`umbra`](./startproject) binary handles
+plugins. The framework-global [`umbral`](./startproject) binary handles
 scaffolding (`startproject`, `startapp`) and nothing else - it can't
 manage your database because it doesn't know about your models.
 
@@ -36,18 +36,18 @@ manage your database because it doesn't know about your models.
 Built-in plugins contribute their own subcommands through the `Plugin::commands()` hook — structurally identical to a third-party plugin's. They only appear when the plugin is registered in your `App`.
 
 <CardGrid cols={2}>
-  <Card icon="user-plus" title="createsuperuser" description="umbra-auth. Create an is_staff + is_superuser user with an argon2id-hashed password. --noinput for CI." />
-  <Card icon="cpu" title="tasks-worker" description="umbra-tasks. Drain the task queue. --once runs one batch and exits (cron-friendly)." />
-  <Card icon="clock" title="tasks-beat" description="umbra-tasks. Run the periodic-task scheduler (Celery beat). --once syncs schedules, runs one tick, exits." />
-  <Card icon="trash-2" title="clearsessions" description="umbra-sessions. Delete all expired session rows from the database (Django parity)." />
-  <Card icon="folder-down" title="collectstatic" description="umbra-storage. Collect every plugin's static assets into static_root. --clear / --hashed / --storage." />
+  <Card icon="user-plus" title="createsuperuser" description="umbral-auth. Create an is_staff + is_superuser user with an argon2id-hashed password. --noinput for CI." />
+  <Card icon="cpu" title="tasks-worker" description="umbral-tasks. Drain the task queue. --once runs one batch and exits (cron-friendly)." />
+  <Card icon="clock" title="tasks-beat" description="umbral-tasks. Run the periodic-task scheduler (Celery beat). --once syncs schedules, runs one tick, exits." />
+  <Card icon="trash-2" title="clearsessions" description="umbral-sessions. Delete all expired session rows from the database (Django parity)." />
+  <Card icon="folder-down" title="collectstatic" description="umbral-storage. Collect every plugin's static assets into static_root. --clear / --hashed / --storage." />
 </CardGrid>
 
 Each plugin command shares the same `cargo run -- <cmd>` form and is detailed in its own section below.
 
 ## How it works
 
-Your `src/main.rs` (the one `umbra startproject` generates) ends
+Your `src/main.rs` (the one `umbral startproject` generates) ends
 with:
 
 ```rust
@@ -58,7 +58,7 @@ let app = App::builder()
     .plugin(blog::BlogPlugin::default())
     .build()?;
 
-umbra_cli::dispatch(app).await
+umbral_cli::dispatch(app).await
 ```
 
 `dispatch(app)` parses `argv`, picks the subcommand, and runs it
@@ -78,22 +78,22 @@ cargo run -- showmigrations  # list per-plugin state
 ## Settings come from the environment
 
 Settings load the same way the server does - defaults, an optional
-`umbra.toml`, and `UMBRA_`-prefixed environment variables (last wins).
+`umbral.toml`, and `UMBRAL_`-prefixed environment variables (last wins).
 
 ```bash
-export UMBRA_SECRET_KEY=$(openssl rand -hex 32)
-export UMBRA_DATABASE_URL=sqlite://app.db?mode=rwc
+export UMBRAL_SECRET_KEY=$(openssl rand -hex 32)
+export UMBRAL_DATABASE_URL=sqlite://app.db?mode=rwc
 
 cargo run -- makemigrations
 cargo run -- migrate
 ```
 
 <Callout type="warning">
-Without `UMBRA_DATABASE_URL` set, the management subcommands fall back
-to the `database_url` in `umbra.toml` (or `sqlite::memory:` if that's
+Without `UMBRAL_DATABASE_URL` set, the management subcommands fall back
+to the `database_url` in `umbral.toml` (or `sqlite::memory:` if that's
 also unset). `migrate` will happily report `Applied 1 migration(s)`
 against an in-memory pool that vanishes when the process exits. Set
-the URL once in `umbra.toml` or your shell, and forget about it.
+the URL once in `umbral.toml` or your shell, and forget about it.
 </Callout>
 
 ## serve - boot the HTTP server
@@ -111,18 +111,18 @@ cargo run -- serve --addr 127.0.0.1:8080
 cargo run -- serve --addr 0.0.0.0:8080
 
 # Same effect via env var (useful in docker-compose / systemd)
-UMBRA_BIND_ADDR=0.0.0.0:8080 cargo run -- serve
+UMBRAL_BIND_ADDR=0.0.0.0:8080 cargo run -- serve
 
-# Or set it once in umbra.toml and never pass --addr again
-# umbra.toml:
+# Or set it once in umbral.toml and never pass --addr again
+# umbral.toml:
 #   bind_addr = "0.0.0.0:8080"
 ```
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--addr <host:port>` | `127.0.0.1:8000` | Override `settings.bind_addr`. `0.0.0.0:PORT` listens on every interface; `127.0.0.1:PORT` only loopback. Equivalent to setting `UMBRA_BIND_ADDR`. |
+| `--addr <host:port>` | `127.0.0.1:8000` | Override `settings.bind_addr`. `0.0.0.0:PORT` listens on every interface; `127.0.0.1:PORT` only loopback. Equivalent to setting `UMBRAL_BIND_ADDR`. |
 
-Precedence: `--addr` flag wins over `UMBRA_BIND_ADDR` wins over `umbra.toml`'s `bind_addr` wins over the built-in default.
+Precedence: `--addr` flag wins over `UMBRAL_BIND_ADDR` wins over `umbral.toml`'s `bind_addr` wins over the built-in default.
 
 ## dev - auto-reload loop for development
 
@@ -152,7 +152,7 @@ cargo run -- dev -- serve --addr 0.0.0.0:8080
 | `-w <path>` / `--watch <path>` | cargo-watch's own (`src/`, `Cargo.toml`) | Add a path to the watch list. Repeat the flag for multiple paths - `-w plugins/ -w migrations/`. Hyphenated paths like `--watch=plugins/` also work. |
 | `-- <run_args>...` | `cargo run` with no args | Pass-through args for the inner cargo command. Everything after `--` is forwarded to `cargo run --`. |
 
-Without `cargo-watch` installed, `umbra dev` prints the install hint and exits 1 - no cryptic failure, no half-started server.
+Without `cargo-watch` installed, `umbral dev` prints the install hint and exits 1 - no cryptic failure, no half-started server.
 
 <Callout type="info">
 **You don't need `dev` for template edits.** When `settings.environment == Dev`, the templates engine re-reads `.html` files from disk on every render. Save a template, refresh the browser, see the change - no restart, no `dev` subcommand. `dev` is only for Rust-source edits that need a recompile.
@@ -182,7 +182,7 @@ No flags. The output is one `Wrote <path>` line per plugin with changes. Apply t
 # Everyday: apply everything pending.
 cargo run -- migrate
 
-# Adopting an existing database that wasn't built with umbra:
+# Adopting an existing database that wasn't built with umbral:
 cargo run -- migrate --fake-initial
 
 # Recovering from a deleted migration file: mark it applied
@@ -198,7 +198,7 @@ cargo run -- migrate --allow-drift
 | Flag | Default | Effect |
 |---|---|---|
 | *(none)* | apply pending | Apply every pending migration. Errors on drift (applied-but-missing-on-disk). |
-| `--fake <plugin/name>` | - | Mark one migration as applied in the tracking table WITHOUT running its SQL. Format: `app/0001_create_post`. Recovery path when the schema already exists outside umbra's control. |
+| `--fake <plugin/name>` | - | Mark one migration as applied in the tracking table WITHOUT running its SQL. Format: `app/0001_create_post`. Recovery path when the schema already exists outside umbral's control. |
 | `--fake-initial` | off | Per plugin: if the `0001_*` migration's target tables already exist in the database, mark it applied without running SQL. Use when onboarding a database bootstrapped by hand or by another tool. |
 | `--allow-drift` | off | Proceed even when some applied migrations are missing from disk. Logs a warning per missing file and applies the genuinely-pending ones. |
 
@@ -259,19 +259,19 @@ The porting on-ramp. Reads the connected database's schema and writes a `models.
 
 ```bash
 # Point at an existing database, scaffold models into a plugin dir
-UMBRA_DATABASE_URL=postgres://user:pass@localhost/legacy \
+UMBRAL_DATABASE_URL=postgres://user:pass@localhost/legacy \
   cargo run -- inspectdb --output plugins/imported
 
 # Same, plus mark the migration as already-applied so the next
 # `migrate` is a no-op (the tables already exist).
-UMBRA_DATABASE_URL=postgres://user:pass@localhost/legacy \
+UMBRAL_DATABASE_URL=postgres://user:pass@localhost/legacy \
   cargo run -- inspectdb --output plugins/imported --mark-applied
 ```
 
 | Flag | Default | Effect |
 |---|---|---|
 | `--output <path>` | - (required) | Where `models.rs` and `migrations/app/0001_initial.json` land. The directory is created if it doesn't exist. |
-| `--mark-applied` | off | Record `0001_initial` in the `umbra_migrations` tracking table without running its SQL. Pass when the target DB already holds the introspected tables - without this flag, the next `migrate` would try to `CREATE TABLE` over them. |
+| `--mark-applied` | off | Record `0001_initial` in the `umbral_migrations` tracking table without running its SQL. Pass when the target DB already holds the introspected tables - without this flag, the next `migrate` would try to `CREATE TABLE` over them. |
 
 Full porting workflow in [the inspectdb guide](/docs/v0.0.1/migrations/inspectdb).
 
@@ -325,13 +325,13 @@ Generates a fresh X25519 keypair for `Masked<T>` field encryption and prints the
 
 ```bash
 cargo run -- maskkeygen
-# -> UMBRA_MASK_PUBLIC_KEY=...
-# -> UMBRA_MASK_PRIVATE_KEY=...
+# -> UMBRAL_MASK_PUBLIC_KEY=...
+# -> UMBRAL_MASK_PRIVATE_KEY=...
 ```
 
 No flags. Set both lines in your environment (or `.env`) before booting an app that has `Masked<T>` fields.
 
-## createsuperuser - `umbra-auth`
+## createsuperuser - `umbral-auth`
 
 Interactive prompt for username / email / password; creates a row in `auth_user` with `is_staff = is_superuser = true` and the password argon2id-hashed.
 
@@ -341,7 +341,7 @@ cargo run -- createsuperuser
 # Prompts for username, email, password (twice for confirmation).
 
 # Non-interactive (CI / first-deploy scripts)
-UMBRA_SUPERUSER_PASSWORD='strong-password' \
+UMBRAL_SUPERUSER_PASSWORD='strong-password' \
   cargo run -- createsuperuser \
     --username alice \
     --email alice@example.com \
@@ -352,11 +352,11 @@ UMBRA_SUPERUSER_PASSWORD='strong-password' \
 |---|---|---|
 | `--username <name>` | non-interactive | Skip the username prompt; use this value. |
 | `--email <addr>` | non-interactive | Skip the email prompt; use this value. |
-| `--noinput` | non-interactive | No prompts at all. Username, email, and `UMBRA_SUPERUSER_PASSWORD` must all be set or the command errors. |
+| `--noinput` | non-interactive | No prompts at all. Username, email, and `UMBRAL_SUPERUSER_PASSWORD` must all be set or the command errors. |
 
-Password is read from `UMBRA_SUPERUSER_PASSWORD` in `--noinput` mode (never via a flag - flags land in shell history).
+Password is read from `UMBRAL_SUPERUSER_PASSWORD` in `--noinput` mode (never via a flag - flags land in shell history).
 
-## tasks-worker - `umbra-tasks`
+## tasks-worker - `umbral-tasks`
 
 Drain the task queue. Without flags, loops forever. With `--once`, processes one batch and exits - cron-friendly.
 
@@ -372,7 +372,7 @@ cargo run -- tasks-worker --once
 |---|---|---|
 | `--once` | off (loop forever) | Run one iteration of the claim/dispatch loop and exit. Cron-friendly. |
 
-## tasks-beat - `umbra-tasks`
+## tasks-beat - `umbral-tasks`
 
 Run the periodic-task scheduler (the Celery *beat* equivalent). On startup it syncs the registered periodic specs to `PeriodicTask` rows, then each tick claims every due row atomically and enqueues the underlying task. Run it as its **own** process alongside `tasks-worker` — beat fills the queue, the worker drains it.
 
@@ -388,7 +388,7 @@ cargo run -- tasks-beat --once
 |---|---|---|
 | `--once` | off (poll forever) | Sync schedules, run one tick, and exit. |
 
-## clearsessions - `umbra-sessions`
+## clearsessions - `umbral-sessions`
 
 Delete every expired session row from the database (Django's `clearsessions`). Run it periodically (cron / a scheduled task) to keep the session table from accumulating dead rows.
 
@@ -399,7 +399,7 @@ cargo run -- clearsessions
 
 No flags. Deletes session rows whose `expires_at` is in the past.
 
-## collectstatic - `umbra-storage`
+## collectstatic - `umbral-storage`
 
 Collect every plugin's static assets — namespaced `static_dirs()` plus site-level `static_root_dirs()` — into `settings.static_root`. Django's `collectstatic`.
 
@@ -419,7 +419,7 @@ cargo run -- collectstatic --hashed
 |---|---|---|
 | `--clear` | off | Empty `static_root` before collecting (no confirmation prompt), dropping assets no plugin ships any more. |
 | `--hashed` | off | Write content-hashed copies (`app.<hash>.css`) alongside each asset plus a `staticfiles.json` manifest (Django's `ManifestStaticFilesStorage`). Use in production. |
-| `--storage <backend>` | `local` | Where to write: `local` (the on-disk `static_root`) or `s3` (requires the umbra-storage `s3` feature and `UMBRA_STATIC_BUCKET` / `UMBRA_STATIC_REGION`). Overrides `UMBRA_STATIC_STORAGE`. |
+| `--storage <backend>` | `local` | Where to write: `local` (the on-disk `static_root`) or `s3` (requires the umbral-storage `s3` feature and `UMBRAL_STATIC_BUCKET` / `UMBRAL_STATIC_REGION`). Overrides `UMBRAL_STATIC_STORAGE`. |
 
 ## Errors
 
@@ -427,7 +427,7 @@ Every subcommand prints errors through the `Display` impl, not the
 `Debug` repr. A failure reads as a single human-readable diagnostic:
 
 ```
-error: umbra inspectdb: column `doc.payload` has unsupported SQL type
+error: umbral inspectdb: column `doc.payload` has unsupported SQL type
        `BLOB`; add a matching SqlType variant or edit the generated
        model by hand
 ```
@@ -446,9 +446,9 @@ alongside the built-ins.
 
 ```rust
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use umbra::cli::{CliError, PluginCommand};
-use umbra::plugin::{AppContext, Plugin, PluginError};
-use umbra::web::Router;
+use umbral::cli::{CliError, PluginCommand};
+use umbral::plugin::{AppContext, Plugin, PluginError};
+use umbral::web::Router;
 
 pub struct BlogPlugin;
 
@@ -463,7 +463,7 @@ impl Plugin for BlogPlugin {
 }
 
 /// One management subcommand. The shape is identical to what
-/// umbra-auth's `createsuperuser` or umbra-tasks's `tasks-worker`
+/// umbral-auth's `createsuperuser` or umbral-tasks's `tasks-worker`
 /// use - there's no separate "framework command" vs "plugin
 /// command" distinction.
 #[derive(Debug, Default)]
@@ -534,7 +534,7 @@ let app = App::builder()
     .plugin(BlogPlugin)
     .build()?;
 
-umbra_cli::dispatch(app).await
+umbral_cli::dispatch(app).await
 ```
 
 Then:
@@ -552,7 +552,7 @@ cargo run -- seed-blog --count 10
 ### How dispatch routes args
 
 When `cargo run -- <name>` runs, the project's binary calls
-`umbra_cli::dispatch(app)`. The dispatcher:
+`umbral_cli::dispatch(app)`. The dispatcher:
 
 1. Walks every registered plugin in topological order, collecting
    each one's `Plugin::commands()` Vec.
@@ -571,14 +571,14 @@ clap sees every subcommand at once.
 
 The handler runs **after** `App::build()` has finished, so:
 
-- `umbra::db::pool()` returns the live pool.
+- `umbral::db::pool()` returns the live pool.
 - The model registry is populated; `MyModel::objects().fetch().await`
   works.
-- Settings are live; `umbra::settings::get()` returns the resolved
+- Settings are live; `umbral::settings::get()` returns the resolved
   values.
 - Every other plugin's `on_ready` has fired (commands run after
   on_ready by design - see the dispatch order in
-  `crates/umbra-core/src/cli.rs`).
+  `crates/umbral-core/src/cli.rs`).
 
 What NOT to do: don't start the HTTP server, don't run migrations
 yourself. Those are separate subcommands; your command should do one
@@ -602,8 +602,8 @@ thing and exit.
 The deep spec for each subcommand lives alongside its subsystem:
 `docs/specs/06-migration-engine.md` for the migrate trio,
 `docs/specs/07-inspectdb.md` for inspectdb. The `PluginCommand` trait
-lives at `crates/umbra-core/src/cli.rs`.
+lives at `crates/umbral-core/src/cli.rs`.
 
-See [Scaffolding a project](./startproject) for the global `umbra`
-binary that creates `src/main.rs` + the `umbra.toml` config in the
+See [Scaffolding a project](./startproject) for the global `umbral`
+binary that creates `src/main.rs` + the `umbral.toml` config in the
 first place.

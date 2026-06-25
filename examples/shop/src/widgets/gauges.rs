@@ -10,8 +10,8 @@
 //!   (the same data the donut shows, in the "top N" shape).
 
 use ecommerce::models::Order;
-use umbra::orm::Aggregate;
-use umbra_admin::{
+use umbral::orm::Aggregate;
+use umbral_admin::{
     HeatmapPayload, ProgressPayload, RadialPayload, Span, Widget, WidgetDataFn, WidgetKind,
     WidgetPayload,
 };

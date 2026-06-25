@@ -1,17 +1,17 @@
 ---
 title: Template Filters and Helpers
-description: Built-in filters, tests, and globals available in umbra templates via minijinja 2.
+description: Built-in filters, tests, and globals available in umbral templates via minijinja 2.
 sidebar_position: 2
 tags: [templates, filters, helpers, minijinja]
 ---
 
-umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. On top of that standard library, umbra-core registers a handful of custom filters and functions of its own (`img`, `markdown`, `sanitize`, `currency`, `static`, `media_url`, `now`, `querystring_with`, `highlight_styles`) and injects ambient globals into every render (`csrf_token`, `csrf_input`, plus the anonymous-safe `user`). Plugins can add their own; see [Custom template tags](custom-tags).
+umbral templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. On top of that standard library, umbral-core registers a handful of custom filters and functions of its own (`img`, `markdown`, `sanitize`, `currency`, `static`, `media_url`, `now`, `querystring_with`, `highlight_styles`) and injects ambient globals into every render (`csrf_token`, `csrf_input`, plus the anonymous-safe `user`). Plugins can add their own; see [Custom template tags](custom-tags).
 
-This page catalogues the filters and globals umbra users reach for most, with examples written in the umbra template style.
+This page catalogues the filters and globals umbral users reach for most, with examples written in the umbral template style.
 
-## umbra's own filters and globals
+## umbral's own filters and globals
 
-These are registered by umbra-core's template engine (`crates/umbra-core/src/templates.rs`) and are available in every `.html` template the framework renders, on top of the minijinja standard library below.
+These are registered by umbral-core's template engine (`crates/umbral-core/src/templates.rs`) and are available in every `.html` template the framework renders, on top of the minijinja standard library below.
 
 | Name | Kind | Purpose | Usage |
 |------|------|---------|-------|
@@ -39,7 +39,7 @@ These are registered by umbra-core's template engine (`crates/umbra-core/src/tem
 ```
 
 <Callout type="info">
-**`None` and `Undefined` render as the empty string.** umbra installs a custom formatter so an `Option<String>` field that is `None`, or an undefined variable, renders as `""` instead of the literal tokens `none` / `undefined`. This means `<input value="{{ form.phone }}">` on a fresh form yields `value=""`, not `value="none"`. Non-null values pass through the normal escaping formatter unchanged.
+**`None` and `Undefined` render as the empty string.** umbral installs a custom formatter so an `Option<String>` field that is `None`, or an undefined variable, renders as `""` instead of the literal tokens `none` / `undefined`. This means `<input value="{{ form.phone }}">` on a fresh form yields `value=""`, not `value="none"`. Non-null values pass through the normal escaping formatter unchanged.
 </Callout>
 
 Plugins register their own app-level filters and functions through `Plugin::template_registrars`; see [Custom template tags](custom-tags). (The admin plugin additionally registers a `naturaltime` filter against its *private* environment; that one is scoped to admin templates and isn't available in app-level templates.)
@@ -172,7 +172,7 @@ minijinja exposes a small set of global functions callable anywhere in a templat
 
 ## The `safe` filter and autoescape
 
-umbra enables autoescape on every `.html` and `.htm` template. A value that contains `<script>` will be emitted as `&lt;script&gt;` automatically. To render pre-trusted HTML - for example, a sanitised rich-text field - pipe it through `safe`:
+umbral enables autoescape on every `.html` and `.htm` template. A value that contains `<script>` will be emitted as `&lt;script&gt;` automatically. To render pre-trusted HTML - for example, a sanitised rich-text field - pipe it through `safe`:
 
 ```html
 {# Only do this for content you have already sanitised server-side #}
@@ -183,7 +183,7 @@ There is no global escape bypass. See [Rendering HTML](rendering-html#autoescape
 
 ## What is missing today: humanize helpers
 
-Django's `django.contrib.humanize` provides filters like `naturalday`, `naturaltime`, `intcomma`, `ordinal`, and `filesizeformat`. minijinja 2 does not ship these, and umbra-core does not register app-level equivalents yet (the admin plugin ships a `naturaltime` filter, but it's scoped to admin templates only). When humanize-style filters land for app templates they will be documented here.
+Django's `django.contrib.humanize` provides filters like `naturalday`, `naturaltime`, `intcomma`, `ordinal`, and `filesizeformat`. minijinja 2 does not ship these, and umbral-core does not register app-level equivalents yet (the admin plugin ships a `naturaltime` filter, but it's scoped to admin templates only). When humanize-style filters land for app templates they will be documented here.
 
 In the meantime, compute humanized representations in the handler and pass them as context values:
 
@@ -193,7 +193,7 @@ let context = context! {
     article,
     created_label => humantime::format_duration(elapsed).to_string(),
 };
-let html = umbra::templates::render("article.html", &context)?;
+let html = umbral::templates::render("article.html", &context)?;
 ```
 
 ```html

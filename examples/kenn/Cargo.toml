@@ -6,28 +6,28 @@ edition = "2024"
 [dependencies]
 
 # ----- Framework core (always required) ------------------------------------
-umbra         = { git = "https://github.com/dalmasonto/umbra" }
-umbra-cli     = { git = "https://github.com/dalmasonto/umbra" }
+umbral         = { git = "https://github.com/dalmasonto/umbral" }
+umbral-cli     = { git = "https://github.com/dalmasonto/umbral" }
 
 # ----- Active by default ---------------------------------------------------
 # What the generated `src/main.rs` wires in. Comment any of these out only
 # if you also remove the matching `.plugin(...)` line.
-umbra-auth     = { git = "https://github.com/dalmasonto/umbra" }
-umbra-sessions = { git = "https://github.com/dalmasonto/umbra" }
-umbra-admin    = { git = "https://github.com/dalmasonto/umbra" }
-umbra-rest     = { git = "https://github.com/dalmasonto/umbra" }
-umbra-openapi  = { git = "https://github.com/dalmasonto/umbra" }
-umbra-security = { git = "https://github.com/dalmasonto/umbra" }
+umbral-auth     = { git = "https://github.com/dalmasonto/umbral" }
+umbral-sessions = { git = "https://github.com/dalmasonto/umbral" }
+umbral-admin    = { git = "https://github.com/dalmasonto/umbral" }
+umbral-rest     = { git = "https://github.com/dalmasonto/umbral" }
+umbral-openapi  = { git = "https://github.com/dalmasonto/umbral" }
+umbral-security = { git = "https://github.com/dalmasonto/umbral" }
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
-# umbra-playground   = { git = "https://github.com/dalmasonto/umbra" }  # Interactive API playground UI (think mini-Postman) at /playground/.
-# umbra-tasks        = { git = "https://github.com/dalmasonto/umbra" }  # DB-backed background task queue (Celery-equivalent).
-# umbra-permissions  = { git = "https://github.com/dalmasonto/umbra" }  # Django-style ContentType + Group + Permission model.
-# umbra-rls          = { git = "https://github.com/dalmasonto/umbra" }  # Postgres row-level security policy registration.
-# umbra-cache        = { git = "https://github.com/dalmasonto/umbra" }  # Per-request caching helper.
-# umbra-email        = { git = "https://github.com/dalmasonto/umbra" }  # SMTP + MIME email composer + sender.
-# umbra-storage      = { git = "https://github.com/dalmasonto/umbra" }  # Unified storage: static-file serving (prod) + uploaded-file storage (local FS + S3).
-# umbra-signals      = { git = "https://github.com/dalmasonto/umbra" }  # Pre/post save/delete signal dispatch.
+# umbral-playground   = { git = "https://github.com/dalmasonto/umbral" }  # Interactive API playground UI (think mini-Postman) at /playground/.
+# umbral-tasks        = { git = "https://github.com/dalmasonto/umbral" }  # DB-backed background task queue (Celery-equivalent).
+# umbral-permissions  = { git = "https://github.com/dalmasonto/umbral" }  # Django-style ContentType + Group + Permission model.
+# umbral-rls          = { git = "https://github.com/dalmasonto/umbral" }  # Postgres row-level security policy registration.
+# umbral-cache        = { git = "https://github.com/dalmasonto/umbral" }  # Per-request caching helper.
+# umbral-email        = { git = "https://github.com/dalmasonto/umbral" }  # SMTP + MIME email composer + sender.
+# umbral-storage      = { git = "https://github.com/dalmasonto/umbral" }  # Unified storage: static-file serving (prod) + uploaded-file storage (local FS + S3).
+# umbral-signals      = { git = "https://github.com/dalmasonto/umbral" }  # Pre/post save/delete signal dispatch.
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -36,6 +36,6 @@ serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }
 
-# Once you `umbra startapp <plugin>` or `umbra startplugin <plugin>`, add
+# Once you `umbral startapp <plugin>` or `umbral startplugin <plugin>`, add
 # the plugin crate here:
 # kenn-posts = { path = "plugins/posts" }

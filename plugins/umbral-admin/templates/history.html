@@ -1,0 +1,38 @@
+{#
+  history.html
+  ============
+  Audit history sheet/fragment for GET {{ admin_base }}/{table}/{id}/history.
+  Rendered as an HTMX fragment (sheet body content) or as a standalone div.
+#}
+{% from "admin/_macros/audit_timeline.html" import audit_timeline %}
+
+<div id="umbral-history-panel"
+     class="flex flex-col h-full bg-surface rounded-xl overflow-hidden"
+     role="region"
+     aria-label="Object history">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between px-lg py-md border-b border-outline-variant flex-shrink-0 bg-surface-container-low">
+    <div class="flex items-center gap-sm">
+      <i data-lucide="history" class="w-4 h-4 text-primary"></i>
+      <h3 class="font-h3 text-h3 text-on-surface">History</h3>
+    </div>
+    <div class="flex items-center gap-xs text-label-sm text-outline">
+      <span>{{ model_name }} #{{ object_id }}</span>
+      <button
+        type="button"
+        onclick="umbral.popSheet()"
+        class="ml-sm p-xs rounded-lg hover:bg-surface-container-high transition-colors text-outline hover:text-on-surface"
+        aria-label="Close history"
+      >
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- Timeline -->
+  <div class="flex-1 overflow-y-auto px-lg py-md">
+    {{ audit_timeline(entries) }}
+  </div>
+
+</div>

@@ -1,8 +1,8 @@
 # Building a Django-Inspired Web Framework in Rust — Architecture, Features & Build Strategy
 
-The goal is not to clone Django line-for-line, but to recreate the *feeling*: declare your data, get migrations, CRUD, an admin, and (optionally) an API almost for free, while gaining Rust's compile-time resilience. umbra is a separate Rust framework inspired by Django's shape and ergonomics; it isn't a port and shares no code with the Django project. The framework is **thin-core + plugin-heavy**, and it **dogfoods its own plugin system** for every built-in feature.
+The goal is not to clone Django line-for-line, but to recreate the *feeling*: declare your data, get migrations, CRUD, an admin, and (optionally) an API almost for free, while gaining Rust's compile-time resilience. umbral is a separate Rust framework inspired by Django's shape and ergonomics; it isn't a port and shares no code with the Django project. The framework is **thin-core + plugin-heavy**, and it **dogfoods its own plugin system** for every built-in feature.
 
-> **Project name: `umbra`** (Latin for *shadow*; the framework lives in Django's shadow in shape, not in code). Placeholder; rename the whole tree later with a single `sed 's/umbra/yourname/g'`. Convention: the facade crate is `umbra`, internals are `umbra-*`, and third-party plugins follow `umbra-<thing>` the way Django plugins are `django-<thing>`.
+> **Project name: `umbral`** ('of the shadow', from Latin *umbra*, shadow; the framework lives in Django's shadow in shape, not in code). Placeholder; rename the whole tree later with a single `sed 's/umbral/yourname/g'`. Convention: the facade crate is `umbral`, internals are `umbral-*`, and third-party plugins follow `umbral-<thing>` the way Django plugins are `django-<thing>`.
 
 ---
 
@@ -35,37 +35,37 @@ The crate boundaries *are* the architecture:
 
 ```
 workspace/
-├── umbra-core        # ORM, migrations, routing, DB backends, the Plugin TRAIT. Depends on nothing plugin-related.
-├── umbra-macros      # #[derive(Model)], #[task], etc.
-├── umbra             # FACADE: re-exports core (+ macros) as one stable surface → `use umbra::prelude::*`
-├── umbra-cli         # the `manage.py` equivalent binary
+├── umbral-core        # ORM, migrations, routing, DB backends, the Plugin TRAIT. Depends on nothing plugin-related.
+├── umbral-macros      # #[derive(Model)], #[task], etc.
+├── umbral             # FACADE: re-exports core (+ macros) as one stable surface → `use umbral::prelude::*`
+├── umbral-cli         # the `manage.py` equivalent binary
 ├── plugins/
-│   ├── umbra-auth     # built-in plugin: users, permissions, password hashing
-│   ├── umbra-sessions # built-in plugin: session store + middleware
-│   ├── umbra-admin    # built-in plugin: auto CRUD UI
-│   ├── umbra-tasks    # built-in plugin: DB-backed Celery-equivalent
-│   ├── umbra-rest     # OPTIONAL plugin: serializers, viewsets, routers (the "DRF")
-│   └── umbra-openapi  # OPTIONAL plugin: Swagger UI / schema gen, depends on umbra-rest
+│   ├── umbral-auth     # built-in plugin: users, permissions, password hashing
+│   ├── umbral-sessions # built-in plugin: session store + middleware
+│   ├── umbral-admin    # built-in plugin: auto CRUD UI
+│   ├── umbral-tasks    # built-in plugin: DB-backed Celery-equivalent
+│   ├── umbral-rest     # OPTIONAL plugin: serializers, viewsets, routers (the "DRF")
+│   └── umbral-openapi  # OPTIONAL plugin: Swagger UI / schema gen, depends on umbral-rest
 ```
 
-**Dependency direction (this is the whole game).** Every plugin depends on `umbra` (the facade), never the reverse. `umbra-core` defines the `Plugin` *trait* but never names a concrete plugin. The user's **binary crate** depends on `umbra` plus all chosen plugins and wires them. So arrows point *inward* toward core; control flows *outward* through the trait. Cargo's ban on circular crate deps doesn't fight this — it enforces it. REST being a crate core does not depend on is the structural proof that "serializers are a plugin." OpenAPI depends on REST; core depends on neither.
+**Dependency direction (this is the whole game).** Every plugin depends on `umbral` (the facade), never the reverse. `umbral-core` defines the `Plugin` *trait* but never names a concrete plugin. The user's **binary crate** depends on `umbral` plus all chosen plugins and wires them. So arrows point *inward* toward core; control flows *outward* through the trait. Cargo's ban on circular crate deps doesn't fight this — it enforces it. REST being a crate core does not depend on is the structural proof that "serializers are a plugin." OpenAPI depends on REST; core depends on neither.
 
 ---
 
 ## 2. Cross-cutting conventions
 
-Two rules apply across every subsystem and shape umbra's *feel*. They sit here, ahead of the Plugin Contract, because the Plugin Contract starts naming concrete public surface (the prelude) and both rules need to be in scope before that point.
+Two rules apply across every subsystem and shape umbral's *feel*. They sit here, ahead of the Plugin Contract, because the Plugin Contract starts naming concrete public surface (the prelude) and both rules need to be in scope before that point.
 
 ### 2.1 Visibility of underlying crates
 
-**Does an umbra developer see axum?** Rule of thumb: if a crate is a way to build the framework, hide it; if it is how the user describes their own data and behavior, surface it.
+**Does an umbral developer see axum?** Rule of thumb: if a crate is a way to build the framework, hide it; if it is how the user describes their own data and behavior, surface it.
 
 | Crate | Visibility | Notes |
 |---|---|---|
-| **axum** | **Hidden** by default. `umbra::web::{Router, Request, Response, Json, Path, Query, Form}`. Escape hatch: `umbra::axum::*`. | Day-to-day umbra looks Django-shape. |
-| **sqlx** | **Hidden** behind `QuerySet` / `Manager`. Escape hatch: `umbra::db::query!` is `sqlx::query!`. | Compile-time-checked SQL remains available. |
+| **axum** | **Hidden** by default. `umbral::web::{Router, Request, Response, Json, Path, Query, Form}`. Escape hatch: `umbral::axum::*`. | Day-to-day umbral looks Django-shape. |
+| **sqlx** | **Hidden** behind `QuerySet` / `Manager`. Escape hatch: `umbral::db::query!` is `sqlx::query!`. | Compile-time-checked SQL remains available. |
 | **sea-query** | **Fully hidden.** | Pure implementation detail. |
-| **tower / tower-http** | **Mixed.** Middleware is configured through umbra's chain, but the underlying type is a tower service so standard layers compose. | Contract reads as umbra; ecosystem still works. |
+| **tower / tower-http** | **Mixed.** Middleware is configured through umbral's chain, but the underlying type is a tower service so standard layers compose. | Contract reads as umbral; ecosystem still works. |
 | **serde** | **Visible.** Users `#[derive(Serialize, Deserialize)]` on their own types. | Ecosystem fluency, not infrastructure. |
 | **clap** | **Visible at the extension seam.** Custom `Command`s use clap derives. | Same reason as serde. |
 | **tracing** | **Visible.** Users add their own spans/logs. | Observability is the user's. |
@@ -77,13 +77,13 @@ Two rules apply across every subsystem and shape umbra's *feel*. They sit here, 
 
 | Kind of context | Examples | Visibility in a handler |
 |---|---|---|
-| **App-wide / process-scoped** | DB pool, `Settings`, plugin registry, task-queue handle, cache, template engine | **Ambient.** Set during `App::build()` (stored in `OnceLock`s inside the relevant module). Reached via accessors: `Post::objects()`, `umbra::settings()`, `umbra::tasks::enqueue(...)`. **No `State<…>` in the handler signature.** |
-| **Per-request / request-scoped** | The Request, parsed body, path/query params, the session, the authenticated user, an active transaction handle | **Explicit arguments.** Extracted into the handler signature: `Request`, `Path<T>`, `Json<T>`, `Form<T>`, `Query<T>`, `Session`, `Auth<User>`. Uses axum extractors under the hood; the user sees umbra types only. |
+| **App-wide / process-scoped** | DB pool, `Settings`, plugin registry, task-queue handle, cache, template engine | **Ambient.** Set during `App::build()` (stored in `OnceLock`s inside the relevant module). Reached via accessors: `Post::objects()`, `umbral::settings()`, `umbral::tasks::enqueue(...)`. **No `State<…>` in the handler signature.** |
+| **Per-request / request-scoped** | The Request, parsed body, path/query params, the session, the authenticated user, an active transaction handle | **Explicit arguments.** Extracted into the handler signature: `Request`, `Path<T>`, `Json<T>`, `Form<T>`, `Query<T>`, `Session`, `Auth<User>`. Uses axum extractors under the hood; the user sees umbral types only. |
 
-A Django-shape umbra handler — no `State`, no `axum`, ambient ORM:
+A Django-shape umbral handler — no `State`, no `axum`, ambient ORM:
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 async fn create_post(
     auth: Auth<User>,
@@ -120,8 +120,8 @@ A plugin (Django's "app") is a unit that can contribute any subset of:
 
 This is the crux of the whole ecosystem. Django plugins import the framework (`from django.db import models`) but the framework never imports the plugin — it discovers plugins through `INSTALLED_APPS` *strings* resolved at runtime. One-directional static dependency; dynamic config-based discovery. Replicate it with **dependency inversion**:
 
-1. `umbra-core` owns the ORM and **defines the `Plugin` trait** (the contract). Depends on no plugin.
-2. A plugin depends on the `umbra` facade, implements `Plugin`, and `use`s the ORM freely. The direct equivalent of `from django.db import models`. It "magically" has the ORM because it imports it.
+1. `umbral-core` owns the ORM and **defines the `Plugin` trait** (the contract). Depends on no plugin.
+2. A plugin depends on the `umbral` facade, implements `Plugin`, and `use`s the ORM freely. The direct equivalent of `from django.db import models`. It "magically" has the ORM because it imports it.
 3. The user's **binary** depends on core plus every plugin and composes them.
 4. Core only ever touches plugins as `Box<dyn Plugin>`. The trait object is the dynamic seam that stands in for `INSTALLED_APPS`. Core reaches plugin code without statically naming it.
 
@@ -130,9 +130,9 @@ Mantra: **dependencies point inward toward core; control flows outward through t
 A complete third-party plugin looks like this — note it imports nothing but the facade:
 
 ```rust
-use umbra::prelude::*;            // ORM, Plugin trait, routing — one stable surface
+use umbral::prelude::*;            // ORM, Plugin trait, routing — one stable surface
 
-#[derive(Model)]                  // "magic" ORM access, because it depends on umbra
+#[derive(Model)]                  // "magic" ORM access, because it depends on umbral
 pub struct Post { /* fields */ }
 
 pub struct BlogPlugin;
@@ -146,7 +146,7 @@ impl Plugin for BlogPlugin {
 }
 ```
 
-The author experience is: `cargo add umbra-blog`, then register it (see below). The **facade + prelude** is what keeps this clean — authors never reach into `umbra-core` internals, so you can refactor the internal crate split without breaking a single plugin.
+The author experience is: `cargo add umbral-blog`, then register it (see below). The **facade + prelude** is what keeps this clean — authors never reach into `umbral-core` internals, so you can refactor the internal crate split without breaking a single plugin.
 
 ### Ambient ORM access (the one place to decide deliberately)
 
@@ -167,7 +167,7 @@ App::builder()
     .build();
 ```
 
-Each plugin implements a `Plugin` trait whose methods return its migrations, routes, commands, and config defaults. Explicit builder registration is the Django-`INSTALLED_APPS`-like, debuggable default. For the zero-boilerplate "`cargo add umbra-blog` and it just works" experience, *optionally* layer in `inventory`/`linkme` distributed slices so a plugin self-registers at static-init — no `.plugin()` call needed. One caveat: the linker drops crates nothing references, so the binary must still list the plugin as a dependency for auto-registration to fire (which it does the moment you `cargo add` it).
+Each plugin implements a `Plugin` trait whose methods return its migrations, routes, commands, and config defaults. Explicit builder registration is the Django-`INSTALLED_APPS`-like, debuggable default. For the zero-boilerplate "`cargo add umbral-blog` and it just works" experience, *optionally* layer in `inventory`/`linkme` distributed slices so a plugin self-registers at static-init — no `.plugin()` call needed. One caveat: the linker drops crates nothing references, so the binary must still list the plugin as a dependency for auto-registration to fire (which it does the moment you `cargo add` it).
 
 ### Automagic migrations on `migrate`
 
@@ -175,7 +175,7 @@ Once a plugin is registered:
 
 1. `manage.py migrate` walks every registered plugin and collects `plugin.migrations()`.
 2. Migrations are ordered by a dependency graph (cross-plugin FKs allowed).
-3. Applied migrations are tracked in a umbra-owned table; only new ones run.
+3. Applied migrations are tracked in a umbral-owned table; only new ones run.
 4. A third-party plugin "just works" — drop it in, register it, `migrate`, done.
 
 The framework's own auth/sessions/tasks tables are created this exact way — they are plugin migrations, not special-cased.
@@ -253,16 +253,16 @@ Django abstracts most differences but also exposes backend-specific power (`djan
 
 ## 6. Built-in Plugins (shipped in the box, structurally ordinary)
 
-### 6.1 `umbra-auth`
+### 6.1 `umbral-auth`
 User model (incl. custom user models), authentication backends, permissions & groups, password hashing *(reuse: argon2)*, login guards. Owns its migrations.
 
-### 6.2 `umbra-sessions`
+### 6.2 `umbral-sessions`
 Session store + middleware. *(reuse: tower-sessions)* Owns its migrations (DB session backend).
 
-### 6.3 `umbra-admin`
+### 6.3 `umbral-admin`
 Register a model → auto CRUD UI: list display, filters, search, inlines, bulk actions, permission integration. The flagship "wow" feature. *(build)*
 
-### 6.4 `umbra-tasks` — DB-backed task queue (Celery out of the box)
+### 6.4 `umbral-tasks` — DB-backed task queue (Celery out of the box)
 - **`#[task]` macro / `Task` trait** to define tasks; typed args via serde.
 - **DB-backed broker** — owns a `tasks` table via its own migration; no Redis/RabbitMQ required to start. *(reuse: `underway` (Postgres-native) or `apalis` (multi-backend) as the engine)*
 - **Worker process** — `manage.py worker` polls and executes.
@@ -270,14 +270,14 @@ Register a model → auto CRUD UI: list display, filters, search, inlines, bulk 
 - **Pluggable broker later** (Redis, etc.) behind the same task API.
 - Because it's DB-backed and registered like any plugin, `migrate` provisions its tables automatically — exactly the "plugin owns its migrations" story.
 
-### 6.5 `umbra-rest` — the "DRF" (OPTIONAL)
+### 6.5 `umbral-rest` — the "DRF" (OPTIONAL)
 - **Serializers / ModelSerializer** — struct ↔ JSON + validation. *(reuse: serde; build mapping)*
 - **ViewSets & routers** — auto-generate CRUD URL sets. *(build)*
 - **Auth/permission/throttle classes, pagination, filtering, ordering.** *(build; reuse tower-governor for throttle)*
 - **Renderers / content negotiation; browsable API later.** *(build)*
 - Core does **not** depend on this crate. No REST plugin → no serializer overhead.
 
-### 6.6 `umbra-openapi` (OPTIONAL, depends on `umbra-rest`)
+### 6.6 `umbral-openapi` (OPTIONAL, depends on `umbral-rest`)
 - **Auto-generate OpenAPI schema + Swagger UI** from registered viewsets/serializers. *(reuse: utoipa; build integration)*
 
 ---
@@ -319,13 +319,13 @@ Each milestone is independently demoable. Build the primitives by hand first, th
 
 **M8 — Harden autodetection + plugin-ify built-ins.** Rename vs. drop+add disambiguation, data migrations, cross-plugin FK ordering. Re-express auth and sessions as plugins. That's the proof of the contract.
 
-**M9 — `umbra-tasks` plugin.** DB-backed queue, `#[task]`, the `worker` and `beat` commands. Owns its tables via its own migration.
+**M9 — `umbral-tasks` plugin.** DB-backed queue, `#[task]`, the `worker` and `beat` commands. Owns its tables via its own migration.
 
-**M10 — `umbra-rest` plugin.** Serializers, viewsets, routers, pagination, filtering, throttling, as an *optional* crate.
+**M10 — `umbral-rest` plugin.** Serializers, viewsets, routers, pagination, filtering, throttling, as an *optional* crate.
 
-**M11 — `umbra-admin` plugin.** Auto CRUD UI: list/filter/search, inlines, bulk actions, permission integration.
+**M11 — `umbral-admin` plugin.** Auto CRUD UI: list/filter/search, inlines, bulk actions, permission integration.
 
-**M12 — `umbra-openapi` plugin.** Swagger UI and schema generation from registered REST surface.
+**M12 — `umbral-openapi` plugin.** Swagger UI and schema generation from registered REST surface.
 
 **M13 — Polish.** Generators (`startproject`, `startapp`), autoreload, browsable API, caching, fixtures, rich error pages.
 

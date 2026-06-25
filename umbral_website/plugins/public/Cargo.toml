@@ -1,0 +1,30 @@
+[package]
+name = "public"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+umbral = { path = "/home/dalmas/E/projects/umbral/crates/umbral" }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Inter-plugin model access: the public landing page queries
+# plugin_directory for the plugin map and site_content for form
+# submission counts. Both stay narrow — only the model modules,
+# never internals.
+plugin_directory = { path = "../plugin_directory" }
+site_content = { path = "../site_content" }
+# The homepage trust strip renders a curated slice of approved reviews
+# via reviews::featured_reviews() — keeping byline/initials logic in one
+# place instead of duplicating it on the landing page.
+reviews = { path = "../reviews" }
+# The homepage "Join the ecosystem" grid renders the SAME model-driven
+# channel cards as /community, via community::home_channels() +
+# community::newsletter_url() — one source of truth for channels.
+community = { path = "../community" }
+
+[dev-dependencies]
+# The render smoke-test (tests/render_home.rs) drives an async handler
+# render under a tokio runtime.
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

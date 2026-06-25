@@ -8,7 +8,7 @@ tags:
   - data
 ---
 
-Most migrations are **schema** migrations — umbra auto-detects them from a model change (`CreateTable`, `AddColumn`, …). A **data migration** changes *rows*, not the schema: backfill a new column, normalise existing values, seed lookup rows. umbra ships this as `Operation::RunSql`, a hand-authored raw-SQL op.
+Most migrations are **schema** migrations — umbral auto-detects them from a model change (`CreateTable`, `AddColumn`, …). A **data migration** changes *rows*, not the schema: backfill a new column, normalise existing values, seed lookup rows. umbral ships this as `Operation::RunSql`, a hand-authored raw-SQL op.
 
 A data migration is never auto-generated — `makemigrations` only emits schema diffs. You write it by hand, and because it has no schema effect, it never disturbs the model-snapshot chain (its `snapshot_after` equals the previous snapshot, so the next `makemigrations` still detects no change).
 
@@ -87,4 +87,4 @@ Under [schema-per-tenant](/docs/v0.0.1/plugins/tenancy), a `RunSql` in a **tenan
 
 - [Managed migrations](/docs/v0.0.1/migrations/managed-migrations) — the auto-detected schema loop.
 - [Multitenancy](/docs/v0.0.1/plugins/tenancy) — boundary-spanning data migrations.
-- `crates/umbra-core/src/migrate.rs` (the `Operation::RunSql` variant) and `docs/specs/06-migration-engine.md` for the design.
+- `crates/umbral-core/src/migrate.rs` (the `Operation::RunSql` variant) and `docs/specs/06-migration-engine.md` for the design.

@@ -1,5 +1,0 @@
-/target
-/styles/node_modules
-/umbra_website.db*
-.env
-Cargo.lock

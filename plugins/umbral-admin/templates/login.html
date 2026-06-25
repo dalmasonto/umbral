@@ -1,0 +1,192 @@
+{% extends "admin/wrapper.html" %}
+
+{% block title %}Sign in | {{ site_title }}{% endblock %}
+
+{% block extra_head %}
+<style>
+    body {
+        font-family: "Inter", sans-serif;
+        -webkit-font-smoothing: antialiased;
+    }
+    /* Tabular numerals for any numeric context. */
+    .tabular-nums {
+        font-variant-numeric: tabular-nums;
+    }
+    /* Slanted grid mesh painted behind the top half of the page.
+       Hairline grid lines in `--outline-variant` (the same token
+       used by card borders) so the pattern stays subtle in BOTH
+       light and dark themes without any per-theme override. A
+       vertical mask fades the grid out before it reaches the auth
+       card, so the card sits on a clean background. Rotated by a
+       few degrees and scaled up to keep the corners filled after
+       the rotation crops them. `pointer-events-none` keeps the
+       mesh purely decorative. */
+    .login-grid-mesh {
+        background-image:
+            linear-gradient(to right, var(--outline-variant) 1px, transparent 1px),
+            linear-gradient(to bottom, var(--outline-variant) 1px, transparent 1px);
+        background-size: 56px 56px;
+        -webkit-mask-image: linear-gradient(to bottom, black 0%, transparent 100%);
+        mask-image: linear-gradient(to bottom, black 0%, transparent 100%);
+        transform: rotate(-4deg) scale(1.4);
+        transform-origin: 50% 0%;
+        opacity: 0.55;
+    }
+</style>
+{% endblock %}
+
+{# Page bg matches the card bg (`surface-container`) so the card #}
+{# doesn't appear "lighter" against a bluish-tinted page. Previously #}
+{# `mesh-gradient` painted a `#0b0e15` body with two radial gradients #}
+{# in purple-ish hues, which read as a mismatched panel. #}
+{% block body_attrs %}class="bg-surface-container min-h-screen flex items-center justify-center p-md text-on-surface"{% endblock %}
+
+{% block body %}
+    <!-- Decorative slanted grid mesh in the upper half of the page.
+         Sits behind everything (z-0 with the auth container at z-10).
+         55vh tall, so it fades out well before the footer. The CSS
+         lives in `extra_head` — theme adaptable via `--outline-variant`. -->
+    <div
+        class="fixed inset-x-0 top-0 h-[55vh] z-0 pointer-events-none overflow-hidden"
+        aria-hidden="true"
+    >
+        <div class="login-grid-mesh absolute inset-0"></div>
+    </div>
+
+    <!-- Auth container. `relative z-10` lifts it above the grid
+         mesh so the card never gets crossed by stray hairlines. -->
+    <div class="relative z-10 w-full max-w-[420px]">
+        <!-- Brand identity -->
+        <div class="flex flex-col items-center mb-xl">
+            <div
+                class="w-12 h-12 bg-primary-container rounded-xl flex items-center justify-center mb-md shadow-lg"
+            >
+                <i
+                    data-lucide="layers"
+                    class="w-6 h-6 text-on-primary-container"
+                ></i>
+            </div>
+            <h1 class="font-h1 text-h1 text-on-surface tracking-tight">
+                {{ site_title }}
+            </h1>
+            <p
+                class="font-body-md text-body-md text-on-surface-variant mt-xs"
+            >
+                Precision infrastructure management
+            </p>
+        </div>
+
+        <!-- Login card -->
+        <main
+            class="bg-surface-container border border-outline-variant rounded-auth-card p-xl shadow-2xl"
+        >
+            <header class="mb-xl">
+                <h2 class="font-h2 text-h2 mb-xs">Welcome back</h2>
+                <p
+                    class="font-body-sm text-body-sm text-on-surface-variant"
+                >
+                    Enter your credentials to access your dashboard
+                </p>
+            </header>
+
+            {%- if error %}
+            <!-- Error banner: never reveals whether username or password was wrong -->
+            <div
+                class="mb-md p-md rounded-lg border border-error-container bg-error-container/20 flex items-center gap-sm"
+            >
+                <i
+                    data-lucide="alert-circle"
+                    class="w-4 h-4 text-error flex-shrink-0"
+                ></i>
+                <p class="font-body-sm text-body-sm text-error">
+                    {{ error }}
+                </p>
+            </div>
+            {%- endif %}
+
+            <form method="post" action="{{ admin_base }}/login" class="space-y-md">
+                <!-- CSRF token — per-session, verified on POST -->
+                <input
+                    type="hidden"
+                    name="csrf_token"
+                    value="{{ csrf_token }}"
+                />
+                <!-- next redirect target (validated server-side) -->
+                <input type="hidden" name="next" value="{{ next }}" />
+
+                <!-- Username field -->
+                <div class="space-y-sm">
+                    <label
+                        class="font-label-md text-label-md text-on-surface-variant block"
+                        for="username"
+                        >Username</label
+                    >
+                    <div class="relative group">
+                        <div
+                            class="absolute inset-y-0 left-0 pl-md flex items-center pointer-events-none"
+                        >
+                            <i
+                                data-lucide="user"
+                                class="w-4 h-4 text-outline group-focus-within:text-primary transition-colors"
+                            ></i>
+                        </div>
+                        <input
+                            class="w-full bg-surface-container-lowest border border-outline-variant rounded-xl py-[10px] pl-[42px] pr-md font-body-md text-body-md text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all placeholder:text-outline/50"
+                            id="username"
+                            name="username"
+                            type="text"
+                            autocomplete="username"
+                            placeholder="your-username"
+                            value="{{ prefill_username }}"
+                            required
+                        />
+                    </div>
+                </div>
+
+                <!-- Password field -->
+                <div class="space-y-sm">
+                    <label
+                        class="font-label-md text-label-md text-on-surface-variant block"
+                        for="password"
+                        >Password</label
+                    >
+                    <div class="relative group">
+                        <div
+                            class="absolute inset-y-0 left-0 pl-md flex items-center pointer-events-none"
+                        >
+                            <i
+                                data-lucide="lock"
+                                class="w-4 h-4 text-outline group-focus-within:text-primary transition-colors"
+                            ></i>
+                        </div>
+                        <input
+                            class="w-full bg-surface-container-lowest border border-outline-variant rounded-xl py-[10px] pl-[42px] pr-md font-body-md text-body-md text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all placeholder:text-outline/50"
+                            id="password"
+                            name="password"
+                            type="password"
+                            autocomplete="current-password"
+                            placeholder="••••••••"
+                            required
+                        />
+                    </div>
+                </div>
+
+                <!-- Submit -->
+                <button
+                    type="submit"
+                    class="w-full bg-primary-container hover:opacity-90 active:scale-[0.98] text-on-primary-container font-h3 text-h3 py-md rounded-xl transition-all shadow-lg mt-md"
+                >
+                    Sign in
+                </button>
+            </form>
+        </main>
+
+        <!-- Footer -->
+        <footer class="mt-xl flex justify-center items-center space-x-md">
+            <span class="font-label-md text-label-md text-outline"
+                >Umbral v0.0.1</span
+            >
+        </footer>
+    </div>
+
+{% endblock %}

@@ -14,9 +14,9 @@
   let { data } = $props();
   let config = $derived(data.config);
   const docsUrl = '/docs/v0.0.1/about';
-  const pageTitle = 'Umbra — the batteries-included Rust web framework for full-stack apps and APIs';
+  const pageTitle = 'Umbral — the batteries-included Rust web framework for full-stack apps and APIs';
   const pageDescription =
-    'Umbra is a Rust web framework for shipping complete web applications: ORM with managed migrations, auto-generated REST API, admin UI, auth + sessions, background tasks, email, and a plugin system. Compile-time guarantees instead of runtime hopes.';
+    'Umbral is a Rust web framework for shipping complete web applications: ORM with managed migrations, auto-generated REST API, admin UI, auth + sessions, background tasks, email, and a plugin system. Compile-time guarantees instead of runtime hopes.';
   const pageKeywords =
     'Rust web framework, Rust ORM, Rust web framework with API, Rust admin panel, Rust REST framework, Rust Django alternative, full-stack Rust, sqlx ORM, axum framework, Rust web development, batteries-included Rust';
   let siteUrl = $derived((config?.site?.url || 'http://localhost:5173').replace(/\/$/, ''));
@@ -24,7 +24,7 @@
   let jsonLd = $derived({
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
-    name: 'Umbra',
+    name: 'Umbral',
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'Linux, macOS, Windows',
     description: pageDescription,
@@ -46,7 +46,7 @@
   <meta property="og:title" content={pageTitle} />
   <meta property="og:description" content={pageDescription} />
   <meta property="og:url" content={siteUrl + '/'} />
-  <meta property="og:site_name" content={config?.site?.title || 'Umbra'} />
+  <meta property="og:site_name" content={config?.site?.title || 'Umbral'} />
 
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content={pageTitle} />
@@ -62,12 +62,12 @@
     <div class="max-w-7xl mx-auto flex h-14 items-center justify-between px-6">
       <a href="/" class="flex items-center gap-2">
         <Logo logo={config.site.logo} alt={config.site.title} className="w-16 object-contain" />
-        <span class="font-semibold text-foreground">{config.site.title || 'Umbra'}</span>
+        <span class="font-semibold text-foreground">{config.site.title || 'Umbral'}</span>
       </a>
       <div class="flex items-center gap-6">
         <a href={docsUrl} class="text-sm text-muted-foreground hover:text-foreground transition-colors">Docs</a>
         {#if config?.social?.github}
-          <a href={config.social.github} target="_blank" rel="noopener noreferrer" aria-label="View Umbra on GitHub" class="text-muted-foreground hover:text-foreground transition-colors">
+          <a href={config.social.github} target="_blank" rel="noopener noreferrer" aria-label="View Umbral on GitHub" class="text-muted-foreground hover:text-foreground transition-colors">
             <Github class="h-5 w-5" />
           </a>
         {/if}
@@ -86,7 +86,7 @@
         <span class="text-foreground">In Rust.</span>
       </h1>
       <p class="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-6 leading-relaxed">
-        Umbra is a batteries-included Rust web framework: declare your data and you get
+        Umbral is a batteries-included Rust web framework: declare your data and you get
         <strong class="text-foreground font-semibold">managed migrations</strong>, a
         <strong class="text-foreground font-semibold">REST API</strong>, an
         <strong class="text-foreground font-semibold">admin UI</strong>,
@@ -114,7 +114,7 @@
 
     <section aria-labelledby="capabilities-heading" class="border-t" style="border-color: var(--border);">
       <div class="max-w-5xl mx-auto py-20 px-6">
-        <h2 id="capabilities-heading" class="sr-only">What Umbra ships</h2>
+        <h2 id="capabilities-heading" class="sr-only">What Umbral ships</h2>
         <div class="grid md:grid-cols-3 gap-10">
           <article>
             <div class="h-10 w-10 rounded-lg bg-[#bd34fe]/10 flex items-center justify-center mb-4">
@@ -176,14 +176,14 @@
 
     <section aria-labelledby="why-heading" class="border-t" style="border-color: var(--border);">
       <div class="max-w-4xl mx-auto py-20 px-6">
-        <h2 id="why-heading" class="text-2xl md:text-3xl font-bold text-foreground mb-6">Why Umbra</h2>
+        <h2 id="why-heading" class="text-2xl md:text-3xl font-bold text-foreground mb-6">Why Umbral</h2>
         <div class="space-y-5 text-muted-foreground leading-relaxed">
           <p>
             <strong class="text-foreground">Most Rust web frameworks stop at "here's a router."</strong>
             You wire up sqlx, write your own migration runner, hand-roll auth, build the admin yourself, and decide what to do about background jobs. That's a lot of code that isn't your product.
           </p>
           <p>
-            <strong class="text-foreground">Umbra ships the boring stuff for you.</strong>
+            <strong class="text-foreground">Umbral ships the boring stuff for you.</strong>
             Declare your model once and the framework reads it as the source of truth for the database schema, the JSON REST API, the admin UI, and the OpenAPI document. Changes flow through one autodetected migration. Auth, sessions, CSRF, secure cookies, and HTML autoescape are on by default — the easy path and the safe path are the same path.
           </p>
           <p>

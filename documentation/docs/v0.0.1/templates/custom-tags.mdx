@@ -1,13 +1,13 @@
 ---
 title: Custom template tags
-description: Add your own filters and functions to umbra templates from a plugin via Plugin::template_registrars.
+description: Add your own filters and functions to umbral templates from a plugin via Plugin::template_registrars.
 sidebar_position: 3
 tags: [templates, plugins, filters, minijinja]
 ---
 
 # Custom template tags
 
-Django plugins ship template libraries you `{% load %}` to get extra filters and tags. umbra's equivalent is the `Plugin::template_registrars` hook: a plugin returns closures that mutate the minijinja [`Environment`](https://docs.rs/minijinja/latest/minijinja/struct.Environment.html) at engine-build time, adding filters, functions, and globals that every app-level template can then use.
+Django plugins ship template libraries you `{% load %}` to get extra filters and tags. umbral's equivalent is the `Plugin::template_registrars` hook: a plugin returns closures that mutate the minijinja [`Environment`](https://docs.rs/minijinja/latest/minijinja/struct.Environment.html) at engine-build time, adding filters, functions, and globals that every app-level template can then use.
 
 <Callout type="info">
 This is the app-level surface. The admin plugin keeps its own private environment with its own filters (e.g. `naturaltime`); those are not visible to app templates. A registrar returned from `template_registrars` *is*.
@@ -16,8 +16,8 @@ This is the app-level surface. The admin plugin keeps its own private environmen
 ## The hook
 
 ```rust
-use umbra::prelude::*;
-use umbra::templates::TemplateRegistrar;
+use umbral::prelude::*;
+use umbral::templates::TemplateRegistrar;
 
 struct HumanizePlugin;
 
@@ -55,7 +55,7 @@ App::builder()
 
 <Steps>
 <Step title="Closures are owned and 'static">
-A registrar is a `Box<dyn Fn(&mut Environment<'static>) + Send + Sync>`. It can't borrow `self`, so capture any per-plugin config **by value** into the closure. This is what lets umbra stash the registrar and re-run it on every dev-mode hot-reload rebuild.
+A registrar is a `Box<dyn Fn(&mut Environment<'static>) + Send + Sync>`. It can't borrow `self`, so capture any per-plugin config **by value** into the closure. This is what lets umbral stash the registrar and re-run it on every dev-mode hot-reload rebuild.
 </Step>
 <Step title="Applied after the built-ins">
 Registrars run after the framework's own filters/functions (`img`, `markdown`, `sanitize`, `currency`, `static`, `media_url`, `now`, `querystring_with`, `highlight_styles`) and in plugin dependency order. Because minijinja's `add_filter` / `add_function` overwrite by name, a plugin *can* deliberately replace a built-in by registering the same name. Do this sparingly and document it.
@@ -81,4 +81,4 @@ Filter and function arguments are deserialized from the template call: take `Str
 
 - [Template Filters and Helpers](helpers): the built-in filters and globals your tags sit alongside.
 - [minijinja `Environment` API](https://docs.rs/minijinja/latest/minijinja/struct.Environment.html): every `add_*` method.
-- `crates/umbra-core/src/templates.rs` (`now` / `currency`) for reference implementations of a built-in function and filter.
+- `crates/umbral-core/src/templates.rs` (`now` / `currency`) for reference implementations of a built-in function and filter.

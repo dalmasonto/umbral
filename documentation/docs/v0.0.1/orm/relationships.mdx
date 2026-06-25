@@ -6,20 +6,20 @@ icon: link
 tags: [orm, foreign-key, relationships, schema]
 ---
 
-A `ForeignKey<T>` field declares that one row in the current model references a row in model `T`. Umbra stores the referenced primary key as a `BIGINT` column and emits a `REFERENCES "<table>"("id")` constraint in the migration.
+A `ForeignKey<T>` field declares that one row in the current model references a row in model `T`. Umbral stores the referenced primary key as a `BIGINT` column and emits a `REFERENCES "<table>"("id")` constraint in the migration.
 
 ## Declaring a foreign key
 
 ```rust
-use umbra::orm::{ForeignKey, Model};
+use umbral::orm::{ForeignKey, Model};
 
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
 pub struct User {
     pub id: i64,
     pub name: String,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
 pub struct Post {
     pub id: i64,
     pub title: String,
@@ -28,7 +28,7 @@ pub struct Post {
 }
 ```
 
-The `ForeignKey<T>` type is in scope via `use umbra::orm::ForeignKey` or `use umbra::prelude::*`.
+The `ForeignKey<T>` type is in scope via `use umbral::orm::ForeignKey` or `use umbral::prelude::*`.
 
 ## What the migration engine emits
 
@@ -65,7 +65,7 @@ By default the FK emits no `ON DELETE` / `ON UPDATE` clause, which means "NO ACT
 pub struct AuthToken {
     pub id: i64,
     // When the user is deleted, every token they hold goes with them.
-    #[umbra(on_delete = "cascade")]
+    #[umbral(on_delete = "cascade")]
     pub user_id: ForeignKey<AuthUser>,
     // ...
 }
@@ -95,7 +95,7 @@ pub struct Category {
     pub name: String,
     // Each category optionally points at its parent. CASCADE prunes
     // the subtree when a root is deleted.
-    #[umbra(on_delete = "cascade")]
+    #[umbral(on_delete = "cascade")]
     pub parent_id: Option<ForeignKey<Category>>,
 }
 ```
@@ -124,7 +124,7 @@ let children = Category::objects()
 
 ## One-to-one relationships
 
-Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra ships two equivalent spellings on the child (referencing) side. Pick whichever reads cleaner; both compile to the same column shape and emit the same back-link accessors.
+Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbral ships two equivalent spellings on the child (referencing) side. Pick whichever reads cleaner; both compile to the same column shape and emit the same back-link accessors.
 
 ### Sugar spelling: `OneToOne<T>`
 
@@ -138,16 +138,16 @@ pub struct Profile {
 }
 ```
 
-The derive macro sees `OneToOne<T>` without `#[sqlx(skip)]` and rewrites it internally to `#[umbra(unique)] pub user: ForeignKey<AuthUser>`: same column DDL (`bigint NOT NULL UNIQUE REFERENCES "auth_user"("id")`), same `select_related("user")` behavior, same reverse-O2O accessor on the parent (`auth_user.profile().await?`). The `OneToOne<T>` type carries the FK value at runtime: construct with `OneToOne::new(id)`, read with `.id()`, and (after `select_related`) `.resolved() -> Option<&T>`, symmetric with `ForeignKey<T>`.
+The derive macro sees `OneToOne<T>` without `#[sqlx(skip)]` and rewrites it internally to `#[umbral(unique)] pub user: ForeignKey<AuthUser>`: same column DDL (`bigint NOT NULL UNIQUE REFERENCES "auth_user"("id")`), same `select_related("user")` behavior, same reverse-O2O accessor on the parent (`auth_user.profile().await?`). The `OneToOne<T>` type carries the FK value at runtime: construct with `OneToOne::new(id)`, read with `.id()`, and (after `select_related`) `.resolved() -> Option<&T>`, symmetric with `ForeignKey<T>`.
 
-### Longhand spelling: `#[umbra(unique)] ForeignKey<T>`
+### Longhand spelling: `#[umbral(unique)] ForeignKey<T>`
 
 ```rust
 #[derive(Model)]
 pub struct Profile {
     pub id: i64,
     // Each user has at most one profile.
-    #[umbra(unique, on_delete = "cascade")]
+    #[umbral(unique, on_delete = "cascade")]
     pub user: ForeignKey<AuthUser>,
     pub bio: String,
     pub avatar: String,
@@ -182,20 +182,20 @@ let profile = Profile::objects()
 The relationship lives entirely on the **child** (`Profile`) — exactly like Django, where you add `OneToOneField` to `Profile` and never touch the `User` model. To read it back from the parent (Django's `user.profile.avatar`), how you spell it depends on whether you can edit the parent type.
 
 <Callout type="info">
-**For `AuthUser` — and any parent you can't edit — use the method accessor and add nothing to it.** `AuthUser` lives in `umbra-auth`; you don't fork it, and (just like Django) you don't need to. The derive on `Profile` generates `user.profile().await?` directly on `AuthUser` — the faithful equivalent of Django's `user.profile`. See the **Cross-crate back-link** section just below. The `OneToOne<C>` **struct field** described next is *only* for a parent type **you own** (e.g. a custom user model in your crate).
+**For `AuthUser` — and any parent you can't edit — use the method accessor and add nothing to it.** `AuthUser` lives in `umbral-auth`; you don't fork it, and (just like Django) you don't need to. The derive on `Profile` generates `user.profile().await?` directly on `AuthUser` — the faithful equivalent of Django's `user.profile`. See the **Cross-crate back-link** section just below. The `OneToOne<C>` **struct field** described next is *only* for a parent type **you own** (e.g. a custom user model in your crate).
 </Callout>
 
 #### `OneToOne<C>` — when you own the parent type
 
-If the parent model is in your crate, you can declare a `OneToOne<C>` field on it instead of using the method accessor. You get the same back-link **plus** serde-nesting (the child shows up as a nested object in REST + templates) and `prefetch_related` batch loading. No umbra attribute — the back-link is discovered at runtime by scanning the child's `FIELDS` for the unique FK pointing back:
+If the parent model is in your crate, you can declare a `OneToOne<C>` field on it instead of using the method accessor. You get the same back-link **plus** serde-nesting (the child shows up as a nested object in REST + templates) and `prefetch_related` batch loading. No umbral attribute — the back-link is discovered at runtime by scanning the child's `FIELDS` for the unique FK pointing back:
 
 ```rust
 #[derive(Model)]
 pub struct Account {                  // a model YOU define
     pub id: i64,
     pub email: String,
-    // Reads back the `Profile` whose `#[umbra(unique)] user: ForeignKey<Account>`
-    // points here. No `#[umbra(...)]` needed — the back-link is found at runtime.
+    // Reads back the `Profile` whose `#[umbral(unique)] user: ForeignKey<Account>`
+    // points here. No `#[umbral(...)]` needed — the back-link is found at runtime.
     #[sqlx(skip)]
     pub profile: OneToOne<Profile>,
 }
@@ -238,18 +238,18 @@ if account.profile.is_loaded() && account.profile.resolved().is_none() {
 
 ### Ambiguity errors
 
-The back-link discovery requires **exactly one** UNIQUE FK on the child pointing at the parent. If the child has two unique FKs to the same parent (rare but possible), `prefetch_related` errors loudly naming the candidates and suggesting you either rename one or drop the `unique` attribute. If the child has *no* unique FK to the parent, the error tells you to add `#[umbra(unique)]`.
+The back-link discovery requires **exactly one** UNIQUE FK on the child pointing at the parent. If the child has two unique FKs to the same parent (rare but possible), `prefetch_related` errors loudly naming the candidates and suggesting you either rename one or drop the `unique` attribute. If the child has *no* unique FK to the parent, the error tells you to add `#[umbral(unique)]`.
 
 ### Cross-crate back-link: `auth_user.profile().await?`
 
-`OneToOne<C>` as a struct field needs the parent type to be in your crate or one you can edit. That doesn't fit `AuthUser`, which lives in `umbra-auth` and you don't want to fork. For exactly this case the derive macro emits a trait-based reverse-OneToOne accessor alongside the existing reverse-FK trait:
+`OneToOne<C>` as a struct field needs the parent type to be in your crate or one you can edit. That doesn't fit `AuthUser`, which lives in `umbral-auth` and you don't want to fork. For exactly this case the derive macro emits a trait-based reverse-OneToOne accessor alongside the existing reverse-FK trait:
 
 ```rust
 // In your app crate.
 #[derive(Model)]
 pub struct Profile {
     pub id: i64,
-    #[umbra(unique, on_delete = "cascade")]
+    #[umbral(unique, on_delete = "cascade")]
     pub user: ForeignKey<AuthUser>,   // unique = o2o
     pub bio: String,
 }
@@ -263,7 +263,7 @@ if let Some(profile) = user.profile().await? {
 
 The macro emits both `pub trait ProfileUserOneToOneReverse { async fn profile(&self) -> Result<Option<Profile>, sqlx::Error> }` and `impl ProfileUserOneToOneReverse for AuthUser { ... }` in your crate, the same trait-on-foreign-type pattern that powers reverse-FK (`user.profile_set()`). Rust's orphan rule allows `impl LocalTrait for ForeignType`, so the accessor works without touching `AuthUser` at all.
 
-Naming is `<child_snake>()`, with `<child_snake>_via_<field>()` disambiguating when one child has multiple unique FKs to the same parent. The accessor is only emitted when the FK carries `#[umbra(unique)]`; a plain FK gets the `_set()` form but not the o2o form, since the cardinality is `0..N`.
+Naming is `<child_snake>()`, with `<child_snake>_via_<field>()` disambiguating when one child has multiple unique FKs to the same parent. The accessor is only emitted when the FK carries `#[umbral(unique)]`; a plain FK gets the `_set()` form but not the o2o form, since the cardinality is `0..N`.
 
 This is the right shape for `request.user.profile.avatar`-style flows in Rust: one method call, one `LIMIT 1` query, no need for the user to know the back-link convention.
 
@@ -283,7 +283,7 @@ This is the right shape for `request.user.profile.avatar`-style flows in Rust: o
 
 ### Unique-constraint violations in the admin
 
-Trying to create a second `Profile` for a user who already has one trips the UNIQUE constraint. The admin surfaces this as **"A record with this `user` already exists."** rather than a generic "database error". The column name comes from the parser in `umbra-admin/src/util.rs::parse_unique_violation_column`, which handles both SQLite (`UNIQUE constraint failed: profile.user`) and Postgres (`Key (user)=(7) already exists.`) message formats.
+Trying to create a second `Profile` for a user who already has one trips the UNIQUE constraint. The admin surfaces this as **"A record with this `user` already exists."** rather than a generic "database error". The column name comes from the parser in `umbral-admin/src/util.rs::parse_unique_violation_column`, which handles both SQLite (`UNIQUE constraint failed: profile.user`) and Postgres (`Key (user)=(7) already exists.`) message formats.
 
 ## Querying with a foreign key
 
@@ -413,14 +413,14 @@ For the design rationale see [`arch.md`](../../../../arch.md) §M9 and the desig
 Declare a many-to-many with the `M2M<T>` field type. The framework auto-creates a junction table named `<parent_table>_<field>` with `(parent_id, child_id)` columns at migration time, no through-model to write by hand.
 
 ```rust
-use umbra::orm::M2M;
+use umbral::orm::M2M;
 
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-#[umbra(table = "tag")]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "tag")]
 pub struct Tag { pub id: i64, pub name: String }
 
-#[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-#[umbra(table = "post")]
+#[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "post")]
 pub struct Post {
     pub id: i64,
     pub title: String,
@@ -433,12 +433,12 @@ pub struct Post {
 }
 ```
 
-The `M2M<T>` type is detected from the Rust type alone; no `#[umbra(m2m)]` marker is required. Add `#[umbra(m2m = "<child_table>")]` only when the child's table name isn't the snake_case default of `T` (e.g. the field's `T` is `Tag2` but the table is `tag`).
+The `M2M<T>` type is detected from the Rust type alone; no `#[umbral(m2m)]` marker is required. Add `#[umbral(m2m = "<child_table>")]` only when the child's table name isn't the snake_case default of `T` (e.g. the field's `T` is `Tag2` but the table is `tag`).
 
 `M2M<T, P>` carries a second type parameter `P` for the **parent** model's primary-key type, defaulting to `i64`. Override it when the parent's PK isn't `i64` — `pub tags: M2M<Tag, String>` on a model whose PK is a `String` slug. The child's PK type comes from `T::PrimaryKey` and needs no annotation.
 
 <Callout type="info">
-First-class M2M (the `M2M<T>` field, `prefetch_related`, `join_related`, the form `ModelMultiChoice`, and `annotate_count`) is the shipped path. `examples/shop/plugins/content/src/models.rs` (`Post.tags: M2M<Tag>`) and `umbra_website/plugins/site_content/src/models.rs` (`BlogPost.tags: M2M<ContentTag>`) are real reference uses.
+First-class M2M (the `M2M<T>` field, `prefetch_related`, `join_related`, the form `ModelMultiChoice`, and `annotate_count`) is the shipped path. `examples/shop/plugins/content/src/models.rs` (`Post.tags: M2M<Tag>`) and `umbral_website/plugins/site_content/src/models.rs` (`BlogPost.tags: M2M<ContentTag>`) are real reference uses.
 </Callout>
 
 ### Loading the related set: `prefetch_related("tags")`
@@ -492,19 +492,19 @@ let rows = Post::objects()
 
 ### M2M in a form: `ModelMultiChoice`
 
-`#[derive(umbra::forms::Form)]` on a model with an `M2M<T>` field renders a multi-`<select>` and writes the selected ids to the junction after the parent insert, atomically. See [Forms learn relations › M2M](/docs/v0.0.1/orm/forms-relations#m2m--modelmultichoice).
+`#[derive(umbral::forms::Form)]` on a model with an `M2M<T>` field renders a multi-`<select>` and writes the selected ids to the junction after the parent insert, atomically. See [Forms learn relations › M2M](/docs/v0.0.1/orm/forms-relations#m2m--modelmultichoice).
 
 ## Reverse FK accessors
 
 For every `ForeignKey<Parent>` field on a derived Child, the macro emits a method on the Parent type:
 
 ```rust
-#[derive(umbra::orm::Model)]
-#[umbra(table = "user")]
+#[derive(umbral::orm::Model)]
+#[umbral(table = "user")]
 pub struct User { pub id: i64, pub name: String }
 
-#[derive(umbra::orm::Model)]
-#[umbra(table = "comment")]
+#[derive(umbral::orm::Model)]
+#[umbral(table = "comment")]
 pub struct Comment {
     pub id: i64,
     pub body: String,
@@ -533,10 +533,10 @@ Limitations: parent type must be local (Rust's orphan rule on inherent impls); p
 The `_set()` accessor above fetches one parent's children on demand. When you have **N parents** and want their children without an N+1 fetch loop, declare a typed `ReverseSet<Child>` field on the Parent and batch-load it with `prefetch_related` (Django's `Author.objects.prefetch_related("books")`):
 
 ```rust
-use umbra::orm::{ForeignKey, ReverseSet};
+use umbral::orm::{ForeignKey, ReverseSet};
 
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-#[umbra(table = "parent")]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "parent")]
 pub struct Parent {
     pub id: i64,
     pub name: String,
@@ -545,12 +545,12 @@ pub struct Parent {
     // the parent table, so skip it from the row decode + serialise.
     #[sqlx(skip)]
     #[serde(skip)]
-    #[umbra(reverse_fk = "parent")]
+    #[umbral(reverse_fk = "parent")]
     pub child_set: ReverseSet<Child>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-#[umbra(table = "child")]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "child")]
 pub struct Child {
     pub id: i64,
     pub label: String,
@@ -576,10 +576,10 @@ for p in &parents {
 
 ### Generic instance accessor: `instance.reverse::<Child>()`
 
-The macro-emitted `comment_set()` only exists because the Child's `ForeignKey<Parent>` is visible where the Child is derived. When the Parent lives in another crate (e.g. `AuthUser` in `umbra-auth`) the macro can't enumerate its children, so there's a zero-declaration runtime accessor on **every** model instance, Django's `post.comment_set.all()` reached generically. The Child type is named at the call site; the FK column on the Child is discovered at runtime from `Child::FIELDS`:
+The macro-emitted `comment_set()` only exists because the Child's `ForeignKey<Parent>` is visible where the Child is derived. When the Parent lives in another crate (e.g. `AuthUser` in `umbral-auth`) the macro can't enumerate its children, so there's a zero-declaration runtime accessor on **every** model instance, Django's `post.comment_set.all()` reached generically. The Child type is named at the call site; the FK column on the Child is discovered at runtime from `Child::FIELDS`:
 
 ```rust
-use umbra::prelude::*; // brings ReverseRelations into scope
+use umbral::prelude::*; // brings ReverseRelations into scope
 
 // Returns a real, chainable QuerySet<Comment> filtered to children
 // whose FK points at this instance; no ReverseSet field required.
@@ -678,6 +678,6 @@ For most list views `prefetch_related` is the right default. Reach for `join_rel
 
 - [Deep joins](/docs/v0.0.1/orm/joins): the full `join_related` / `inner_join_related` / `left_join_related` / `right_join_related` surface, INNER/LEFT auto-inference, nested `__` paths, and the M2M-hop chain.
 - [Aggregates and annotate](/docs/v0.0.1/orm/aggregates): `annotate_count("rel")` / `annotate_count_where` / M2M counts in one query, including auto-discovery of an undeclared relation.
-- [Forms learn relations](/docs/v0.0.1/orm/forms-relations): `#[derive(Form)]` turns `ForeignKey`/`OneToOne` into a `ModelChoice`, `M2M` into a `ModelMultiChoice`, and a `#[umbra(choices)]` enum into a `Select`.
+- [Forms learn relations](/docs/v0.0.1/orm/forms-relations): `#[derive(Form)]` turns `ForeignKey`/`OneToOne` into a `ModelChoice`, `M2M` into a `ModelMultiChoice`, and a `#[umbral(choices)]` enum into a `Select`.
 - [Forms (Form&lt;T&gt;)](/docs/v0.0.1/web/forms): the general form derive, async `validate`, `ValidationErrors`, and the `Form<T>` extractor.
-- [Column types](/docs/v0.0.1/orm/column-types): `ForeignKey<T>` DDL, `#[umbra(choices)]` enums, and the `default` literal rule.
+- [Column types](/docs/v0.0.1/orm/column-types): `ForeignKey<T>` DDL, `#[umbral(choices)]` enums, and the `default` literal rule.

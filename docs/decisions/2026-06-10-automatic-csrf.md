@@ -4,25 +4,25 @@
 
 ## Problem
 
-The validation half of CSRF is already automatic (`umbra-security`'s `csrf_middleware` rejects unsafe methods without a matching token). The token-delivery half is manual: every form view calls `ensure_csrf_cookie(&headers)`, threads `csrf_token` through its render helpers, and hand-attaches the `Set-Cookie`. Django's developer writes `{% csrf_token %}` in the template and nothing else; umbra's developer writes ~20 lines of plumbing per form view.
+The validation half of CSRF is already automatic (`umbral-security`'s `csrf_middleware` rejects unsafe methods without a matching token). The token-delivery half is manual: every form view calls `ensure_csrf_cookie(&headers)`, threads `csrf_token` through its render helpers, and hand-attaches the `Set-Cookie`. Django's developer writes `{% csrf_token %}` in the template and nothing else; umbral's developer writes ~20 lines of plumbing per form view.
 
 Three secondary problems share the same root cause (no single owner for token minting):
 
-- The admin plugin self-mints (`ensure_csrf_token` in `plugins/umbra-admin/src/auth.rs`), forcing the middleware to carry deference logic (`response_sets_csrf_cookie`) and blocking the `signed_csrf` default flip (gaps2 #26).
+- The admin plugin self-mints (`ensure_csrf_token` in `plugins/umbral-admin/src/auth.rs`), forcing the middleware to carry deference logic (`response_sets_csrf_cookie`) and blocking the `signed_csrf` default flip (gaps2 #26).
 - The admin's htmx CRUD requests (sheet create/edit, inline edit, delete, actions) carry **no token at all** — only `login.html` does. With SecurityPlugin mounted over the admin (as the shop now does), every admin write 403s.
 - The middleware attaches its cookie with `headers_mut().insert(SET_COOKIE, …)`, which replaces any cookie the handler set (e.g. a session cookie) instead of appending.
 
 ## Decision
 
-Mirror Django's `CsrfViewMiddleware` + `{% csrf_token %}` split, reusing the existing `CURRENT_USER` task-local seam in `umbra-core`:
+Mirror Django's `CsrfViewMiddleware` + `{% csrf_token %}` split, reusing the existing `CURRENT_USER` task-local seam in `umbral-core`:
 
-1. **Core (`crates/umbra-core/src/templates.rs`).** New `CURRENT_CSRF: Option<String>` task-local + `with_current_csrf(token, fut)` scope fn + `current_csrf() -> Option<String>` read accessor. `render` merges `csrf_token` (raw value, for `X-CSRF-Token` headers / htmx) and `csrf_input` (pre-built safe-string hidden `<input name="csrf_token">`, the `{% csrf_token %}` equivalent) into every template context. Explicit ctx keys win, same precedence as the `user` merge. Facade re-export under `umbra::templates`, not in the prelude.
+1. **Core (`crates/umbral-core/src/templates.rs`).** New `CURRENT_CSRF: Option<String>` task-local + `with_current_csrf(token, fut)` scope fn + `current_csrf() -> Option<String>` read accessor. `render` merges `csrf_token` (raw value, for `X-CSRF-Token` headers / htmx) and `csrf_input` (pre-built safe-string hidden `<input name="csrf_token">`, the `{% csrf_token %}` equivalent) into every template context. Explicit ctx keys win, same precedence as the `user` merge. Facade re-export under `umbral::templates`, not in the prelude.
 
-2. **Middleware is the only mint (`plugins/umbra-security/src/lib.rs`).** `csrf_middleware` resolves the cookie token for *all* methods (POST error re-renders need it in scope too), mints **before** `next.run` on safe methods when the cookie is missing **or fails signed-mode validation** (rotation — so flipping `signed_csrf` on doesn't 403 browsers holding old unsigned cookies), scopes `with_current_csrf` around the handler, and `append`s (not `insert`s) the `Set-Cookie` when it minted. `ensure_csrf_cookie` and `response_sets_csrf_cookie` are **deleted** — with the task-local in place no handler ever needs to mint.
+2. **Middleware is the only mint (`plugins/umbral-security/src/lib.rs`).** `csrf_middleware` resolves the cookie token for *all* methods (POST error re-renders need it in scope too), mints **before** `next.run` on safe methods when the cookie is missing **or fails signed-mode validation** (rotation — so flipping `signed_csrf` on doesn't 403 browsers holding old unsigned cookies), scopes `with_current_csrf` around the handler, and `append`s (not `insert`s) the `Set-Cookie` when it minted. `ensure_csrf_cookie` and `response_sets_csrf_cookie` are **deleted** — with the task-local in place no handler ever needs to mint.
 
 3. **`signed_csrf` defaults to `true`.** Tokens become `<random>.<HMAC-SHA256(secret_key, random)>`. Safe now because: (a) the middleware is the only mint when SecurityPlugin is mounted, (b) rotation re-mints stale unsigned cookies on the next safe request, (c) with no resolvable `secret_key` the mint degrades to plain double-submit instead of locking writes out.
 
-4. **Admin prefers the ambient token (`plugins/umbra-admin/src/auth.rs`).** `ensure_csrf_token` tries `umbra::templates::current_csrf()` first (SecurityPlugin mounted → middleware minted, admin sets no cookie); falls back to the existing cookie-read + self-mint only when nothing is in scope (SecurityPlugin absent → admin stays self-protecting). Its token comparison switches to constant-time equality via a shared public helper in `umbra-security` (the private `tokens_match` becomes `pub`).
+4. **Admin prefers the ambient token (`plugins/umbral-admin/src/auth.rs`).** `ensure_csrf_token` tries `umbral::templates::current_csrf()` first (SecurityPlugin mounted → middleware minted, admin sets no cookie); falls back to the existing cookie-read + self-mint only when nothing is in scope (SecurityPlugin absent → admin stays self-protecting). Its token comparison switches to constant-time equality via a shared public helper in `umbral-security` (the private `tokens_match` becomes `pub`).
 
 5. **Admin htmx carries the token.** `wrapper.html`'s `<body>` gains `hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'` (htmx inherits headers to all descendant requests); raw `fetch()` calls in `admin.js` read the (deliberately non-HttpOnly) cookie.
 

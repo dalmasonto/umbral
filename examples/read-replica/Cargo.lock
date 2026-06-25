@@ -3183,23 +3183,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
-name = "umbra"
+name = "umbral"
 version = "0.0.1"
 dependencies = [
  "async-trait",
  "minijinja",
  "serde_json",
  "sqlx",
- "umbra-core",
- "umbra-macros",
+ "umbral-core",
+ "umbral-macros",
 ]
 
 [[package]]
-name = "umbra-casing"
+name = "umbral-casing"
 version = "0.0.1"
 
 [[package]]
-name = "umbra-core"
+name = "umbral-core"
 version = "0.0.1"
 dependencies = [
  "ammonia",
@@ -3236,22 +3236,22 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "umbra-casing",
+ "umbral-casing",
  "uuid",
 ]
 
 [[package]]
-name = "umbra-macros"
+name = "umbral-macros"
 version = "0.0.1"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
- "umbra-casing",
+ "umbral-casing",
 ]
 
 [[package]]
-name = "umbra-read-replica"
+name = "umbral-read-replica"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -3260,7 +3260,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "umbra",
+ "umbral",
 ]
 
 [[package]]

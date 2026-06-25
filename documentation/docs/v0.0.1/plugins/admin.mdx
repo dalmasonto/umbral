@@ -5,7 +5,7 @@ sidebar_position: 7
 icon: shield
 ---
 
-`umbra-admin` mounts a ready-made HTML CRUD interface at `/admin/`. Every model
+`umbral-admin` mounts a ready-made HTML CRUD interface at `/admin/`. Every model
 that any registered plugin contributed to the migration registry gets list, detail,
 create, edit, and delete views - no extra code required.
 
@@ -54,7 +54,7 @@ Several admin features ship with full backend wiring but only appear in the UI w
 | "Change password" button on the edit sheet | `AdminModel::new("auth_user").password_field("password_hash")` names the hash column. The route + audit-log handler are always wired; this flag is what makes the footer button render. |
 | Bulk actions (toolbar appears when ≥1 row is selected) | Default delete-selected ships; custom ones via `.actions(vec![Action::new("publish", handler)])`. |
 | Async FK combobox | Automatic for every `ForeignKey<T>` field - no opt-in. |
-| `<select>` for closed-set enums | Automatic for every `#[umbra(choices)]` / `MultiChoice<E>` field - no opt-in. |
+| `<select>` for closed-set enums | Automatic for every `#[umbral(choices)]` / `MultiChoice<E>` field - no opt-in. |
 | Search box on list view | `AdminModel::new("post").search_fields(&["title", "body"])`. Without this, the search box is hidden. |
 | Filter sidebar | `.list_filter(&["status", "published_at"])`. Each column gets its own facet. |
 | Customisable column set on the list view | `.list_display(&["title", "status", "published_at"])`. Without this, every column shows. |
@@ -82,7 +82,7 @@ Phase 1 replaces the old HTTP Basic Auth challenge with a proper HTML form flow:
 1. Unauthenticated requests to any admin route redirect to `GET /admin/login?next=<path>`.
 2. `GET /admin/login` renders a login form. If no session cookie is present, a fresh anonymous session is created so the CSRF token has somewhere to live.
 3. The form submits `username`, `password`, `csrf_token`, and `next` to `POST /admin/login`.
-4. The handler verifies the CSRF token against the session, then calls `umbra_auth::authenticate`. On success it calls `umbra_auth::login_with_request` (which also handles session-fixation defense) and redirects to `next`.
+4. The handler verifies the CSRF token against the session, then calls `umbral_auth::authenticate`. On success it calls `umbral_auth::login_with_request` (which also handles session-fixation defense) and redirects to `next`.
 5. On failure, the form re-renders with a generic error message - the wording never reveals whether the username or the password was wrong.
 6. `GET /admin/logout` destroys the session and redirects to `/admin/login`.
 
@@ -90,7 +90,7 @@ The `next` parameter is validated server-side: only paths starting with `/admin`
 
 ## Model discovery - nothing to register
 
-The admin walks `umbra::migrate::registered_plugins()` at request time and
+The admin walks `umbral::migrate::registered_plugins()` at request time and
 discovers every model every plugin declared via `Plugin::models()`. You do not
 register models explicitly with the admin. Add a plugin, its models appear in the
 admin automatically.
@@ -103,10 +103,10 @@ Every admin route requires a valid session cookie carrying an `is_staff = true` 
 // Create a staff user (e.g. in a management command or seed script).
 // create_superuser sets is_staff = is_superuser = true; create_user_with_flags
 // lets you pick a staff-but-not-superuser shape. Both go through the ORM.
-let admin = umbra_auth::create_superuser("admin", "admin@example.com", "secret").await?;
+let admin = umbral_auth::create_superuser("admin", "admin@example.com", "secret").await?;
 
 // Staff-only (no superuser) editor account:
-let editor = umbra_auth::create_user_with_flags(
+let editor = umbral_auth::create_user_with_flags(
     "editor", "editor@example.com", "secret", /* is_staff */ true, /* is_superuser */ false,
 ).await?;
 ```
@@ -124,7 +124,7 @@ Two attributes on the model struct control how it appears in the admin sidebar -
 
 ```rust
 #[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "auth", display = "Users", icon = "users")]
+#[umbral(plugin = "auth", display = "Users", icon = "users")]
 pub struct AuthUser {
     pub id: i64,
     pub username: String,
@@ -146,7 +146,7 @@ Any valid [Lucide icon name](https://lucide.dev/icons/) works. Unknown names are
 `AdminModel` (renamed from `AdminConfig` in phase 1 - the old name is kept as a type alias) is the admin equivalent of REST's `ResourceConfig` - one config per model, registered on the plugin before it is passed to `App::builder()`.
 
 ```rust
-use umbra_admin::{Action, ActionInvocation, ActionResult, AdminModel, AdminPlugin, ToastLevel};
+use umbral_admin::{Action, ActionInvocation, ActionResult, AdminModel, AdminPlugin, ToastLevel};
 
 let admin = AdminPlugin::default()
     .register(
@@ -179,7 +179,7 @@ As with REST's [`.resources(...)`](/docs/v0.0.1/rest/exposure#registering-many-r
 
 ```rust
 // plugins/blog/src/lib.rs — the blog app's admin surface
-pub fn admin_models() -> Vec<umbra_admin::AdminModel> {
+pub fn admin_models() -> Vec<umbral_admin::AdminModel> {
     vec![post_admin(), comment_admin(), tag_admin()]
 }
 
@@ -243,20 +243,20 @@ Registers bulk actions. `Action::new(key, label, icon, handler)` takes a Lucide 
 
 ### Trash UI for soft-delete models
 
-Register a model tagged [`#[umbra(soft_delete)]`](/docs/v0.0.1/orm/soft-delete) and the admin grows a full trash workflow automatically — no extra config on `AdminModel`:
+Register a model tagged [`#[umbral(soft_delete)]`](/docs/v0.0.1/orm/soft-delete) and the admin grows a full trash workflow automatically — no extra config on `AdminModel`:
 
 - The changelist header gains a **Trash / Active toggle** (with a trashed-row count badge). `?trash=1` lists only soft-deleted rows; the default view shows the live set, which already excludes trashed rows.
 - The default `Action::delete_selected()` **soft-deletes** on a soft-delete model — it moves rows to the trash (sets `deleted_at`) rather than purging them, because it routes through `DynQuerySet::delete()`.
 - In the trash view, the row and bulk affordances become **Restore selected** (clears `deleted_at` via `DynQuerySet::restore()`) and **Delete permanently** (a real `hard_delete()` behind a confirm dialog — the row leaves the table entirely and cannot be restored).
 
-Restore is gated by the `change_<model>` permission; Delete-permanently by the stronger `delete_<model>`. A model **without** `#[umbra(soft_delete)]` is unchanged: no toggle, no restore, and `delete_selected` hard-deletes as before.
+Restore is gated by the `change_<model>` permission; Delete-permanently by the stronger `delete_<model>`. A model **without** `#[umbral(soft_delete)]` is unchanged: no toggle, no restore, and `delete_selected` hard-deletes as before.
 
 ```rust
-#[derive(umbra::orm::Model)]
-#[umbra(soft_delete)]
+#[derive(umbral::orm::Model)]
+#[umbral(soft_delete)]
 struct Note {
     id: i64,
-    #[umbra(string)]
+    #[umbral(string)]
     title: String,
     deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -338,7 +338,7 @@ The `sheet` macro (`templates/_macros/sheet.html`) is a floating right-side pane
 - **Preview mode.** Fields as labelled values. Booleans render as Yes/No pills. Empty values show "-". Numbers use tabular numerals.
 - **Edit mode.** Full form with per-type field editors.
 - **Footer.** In preview: "Edit" button. In edit: Cancel / Save & continue / Save. In edit (non-create): Delete button that opens the confirm dialog.
-- **Drag-resize.** A left-edge drag handle lets users resize the sheet. Width is persisted in `localStorage` under `umbra-admin-sheet-width`.
+- **Drag-resize.** A left-edge drag handle lets users resize the sheet. Width is persisted in `localStorage` under `umbral-admin-sheet-width`.
 - **Esc to close.** Vanilla JS listener inside the rendered fragment.
 
 <Callout type="info" title="Sheet stacking is phase 3">
@@ -367,9 +367,9 @@ ForeignKey fields currently render a plain `<input type="number">` showing the F
 
 ### Markdown image upload
 
-A field rendered with the `markdown` widget mounts an [EasyMDE](https://github.com/Ionaru/easy-markdown-editor) editor. When a **storage backend** is mounted (the [`StoragePlugin`](/docs/v0.0.1/plugins/storage) media side, or any `umbra::storage::set_storage(...)` backend), the editor's toolbar gains an image button and you can **paste, drop, or pick an image**: it uploads to `POST {base}/upload-image` and the returned URL is inserted into the markdown as `![](...)`.
+A field rendered with the `markdown` widget mounts an [EasyMDE](https://github.com/Ionaru/easy-markdown-editor) editor. When a **storage backend** is mounted (the [`StoragePlugin`](/docs/v0.0.1/plugins/storage) media side, or any `umbral::storage::set_storage(...)` backend), the editor's toolbar gains an image button and you can **paste, drop, or pick an image**: it uploads to `POST {base}/upload-image` and the returned URL is inserted into the markdown as `![](...)`.
 
-The endpoint is **staff-gated** exactly like every other admin route (unauthenticated → login redirect, logged-in-non-staff → 403), validates the part is an image (`png`, `jpeg`, `gif`, `webp`, `svg`) under a 10 MiB cap, and stores the bytes through the ambient storage seam — the admin never names a media crate directly. The fetch carries the shared CSRF token from the `umbra_csrf_token` cookie.
+The endpoint is **staff-gated** exactly like every other admin route (unauthenticated → login redirect, logged-in-non-staff → 403), validates the part is an image (`png`, `jpeg`, `gif`, `webp`, `svg`) under a 10 MiB cap, and stores the bytes through the ambient storage seam — the admin never names a media crate directly. The fetch carries the shared CSRF token from the `umbral_csrf_token` cookie.
 
 <Callout type="info" title="Degrades gracefully">
 With no storage backend installed the route returns a `409` with a clear JSON error (`"image upload requires a storage backend — add StoragePlugin"`), which EasyMDE surfaces inline. The editor itself still works — only the image-upload affordance needs a backend. See [`arch.md`](https://github.com/) and `gaps2 #36`.
@@ -377,7 +377,7 @@ With no storage backend installed the route returns a `409` with a clear JSON er
 
 ### Confirm dialog
 
-The `confirm_dialog` macro (`templates/_macros/confirm_dialog.html`) is a centered alert dialog (14px radius, danger styling). Used by trash-2 in the DataTable and the Delete button in the Sheet. Injected into `<div id="umbra-dialog-slot">`. Escape key and scrim click cancel. Cancel is the default-focused button (danger action is never auto-focused).
+The `confirm_dialog` macro (`templates/_macros/confirm_dialog.html`) is a centered alert dialog (14px radius, danger styling). Used by trash-2 in the DataTable and the Delete button in the Sheet. Injected into `<div id="umbral-dialog-slot">`. Escape key and scrim click cancel. Cancel is the default-focused button (danger action is never auto-focused).
 
 ### Extending the DataTable
 
@@ -390,7 +390,7 @@ To add a custom column type, add an `{% elif col.name == "..." %}` clause inside
 Phase 3 replaces the simple bulk-action shim with a typed `Action` descriptor. Every action now carries an icon (Lucide), variant, scope, optional confirm message, and returns a structured `ActionResult`:
 
 ```rust
-use umbra_admin::{Action, ActionInvocation, ActionResult, ActionScope, ToastLevel};
+use umbral_admin::{Action, ActionInvocation, ActionResult, ActionScope, ToastLevel};
 
 let publish = Action::new(
     "publish",      // URL-safe key
@@ -416,7 +416,7 @@ AdminModel::new("post")
     .actions(vec![Action::delete_selected(), publish])
 ```
 
-**`.permission(codename)`** restricts the action to users who hold the named codename (or are superusers). The check runs after the model-level `change_<model>` gate and before the handler. When `umbra-permissions` is not installed the check is a no-op and any staff user can run the action. Use the same composite `"<plugin>.<verb>_<model>"` format that `PermissionsPlugin` auto-creates, or any custom codename you seed.
+**`.permission(codename)`** restricts the action to users who hold the named codename (or are superusers). The check runs after the model-level `change_<model>` gate and before the handler. When `umbral-permissions` is not installed the check is a no-op and any staff user can run the action. Use the same composite `"<plugin>.<verb>_<model>"` format that `PermissionsPlugin` auto-creates, or any custom codename you seed.
 
 `ActionResult` variants and their HTMX encoding:
 
@@ -530,11 +530,11 @@ The write is fire-and-forget - a failure to insert the row is logged at `tracing
 
 The table is intentionally scoped to the admin's CRUD surface. These events are not recorded:
 
-- **Logins, logouts, session creation.** The 11K rows in `session` come from `umbra-sessions` doing its job; that's its own data store. If you want admin-side login auditing, write a [signal handler](/docs/v0.0.1/plugins/signals) on `umbra_sessions::login_succeeded` and forward into `admin_audit_log` from there.
-- **Direct ORM writes from your own code.** Calling `Article::objects().save(...)` from a non-admin handler bypasses the admin entirely. If you want those writes audited, hook a `post_save` signal or write to the table directly via `umbra_admin::models::log(...)`.
+- **Logins, logouts, session creation.** The 11K rows in `session` come from `umbral-sessions` doing its job; that's its own data store. If you want admin-side login auditing, write a [signal handler](/docs/v0.0.1/plugins/signals) on `umbral_sessions::login_succeeded` and forward into `admin_audit_log` from there.
+- **Direct ORM writes from your own code.** Calling `Article::objects().save(...)` from a non-admin handler bypasses the admin entirely. If you want those writes audited, hook a `post_save` signal or write to the table directly via `umbral_admin::models::log(...)`.
 - **API endpoints the admin exposes for itself.** The palette search, FK picker, and dashboard widget data endpoints are reads; they don't mutate user models and don't log.
 
-For "everything that happens" auditing, build a separate event log fed by signal handlers across `umbra-sessions`, `umbra-auth`, and per-model post-save hooks. The admin's audit log is the right datum for "who deleted that row from the admin?" - not for general security telemetry.
+For "everything that happens" auditing, build a separate event log fed by signal handlers across `umbral-sessions`, `umbral-auth`, and per-model post-save hooks. The admin's audit log is the right datum for "who deleted that row from the admin?" - not for general security telemetry.
 
 Per-object history is available at:
 
@@ -546,10 +546,10 @@ This renders an audit timeline as a stacked sheet fragment (HTMX) or a standalon
 
 #### Writing your own audit entries
 
-`umbra_admin::models::log(actor_id, action, table, object_id, summary)` is `pub` so handlers outside the admin can append to the same timeline. Useful when an external job mutates a model and you want the change visible to admin users:
+`umbral_admin::models::log(actor_id, action, table, object_id, summary)` is `pub` so handlers outside the admin can append to the same timeline. Useful when an external job mutates a model and you want the change visible to admin users:
 
 ```rust
-use umbra_admin::models;
+use umbral_admin::models;
 
 models::log(
     current_user.id,
@@ -570,7 +570,7 @@ models::log(
 **Registering a widget:**
 
 ```rust
-use umbra_admin::{AdminPlugin, Widget, WidgetKind, WidgetDataFn, WidgetPayload, KpiPayload, Span};
+use umbral_admin::{AdminPlugin, Widget, WidgetKind, WidgetDataFn, WidgetPayload, KpiPayload, Span};
 
 AdminPlugin::default()
     .register_widget(Widget {
@@ -613,11 +613,11 @@ The data endpoint returns JSON for API consumers and an HTML fragment for HTMX r
 
 **Two built-in widgets** ship as public functions you register where you want them (they used to be auto-prepended; now you place and size them yourself):
 
-- `builtin_total_models_widget()` → key `umbra_total_models` (KPI) - count of all registered models.
-- `builtin_recent_users_widget()` → key `umbra_recent_users` (Feed) - last 5 `auth_user` signups.
+- `builtin_total_models_widget()` → key `umbral_total_models` (KPI) - count of all registered models.
+- `builtin_recent_users_widget()` → key `umbral_recent_users` (Feed) - last 5 `auth_user` signups.
 
 ```rust
-use umbra_admin::{AdminPlugin, builtin_total_models_widget, builtin_recent_users_widget};
+use umbral_admin::{AdminPlugin, builtin_total_models_widget, builtin_recent_users_widget};
 
 AdminPlugin::default()
     .register_widget(builtin_total_models_widget())
@@ -629,7 +629,7 @@ AdminPlugin::default()
 A `preview_kind` is resolved server-side from the MIME type and file extension so the front-end never has to sniff bytes:
 
 ```rust
-use umbra_admin::{file_descriptor, resolve_preview_kind};
+use umbral_admin::{file_descriptor, resolve_preview_kind};
 
 // Build a file descriptor JSON value for a given file.
 let desc = file_descriptor(
@@ -655,7 +655,7 @@ let desc = file_descriptor(
 Preview macros live in `templates/_macros/previews/`: `image.html` (thumbnail + lightbox), `pdf.html` (`<embed>`), `video_audio.html` (HTML5 players), `code_text.html` (syntax highlighted `<pre>`), `download.html` (download card with type glyph).
 
 <Callout type="info" title="ORM File field type is deferred">
-A first-class `File` / `Image` field type in the umbra ORM is scheduled for a future milestone. For now, store file paths in `Text` columns and supply a custom preview override per model if needed. The preview infrastructure (descriptor format, MIME resolution, preview macros) is fully wired.
+A first-class `File` / `Image` field type in the umbral ORM is scheduled for a future milestone. For now, store file paths in `Text` columns and supply a custom preview override per model if needed. The preview infrastructure (descriptor format, MIME resolution, preview macros) is fully wired.
 </Callout>
 
 ### Command palette (`⌘K`)
@@ -672,10 +672,10 @@ The palette fragment is HTMX-loaded from:
 
 ```
 GET /admin/api/palette
-→ HTML fragment injected into #umbra-palette-slot
+→ HTML fragment injected into #umbral-palette-slot
 ```
 
-The palette slot (`<div id="umbra-palette-slot">`) lives in `wrapper.html` so it is available on every authenticated admin page.
+The palette slot (`<div id="umbral-palette-slot">`) lives in `wrapper.html` so it is available on every authenticated admin page.
 
 ---
 
@@ -705,4 +705,4 @@ For the design spec see `docs/admin-backend/backend-prd.md` and `docs/admin-back
 - **Per-row permissions.** Auth gating is binary: staff or not. Row-level
   restrictions and per-model action gating are deferred.
 
-The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-admin/src/lib.rs` and `plugins/umbra-admin/src/config.rs`.
+The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbral-admin/src/lib.rs` and `plugins/umbral-admin/src/config.rs`.

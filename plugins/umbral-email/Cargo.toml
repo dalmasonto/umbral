@@ -1,0 +1,46 @@
+[package]
+name = "umbral-email"
+description = "SMTP + template-driven transactional email for umbral."
+workspace = "../.."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# HTTP API email backend (Resend / SendGrid). Pulls in `reqwest` only when
+# enabled, so an SMTP/console-only app never compiles the HTTP client. Off by
+# default — mirrors umbral-storage's `s3` feature pattern.
+api = ["dep:reqwest"]
+
+[dependencies]
+umbral = { path = "../../crates/umbral", version = "0.0.1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["rt", "macros", "sync"] }
+tracing = "0.1"
+base64 = "0.22"
+# Optional HTTP client for the API backend. `json` for serde_json bodies,
+# rustls TLS so the build doesn't need OpenSSL; default-features off to stay
+# lean. Only built under the `api` feature.
+reqwest = { version = "0.12", optional = true, default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+# SMTP transport. `lettre` is the standard Rust SMTP client. Use the
+# tokio runtime variant; rustls so the build doesn't need OpenSSL
+# system libs.
+lettre = { version = "0.11", default-features = false, features = [
+    "builder",
+    "smtp-transport",
+    "tokio1-rustls-tls",
+    "ring",
+] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tempfile = "3"

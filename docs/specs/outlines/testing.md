@@ -8,27 +8,27 @@
 
 ## Purpose
 
-`umbra::test` is the surface tests reach for so they exercise the same framework the app does. It ships a test client that mounts the App's real router, a task-local pool override that scopes a test future against an isolated database, a transactional `TestCase` analog that rolls back the world between tests, and a small factories layer that produces saved models without each test re-deriving its fixtures. The thing that matters most is the *symmetry*: tests build an `App` through `App::builder()`, drive routes through `Client`, and read through `Post::objects()` — the same surfaces a handler uses in production. The framework's invariants (the system check at boot, the plugin contract, the ambient-pool resolution rule) are *exercised by tests too*, so a green test suite is also evidence that the framework's contracts hold. The client is intentionally thin: a wrapper over `axum-test`, not a reimplementation. The value is the framework-aware shortcuts on top — auth helpers, factory integration, transactional isolation — that bare `axum-test` can't know about because they live in umbra plugins.
+`umbral::test` is the surface tests reach for so they exercise the same framework the app does. It ships a test client that mounts the App's real router, a task-local pool override that scopes a test future against an isolated database, a transactional `TestCase` analog that rolls back the world between tests, and a small factories layer that produces saved models without each test re-deriving its fixtures. The thing that matters most is the *symmetry*: tests build an `App` through `App::builder()`, drive routes through `Client`, and read through `Post::objects()` — the same surfaces a handler uses in production. The framework's invariants (the system check at boot, the plugin contract, the ambient-pool resolution rule) are *exercised by tests too*, so a green test suite is also evidence that the framework's contracts hold. The client is intentionally thin: a wrapper over `axum-test`, not a reimplementation. The value is the framework-aware shortcuts on top — auth helpers, factory integration, transactional isolation — that bare `axum-test` can't know about because they live in umbral plugins.
 
 ## Key concepts
 
-### `umbra::test::Client` — the test client
+### `umbral::test::Client` — the test client
 
-`Client` wraps `axum-test::TestServer` against the router produced by `App::builder().build()?`. It exposes the verb methods directly (`.get(path)`, `.post(path).json(...)`, `.form(...)`, `.multipart(...)`) and returns a typed `Response` with helpers (`.status()`, `.json::<T>()`, `.header(name)`, `.cookies()`). Framework-aware shortcuts are what justifies the wrapper: `client.login(&user)` sets up a session through `umbra-auth` and `umbra-sessions` rather than fabricating a cookie by hand; `client.as_user(&user, async { ... })` scopes a logged-in identity for a block; `client.assert_no_n_plus_one()` instruments the ambient pool to count queries through a span.
+`Client` wraps `axum-test::TestServer` against the router produced by `App::builder().build()?`. It exposes the verb methods directly (`.get(path)`, `.post(path).json(...)`, `.form(...)`, `.multipart(...)`) and returns a typed `Response` with helpers (`.status()`, `.json::<T>()`, `.header(name)`, `.cookies()`). Framework-aware shortcuts are what justifies the wrapper: `client.login(&user)` sets up a session through `umbral-auth` and `umbral-sessions` rather than fabricating a cookie by hand; `client.as_user(&user, async { ... })` scopes a logged-in identity for a block; `client.assert_no_n_plus_one()` instruments the ambient pool to count queries through a span.
 
 ```rust
 let app = App::builder().settings(test_settings).plugin(AuthPlugin::default()).build()?;
-let client = umbra::test::Client::new(app);
+let client = umbral::test::Client::new(app);
 let resp = client.post("/posts").json(&NewPost { title: "x".into() }).send().await?;
 assert_eq!(resp.status(), 201);
 ```
 
-### `umbra::test::with_pool` — task-local pool scoping
+### `umbral::test::with_pool` — task-local pool scoping
 
 The task-local override designed in `01-app-and-settings.md` §Test override is re-exported here as the surface tests reach for. This outline owns *how it appears in test code*; the deep spec owns the mechanism (the `tokio::task_local!` plus the accessor's fall-through to the `OnceLock`). A test that exercises a handler reading the ambient pool wraps the call:
 
 ```rust
-umbra::test::with_pool(test_pool.clone(), async {
+umbral::test::with_pool(test_pool.clone(), async {
     let resp = client.get("/posts").send().await?;
     assert_eq!(resp.json::<Vec<Post>>().await?.len(), 3);
 }).await
@@ -55,21 +55,21 @@ let post = PostFactory::default().with(|p| p.title = "fixed".into()).create().aw
 
 ### Fixtures
 
-JSON or RON files of pre-baked rows live under `fixtures/` and load through `cargo run -p umbra-cli -- loaddata <name>`. Useful for integration tests that need stable seed data (a known admin user, a set of categories) without per-test factory ceremony. Fixtures share the migration tracking table's view of the schema, so a fixture for an old model shape fails loudly rather than corrupting the database.
+JSON or RON files of pre-baked rows live under `fixtures/` and load through `cargo run -p umbral-cli -- loaddata <name>`. Useful for integration tests that need stable seed data (a known admin user, a set of categories) without per-test factory ceremony. Fixtures share the migration tracking table's view of the schema, so a fixture for an old model shape fails loudly rather than corrupting the database.
 
 ### `RequestFactory` — handler-level unit tests
 
-The lower-level companion to `Client`: build a `Request` directly and pass it to a handler without routing. Used for testing extractors and small handlers in isolation, where the routing layer and middleware chain are noise. Reuses the same `umbra::web::Request` type the runtime sees.
+The lower-level companion to `Client`: build a `Request` directly and pass it to a handler without routing. Used for testing extractors and small handlers in isolation, where the routing layer and middleware chain are noise. Reuses the same `umbral::web::Request` type the runtime sees.
 
 ## Promote-to-deep trigger
 
-Promotes at M9 entry, when `umbra-tasks` and the re-expressed auth/sessions plugins need real integration tests to prove the contract from `02-plugin-contract.md` holds end-to-end.
+Promotes at M9 entry, when `umbral-tasks` and the re-expressed auth/sessions plugins need real integration tests to prove the contract from `02-plugin-contract.md` holds end-to-end.
 
 ## Open questions
 
 - **Factory derive shape.** A `#[derive(Factory)]` macro that picks defaults from field types vs. hand-written `Factory<T>` impls. Derive is ergonomic but commits the framework to a defaults catalogue (random strings? sequential integers? `fake-rs` providers per type?); hand-written is verbose but transparent. Resolve once enough built-in plugin tests have been written to see the duplication.
 - **Transactional `TestCase` vs application-opened transactions.** Savepoints-all-the-way-down is the direction, but the precise semantics when application code calls `Db::tx` inside a test (does the inner savepoint commit, or just merge into the outer rollback?) need a concrete worked example to lock down.
-- **Test runner integration.** Whether `umbra` ships a `#[umbra::test]` attribute that wires the runtime, the pool override, and the `TestCase` setup in one annotation, or whether the canonical pattern is `#[tokio::test]` plus explicit `umbra::test::*` helpers. The attribute is more concise; the explicit form is more transparent and composes with existing test infrastructure.
+- **Test runner integration.** Whether `umbral` ships a `#[umbral::test]` attribute that wires the runtime, the pool override, and the `TestCase` setup in one annotation, or whether the canonical pattern is `#[tokio::test]` plus explicit `umbral::test::*` helpers. The attribute is more concise; the explicit form is more transparent and composes with existing test infrastructure.
 - **Fixture format choice.** JSON is universal but verbose; RON matches the Rust ecosystem and reads better for complex shapes; a `dumpdata` round-trip needs to pick one. Likely RON with JSON tolerated; settle when `dumpdata` (the inverse command) is specced.
 - **Parallel test isolation.** `cargo test` runs tests in parallel by default. A per-test transaction on a shared pool serialises writes; a per-test *database* (template-cloned) keeps parallelism but pays the clone cost. Pick once a real suite is large enough to measure both.
 

@@ -5,17 +5,17 @@ sidebar_position: 9
 icon: book-open
 ---
 
-`umbra-openapi` walks the model registry and serves a live Swagger UI and a
+`umbral-openapi` walks the model registry and serves a live Swagger UI and a
 machine-readable JSON spec. Add it to any app that already uses
-[`umbra-rest`](/docs/v0.0.1/rest) - the OpenAPI plugin depends on REST's
+[`umbral-rest`](/docs/v0.0.1/rest) - the OpenAPI plugin depends on REST's
 routes and will not compile without it.
 
 ## Quickstart
 
 ```rust
-use umbra::prelude::*;
-use umbra_rest::RestPlugin;
-use umbra_openapi::OpenApiPlugin;
+use umbral::prelude::*;
+use umbral_rest::RestPlugin;
+use umbral_openapi::OpenApiPlugin;
 
 App::builder()
     .settings(settings)
@@ -50,9 +50,9 @@ you supply.
 
 ## Excluding models
 
-By default the plugin exposes every model that `umbra-rest` exposes.
-The framework's internal tables (`auth_user`, `session`, `umbra_migrations`,
-the `permissions_*` tables, `task_row`, `admin_audit_log`) sit on `umbra-rest`'s
+By default the plugin exposes every model that `umbral-rest` exposes.
+The framework's internal tables (`auth_user`, `session`, `umbral_migrations`,
+the `permissions_*` tables, `task_row`, `admin_audit_log`) sit on `umbral-rest`'s
 default block-list, so they stay out of the spec unless you opt them back in
 on `RestPlugin`.
 
@@ -68,23 +68,23 @@ no schema object and no operations in the spec.
 
 ## Column metadata in the schema
 
-Beyond `type` + `format`, every column's schema carries the metadata the migration engine already knew about - surfaced so Swagger UI, generated clients, and the umbra-playground can build richer affordances without re-walking the model registry.
+Beyond `type` + `format`, every column's schema carries the metadata the migration engine already knew about - surfaced so Swagger UI, generated clients, and the umbral-playground can build richer affordances without re-walking the model registry.
 
 | OpenAPI key | Source on the column |
 |---|---|
-| `enum` | `#[umbra(choices)]` - closed-set columns get their valid values inline. (Skipped for `is_multichoice` columns whose wire value is a CSV.) |
-| `maxLength` | `#[umbra(max_length = N)]` |
-| `default` | `#[umbra(default = "...")]` |
-| `minimum` / `maximum` | `#[umbra(min = N)]` / `#[umbra(max = N)]` |
-| `description` | `#[umbra(help = "...")]` |
-| `example` | `#[umbra(example = "...")]` |
-| `readOnly` | `#[umbra(noform)]` - the field is never accepted in any request body (POST, PUT, or PATCH); the server fills it in |
+| `enum` | `#[umbral(choices)]` - closed-set columns get their valid values inline. (Skipped for `is_multichoice` columns whose wire value is a CSV.) |
+| `maxLength` | `#[umbral(max_length = N)]` |
+| `default` | `#[umbral(default = "...")]` |
+| `minimum` / `maximum` | `#[umbral(min = N)]` / `#[umbral(max = N)]` |
+| `description` | `#[umbral(help = "...")]` |
+| `example` | `#[umbral(example = "...")]` |
+| `readOnly` | `#[umbral(noform)]` - the field is never accepted in any request body (POST, PUT, or PATCH); the server fills it in |
 | `nullable` | `Option<T>` on the model field |
 
-`#[umbra(noedit)]` is **not** mapped to `readOnly` - `noedit` is an admin edit-form
+`#[umbral(noedit)]` is **not** mapped to `readOnly` - `noedit` is an admin edit-form
 hint (the field stays writable on create), so mapping it to OpenAPI `readOnly`
 (which means "never accepted in any body") would wrongly hide required fields from
-client autofill on POST. It surfaces instead as the `x-umbra-noedit` vendor extension below.
+client autofill on POST. It surfaces instead as the `x-umbral-noedit` vendor extension below.
 
 ### Vendor extensions
 
@@ -92,16 +92,16 @@ OpenAPI 3.0 reserves `x-*` keys for tool-specific data. The plugin emits these f
 
 | Extension | Meaning |
 |---|---|
-| `x-umbra-choice-labels` | Human labels paired position-for-position with `enum` (from `ChoiceField`). |
-| `x-umbra-multichoice` + `x-umbra-choices` | Flag for multichoice columns whose wire value is a CSV of the choice set. |
-| `x-umbra-fk-target` | Name of the table a foreign-key column points at. |
-| `x-umbra-fk-ref` | JSON pointer (`#/components/schemas/<Target>`) to the FK target's schema, when known. |
-| `x-umbra-m2m` + `x-umbra-m2m-target` | Flags a many-to-many slot and names the child schema (the property is an array of child PKs). |
-| `x-umbra-auto-now` / `x-umbra-auto-now-add` | Server-populated timestamp columns; aware clients skip them on autofill. |
-| `x-umbra-noform` | Companion to `readOnly` - the column the API never accepts in a body. |
-| `x-umbra-noedit` | Admin edit-form hint; the field is still writable in the API contract. |
-| `x-umbra-string-repr` | The model's `__str__`-equivalent display column. |
-| `x-umbra-filter-field` + `x-umbra-filter-lookup` | On filter query parameters (see below) - names the column and lookup the parameter wraps. |
+| `x-umbral-choice-labels` | Human labels paired position-for-position with `enum` (from `ChoiceField`). |
+| `x-umbral-multichoice` + `x-umbral-choices` | Flag for multichoice columns whose wire value is a CSV of the choice set. |
+| `x-umbral-fk-target` | Name of the table a foreign-key column points at. |
+| `x-umbral-fk-ref` | JSON pointer (`#/components/schemas/<Target>`) to the FK target's schema, when known. |
+| `x-umbral-m2m` + `x-umbral-m2m-target` | Flags a many-to-many slot and names the child schema (the property is an array of child PKs). |
+| `x-umbral-auto-now` / `x-umbral-auto-now-add` | Server-populated timestamp columns; aware clients skip them on autofill. |
+| `x-umbral-noform` | Companion to `readOnly` - the column the API never accepts in a body. |
+| `x-umbral-noedit` | Admin edit-form hint; the field is still writable in the API contract. |
+| `x-umbral-string-repr` | The model's `__str__`-equivalent display column. |
+| `x-umbral-filter-field` + `x-umbral-filter-lookup` | On filter query parameters (see below) - names the column and lookup the parameter wraps. |
 
 ## Filter parameters
 
@@ -117,7 +117,7 @@ Parameter naming follows the runtime parser:
 Types follow the column (`eq`, `ne`, `gt`, `lt`, `gte`, `lte`); `__in` is a CSV string; `__isnull` is a boolean. PK columns are skipped - filtering on `id` adds no value over the detail URL `/api/<table>/{id}`.
 
 ```rust
-use umbra_rest::{RestPlugin, ResourceConfig};
+use umbral_rest::{RestPlugin, ResourceConfig};
 
 RestPlugin::default()
     .resource(ResourceConfig::new("article"))  // filtering is on by default
@@ -138,7 +138,7 @@ List operations also advertise the pagination query parameters that match the
 
 ## Pairing with REST
 
-`umbra-openapi` declares `"rest"` in its `dependencies()`, so the plugin
+`umbral-openapi` declares `"rest"` in its `dependencies()`, so the plugin
 topological sort always places it after `RestPlugin`. The spec mirrors the
 routes that REST actually registers: if a model is excluded from REST, it will
 not appear in the spec either. If you exclude a model from REST but forget to

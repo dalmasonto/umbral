@@ -56,7 +56,7 @@ POST /api/order/ { "customer": "Grace", "items": [ {"product":"ok","qty":1}, {"q
 ```
 
 <Callout type="info">
-This is a **real database transaction**: `create_nested` opens one `umbra::db::Transaction`, inserts the parent + every child on it (`DynQuerySet::insert_json_in_tx`), and `commit()`s only after they all succeed. Any failure — a bad child, a constraint clash, or even a process crash *between* inserts — leaves **zero rows**, because the transaction is never committed and the database rolls it back. (This replaced an earlier compensating delete-on-failure handler; see `planning/orm_fixes.md` #2.)
+This is a **real database transaction**: `create_nested` opens one `umbral::db::Transaction`, inserts the parent + every child on it (`DynQuerySet::insert_json_in_tx`), and `commit()`s only after they all succeed. Any failure — a bad child, a constraint clash, or even a process crash *between* inserts — leaves **zero rows**, because the transaction is never committed and the database rolls it back. (This replaced an earlier compensating delete-on-failure handler; see `planning/orm_fixes.md` #2.)
 </Callout>
 
 ## Scope

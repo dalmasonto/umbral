@@ -1,5 +1,0 @@
-error: #[task] requires `-> Result<(), String>` as the return type (matches the umbra-tasks handler contract)
- --> tests/task_macro_fixtures/wrong_return.rs:5:41
-  |
-5 | async fn wrong_return(payload: Payload) -> Result<(), Box<dyn std::error::Error>> {
-  |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

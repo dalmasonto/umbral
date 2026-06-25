@@ -1,4 +1,4 @@
-# umbra-cache — Holistic Review
+# umbral-cache — Holistic Review
 
 > Date: 2026-06-16 · Read-only audit · Files read: `Cargo.toml`, `src/lib.rs`, `src/cache_page.rs`, `tests/integration.rs`, `tests/cache_page.rs`, `tests/redis_backend.rs`
 
@@ -6,13 +6,13 @@
 
 ## Verdict
 
-`umbra-cache` is a well-scoped v0 plugin: three backends (memory, SQLite, Redis), view-level `cache_page` middleware, and a clean `CacheBackend` trait. The architecture is sound — raw `sqlx` is used only for `SqliteBackend` DDL and row ops, with a documented and accurate rationale for the ORM-bypass exception. The two BROKEN markers in the source are already self-described and partially addressed (BROKEN-12 logs are in place; BROKEN-9 `on_ready` wiring is implemented). The worst net-new finding is a **security-class cache poisoning bug**: `cache_page` keys by method + URI only, with no `Host` header component, so a multi-tenant or multi-domain deployment will serve one site's cached HTML to another site's visitors. The second-worst is a silent privacy breach: `cache_page` does not check the inbound `Authorization` or `Cookie` request headers before serving a cached response, meaning a page that renders differently for authenticated vs anonymous users will serve the wrong body to anonymous callers once a logged-in user's response is cached. Neither is filed in the existing backlog.
+`umbral-cache` is a well-scoped v0 plugin: three backends (memory, SQLite, Redis), view-level `cache_page` middleware, and a clean `CacheBackend` trait. The architecture is sound — raw `sqlx` is used only for `SqliteBackend` DDL and row ops, with a documented and accurate rationale for the ORM-bypass exception. The two BROKEN markers in the source are already self-described and partially addressed (BROKEN-12 logs are in place; BROKEN-9 `on_ready` wiring is implemented). The worst net-new finding is a **security-class cache poisoning bug**: `cache_page` keys by method + URI only, with no `Host` header component, so a multi-tenant or multi-domain deployment will serve one site's cached HTML to another site's visitors. The second-worst is a silent privacy breach: `cache_page` does not check the inbound `Authorization` or `Cookie` request headers before serving a cached response, meaning a page that renders differently for authenticated vs anonymous users will serve the wrong body to anonymous callers once a logged-in user's response is cached. Neither is filed in the existing backlog.
 
 ---
 
 ## Completeness vs Django cache framework
 
-| Django cache feature | umbra-cache status |
+| Django cache feature | umbral-cache status |
 |---|---|
 | In-memory backend | Shipped — `MemoryBackend` (`tokio::sync::Mutex<HashMap>`) |
 | DB backend | Shipped — `SqliteBackend` (SQLite only; no Postgres backend) |
@@ -141,7 +141,7 @@ This is the standard "buffer-or-clone" Tower pattern: `poll_ready` readies `self
 
 **[NEW] [FYI] SQLite `sweep` is caller-driven with no auto-scheduling integration** — `src/lib.rs:327`
 
-`SqliteBackend::sweep` exists and is tested, but the plugin has no `umbra-tasks` integration to schedule it periodically. A long-running process that caches many short-TTL pages will accumulate dead rows indefinitely. This is acknowledged in the doc-comment ("reads already skip expired rows so a call is never required for correctness"). Once `umbra-tasks` is stable, wire a periodic sweep task (e.g. every 10 minutes) into `CachePlugin::on_ready`. Not a correctness issue, but a maintenance item.
+`SqliteBackend::sweep` exists and is tested, but the plugin has no `umbral-tasks` integration to schedule it periodically. A long-running process that caches many short-TTL pages will accumulate dead rows indefinitely. This is acknowledged in the doc-comment ("reads already skip expired rows so a call is never required for correctness"). Once `umbral-tasks` is stable, wire a periodic sweep task (e.g. every 10 minutes) into `CachePlugin::on_ready`. Not a correctness issue, but a maintenance item.
 
 ---
 

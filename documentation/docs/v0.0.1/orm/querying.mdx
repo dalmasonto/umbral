@@ -19,7 +19,7 @@ An `F` expression wraps a column name so it can appear on the right-hand side of
 Use `FColExt::eq_f` or `ne_f` to compare two columns on the same row:
 
 ```rust
-use umbra::orm::{F, FColExt};
+use umbral::orm::{F, FColExt};
 
 // WHERE author = editor
 let posts = Post::objects()
@@ -28,14 +28,14 @@ let posts = Post::objects()
     .await?;
 ```
 
-`FColExt` is automatically in scope for `IntCol`, `ForeignKeyCol`, and `StrCol`. The trait is re-exported from `umbra::prelude`.
+`FColExt` is automatically in scope for `IntCol`, `ForeignKeyCol`, and `StrCol`. The trait is re-exported from `umbral::prelude`.
 
 ### Atomic update arithmetic
 
 `F::col("views").add(1)` returns an `FExpr` that encodes `views + 1` as a SQL expression tree. Pass it to `QuerySet::update_expr`:
 
 ```rust
-use umbra::orm::F;
+use umbral::orm::F;
 
 // SET views = views + 1, no read-modify-write round-trip
 Post::objects()
@@ -59,7 +59,7 @@ For updates that mix JSON values and F-expressions on different columns, call `u
 ### Q::or
 
 ```rust
-use umbra::orm::Q;
+use umbral::orm::Q;
 
 // Published OR authored by this user
 Post::objects()
@@ -166,10 +166,10 @@ Mirrors Django's `QuerySet.values('id', 'title')`. The typed-tuple form (`values
 
 ## DB-function helpers: `.lower()`, `.upper()`, `.length()`, `.trim()`, `.coalesce()`, `.concat()`, `.year()`, `.month()`, `.day()`
 
-Column extension traits add SQL function wrappers that compose with `.filter`. Import `umbra::orm::column::{StrColExt, DateTimeColExt}` to bring them into scope.
+Column extension traits add SQL function wrappers that compose with `.filter`. Import `umbral::orm::column::{StrColExt, DateTimeColExt}` to bring them into scope.
 
 ```rust
-use umbra::orm::column::{StrColExt, DateTimeColExt};
+use umbral::orm::column::{StrColExt, DateTimeColExt};
 
 // Case-insensitive search.
 Post::objects()

@@ -6,7 +6,7 @@
 
 use content::models::{Post, Subscriber, post, subscriber};
 use std::collections::HashMap;
-use umbra_admin::{
+use umbral_admin::{
     CardPayload, DonutPayload, Span, TableColumn, TablePayload, Widget, WidgetDataFn, WidgetKind,
     WidgetPayload,
 };
@@ -47,7 +47,7 @@ pub fn content_recent_posts_table() -> Widget {
                     serde_json::json!({
                         "title":  p.title,
                         "status": format!("{:?}", p.status).to_lowercase(),
-                        "views":  umbra_admin::humanize_number(p.view_count as f64),
+                        "views":  umbral_admin::humanize_number(p.view_count as f64),
                     })
                 })
                 .collect();
@@ -104,7 +104,7 @@ pub fn content_subscribers_card() -> Widget {
                 .await
                 .unwrap_or(0);
             WidgetPayload::Card(
-                CardPayload::new(umbra_admin::humanize_number(total as f64))
+                CardPayload::new(umbral_admin::humanize_number(total as f64))
                     .unit("total")
                     .icon("mail")
                     .subtitle(format!("{confirmed} confirmed")),

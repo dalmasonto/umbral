@@ -1,4 +1,4 @@
-# Outline — Admin (umbra-admin)
+# Outline — Admin (umbral-admin)
 
 | | |
 |---|---|
@@ -8,7 +8,7 @@
 
 ## Purpose
 
-`umbra-admin` is the flagship "wow" plugin — register a `Model`, get a paginated, filterable, searchable CRUD UI for free. It is the umbra equivalent of `django.contrib.admin`: the feature most existing Django users will reach for first to confirm the framework feels right. Structurally it is an ordinary plugin built on the contract in `02-plugin-contract.md` — it contributes routes (the admin URL tree), middleware (an auth gate), migrations (an `admin_log` table for audit history), commands (`createsuperuser` lives here in spirit even if it's exported as an auth-plugin command), and an `on_ready` hook that seals the model registry so registrations done from other plugins are visible at request time. The contract has no admin-shaped escape hatch; if `umbra-admin` needs something the `Plugin` trait cannot express, that is a signal the trait is wrong.
+`umbral-admin` is the flagship "wow" plugin — register a `Model`, get a paginated, filterable, searchable CRUD UI for free. It is the umbral equivalent of `django.contrib.admin`: the feature most existing Django users will reach for first to confirm the framework feels right. Structurally it is an ordinary plugin built on the contract in `02-plugin-contract.md` — it contributes routes (the admin URL tree), middleware (an auth gate), migrations (an `admin_log` table for audit history), commands (`createsuperuser` lives here in spirit even if it's exported as an auth-plugin command), and an `on_ready` hook that seals the model registry so registrations done from other plugins are visible at request time. The contract has no admin-shaped escape hatch; if `umbral-admin` needs something the `Plugin` trait cannot express, that is a signal the trait is wrong.
 
 ## Key concepts
 
@@ -32,7 +32,7 @@ Field references are the sibling-module column constants from `04-orm-model-and-
 
 ### list_display, list_filter, search_fields, ordering
 
-`list_display` is the column set for the changelist table; FK columns render as links to the related object's detail page. `list_filter` produces faceted sidebar filters — distinct values for low-cardinality columns, date-bucket pickers for datetimes, choice values for `#[umbra(choices)]` fields. `search_fields` drives a single search box translated into `LIKE` (or `ILIKE` on Postgres) across the listed columns. `ordering` mirrors the `Meta` attribute and is overridable per-column from the table header.
+`list_display` is the column set for the changelist table; FK columns render as links to the related object's detail page. `list_filter` produces faceted sidebar filters — distinct values for low-cardinality columns, date-bucket pickers for datetimes, choice values for `#[umbral(choices)]` fields. `search_fields` drives a single search box translated into `LIKE` (or `ILIKE` on Postgres) across the listed columns. `ordering` mirrors the `Meta` attribute and is overridable per-column from the table header.
 
 ### Inlines
 
@@ -44,11 +44,11 @@ Bulk actions are functions over a `QuerySet<T>` exposed in the changelist's acti
 
 ### Permission integration
 
-Permission gating leans on `umbra-auth`'s permission model: `add_<model>`, `change_<model>`, `delete_<model>`, `view_<model>` are auto-created per registered model, mirroring Django's contenttypes-derived defaults. The admin middleware short-circuits unauthenticated requests to a login view; per-page guards check the relevant permission against `Auth<User>`. Custom user models flow through unchanged — the admin sees `Auth<User>` from the prelude and never names a concrete user type.
+Permission gating leans on `umbral-auth`'s permission model: `add_<model>`, `change_<model>`, `delete_<model>`, `view_<model>` are auto-created per registered model, mirroring Django's contenttypes-derived defaults. The admin middleware short-circuits unauthenticated requests to a login view; per-page guards check the relevant permission against `Auth<User>`. Custom user models flow through unchanged — the admin sees `Auth<User>` from the prelude and never names a concrete user type.
 
 ### Rendering substrate
 
-Lean toward server-rendered minijinja templates (the substrate owned by outline `templates.md`), reused by any plugin that needs HTML. The admin ships a small base template set (changelist, detail, login) that downstream apps can override the way Django's `templates/admin/` override path works. An embedded SPA is the alternative and stays on the table for the deep spec — it would buy a richer client-side filter UX at the cost of a JS build pipeline `umbra-admin` would otherwise not need. **The deep spec at M11 entry decides; this outline records the lean.**
+Lean toward server-rendered minijinja templates (the substrate owned by outline `templates.md`), reused by any plugin that needs HTML. The admin ships a small base template set (changelist, detail, login) that downstream apps can override the way Django's `templates/admin/` override path works. An embedded SPA is the alternative and stays on the table for the deep spec — it would buy a richer client-side filter UX at the cost of a JS build pipeline `umbral-admin` would otherwise not need. **The deep spec at M11 entry decides; this outline records the lean.**
 
 ### Customisation hooks
 
@@ -61,10 +61,10 @@ Promote at **M11 entry**, when the milestone begins. The promotion also resolves
 ## Open questions
 
 - **Rendering technology choice.** Server-rendered minijinja (lean) vs embedded SPA. Server templates reuse the substrate that the email and forms plugins already need; an SPA buys richer client-side interactivity at the cost of a JS build. Decided in the deep spec.
-- **Custom user model in the permission model.** `umbra-auth` owns the swap mechanism (outline open question #5); the admin needs to know how to look up "the change_post permission for *this* user type" without naming the concrete user struct. Likely resolves via a trait the swapped user type implements.
+- **Custom user model in the permission model.** `umbral-auth` owns the swap mechanism (outline open question #5); the admin needs to know how to look up "the change_post permission for *this* user type" without naming the concrete user struct. Likely resolves via a trait the swapped user type implements.
 - **File and image field rendering.** `FileField` / `ImageField` in the detail form need an upload widget, thumbnail preview (for images), and a "clear" affordance. The storage half lives in `static-and-media.md`; the admin owns the widget half. Open until both specs land at M11.
 - **Action result UX.** Bulk actions can succeed partially (publish 7 of 10), fail with per-row errors, or need confirmation before running on a large selection. How the changelist surfaces these — flash messages, a result page, an audit log entry — is open.
-- **Admin-log audit table.** Django records every add/change/delete in `django_admin_log`. Whether `umbra-admin` owns the same table by default (and whether it is queryable through the admin UI itself) decides at deep-spec time.
+- **Admin-log audit table.** Django records every add/change/delete in `django_admin_log`. Whether `umbral-admin` owns the same table by default (and whether it is queryable through the admin UI itself) decides at deep-spec time.
 
 ## Cross-links
 

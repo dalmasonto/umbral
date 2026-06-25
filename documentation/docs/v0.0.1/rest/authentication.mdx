@@ -45,8 +45,8 @@ The shape is intentionally narrow: `user_id` + `is_staff` + `is_superuser` cover
 
 <CardGrid cols={2}>
   <Card icon="x" title="NoAuthentication" description="The default. Every request looks anonymous. Pair with AllowAny for fully open endpoints." />
-  <Card icon="cookie" title="SessionAuthentication" description="Reads the umbra-sessions cookie, hydrates the AuthUser. Lives in umbra-auth." />
-  <Card icon="key" title="BearerAuthentication" description="Reads Authorization: Bearer <key>, looks up an AuthToken row. Lives in umbra-auth." />
+  <Card icon="cookie" title="SessionAuthentication" description="Reads the umbral-sessions cookie, hydrates the AuthUser. Lives in umbral-auth." />
+  <Card icon="key" title="BearerAuthentication" description="Reads Authorization: Bearer <key>, looks up an AuthToken row. Lives in umbral-auth." />
   <Card icon="link" title="ChainAuthentication" description="Tries multiple backends in order; first hit wins." />
   <Card icon="code" title="FnAuthentication" description="Wraps an async closure. The DIY hook for one-off needs." />
 </CardGrid>
@@ -56,10 +56,10 @@ The shape is intentionally narrow: `user_id` + `is_staff` + `is_superuser` cover
 The browser cookie path. The `SessionsPlugin` middleware already sets a session row on every request; `SessionAuthentication` reads its cookie and turns the resolved user into an `Identity`.
 
 ```rust
-use umbra::prelude::*;
-use umbra_auth::SessionAuthentication;
-use umbra_rest::RestPlugin;
-use umbra_sessions::SessionsPlugin;
+use umbral::prelude::*;
+use umbral_auth::SessionAuthentication;
+use umbral_rest::RestPlugin;
+use umbral_sessions::SessionsPlugin;
 
 App::builder()
     .plugin(SessionsPlugin::default())
@@ -74,13 +74,13 @@ Anonymous sessions (no logged-in user yet) resolve to `None`; the permission cla
 The opaque DB-backed bearer-token path, the same shape DRF ships. Each user can hold any number of named tokens; the row stores `sha256(plaintext)` so a DB leak does not surrender live tokens.
 
 ```rust
-use umbra_auth::{AuthToken, BearerAuthentication};
-use umbra_rest::RestPlugin;
+use umbral_auth::{AuthToken, BearerAuthentication};
+use umbral_rest::RestPlugin;
 
 // Wire the auth class.
 RestPlugin::default().authenticate(BearerAuthentication::default());
 
-// Mint a token elsewhere (an admin action, an `umbra` CLI command,
+// Mint a token elsewhere (an admin action, an `umbral` CLI command,
 // a /auth/token endpoint; the last is on the roadmap).
 let (_token, plaintext) = AuthToken::create_for(&user, "laptop").await?;
 println!("Save this: {plaintext}");   // shown ONCE; not recoverable from the row
@@ -89,10 +89,10 @@ println!("Save this: {plaintext}");   // shown ONCE; not recoverable from the ro
 A request then carries it as a normal Bearer header:
 
 ```bash
-curl -H "Authorization: Bearer umbra_K3PqJ4nMr9X2v..." https://api.example.com/api/article/
+curl -H "Authorization: Bearer umbral_K3PqJ4nMr9X2v..." https://api.example.com/api/article/
 ```
 
-Token format: `umbra_` prefix + 43 URL-safe base64 chars from 32 random bytes (~50 chars total). The prefix is grep-able, so log scrubbers can flag accidentally-committed tokens by pattern.
+Token format: `umbral_` prefix + 43 URL-safe base64 chars from 32 random bytes (~50 chars total). The prefix is grep-able, so log scrubbers can flag accidentally-committed tokens by pattern.
 
 Revoke with `token.revoke()`: the row is deleted, the next request with that plaintext fails the lookup, the caller is treated as anonymous.
 
@@ -102,8 +102,8 @@ Browsers send the cookie; CLI clients and CI send a bearer. First class to retur
 
 ```rust
 use std::sync::Arc;
-use umbra_auth::{BearerAuthentication, SessionAuthentication};
-use umbra_rest::{ChainAuthentication, RestPlugin};
+use umbral_auth::{BearerAuthentication, SessionAuthentication};
+use umbral_rest::{ChainAuthentication, RestPlugin};
 
 let auth = ChainAuthentication::new(vec![
     Arc::new(SessionAuthentication::default()),
@@ -117,13 +117,13 @@ RestPlugin::default().authenticate(auth);
 Wraps an async closure when there is no built-in for what you need. Two common shapes:
 
 ```rust
-use umbra::web::HeaderMap;
-use umbra_rest::{FnAuthentication, Identity, RestPlugin, parse_basic_credentials};
+use umbral::web::HeaderMap;
+use umbral_rest::{FnAuthentication, Identity, RestPlugin, parse_basic_credentials};
 
-// HTTP Basic Auth against umbra-auth:
+// HTTP Basic Auth against umbral-auth:
 RestPlugin::default().authenticate(FnAuthentication::new(|headers: HeaderMap| async move {
     let (user, pass) = parse_basic_credentials(&headers)?;
-    let auth_user = umbra_auth::authenticate(&user, &pass).await.ok()?;
+    let auth_user = umbral_auth::authenticate(&user, &pass).await.ok()?;
     Some(Identity::user(auth_user.id).with_staff(auth_user.is_staff))
 }));
 ```
@@ -136,8 +136,8 @@ Anything that recognises a credential in the headers and resolves it to an `Iden
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use umbra::web::HeaderMap;
-use umbra_rest::{Authentication, Identity, RestPlugin};
+use umbral::web::HeaderMap;
+use umbral_rest::{Authentication, Identity, RestPlugin};
 
 #[derive(Debug, Clone)]
 pub struct ApiKeyAuthentication {
@@ -172,11 +172,11 @@ The contract is small on purpose: *parse headers, return Identity*. Anything mor
 
 ## Reading the identity from a custom handler
 
-`RestPlugin` runs the configured auth chain inside its CRUD handlers, but a handler you write yourself (`/api/auth/me`, a custom action, anything outside the auto-CRUD surface) doesn't go through that pipeline. Two axum extractors in `umbra-auth` give you the same `Identity` shape from a hand-written handler:
+`RestPlugin` runs the configured auth chain inside its CRUD handlers, but a handler you write yourself (`/api/auth/me`, a custom action, anything outside the auto-CRUD surface) doesn't go through that pipeline. Two axum extractors in `umbral-auth` give you the same `Identity` shape from a hand-written handler:
 
 ```rust
-use umbra::web::Json;
-use umbra_auth::{CurrentIdentity, OptionalIdentity};
+use umbral::web::Json;
+use umbral_auth::{CurrentIdentity, OptionalIdentity};
 
 // Rejects with 401 if no auth resolves:
 async fn dashboard(CurrentIdentity(id): CurrentIdentity) -> Json<DashboardData> {
@@ -193,7 +193,7 @@ async fn home(OptionalIdentity(id): OptionalIdentity) -> Json<Page> {
 
 Both run the same session-then-bearer chain `RestPlugin` uses by default. If you need a different chain (bearer only, custom backend), write a one-off extractor that calls your own chain; the type is `Option<Identity>` either way.
 
-The bare resolution helper is also exposed: `umbra_auth::resolve_identity(&headers).await -> Option<Identity>`. Use it when you need the result inside a closure or somewhere the extractor framing doesn't fit.
+The bare resolution helper is also exposed: `umbral_auth::resolve_identity(&headers).await -> Option<Identity>`. Use it when you need the result inside a closure or somewhere the extractor framing doesn't fit.
 
 ## Why `authenticate` never returns an error
 
@@ -203,8 +203,8 @@ The trait signature is `Option<Identity>`, not `Result<Identity, _>`. Returning 
 
 | Class | Status | Notes |
 |---|---|---|
-| `JwtAuthentication` | Deferred to its own small plugin | Stateless, no DB hit; revocation via denylist. Keeps the umbra-auth dep tree free of a JWT crate for apps that don't want it. |
-| `BasicAuthentication` | DIY via `FnAuthentication` | One-liner against `umbra_auth::authenticate`. A built-in lands when there's a real consumer. |
+| `JwtAuthentication` | Deferred to its own small plugin | Stateless, no DB hit; revocation via denylist. Keeps the umbral-auth dep tree free of a JWT crate for apps that don't want it. |
+| `BasicAuthentication` | DIY via `FnAuthentication` | One-liner against `umbral_auth::authenticate`. A built-in lands when there's a real consumer. |
 | OAuth2 / OIDC | Out of scope | Outsource to a real OIDC client crate; bridge via `FnAuthentication`. |
 
-See `arch.md` for the design rationale and `plugins/umbra-rest/src/auth.rs` for the trait definition.
+See `arch.md` for the design rationale and `plugins/umbral-rest/src/auth.rs` for the trait definition.

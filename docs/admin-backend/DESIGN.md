@@ -1,5 +1,5 @@
 ---
-name: Umbra Admin
+name: Umbral Admin
 colors:
   surface: '#10131a'
   surface-dim: '#10131a'

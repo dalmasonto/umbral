@@ -13,20 +13,20 @@
 ## File Structure
 
 ```
-crates/umbra-core/src/orm/queryset/
+crates/umbral-core/src/orm/queryset/
   mod.rs              # JoinKind + JoinReq types; join_related field swap;
                       #   left_/inner_/right_join_related methods; rewritten
                       #   apply_join_related (nested chains + per-hop join type);
                       #   Manager forwarders; fetch() routing tweaks
   backend_sqlite.rs   # hydrate_joined_rels: build nested JSON from dotted aliases
   backend_pg.rs       # same, Postgres row variant
-crates/umbra-core/src/check.rs   # (no static check; 4d is a runtime warn — see Task 7)
-crates/umbra-core/tests/
+crates/umbral-core/src/check.rs   # (no static check; 4d is a runtime warn — see Task 7)
+crates/umbral-core/tests/
   joins_nested.rs     # NEW — all Part-4 behavioral + SQL-shape tests
 documentation/docs/v0.0.1/orm/joins.mdx   # NEW doc page (Task 8)
 ```
 
-Existing tests `crates/umbra-core/tests/join_related.rs` and `join_related_m2m.rs` MUST stay green throughout — they pin the one-hop FK and M2M behavior we are generalizing. Run them after every implementation task.
+Existing tests `crates/umbral-core/tests/join_related.rs` and `join_related_m2m.rs` MUST stay green throughout — they pin the one-hop FK and M2M behavior we are generalizing. Run them after every implementation task.
 
 ---
 
@@ -35,12 +35,12 @@ Existing tests `crates/umbra-core/tests/join_related.rs` and `join_related_m2m.r
 This task introduces the join-type vocabulary and reshapes the recorded state from `Vec<String>` to `Vec<JoinReq>` WITHOUT changing emitted SQL yet (every recorded `kind` is `None`, and `apply_join_related` keeps emitting LEFT for `None`). It must leave the whole existing test suite green — it is a pure refactor of the carrier.
 
 **Files:**
-- `crates/umbra-core/src/orm/queryset/mod.rs` — struct field at ~184, `new()` init at ~227, `join_related`/`join_related_many` at ~576-587, `apply_join_related` read sites at ~890 / ~923 / ~925-998, `fetch()` clone + partition at ~1019 / ~1036-1039, Manager forwarders at ~2796-2803, `validate_join_related_fields` at ~715.
-- Test path: existing `crates/umbra-core/tests/join_related.rs` and `crates/umbra-core/tests/join_related_m2m.rs` are the regression gate (no new test file in this task).
+- `crates/umbral-core/src/orm/queryset/mod.rs` — struct field at ~184, `new()` init at ~227, `join_related`/`join_related_many` at ~576-587, `apply_join_related` read sites at ~890 / ~923 / ~925-998, `fetch()` clone + partition at ~1019 / ~1036-1039, Manager forwarders at ~2796-2803, `validate_join_related_fields` at ~715.
+- Test path: existing `crates/umbral-core/tests/join_related.rs` and `crates/umbral-core/tests/join_related_m2m.rs` are the regression gate (no new test file in this task).
 
 Steps:
 
-- [ ] Run the existing suite to capture the green baseline: `cd crates && cargo test -p umbra-core --test join_related --test join_related_m2m` — expect PASS (this is the contract Task 1 must preserve).
+- [ ] Run the existing suite to capture the green baseline: `cd crates && cargo test -p umbral-core --test join_related --test join_related_m2m` — expect PASS (this is the contract Task 1 must preserve).
 
 - [ ] Add the types just above `pub struct QuerySet<T>` (~line 109) in `mod.rs`:
 ```rust
@@ -110,7 +110,7 @@ pub(crate) struct JoinReq {
 
 - [ ] `validate_join_related_fields` (~715) still takes `&[String]` and is fed `join_fields` (the path strings) — no change. NOTE for Task 4: this validator only checks one-hop FK/M2M names; nested paths will be validated inside `apply_join_related`/hydration. For now a nested path like `"plugin__author"` would fail this validator (no `__`-split field exists), which is fine because no caller passes a nested path until Task 4. Leave it.
 
-- [ ] Run-expect-PASS: `cd crates && cargo test -p umbra-core --test join_related --test join_related_m2m` — must still PASS (pure carrier refactor, SQL unchanged).
+- [ ] Run-expect-PASS: `cd crates && cargo test -p umbral-core --test join_related --test join_related_m2m` — must still PASS (pure carrier refactor, SQL unchanged).
 
 - [ ] `cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test`
 
@@ -123,7 +123,7 @@ pub(crate) struct JoinReq {
 Add the three explicit methods. SQL still uses the recorded kind only once Task 3 lands; here we prove the methods record `Some(kind)` and that `inner_join_related` already changes the keyword (because Task 3 ships in the SAME commit-cadence window — but to keep tasks independent we assert recording here and behavior in Task 3). To make this task's test behavioral rather than tautological, we assert the SQL keyword via a NEW test only after Task 3; in THIS task we only add methods + forwarders and rely on the existing suite staying green.
 
 **Files:**
-- `crates/umbra-core/src/orm/queryset/mod.rs` — add methods near `join_related` (~579), forwarders near ~2803.
+- `crates/umbral-core/src/orm/queryset/mod.rs` — add methods near `join_related` (~579), forwarders near ~2803.
 - Test path: regression only (`join_related.rs`, `join_related_m2m.rs`).
 
 Steps:
@@ -173,9 +173,9 @@ Steps:
     }
 ```
 
-- [ ] Re-export `JoinKind` from the orm module so the facade can surface it. In `crates/umbra-core/src/orm/queryset/mod.rs` it is already `pub`; add it to the `pub use queryset::{...}` line in `crates/umbra-core/src/orm/mod.rs` (~82): append `JoinKind` to the existing brace list. (No facade prelude entry — it's power-user surface; users call the methods, not the enum.)
+- [ ] Re-export `JoinKind` from the orm module so the facade can surface it. In `crates/umbral-core/src/orm/queryset/mod.rs` it is already `pub`; add it to the `pub use queryset::{...}` line in `crates/umbral-core/src/orm/mod.rs` (~82): append `JoinKind` to the existing brace list. (No facade prelude entry — it's power-user surface; users call the methods, not the enum.)
 
-- [ ] Run-expect-PASS (methods compile, nothing else changed): `cd crates && cargo build -p umbra-core` then `cargo test -p umbra-core --test join_related --test join_related_m2m` — PASS.
+- [ ] Run-expect-PASS (methods compile, nothing else changed): `cd crates && cargo build -p umbral-core` then `cargo test -p umbral-core --test join_related --test join_related_m2m` — PASS.
 
 - [ ] `cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test`
 
@@ -188,41 +188,41 @@ Steps:
 This is the first behavioral task. Rewrite the FK branch and the M2M child hop of `apply_join_related` to use a resolved `JoinKind` instead of the hard-coded `LeftJoin`. Resolution: `jr.kind` if `Some`; else INNER when the FK field is NOT NULL, LEFT when nullable (`FieldSpec.nullable`). The M2M JUNCTION hop stays INNER unconditionally (spec 4e: a parent reaches a child only through an existing junction row); the recorded kind applies to the CHILD hop.
 
 **Files:**
-- `crates/umbra-core/src/orm/queryset/mod.rs` — `apply_join_related` FK branch ~925-955 (`join_as(LeftJoin, ...)` at ~937) and M2M branch ~957-998 (two `join_as(LeftJoin, ...)` at ~977 and ~984).
-- Test path: NEW `crates/umbra-core/tests/joins_nested.rs` (one-hop drop/keep cases here; nested cases land in Task 4).
+- `crates/umbral-core/src/orm/queryset/mod.rs` — `apply_join_related` FK branch ~925-955 (`join_as(LeftJoin, ...)` at ~937) and M2M branch ~957-998 (two `join_as(LeftJoin, ...)` at ~977 and ~984).
+- Test path: NEW `crates/umbral-core/tests/joins_nested.rs` (one-hop drop/keep cases here; nested cases land in Task 4).
 
 Steps:
 
-- [ ] Write the failing test file `crates/umbra-core/tests/joins_nested.rs`. Reuse the harness shape from `join_related.rs` (App::builder + raw `CREATE TABLE` for the in-memory pool — raw DDL in tests is the sanctioned exception per CLAUDE.md). Seed a parent WITH a related row and an ORPHAN parent (NOT NULL can't be a true null, so the orphan for the INNER/LEFT contrast uses a NULLABLE FK that is NULL; the NOT NULL drop is asserted via the auto-inference test in Task 5). Start with the explicit-method drop/keep contract:
+- [ ] Write the failing test file `crates/umbral-core/tests/joins_nested.rs`. Reuse the harness shape from `join_related.rs` (App::builder + raw `CREATE TABLE` for the in-memory pool — raw DDL in tests is the sanctioned exception per CLAUDE.md). Seed a parent WITH a related row and an ORPHAN parent (NOT NULL can't be a true null, so the orphan for the INNER/LEFT contrast uses a NULLABLE FK that is NULL; the NOT NULL drop is asserted via the auto-inference test in Task 5). Start with the explicit-method drop/keep contract:
 ```rust
 //! Part 4 deep-join behavioral + SQL-shape tests.
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
-use umbra::orm::ForeignKey;
-use umbra_core::db;
+use umbral::orm::ForeignKey;
+use umbral_core::db;
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "dj_author")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "dj_author")]
 pub struct Author {
     pub id: i64,
-    #[umbra(string)]
+    #[umbral(string)]
     pub name: String,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "dj_plugin")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "dj_plugin")]
 pub struct Plugin {
     pub id: i64,
-    #[umbra(string)]
+    #[umbral(string)]
     pub name: String,
     // NOT NULL forward FK -> auto INNER under plain join_related.
     pub author: ForeignKey<Author>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "dj_comment")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "dj_comment")]
 pub struct Comment {
     pub id: i64,
     pub body: String,
@@ -235,9 +235,9 @@ static BOOT: OnceCell<()> = OnceCell::const_new();
 
 async fn boot() {
     BOOT.get_or_init(|| async {
-        let settings = umbra::Settings::from_env().expect("figment defaults");
+        let settings = umbral::Settings::from_env().expect("figment defaults");
         let pool = db::connect_sqlite("sqlite::memory:").await.expect("sqlite");
-        umbra::App::builder()
+        umbral::App::builder()
             .settings(settings)
             .database("default", pool.clone())
             .model::<Author>()
@@ -295,7 +295,7 @@ async fn inner_join_drops_orphan_left_keeps_it() {
 }
 ```
 
-- [ ] Run-expect-FAIL: `cd crates && cargo test -p umbra-core --test joins_nested inner_join_drops_orphan_left_keeps_it` — FAILS because `apply_join_related` still hard-codes `LeftJoin` (INNER assertion + drop assertion fail).
+- [ ] Run-expect-FAIL: `cd crates && cargo test -p umbral-core --test joins_nested inner_join_drops_orphan_left_keeps_it` — FAILS because `apply_join_related` still hard-codes `LeftJoin` (INNER assertion + drop assertion fail).
 
 - [ ] Implement: in `apply_join_related` FK branch, compute the kind before the `join_as`. Replace the block at ~929-955:
 ```rust
@@ -344,9 +344,9 @@ async fn inner_join_drops_orphan_left_keeps_it() {
 ```
   IMPORTANT regression check: `join_related_m2m.rs` asserts the double **LEFT JOIN** and relies on parents WITHOUT any tag still appearing. Switching the junction hop to INNER drops tag-less parents from the M2M-join result. Read `join_related_m2m.rs` first; if any test seeds a parent with zero tags and asserts it survives the JOIN, KEEP the junction hop as LEFT (set both hops from `child_kind` with junction defaulting LEFT) to avoid changing shipped behavior, and record the spec-4e "junction INNER" intent as a `// TODO(spec 4e)` only if the existing test forbids it. Default position: match the existing test; do not break `join_related_m2m.rs`.
 
-- [ ] Run-expect-PASS: `cd crates && cargo test -p umbra-core --test joins_nested inner_join_drops_orphan_left_keeps_it` — PASS.
+- [ ] Run-expect-PASS: `cd crates && cargo test -p umbral-core --test joins_nested inner_join_drops_orphan_left_keeps_it` — PASS.
 
-- [ ] Regression: `cd crates && cargo test -p umbra-core --test join_related --test join_related_m2m` — PASS (the plain `join_related("category")` over a NOT NULL FK in `join_related.rs` now emits INNER instead of LEFT; check whether any assertion there literally requires `LEFT JOIN` for a NOT NULL FK. `to_sql_emits_left_join_with_aliased_child_columns` asserts `LEFT JOIN` on `Product.category` which is a NOT NULL FK — under 4c that becomes INNER. RESOLVE: update that one assertion in `join_related.rs` to accept either keyword OR change it to `Product.brand` (nullable → still LEFT). Make the change in `join_related.rs` in THIS commit and note it in the body. This is a deliberate, spec-mandated behavior change, not a workaround.)
+- [ ] Regression: `cd crates && cargo test -p umbral-core --test join_related --test join_related_m2m` — PASS (the plain `join_related("category")` over a NOT NULL FK in `join_related.rs` now emits INNER instead of LEFT; check whether any assertion there literally requires `LEFT JOIN` for a NOT NULL FK. `to_sql_emits_left_join_with_aliased_child_columns` asserts `LEFT JOIN` on `Product.category` which is a NOT NULL FK — under 4c that becomes INNER. RESOLVE: update that one assertion in `join_related.rs` to accept either keyword OR change it to `Product.brand` (nullable → still LEFT). Make the change in `join_related.rs` in THIS commit and note it in the body. This is a deliberate, spec-mandated behavior change, not a workaround.)
 
 - [ ] `cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test`
 
@@ -359,11 +359,11 @@ async fn inner_join_drops_orphan_left_keeps_it() {
 Generalize `apply_join_related` from one hop to N hops for a path split on `__`, AND teach `hydrate_joined_rels` to rebuild the nested JSON object from the dotted-path aliases so `comment.plugin.author` hydrates from one query. Resolution mirrors `hydrate_select_related_nested` (`hydration.rs:162-220`): walk hops, look up each hop's FK column + target table + target PK from `T::FIELDS` (hop 0) then the migrate registry `Column`s (hops 1..n).
 
 **Files:**
-- `crates/umbra-core/src/orm/queryset/mod.rs` — `apply_join_related` FK branch becomes a per-hop loop; the inner-trim block (~882-905) only needs hop-0 FK columns (it already collects `join_field` names; for nested paths use the FIRST hop only).
-- `crates/umbra-core/src/orm/queryset/backend_sqlite.rs` — `hydrate_joined_rels` (~58) rebuilds nested JSON.
-- `crates/umbra-core/src/orm/queryset/backend_pg.rs` — `hydrate_joined_rels` (~39) same for `PgRow`.
-- `crates/umbra-core/src/orm/queryset/hydration.rs:162-220` — READ ONLY (resolution to copy).
-- Test path: `crates/umbra-core/tests/joins_nested.rs`.
+- `crates/umbral-core/src/orm/queryset/mod.rs` — `apply_join_related` FK branch becomes a per-hop loop; the inner-trim block (~882-905) only needs hop-0 FK columns (it already collects `join_field` names; for nested paths use the FIRST hop only).
+- `crates/umbral-core/src/orm/queryset/backend_sqlite.rs` — `hydrate_joined_rels` (~58) rebuilds nested JSON.
+- `crates/umbral-core/src/orm/queryset/backend_pg.rs` — `hydrate_joined_rels` (~39) same for `PgRow`.
+- `crates/umbral-core/src/orm/queryset/hydration.rs:162-220` — READ ONLY (resolution to copy).
+- Test path: `crates/umbral-core/tests/joins_nested.rs`.
 
 Steps:
 
@@ -403,7 +403,7 @@ async fn nested_inner_join_hydrates_three_level_graph_in_one_query() {
 ```
   (Single-round-trip / no-N+1 is proven structurally: only `fetch()` ran, and the deepest level is reachable only via the joined columns — there is no second batched query in the join path, unlike `select_related`.)
 
-- [ ] Run-expect-FAIL: `cd crates && cargo test -p umbra-core --test joins_nested nested_inner_join_hydrates_three_level_graph_in_one_query` — FAILS (today `apply_join_related` treats `"plugin__author"` as a single field name `T::FIELDS.find(== "plugin__author")` → no match → no JOIN; and `validate_join_related_fields` rejects it).
+- [ ] Run-expect-FAIL: `cd crates && cargo test -p umbral-core --test joins_nested nested_inner_join_hydrates_three_level_graph_in_one_query` — FAILS (today `apply_join_related` treats `"plugin__author"` as a single field name `T::FIELDS.find(== "plugin__author")` → no match → no JOIN; and `validate_join_related_fields` rejects it).
 
 - [ ] Implement a hop-resolution helper in `mod.rs` (near `apply_join_related`), returning the per-hop `(parent_alias_table, fk_col, child_table, child_pk, child_columns, nullable)` chain so both SQL emit and hydration agree:
 ```rust
@@ -522,7 +522,7 @@ fn resolve_join_hops<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
                 continue;
             }
             return Err(sqlx::Error::Protocol(format!(
-                "umbra::orm::join_related: nested path `{field_name}` on `{}` has an \
+                "umbral::orm::join_related: nested path `{field_name}` on `{}` has an \
                  unresolvable hop (each segment must be a FK to a registered model)",
                 T::NAME
             )));
@@ -592,9 +592,9 @@ fn resolve_join_hops<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
 
 - [ ] Mirror the SAME rewrite in `backend_pg.rs` `hydrate_joined_rels` (~39), using `sqlx::postgres::PgRow` and the same `decode_to_json_aliased`. (Both backends' `hydrate_joined_rels` share the algorithm; keep them in lockstep.)
 
-- [ ] Run-expect-PASS: `cd crates && cargo test -p umbra-core --test joins_nested nested_inner_join_hydrates_three_level_graph_in_one_query` — PASS.
+- [ ] Run-expect-PASS: `cd crates && cargo test -p umbral-core --test joins_nested nested_inner_join_hydrates_three_level_graph_in_one_query` — PASS.
 
-- [ ] Regression: `cd crates && cargo test -p umbra-core --test join_related --test join_related_m2m --test joins_nested` — all PASS.
+- [ ] Regression: `cd crates && cargo test -p umbral-core --test join_related --test join_related_m2m --test joins_nested` — all PASS.
 
 - [ ] `cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test`
 
@@ -607,7 +607,7 @@ fn resolve_join_hops<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
 Task 3 wired the inference; this task pins it with the row-set discriminator the spec demands: a plain `join_related` over a NOT NULL FK behaves as INNER (drops the orphan), and over a nullable FK behaves as LEFT (keeps the orphan). The `Comment.plugin` field is nullable; we need a NOT NULL FK with a constructable orphan to prove the INNER side. A NOT NULL column can't hold NULL, so the "orphan" for the NOT NULL case is a row whose FK points at a NON-EXISTENT parent id (a dangling reference — SQLite allows it without `PRAGMA foreign_keys=ON`), which an INNER JOIN drops and a LEFT JOIN keeps.
 
 **Files:**
-- `crates/umbra-core/tests/joins_nested.rs` — add a NOT NULL FK model + dangling-row seed, or reuse `Plugin.author` (NOT NULL) with a dangling author id.
+- `crates/umbral-core/tests/joins_nested.rs` — add a NOT NULL FK model + dangling-row seed, or reuse `Plugin.author` (NOT NULL) with a dangling author id.
 - Test path: same file.
 
 Steps:
@@ -658,7 +658,7 @@ async fn plain_join_infers_left_for_nullable_fk() {
 }
 ```
 
-- [ ] Run-expect: the LEFT test PASSES already (Task 3); the INNER test PASSES already too IF Task 3 landed. If both already pass, this task is a pure regression-pin commit (still valuable — it's the spec's mandated row-set proof). If the INNER test FAILS, the inference branch in `apply_join_related` is wrong — fix the `if fk_field.nullable` default. Command: `cd crates && cargo test -p umbra-core --test joins_nested plain_join_infers`.
+- [ ] Run-expect: the LEFT test PASSES already (Task 3); the INNER test PASSES already too IF Task 3 landed. If both already pass, this task is a pure regression-pin commit (still valuable — it's the spec's mandated row-set proof). If the INNER test FAILS, the inference branch in `apply_join_related` is wrong — fix the `if fk_field.nullable` default. Command: `cd crates && cargo test -p umbral-core --test joins_nested plain_join_infers`.
 
 - [ ] `cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test`
 
@@ -671,30 +671,30 @@ async fn plain_join_infers_left_for_nullable_fk() {
 A nested path may pass THROUGH an M2M hop: the first hop is the junction→child double-join, and subsequent hops are FK joins off the child. Assert the child + its onward FK both hydrate and that parent count is stable (no drop/dup from the junction).
 
 **Files:**
-- `crates/umbra-core/src/orm/queryset/mod.rs` — extend `apply_join_related` so a path whose FIRST segment is an M2M field routes through the junction double-join, then continues the FK chain off the child alias; and `resolve_join_hops` (or a parallel path) recognizes a leading M2M segment.
-- `crates/umbra-core/src/orm/queryset/backend_sqlite.rs` / `backend_pg.rs` — M2M-chain hydration (the M2M child rows already dedup; the onward FK nests into each child).
-- Test path: `crates/umbra-core/tests/joins_nested.rs` (reuse `join_related_m2m.rs`'s Post/Tag/Category shape, but add a FK from Tag → Category to make `tags__category` meaningful).
+- `crates/umbral-core/src/orm/queryset/mod.rs` — extend `apply_join_related` so a path whose FIRST segment is an M2M field routes through the junction double-join, then continues the FK chain off the child alias; and `resolve_join_hops` (or a parallel path) recognizes a leading M2M segment.
+- `crates/umbral-core/src/orm/queryset/backend_sqlite.rs` / `backend_pg.rs` — M2M-chain hydration (the M2M child rows already dedup; the onward FK nests into each child).
+- Test path: `crates/umbral-core/tests/joins_nested.rs` (reuse `join_related_m2m.rs`'s Post/Tag/Category shape, but add a FK from Tag → Category to make `tags__category` meaningful).
 
 Steps:
 
 - [ ] Add M2M-chain models to `joins_nested.rs` (separate tables from the FK test so the two `boot`s don't collide — use a second `OnceCell` or a single boot that creates all tables):
 ```rust
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "dj_cat")]
-pub struct Cat { pub id: i64, #[umbra(string)] pub name: String }
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "dj_cat")]
+pub struct Cat { pub id: i64, #[umbral(string)] pub name: String }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "dj_tag")]
-pub struct Tag2 { pub id: i64, #[umbra(string)] pub name: String, pub category: ForeignKey<Cat> }
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "dj_tag")]
+pub struct Tag2 { pub id: i64, #[umbral(string)] pub name: String, pub category: ForeignKey<Cat> }
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "dj_post")]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "dj_post")]
 pub struct Post2 {
     pub id: i64,
     pub title: String,
     #[sqlx(skip)] #[serde(skip)]
-    #[umbra(m2m = "dj_tag")]
-    pub tags: umbra::orm::M2M<Tag2>,
+    #[umbral(m2m = "dj_tag")]
+    pub tags: umbral::orm::M2M<Tag2>,
 }
 ```
   Register all three in the App builder; create `dj_cat`, `dj_tag` (with `category INTEGER NOT NULL REFERENCES dj_cat(id)`), `dj_post`, and `dj_post_tags(parent_id, child_id)`. Seed: cat 1 = "news"; tag 1 "rust" → cat 1; post 1 "hello"; junction (post 1, tag 1).
@@ -720,15 +720,15 @@ async fn m2m_chain_hydrates_child_and_onward_fk_without_dropping_parents() {
 }
 ```
 
-- [ ] Run-expect-FAIL: `cd crates && cargo test -p umbra-core --test joins_nested m2m_chain_hydrates_child_and_onward_fk_without_dropping_parents` — FAILS (today `apply_join_related`'s M2M branch is one-hop child only; `tags__category` isn't routed, and the child's `category` FK isn't joined/aliased).
+- [ ] Run-expect-FAIL: `cd crates && cargo test -p umbral-core --test joins_nested m2m_chain_hydrates_child_and_onward_fk_without_dropping_parents` — FAILS (today `apply_join_related`'s M2M branch is one-hop child only; `tags__category` isn't routed, and the child's `category` FK isn't joined/aliased).
 
 - [ ] Implement in `apply_join_related`: when `field_name` splits and `segs[0]` is an M2M field, emit the junction + child double-join (as today) using child alias `__j_<field_name>_h0`, alias the CHILD's columns by `<field_name_seg0>__<col>` (the M2M decode path expects `<m2m_field>__<col>`), THEN if `segs.len() > 1` continue the FK chain off the child alias for `segs[1..]`, aliasing the leaf columns by the full dotted path `<seg0>__<seg1>__...__<col>`. Route detection: check `T::M2M_RELATIONS` for `segs[0]` BEFORE calling `resolve_join_hops` (which only handles FK hop 0).
 
 - [ ] Implement M2M-chain hydration: the existing `dedup_decode_sqlite`/`extract_m2m_child_json` path collects child rows keyed by `<m2m_field>__<col>`. Extend `extract_m2m_child_json` (or add a sibling) so that when the path has onward FK segments, it also reads the leaf's dotted-aliased columns and nests them under the child's onward FK field key — same fold-in-reverse logic as Task 4, applied per child row. The child's `category` slot gets the nested `Cat` object so `tags[0].category.resolved()` works. Keep parent dedup unchanged (one `Post2` per distinct parent PK).
 
-- [ ] Run-expect-PASS: `cd crates && cargo test -p umbra-core --test joins_nested m2m_chain_hydrates_child_and_onward_fk_without_dropping_parents` — PASS.
+- [ ] Run-expect-PASS: `cd crates && cargo test -p umbral-core --test joins_nested m2m_chain_hydrates_child_and_onward_fk_without_dropping_parents` — PASS.
 
-- [ ] Regression: `cd crates && cargo test -p umbra-core --test join_related_m2m --test joins_nested` — PASS.
+- [ ] Regression: `cd crates && cargo test -p umbral-core --test join_related_m2m --test joins_nested` — PASS.
 
 - [ ] `cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test`
 
@@ -741,8 +741,8 @@ async fn m2m_chain_hydrates_child_and_onward_fk_without_dropping_parents() {
 RIGHT/FULL JOIN needs SQLite >= 3.39 (Postgres unconditional). The boot system check (`check.rs`) is synchronous and has no live pool, and whether a `right_join_related` is reachable is a runtime QuerySet fact, not static model metadata — so the spec's "boot-time warning" is realized as a one-shot runtime warning emitted the first time a RIGHT join is applied against a SQLite pool older than 3.39. This keeps the "backend mismatch surfaces with a clear message" contract without forcing static analysis of every call site.
 
 **Files:**
-- `crates/umbra-core/src/orm/queryset/mod.rs` — in `apply_join_related`, when any resolved hop kind is `JoinKind::Right` and the dispatched pool is SQLite, check the version once and `tracing::warn!`. Detect SQLite version via a cached probe.
-- Test path: `crates/umbra-core/tests/joins_nested.rs` (assert the SQL still emits `RIGHT JOIN` on SQLite; the warning is a `tracing` side-effect — assert it doesn't panic and the query builds. If the CI SQLite is >= 3.39 the warn won't fire; the test asserts the SQL shape + that `right_join_related` over a present relation still returns rows).
+- `crates/umbral-core/src/orm/queryset/mod.rs` — in `apply_join_related`, when any resolved hop kind is `JoinKind::Right` and the dispatched pool is SQLite, check the version once and `tracing::warn!`. Detect SQLite version via a cached probe.
+- Test path: `crates/umbral-core/tests/joins_nested.rs` (assert the SQL still emits `RIGHT JOIN` on SQLite; the warning is a `tracing` side-effect — assert it doesn't panic and the query builds. If the CI SQLite is >= 3.39 the warn won't fire; the test asserts the SQL shape + that `right_join_related` over a present relation still returns rows).
 
 Steps:
 
@@ -760,7 +760,7 @@ async fn right_join_emits_keyword_and_builds() {
 }
 ```
 
-- [ ] Run-expect-FAIL: `cd crates && cargo test -p umbra-core --test joins_nested right_join_emits_keyword_and_builds` — FAILS only if `right_join_related` or `JoinKind::Right` SQL emit is missing (Task 2 added the method; Task 3's `kind.sea()` maps `Right → RightJoin`). If Tasks 2-3 are in, this likely PASSES immediately for the SQL assertion — in that case this task adds ONLY the warning + keeps the test as a regression pin.
+- [ ] Run-expect-FAIL: `cd crates && cargo test -p umbral-core --test joins_nested right_join_emits_keyword_and_builds` — FAILS only if `right_join_related` or `JoinKind::Right` SQL emit is missing (Task 2 added the method; Task 3's `kind.sea()` maps `Right → RightJoin`). If Tasks 2-3 are in, this likely PASSES immediately for the SQL assertion — in that case this task adds ONLY the warning + keeps the test as a regression pin.
 
 - [ ] Implement the warning in `apply_join_related`: after resolving a hop's `kind`, if `kind == JoinKind::Right`, set a local `emitted_right = true`. After the emit loop, when `emitted_right`, call a helper `warn_right_join_on_old_sqlite()` that:
   - matches `crate::db::pool_dispatched()`; returns early for `DbPool::Postgres`;
@@ -772,7 +772,7 @@ fn warn_right_join_on_sqlite() {
     if matches!(crate::db::pool_dispatched(), crate::db::DbPool::Sqlite(_)) {
         ONCE.call_once(|| {
             tracing::warn!(
-                "umbra::orm::right_join_related: RIGHT JOIN requires SQLite >= 3.39. \
+                "umbral::orm::right_join_related: RIGHT JOIN requires SQLite >= 3.39. \
                  If your SQLite is older the query will error at execute time; \
                  Postgres is unaffected. Prefer left_/inner_join_related on SQLite \
                  unless you've confirmed the engine version."
@@ -783,7 +783,7 @@ fn warn_right_join_on_sqlite() {
 ```
   This is honest (it doesn't claim a version it can't read) and once-per-process (no log spam). Document in the method's rustdoc and the joins doc page that the precise version gate lives at execute time (the SQLite driver's own error), and the warn is the early nudge — consistent with `check.rs`'s `Severity::Warning` posture. Call `warn_right_join_on_sqlite()` from `apply_join_related` when `emitted_right`.
 
-- [ ] Run-expect-PASS: `cd crates && cargo test -p umbra-core --test joins_nested right_join_emits_keyword_and_builds` — PASS.
+- [ ] Run-expect-PASS: `cd crates && cargo test -p umbral-core --test joins_nested right_join_emits_keyword_and_builds` — PASS.
 
 - [ ] `cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test`
 
@@ -824,7 +824,7 @@ let name = comments[0].plugin.as_ref().unwrap()
 
 <Callout type="warning">
 RIGHT JOIN needs SQLite >= 3.39 (Postgres is unconditional). On older
-SQLite, `right_join_related` errors at execute time; umbra warns once at
+SQLite, `right_join_related` errors at execute time; umbral warns once at
 runtime. Design rationale: `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md` Part 4.
 </Callout>
 ```

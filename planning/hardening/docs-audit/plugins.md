@@ -15,7 +15,7 @@ Severity key:
 
 ## `admin.mdx`
 
-Source: `plugins/umbra-admin/src/lib.rs`, `plugins/umbra-admin/src/models.rs`, `plugins/umbra-admin/src/config.rs`
+Source: `plugins/umbral-admin/src/lib.rs`, `plugins/umbral-admin/src/models.rs`, `plugins/umbral-admin/src/config.rs`
 
 ### [Critical] CSS path is wrong
 
@@ -32,7 +32,7 @@ The doc's "Phase 4 — Admin tables" section states:
 Source `lib.rs:788-793` (`on_ready` impl):
 
 ```rust
-fn on_ready(&self, _ctx: &AppContext) -> Result<(), umbra::plugin::PluginError> {
+fn on_ready(&self, _ctx: &AppContext) -> Result<(), umbral::plugin::PluginError> {
     Ok(())
 }
 ```
@@ -79,7 +79,7 @@ The doc example uses `ordering(&["-published_at", "title"])` — this matches th
 
 ## `auth.mdx`
 
-Source: `plugins/umbra-auth/src/lib.rs`
+Source: `plugins/umbral-auth/src/lib.rs`
 
 No critical discrepancies found. Verified:
 
@@ -97,7 +97,7 @@ The doc doesn't note that `with_default_routes()` is only available on `AuthPlug
 
 ## `sessions.mdx`
 
-Source: `plugins/umbra-sessions/src/lib.rs`
+Source: `plugins/umbral-sessions/src/lib.rs`
 
 ### [Required] `create_session` parameter type mismatch
 
@@ -125,7 +125,7 @@ The `SessionsPlugin::without_auto_layer()` builder method exists in source but i
 
 ## `permissions.mdx`
 
-Source: `plugins/umbra-permissions/src/lib.rs`, `plugins/umbra-permissions/src/perm.rs`
+Source: `plugins/umbral-permissions/src/lib.rs`, `plugins/umbral-permissions/src/perm.rs`
 
 ### [Required] `has_perm` signature uses `&str` user ID, not `i64`
 
@@ -187,7 +187,7 @@ The `.on(&pool)` method may not exist at all on the current QuerySet surface. Th
 
 ## `rest.mdx`
 
-Source: `plugins/umbra-rest/src/lib.rs` (lines 1-1367+ confirmed in prior session)
+Source: `plugins/umbral-rest/src/lib.rs` (lines 1-1367+ confirmed in prior session)
 
 The `rest.mdx` page is intentionally minimal (redirects to the REST section). No claims to audit here beyond noting the dedicated `/docs/v0.0.1/rest/` section pages should be audited separately.
 
@@ -195,7 +195,7 @@ The `rest.mdx` page is intentionally minimal (redirects to the REST section). No
 
 ## `cache.mdx`
 
-Source: `plugins/umbra-cache/src/lib.rs`
+Source: `plugins/umbral-cache/src/lib.rs`
 
 ### [Required] `CachePlugin::new()` is the idiomatic API; doc only shows `init()`
 
@@ -224,7 +224,7 @@ The doc lists `Cache::redis()` as an available backend alongside `Cache::memory(
 
 ## `openapi.mdx`
 
-Source: `plugins/umbra-openapi/src/lib.rs`
+Source: `plugins/umbral-openapi/src/lib.rs`
 
 Verified signatures:
 
@@ -241,7 +241,7 @@ No critical discrepancies. The doc is accurate for the current source.
 
 ## `tasks.mdx`
 
-Source: `plugins/umbra-tasks/src/lib.rs`
+Source: `plugins/umbral-tasks/src/lib.rs`
 
 ### [Required] `enqueue` takes 3 arguments, not 2
 
@@ -271,7 +271,7 @@ The source exports `STATUS_PENDING`, `STATUS_RUNNING`, `STATUS_SUCCEEDED`, `STAT
 
 ## `signals.mdx`
 
-Source: `plugins/umbra-signals/src/lib.rs`
+Source: `plugins/umbral-signals/src/lib.rs`
 
 Verified:
 
@@ -289,7 +289,7 @@ The signals page shows a code snippet that calls `enqueue(...)` with 2 arguments
 
 ## `security.mdx`
 
-Source: `plugins/umbra-security/src/lib.rs`
+Source: `plugins/umbral-security/src/lib.rs`
 
 Verified:
 
@@ -297,7 +297,7 @@ Verified:
 - `SecurityPlugin::with_config(config: SecurityConfig)` — confirmed
 - `SecurityPlugin::with_hsts(hsts: ...)` — confirmed (not in doc but not wrong)
 - `SecurityConfig` struct fields including `hsts`, `content_security_policy`, `csrf_exempt_paths` — confirmed
-- Default `server_header: Some("umbra")` — confirmed (doc doesn't mention but not a discrepancy)
+- Default `server_header: Some("umbral")` — confirmed (doc doesn't mention but not a discrepancy)
 
 No discrepancies found. The doc is accurate.
 
@@ -305,7 +305,7 @@ No discrepancies found. The doc is accurate.
 
 ## `the-plugin-trait.mdx`
 
-Source: `crates/umbra-core/src/plugin.rs` (implied; not read in this session but cross-checked via plugin source impls)
+Source: `crates/umbral-core/src/plugin.rs` (implied; not read in this session but cross-checked via plugin source impls)
 
 The doc lists the Plugin trait surface:
 
@@ -314,17 +314,17 @@ name, dependencies, models, routes, system_checks, on_ready, commands,
 templates_dirs, wrap_router, static_files
 ```
 
-From source impls observed across plugins: `name`, `models`, `routes`, `on_ready`, `commands`, `wrap_router` are all confirmed. `static_dirs` (not `static_files`) is the correct method name (confirmed via `umbra-playground/src/lib.rs:171` and `umbra-static/src/lib.rs:304`).
+From source impls observed across plugins: `name`, `models`, `routes`, `on_ready`, `commands`, `wrap_router` are all confirmed. `static_dirs` (not `static_files`) is the correct method name (confirmed via `umbral-playground/src/lib.rs:171` and `umbral-static/src/lib.rs:304`).
 
 ### [Required] `static_files` vs `static_dirs`
 
-The doc uses `static_files` in the Plugin trait surface listing. The actual trait method is `static_dirs()` (confirmed in `umbra-playground/src/lib.rs:171`: `fn static_dirs(&self) -> Vec<StaticDir>`). Also `static_root_dirs()` is a separate method for root (non-namespaced) sources (confirmed in `umbra-static/src/lib.rs:304`). The doc needs to distinguish these two trait methods.
+The doc uses `static_files` in the Plugin trait surface listing. The actual trait method is `static_dirs()` (confirmed in `umbral-playground/src/lib.rs:171`: `fn static_dirs(&self) -> Vec<StaticDir>`). Also `static_root_dirs()` is a separate method for root (non-namespaced) sources (confirmed in `umbral-static/src/lib.rs:304`). The doc needs to distinguish these two trait methods.
 
 ---
 
 ## `static.mdx`
 
-Source: `plugins/umbra-static/src/lib.rs`
+Source: `plugins/umbral-static/src/lib.rs`
 
 Verified:
 
@@ -341,7 +341,7 @@ The doc mentions `.max_age()` but does not note that in `Environment::Dev` the e
 
 ## `media.mdx`
 
-Source: `plugins/umbra-media/src/lib.rs`
+Source: `plugins/umbral-media/src/lib.rs`
 
 Verified:
 
@@ -365,7 +365,7 @@ The `FsStorage::store` implementation silently renames uploads with active-conte
 
 ## `rls.mdx`
 
-Source: `plugins/umbra-rls/src/lib.rs`
+Source: `plugins/umbral-rls/src/lib.rs`
 
 Verified:
 
@@ -382,14 +382,14 @@ No critical discrepancies. The doc is accurate.
 
 ## `playground.mdx`
 
-Source: `plugins/umbra-playground/src/lib.rs`
+Source: `plugins/umbral-playground/src/lib.rs`
 
 Verified:
 
 - `PlaygroundPlugin::new(app_name)` — confirmed
 - `PlaygroundPlugin::default()` warns and falls back to `"default"` — confirmed
 - `.at(path)` — confirmed
-- Requires `umbra-openapi` and `umbra-rest` — correct (reads OpenAPI spec at runtime)
+- Requires `umbral-openapi` and `umbral-rest` — correct (reads OpenAPI spec at runtime)
 
 ### [Important] `allow_in_prod` not documented
 
@@ -399,14 +399,14 @@ The source adds `PlaygroundPlugin::allow_in_prod()` (lib.rs:89) which gates whet
 
 ## `live-reload.mdx`
 
-Source: `plugins/umbra-livereload/src/lib.rs`
+Source: `plugins/umbral-livereload/src/lib.rs`
 
 Verified:
 
 - `LiveReloadPlugin::new()` — confirmed (watches `./templates` + `./static` by default)
 - `.watch(path: impl Into<PathBuf>)` — confirmed
 - `.watch_only(paths: impl IntoIterator<Item = PathBuf>)` — confirmed
-- SSE at `/__umbra/livereload` — confirmed
+- SSE at `/__umbral/livereload` — confirmed
 - Auto-injection via `Plugin::wrap_router` — confirmed
 - Dev-only gating — confirmed
 - CSS hot-swap vs full reload — confirmed
@@ -417,7 +417,7 @@ No discrepancies found. The doc is accurate.
 
 ## `email.mdx`
 
-Source: `plugins/umbra-email/src/lib.rs`
+Source: `plugins/umbral-email/src/lib.rs`
 
 Verified:
 
@@ -428,7 +428,7 @@ Verified:
 - `send(&EmailMessage) -> Result<(), EmailError>` — confirmed
 - `render_email_body(template_name, context) -> Result<String, EmailError>` — confirmed
 - Console backend (default when SMTP host unset) — confirmed
-- `UMBRA_EMAIL_BACKEND=console` override — confirmed
+- `UMBRAL_EMAIL_BACKEND=console` override — confirmed
 
 ### [Nit] `EmailPlugin::default()` vs recommended `EmailPlugin` (unit struct)
 

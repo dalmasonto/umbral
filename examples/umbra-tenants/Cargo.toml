@@ -1,13 +1,13 @@
 [package]
-name = "umbra-tenants-example"
+name = "umbral-tenants-example"
 version = "0.1.0"
 edition = "2024"
-description = "Standalone umbra example: schema-per-tenant multitenancy with umbra-tenants (Tenant model, TenantRouter, create_tenant, migrate_schemas)."
+description = "Standalone umbral example: schema-per-tenant multitenancy with umbral-tenants (Tenant model, TenantRouter, create_tenant, migrate_schemas)."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-umbra = { path = "../../crates/umbra" }
-umbra-tenants = { path = "../../plugins/umbra-tenants" }
+umbral = { path = "../../crates/umbral" }
+umbral-tenants = { path = "../../plugins/umbral-tenants" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
 serde = { version = "1", features = ["derive"] }

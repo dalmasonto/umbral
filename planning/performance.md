@@ -1,6 +1,6 @@
 # Best performance practices
 
-Performance is key in Umbra. Here are some best practices to follow:
+Performance is key in Umbral. Here are some best practices to follow:
 
 1. Generics over dynamic dispatch
 2. Inlining critical functions

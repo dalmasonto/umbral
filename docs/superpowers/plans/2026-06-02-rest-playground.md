@@ -1,10 +1,10 @@
-# umbra-playground Implementation Plan
+# umbral-playground Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship `umbra-playground`, a new plugin that mounts a 3-pane React API playground at `/api/playground/`, fetching the existing `umbra-openapi` JSON spec at runtime and bundling a React + tailwindcss frontend via `build.rs`-driven esbuild.
+**Goal:** Ship `umbral-playground`, a new plugin that mounts a 3-pane React API playground at `/api/playground/`, fetching the existing `umbral-openapi` JSON spec at runtime and bundling a React + tailwindcss frontend via `build.rs`-driven esbuild.
 
-**Architecture:** New workspace crate `plugins/umbra-playground`. The Rust side is two routes (HTML shell + assets under `dist/`). `build.rs` invokes `esbuild` and `tailwindcss` CLIs, generates a `generated_assets.rs` Rust file with the hashed bundle filenames, and degrades gracefully (placeholder HTML + warning) if the tools are missing. The frontend is a single React app with zustand state, ~12 components, and a localStorage-backed history. Build pipeline produces ~40KB JS + ~10KB CSS.
+**Architecture:** New workspace crate `plugins/umbral-playground`. The Rust side is two routes (HTML shell + assets under `dist/`). `build.rs` invokes `esbuild` and `tailwindcss` CLIs, generates a `generated_assets.rs` Rust file with the hashed bundle filenames, and degrades gracefully (placeholder HTML + warning) if the tools are missing. The frontend is a single React app with zustand state, ~12 components, and a localStorage-backed history. Build pipeline produces ~40KB JS + ~10KB CSS.
 
 **Tech Stack:** Rust, Axum, vanilla HTML shell. React 18 + TypeScript + zustand + openapi-types. esbuild (bundler) + tailwindcss (CSS). Vitest + @testing-library/react. Node 20+ required at build time; degrades without.
 
@@ -17,47 +17,47 @@
 | Action | File |
 |---|---|
 | New | `crates/Cargo.toml` (modify: add member) |
-| New | `plugins/umbra-playground/Cargo.toml` |
-| New | `plugins/umbra-playground/build.rs` |
-| New | `plugins/umbra-playground/src/lib.rs` |
-| New | `plugins/umbra-playground/src/routes.rs` |
-| New | `plugins/umbra-playground/src/static.rs` |
-| New | `plugins/umbra-playground/src/placeholder.html` |
-| New | `plugins/umbra-playground/frontend/index.html` |
-| New | `plugins/umbra-playground/frontend/index.tsx` |
-| New | `plugins/umbra-playground/frontend/components/App.tsx` |
-| New | `plugins/umbra-playground/frontend/components/Header.tsx` |
-| New | `plugins/umbra-playground/frontend/components/EndpointTree.tsx` |
-| New | `plugins/umbra-playground/frontend/components/RequestBuilder.tsx` |
-| New | `plugins/umbra-playground/frontend/components/ResponseViewer.tsx` |
-| New | `plugins/umbra-playground/frontend/components/AuthTab.tsx` |
-| New | `plugins/umbra-playground/frontend/components/MethodBadge.tsx` |
-| New | `plugins/umbra-playground/frontend/components/JsonView.tsx` |
-| New | `plugins/umbra-playground/frontend/components/Tabs.tsx` |
-| New | `plugins/umbra-playground/frontend/components/KeyValueTable.tsx` |
-| New | `plugins/umbra-playground/frontend/components/EmptyState.tsx` |
-| New | `plugins/umbra-playground/frontend/components/ErrorBanner.tsx` |
-| New | `plugins/umbra-playground/frontend/state/store.ts` |
-| New | `plugins/umbra-playground/frontend/state/spec.ts` |
-| New | `plugins/umbra-playground/frontend/state/history.ts` |
-| New | `plugins/umbra-playground/frontend/state/curl.ts` |
-| New | `plugins/umbra-playground/frontend/state/buildFetchArgs.ts` |
-| New | `plugins/umbra-playground/frontend/styles/tailwind.config.js` |
-| New | `plugins/umbra-playground/frontend/styles/app.css` |
-| New | `plugins/umbra-playground/frontend/__tests__/buildFetchArgs.test.ts` |
-| New | `plugins/umbra-playground/frontend/__tests__/store.test.ts` |
-| New | `plugins/umbra-playground/frontend/__tests__/RequestBuilder.test.tsx` |
-| New | `plugins/umbra-playground/frontend/__tests__/ResponseViewer.test.tsx` |
-| New | `plugins/umbra-playground/frontend/vitest.config.ts` |
-| New | `plugins/umbra-playground/frontend/package.json` |
-| New | `plugins/umbra-playground/frontend/tsconfig.json` |
-| New | `plugins/umbra-playground/frontend/vitest.setup.ts` |
-| New | `plugins/umbra-playground/tests/rust_integration.rs` |
-| New | `plugins/umbra-playground/README.md` |
+| New | `plugins/umbral-playground/Cargo.toml` |
+| New | `plugins/umbral-playground/build.rs` |
+| New | `plugins/umbral-playground/src/lib.rs` |
+| New | `plugins/umbral-playground/src/routes.rs` |
+| New | `plugins/umbral-playground/src/static.rs` |
+| New | `plugins/umbral-playground/src/placeholder.html` |
+| New | `plugins/umbral-playground/frontend/index.html` |
+| New | `plugins/umbral-playground/frontend/index.tsx` |
+| New | `plugins/umbral-playground/frontend/components/App.tsx` |
+| New | `plugins/umbral-playground/frontend/components/Header.tsx` |
+| New | `plugins/umbral-playground/frontend/components/EndpointTree.tsx` |
+| New | `plugins/umbral-playground/frontend/components/RequestBuilder.tsx` |
+| New | `plugins/umbral-playground/frontend/components/ResponseViewer.tsx` |
+| New | `plugins/umbral-playground/frontend/components/AuthTab.tsx` |
+| New | `plugins/umbral-playground/frontend/components/MethodBadge.tsx` |
+| New | `plugins/umbral-playground/frontend/components/JsonView.tsx` |
+| New | `plugins/umbral-playground/frontend/components/Tabs.tsx` |
+| New | `plugins/umbral-playground/frontend/components/KeyValueTable.tsx` |
+| New | `plugins/umbral-playground/frontend/components/EmptyState.tsx` |
+| New | `plugins/umbral-playground/frontend/components/ErrorBanner.tsx` |
+| New | `plugins/umbral-playground/frontend/state/store.ts` |
+| New | `plugins/umbral-playground/frontend/state/spec.ts` |
+| New | `plugins/umbral-playground/frontend/state/history.ts` |
+| New | `plugins/umbral-playground/frontend/state/curl.ts` |
+| New | `plugins/umbral-playground/frontend/state/buildFetchArgs.ts` |
+| New | `plugins/umbral-playground/frontend/styles/tailwind.config.js` |
+| New | `plugins/umbral-playground/frontend/styles/app.css` |
+| New | `plugins/umbral-playground/frontend/__tests__/buildFetchArgs.test.ts` |
+| New | `plugins/umbral-playground/frontend/__tests__/store.test.ts` |
+| New | `plugins/umbral-playground/frontend/__tests__/RequestBuilder.test.tsx` |
+| New | `plugins/umbral-playground/frontend/__tests__/ResponseViewer.test.tsx` |
+| New | `plugins/umbral-playground/frontend/vitest.config.ts` |
+| New | `plugins/umbral-playground/frontend/package.json` |
+| New | `plugins/umbral-playground/frontend/tsconfig.json` |
+| New | `plugins/umbral-playground/frontend/vitest.setup.ts` |
+| New | `plugins/umbral-playground/tests/rust_integration.rs` |
+| New | `plugins/umbral-playground/README.md` |
 | New | `documentation/docs/v0.0.1/plugins/_category_.json` |
 | New | `documentation/docs/v0.0.1/plugins/playground.mdx` |
 | Modify | `examples/derive-demo/src/main.rs` (or wherever the demo registers plugins) |
-| Modify | `.gitignore` (add `plugins/umbra-playground/dist/`, `plugins/umbra-playground/src/generated_assets.rs`, `plugins/umbra-playground/frontend/node_modules/`) |
+| Modify | `.gitignore` (add `plugins/umbral-playground/dist/`, `plugins/umbral-playground/src/generated_assets.rs`, `plugins/umbral-playground/frontend/node_modules/`) |
 
 ---
 
@@ -76,13 +76,13 @@ Read the file and find the `[workspace]` block. Identify where existing `plugins
 
 - [ ] **Step 2: Add the new member**
 
-Add `"../plugins/umbra-playground"` to the workspace members list, in alphabetical position with the other plugin entries. The line should look like:
+Add `"../plugins/umbral-playground"` to the workspace members list, in alphabetical position with the other plugin entries. The line should look like:
 
 ```toml
-"../plugins/umbra-playground",
+"../plugins/umbral-playground",
 ```
 
-Do not modify the `[workspace.dependencies]` block. The new crate has no shared deps yet (only the `umbra` facade path-dep, which is local).
+Do not modify the `[workspace.dependencies]` block. The new crate has no shared deps yet (only the `umbral` facade path-dep, which is local).
 
 - [ ] **Step 3: Verify the workspace still resolves**
 
@@ -90,29 +90,29 @@ Run: `cd crates && cargo metadata --no-deps --format-version 1 | head -1 | pytho
 
 Expected: a number ≥ 12 (the count of currently-registered plugins). The exact number doesn't matter; what matters is that `cargo metadata` doesn't error.
 
-If it errors with "package not found in workspace", you added the path wrong — check the relative path is `../plugins/umbra-playground` (two dots, slash).
+If it errors with "package not found in workspace", you added the path wrong — check the relative path is `../plugins/umbral-playground` (two dots, slash).
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add crates/Cargo.toml
-git commit -m "chore(workspace): register umbra-playground plugin member"
+git commit -m "chore(workspace): register umbral-playground plugin member"
 ```
 
 ### Task 2: Scaffold the empty crate
 
 **Files:**
-- Create: `plugins/umbra-playground/Cargo.toml`
-- Create: `plugins/umbra-playground/src/lib.rs`
+- Create: `plugins/umbral-playground/Cargo.toml`
+- Create: `plugins/umbral-playground/src/lib.rs`
 
 - [ ] **Step 1: Write `Cargo.toml`**
 
-Write to `plugins/umbra-playground/Cargo.toml`:
+Write to `plugins/umbral-playground/Cargo.toml`:
 
 ```toml
 [package]
-name = "umbra-playground"
-description = "Interactive API playground UI for umbra-rest. The DRF browsable API, in umbra."
+name = "umbral-playground"
+description = "Interactive API playground UI for umbral-rest. The DRF browsable API, in umbral."
 workspace = "../../crates"
 version.workspace = true
 edition.workspace = true
@@ -122,20 +122,20 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbra = { path = "../../crates/umbra", version = "0.0.1" }
+umbral = { path = "../../crates/umbral", version = "0.0.1" }
 ```
 
-This mirrors the other plugin `Cargo.toml` files. The `workspace = "../../crates"` line is what tells Cargo this crate is part of the `crates/` workspace despite living one directory outside it. The `umbra` dep is the facade only — no plugin deps.
+This mirrors the other plugin `Cargo.toml` files. The `workspace = "../../crates"` line is what tells Cargo this crate is part of the `crates/` workspace despite living one directory outside it. The `umbral` dep is the facade only — no plugin deps.
 
 - [ ] **Step 2: Write a no-op `lib.rs`**
 
-Write to `plugins/umbra-playground/src/lib.rs`:
+Write to `plugins/umbral-playground/src/lib.rs`:
 
 ```rust
-//! umbra-playground — interactive API playground UI for umbra-rest.
+//! umbral-playground — interactive API playground UI for umbral-rest.
 //!
 //! MVP: a 3-pane React UI mounted at `/api/playground/`, fetching the
-//! existing `umbra-openapi` JSON spec at runtime. See the design spec
+//! existing `umbral-openapi` JSON spec at runtime. See the design spec
 //! at `docs/superpowers/specs/2026-06-02-rest-playground-design.md`.
 
 /// Placeholder. The real plugin type lands in Milestone 2.
@@ -146,11 +146,11 @@ The crate compiles to a library (`rlib`) and exposes a single placeholder type. 
 
 - [ ] **Step 3: Build the crate**
 
-Run: `cd crates && cargo build -p umbra-playground`
+Run: `cd crates && cargo build -p umbral-playground`
 
-Expected: `Compiling umbra-playground` followed by `Finished ...`. No warnings, no errors.
+Expected: `Compiling umbral-playground` followed by `Finished ...`. No warnings, no errors.
 
-If you get "error: failed to load manifest", check the `[package]` block has `name = "umbra-playground"` and `workspace = "../../crates"`.
+If you get "error: failed to load manifest", check the `[package]` block has `name = "umbral-playground"` and `workspace = "../../crates"`.
 
 - [ ] **Step 4: Run `cargo check` on the whole workspace**
 
@@ -161,7 +161,7 @@ Expected: `Finished ...` for the workspace, no new errors. Other crates' build s
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/umbra-playground/Cargo.toml plugins/umbra-playground/src/lib.rs
+git add plugins/umbral-playground/Cargo.toml plugins/umbral-playground/src/lib.rs
 git commit -m "feat(playground): scaffold empty plugin crate"
 ```
 
@@ -185,10 +185,10 @@ Read the file. The repo already ignores `target/`, `Cargo.lock` (in the umbrella
 Append at the end of the file:
 
 ```
-# umbra-playground build artifacts
-plugins/umbra-playground/dist/
-plugins/umbra-playground/src/generated_assets.rs
-plugins/umbra-playground/frontend/node_modules/
+# umbral-playground build artifacts
+plugins/umbral-playground/dist/
+plugins/umbral-playground/src/generated_assets.rs
+plugins/umbral-playground/frontend/node_modules/
 ```
 
 - [ ] **Step 3: Verify the existing file still parses**
@@ -206,19 +206,19 @@ git commit -m "chore(playground): gitignore dist/, generated_assets.rs, node_mod
 
 ### Task 4: `frontend/package.json` + `tsconfig.json`
 
-These are the *frontend* toolchain config files. They live inside `plugins/umbra-playground/frontend/` and are managed by Node, not Cargo. They pin the exact versions the README will document.
+These are the *frontend* toolchain config files. They live inside `plugins/umbral-playground/frontend/` and are managed by Node, not Cargo. They pin the exact versions the README will document.
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/package.json`
-- Create: `plugins/umbra-playground/frontend/tsconfig.json`
+- Create: `plugins/umbral-playground/frontend/package.json`
+- Create: `plugins/umbral-playground/frontend/tsconfig.json`
 
 - [ ] **Step 1: Write `package.json`**
 
-Write to `plugins/umbra-playground/frontend/package.json`:
+Write to `plugins/umbral-playground/frontend/package.json`:
 
 ```json
 {
-  "name": "umbra-playground-frontend",
+  "name": "umbral-playground-frontend",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -252,7 +252,7 @@ The `build` and `build:dev` scripts are intentionally not invoked from `npm` dir
 
 - [ ] **Step 2: Write `tsconfig.json`**
 
-Write to `plugins/umbra-playground/frontend/tsconfig.json`:
+Write to `plugins/umbral-playground/frontend/tsconfig.json`:
 
 ```json
 {
@@ -285,21 +285,21 @@ We deliberately don't run `npm install` from this task. The build pipeline in Ta
 - [ ] **Step 4: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/package.json plugins/umbra-playground/frontend/tsconfig.json
+git add plugins/umbral-playground/frontend/package.json plugins/umbral-playground/frontend/tsconfig.json
 git commit -m "feat(playground): add frontend package.json and tsconfig"
 ```
 
 ### Task 5: Minimal `build.rs` that produces a placeholder `generated_assets.rs`
 
 **Files:**
-- Create: `plugins/umbra-playground/build.rs`
+- Create: `plugins/umbral-playground/build.rs`
 
 - [ ] **Step 1: Write `build.rs`**
 
-Write to `plugins/umbra-playground/build.rs`:
+Write to `plugins/umbral-playground/build.rs`:
 
 ```rust
-//! build.rs for umbra-playground.
+//! build.rs for umbral-playground.
 //!
 //! Invokes `esbuild` and `tailwindcss` to bundle the React frontend
 //! and CSS into `dist/`. Writes `src/generated_assets.rs` with the
@@ -339,13 +339,13 @@ fn main() {
             match bundle(&frontend_dir, &dist_dir, &eb, &tw, debug) {
                 Ok((js, css)) => (js, css),
                 Err(e) => {
-                    eprintln!("cargo:warning=umbra-playground: bundle failed ({e}); using placeholder");
+                    eprintln!("cargo:warning=umbral-playground: bundle failed ({e}); using placeholder");
                     (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
                 }
             }
         }
         _ => {
-            eprintln!("cargo:warning=umbra-playground: esbuild and/or tailwindcss not in $PATH; using placeholder HTML. Install with `npm i -g esbuild tailwindcss` to enable the full UI.");
+            eprintln!("cargo:warning=umbral-playground: esbuild and/or tailwindcss not in $PATH; using placeholder HTML. Install with `npm i -g esbuild tailwindcss` to enable the full UI.");
             (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
         }
     };
@@ -455,7 +455,7 @@ This file is long but mechanical. Key things to note:
 
 - [ ] **Step 2: Write the placeholder HTML**
 
-Write to `plugins/umbra-playground/src/placeholder.html`:
+Write to `plugins/umbral-playground/src/placeholder.html`:
 
 ```html
 <!doctype html>
@@ -463,7 +463,7 @@ Write to `plugins/umbra-playground/src/placeholder.html`:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>umbra playground — placeholder</title>
+  <title>umbral playground — placeholder</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: #020617; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem; }
@@ -475,7 +475,7 @@ Write to `plugins/umbra-playground/src/placeholder.html`:
 </head>
 <body>
   <div class="card">
-    <h1>umbra playground</h1>
+    <h1>umbral playground</h1>
     <p>The playground frontend was not built.</p>
     <p>To enable the interactive UI, install <code>esbuild</code> and <code>tailwindcss</code> in your <code>$PATH</code>:</p>
     <p><code>npm i -g esbuild tailwindcss</code></p>
@@ -489,13 +489,13 @@ This is a deliberately *plain* file. The interactive UI lives in `frontend/`; th
 
 - [ ] **Step 3: Add `include_str!` to `lib.rs`**
 
-Modify `plugins/umbra-playground/src/lib.rs` to read:
+Modify `plugins/umbral-playground/src/lib.rs` to read:
 
 ```rust
-//! umbra-playground — interactive API playground UI for umbra-rest.
+//! umbral-playground — interactive API playground UI for umbral-rest.
 //!
 //! MVP: a 3-pane React UI mounted at `/api/playground/`, fetching the
-//! existing `umbra-openapi` JSON spec at runtime. See the design spec
+//! existing `umbral-openapi` JSON spec at runtime. See the design spec
 //! at `docs/superpowers/specs/2026-06-02-rest-playground-design.md`.
 
 pub mod routes;
@@ -512,11 +512,11 @@ pub(crate) use generated_assets::{CSS, JS};
 pub(crate) const PLACEHOLDER_HTML: &str = include_str!("placeholder.html");
 ```
 
-Wait — the `include!` path above is wrong. `OUT_DIR` is `target/.../build/umbra-playground-<hash>/out/`, and `generated_assets.rs` is being written to `src/`, not `OUT_DIR`. Fix: write `generated_assets.rs` to `OUT_DIR` and `include!` from there. Update `build.rs` `out_path` to `PathBuf::from(env::var("OUT_DIR").unwrap()).join("generated_assets.rs")` and `lib.rs` to `include!(concat!(env!("OUT_DIR"), "/generated_assets.rs"))`. This is a real bug in the draft — make the fix when transcribing.
+Wait — the `include!` path above is wrong. `OUT_DIR` is `target/.../build/umbral-playground-<hash>/out/`, and `generated_assets.rs` is being written to `src/`, not `OUT_DIR`. Fix: write `generated_assets.rs` to `OUT_DIR` and `include!` from there. Update `build.rs` `out_path` to `PathBuf::from(env::var("OUT_DIR").unwrap()).join("generated_assets.rs")` and `lib.rs` to `include!(concat!(env!("OUT_DIR"), "/generated_assets.rs"))`. This is a real bug in the draft — make the fix when transcribing.
 
 - [ ] **Step 4: Apply the `OUT_DIR` fix to `build.rs`**
 
-In `plugins/umbra-playground/build.rs`, change:
+In `plugins/umbral-playground/build.rs`, change:
 
 ```rust
 let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -530,31 +530,31 @@ And in `lib.rs`, use:
 include!(concat!(env!("OUT_DIR"), "/generated_assets.rs"))
 ```
 
-This way `generated_assets.rs` lands in `OUT_DIR`, which is gitignored transitively (it lives under `target/`). No need to add `plugins/umbra-playground/src/generated_assets.rs` to `.gitignore` after all — but keep the line in `.gitignore` from Task 3 as a safety net in case a future build step changes the location.
+This way `generated_assets.rs` lands in `OUT_DIR`, which is gitignored transitively (it lives under `target/`). No need to add `plugins/umbral-playground/src/generated_assets.rs` to `.gitignore` after all — but keep the line in `.gitignore` from Task 3 as a safety net in case a future build step changes the location.
 
 - [ ] **Step 5: Build and verify `OUT_DIR` works**
 
-Run: `cd crates && cargo build -p umbra-playground 2>&1 | tail -20`
+Run: `cd crates && cargo build -p umbral-playground 2>&1 | tail -20`
 
-Expected: a `cargo:warning=umbra-playground: esbuild and/or tailwindcss not in $PATH; using placeholder HTML` line, then `Compiling umbra-playground` and `Finished ...`. The warning is expected and correct on this machine.
+Expected: a `cargo:warning=umbral-playground: esbuild and/or tailwindcss not in $PATH; using placeholder HTML` line, then `Compiling umbral-playground` and `Finished ...`. The warning is expected and correct on this machine.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add plugins/umbra-playground/build.rs plugins/umbra-playground/src/lib.rs plugins/umbra-playground/src/placeholder.html
+git add plugins/umbral-playground/build.rs plugins/umbral-playground/src/lib.rs plugins/umbral-playground/src/placeholder.html
 git commit -m "feat(playground): build pipeline with degraded placeholder mode"
 ```
 
 ### Task 6: Routes + static asset serving
 
 **Files:**
-- Create: `plugins/umbra-playground/src/routes.rs`
-- Create: `plugins/umbra-playground/src/static_serve.rs`
-- Modify: `plugins/umbra-playground/src/lib.rs` (add `Plugin` impl)
+- Create: `plugins/umbral-playground/src/routes.rs`
+- Create: `plugins/umbral-playground/src/static_serve.rs`
+- Modify: `plugins/umbral-playground/src/lib.rs` (add `Plugin` impl)
 
 - [ ] **Step 1: Write `static_serve.rs`**
 
-Write to `plugins/umbra-playground/src/static_serve.rs`:
+Write to `plugins/umbral-playground/src/static_serve.rs`:
 
 ```rust
 //! Path-traversal-safe static file serving for the bundled assets.
@@ -610,7 +610,7 @@ pub fn content_type(path: &Path) -> &'static str {
 
 - [ ] **Step 2: Write `routes.rs`**
 
-Write to `plugins/umbra-playground/src/routes.rs`:
+Write to `plugins/umbral-playground/src/routes.rs`:
 
 ```rust
 //! Two routes: the HTML shell and the bundled assets.
@@ -713,7 +713,7 @@ pub fn router(state: PlaygroundState) -> axum::Router {
 
 - [ ] **Step 3: Write `shell.html`**
 
-Write to `plugins/umbra-playground/src/shell.html`:
+Write to `plugins/umbral-playground/src/shell.html`:
 
 ```html
 <!doctype html>
@@ -721,7 +721,7 @@ Write to `plugins/umbra-playground/src/shell.html`:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>umbra playground</title>
+  <title>umbral playground</title>
   <link rel="stylesheet" href="/__CSS__" />
 </head>
 <body>
@@ -762,18 +762,18 @@ And `shell.html` becomes:
 
 - [ ] **Step 5: Write the `Plugin` impl in `lib.rs`**
 
-Replace `plugins/umbra-playground/src/lib.rs` with:
+Replace `plugins/umbral-playground/src/lib.rs` with:
 
 ```rust
-//! umbra-playground — interactive API playground UI for umbra-rest.
+//! umbral-playground — interactive API playground UI for umbral-rest.
 //!
 //! MVP: a 3-pane React UI mounted at `/api/playground/`, fetching the
-//! existing `umbra-openapi` JSON spec at runtime. See the design spec
+//! existing `umbral-openapi` JSON spec at runtime. See the design spec
 //! at `docs/superpowers/specs/2026-06-02-rest-playground-design.md`.
 
 use std::sync::Arc;
 
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 pub mod routes;
 pub mod static_serve;
@@ -817,7 +817,7 @@ impl PlaygroundPlugin {
 
 impl Plugin for PlaygroundPlugin {
     fn name(&self) -> &'static str {
-        "umbra-playground"
+        "umbral-playground"
     }
 
     fn routes(&self) -> Option<axum::Router> {
@@ -841,13 +841,13 @@ The `routes()` method is intentionally rough in this milestone — the real nest
 
 - [ ] **Step 6: Build and verify**
 
-Run: `cd crates && cargo build -p umbra-playground 2>&1 | tail -10`
+Run: `cd crates && cargo build -p umbral-playground 2>&1 | tail -10`
 
 Expected: `Finished ...`. If you see errors about `axum::Router` not being a valid return type, add `axum = "0.8"` to `[dependencies]` in `Cargo.toml`.
 
 - [ ] **Step 7: Add `axum` to Cargo.toml if needed**
 
-If the build failed with `axum` errors, edit `plugins/umbra-playground/Cargo.toml` to add:
+If the build failed with `axum` errors, edit `plugins/umbral-playground/Cargo.toml` to add:
 
 ```toml
 axum = "0.8"
@@ -858,7 +858,7 @@ under `[dependencies]`. Then re-run Step 6.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add plugins/umbra-playground/
+git add plugins/umbral-playground/
 git commit -m "feat(playground): routes for shell + static assets, Plugin impl skeleton"
 ```
 
@@ -867,11 +867,11 @@ git commit -m "feat(playground): routes for shell + static assets, Plugin impl s
 We don't have a full example app exercising the plugin yet (that's M6). For M2, the verification is *structural* — confirm the crate builds, the warning fires when CLIs are missing, and the build pipeline can be re-run with the CLIs available to produce real assets.
 
 **Files:**
-- Create: `plugins/umbra-playground/tests/m2_build.rs` (integration test that just builds and checks the generated asset filenames)
+- Create: `plugins/umbral-playground/tests/m2_build.rs` (integration test that just builds and checks the generated asset filenames)
 
 - [ ] **Step 1: Write a smoke test**
 
-Write to `plugins/umbra-playground/tests/m2_build.rs`:
+Write to `plugins/umbral-playground/tests/m2_build.rs`:
 
 ```rust
 //! Smoke test for the build pipeline. Asserts the generated_assets.rs
@@ -882,7 +882,7 @@ Write to `plugins/umbra-playground/tests/m2_build.rs`:
 fn generated_assets_module_is_built() {
     // The include! in lib.rs at compile time guarantees the module
     // is present. If this test compiles, the build pipeline ran.
-    use umbra_playground::{CSS, JS};
+    use umbral_playground::{CSS, JS};
     assert!(!CSS.is_empty(), "CSS asset name should be non-empty");
     assert!(!JS.is_empty(), "JS asset name should be non-empty");
     // Either real hash or placeholder marker; both are valid.
@@ -895,7 +895,7 @@ fn generated_assets_module_is_built() {
 
 - [ ] **Step 2: Run the test**
 
-Run: `cd crates && cargo test -p umbra-playground --test m2_build`
+Run: `cd crates && cargo test -p umbral-playground --test m2_build`
 
 Expected: `1 passed; 0 failed`. The warning about esbuild/tailwindcss not in $PATH is expected and doesn't fail the test.
 
@@ -903,16 +903,16 @@ Expected: `1 passed; 0 failed`. The warning about esbuild/tailwindcss not in $PA
 
 Run: `which esbuild tailwindcss 2>&1`
 
-If both CLIs are present, run: `cd crates && cargo clean -p umbra-playground && cargo build -p umbra-playground 2>&1 | tail -20`
+If both CLIs are present, run: `cd crates && cargo clean -p umbral-playground && cargo build -p umbral-playground 2>&1 | tail -20`
 
-Expected: no warning line this time, the build still succeeds, and `plugins/umbra-playground/dist/playground.*.{js,css}` files now exist.
+Expected: no warning line this time, the build still succeeds, and `plugins/umbral-playground/dist/playground.*.{js,css}` files now exist.
 
 If the CLIs are not present (the common case in this environment), skip this step. The degraded-mode path is the one that ships in CI; the happy path is verified by anyone who runs `npm i -g esbuild tailwindcss` once.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add plugins/umbra-playground/tests/m2_build.rs
+git add plugins/umbral-playground/tests/m2_build.rs
 git commit -m "test(playground): m2 build-pipeline smoke test"
 ```
 
@@ -925,15 +925,15 @@ Goal: the React app boots, fetches the OpenAPI spec, and renders a navigable tre
 ### Task 8: Frontend state — zustand store skeleton + spec loader
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/state/store.ts`
-- Create: `plugins/umbra-playground/frontend/state/spec.ts`
-- Create: `plugins/umbra-playground/frontend/state/buildFetchArgs.ts`
-- Create: `plugins/umbra-playground/frontend/state/curl.ts`
-- Create: `plugins/umbra-playground/frontend/state/history.ts`
+- Create: `plugins/umbral-playground/frontend/state/store.ts`
+- Create: `plugins/umbral-playground/frontend/state/spec.ts`
+- Create: `plugins/umbral-playground/frontend/state/buildFetchArgs.ts`
+- Create: `plugins/umbral-playground/frontend/state/curl.ts`
+- Create: `plugins/umbral-playground/frontend/state/history.ts`
 
 - [ ] **Step 1: Write the shared types in `store.ts`**
 
-Write to `plugins/umbra-playground/frontend/state/store.ts`:
+Write to `plugins/umbral-playground/frontend/state/store.ts`:
 
 ```typescript
 import { create } from "zustand";
@@ -1063,7 +1063,7 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
 
 - [ ] **Step 2: Write the spec helper**
 
-Write to `plugins/umbra-playground/frontend/state/spec.ts`:
+Write to `plugins/umbral-playground/frontend/state/spec.ts`:
 
 ```typescript
 import type { OpenAPIV3 } from "openapi-types";
@@ -1137,7 +1137,7 @@ Wait — there's a syntax error above (`if (!op) continue { ... }` should be `if
 
 - [ ] **Step 3: Write the placeholder `buildFetchArgs.ts`**
 
-Write to `plugins/umbra-playground/frontend/state/buildFetchArgs.ts`:
+Write to `plugins/umbral-playground/frontend/state/buildFetchArgs.ts`:
 
 ```typescript
 import type { RequestDraft } from "./store";
@@ -1165,7 +1165,7 @@ export function buildFetchArgs(draft: RequestDraft): {
 
 - [ ] **Step 4: Write the placeholder `curl.ts`**
 
-Write to `plugins/umbra-playground/frontend/state/curl.ts`:
+Write to `plugins/umbral-playground/frontend/state/curl.ts`:
 
 ```typescript
 import type { RequestDraft } from "./store";
@@ -1189,12 +1189,12 @@ export function toCurl(draft: RequestDraft): string {
 
 - [ ] **Step 5: Write the placeholder `history.ts`**
 
-Write to `plugins/umbra-playground/frontend/state/history.ts`:
+Write to `plugins/umbral-playground/frontend/state/history.ts`:
 
 ```typescript
 import type { ResponseRecord } from "./store";
 
-const STORAGE_KEY = "umbra-playground:history:v1";
+const STORAGE_KEY = "umbral-playground:history:v1";
 const PER_OPERATION_CAP = 50;
 const TOTAL_BYTE_CAP = 5 * 1024 * 1024; // 5MB
 
@@ -1257,23 +1257,23 @@ function enforceCaps(
 - [ ] **Step 6: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/state/
+git add plugins/umbral-playground/frontend/state/
 git commit -m "feat(playground): zustand store skeleton + spec/curl/history helpers"
 ```
 
 ### Task 9: Components — App, Header, Tabs, MethodBadge, EmptyState, ErrorBanner
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/components/App.tsx`
-- Create: `plugins/umbra-playground/frontend/components/Header.tsx`
-- Create: `plugins/umbra-playground/frontend/components/Tabs.tsx`
-- Create: `plugins/umbra-playground/frontend/components/MethodBadge.tsx`
-- Create: `plugins/umbra-playground/frontend/components/EmptyState.tsx`
-- Create: `plugins/umbra-playground/frontend/components/ErrorBanner.tsx`
+- Create: `plugins/umbral-playground/frontend/components/App.tsx`
+- Create: `plugins/umbral-playground/frontend/components/Header.tsx`
+- Create: `plugins/umbral-playground/frontend/components/Tabs.tsx`
+- Create: `plugins/umbral-playground/frontend/components/MethodBadge.tsx`
+- Create: `plugins/umbral-playground/frontend/components/EmptyState.tsx`
+- Create: `plugins/umbral-playground/frontend/components/ErrorBanner.tsx`
 
 - [ ] **Step 1: Write `MethodBadge.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/MethodBadge.tsx`:
+Write to `plugins/umbral-playground/frontend/components/MethodBadge.tsx`:
 
 ```tsx
 const COLORS: Record<string, string> = {
@@ -1298,7 +1298,7 @@ export function MethodBadge({ method }: { method: string }) {
 
 - [ ] **Step 2: Write `Tabs.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/Tabs.tsx`:
+Write to `plugins/umbral-playground/frontend/components/Tabs.tsx`:
 
 ```tsx
 import { useState, type ReactNode } from "react";
@@ -1338,7 +1338,7 @@ export function Tabs({ tabs, initial }: { tabs: Tab[]; initial?: string }) {
 
 - [ ] **Step 3: Write `EmptyState.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/EmptyState.tsx`:
+Write to `plugins/umbral-playground/frontend/components/EmptyState.tsx`:
 
 ```tsx
 import type { ReactNode } from "react";
@@ -1363,7 +1363,7 @@ export function EmptyState({
 
 - [ ] **Step 4: Write `ErrorBanner.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/ErrorBanner.tsx`:
+Write to `plugins/umbral-playground/frontend/components/ErrorBanner.tsx`:
 
 ```tsx
 export function ErrorBanner({
@@ -1395,7 +1395,7 @@ export function ErrorBanner({
 
 - [ ] **Step 5: Write `Header.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/Header.tsx`:
+Write to `plugins/umbral-playground/frontend/components/Header.tsx`:
 
 ```tsx
 import { usePlayground } from "../state/store";
@@ -1407,7 +1407,7 @@ export function Header() {
   return (
     <header className="border-b border-slate-800 px-4 py-2 flex items-center justify-between bg-slate-950/60">
       <div className="flex items-baseline gap-3">
-        <span className="font-mono text-xs tracking-widest text-slate-500">umbra</span>
+        <span className="font-mono text-xs tracking-widest text-slate-500">umbral</span>
         <span className="font-mono text-xs text-slate-300">
           {spec?.info?.title ?? "playground"}
         </span>
@@ -1431,7 +1431,7 @@ export function Header() {
 
 - [ ] **Step 6: Write `App.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/App.tsx`:
+Write to `plugins/umbral-playground/frontend/components/App.tsx`:
 
 ```tsx
 import { useEffect } from "react";
@@ -1476,24 +1476,24 @@ export function App() {
 - [ ] **Step 7: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/components/
+git add plugins/umbral-playground/frontend/components/
 git commit -m "feat(playground): app shell, header, tabs, badge, empty/error states"
 ```
 
 ### Task 10: Components — EndpointTree, RequestBuilder (stub), ResponseViewer (stub)
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/components/EndpointTree.tsx`
-- Create: `plugins/umbra-playground/frontend/components/RequestBuilder.tsx`
-- Create: `plugins/umbra-playground/frontend/components/ResponseViewer.tsx`
-- Create: `plugins/umbra-playground/frontend/index.tsx`
-- Create: `plugins/umbra-playground/frontend/index.html`
-- Create: `plugins/umbra-playground/frontend/styles/tailwind.config.js`
-- Create: `plugins/umbra-playground/frontend/styles/app.css`
+- Create: `plugins/umbral-playground/frontend/components/EndpointTree.tsx`
+- Create: `plugins/umbral-playground/frontend/components/RequestBuilder.tsx`
+- Create: `plugins/umbral-playground/frontend/components/ResponseViewer.tsx`
+- Create: `plugins/umbral-playground/frontend/index.tsx`
+- Create: `plugins/umbral-playground/frontend/index.html`
+- Create: `plugins/umbral-playground/frontend/styles/tailwind.config.js`
+- Create: `plugins/umbral-playground/frontend/styles/app.css`
 
 - [ ] **Step 1: Write `EndpointTree.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/EndpointTree.tsx`:
+Write to `plugins/umbral-playground/frontend/components/EndpointTree.tsx`:
 
 ```tsx
 import { useMemo, useState } from "react";
@@ -1590,7 +1590,7 @@ export function EndpointTree() {
 
 - [ ] **Step 2: Write a stub `RequestBuilder.tsx` for M3**
 
-Write to `plugins/umbra-playground/frontend/components/RequestBuilder.tsx`:
+Write to `plugins/umbral-playground/frontend/components/RequestBuilder.tsx`:
 
 ```tsx
 import { useEffect } from "react";
@@ -1639,7 +1639,7 @@ export function RequestBuilder() {
 
 - [ ] **Step 3: Write a stub `ResponseViewer.tsx` for M3**
 
-Write to `plugins/umbra-playground/frontend/components/ResponseViewer.tsx`:
+Write to `plugins/umbral-playground/frontend/components/ResponseViewer.tsx`:
 
 ```tsx
 import { EmptyState } from "./EmptyState";
@@ -1651,7 +1651,7 @@ export function ResponseViewer() {
 
 - [ ] **Step 4: Write `index.tsx`**
 
-Write to `plugins/umbra-playground/frontend/index.tsx`:
+Write to `plugins/umbral-playground/frontend/index.tsx`:
 
 ```tsx
 import { createRoot } from "react-dom/client";
@@ -1659,14 +1659,14 @@ import { App } from "./components/App";
 
 const container = document.getElementById("root");
 if (!container) {
-  throw new Error("umbra-playground: #root not found");
+  throw new Error("umbral-playground: #root not found");
 }
 createRoot(container).render(<App />);
 ```
 
 - [ ] **Step 5: Write `index.html`**
 
-Write to `plugins/umbra-playground/frontend/index.html`:
+Write to `plugins/umbral-playground/frontend/index.html`:
 
 ```html
 <!doctype html>
@@ -1674,7 +1674,7 @@ Write to `plugins/umbra-playground/frontend/index.html`:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>umbra playground</title>
+  <title>umbral playground</title>
 </head>
 <body>
   <div id="root"></div>
@@ -1686,7 +1686,7 @@ This is the *source* HTML; the served `shell.html` is the runtime variant. `esbu
 
 - [ ] **Step 6: Write `tailwind.config.js`**
 
-Write to `plugins/umbra-playground/frontend/styles/tailwind.config.js`:
+Write to `plugins/umbral-playground/frontend/styles/tailwind.config.js`:
 
 ```javascript
 /** @type {import('tailwindcss').Config} */
@@ -1701,7 +1701,7 @@ export default {
 
 - [ ] **Step 7: Write `app.css`**
 
-Write to `plugins/umbra-playground/frontend/styles/app.css`:
+Write to `plugins/umbral-playground/frontend/styles/app.css`:
 
 ```css
 @tailwind base;
@@ -1712,7 +1712,7 @@ Write to `plugins/umbra-playground/frontend/styles/app.css`:
 - [ ] **Step 8: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/
+git add plugins/umbral-playground/frontend/
 git commit -m "feat(playground): m3 frontend — tree, URL strip, full app shell"
 ```
 
@@ -1731,24 +1731,24 @@ If not: skip to Step 4. The placeholder page is the correct degraded outcome.
 
 - [ ] **Step 2: Install frontend deps (only if running the happy path)**
 
-Run: `cd plugins/umbra-playground/frontend && npm install --no-audit --no-fund 2>&1 | tail -5`
+Run: `cd plugins/umbral-playground/frontend && npm install --no-audit --no-fund 2>&1 | tail -5`
 
 Expected: `added N packages` with no errors.
 
 - [ ] **Step 3: Build the plugin**
 
-Run: `cd ../../../crates && cargo clean -p umbra-playground && cargo build -p umbra-playground 2>&1 | tail -10`
+Run: `cd ../../../crates && cargo clean -p umbral-playground && cargo build -p umbral-playground 2>&1 | tail -10`
 
 Expected: no `cargo:warning=...` about missing CLIs. `Finished ...` for the crate. The `dist/` directory should now contain `playground.<hash>.{js,css}`.
 
 - [ ] **Step 4: Document the manual visual check in the README**
 
-In `plugins/umbra-playground/README.md`, add a "Manual smoke test" section:
+In `plugins/umbral-playground/README.md`, add a "Manual smoke test" section:
 
 ```markdown
 ## Manual smoke test
 
-After `cargo build -p umbra-playground` with the CLIs installed:
+After `cargo build -p umbral-playground` with the CLIs installed:
 
 1. Run an example app that registers `RestPlugin`, `OpenApiPlugin`, and `PlaygroundPlugin`.
 2. Open `http://localhost:<port>/api/playground/` in a browser.
@@ -1759,19 +1759,19 @@ After `cargo build -p umbra-playground` with the CLIs installed:
 
 The README file is `Create`, not `Modify`. Write it now:
 
-Write to `plugins/umbra-playground/README.md`:
+Write to `plugins/umbral-playground/README.md`:
 
 ```markdown
-# umbra-playground
+# umbral-playground
 
-Interactive API playground UI for umbra-rest. A 3-pane Postman-style UI mounted at `/api/playground/`. Fetches the existing `umbra-openapi` JSON spec at runtime and renders a navigable endpoint tree, request builder, and response viewer.
+Interactive API playground UI for umbral-rest. A 3-pane Postman-style UI mounted at `/api/playground/`. Fetches the existing `umbral-openapi` JSON spec at runtime and renders a navigable endpoint tree, request builder, and response viewer.
 
 ## Quick start
 
 ```rust
-use umbra_playground::PlaygroundPlugin;
-use umbra_rest::RestPlugin;
-use umbra_openapi::OpenApiPlugin;
+use umbral_playground::PlaygroundPlugin;
+use umbral_rest::RestPlugin;
+use umbral_openapi::OpenApiPlugin;
 
 let app = App::builder()
     .plugin(RestPlugin::default())
@@ -1806,7 +1806,7 @@ See `docs/superpowers/specs/2026-06-02-rest-playground-design.md` for the full d
 
 ## Manual smoke test
 
-After `cargo build -p umbra-playground` with the CLIs installed:
+After `cargo build -p umbral-playground` with the CLIs installed:
 
 1. Run an example app that registers `RestPlugin`, `OpenApiPlugin`, and `PlaygroundPlugin`.
 2. Open `http://localhost:<port>/api/playground/` in a browser.
@@ -1818,7 +1818,7 @@ After `cargo build -p umbra-playground` with the CLIs installed:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/umbra-playground/README.md
+git add plugins/umbral-playground/README.md
 git commit -m "docs(playground): README with quickstart and v1 limitations"
 ```
 
@@ -1831,11 +1831,11 @@ Goal: the playground actually sends requests and renders the response. All four 
 ### Task 12: Implement `buildFetchArgs` properly
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/state/buildFetchArgs.ts`
+- Modify: `plugins/umbral-playground/frontend/state/buildFetchArgs.ts`
 
 - [ ] **Step 1: Write the failing test**
 
-Write to `plugins/umbra-playground/frontend/__tests__/buildFetchArgs.test.ts`:
+Write to `plugins/umbral-playground/frontend/__tests__/buildFetchArgs.test.ts`:
 
 ```typescript
 import { describe, it, expect } from "vitest";
@@ -1960,19 +1960,19 @@ describe("buildFetchArgs", () => {
 
 - [ ] **Step 2: Install deps so Vitest can run**
 
-Run: `cd plugins/umbra-playground/frontend && npm install --no-audit --no-fund 2>&1 | tail -5`
+Run: `cd plugins/umbral-playground/frontend && npm install --no-audit --no-fund 2>&1 | tail -5`
 
 Expected: `added N packages`.
 
 - [ ] **Step 3: Run the test to verify it fails**
 
-Run: `cd plugins/umbra-playground/frontend && npx vitest run __tests__/buildFetchArgs.test.ts 2>&1 | tail -30`
+Run: `cd plugins/umbral-playground/frontend && npx vitest run __tests__/buildFetchArgs.test.ts 2>&1 | tail -30`
 
 Expected: most tests fail with `ok: false, error: "not yet implemented"`. The test runner reports the failures.
 
 - [ ] **Step 4: Implement `buildFetchArgs`**
 
-Replace `plugins/umbra-playground/frontend/state/buildFetchArgs.ts` with:
+Replace `plugins/umbral-playground/frontend/state/buildFetchArgs.ts` with:
 
 ```typescript
 import type { RequestDraft } from "./store";
@@ -2057,32 +2057,32 @@ export function buildFetchArgs(draft: RequestDraft): {
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `cd plugins/umbra-playground/frontend && npx vitest run __tests__/buildFetchArgs.test.ts 2>&1 | tail -15`
+Run: `cd plugins/umbral-playground/frontend && npx vitest run __tests__/buildFetchArgs.test.ts 2>&1 | tail -15`
 
 Expected: all 10 tests pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/state/buildFetchArgs.ts plugins/umbra-playground/frontend/__tests__/buildFetchArgs.test.ts plugins/umbra-playground/frontend/package-lock.json plugins/umbra-playground/frontend/node_modules/
+git add plugins/umbral-playground/frontend/state/buildFetchArgs.ts plugins/umbral-playground/frontend/__tests__/buildFetchArgs.test.ts plugins/umbral-playground/frontend/package-lock.json plugins/umbral-playground/frontend/node_modules/
 git commit -m "feat(playground): buildFetchArgs with full template + body + header logic"
 ```
 
 Wait — `node_modules/` is gitignored. Don't add it. The `package-lock.json` *should* be committed (so the lockfile pins the dependency tree). Update the commit:
 
 ```bash
-git add plugins/umbra-playground/frontend/state/buildFetchArgs.ts plugins/umbra-playground/frontend/__tests__/buildFetchArgs.test.ts plugins/umbra-playground/frontend/package-lock.json
+git add plugins/umbral-playground/frontend/state/buildFetchArgs.ts plugins/umbral-playground/frontend/__tests__/buildFetchArgs.test.ts plugins/umbral-playground/frontend/package-lock.json
 git commit -m "feat(playground): buildFetchArgs with full template + body + header logic"
 ```
 
 ### Task 13: Wire up `send()` in the store
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/state/store.ts`
+- Modify: `plugins/umbral-playground/frontend/state/store.ts`
 
 - [ ] **Step 1: Update the `send` implementation**
 
-In `plugins/umbra-playground/frontend/state/store.ts`, replace the `send` action:
+In `plugins/umbral-playground/frontend/state/store.ts`, replace the `send` action:
 
 ```typescript
   send: async () => {
@@ -2167,7 +2167,7 @@ In `plugins/umbra-playground/frontend/state/store.ts`, replace the `send` action
 
 - [ ] **Step 2: Add the imports at the top of the file**
 
-In `plugins/umbra-playground/frontend/state/store.ts`, the new `send` references `buildFetchArgs` and `saveHistoryDebounced`. Add at the top:
+In `plugins/umbral-playground/frontend/state/store.ts`, the new `send` references `buildFetchArgs` and `saveHistoryDebounced`. Add at the top:
 
 ```typescript
 import { buildFetchArgs } from "./buildFetchArgs";
@@ -2185,27 +2185,27 @@ is already there. Good.
 
 - [ ] **Step 3: Verify TypeScript compiles**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc --noEmit 2>&1 | tail -20`
+Run: `cd plugins/umbral-playground/frontend && npx tsc --noEmit 2>&1 | tail -20`
 
 Expected: no errors. If you see errors about missing types, run `npm install` again — some types are pulled in transitively.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/state/store.ts
+git add plugins/umbral-playground/frontend/state/store.ts
 git commit -m "feat(playground): send() action wires up fetch + history append"
 ```
 
 ### Task 14: Replace the request builder stub with the full UI
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/components/RequestBuilder.tsx`
-- Create: `plugins/umbra-playground/frontend/components/KeyValueTable.tsx`
-- Create: `plugins/umbra-playground/frontend/components/AuthTab.tsx`
+- Modify: `plugins/umbral-playground/frontend/components/RequestBuilder.tsx`
+- Create: `plugins/umbral-playground/frontend/components/KeyValueTable.tsx`
+- Create: `plugins/umbral-playground/frontend/components/AuthTab.tsx`
 
 - [ ] **Step 1: Write `KeyValueTable.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/KeyValueTable.tsx`:
+Write to `plugins/umbral-playground/frontend/components/KeyValueTable.tsx`:
 
 ```tsx
 import { useState } from "react";
@@ -2318,7 +2318,7 @@ export function KeyValueTable({
 
 - [ ] **Step 2: Write `AuthTab.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/AuthTab.tsx`:
+Write to `plugins/umbral-playground/frontend/components/AuthTab.tsx`:
 
 ```tsx
 import { usePlayground } from "../state/store";
@@ -2355,7 +2355,7 @@ export function AuthTab() {
 
 - [ ] **Step 3: Replace `RequestBuilder.tsx` with the full UI**
 
-Write to `plugins/umbra-playground/frontend/components/RequestBuilder.tsx`:
+Write to `plugins/umbral-playground/frontend/components/RequestBuilder.tsx`:
 
 ```tsx
 import { useEffect, useMemo } from "react";
@@ -2536,26 +2536,26 @@ export function RequestBuilder() {
 
 - [ ] **Step 4: Verify TypeScript compiles**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc --noEmit 2>&1 | tail -20`
+Run: `cd plugins/umbral-playground/frontend && npx tsc --noEmit 2>&1 | tail -20`
 
 Expected: no errors. If `JSX.Element` is missing, add the React types import; if you see `kvToRecord` unused warnings, that's fine (it's used in Headers; lint config might still flag it — fix if so).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/components/
+git add plugins/umbral-playground/frontend/components/
 git commit -m "feat(playground): full request builder with all four tabs"
 ```
 
 ### Task 15: Replace the response viewer stub with the full UI
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/components/ResponseViewer.tsx`
-- Create: `plugins/umbra-playground/frontend/components/JsonView.tsx`
+- Modify: `plugins/umbral-playground/frontend/components/ResponseViewer.tsx`
+- Create: `plugins/umbral-playground/frontend/components/JsonView.tsx`
 
 - [ ] **Step 1: Write `JsonView.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/JsonView.tsx`:
+Write to `plugins/umbral-playground/frontend/components/JsonView.tsx`:
 
 ```tsx
 import { useState } from "react";
@@ -2637,7 +2637,7 @@ export function JsonView({ text }: { text: string }) {
 
 - [ ] **Step 2: Replace `ResponseViewer.tsx`**
 
-Write to `plugins/umbra-playground/frontend/components/ResponseViewer.tsx`:
+Write to `plugins/umbral-playground/frontend/components/ResponseViewer.tsx`:
 
 ```tsx
 import { usePlayground, type ResponseRecord } from "../state/store";
@@ -2800,25 +2800,25 @@ export function ResponseViewer() {
 
 - [ ] **Step 3: Verify TypeScript compiles**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc --noEmit 2>&1 | tail -20`
+Run: `cd plugins/umbral-playground/frontend && npx tsc --noEmit 2>&1 | tail -20`
 
 Expected: no errors. (There may be unused import warnings for `setMethod`, `setParam`, `setHeader`, `setBody`, `setBearerToken` if the restore logic only uses `resetCurrent` — remove the unused imports if your linter is strict.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/components/
+git add plugins/umbral-playground/frontend/components/
 git commit -m "feat(playground): full response viewer with body, headers, history, cURL"
 ```
 
 ### Task 16: Hydrate history from localStorage on mount
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/components/App.tsx`
+- Modify: `plugins/umbral-playground/frontend/components/App.tsx`
 
 - [ ] **Step 1: Add the hydration effect**
 
-In `plugins/umbra-playground/frontend/components/App.tsx`, add at the top of the `App` function body (before the existing `useEffect`):
+In `plugins/umbral-playground/frontend/components/App.tsx`, add at the top of the `App` function body (before the existing `useEffect`):
 
 ```tsx
 import { loadHistory } from "../state/history";
@@ -2832,14 +2832,14 @@ useEffect(() => {
 
 - [ ] **Step 2: Verify TypeScript compiles**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc --noEmit 2>&1 | tail -10`
+Run: `cd plugins/umbral-playground/frontend && npx tsc --noEmit 2>&1 | tail -10`
 
 Expected: no errors.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/components/App.tsx
+git add plugins/umbral-playground/frontend/components/App.tsx
 git commit -m "feat(playground): hydrate history from localStorage on mount"
 ```
 
@@ -2851,12 +2851,12 @@ This is a manual smoke test in a browser, like M3. We add it as a documented ste
 
 - [ ] **Step 1: Add the M4 manual check to the README**
 
-In `plugins/umbra-playground/README.md`, replace the "Manual smoke test" section with:
+In `plugins/umbral-playground/README.md`, replace the "Manual smoke test" section with:
 
 ```markdown
 ## Manual smoke test
 
-After `cargo build -p umbra-playground` with the CLIs installed:
+After `cargo build -p umbral-playground` with the CLIs installed:
 
 1. Run an example app that registers `RestPlugin`, `OpenApiPlugin`, and `PlaygroundPlugin`.
 2. Open `http://localhost:<port>/api/playground/` in a browser.
@@ -2871,7 +2871,7 @@ After `cargo build -p umbra-playground` with the CLIs installed:
 - [ ] **Step 2: Commit**
 
 ```bash
-git add plugins/umbra-playground/README.md
+git add plugins/umbral-playground/README.md
 git commit -m "docs(playground): extend manual smoke test for M4 request/response flow"
 ```
 
@@ -2884,14 +2884,14 @@ Goal: the test pyramid from the spec is in place. Pure-function tests, component
 ### Task 18: Component tests for RequestBuilder and ResponseViewer
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/vitest.config.ts`
-- Create: `plugins/umbra-playground/frontend/vitest.setup.ts`
-- Create: `plugins/umbra-playground/frontend/__tests__/RequestBuilder.test.tsx`
-- Create: `plugins/umbra-playground/frontend/__tests__/ResponseViewer.test.tsx`
+- Create: `plugins/umbral-playground/frontend/vitest.config.ts`
+- Create: `plugins/umbral-playground/frontend/vitest.setup.ts`
+- Create: `plugins/umbral-playground/frontend/__tests__/RequestBuilder.test.tsx`
+- Create: `plugins/umbral-playground/frontend/__tests__/ResponseViewer.test.tsx`
 
 - [ ] **Step 1: Write `vitest.config.ts`**
 
-Write to `plugins/umbra-playground/frontend/vitest.config.ts`:
+Write to `plugins/umbral-playground/frontend/vitest.config.ts`:
 
 ```typescript
 import { defineConfig } from "vitest/config";
@@ -2909,7 +2909,7 @@ export default defineConfig({
 
 - [ ] **Step 2: Write `vitest.setup.ts`**
 
-Write to `plugins/umbra-playground/frontend/vitest.setup.ts`:
+Write to `plugins/umbral-playground/frontend/vitest.setup.ts`:
 
 ```typescript
 import "@testing-library/jest-dom/vitest";
@@ -2917,7 +2917,7 @@ import "@testing-library/jest-dom/vitest";
 
 - [ ] **Step 3: Write the `RequestBuilder.test.tsx`**
 
-Write to `plugins/umbra-playground/frontend/__tests__/RequestBuilder.test.tsx`:
+Write to `plugins/umbral-playground/frontend/__tests__/RequestBuilder.test.tsx`:
 
 ```tsx
 import { describe, it, expect, beforeEach } from "vitest";
@@ -2985,7 +2985,7 @@ describe("RequestBuilder", () => {
 
 - [ ] **Step 4: Write the `ResponseViewer.test.tsx`**
 
-Write to `plugins/umbra-playground/frontend/__tests__/ResponseViewer.test.tsx`:
+Write to `plugins/umbral-playground/frontend/__tests__/ResponseViewer.test.tsx`:
 
 ```tsx
 import { describe, it, expect, beforeEach } from "vitest";
@@ -3047,29 +3047,29 @@ describe("ResponseViewer", () => {
 
 - [ ] **Step 5: Run the tests**
 
-Run: `cd plugins/umbra-playground/frontend && npx vitest run 2>&1 | tail -30`
+Run: `cd plugins/umbral-playground/frontend && npx vitest run 2>&1 | tail -30`
 
 Expected: all tests pass. If `RequestBuilder` tests fail because `useEffect` doesn't fire synchronously in jsdom, wrap the assertions in `await waitFor(...)` from `@testing-library/react`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add plugins/umbra-playground/frontend/__tests__/ plugins/umbra-playground/frontend/vitest.config.ts plugins/umbra-playground/frontend/vitest.setup.ts
+git add plugins/umbral-playground/frontend/__tests__/ plugins/umbral-playground/frontend/vitest.config.ts plugins/umbral-playground/frontend/vitest.setup.ts
 git commit -m "test(playground): component tests for RequestBuilder and ResponseViewer"
 ```
 
 ### Task 19: Rust integration test for the plugin shell
 
 **Files:**
-- Create: `plugins/umbra-playground/tests/rust_integration.rs`
+- Create: `plugins/umbral-playground/tests/rust_integration.rs`
 
 - [ ] **Step 1: Inspect the existing plugin's test patterns**
 
-Read `plugins/umbra-openapi/tests/` (if it exists) or one of the other plugin test files to find the right imports and boot pattern. The plugin test convention in this project uses `tower::ServiceExt::oneshot`.
+Read `plugins/umbral-openapi/tests/` (if it exists) or one of the other plugin test files to find the right imports and boot pattern. The plugin test convention in this project uses `tower::ServiceExt::oneshot`.
 
 - [ ] **Step 2: Write the integration test**
 
-Write to `plugins/umbra-playground/tests/rust_integration.rs`:
+Write to `plugins/umbral-playground/tests/rust_integration.rs`:
 
 ```rust
 //! Integration test: the PlaygroundPlugin serves a 200 HTML shell
@@ -3078,7 +3078,7 @@ Write to `plugins/umbra-playground/tests/rust_integration.rs`:
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
-use umbra_playground::PlaygroundPlugin;
+use umbral_playground::PlaygroundPlugin;
 
 #[tokio::test]
 async fn shell_returns_200_html() {
@@ -3120,7 +3120,7 @@ async fn missing_asset_returns_404() {
 
 - [ ] **Step 3: Add `base_path_for_test` to the plugin**
 
-In `plugins/umbra-playground/src/lib.rs`, add this method to `impl PlaygroundPlugin`:
+In `plugins/umbral-playground/src/lib.rs`, add this method to `impl PlaygroundPlugin`:
 
 ```rust
     #[doc(hidden)]
@@ -3133,7 +3133,7 @@ This is `#[doc(hidden)]` and only present so the integration test can read the b
 
 - [ ] **Step 4: Add test dependencies if missing**
 
-In `plugins/umbra-playground/Cargo.toml`, ensure:
+In `plugins/umbral-playground/Cargo.toml`, ensure:
 
 ```toml
 [dev-dependencies]
@@ -3144,28 +3144,28 @@ http-body-util = "0.1"
 
 - [ ] **Step 5: Run the integration tests**
 
-Run: `cd crates && cargo test -p umbra-playground --test rust_integration 2>&1 | tail -20`
+Run: `cd crates && cargo test -p umbral-playground --test rust_integration 2>&1 | tail -20`
 
 Expected: 2 tests pass.
 
-- [ ] **Step 6: Run the whole umbra-playground test suite**
+- [ ] **Step 6: Run the whole umbral-playground test suite**
 
-Run: `cd crates && cargo test -p umbra-playground 2>&1 | tail -10`
+Run: `cd crates && cargo test -p umbral-playground 2>&1 | tail -10`
 
 Expected: all tests pass (m2_build, rust_integration). The Vitest suite isn't run from Cargo by default — that's a v2 improvement.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add plugins/umbra-playground/tests/rust_integration.rs plugins/umbra-playground/src/lib.rs plugins/umbra-playground/Cargo.toml
+git add plugins/umbral-playground/tests/rust_integration.rs plugins/umbral-playground/src/lib.rs plugins/umbral-playground/Cargo.toml
 git commit -m "test(playground): rust integration test for shell + asset 404"
 ```
 
 ### Task 20: M5 final polish — handle the `npx vitest` from `cargo test`
 
 **Files:**
-- Create: `plugins/umbra-playground/build.rs` (modify to run vitest in test mode)
-- Create: `plugins/umbra-playground/tests/run_vitest.rs` (a no-op Rust test that shells out)
+- Create: `plugins/umbral-playground/build.rs` (modify to run vitest in test mode)
+- Create: `plugins/umbral-playground/tests/run_vitest.rs` (a no-op Rust test that shells out)
 
 - [ ] **Step 1: Decide whether to actually wire this up**
 
@@ -3189,7 +3189,7 @@ Expected: no output (or only files that were reformatted).
 
 - [ ] **Step 2: Run `cargo clippy`**
 
-Run: `cd crates && cargo clippy -p umbra-playground --all-targets 2>&1 | tail -20`
+Run: `cd crates && cargo clippy -p umbral-playground --all-targets 2>&1 | tail -20`
 
 Expected: no errors. If clippy flags unused imports or dead code in the plugin, fix them. The frontend lints are a separate concern.
 
@@ -3251,20 +3251,20 @@ Write to `documentation/docs/v0.0.1/plugins/playground.mdx`:
 ```mdx
 ---
 title: Playground
-description: Interactive API playground for umbra-rest endpoints.
+description: Interactive API playground for umbral-rest endpoints.
 sidebar_position: 1
 ---
 
 # Playground
 
-`umbra-playground` mounts a Postman-style API playground at `/api/playground/`. It reads the OpenAPI spec produced by `umbra-openapi` and renders a navigable endpoint tree, a request builder, and a response viewer — all from the browser, no extra service to run.
+`umbral-playground` mounts a Postman-style API playground at `/api/playground/`. It reads the OpenAPI spec produced by `umbral-openapi` and renders a navigable endpoint tree, a request builder, and a response viewer — all from the browser, no extra service to run.
 
 ## Quick start
 
 ```rust
-use umbra_playground::PlaygroundPlugin;
-use umbra_rest::RestPlugin;
-use umbra_openapi::OpenApiPlugin;
+use umbral_playground::PlaygroundPlugin;
+use umbral_rest::RestPlugin;
+use umbral_openapi::OpenApiPlugin;
 
 let app = App::builder()
     .plugin(RestPlugin::default())
@@ -3300,7 +3300,7 @@ Without these, the plugin still compiles and serves a placeholder page that expl
 - Auth is a single bearer-token field; spec-driven `securitySchemes` arrive in v2.
 - History is per-browser (localStorage); server-side history is a future plugin.
 
-See [the design spec](https://github.com/umbra/umbra/blob/main/docs/superpowers/specs/2026-06-02-rest-playground-design.md) for the full design and follow-up work.
+See [the design spec](https://github.com/umbral/umbral/blob/main/docs/superpowers/specs/2026-06-02-rest-playground-design.md) for the full design and follow-up work.
 ```
 
 (Adjust the GitHub link to match the actual repo URL.)
@@ -3333,7 +3333,7 @@ Find where `RestPlugin` and `OpenApiPlugin` (or whatever REST/OpenAPI plugins it
 In `examples/derive-demo/Cargo.toml`, add under `[dependencies]`:
 
 ```toml
-umbra-playground = { path = "../../plugins/umbra-playground" }
+umbral-playground = { path = "../../plugins/umbral-playground" }
 ```
 
 - [ ] **Step 3: Register the plugin in the example's main**
@@ -3341,7 +3341,7 @@ umbra-playground = { path = "../../plugins/umbra-playground" }
 In `examples/derive-demo/src/main.rs`, find the `App::builder()` chain and add:
 
 ```rust
-.plugin(umbra_playground::PlaygroundPlugin::new())
+.plugin(umbral_playground::PlaygroundPlugin::new())
 ```
 
 The exact placement depends on the file. Insert it after the OpenApiPlugin registration.
@@ -3362,7 +3362,7 @@ Then in a separate terminal, `curl http://localhost:<port>/api/playground/`. Exp
 
 ```bash
 git add examples/derive-demo/
-git commit -m "feat(derive-demo): register umbra-playground alongside rest+openapi"
+git commit -m "feat(derive-demo): register umbral-playground alongside rest+openapi"
 ```
 
 ### Task 24: Final acceptance pass
@@ -3375,9 +3375,9 @@ From `crates/`:
 
 ```bash
 cargo fmt --all
-cargo clippy -p umbra-playground --all-targets
-cargo build -p umbra-playground
-cargo test -p umbra-playground
+cargo clippy -p umbral-playground --all-targets
+cargo build -p umbral-playground
+cargo test -p umbral-playground
 ```
 
 All four should succeed.
@@ -3385,7 +3385,7 @@ All four should succeed.
 - [ ] **Step 2: Run the JS test suite**
 
 ```bash
-cd plugins/umbra-playground/frontend
+cd plugins/umbral-playground/frontend
 npx vitest run
 ```
 
@@ -3404,7 +3404,7 @@ Visit (or have CI confirm) the `playground.mdx` page renders in the sidebar.
 
 - [ ] **Step 5: Update the README with a final "v1 done" marker**
 
-In `plugins/umbra-playground/README.md`, add a header at the very top:
+In `plugins/umbral-playground/README.md`, add a header at the very top:
 
 ```markdown
 > **Status:** v1.0 shipped. See `docs/superpowers/specs/2026-06-02-rest-playground-design.md` for the design and `docs/superpowers/plans/2026-06-02-rest-playground.md` for the build order.
@@ -3413,7 +3413,7 @@ In `plugins/umbra-playground/README.md`, add a header at the very top:
 - [ ] **Step 6: Final commit**
 
 ```bash
-git add plugins/umbra-playground/README.md
+git add plugins/umbral-playground/README.md
 git commit -m "docs(playground): mark v1 shipped in README"
 ```
 
@@ -3426,7 +3426,7 @@ git commit -m "docs(playground): mark v1 shipped in README"
 | Spec section | Plan task(s) |
 |---|---|
 | §1 Goal | Whole plan |
-| §2 Architecture (new crate, no umbra-openapi dep, fetch over HTTP) | Tasks 1, 2, 5, 6 |
+| §2 Architecture (new crate, no umbral-openapi dep, fetch over HTTP) | Tasks 1, 2, 5, 6 |
 | §2 Mount points (`/api/playground/`, `/api/playground/assets/*`) | Task 6 |
 | §3 Crate layout (file tree) | Tasks 2, 4, 5, 6, 8, 9, 10 |
 | §4 Build pipeline (esbuild + tailwindcss, OUT_DIR fix, degraded mode) | Task 5 |
@@ -3476,6 +3476,6 @@ The following are explicit decisions made during execution that future maintaine
 
 ### Vitest is not invoked from `cargo test`
 
-The spec (§9) called for vitest to be invoked from `cargo test` via `build.rs`-driven `npx vitest run`. We chose the documented alternative: `npm test` in `plugins/umbra-playground/frontend/`. The cross-toolchain coupling (Cargo shelling out to npm) wasn't worth the small UX win of "one command runs everything." CI runs them as two separate steps.
+The spec (§9) called for vitest to be invoked from `cargo test` via `build.rs`-driven `npx vitest run`. We chose the documented alternative: `npm test` in `plugins/umbral-playground/frontend/`. The cross-toolchain coupling (Cargo shelling out to npm) wasn't worth the small UX win of "one command runs everything." CI runs them as two separate steps.
 
-Affected: Task 20 (which is intentionally a no-op as a result). If you want to wire them together later, the hook would live in `plugins/umbra-playground/build.rs` (or a separate test-only build script) and would need to gracefully degrade when `npx` isn't available, mirroring the build pipeline's approach.
+Affected: Task 20 (which is intentionally a no-op as a result). If you want to wire them together later, the hook would live in `plugins/umbral-playground/build.rs` (or a separate test-only build script) and would need to gracefully degrade when `npx` isn't available, mirroring the build pipeline's approach.

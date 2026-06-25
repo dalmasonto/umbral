@@ -7,7 +7,7 @@ tags: [auth, oauth, social-login, google, github, allauth]
 
 # OAuth / social login
 
-`umbra-oauth` is umbra's [django-allauth](https://docs.allauth.org/) equivalent. It does two things with one flow, layered on `umbra-auth`:
+`umbral-oauth` is umbral's [django-allauth](https://docs.allauth.org/) equivalent. It does two things with one flow, layered on `umbral-auth`:
 
 - **Social login**: "Sign in with Google" resolves (or creates) an `AuthUser` and logs them in.
 - **Account connection**: a logged-in user attaches a provider ("Connect GitHub"), which is how the app later gets API access (Drive, repos, …) on their behalf.
@@ -17,8 +17,8 @@ A social identity is an **extension** of the user (a `SocialAccount` row linked 
 ## Wiring
 
 ```rust
-use umbra_oauth::OAuthPlugin;
-use umbra_oauth::providers::{GoogleProvider, GitHubProvider};
+use umbral_oauth::OAuthPlugin;
+use umbral_oauth::providers::{GoogleProvider, GitHubProvider};
 
 let mut oauth = OAuthPlugin::new("https://example.com").login_redirect("/dashboard");
 if let Some(g) = GoogleProvider::from_env() { oauth = oauth.provider(g); }
@@ -56,8 +56,8 @@ Register an OAuth app with each provider and set the credentials as environment 
 3. Copy the client ID + secret into your env:
 
 ```bash
-UMBRA_OAUTH_GOOGLE_CLIENT_ID=...
-UMBRA_OAUTH_GOOGLE_CLIENT_SECRET=...
+UMBRAL_OAUTH_GOOGLE_CLIENT_ID=...
+UMBRAL_OAUTH_GOOGLE_CLIENT_SECRET=...
 ```
 
 Default scopes are `openid email profile`. Google receives `access_type=offline` and `prompt=consent`, so it returns a **refresh token** for later API access (widen scopes with `.scopes("openid email profile https://www.googleapis.com/auth/drive.readonly")`).
@@ -68,8 +68,8 @@ Default scopes are `openid email profile`. Google receives `access_type=offline`
 3. Copy the client ID + secret:
 
 ```bash
-UMBRA_OAUTH_GITHUB_CLIENT_ID=...
-UMBRA_OAUTH_GITHUB_CLIENT_SECRET=...
+UMBRAL_OAUTH_GITHUB_CLIENT_ID=...
+UMBRAL_OAUTH_GITHUB_CLIENT_SECRET=...
 ```
 
 Default scopes are `read:user user:email`. The verified primary email is read from `/user/emails`. GitHub **OAuth apps don't issue refresh tokens** (GitHub Apps do), so `refresh_token` is `None`.
@@ -77,25 +77,25 @@ Default scopes are `read:user user:email`. The verified primary email is read fr
 </Tab>
 </Tabs>
 
-Optional: override the callback origin in prod without recompiling. The website example reads `UMBRA_OAUTH_REDIRECT_BASE`.
+Optional: override the callback origin in prod without recompiling. The website example reads `UMBRAL_OAUTH_REDIRECT_BASE`.
 
 ### Using a `.env` file
 
-You don't have to export the variables by hand. Drop them in a `.env` file in the directory you launch the app from (next to `Cargo.toml`), and Umbra loads it into the process environment at `App::builder()`, so the providers' `from_env()` picks them up:
+You don't have to export the variables by hand. Drop them in a `.env` file in the directory you launch the app from (next to `Cargo.toml`), and Umbral loads it into the process environment at `App::builder()`, so the providers' `from_env()` picks them up:
 
 ```bash
 # .env  (add this file to .gitignore; never commit credentials)
-UMBRA_OAUTH_GOOGLE_CLIENT_ID=98840861591-xxxx.apps.googleusercontent.com
-UMBRA_OAUTH_GOOGLE_CLIENT_SECRET=GOCSPX-xxxx
-UMBRA_OAUTH_GITHUB_CLIENT_ID=Ov23xxxx
-UMBRA_OAUTH_GITHUB_CLIENT_SECRET=xxxx
+UMBRAL_OAUTH_GOOGLE_CLIENT_ID=98840861591-xxxx.apps.googleusercontent.com
+UMBRAL_OAUTH_GOOGLE_CLIENT_SECRET=GOCSPX-xxxx
+UMBRAL_OAUTH_GITHUB_CLIENT_ID=Ov23xxxx
+UMBRAL_OAUTH_GITHUB_CLIENT_SECRET=xxxx
 
 # optional: public origin for the OAuth callback (defaults to your bind addr)
-UMBRA_OAUTH_REDIRECT_BASE=http://localhost:8100
+UMBRAL_OAUTH_REDIRECT_BASE=http://localhost:8100
 ```
 
 <Callout type="warning">
-The variable names must match **exactly**. The secret is `UMBRA_OAUTH_<PROVIDER>_CLIENT_SECRET`; note the `CLIENT_`. A common mistake is `UMBRA_OAUTH_GOOGLE_SECRET`, which `from_env()` never sees; a provider registers only when **both** its id and secret are present, so a misnamed secret means the provider silently doesn't register (you'll get "no providers registered" at boot and the buttons stay hidden).
+The variable names must match **exactly**. The secret is `UMBRAL_OAUTH_<PROVIDER>_CLIENT_SECRET`; note the `CLIENT_`. A common mistake is `UMBRAL_OAUTH_GOOGLE_SECRET`, which `from_env()` never sees; a provider registers only when **both** its id and secret are present, so a misnamed secret means the provider silently doesn't register (you'll get "no providers registered" at boot and the buttons stay hidden).
 </Callout>
 
 `.env` is read relative to the **working directory**, so launch the app from the project root (where the `.env` lives). Real exported environment variables always win over `.env` values.
@@ -121,7 +121,7 @@ A login (or connect) entry point is just a link; `GET` routes need no form:
 <a href="/oauth/github/connect">Connect GitHub</a>
 ```
 
-**Disconnect is a `POST`**, so include the CSRF token. Umbra exposes `{{ csrf_input }}`, a ready-made, safe hidden `<input name="csrf_token">` (the same one the admin uses) that's available in every template render when the security middleware is active:
+**Disconnect is a `POST`**, so include the CSRF token. Umbral exposes `{{ csrf_input }}`, a ready-made, safe hidden `<input name="csrf_token">` (the same one the admin uses) that's available in every template render when the security middleware is active:
 
 ```html
 <form method="post" action="/oauth/github/disconnect">
@@ -157,14 +157,14 @@ window.location = "https://api.example.com/oauth/google/login"
 ```
 </Step>
 <Step title="Read the token from the URL fragment">
-After consent, the callback redirects to `…/auth/callback#token=umbra_…&token_type=Bearer`. The token rides in the URL **fragment**, which browsers never send to a server and proxies never log.
+After consent, the callback redirects to `…/auth/callback#token=umbral_…&token_type=Bearer`. The token rides in the URL **fragment**, which browsers never send to a server and proxies never log.
 
 ```js
 // SPA callback route
 const params = new URLSearchParams(location.hash.slice(1));
 const token = params.get("token");
 if (token) {
-  localStorage.setItem("umbra_token", token);
+  localStorage.setItem("umbral_token", token);
   history.replaceState(null, "", location.pathname); // scrub the fragment
 }
 ```
@@ -172,11 +172,11 @@ if (token) {
 <Step title="Call the API with the token">
 ```js
 fetch("https://api.example.com/api/post/", {
-  headers: { Authorization: `Bearer ${localStorage.getItem("umbra_token")}` },
+  headers: { Authorization: `Bearer ${localStorage.getItem("umbral_token")}` },
 });
 ```
 
-umbra-rest's bearer authentication resolves it: the token is a real `AuthToken` row, so it works everywhere bearer auth does and can be revoked.
+umbral-rest's bearer authentication resolves it: the token is a real `AuthToken` row, so it works everywhere bearer auth does and can be revoked.
 </Step>
 </Steps>
 
@@ -199,7 +199,7 @@ A `?next=` that doesn't match an `allow_return` prefix is rejected with **400**,
 `path` is relative; `url` is absolute (joined onto the `redirect_base`). The endpoint is public; it lists provider names only, never secrets.
 
 <Callout type="info">
-If you also run **umbra-rest**, these same `login` / `connect` endpoints show up in its `GET /api/` root under `endpoints`, next to your REST resources, one index for the whole API. The plugin advertises them through the framework's `Plugin::api_endpoints()` seam, so REST lists them without depending on `umbra-oauth`.
+If you also run **umbral-rest**, these same `login` / `connect` endpoints show up in its `GET /api/` root under `endpoints`, next to your REST resources, one index for the whole API. The plugin advertises them through the framework's `Plugin::api_endpoints()` seam, so REST lists them without depending on `umbral-oauth`.
 </Callout>
 
 ## Linking policy
@@ -235,7 +235,7 @@ Email-based auto-linking happens **only** for provider-verified emails. This pre
 The tokens are exactly what you need to call the provider's API later (e.g. Google Drive). Load the account and `.reveal()` the token (requires the [mask private key](../orm/masked)):
 
 ```rust
-use umbra_oauth::models::{SocialAccount, social_account};
+use umbral_oauth::models::{SocialAccount, social_account};
 
 let account = SocialAccount::objects()
     .filter(social_account::USER.eq(user_id))
@@ -251,7 +251,7 @@ let access_token = account.access_token.reveal()?;
 Implement `OAuthProvider` (three methods) and register it like any built-in:
 
 ```rust
-use umbra_oauth::provider::{Identity, OAuthError, OAuthProvider, TokenSet};
+use umbral_oauth::provider::{Identity, OAuthError, OAuthProvider, TokenSet};
 
 #[async_trait::async_trait]
 impl OAuthProvider for GitLabProvider {
@@ -288,11 +288,11 @@ The CSRF `state` in the session didn't match the callback. Usually means `Sessio
 
 ### No refresh token from Google
 
-Google only returns a refresh token on the first consent unless `prompt=consent` forces it (which umbra sets). If you'd already consented, revoke the app's access in your Google account and re-link.
+Google only returns a refresh token on the first consent unless `prompt=consent` forces it (which umbral sets). If you'd already consented, revoke the app's access in your Google account and re-link.
 
 ### `unknown provider` (404)
 
-The provider wasn't registered: `from_env()` returned `None` because its `UMBRA_OAUTH_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` aren't set.
+The provider wasn't registered: `from_env()` returned `None` because its `UMBRAL_OAUTH_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` aren't set.
 
 ## Design rationale
 

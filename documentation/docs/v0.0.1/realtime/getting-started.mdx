@@ -7,7 +7,7 @@ tags: [realtime, getting-started, sse, push, supabase]
 
 # Getting started with realtime
 
-`umbra-realtime` is the "Supabase feeling" for umbra: subscribe to live data and presence from the browser, push from the server with one line, and stay safe by default. There is no socket bookkeeping, no polling, and no serializer code to write.
+`umbral-realtime` is the "Supabase feeling" for umbral: subscribe to live data and presence from the browser, push from the server with one line, and stay safe by default. There is no socket bookkeeping, no polling, and no serializer code to write.
 
 This page is the five-minute path: install the plugin, wire identity, add the client script, and send your first end-to-end event.
 
@@ -17,11 +17,11 @@ One browser holds **one** connection no matter how many tabs or subscriptions ar
 
 ## 1. Install the plugin
 
-Add `umbra-realtime` to your binary crate and register the plugin on the app builder. With nothing else configured you get both transports mounted (`GET /realtime/sse`, `GET /realtime/ws`) and the ambient `Realtime` handle for sending.
+Add `umbral-realtime` to your binary crate and register the plugin on the app builder. With nothing else configured you get both transports mounted (`GET /realtime/sse`, `GET /realtime/ws`) and the ambient `Realtime` handle for sending.
 
 ```rust
-use umbra::prelude::*;
-use umbra_realtime::RealtimePlugin;
+use umbral::prelude::*;
+use umbral_realtime::RealtimePlugin;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
         .plugin(RealtimePlugin::new())
         .build()?;
 
-    umbra_cli::dispatch(app).await
+    umbral_cli::dispatch(app).await
 }
 ```
 
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
 By default **every connection is anonymous** — the identity resolver returns `None`. That's fine for a fully public feed, but if you want to gate rooms by user or use presence, the framework needs to know who's connecting. The resolved identity is `user_id: Option<String>` — the user's primary key rendered to its canonical string, so it works for any PK type (`i64` → `"42"`, `uuid` → `"550e8400-…"`).
 
-If you use `umbra-auth`, enable the `auth` feature and call `with_auth_sessions()`. It identifies the connecting user from the session cookie at the SSE/WS handshake:
+If you use `umbral-auth`, enable the `auth` feature and call `with_auth_sessions()`. It identifies the connecting user from the session cookie at the SSE/WS handshake:
 
 ```rust
 RealtimePlugin::new()
@@ -57,7 +57,7 @@ Forget this step and **everyone is anonymous**: `user_id` is always `None`, so a
 
 ## 3. Add the client script
 
-The plugin serves a tiny browser helper at `GET /realtime/client.js`. Add one script tag to your template; it exposes the `umbra.realtime` namespace.
+The plugin serves a tiny browser helper at `GET /realtime/client.js`. Add one script tag to your template; it exposes the `umbral.realtime` namespace.
 
 ```html title="index.html"
 <>
@@ -65,7 +65,7 @@ The plugin serves a tiny browser helper at `GET /realtime/client.js`. Add one sc
 </>
 ```
 
-There is nothing to bundle or import — the script registers `window.umbra.realtime` with `subscribe`, `model`, and `presence`.
+There is nothing to bundle or import — the script registers `window.umbral.realtime` with `subscribe`, `model`, and `presence`.
 
 <Callout type="info">
 **Remounting.** The realtime routes default to `/realtime/...`. Call `RealtimePlugin::new().at("/rt")` to remount them (`/rt/sse`, `/rt/ws`, `/rt/worker.js`, `/rt/client.js`). The served JS templates its own URLs off the base, so you only update the `<script src="/rt/client.js">` to match — see [Transports](transports#remounting-under-a-different-base-path).
@@ -83,7 +83,7 @@ Here is a full round trip on the public `public:lobby` group — allowed by the 
 -  <script src="/realtime/client.js"></script>
 +  <script src="/realtime/client.js"></script>
 <script>
-  const sub = umbra.realtime.subscribe("public:lobby", {
+  const sub = umbral.realtime.subscribe("public:lobby", {
     ping: (data) => console.log("got ping", data),
   });
   // later: sub.unsubscribe();
@@ -99,7 +99,7 @@ Here is a full round trip on the public `public:lobby` group — allowed by the 
 Anywhere in a request handler, a signal handler, or a background task:
 
 ```rust
-use umbra_realtime::Realtime;
+use umbral_realtime::Realtime;
 use serde_json::json;
 
 Realtime::to_group("public:lobby")

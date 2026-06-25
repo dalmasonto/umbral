@@ -1,0 +1,19 @@
+[package]
+name = "umbral-rls"
+description = "Postgres Row-Level Security plugin for umbral. Declares policies once at App::build; the plugin's on_ready hook applies them via ALTER TABLE ENABLE ROW LEVEL SECURITY + CREATE POLICY."
+workspace = "../.."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbral = { path = "../../crates/umbral", version = "0.0.1" }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
+tokio = { version = "1", features = ["rt"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

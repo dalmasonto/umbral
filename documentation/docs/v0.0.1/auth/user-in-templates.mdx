@@ -5,7 +5,7 @@ sidebar_position: 3
 icon: user-check
 ---
 
-Django's templates have `{% if user.is_authenticated %}` and `{% if user.is_staff %}` because Django's `auth` middleware injects `request.user` into every template context for free. Umbra ships the same shape, opt-in, one builder call.
+Django's templates have `{% if user.is_authenticated %}` and `{% if user.is_staff %}` because Django's `auth` middleware injects `request.user` into every template context for free. Umbral ships the same shape, opt-in, one builder call.
 
 ## The one-line opt-in
 
@@ -17,7 +17,7 @@ Django's templates have `{% if user.is_authenticated %}` and `{% if user.is_staf
 )
 ```
 
-That's it. The `user` global is *always* present in every `umbra::templates::render(...)` call (handler templates, plugin templates, error pages) because umbra-core injects it unconditionally. What `.with_user_in_templates()` changes is what authenticated requests see: with the opt-in, a logged-in request gets the full serialized user row; without it, every request (logged-in or not) gets the anonymous sentinel.
+That's it. The `user` global is *always* present in every `umbral::templates::render(...)` call (handler templates, plugin templates, error pages) because umbral-core injects it unconditionally. What `.with_user_in_templates()` changes is what authenticated requests see: with the opt-in, a logged-in request gets the full serialized user row; without it, every request (logged-in or not) gets the anonymous sentinel.
 
 ## What `user` looks like in your template
 
@@ -64,15 +64,15 @@ Request → [user_context_layer]
             ↓
           serialize(user) merged with {is_authenticated: true}
             ↓
-          umbra::templates::with_current_user(value, next.run(req)).await
+          umbral::templates::with_current_user(value, next.run(req)).await
             ↓
-          [handler] → umbra::templates::render(...) → sees `user` in ctx
+          [handler] → umbral::templates::render(...) → sees `user` in ctx
 ```
 
-The middleware lives at `plugins/umbra-auth/src/session_user.rs:263`. It uses a tokio task-local (`CURRENT_USER`) scoped for the duration of the request so the rendered context is per-request, not global.
+The middleware lives at `plugins/umbral-auth/src/session_user.rs:263`. It uses a tokio task-local (`CURRENT_USER`) scoped for the duration of the request so the rendered context is per-request, not global.
 
 <Callout type="info">
-  `user` is **always defined** in templates: umbra-core's renderer injects it unconditionally. Without `.with_user_in_templates()`, it's the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }` for *every* request, even authenticated ones, because no middleware populates the per-request user. So `{% if user.is_staff %}` evaluates cleanly (to `false`) rather than throwing an "undefined value" 500. What `.with_user_in_templates()` adds is the live, *authenticated* shape: it mounts the middleware that replaces the sentinel with the real serialized user for logged-in requests.
+  `user` is **always defined** in templates: umbral-core's renderer injects it unconditionally. Without `.with_user_in_templates()`, it's the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }` for *every* request, even authenticated ones, because no middleware populates the per-request user. So `{% if user.is_staff %}` evaluates cleanly (to `false`) rather than throwing an "undefined value" 500. What `.with_user_in_templates()` adds is the live, *authenticated* shape: it mounts the middleware that replaces the sentinel with the real serialized user for logged-in requests.
 </Callout>
 
 ## Common patterns
@@ -140,12 +140,12 @@ For now, `user.<column>` works only for **columns on the AuthUser table itself**
 
 The default wiring is `AuthPlugin::<AuthUser>::default().with_user_in_templates()`. The middleware is hard-bound to `AuthUser` because the serialization step uses its concrete `Serialize` impl. Apps using a custom `UserModel` build their own middleware against the building blocks:
 
-- `umbra_sessions::current_session(&headers)` → `Option<SessionRow>`
+- `umbral_sessions::current_session(&headers)` → `Option<SessionRow>`
 - `current_session.user_id` → your custom user's PK
 - Your own `MyUser::objects().filter(...).first().await`
-- `umbra::templates::with_current_user(my_user_value, next).await` to push it into the per-request task-local
+- `umbral::templates::with_current_user(my_user_value, next).await` to push it into the per-request task-local
 
-See the source of `user_context_layer` in `plugins/umbra-auth/src/session_user.rs` for a 30-line reference impl.
+See the source of `user_context_layer` in `plugins/umbral-auth/src/session_user.rs` for a 30-line reference impl.
 
 ## When to use this vs. extractors
 

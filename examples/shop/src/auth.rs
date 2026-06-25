@@ -20,15 +20,15 @@
 //! extra glue.
 
 use async_trait::async_trait;
-use umbra::web::{HeaderMap, header};
-use umbra_auth::{AuthUser, UserModel, auth_user, token::AuthToken};
-use umbra_rest::{Authentication, FnAuthentication, Identity};
+use umbral::web::{HeaderMap, header};
+use umbral_auth::{AuthUser, UserModel, auth_user, token::AuthToken};
+use umbral_rest::{Authentication, FnAuthentication, Identity};
 
 // ===========================================================================
 // 1. Custom `Token <key>` scheme
 // ===========================================================================
 
-/// Same lookup as `umbra_auth::BearerAuthentication` but reads
+/// Same lookup as `umbral_auth::BearerAuthentication` but reads
 /// `Authorization: Token <key>` instead of `Bearer <key>`.
 ///
 /// Useful when integrating with API consumers that have hard-coded
@@ -45,7 +45,7 @@ impl TokenSchemeAuthentication {
 
 /// Parse `Authorization: Token <key>`. Returns the trimmed key on
 /// match, `None` on a missing header, missing scheme, or malformed
-/// value. Mirrors `umbra_auth::parse_bearer_header` for the
+/// value. Mirrors `umbral_auth::parse_bearer_header` for the
 /// `Bearer` scheme.
 fn parse_token_header(headers: &HeaderMap) -> Option<&str> {
     let raw = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
@@ -72,7 +72,7 @@ impl Authentication for TokenSchemeAuthentication {
             .ok()
             .flatten()?;
         // The `last_used_at` stat update on AuthToken is a crate-
-        // private helper inside umbra-auth; an external custom auth
+        // private helper inside umbral-auth; an external custom auth
         // backend either skips the update (this demo) or reaches
         // for an ORM-level update on the row.
         //
@@ -111,13 +111,13 @@ impl Authentication for TokenSchemeAuthentication {
 /// for the user whose session is referenced by the cookie, or `None`
 /// for an anonymous request.
 ///
-/// This is the same shape `umbra-sessions` would ship as
+/// This is the same shape `umbral-sessions` would ship as
 /// `SessionAuthentication` — but writing it inline shows that
 /// `FnAuthentication` is a one-liner escape hatch when you don't
 /// want a whole new struct.
 pub fn session_authentication() -> FnAuthentication {
     FnAuthentication::new(|headers| async move {
-        let user = umbra_auth::current_user(&headers).await.ok().flatten()?;
+        let user = umbral_auth::current_user(&headers).await.ok().flatten()?;
         Some(
             Identity::user(user.id_string())
                 .with_staff(user.is_staff())

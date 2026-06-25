@@ -3,7 +3,7 @@
 .env
 Cargo.lock
 
-# Throwaway connection-cost benchmark scaffolding (bare_axum / umbra_min /
+# Throwaway connection-cost benchmark scaffolding (bare_axum / umbral_min /
 # clone_bisect). Local-only — kept on disk so the benchmarks can be re-run,
 # never committed. The `axum` dev-dependency in Cargo.toml exists only for
 # these; drop it if you remove them.

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Changelog - Umbral{% endblock %}
+{% block meta_description %}What's shipped in Umbral and what's next — release notes and the milestone roadmap, in one table.{% endblock %}
+
+{% block extra_head %}
+<style>
+  .cl-table { width: 100%; border-collapse: collapse; }
+  .cl-table th {
+    text-align: left; font-size: 11.5px; font-weight: 700; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--faint); padding: 12px 18px;
+    border-bottom: 1px solid var(--hairline); white-space: nowrap;
+  }
+  .cl-table td { padding: 18px; border-top: 1px solid var(--hairline); vertical-align: top; }
+  .cl-table tbody tr:first-child td { border-top: 0; }
+  .cl-ver { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 14px; font-weight: 700; color: var(--ink); white-space: nowrap; }
+  .cl-date { font-size: 13.5px; color: var(--muted); white-space: nowrap; }
+  /* Tighten the prose bullets inside a table cell. */
+  .cl-table .prose { font-size: 14px; }
+  .cl-table .prose ul { margin: 0; }
+  .cl-table .prose li { margin: 0.2em 0; }
+  @media (max-width: 720px) {
+    .cl-table, .cl-table thead, .cl-table tbody, .cl-table tr, .cl-table td { display: block; }
+    .cl-table thead { display: none; }
+    .cl-table td { border-top: 0; padding: 4px 18px; }
+    .cl-table tbody tr { border-top: 1px solid var(--hairline); padding: 14px 0; display: block; }
+    .cl-table tbody tr:first-child { border-top: 0; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[75rem] px-7 pb-2 pt-[52px]">
+  <div class="kicker mb-3.5 text-accent">
+    <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+    Changelog
+  </div>
+  <h1 class="text-[34px] font-extrabold leading-[1.08] tracking-[-0.03em] text-ink sm:text-[40px]">
+    What's shipped, what's next
+  </h1>
+  <p class="mt-3.5 max-w-[640px] text-[16.5px] leading-[1.6] text-muted">
+    Umbral is greenfield and moving fast. Here's where it stands today and the milestones on the way to v0.1 — managed from the admin, like everything else on this site.
+  </p>
+</section>
+
+<section class="mx-auto max-w-[75rem] px-7 py-10">
+  {% if entries %}
+  <div class="card overflow-hidden rounded-2xl p-0">
+    <table class="cl-table">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Status</th>
+          <th>Date</th>
+          <th>Highlights</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td>
+            <div class="cl-ver">{{ e.version }}</div>
+            {% if e.current %}<span class="pill-ok mt-2 inline-block">Current</span>{% endif %}
+          </td>
+          <td>
+            {% if e.kind == 'Released' %}
+            <span class="pill-ok">Released</span>
+            {% else %}
+            <span class="rounded-full bg-surface-2 px-2.5 py-[3px] text-[12px] font-semibold text-faint">Roadmap</span>
+            {% endif %}
+          </td>
+          <td><span class="cl-date">{% if e.released %}{{ e.released }}{% else %}—{% endif %}</span></td>
+          <td>
+            <div class="mb-1.5 text-[15px] font-bold text-ink">{{ e.title }}</div>
+            <div class="prose max-w-none text-muted">{{ e.body | markdown }}</div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="mt-5 text-[13px] text-faint">Track the work on <a href="https://github.com/dalmasonto/umbral" target="_blank" rel="noopener" class="font-semibold text-accent-2">GitHub</a>, or follow releases via the <a href="/community" class="font-semibold text-accent-2">newsletter</a>.</p>
+  {% else %}
+  <div class="card rounded-[20px] p-12 text-center">
+    <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent-2">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg>
+    </div>
+    <h2 class="mb-1.5 text-[18px] font-bold text-ink">No changelog entries yet</h2>
+    <p class="mx-auto max-w-[420px] text-[14.5px] leading-[1.55] text-muted">Release notes will appear here as versions ship. Add them from the admin.</p>
+  </div>
+  {% endif %}
+</section>
+
+{% endblock %}

@@ -1,0 +1,45 @@
+[package]
+name = "umbral-oauth"
+description = "OAuth / social-auth for umbral (django-allauth equivalent): social login and account connection for Google, GitHub, and more, layered on umbral-auth. Provider tokens are stored encrypted via Masked<T>."
+workspace = "../.."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbral = { path = "../../crates/umbral", version = "0.0.1" }
+umbral-auth = { path = "../umbral-auth", version = "0.0.1" }
+umbral-sessions = { path = "../umbral-sessions", version = "0.0.1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+tracing = "0.1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+axum = "0.8"
+http = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+url = "2"
+# Random, unguessable CSRF `state` token for the authorization request.
+uuid = { version = "1", features = ["v4"] }
+# PKCE (RFC 7636): a CSPRNG `code_verifier`, its SHA-256 `code_challenge`,
+# and URL-safe base64 for both. Versions match the sibling auth/security
+# plugins so the workspace resolves one copy of each.
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+# OAuth flow HTTP: token exchange (POST) + identity fetch (GET). We build
+# the requests directly on reqwest rather than pulling the `oauth2` crate
+# (whose API churns across versions) — the authorization-code flow is thin
+# integration glue, not a primitive worth a heavy dep. rustls avoids a
+# system OpenSSL build dependency.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

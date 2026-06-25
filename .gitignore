@@ -12,7 +12,7 @@ target/
 # OS
 .DS_Store
 
-# Runtime SQLite databases produced by `cargo run -p umbra-cli` (the
+# Runtime SQLite databases produced by `cargo run -p umbral-cli` (the
 # demo's file-backed pool, plus any tempfiles tests may leave behind).
 *.db
 *.db-journal
@@ -22,16 +22,16 @@ target/
 node_modules
 create_db.sh
 
-# Throwaway cot.rs comparison benchmark (not part of umbra; never committed).
+# Throwaway cot.rs comparison benchmark (not part of umbral; never committed).
 examples/cot-bench/
 
 # Git worktrees created by the using-git-worktrees skill
 .worktrees/
 
-# umbra-playground build artifacts
-plugins/umbra-playground/dist/
-plugins/umbra-playground/src/generated_assets.rs
-plugins/umbra-playground/frontend/node_modules/
+# umbral-playground build artifacts
+plugins/umbral-playground/dist/
+plugins/umbral-playground/src/generated_assets.rs
+plugins/umbral-playground/frontend/node_modules/
 
 .env
 

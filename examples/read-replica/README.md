@@ -1,6 +1,6 @@
 # read-replica
 
-A standalone umbra example showing a custom **`DatabaseRouter`** that sends every **read** to a replica pool and every **write** to the primary — the foundation behind read/write replica split (gaps2 #69, folds in #23).
+A standalone umbral example showing a custom **`DatabaseRouter`** that sends every **read** to a replica pool and every **write** to the primary — the foundation behind read/write replica split (gaps2 #69, folds in #23).
 
 The point: the model and handlers are written exactly like a single-database app. Routing is one trait impl wired in at `App::builder().router(...)`; the ORM consults it on every terminal.
 
@@ -50,8 +50,8 @@ App::builder()
 The demo runs against **one** sqlite file (`read_replica.db`, created on first run), so the "replica" is the same database as the primary and reads see writes immediately — the router is still consulted and logged, you just can't observe replication lag. For a real split:
 
 ```bash
-UMBRA_DATABASE_URL=postgres://.../primary \
-UMBRA_REPLICA_URL=postgres://.../replica \
+UMBRAL_DATABASE_URL=postgres://.../primary \
+UMBRAL_REPLICA_URL=postgres://.../replica \
 cargo run
 ```
 

@@ -7,20 +7,20 @@ tags: [testing, test-client, integration]
 
 # Test client
 
-`umbra-testing` gives you Django's `TestCase` + `Client` ergonomics in Rust. The repeated work in every integration test (spin up a pool, build the router, send a request, read the response) collapses into three types:
+`umbral-testing` gives you Django's `TestCase` + `Client` ergonomics in Rust. The repeated work in every integration test (spin up a pool, build the router, send a request, read the response) collapses into three types:
 
 - **`TempPool`**: a tempfile-backed SQLite pool, deleted when the guard drops.
 - **`TestClient`**: wraps an `axum::Router` with HTTP-verb methods, a per-client cookie jar (a session set on one request rides on the next), and JSON helpers.
 - **`TestResponse`**: owns the body and headers and exposes assertions.
 
 <Callout type="info">
-Add `umbra-testing` under `[dev-dependencies]`. It's a test-only utility crate, never shipped in a release build.
+Add `umbral-testing` under `[dev-dependencies]`. It's a test-only utility crate, never shipped in a release build.
 </Callout>
 
 ## A request round-trip
 
 ```rust
-use umbra_testing::{TempPool, TestClient};
+use umbral_testing::{TempPool, TestClient};
 
 #[tokio::test]
 async fn list_endpoint_returns_seeded_rows() {
@@ -68,4 +68,4 @@ The assertion methods return `&Self`, so they chain.
 ## See also
 
 - [Factories](./factories): generate realistic rows to drive these requests.
-- JSON seed files: `load_fixture` / `dump_fixture` in `crates/umbra-core/src/fixtures.rs`.
+- JSON seed files: `load_fixture` / `dump_fixture` in `crates/umbral-core/src/fixtures.rs`.

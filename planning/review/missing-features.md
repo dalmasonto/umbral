@@ -9,14 +9,14 @@ Django-parity gaps grounded in an actual in-tree need (not speculation). Broad, 
 
 ## MISS-1 — No `select_for_update()` / `skip_locked()` anywhere in the ORM
 > **✅ CLOSED — delivered elsewhere.** The only in-tree need (the tasks double-claim) is fixed by BROKEN-1's conditional `UPDATE ... WHERE status='pending'` guard (`98ef6e9`), correct on both backends. `FOR UPDATE SKIP LOCKED` has no other caller in the codebase, so it's a speculative optimization, not a gap — reopen if/when a second row-claiming use case appears.
-**Severity: medium** · **Verified** (zero hits for `FOR UPDATE` / `for_update` / `skip_locked` in `crates/umbra-core/src`)
+**Severity: medium** · **Verified** (zero hits for `FOR UPDATE` / `for_update` / `skip_locked` in `crates/umbral-core/src`)
 
-- **Evidence:** The ORM has no row-locking primitive. This isn't a theoretical gap — it's the exact operation `umbra-tasks` needed and worked around incorrectly (see [BROKEN-1](broken-features.md)). The tasks `claim_one` wraps a read-then-update in a transaction and *claims in a comment* that this prevents Postgres double-claims, but without `FOR UPDATE SKIP LOCKED` it doesn't.
+- **Evidence:** The ORM has no row-locking primitive. This isn't a theoretical gap — it's the exact operation `umbral-tasks` needed and worked around incorrectly (see [BROKEN-1](broken-features.md)). The tasks `claim_one` wraps a read-then-update in a transaction and *claims in a comment* that this prevents Postgres double-claims, but without `FOR UPDATE SKIP LOCKED` it doesn't.
 - **Why it matters:** Any worker-queue, counter, or "claim a row" pattern on Postgres needs `SELECT … FOR UPDATE` (optionally `SKIP LOCKED`) to be correct under concurrency. It's also absent from the features.md ORM list (#13-38) and the gaps files. Per CLAUDE.md's own rule — *"If the ORM can't express a row-level operation you need, the right fix is to add the operation to the ORM"* — this is the gap entry the tasks plugin should have filed instead of the raw workaround.
 - **Fix:** Add `QuerySet::select_for_update()` and `.skip_locked()`:
   - Postgres: append `FOR UPDATE` / `FOR UPDATE SKIP LOCKED` to the SELECT.
   - SQLite: documented no-op (single-writer model makes it harmless — the same dispatch shape as other backend-specific ORM features).
-  - Then rewrite `umbra-tasks::claim_one` to use it and delete the incorrect comment.
+  - Then rewrite `umbral-tasks::claim_one` to use it and delete the incorrect comment.
 
 ---
 

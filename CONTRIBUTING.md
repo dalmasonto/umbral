@@ -1,6 +1,6 @@
-# Contributing to umbra
+# Contributing to umbral
 
-Thanks for considering a contribution! umbra is a Django-inspired web framework in Rust — declare your data and get migrations, CRUD, an admin, and an optional REST API almost for free, with compile-time guarantees. This guide covers how to get set up, the conventions we hold to, and how changes land.
+Thanks for considering a contribution! umbral is a Django-inspired web framework in Rust — declare your data and get migrations, CRUD, an admin, and an optional REST API almost for free, with compile-time guarantees. This guide covers how to get set up, the conventions we hold to, and how changes land.
 
 If anything here is unclear or out of date, open an issue — improving this doc is itself a welcome contribution.
 
@@ -10,30 +10,30 @@ Be kind, be constructive, assume good faith. Harassment or hostility isn't welco
 
 ## Licensing of contributions
 
-umbra is dual-licensed under [MIT](LICENSE-MIT) **OR** [Apache-2.0](LICENSE-APACHE). 
+umbral is dual-licensed under [MIT](LICENSE-MIT) **OR** [Apache-2.0](LICENSE-APACHE). 
 
 > Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in the work (as defined in the Apache-2.0 license) shall be dual-licensed as above, without any additional terms or conditions.
 
-The **name** "umbra" and the project's branding are covered separately — see [TRADEMARK.md](TRADEMARK.md). Short version: the code is yours to fork and ship; the name stays pointing at the official project.
+The **name** "umbral" and the project's branding are covered separately — see [TRADEMARK.md](TRADEMARK.md). Short version: the code is yours to fork and ship; the name stays pointing at the official project.
 
 ## Project layout
 
-The Cargo workspace is rooted at the **repo-root `Cargo.toml`** and spans `crates/*` (the framework) plus `plugins/*` (the built-in plugins). `examples/`, `umbra_website/`, and `documentation/` are excluded and stay standalone projects, so the tree is still multi-purpose. `cargo` commands run from the repo root.
+The Cargo workspace is rooted at the **repo-root `Cargo.toml`** and spans `crates/*` (the framework) plus `plugins/*` (the built-in plugins). `examples/`, `umbral_website/`, and `documentation/` are excluded and stay standalone projects, so the tree is still multi-purpose. `cargo` commands run from the repo root.
 
 ```
 crates/        # the framework workspace
-  umbra-core     # ORM, migrations, routing, DB backends, the Plugin trait
-  umbra-macros   # #[derive(Model)], #[task], …
-  umbra          # the facade: `use umbra::prelude::*;` — the only stable surface
-  umbra-cli      # the `manage.py` equivalent
-  umbra-casing / umbra-testing  # support crates
+  umbral-core     # ORM, migrations, routing, DB backends, the Plugin trait
+  umbral-macros   # #[derive(Model)], #[task], …
+  umbral          # the facade: `use umbral::prelude::*;` — the only stable surface
+  umbral-cli      # the `manage.py` equivalent
+  umbral-casing / umbral-testing  # support crates
 plugins/       # built-in plugins, each its own crate (auth, admin, rest, tasks, …)
-examples/      # standalone apps that path-dep the local umbra (NOT workspace members)
+examples/      # standalone apps that path-dep the local umbral (NOT workspace members)
 documentation/ # user-facing docs site (SvelteKit + Specra, MDX)
-umbra_website/ # the project's own marketing/community site (an umbra app)
+umbral_website/ # the project's own marketing/community site (an umbral app)
 ```
 
-**Architecture in one line:** dependencies point inward toward `umbra-core`; control flows outward through the `Plugin` trait. `umbra-core` never names a concrete plugin. The full design rationale is in [`arch.md`](arch.md) — read it before any substantial change.
+**Architecture in one line:** dependencies point inward toward `umbral-core`; control flows outward through the `Plugin` trait. `umbral-core` never names a concrete plugin. The full design rationale is in [`arch.md`](arch.md) — read it before any substantial change.
 
 ## Getting set up
 
@@ -42,9 +42,9 @@ You need a recent stable Rust (the workspace pins `rust-version = "1.85"`, editi
 ```bash
 cargo build                      # build all workspace crates
 cargo test                       # run all tests
-cargo test -p umbra-core         # test a single crate
+cargo test -p umbral-core         # test a single crate
 cargo test <test_name>           # run one test by name
-cargo run -p umbra-cli -- <cmd>  # migrate, makemigrations, worker, inspectdb, …
+cargo run -p umbral-cli -- <cmd>  # migrate, makemigrations, worker, inspectdb, …
 cargo clippy --all-targets       # lint
 cargo fmt                        # format
 ```
@@ -61,7 +61,7 @@ cd examples/<name> && cargo build
 
 These come straight from how the framework is designed. PRs are checked against them.
 
-- **Thin core, plugin-heavy.** If a built-in capability can't be expressed as a plugin, the plugin contract is wrong — fix the contract, don't special-case the core. `umbra-core` must never depend on a plugin crate (Cargo's ban on circular deps enforces this).
+- **Thin core, plugin-heavy.** If a built-in capability can't be expressed as a plugin, the plugin contract is wrong — fix the contract, don't special-case the core. `umbral-core` must never depend on a plugin crate (Cargo's ban on circular deps enforces this).
 - **Plugins use the ORM, not raw SQL.** Every row-level read/write goes through the QuerySet API (`Model::objects().filter(...)…`), which emits the right SQL per backend. The only sanctioned raw SQL is schema DDL (owned by the migration engine) and backend-specific features the ORM can't model (gated per backend). A PR touching a plugin gets grepped for `sqlx::query` / `sqlx::query_as`; new hits need a justifying comment.
 - **Migrations are sacred.** Never delete a migration file or wipe a database to "get a clean run." The `declare → migrate → change → migrate` loop is the product; existing rows are the test, not an obstacle. Use `makemigrations` then `migrate`.
 - **Fix the root cause, don't patch the symptom.** No defensive guards, swallowed errors, `#[allow(unused)]`, or `_`-prefixed variables that hide a missing piece of the framework. If the proper fix is out of scope, log a tracker entry (see below) and leave a `// TODO(gaps2 #N)` breadcrumb pointing at where the real fix belongs.
@@ -88,7 +88,7 @@ These messages feed the changelog automatically at release time (see below), so 
 
 ## Before you push — verify the whole workspace
 
-A change in `umbra-core` can silently break the facade's re-exports, so verify everything, not just the crate you touched:
+A change in `umbral-core` can silently break the facade's re-exports, so verify everything, not just the crate you touched:
 
 ```bash
 cargo fmt
@@ -115,7 +115,7 @@ Design gaps and deferred work are tracked under `planning/` (`gaps.md`, `gaps2.m
 
 ## How releases work (maintainers)
 
-Releases are automated with [release-plz](https://release-plz.dev) and run **manually** from the Actions tab (`release-plz` workflow), not on every push. All crates share one **unified version** (`version_group = "umbra"` in `release-plz.toml`). The flow:
+Releases are automated with [release-plz](https://release-plz.dev) and run **manually** from the Actions tab (`release-plz` workflow), not on every push. All crates share one **unified version** (`version_group = "umbral"` in `release-plz.toml`). The flow:
 
 1. Dispatch `release-plz` with `command = release-pr` → it opens a single PR bumping every crate to the next version and updating changelogs from your commit messages.
 2. Review and merge that PR.

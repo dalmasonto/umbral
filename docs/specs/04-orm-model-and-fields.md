@@ -8,7 +8,7 @@
 
 ## Purpose
 
-What a "model" is in umbra. Defines:
+What a "model" is in umbral. Defines:
 
 - The **`Model` trait** that every model implements, by hand at M2, then by derive at M3.
 - The **field types** the user reaches for (text, int, float, bool, datetime, decimal, UUID, JSON, binary; plus opt-in `FileField`, `ImageField`, `EmailField`, `URLField`, `SlugField`).
@@ -83,13 +83,13 @@ Attributes live on the struct field. The derive parses them into the `FieldSpec`
 pub struct Post {
     pub id: i64,
     
-    #[umbra(fk = Author)]
+    #[umbral(fk = Author)]
     pub author_id: i64,
     
-    #[umbra(max_length = 200)]
+    #[umbral(max_length = 200)]
     pub title: String,
     
-    #[umbra(unique, indexed)]
+    #[umbral(unique, indexed)]
     pub slug: String,
     
     pub body: String,
@@ -100,15 +100,15 @@ pub struct Post {
 
 | Attribute | Effect |
 |---|---|
-| `#[umbra(default = "...")]` | Database-level default value (literal or one of: `now`, `uuid_v7`). |
-| `#[umbra(unique)]` | UNIQUE constraint at column level. |
-| `#[umbra(indexed)]` | Single-column index (not unique). |
-| `#[umbra(max_length = N)]` | For string columns: VARCHAR(N) on Postgres; CHECK on SQLite. |
-| `#[umbra(choices(Draft, Published, Archived))]` | CHECK constraint accepting one of the listed values. |
-| `#[umbra(validators(slug, length(min = 1, max = 80)))]` | Model-level validators that run on `.save()` / `.create()`. Validator names map to `validator` crate functions; custom validators are functions of `fn(&self) -> Result<(), ValidationError>`. |
-| `#[umbra(fk = Target)]` | Foreign-key relation. The field type is the FK column type (typically `i64`); the derive generates a sibling relation reference under `post::author`. |
-| `#[umbra(fk = Target, on_delete = Cascade)]` | Specify `on_delete` (default: `Restrict`). |
-| `#[umbra(rename = "blog_post_title")]` | Override the column name (default: the field name as-is). |
+| `#[umbral(default = "...")]` | Database-level default value (literal or one of: `now`, `uuid_v7`). |
+| `#[umbral(unique)]` | UNIQUE constraint at column level. |
+| `#[umbral(indexed)]` | Single-column index (not unique). |
+| `#[umbral(max_length = N)]` | For string columns: VARCHAR(N) on Postgres; CHECK on SQLite. |
+| `#[umbral(choices(Draft, Published, Archived))]` | CHECK constraint accepting one of the listed values. |
+| `#[umbral(validators(slug, length(min = 1, max = 80)))]` | Model-level validators that run on `.save()` / `.create()`. Validator names map to `validator` crate functions; custom validators are functions of `fn(&self) -> Result<(), ValidationError>`. |
+| `#[umbral(fk = Target)]` | Foreign-key relation. The field type is the FK column type (typically `i64`); the derive generates a sibling relation reference under `post::author`. |
+| `#[umbral(fk = Target, on_delete = Cascade)]` | Specify `on_delete` (default: `Restrict`). |
+| `#[umbral(rename = "blog_post_title")]` | Override the column name (default: the field name as-is). |
 
 ### Model `Meta`
 
@@ -116,7 +116,7 @@ Model-level options sit in a struct-level attribute group:
 
 ```rust
 #[derive(Model)]
-#[umbra(
+#[umbral(
     table = "blog_post",                            // default: snake_case of struct name
     ordering = [post::published_at.desc()],         // default order_by
     unique_together = [(post::author_id, post::slug)],
@@ -132,27 +132,27 @@ The `ordering`, `unique_together`, and `indexes` columns are expressed using the
 **Foreign key.** A typed FK is a normal column (`author_id: i64`) plus a sibling relation reference. The derive generates `post::author` as a relation expression usable in `.with(post::author)` (a JOIN). The column type stays the underlying scalar so it can be filtered with the usual predicates (`post::author_id.eq(3)`).
 
 ```rust
-#[umbra(fk = Author)]
+#[umbral(fk = Author)]
 pub author_id: i64,
 ```
 
 generates a `post::author` relation reference and (under the hood) wires up the `ForeignKey<Post, Author>` relation type the QuerySet uses.
 
-**One-to-one.** A foreign key with `#[umbra(fk = User, unique)]`. The `unique` attribute is the difference; the underlying SQL is "UNIQUE FOREIGN KEY".
+**One-to-one.** A foreign key with `#[umbral(fk = User, unique)]`. The `unique` attribute is the difference; the underlying SQL is "UNIQUE FOREIGN KEY".
 
 **Many-to-many.** Explicit through-table model, declared as a separate `#[derive(Model)]` struct, plus a struct-level attribute on the parent that names the relation:
 
 ```rust
 #[derive(Model)]
 pub struct PostTag {
-    #[umbra(fk = Post, on_delete = Cascade)]
+    #[umbral(fk = Post, on_delete = Cascade)]
     pub post_id: i64,
-    #[umbra(fk = Tag, on_delete = Cascade)]
+    #[umbral(fk = Tag, on_delete = Cascade)]
     pub tag_id: i64,
 }
 
 #[derive(Model)]
-#[umbra(m2m(tags(Tag, through = PostTag)))]
+#[umbral(m2m(tags(Tag, through = PostTag)))]
 pub struct Post {
     pub id: i64,
     // … no `tags` field; the M2M is a relation reference, not a column
@@ -229,20 +229,20 @@ At M3, `#[derive(Model)]` generates exactly that. Writing it by hand at M2 is th
 
 ### Nullable ↔ `Option<T>` is the only path
 
-There is no `#[umbra(nullable)]` attribute. The only way to express NULL is `Option<T>`. The derive walks the field types; an `Option<X>` field produces a `Nullable<X>Col` in the sibling module and `nullable: true` in `FieldSpec`. Removing the `Option<>` makes the column NOT NULL. This is the type-system version of Django's `null=True` / `blank=True` distinction collapsed to one rule.
+There is no `#[umbral(nullable)]` attribute. The only way to express NULL is `Option<T>`. The derive walks the field types; an `Option<X>` field produces a `Nullable<X>Col` in the sibling module and `nullable: true` in `FieldSpec`. Removing the `Option<>` makes the column NOT NULL. This is the type-system version of Django's `null=True` / `blank=True` distinction collapsed to one rule.
 
 ### Defaults
 
 Two layers of default exist:
 
 - **Rust-side default** via `#[derive(Default)]` on the model. Used by `NewPost::default()` when the user doesn't fill a field. Lives in Rust.
-- **Database-side default** via `#[umbra(default = "...")]`. Generates `DEFAULT ...` in the schema. Lives in SQL.
+- **Database-side default** via `#[umbral(default = "...")]`. Generates `DEFAULT ...` in the schema. Lives in SQL.
 
 These are deliberately separate. A model can have a database default of `now()` for `created_at` while the Rust struct's `Default::default()` returns `DateTime::UNIX_EPOCH`. The migration engine reads the database-side default; the QuerySet `.create()` reads the Rust-side one for fields the caller omitted.
 
 ### Validators run at `.save()` / `.create()`
 
-The full-clean equivalent runs before any INSERT or UPDATE. Validators come from `#[umbra(validators(...))]` plus any model-level `impl Validate for Post`. A failed validator yields `Error::Validation { field, message }`. Validators are sync.
+The full-clean equivalent runs before any INSERT or UPDATE. Validators come from `#[umbral(validators(...))]` plus any model-level `impl Validate for Post`. A failed validator yields `Error::Validation { field, message }`. Validators are sync.
 
 ### Generated names
 
@@ -259,16 +259,16 @@ These are overridable (`table`, `rename`) but the defaults match what the canoni
 
 **Field types as column wrappers (`StrCol<Post>`) vs raw Rust types in the struct.** The struct itself stores the raw Rust types (`String`, `Option<DateTime<Utc>>`, `i64`). The `StrCol`/`IntCol`/`...Col` types are only used in the sibling column module to carry the *column metadata* (name, model) for predicate building. The user never types `StrCol` in their struct definition. This keeps the struct readable as a plain data carrier while still giving the QuerySet API enough type information.
 
-**Attribute syntax via `#[umbra(...)]` vs separate attributes.** A single `#[umbra(...)]` group reads like Django's class-attribute block and lets one attribute parser handle everything. Separate `#[fk(...)]`, `#[unique]`, etc. would require multiple parsers and pollute the attribute namespace.
+**Attribute syntax via `#[umbral(...)]` vs separate attributes.** A single `#[umbral(...)]` group reads like Django's class-attribute block and lets one attribute parser handle everything. Separate `#[fk(...)]`, `#[unique]`, etc. would require multiple parsers and pollute the attribute namespace.
 
 **Generated `NewPost` insert struct vs in-place struct literal with `id: 0`.** A separate insert struct catches "I forgot to set author_id" at compile time (the field is non-optional). An in-place literal would either need every field optional (defeating the type-system invariant for required columns) or a magic placeholder for `id`. The cost is one extra generated type per model; the win is correctness at the call site.
 
-**Many-to-many with an explicit through-table, mandatory.** Django lets you define a M2M without naming the through-table; the framework generates one. umbra requires the through-table to be a real `#[derive(Model)]` struct. Reason: through-table rows are first-class — they can carry fields like `joined_at` or `weight` — and uniformly treating them as models means the migration engine, admin, and REST plugin all handle them with zero special cases. The cost is one extra struct for the M2M case; the win is "no special path for M2M."
+**Many-to-many with an explicit through-table, mandatory.** Django lets you define a M2M without naming the through-table; the framework generates one. umbral requires the through-table to be a real `#[derive(Model)]` struct. Reason: through-table rows are first-class — they can carry fields like `joined_at` or `weight` — and uniformly treating them as models means the migration engine, admin, and REST plugin all handle them with zero special cases. The cost is one extra struct for the M2M case; the win is "no special path for M2M."
 
 ## Open questions
 
 - **Exact attribute parsing for `m2m`, `choices`, and `validators`.** The shape is sketched, but each one has corners — variadic `choices`, validator argument syntax, and `m2m`'s nested form. Resolve at M3 when the derive needs to be implemented.
-- **Model inheritance / abstract base classes.** Django supports abstract models that contribute fields without their own table. Useful for timestamped models (`abstract = True`, `created_at`, `updated_at` mixed in). umbra can express this via Rust trait composition or a derive helper. Defer until a real use case lands (likely M9+ for plugin authors who want a timestamped base).
+- **Model inheritance / abstract base classes.** Django supports abstract models that contribute fields without their own table. Useful for timestamped models (`abstract = True`, `created_at`, `updated_at` mixed in). umbral can express this via Rust trait composition or a derive helper. Defer until a real use case lands (likely M9+ for plugin authors who want a timestamped base).
 - **Custom user model swap.** The auth outline owns the mechanism; this spec just needs to know that the swap target satisfies `Model`. Resolve in `auth-and-sessions.md`.
 - **Computed properties (Django's `@property`).** Rust idiom: just write a method. No framework support needed unless the admin or REST plugin needs to list computed properties as "fields." Revisit when that surfaces.
 
@@ -277,6 +277,6 @@ These are overridable (`table`, `rename`) but the defaults match what the canoni
 - The QuerySet API that uses `post::title`, `post::author`, etc.: `03-orm-querysets.md`.
 - `FIELDS` consumers: `05-backends-and-system-check.md` (boot check), `06-migration-engine.md` (snapshot diff).
 - `FileField` and `ImageField` storage semantics: outline `static-and-media.md`.
-- Validator integration (`#[umbra(validators(...))]`): outline `forms.md` (shared validator catalog) and the `validator` crate.
+- Validator integration (`#[umbral(validators(...))]`): outline `forms.md` (shared validator catalog) and the `validator` crate.
 - Custom user model details: outline `auth-and-sessions.md`.
 - Through-table migrations interacting with FK ordering: `06-migration-engine.md`.

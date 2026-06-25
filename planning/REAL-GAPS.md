@@ -5,7 +5,7 @@ This file captures the two different audiences that evaluate a web framework.
 - **Part A** is what individual developers, indie hackers, and bootstrapped teams reach for first. These are the "ship fast" features.
 - **Part B** is what engineering managers, security teams, and platform leads require before adopting a framework at scale. These are the "run safe" features.
 
-Anything in **Part B** that Umbra does not yet cover is a strategic gap — it blocks enterprise pilots and contracting conversations.
+Anything in **Part B** that Umbral does not yet cover is a strategic gap — it blocks enterprise pilots and contracting conversations.
 
 ---
 
@@ -13,27 +13,27 @@ Anything in **Part B** that Umbra does not yet cover is a strategic gap — it b
 
 > "Can I build a working MVP in a weekend?"
 
-| # | Feature | Why it matters | Umbra status |
+| # | Feature | Why it matters | Umbral status |
 |---|---------|----------------|--------------|
-| 1 | **Auto-generated Admin UI** | Visual CRUD without writing HTML/JS. Django's killer feature. | ✅ `umbra-admin` — list, create, edit, delete, search, filters |
-| 2 | **Built-in Auth** | Users, login, logout, password reset, session management out of the box. | ✅ `umbra-auth` + `umbra-sessions` |
-| 3 | **REST API Auto-generation** | Expose models as JSON endpoints with pagination, filtering, sorting with zero config. | ✅ `umbra-rest` — list, retrieve, create, update, delete |
+| 1 | **Auto-generated Admin UI** | Visual CRUD without writing HTML/JS. Django's killer feature. | ✅ `umbral-admin` — list, create, edit, delete, search, filters |
+| 2 | **Built-in Auth** | Users, login, logout, password reset, session management out of the box. | ✅ `umbral-auth` + `umbral-sessions` |
+| 3 | **REST API Auto-generation** | Expose models as JSON endpoints with pagination, filtering, sorting with zero config. | ✅ `umbral-rest` — list, retrieve, create, update, delete |
 | 4 | **Database Migrations** | `makemigrations` + `migrate` that diffs models and generates safe SQL. | ✅ Phase 1 complete — autodetect, apply, track |
-| 5 | **CLI Scaffolding** | `startproject`, `startapp`, `createsuperuser` — reduces boilerplate to near zero. | ✅ `umbra-cli` ships all three |
-| 6 | **Hot Reload / Dev Server** | Edit a template or handler, see the change immediately without recompile. | ✅ `umbra dev` (cargo-watch) + in-process template hot-reload + `umbra-livereload` — browser auto-reloads over SSE on template/CSS edits (CSS hot-swaps in place) and reconnect-reloads after a `.rs` rebuild. No manual refresh. |
+| 5 | **CLI Scaffolding** | `startproject`, `startapp`, `createsuperuser` — reduces boilerplate to near zero. | ✅ `umbral-cli` ships all three |
+| 6 | **Hot Reload / Dev Server** | Edit a template or handler, see the change immediately without recompile. | ✅ `umbral dev` (cargo-watch) + in-process template hot-reload + `umbral-livereload` — browser auto-reloads over SSE on template/CSS edits (CSS hot-swaps in place) and reconnect-reloads after a `.rs` rebuild. No manual refresh. |
 | 7 | **Simple Deployment** | Single binary + static files. No Docker required for side projects. | ✅ Cargo binary + `templates/` dir |
-| 8 | **Background Tasks / Job Queue** | Schedule emails, image processing, reports without blocking the web server. | ✅ `umbra-tasks` — DB-backed queue: enqueue, worker loop, `#[task]` macro, retries (`attempts`/`max_attempts`), scheduled execution (`scheduled_for`). apalis migration is a future improvement |
-| 9 | **Email Sending** | Password resets, notifications, transactional emails with SMTP or API backends. | ✅ `umbra-email` — SMTP via `lettre` (STARTTLS 587) + console backend, HTML/multipart messages. API backends (SendGrid/SES) deferred |
-| 10 | **File Uploads & Media Storage** | Handle multipart uploads, store locally or on S3/R2, serve with signed URLs. | ✅ `FileField`/`ImageField` + multipart parsing + pluggable `Storage` (`FsStorage` in umbra-media); admin upload widgets. S3 backend + signed URLs deferred |
-| 11 | **OpenAPI / Swagger Auto-docs** | Every REST endpoint documented with schemas, ready for frontend code generation. | ✅ `umbra-openapi` generates spec |
-| 12 | **Social Auth / OAuth** | "Sign in with GitHub/Google" — table stakes for modern SaaS. | ✅ `umbra-oauth` — Google/GitHub login + account connection, SPA token return, encrypted tokens (`Masked<T>`) |
+| 8 | **Background Tasks / Job Queue** | Schedule emails, image processing, reports without blocking the web server. | ✅ `umbral-tasks` — DB-backed queue: enqueue, worker loop, `#[task]` macro, retries (`attempts`/`max_attempts`), scheduled execution (`scheduled_for`). apalis migration is a future improvement |
+| 9 | **Email Sending** | Password resets, notifications, transactional emails with SMTP or API backends. | ✅ `umbral-email` — SMTP via `lettre` (STARTTLS 587) + console backend, HTML/multipart messages. API backends (SendGrid/SES) deferred |
+| 10 | **File Uploads & Media Storage** | Handle multipart uploads, store locally or on S3/R2, serve with signed URLs. | ✅ `FileField`/`ImageField` + multipart parsing + pluggable `Storage` (`FsStorage` in umbral-media); admin upload widgets. S3 backend + signed URLs deferred |
+| 11 | **OpenAPI / Swagger Auto-docs** | Every REST endpoint documented with schemas, ready for frontend code generation. | ✅ `umbral-openapi` generates spec |
+| 12 | **Social Auth / OAuth** | "Sign in with GitHub/Google" — table stakes for modern SaaS. | ✅ `umbral-oauth` — Google/GitHub login + account connection, SPA token return, encrypted tokens (`Masked<T>`) |
 | 13 | **Full-text Search** | Typeahead, fuzzy matching, ranking — not just exact `LIKE` queries. | ⚠️ Postgres `tsvector` FTS shipped (`TsVector` field, `.matches()`/`.matches_websearch()`, boot-time SQLite gating); auto-GIN-index + SQLite FTS5 fallback deferred (features.md #33) |
-| 14 | **WebSockets / Real-time** | Chat, notifications, live dashboards without polling. | ✅ `umbra-realtime` — SSE + WebSocket, user/group-targeted, GroupPolicy gate, signals bridge (`on_model`). Multi-instance Redis broker deferred |
-| 15 | **Caching Layer** | Redis-backed cache for expensive queries, view fragments, or session stores. | ✅ `umbra-cache` — in-memory / SQLite / Redis backends + `cache_page` view middleware + ambient `Cache` handle |
+| 14 | **WebSockets / Real-time** | Chat, notifications, live dashboards without polling. | ✅ `umbral-realtime` — SSE + WebSocket, user/group-targeted, GroupPolicy gate, signals bridge (`on_model`). Multi-instance Redis broker deferred |
+| 15 | **Caching Layer** | Redis-backed cache for expensive queries, view fragments, or session stores. | ✅ `umbral-cache` — in-memory / SQLite / Redis backends + `cache_page` view middleware + ambient `Cache` handle |
 | 16 | **Form Validation & Error Messages** | Declarative validation (min/max, regex, custom rules) with user-friendly errors. | ✅ `#[derive(Form)]` validators (required/email/phone/url/regex/min/max/length/message) + `FormErrors` with per-field & non-field messages and template context |
 | 17 | **i18n / Internationalization** | Translate templates, model labels, and error messages for multiple locales. | ❌ Not yet implemented |
-| 18 | **Testing Utilities** | Test client that boots the app in-memory, DB rollback per test, factory fixtures. | ✅ `umbra-testing` — `TestClient`/`TempPool`/`TestResponse` + `Factory` trait (build/create/create_with/create_batch, `seq()`, `fake`) + `fixtures` (load/dump) |
-| 19 | **Dashboard / Analytics Widgets** | Built-in charts, counts, recent-activity panels in the admin. | ✅ `umbra-admin` dashboard — per-model row-count cards + user-customizable widget grid |
+| 18 | **Testing Utilities** | Test client that boots the app in-memory, DB rollback per test, factory fixtures. | ✅ `umbral-testing` — `TestClient`/`TempPool`/`TestResponse` + `Factory` trait (build/create/create_with/create_batch, `seq()`, `fake`) + `fixtures` (load/dump) |
+| 19 | **Dashboard / Analytics Widgets** | Built-in charts, counts, recent-activity panels in the admin. | ✅ `umbral-admin` dashboard — per-model row-count cards + user-customizable widget grid |
 | 20 | **Plugin Ecosystem** | Third-party plugins on crates.io that extend the framework (payment, CRM, blog). | ⚠️ Plugin trait exists; ecosystem is empty |
 
 ---
@@ -42,15 +42,15 @@ Anything in **Part B** that Umbra does not yet cover is a strategic gap — it b
 
 > "Can we pass a security audit and scale to 10k users?"
 
-| # | Feature | Why it matters | Umbra status |
+| # | Feature | Why it matters | Umbral status |
 |---|---------|----------------|--------------|
-| 1 | **RBAC / Fine-grained Permissions** | Not just "is_staff" — role-based access with per-object permissions (`can_edit_own_post`). | ✅ `umbra-permissions` — groups, permissions, M2M checks |
+| 1 | **RBAC / Fine-grained Permissions** | Not just "is_staff" — role-based access with per-object permissions (`can_edit_own_post`). | ✅ `umbral-permissions` — groups, permissions, M2M checks |
 | 2 | **Audit Logging** | Every create, update, delete recorded with who, when, and what changed. | ⚠️ `AdminAuditLog` model exists; no queryable audit trail API |
 | 3 | **SSO / OIDC / SAML** | Enterprise customers demand "Sign in with Okta/Azure AD/Google Workspace." | ❌ Not yet implemented |
 | 4 | **Multi-tenancy** | One app serving isolated customers (schemas or row-level) with zero data leakage. | ❌ Not yet implemented (We need a good database router) |
 | 5 | **Read Replicas & Connection Pooling** | Route reads to replicas, writes to primary. Transparent failover. | ⚠️ `sqlx` pool handles basics; no replica routing (We need a good database router) |
 | 6 | **Horizontal Scaling (Stateless)** | Run 10 app instances behind a load balancer with shared session store. | ⚠️ Sessions use DB; Redis-backed sessions needed for scale |
-| 7 | **Health Checks & Readiness Probes** | `/healthz`, `/ready` endpoints for Kubernetes and load balancers. | ✅ `umbra-health` — `/healthz` (liveness) + `/ready` (DB probe + registered `HealthCheck`s, 503 + per-dep JSON on failure) |
+| 7 | **Health Checks & Readiness Probes** | `/healthz`, `/ready` endpoints for Kubernetes and load balancers. | ✅ `umbral-health` — `/healthz` (liveness) + `/ready` (DB probe + registered `HealthCheck`s, 503 + per-dep JSON on failure) |
 | 8 | **Structured Logging / Observability** | JSON logs, distributed tracing (OpenTelemetry), request correlation IDs. | ❌ Not yet implemented |
 | 9 | **Metrics & Monitoring** | Prometheus-compatible counters for requests, DB latency, queue depth. | ❌ Not yet implemented |
 | 10 | **Rate Limiting & Throttling** | Per-IP, per-user, per-endpoint limits. Essential for public APIs. | ❌ Not yet implemented |
@@ -62,7 +62,7 @@ Anything in **Part B** that Umbra does not yet cover is a strategic gap — it b
 | 16 | **Feature Flags** | Toggle features per tenant, per user segment, or percentage rollout. | ❌ Not yet implemented |
 | 17 | **gRPC / GraphQL Support** | Internal microservices often prefer gRPC; frontend teams want GraphQL. | ❌ Not yet implemented |
 | 18 | **Event Sourcing / CQRS** | Audit-grade change logs, read-model separation, replayable events. | ❌ Not yet implemented |
-| 19 | **Row-Level Security (RLS)** | Postgres RLS policies enforced at the DB level for multi-tenant isolation. | ⚠️ `umbra-rls` — `ENABLE ROW LEVEL SECURITY` + per-table/action `CREATE POLICY`; still needs a security-context (`set_config`) middleware to populate the current user so policies actually isolate (review AUTH-3) |
+| 19 | **Row-Level Security (RLS)** | Postgres RLS policies enforced at the DB level for multi-tenant isolation. | ⚠️ `umbral-rls` — `ENABLE ROW LEVEL SECURITY` + per-table/action `CREATE POLICY`; still needs a security-context (`set_config`) middleware to populate the current user so policies actually isolate (review AUTH-3) |
 | 20 | **Data Masking / PII Redaction** | Hide sensitive fields in logs, admin, and API responses based on role. | ⚠️ `Masked<T>` field encryption at rest (X25519 sealed boxes, GDPR crypto-shredding) shipped; role-based redaction in admin/API responses not yet |
 | 21 | **Service Mesh Integration** | mTLS, sidecar proxies, circuit breakers for inter-service calls. | ❌ Not yet implemented |
 | 22 | **Change Data Capture (CDC)** | Stream DB changes to Kafka/message bus for downstream analytics. | ❌ Not yet implemented |
@@ -74,7 +74,7 @@ Anything in **Part B** that Umbra does not yet cover is a strategic gap — it b
 
 ## Strategic Takeaway
 
-Umbra now covers roughly **85% of Part A** — 17/20 ✅ (admin, auth, REST, migrations, CLI, hot-reload, deploy, **tasks**, **email**, media, OpenAPI, OAuth, realtime, **caching**, **form validation**, testing, **dashboard**); only FTS and the plugin ecosystem are partial and i18n is unstarted — and **~30% of Part B** (health checks, RBAC, CSRF/XSS hardening, vendor-neutral abstractions ✅; data-masking via `Masked<T>`, RLS, audit log, backup, pooling partial). Updated 2026-06-14.
+Umbral now covers roughly **85% of Part A** — 17/20 ✅ (admin, auth, REST, migrations, CLI, hot-reload, deploy, **tasks**, **email**, media, OpenAPI, OAuth, realtime, **caching**, **form validation**, testing, **dashboard**); only FTS and the plugin ecosystem are partial and i18n is unstarted — and **~30% of Part B** (health checks, RBAC, CSRF/XSS hardening, vendor-neutral abstractions ✅; data-masking via `Masked<T>`, RLS, audit log, backup, pooling partial). Updated 2026-06-14.
 
 The gap pattern is clear:
 - **Developer features** that Django already solved are being rebuilt well (admin, auth, REST, migrations, CLI).

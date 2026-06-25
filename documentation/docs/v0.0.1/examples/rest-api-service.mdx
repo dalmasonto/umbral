@@ -1,6 +1,6 @@
 ---
 title: REST API service
-description: API-only umbra app. REST + OpenAPI + token auth, no HTML, no admin. The "Rust microservice" shape.
+description: API-only umbral app. REST + OpenAPI + token auth, no HTML, no admin. The "Rust microservice" shape.
 sidebar_position: 3
 icon: cloud
 tags: [examples, rest, api, openapi]
@@ -33,10 +33,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umbra = "0.0.1"
-umbra-auth = "0.0.1"
-umbra-rest = "0.0.1"
-umbra-openapi = "0.0.1"
+umbral = "0.0.1"
+umbral-auth = "0.0.1"
+umbral-rest = "0.0.1"
+umbral-openapi = "0.0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -51,13 +51,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 ## `.env`
 
-The settings loader only reads `UMBRA_`-prefixed keys, so the database URL goes under `UMBRA_DATABASE_URL` (a bare `DATABASE_URL` would be ignored and the app would fall back to `sqlite::memory:`).
+The settings loader only reads `UMBRAL_`-prefixed keys, so the database URL goes under `UMBRAL_DATABASE_URL` (a bare `DATABASE_URL` would be ignored and the app would fall back to `sqlite::memory:`).
 
 ```bash
-UMBRA_DATABASE_URL=postgres://api:api@localhost:5432/api_service
-UMBRA_BIND_ADDR=0.0.0.0:8000
-UMBRA_SECRET_KEY=replace-me-run-openssl-rand-hex-32
-UMBRA_ENVIRONMENT=Dev
+UMBRAL_DATABASE_URL=postgres://api:api@localhost:5432/api_service
+UMBRAL_BIND_ADDR=0.0.0.0:8000
+UMBRAL_SECRET_KEY=replace-me-run-openssl-rand-hex-32
+UMBRAL_ENVIRONMENT=Dev
 ```
 
 ## `src/models.rs`
@@ -65,7 +65,7 @@ UMBRA_ENVIRONMENT=Dev
 ```rust
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbral::orm::Model)]
 pub struct Project {
     pub id: i64,
     pub slug: String,
@@ -75,7 +75,7 @@ pub struct Project {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbral::orm::Model)]
 pub struct Task {
     pub id: i64,
     pub project_id: i64,
@@ -94,9 +94,9 @@ pub struct Task {
 //! production would store hashed tokens and rotate them.
 
 use async_trait::async_trait;
-use umbra_rest::{Authentication, Identity};
+use umbral_rest::{Authentication, Identity};
 
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
 pub struct ApiToken {
     pub id: i64,
     pub user_id: i64,
@@ -110,7 +110,7 @@ pub struct BearerAuth;
 
 #[async_trait]
 impl Authentication for BearerAuth {
-    async fn authenticate(&self, headers: &umbra::web::HeaderMap) -> Option<Identity> {
+    async fn authenticate(&self, headers: &umbral::web::HeaderMap) -> Option<Identity> {
         let auth = headers.get(http::header::AUTHORIZATION)?.to_str().ok()?;
         let token = auth.strip_prefix("Bearer ")?;
         let row = ApiToken::objects()
@@ -133,10 +133,10 @@ mod models;
 use http::Method;
 use serde_json::{json, Map, Value};
 
-use umbra::prelude::*;
+use umbral::prelude::*;
 
-use umbra_auth::{AuthPlugin, AuthUser};
-use umbra_rest::{
+use umbral_auth::{AuthPlugin, AuthUser};
+use umbral_rest::{
     ActionError, ActionScope, IsAuthenticated, IsStaff, OrPermission, PageNumberPagination,
     ReadOnly, ResourceConfig, RestPlugin,
 };
@@ -250,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let settings = Settings::from_env()?;
-    let pool = umbra::db::connect(&settings.database_url).await?;
+    let pool = umbral::db::connect(&settings.database_url).await?;
 
     let app = App::builder()
         .settings(settings)
@@ -281,7 +281,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // root and serves the schema document at `/openapi.json` (the
         // default `OpenApiPlugin::new()` would mount under `/openapi/`).
         .plugin(
-            umbra_openapi::OpenApiPlugin::new()
+            umbral_openapi::OpenApiPlugin::new()
                 .at("/")
                 .title("API Service")
                 .version("1.0.0")
@@ -289,7 +289,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .build()?;
 
-    umbra::migrate::run().await?;
+    umbral::migrate::run().await?;
 
     let addr = "0.0.0.0:8000".parse::<std::net::SocketAddr>()?;
     println!("api-service listening on http://{addr}");
@@ -306,8 +306,8 @@ cargo run -- makemigrations
 cargo run -- migrate
 
 # 2) Seed an API token directly (production: a /token POST handler).
-# The URL lives under UMBRA_DATABASE_URL; psql wants a bare connection string.
-psql "$UMBRA_DATABASE_URL" <<'SQL'
+# The URL lives under UMBRAL_DATABASE_URL; psql wants a bare connection string.
+psql "$UMBRAL_DATABASE_URL" <<'SQL'
 INSERT INTO auth_user (username, email, password_hash, is_staff, is_superuser, is_active, date_joined)
 VALUES ('alice', 'alice@example.com', 'argon2-hidden', true, true, true, NOW());
 INSERT INTO api_token (user_id, token, is_staff, revoked)
@@ -349,17 +349,17 @@ curl http://localhost:8000/openapi.json | jq '.paths | keys'
 | "Mine" filter via `@action` | `mine` collection action reads `ctx.identity.user_id` |
 | Workflow transition | `done` detail action sets `status = "done"` |
 | Hiding internal tables | `RestPlugin::exclude(["api_token"])` — on top of the 10 framework tables blocked by default (`auth_user`, `session`, `task_row`, …) |
-| OpenAPI document | `umbra_openapi::OpenApiPlugin::new().title(...).version(...)` |
+| OpenAPI document | `umbral_openapi::OpenApiPlugin::new().title(...).version(...)` |
 | Per-route security headers + CSRF defaults | On by default. See [Web error pages](../web/error-pages) |
 
 ## What it deliberately doesn't ship
 
 - **No HTML rendering.** Add `templates_dir(...)` + a handler that returns `Html<String>` if you need a docs landing.
-- **No admin UI.** Add `.plugin(umbra_admin::AdminPlugin::default())` if you want one.
+- **No admin UI.** Add `.plugin(umbral_admin::AdminPlugin::default())` if you want one.
 - **No background tasks / email.** Both plug in with one line. See [Batteries included](./batteries-included).
 
 ## Next
 
-- Pair this with a frontend: the API surface here is exactly what `umbra-openapi`'s schema describes. Plug it into [openapi-typescript](https://github.com/drwpow/openapi-typescript) or any other generator.
+- Pair this with a frontend: the API surface here is exactly what `umbral-openapi`'s schema describes. Plug it into [openapi-typescript](https://github.com/drwpow/openapi-typescript) or any other generator.
 - Swap the bearer token for sessions: see the auth flow in [Batteries included](./batteries-included).
 - For the same shape with HTML + admin, see [Batteries included](./batteries-included).

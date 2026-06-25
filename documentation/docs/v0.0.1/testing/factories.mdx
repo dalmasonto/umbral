@@ -7,12 +7,12 @@ tags: [testing, factories, fixtures, fake]
 
 # Factories
 
-`umbra-testing`'s `Factory` trait produces *realistic* model instances in tests (one row, an overridden row, or a whole batch) without hand-writing the same struct literal everywhere. It's the [factory_boy](https://factoryboy.readthedocs.io/) / FactoryBot shape in Rust, layered on the [`fake`](https://docs.rs/fake) crate for believable values.
+`umbral-testing`'s `Factory` trait produces *realistic* model instances in tests (one row, an overridden row, or a whole batch) without hand-writing the same struct literal everywhere. It's the [factory_boy](https://factoryboy.readthedocs.io/) / FactoryBot shape in Rust, layered on the [`fake`](https://docs.rs/fake) crate for believable values.
 
-It pairs with the [test client](./test-client): factories *generate* the rows, the test client *exercises* the handler against them. For hand-edited JSON seed data, `umbra-core`'s `load_fixture` / `dump_fixture` (in `crates/umbra-core/src/fixtures.rs`) round-trip rows through the ORM.
+It pairs with the [test client](./test-client): factories *generate* the rows, the test client *exercises* the handler against them. For hand-edited JSON seed data, `umbral-core`'s `load_fixture` / `dump_fixture` (in `crates/umbral-core/src/fixtures.rs`) round-trip rows through the ORM.
 
 <Callout type="info">
-`umbra-testing` is a **dev-dependency utility crate**, not a plugin. It never ships in a release build. Add it under `[dev-dependencies]`.
+`umbral-testing` is a **dev-dependency utility crate**, not a plugin. It never ships in a release build. Add it under `[dev-dependencies]`.
 </Callout>
 
 ## The marker shape
@@ -20,8 +20,8 @@ It pairs with the [test client](./test-client): factories *generate* the rows, t
 A factory is a small **marker type** with an associated `Model`, not an `impl` on the model itself. That's deliberate: in a test crate both your model and the `Factory` trait are foreign, so `impl Factory for Plugin` would violate Rust's orphan rule, but `impl Factory for PluginFactory` (a local marker) compiles fine.
 
 ```rust
-use umbra_testing::{Factory, seq};
-use umbra_testing::fake::{Fake, faker::{lorem::en::Sentence, company::en::CompanyName}};
+use umbral_testing::{Factory, seq};
+use umbral_testing::fake::{Fake, faker::{lorem::en::Sentence, company::en::CompanyName}};
 
 struct PluginFactory;
 
@@ -90,5 +90,5 @@ async fn directory_lists_a_factory_built_plugin() {
 ## See also
 
 - [Test client](./test-client): boot the app and assert on responses.
-- JSON seed files: `load_fixture` / `dump_fixture` in `crates/umbra-core/src/fixtures.rs`.
+- JSON seed files: `load_fixture` / `dump_fixture` in `crates/umbral-core/src/fixtures.rs`.
 - Design and rationale: `planning/features.md` #79 / #52.

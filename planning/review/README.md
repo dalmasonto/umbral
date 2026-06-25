@@ -1,4 +1,4 @@
-# umbra framework review — security & feature audit
+# umbral framework review — security & feature audit
 
 Date: 2026-06-10. Method: four parallel read-only audits (ORM/SQL, auth/session/authz, HTTP-facing plugins, broken/missing features) across `crates/` and `plugins/`, cross-checked against the existing `bugs/gaps.md`, `bugs/gaps2.md`, `bugs/REAL-GAPS.md`, `bugs/features.md` so only **new** findings are reported here. Every high/critical claim was independently re-verified against the source before being written down (see the `Verified` line on those entries).
 
@@ -24,15 +24,15 @@ This is a point-in-time review, not a tracker. Each finding has `file:line`, evi
 ### High
 - **WEB-2** — Mass assignment: REST/dynamic writes strip only `noform`, not `noedit` (and REST `hide()` is response-only). `PATCH {"is_superuser": true}` lands. Chains with WEB-1 into unauthenticated privilege escalation.
 - **WEB-3** — Reflected XSS in the admin filter dialog: `tojson` emits `from_safe_string` and a `</script>` in a `filter_<field>=` query param breaks out of an inline `<script>`.
-- **WEB-4** — Stored XSS via umbra-media: no extension/MIME allow-list, user-uploaded `.html`/`.svg` served inline on the app origin.
+- **WEB-4** — Stored XSS via umbral-media: no extension/MIME allow-list, user-uploaded `.html`/`.svg` served inline on the app origin.
 - **AUTH-1** — Flagship `examples/shop` never registers `SecurityPlugin`, so it runs with **no CSRF middleware and no security headers**. Security is opt-in and the reference app forgets it.
 - **AUTH-2** — Admin write handlers don't self-enforce CSRF (only login does); compounds AUTH-1.
-- **AUTH-3** — `umbra-rls` ships row-level-security policies but nothing ever sets `app.user_id`. RLS is either broken-at-runtime or silently non-isolating.
+- **AUTH-3** — `umbral-rls` ships row-level-security policies but nothing ever sets `app.user_id`. RLS is either broken-at-runtime or silently non-isolating.
 - **BROKEN-1** — Tasks: two Postgres workers can claim and run the same task (no `FOR UPDATE SKIP LOCKED`; UPDATE filters on id only). Code comment claims the opposite.
 - **BROKEN-2** — Tasks: worker crash mid-task strands the row in `running` forever (no visibility-timeout/reclaim). At-most-once, not the advertised with-retries durability.
 - **BROKEN-3** — Core signals: one panicking sync handler poisons the registry mutex and turns **every** subsequent ORM write into a 500.
 - **PERF-1** — `RestPlugin::default()` applies no LIMIT (default `NoPagination` → `limit: u64::MAX`); `GET /api/<table>/` loads the whole table into RAM. DoS surface; compounds WEB-1.
-- **PERF-2** — FK columns are never auto-indexed (only explicit `#[umbra(index)]` emits `CREATE INDEX`). Every join/`?include=`/`WHERE fk_id=?` seq-scans. Django auto-indexes every FK; umbra doesn't.
+- **PERF-2** — FK columns are never auto-indexed (only explicit `#[umbral(index)]` emits `CREATE INDEX`). Every join/`?include=`/`WHERE fk_id=?` seq-scans. Django auto-indexes every FK; umbral doesn't.
 - **PERF-3** — `bulk_create` runs one FK-existence `COUNT` per FK per row before the single INSERT — `bulk_create(1000)` with 2 FKs ≈ 2000 round-trips, defeating the bulk path.
 
 ### Medium
@@ -41,8 +41,8 @@ This is a point-in-time review, not a tracker. Each finding has `file:line`, evi
 - **WEB-6** — API playground mounted unauthenticated, runs requests with the visitor's ambient cookies.
 - **WEB-7** — Admin bulk-actions and FK-autocomplete skip `permcheck` (only `require_staff`).
 - **BROKEN-4** — `run_worker` graceful shutdown calls `std::process::exit(0)` from library code (kills the host process in single-binary deploys); doc says it panics.
-- **BROKEN-5** — umbra-signals typed handlers silently never fire when the payload doesn't deserialize (no log).
-- **BROKEN-6** — umbra-email `send()` panics on the console backend when settings aren't initialised (defeats its own no-App workaround).
+- **BROKEN-5** — umbral-signals typed handlers silently never fire when the payload doesn't deserialize (no log).
+- **BROKEN-6** — umbral-email `send()` panics on the console backend when settings aren't initialised (defeats its own no-App workaround).
 - **BROKEN-7** — `cache_page` body-collection failure fabricates an empty 200 with stale `Content-Length`.
 - **BROKEN-8** — `Form<T>` extractor ignores `Content-Type` and turns body-parse failures into bogus "field required" errors instead of 415.
 - **BROKEN-9** — `CachePlugin` registered via `.plugin(...)` is inert; only the static `init()` wires the ambient cache (doc claims `App::build()` does).

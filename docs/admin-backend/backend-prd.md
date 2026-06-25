@@ -1,17 +1,17 @@
-# Umbra Admin — Backend PRD (data & APIs)
+# Umbral Admin — Backend PRD (data & APIs)
 
 | | |
 |---|---|
-| **Scope** | How `umbra-admin` is generated, scoped, powered, and persisted |
+| **Scope** | How `umbral-admin` is generated, scoped, powered, and persisted |
 | **Audience** | Back-end / framework implementation |
 | **Status** | Draft v0.1 · May 30, 2026 |
-| **Companion** | `umbra-admin-design-prd.md` (UI/UX) · `arch.md` (architecture) |
+| **Companion** | `umbral-admin-design-prd.md` (UI/UX) · `arch.md` (architecture) |
 
 ---
 
 ## 1. Where this fits
 
-`umbra-admin` is a **built-in plugin** like any other (it implements `Plugin`, owns its own
+`umbral-admin` is a **built-in plugin** like any other (it implements `Plugin`, owns its own
 migrations, registers routes). It introspects models registered with the ORM and serves a
 JSON/data API that the admin front-end (designed in the companion PRD) consumes. Nothing here is
 special-cased; the admin is proof the plugin contract is strong enough to build a product on.
@@ -145,7 +145,7 @@ large tables). FK and M2M selectors fetch options on demand from a dedicated end
   from model metadata.
 - Permission-checked: a user who cannot view the related model gets no options.
 
-Reuse the same query/serialization layer that `umbra-rest` builds on where possible — the admin
+Reuse the same query/serialization layer that `umbral-rest` builds on where possible — the admin
 is essentially an internal, permission-scoped REST consumer with extra metadata.
 
 ### 5.4 Dashboard
@@ -226,7 +226,7 @@ preview kind so the front-end never sniffs bytes:
 
 ## 6. Persistence (admin owns its migrations)
 
-`umbra-admin` owns tables created via its plugin migrations:
+`umbral-admin` owns tables created via its plugin migrations:
 
 - `admin_dashboard_layout` — per-user widget layout (user_id, dashboard_key, JSON of
   widget instances: key, position, span, per-instance config).
@@ -242,7 +242,7 @@ mechanism every plugin uses.
 ## 7. Permissions
 
 - Every nav entry, model endpoint, action, and widget is gated by permissions resolved from
-  `umbra-auth` (e.g. `app.view_model`, `app.change_model`, `app.delete_model`, custom perms).
+  `umbral-auth` (e.g. `app.view_model`, `app.change_model`, `app.delete_model`, custom perms).
 - The **nav, catalog, and schema responses are pre-filtered** so the front-end only ever knows
   about what the user may access (no hidden-but-present items).
 - Object-level permissions are supported via an optional hook on `AdminModel`.
@@ -286,5 +286,5 @@ fidelity conversion is not a v1 guarantee. Revisit after the core admin is solid
 ---
 
 *Front-end layout, components, theming tokens, and Stitch prompts live in
-`umbra-admin-design-prd.md`. This document defines the APIs and registration those screens
+`umbral-admin-design-prd.md`. This document defines the APIs and registration those screens
 consume.*

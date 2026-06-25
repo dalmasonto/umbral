@@ -1,20 +1,20 @@
-# Umbra Spec Set — Design
+# Umbral Spec Set — Design
 
 | | |
 |---|---|
 | **Date** | 2026-05-30 |
 | **Status** | Approved (brainstorming) — implementation plan pending |
 | **Authors** | Dalmas Ogembo + Claude |
-| **Scope** | A meta-design: which specs to write before umbra implementation starts, at what depth, in what order. |
+| **Scope** | A meta-design: which specs to write before umbral implementation starts, at what depth, in what order. |
 
 ---
 
 ## 1. Context
 
-Umbra is a greenfield, Django-equivalent web framework for Rust. The repository contains three pre-existing documents:
+Umbral is a greenfield, Django-equivalent web framework for Rust. The repository contains three pre-existing documents:
 
 - **`CLAUDE.md`** — the most recent thinking; treats the *declare → migrate → change → migrate* loop as a day-one (M5) target and treats *thin core + plugin-heavy* as the one idea that matters most.
-- **`umbra-PRD.md`** — product requirements; downgrades autodetection to P1 and does not name the declare→migrate loop. **Drifts from CLAUDE.md.**
+- **`umbral-PRD.md`** — product requirements; downgrades autodetection to P1 and does not name the declare→migrate loop. **Drifts from CLAUDE.md.**
 - **`django-shadow-rust-plan.md`** — architecture and build order; schedules M5 as forward-only migrations and M8 as autodetection. **Drifts from CLAUDE.md.**
 
 The goal of this design is to specify the doc set we will write *before* implementation begins, so the framework's design is auditable on paper before any code is written. The user's directive: "specs first; we shall implement them as we go on."
@@ -38,14 +38,14 @@ Two load-bearing design questions surfaced during brainstorming. Their answers c
 
 ### 3.1 Visibility of underlying crates
 
-**Does an umbra developer see axum?** Rule of thumb: **if a crate is a way to build the framework, hide it; if it is how the user describes their own data and behavior, surface it.**
+**Does an umbral developer see axum?** Rule of thumb: **if a crate is a way to build the framework, hide it; if it is how the user describes their own data and behavior, surface it.**
 
 | Crate | Visibility | Notes |
 |---|---|---|
-| **axum** | **Hidden** by default. `umbra::web::{Router, Request, Response, Json, Path, Query, Form}`. Escape hatch: `umbra::axum::*`. | Day-to-day umbra looks Django-shape. |
-| **sqlx** | **Hidden** behind `QuerySet` / `Manager`. Escape hatch: `umbra::db::query!` is `sqlx::query!`. | Compile-time-checked SQL remains available. |
+| **axum** | **Hidden** by default. `umbral::web::{Router, Request, Response, Json, Path, Query, Form}`. Escape hatch: `umbral::axum::*`. | Day-to-day umbral looks Django-shape. |
+| **sqlx** | **Hidden** behind `QuerySet` / `Manager`. Escape hatch: `umbral::db::query!` is `sqlx::query!`. | Compile-time-checked SQL remains available. |
 | **sea-query** | **Fully hidden.** | Pure implementation detail. |
-| **tower / tower-http** | **Mixed.** Middleware is configured through umbra's chain, but the underlying type is a tower service so standard layers compose. | Contract reads as umbra; ecosystem still works. |
+| **tower / tower-http** | **Mixed.** Middleware is configured through umbral's chain, but the underlying type is a tower service so standard layers compose. | Contract reads as umbral; ecosystem still works. |
 | **serde** | **Visible.** Users `#[derive(Serialize, Deserialize)]` on their own types. | Ecosystem fluency, not infrastructure. |
 | **clap** | **Visible at the extension seam.** Custom `Command`s use clap derives. | Same reason as serde. |
 | **tracing** | **Visible.** Users add their own spans/logs. | Observability is the user's. |
@@ -57,13 +57,13 @@ Two load-bearing design questions surfaced during brainstorming. Their answers c
 
 | Kind of context | Examples | Visibility in a handler |
 |---|---|---|
-| **App-wide / process-scoped** | DB pool, `Settings`, plugin registry, task-queue handle, cache, template engine | **Ambient.** Set during `App::build()` (stored in `OnceLock`s inside the relevant module). Reached via accessors: `Post::objects()`, `umbra::settings()`, `umbra::tasks::enqueue(...)`. **No `State<…>` in the handler signature.** |
-| **Per-request / request-scoped** | The Request, parsed body, path/query params, the session, the authenticated user, an active transaction handle | **Explicit arguments.** Extracted into the handler signature: `Request`, `Path<T>`, `Json<T>`, `Form<T>`, `Query<T>`, `Session`, `Auth<User>`. Uses axum extractors *under the hood*; the user sees umbra types only. |
+| **App-wide / process-scoped** | DB pool, `Settings`, plugin registry, task-queue handle, cache, template engine | **Ambient.** Set during `App::build()` (stored in `OnceLock`s inside the relevant module). Reached via accessors: `Post::objects()`, `umbral::settings()`, `umbral::tasks::enqueue(...)`. **No `State<…>` in the handler signature.** |
+| **Per-request / request-scoped** | The Request, parsed body, path/query params, the session, the authenticated user, an active transaction handle | **Explicit arguments.** Extracted into the handler signature: `Request`, `Path<T>`, `Json<T>`, `Form<T>`, `Query<T>`, `Session`, `Auth<User>`. Uses axum extractors *under the hood*; the user sees umbral types only. |
 
-A Django-shape umbra handler — no `State`, no `axum`, ambient ORM:
+A Django-shape umbral handler — no `State`, no `axum`, ambient ORM:
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 async fn create_post(
     auth: Auth<User>,
@@ -96,7 +96,7 @@ async fn create_post(
 - §0 already names managed migrations as a north star; add the explicit *declare → migrate → change → migrate* phrasing.
 - Insert a new section **between §1 (Architectural Pillars) and §2 (The Plugin Contract)** titled "Visibility of underlying crates" — adopt the table from §3 above. It belongs there because dependency direction is already established in §1, and §2 starts naming concrete public surface (the prelude), so the rule needs to be in scope before that point.
 
-### Commit B — update `umbra-PRD.md` in place
+### Commit B — update `umbral-PRD.md` in place
 
 - `F-MIG-3` (autodetection) **P1 → P0**, with rationale (matches CLAUDE.md "day one"; the declare→migrate loop is the product, not a later feature).
 - §1 Summary and §6 Product Principles call out the declare→migrate→change→migrate loop by name.
@@ -115,7 +115,7 @@ Target length: 1–3 pages. Illustrative code, not a frozen reference.
 
 | # | File | Covers | Maps to milestone |
 |---|---|---|---|
-| 00 | `00-overview.md` | Index, reading order, Django↔umbra glossary, naming conventions (`umbra-*`), the canonical example app the specs reference | — |
+| 00 | `00-overview.md` | Index, reading order, Django↔umbral glossary, naming conventions (`umbral-*`), the canonical example app the specs reference | — |
 | 01 | `01-app-and-settings.md` | Typed settings (env layering via figment), `App::builder()`, lifecycle order (build → system check → on_ready → serve), the `OnceLock<DbPool>` decision **including the test-override path (`Manager::on(&pool)` + `test_with_pool` scoped helper) and which modules own which `OnceLock`s** | M0 |
 | 02 | `02-plugin-contract.md` | The `Plugin` trait, dependency-inversion model, what a plugin contributes (models, routes, middleware, commands, settings schema, hooks), registration (explicit + optional `inventory`), the prelude surface | M7 build-order, **specced early** as architectural keystone — gates every built-in spec |
 | 03 | `03-orm-querysets.md` | `QuerySet<T>` builder, lazy eval, `filter / exclude / order_by / limit / values`, Manager (`T::objects()`), ambient pool access, raw-SQL escape hatch | M1 |
@@ -126,7 +126,7 @@ Target length: 1–3 pages. Illustrative code, not a frozen reference.
 
 ### Deliberately *not* deep at this stage
 
-- **Routing / views / middleware.** M0 has one hand-written axum route on purpose; the `umbra::web` API is best designed once we know what handlers need to receive from the ORM and the Plugin contract. Locking it down before M3/M5 would freeze the wrong shape. Outline only.
+- **Routing / views / middleware.** M0 has one hand-written axum route on purpose; the `umbral::web` API is best designed once we know what handlers need to receive from the ORM and the Plugin contract. Locking it down before M3/M5 would freeze the wrong shape. Outline only.
 - **CLI.** `manage.py`-equivalent gets a section inside `arch.md` for now; promoted when the command list grows past `migrate` / `makemigrations` / `inspectdb`.
 - **Error model.** Referenced cross-cuttingly inside `arch.md` and inside specs that touch it; promoted to its own spec once it accretes real surface area. (Security defaults *do* get their own outline below — see §6 — because Django ships a noticeable security middleware surface that we can't fold into one paragraph.)
 
@@ -140,19 +140,19 @@ The first six outlines were named in the initial brainstorming. The remaining ni
 
 | File | Covers | Promote-to-deep trigger |
 |---|---|---|
-| `web-layer.md` | `umbra::web` shape (Router, Request, Response, extractors `Auth<User>` / `Session` / `Path<T>` / `Json<T>` / `Form<T>` / `Query<T>`), middleware chain, generic views, multipart / file uploads, streaming responses, cookies, the "hide axum" rule applied, **the invariant that handler signatures never carry `State<X>` for any app-wide X** | Promote when M0's second route lands, or when the Plugin contract spec needs to name `Router` concretely |
-| `auth-and-sessions.md` | `umbra-auth` (User model + custom user override, permissions, groups, authentication backends, login/logout, argon2 hashing, password validators, password reset) + `umbra-sessions` (tower-sessions wrapper, DB session store) | M8 entry — re-expressing built-ins as plugins |
-| `tasks.md` | `umbra-tasks`: `#[task]`, `Task` trait, DB-backed broker, worker loop, retries, periodic scheduling ("beat"), the `worker` and `beat` CLI commands | M10 entry |
-| `rest.md` | `umbra-rest`: serializers / `ModelSerializer`, viewsets, routers, pagination, filtering, throttling, content negotiation, renderers, parsers | M11 entry |
-| `admin.md` | `umbra-admin`: auto CRUD UI, list/filter/search, inlines, bulk actions, fieldsets, permission integration | M12 entry |
-| `openapi.md` | `umbra-openapi`: utoipa integration, Swagger UI, schema generation from REST viewsets and serializers | M12 entry (after admin or in parallel) |
+| `web-layer.md` | `umbral::web` shape (Router, Request, Response, extractors `Auth<User>` / `Session` / `Path<T>` / `Json<T>` / `Form<T>` / `Query<T>`), middleware chain, generic views, multipart / file uploads, streaming responses, cookies, the "hide axum" rule applied, **the invariant that handler signatures never carry `State<X>` for any app-wide X** | Promote when M0's second route lands, or when the Plugin contract spec needs to name `Router` concretely |
+| `auth-and-sessions.md` | `umbral-auth` (User model + custom user override, permissions, groups, authentication backends, login/logout, argon2 hashing, password validators, password reset) + `umbral-sessions` (tower-sessions wrapper, DB session store) | M8 entry — re-expressing built-ins as plugins |
+| `tasks.md` | `umbral-tasks`: `#[task]`, `Task` trait, DB-backed broker, worker loop, retries, periodic scheduling ("beat"), the `worker` and `beat` CLI commands | M10 entry |
+| `rest.md` | `umbral-rest`: serializers / `ModelSerializer`, viewsets, routers, pagination, filtering, throttling, content negotiation, renderers, parsers | M11 entry |
+| `admin.md` | `umbral-admin`: auto CRUD UI, list/filter/search, inlines, bulk actions, fieldsets, permission integration | M12 entry |
+| `openapi.md` | `umbral-openapi`: utoipa integration, Swagger UI, schema generation from REST viewsets and serializers | M12 entry (after admin or in parallel) |
 | `signals.md` | Decoupled events (pre_save / post_save / pre_delete / post_delete + custom signals), sync vs async dispatch, ordering guarantees, signal connection lifecycle | Open question #4 resolves here; promote at M8 (re-expressing built-ins) or earlier if a built-in plugin needs them |
 | `templates.md` | Template engine choice (minijinja vs askama), autoescape semantics, inheritance, custom tags/filters, the rendering substrate the admin and email plugins reuse | Promote at M12 (admin entry) or earlier if any feature needs server-rendered HTML |
 | `forms.md` | Declarative server-rendered forms (parallel to but distinct from REST serializers), `ModelForm` equivalent, fields, widgets, validation, formsets / inline formsets | Promote at M9–M12 when the admin or non-API web flows need them |
 | `static-and-media.md` | `collectstatic` equivalent, dev-time static serving, `FileField` / `ImageField` semantics, storage backends (filesystem default; S3-compatible later), multipart upload handling | Promote alongside `web-layer.md` when file uploads or admin file fields land |
 | `caching.md` | Cache backends (moka in-process, redis), per-view / per-fragment / low-level cache APIs, invalidation patterns | Promote when a built-in plugin (sessions, admin, rest) needs caching beyond defaults |
 | `email.md` | `send_mail` equivalent, `EmailMessage`, backends (SMTP, console, file, dummy), templated emails (cross-links `templates.md`) | Promote when password reset, or any built-in, needs to send mail |
-| `testing.md` | Test client (`umbra::test::Client` wrapping `axum-test`), fixtures, factories, transactional `TestCase` analog, integration vs unit boundaries | Promote at M9 — the moment the built-ins need integration tests |
+| `testing.md` | Test client (`umbral::test::Client` wrapping `axum-test`), fixtures, factories, transactional `TestCase` analog, integration vs unit boundaries | Promote at M9 — the moment the built-ins need integration tests |
 | `security-defaults.md` | CSRF, clickjacking (X-Frame-Options), HSTS, Content-Type-Nosniff, Referrer-Policy, COOP / CSP, secret signing (`SECRET_KEY` equivalent), secure-cookie defaults | Promote at M9 (with auth/sessions) — security middleware ships with the first plugin set |
 | `dev-experience.md` | `startproject` / `startapp` generators, dev server + autoreload (cargo-watch / listenfd), rich error pages, debug-mode tracebacks | Promote at M13 (polish) |
 
@@ -162,13 +162,13 @@ Outlines live in `docs/specs/outlines/` rather than as half-finished entries ins
 
 ## 7. Django coverage audit
 
-A walk through Django's feature surface, mapped onto the umbra doc set. The goal is to confirm nothing important slipped past, and to surface exactly where each Django capability lands. Three states matter: **covered by a deep spec**, **covered by an outline** (deferred to its milestone), or **explicitly out of scope** (with reason).
+A walk through Django's feature surface, mapped onto the umbral doc set. The goal is to confirm nothing important slipped past, and to surface exactly where each Django capability lands. Three states matter: **covered by a deep spec**, **covered by an outline** (deferred to its milestone), or **explicitly out of scope** (with reason).
 
 This table is the source of truth for "where does feature X go?" When a deep spec gets written, it uses this table to know what to scope in. When a new feature need surfaces during implementation, it gets added to the right cell here first. The §5 deep-spec scope columns are deliberately terse so they don't lock in API; this audit is where the full enumeration lives.
 
 ### 7.1 ORM and data
 
-| Django capability | Location in umbra doc set | Notes |
+| Django capability | Location in umbral doc set | Notes |
 |---|---|---|
 | Models, fields, options, `Meta` | deep `04-orm-model-and-fields.md` | |
 | Field types (text, int, float, bool, datetime, decimal, UUID, JSON, binary) | deep `04` | base set, day-one |
@@ -187,7 +187,7 @@ This table is the source of truth for "where does feature X go?" When a deep spe
 | Signals (`pre_save`, `post_save`, custom, decoupled events) | outline `signals.md` | open question #4 closes here |
 | Transactions (atomic blocks, savepoints) | deep `03` | PRD F-ORM-8 (P1) |
 | Multi-database routing (`.using("alias")`) | deep `01-app-and-settings.md` (pool ownership) + deep `03` (call site) | direction set in §3.2 |
-| Raw SQL escape hatch | deep `03` | `umbra::db::query!` is `sqlx::query!` |
+| Raw SQL escape hatch | deep `03` | `umbral::db::query!` is `sqlx::query!` |
 
 ### 7.2 Migrations and porting
 
@@ -209,7 +209,7 @@ This table is the source of truth for "where does feature X go?" When a deep spe
 | URL routing (path, includes, namespaces, `reverse`) | outline `web-layer.md` | |
 | Function views | outline `web-layer.md` | |
 | Generic class-based views | outline `web-layer.md` | trait-based, not inheritance |
-| `Request` / `Response` types | outline `web-layer.md` | `umbra::web` |
+| `Request` / `Response` types | outline `web-layer.md` | `umbral::web` |
 | Middleware (tower-based) | outline `web-layer.md` | |
 | Cookies | outline `web-layer.md` + outline `auth-and-sessions.md` | secure-cookie defaults in `security-defaults.md` |
 | File uploads (multipart parsing) | outline `web-layer.md` (parsing) + outline `static-and-media.md` (storage) | |
@@ -296,15 +296,15 @@ This table is the source of truth for "where does feature X go?" When a deep spe
 
 ### 7.10 Explicitly out of scope
 
-The features below exist in Django but aren't shipping in umbra's first iteration. Each one is captured as a structured backlog entry (Django term, purpose, why deferred, complexity hint, suggested umbra shape, revisit signal) in **`docs/specs/deferred.md`** — the source of truth for "what's next after the M0–M13 spine."
+The features below exist in Django but aren't shipping in umbral's first iteration. Each one is captured as a structured backlog entry (Django term, purpose, why deferred, complexity hint, suggested umbral shape, revisit signal) in **`docs/specs/deferred.md`** — the source of truth for "what's next after the M0–M13 spine."
 
 Short summary, grouped:
 
-- **Django `contrib` niceties.** `umbra-contenttypes`, `umbra-messages`, `umbra-sites`, `umbra-humanize`, `umbra-redirects`, `umbra-sitemaps`, `umbra-syndication`, `umbra-flatpages`.
-- **Specialty domains.** `umbra-gis` (GeoDjango), `umbra-i18n`, `umbra-channels` (websockets).
+- **Django `contrib` niceties.** `umbral-contenttypes`, `umbral-messages`, `umbral-sites`, `umbral-humanize`, `umbral-redirects`, `umbral-sitemaps`, `umbral-syndication`, `umbral-flatpages`.
+- **Specialty domains.** `umbral-gis` (GeoDjango), `umbral-i18n`, `umbral-channels` (websockets).
 - **Backend and infrastructure.** MySQL / Oracle backend support, pluggable non-DB task brokers (Redis, AMQP).
 - **Tooling and UX.** DRF browsable API, hosted deploy / runtime tooling.
-- **Cross-cutting umbra surfaces that haven't earned their own spec yet.** Error model, logging.
+- **Cross-cutting umbral surfaces that haven't earned their own spec yet.** Error model, logging.
 
 Use `deferred.md` to reorder and pick up items one at a time.
 
@@ -316,7 +316,7 @@ One commit per file. Message form:
 
 ```
 docs(arch):     changes to arch.md
-docs(prd):      changes to umbra-PRD.md
+docs(prd):      changes to umbral-PRD.md
 docs(specs):    new file or change in docs/specs/
 docs(outline):  new file or change in docs/specs/outlines/
 ```
@@ -348,7 +348,7 @@ Carried forward from PRD §13 and from this brainstorming, to be resolved in the
 3. **Admin UI rendering** — server-rendered templates vs a small embedded SPA. *Decided in `admin.md` (outline → deep spec at M12), constrained by `templates.md`.*
 4. **Async story for signals/hooks** — sync vs async callbacks; ordering guarantees. *Decided in `signals.md`.*
 5. **Custom user model mechanism** — how to allow override without Django's runtime swapping tricks. *Decided in `auth-and-sessions.md` (outline → deep at M8).*
-6. **`umbra::web` API shape** — concrete types for `Router`, `Request`, `Response`, extractors. *Deliberately deferred to the web-layer deep spec (post-ORM).*
+6. **`umbral::web` API shape** — concrete types for `Router`, `Request`, `Response`, extractors. *Deliberately deferred to the web-layer deep spec (post-ORM).*
 
 ---
 

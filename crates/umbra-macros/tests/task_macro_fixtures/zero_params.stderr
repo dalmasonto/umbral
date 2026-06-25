@@ -1,7 +1,0 @@
-error: #[task] requires exactly one parameter (the typed payload); found 0 parameter(s)
- --> tests/task_macro_fixtures/zero_params.rs:1:1
-  |
-1 | #[umbra::task]
-  | ^^^^^^^^^^^^^^
-  |
-  = note: this error originates in the attribute macro `umbra::task` (in Nightly builds, run with -Z macro-backtrace for more info)

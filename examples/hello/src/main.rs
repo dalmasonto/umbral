@@ -1,19 +1,19 @@
-//! Minimal umbra app for an apples-to-apples framework benchmark: one
+//! Minimal umbral app for an apples-to-apples framework benchmark: one
 //! model, four endpoints (plain text, JSON, DB read, DB write). NO session
 //! or auth plugins — just the core + the ORM, so the numbers reflect the
 //! framework and ORM, not a maximalist app's middleware stack.
 //!
-//! DB defaults to a WAL file (`hello_bench.db`) via umbra's real
+//! DB defaults to a WAL file (`hello_bench.db`) via umbral's real
 //! `connect_sqlite` (WAL + synchronous=NORMAL + 5s busy_timeout). Override
-//! with `UMBRA_DATABASE_URL`.
+//! with `UMBRAL_DATABASE_URL`.
 
-use umbra::prelude::*;
-use umbra::web::JsonResponse;
+use umbral::prelude::*;
+use umbral::web::JsonResponse;
 
 #[derive(
-    Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model,
+    Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model,
 )]
-#[umbra(table = "hello_note")]
+#[umbral(table = "hello_note")]
 struct Note {
     id: i64,
     title: String,
@@ -27,7 +27,7 @@ struct BenchJson {
 }
 
 async fn bench_text() -> &'static str {
-    "hello from umbra-hello"
+    "hello from umbral-hello"
 }
 
 async fn bench_json() -> JsonResponse<BenchJson> {
@@ -64,11 +64,11 @@ async fn bench_write() -> &'static str {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let settings = Settings::from_env()?;
-    let db_url = std::env::var("UMBRA_DATABASE_URL")
+    let db_url = std::env::var("UMBRAL_DATABASE_URL")
         .unwrap_or_else(|_| "sqlite://hello_bench.db?mode=rwc".to_string());
 
-    // umbra's genuine SQLite pool (WAL + synchronous=NORMAL + busy_timeout).
-    let pool = umbra::db::connect_sqlite(&db_url).await?;
+    // umbral's genuine SQLite pool (WAL + synchronous=NORMAL + busy_timeout).
+    let pool = umbral::db::connect_sqlite(&db_url).await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS hello_note \
          (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
@@ -89,5 +89,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         .build()?;
 
-    umbra_cli::dispatch(app).await
+    umbral_cli::dispatch(app).await
 }

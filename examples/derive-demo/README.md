@@ -1,20 +1,20 @@
-# umbra-derive-demo
+# umbral-derive-demo
 
 Demonstrates `#[derive(Model)]` against a user-defined struct, served over HTTP.
 
 ## Setup (once)
 
 The demo defaults to a local Postgres at
-`postgres://umbra_dev:umbra_dev@localhost/umbra_dev`. Run the one-time
+`postgres://umbral_dev:umbral_dev@localhost/umbral_dev`. Run the one-time
 setup script (creates the role + database):
 
 ```bash
 bash scripts/create_db.sh
 ```
 
-You can override the DB URL with `UMBRA_DATABASE_URL` — point it at
+You can override the DB URL with `UMBRAL_DATABASE_URL` — point it at
 your own Postgres or set
-`UMBRA_DATABASE_URL=sqlite://demo.db?mode=rwc` to run against SQLite
+`UMBRAL_DATABASE_URL=sqlite://demo.db?mode=rwc` to run against SQLite
 instead.
 
 ## Run it
@@ -31,7 +31,7 @@ curl http://127.0.0.1:3001/
 curl http://127.0.0.1:3001/articles
 ```
 
-The first call returns `umbra-derive-demo`. The second returns a JSON array of two seeded `Article` rows ordered by `id`:
+The first call returns `umbral-derive-demo`. The second returns a JSON array of two seeded `Article` rows ordered by `id`:
 
 ```json
 [
@@ -44,15 +44,15 @@ The handler is the Django ergonomic the framework promises: `Article::objects().
 
 ## What it demonstrates
 
-Every umbra symbol in `src/main.rs` comes through the facade — no `umbra_core::` or `umbra_macros::` anywhere. The whole point is that a downstream user gets the full M3 surface from a single `use umbra::prelude::*;`:
+Every umbral symbol in `src/main.rs` comes through the facade — no `umbral_core::` or `umbral_macros::` anywhere. The whole point is that a downstream user gets the full M3 surface from a single `use umbral::prelude::*;`:
 
-- `#[derive(Model)]` — re-exported as `umbra::orm::Model` (the macro), sharing its name with the `Model` trait through Rust's separate type and macro namespaces. The prelude pulls in both at once.
+- `#[derive(Model)]` — re-exported as `umbral::orm::Model` (the macro), sharing its name with the `Model` trait through Rust's separate type and macro namespaces. The prelude pulls in both at once.
 - The auto-generated `TABLE` constant. The struct is `Article`, so the table defaults to `"article"` (snake_case of the struct name).
 - The auto-generated `Article::objects() -> Manager<Article>` entry point. Same shape as the M1 hand-written `Post::objects()`, only the derive writes it.
 - The auto-generated sibling column module `article`, populated with `article::ID`, `article::TITLE`, `article::BODY`, `article::PUBLISHED_AT` in SCREAMING_SNAKE_CASE. The handler uses `article::ID.asc()` to order results, which is the typed predicate surface from M1's column types.
 - `Option<chrono::DateTime<chrono::Utc>>` mapping to a `NullableDateTimeCol`. The other M3-supported field types (`i64` → `IntCol`, `String` → `StrCol`, `chrono::DateTime<chrono::Utc>` → `DateTimeCol`) are all exercised by the struct's other fields.
 
-The schema is no longer hand-written. The example registers `Article` with `App::builder().model::<Article>()` and runs the migration engine in-process on startup (`umbra::migrate::make()` writes `migrations/app/0001_create_article.json` on first run; `umbra::migrate::run()` applies it). Re-runs are no-ops. The seed `INSERT` doesn't supply an `id` value — Postgres's `BIGSERIAL PRIMARY KEY` (or SQLite's `INTEGER PRIMARY KEY AUTOINCREMENT` when you opt into SQLite via `UMBRA_DATABASE_URL`) hands out monotonically increasing ids.
+The schema is no longer hand-written. The example registers `Article` with `App::builder().model::<Article>()` and runs the migration engine in-process on startup (`umbral::migrate::make()` writes `migrations/app/0001_create_article.json` on first run; `umbral::migrate::run()` applies it). Re-runs are no-ops. The seed `INSERT` doesn't supply an `id` value — Postgres's `BIGSERIAL PRIMARY KEY` (or SQLite's `INTEGER PRIMARY KEY AUTOINCREMENT` when you opt into SQLite via `UMBRAL_DATABASE_URL`) hands out monotonically increasing ids.
 
 The auto-migrate-on-startup pattern is demo-only and only fires on a `serve` invocation (or no subcommand). Explicit subcommands — `cargo run -- makemigrations`, `cargo run -- migrate`, `cargo run -- inspectdb`, `cargo run -- createsuperuser` — drive the migration flow themselves and skip the auto-apply. Production deployments split the steps regardless: `makemigrations` → review the JSON → `migrate` → `serve`.
 
@@ -60,7 +60,7 @@ Row writes go through the ORM: the seed loop uses `Manager::get_or_create` keyed
 
 ## Templates
 
-The example also exercises `umbra::templates` (the M11-promoted, minijinja-backed substrate). The `templates/` directory holds:
+The example also exercises `umbral::templates` (the M11-promoted, minijinja-backed substrate). The `templates/` directory holds:
 
 - `base.html` — layout, navigation, footer, all `{% block %}` slots.
 - `home.html` — child template at `/` showing the article count.
@@ -76,8 +76,8 @@ The JSON view at `/api/articles` is still there — same QuerySet, just a differ
 
 `examples/hello/` is the M0 floor: settings, default pool, two hand-written routes, no models. It doesn't use the ORM at all.
 
-`examples/derive-demo/` adds the M3 derive on top of an M0 base: same `App::builder()` shape, same facade-only imports, plus a user-defined `Article` struct with `#[derive(Model)]`. Hello uses the built-in `Post` fixture model from `umbra::orm` only by way of comparison; this example proves the derive works on a struct the user defines, which is the realistic downstream case.
+`examples/derive-demo/` adds the M3 derive on top of an M0 base: same `App::builder()` shape, same facade-only imports, plus a user-defined `Article` struct with `#[derive(Model)]`. Hello uses the built-in `Post` fixture model from `umbral::orm` only by way of comparison; this example proves the derive works on a struct the user defines, which is the realistic downstream case.
 
 ## Workspace note
 
-`examples/derive-demo/` is its own Cargo project with its own `Cargo.lock`. Like `examples/hello/`, it is intentionally not a member of the umbra workspace under `crates/Cargo.toml`. That's what makes it a real downstream-consumer smoke test: a missing facade re-export or a regressed derive breaks here, not silently inside the workspace.
+`examples/derive-demo/` is its own Cargo project with its own `Cargo.lock`. Like `examples/hello/`, it is intentionally not a member of the umbral workspace under `crates/Cargo.toml`. That's what makes it a real downstream-consumer smoke test: a missing facade re-export or a regressed derive breaks here, not silently inside the workspace.

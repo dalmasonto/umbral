@@ -1,18 +1,18 @@
 ---
 title: Request logs
-description: Django-request-style request logging for umbra. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin.
+description: Django-request-style request logging for umbral. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin.
 sidebar_position: 20
 tags: [logs, requests, middleware, admin, plugin]
 ---
 
 # Request logs
 
-`umbra-logs` records every HTTP request to a `RequestLog` row, browsable in the admin — the umbra take on Django's `django.request` logging. Capture is **fire-and-forget**: the response returns to the client immediately and the row is inserted on a background task, so logging never blocks a request and a DB error is swallowed (logged at `warn`, never propagated).
+`umbral-logs` records every HTTP request to a `RequestLog` row, browsable in the admin — the umbral take on Django's `django.request` logging. Capture is **fire-and-forget**: the response returns to the client immediately and the row is inserted on a background task, so logging never blocks a request and a DB error is swallowed (logged at `warn`, never propagated).
 
 Each row carries `method`, `path`, `status`, `duration_ms`, plus best-effort `user_id`, `ip` (from `X-Forwarded-For` / `X-Real-IP`), `user_agent`, and a `created_at` timestamp. The model lives in the `logs_requestlog` table — `migrate` creates it the same way the built-in auth and sessions tables are created (from the plugin's `models()`).
 
 <Callout type="info">
-**How `user_id` is resolved.** The session/identity surface lives in optional sibling plugins (`umbra-auth` / `umbra-sessions`) that `umbra-logs` deliberately doesn't depend on, so a logs-only app stays slim. v1 reads the **`X-Umbra-User-Id`** request header (when present) and parses it as an `i64`; otherwise `user_id` is `None`. Set that header from your auth middleware to attribute logged requests to a user.
+**How `user_id` is resolved.** The session/identity surface lives in optional sibling plugins (`umbral-auth` / `umbral-sessions`) that `umbral-logs` deliberately doesn't depend on, so a logs-only app stays slim. v1 reads the **`X-Umbral-User-Id`** request header (when present) and parses it as an `i64`; otherwise `user_id` is `None`. Set that header from your auth middleware to attribute logged requests to a user.
 </Callout>
 
 <Callout type="info">
@@ -22,14 +22,14 @@ Capture is non-blocking by design. The layer stamps the request duration, runs t
 ## Wiring
 
 ```rust
-use umbra::prelude::*;
-use umbra_logs::LogsPlugin;
-use umbra_admin::AdminPlugin;
+use umbral::prelude::*;
+use umbral_logs::LogsPlugin;
+use umbral_admin::AdminPlugin;
 
 App::builder()
     .plugin(LogsPlugin::default())
     // Browse captured requests in the admin (read-only).
-    .plugin(AdminPlugin::default().register(umbra_logs::admin_model()))
+    .plugin(AdminPlugin::default().register(umbral_logs::admin_model()))
     .build()?;
 ```
 
@@ -40,7 +40,7 @@ cargo run -- makemigrations
 cargo run -- migrate
 ```
 
-`admin_model()` returns a **read-only** `AdminModel`: operators browse logs, they don't author them. Every column is marked readonly. It's gated behind the crate's `admin` feature (**on by default**); build `umbra-logs` with `default-features = false` for a logs-only app that doesn't pull the admin into its dependency graph.
+`admin_model()` returns a **read-only** `AdminModel`: operators browse logs, they don't author them. Every column is marked readonly. It's gated behind the crate's `admin` feature (**on by default**); build `umbral-logs` with `default-features = false` for a logs-only app that doesn't pull the admin into its dependency graph.
 
 ## Exclusions and sampling
 
@@ -59,5 +59,5 @@ LogsPlugin::default()
 
 ## See also
 
-- The plugin contract and the model-owning-plugin migration pattern: [`arch.md`](https://github.com/dalmasonto/umbra/blob/main/arch.md) §7.
+- The plugin contract and the model-owning-plugin migration pattern: [`arch.md`](https://github.com/dalmasonto/umbral/blob/main/arch.md) §7.
 - [Admin](./admin) for customizing the list view.

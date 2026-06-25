@@ -1,7 +1,7 @@
 # Plugin notes → chat surface: inline composer + one-level replies
 
 Date: 2026-06-15
-Area: `umbra_website` / `plugin_directory` plugin
+Area: `umbral_website` / `plugin_directory` plugin
 Status: design (decisions locked in brainstorming; pending review)
 
 ## Problem

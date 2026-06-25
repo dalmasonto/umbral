@@ -5,14 +5,14 @@ sidebar_position: 8
 icon: api
 ---
 
-`umbra-rest` walks the model registry and mounts a JSON CRUD surface for every model you've registered. Add the plugin, get `/api/<table>/` on List + Retrieve + Create + Update + Delete, plus filtering, free-text search, FK expansion (`?include=`), sparse fieldsets (`?fields=`), pagination, and an OpenAPI spec everything else (the playground UI, code generators, third-party clients) reads from.
+`umbral-rest` walks the model registry and mounts a JSON CRUD surface for every model you've registered. Add the plugin, get `/api/<table>/` on List + Retrieve + Create + Update + Delete, plus filtering, free-text search, FK expansion (`?include=`), sparse fieldsets (`?fields=`), pagination, and an OpenAPI spec everything else (the playground UI, code generators, third-party clients) reads from.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 App::builder()
     .model::<Article>()
-    .plugin(umbra_rest::RestPlugin::default())
+    .plugin(umbral_rest::RestPlugin::default())
     .build()?;
 // → GET/POST/PATCH/PUT/DELETE under /api/article/
 ```

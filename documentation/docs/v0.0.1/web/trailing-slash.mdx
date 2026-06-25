@@ -1,6 +1,6 @@
 ---
 title: Trailing-slash redirects
-description: Django's `APPEND_SLASH` for umbra - opt-in 308 redirects between `/foo` and `/foo/` so URL typos still reach the right handler.
+description: Django's `APPEND_SLASH` for umbral - opt-in 308 redirects between `/foo` and `/foo/` so URL typos still reach the right handler.
 sidebar_position: 1
 icon: arrow-right
 ---
@@ -12,14 +12,14 @@ sharing a URL by typing or omitting a trailing slash.
 
 Django solved this with `APPEND_SLASH = True`: on a 404 for `/foo`,
 Django checks whether `/foo/` would have matched, and 301-redirects if
-so. umbra ports the same shape under [`SlashRedirect`](#policies),
+so. umbral ports the same shape under [`SlashRedirect`](#policies),
 opt-in via `App::builder().slash_redirect(...)`.
 
 ## Quickstart
 
 ```rust
-use umbra::prelude::*;
-use umbra::web::SlashRedirect;
+use umbral::prelude::*;
+use umbral::web::SlashRedirect;
 
 let app = App::builder()
     .slash_redirect(SlashRedirect::Append)   // Django's APPEND_SLASH = True
@@ -53,7 +53,7 @@ the App builder.
 <Callout type="info">
 **Why 308 instead of 301?** 308 preserves the HTTP method and body;
 301 historically converted POST → GET, which silently dropped form
-data. Django uses 301 for backwards compat; umbra picked 308 since
+data. Django uses 301 for backwards compat; umbral picked 308 since
 it's greenfield. A `POST /api/users` redirected to `POST /api/users/`
 keeps the body intact.
 </Callout>

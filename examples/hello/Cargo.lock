@@ -3205,19 +3205,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
-name = "umbra"
+name = "umbral"
 version = "0.0.1"
 dependencies = [
  "async-trait",
  "minijinja",
  "serde_json",
  "sqlx",
- "umbra-core",
- "umbra-macros",
+ "umbral-core",
+ "umbral-macros",
 ]
 
 [[package]]
-name = "umbra-cli"
+name = "umbral-cli"
 version = "0.0.1"
 dependencies = [
  "clap",
@@ -3225,12 +3225,12 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing-subscriber",
- "umbra",
- "umbra-core",
+ "umbral",
+ "umbral-core",
 ]
 
 [[package]]
-name = "umbra-core"
+name = "umbral-core"
 version = "0.0.1"
 dependencies = [
  "ammonia",
@@ -3271,18 +3271,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "umbra-hello"
+name = "umbral-hello"
 version = "0.1.0"
 dependencies = [
  "serde",
  "sqlx",
  "tokio",
- "umbra",
- "umbra-cli",
+ "umbral",
+ "umbral-cli",
 ]
 
 [[package]]
-name = "umbra-macros"
+name = "umbral-macros"
 version = "0.0.1"
 dependencies = [
  "proc-macro2",

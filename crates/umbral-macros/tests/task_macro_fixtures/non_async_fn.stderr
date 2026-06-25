@@ -1,0 +1,13 @@
+error: #[task] requires an `async fn`; the handler runs asynchronously in the worker
+ --> tests/task_macro_fixtures/non_async_fn.rs:9:1
+  |
+9 | fn not_async(payload: MyPayload) -> Result<(), String> {
+  | ^^
+
+warning: unused import: `umbral_tasks::EnqueueOptions`
+ --> tests/task_macro_fixtures/non_async_fn.rs:1:5
+  |
+1 | use umbral_tasks::EnqueueOptions;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

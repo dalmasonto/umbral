@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Documentation - Umbral{% endblock %}
+{% block meta_description %}Umbral documentation: getting started, the ORM, migrations, the admin, auth, REST, and more.{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[75rem] px-7 pb-2 pt-[52px] text-center">
+  <div class="kicker mb-3.5 text-accent">
+    <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+    Documentation
+  </div>
+  <h1 class="mx-auto max-w-[760px] text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[44px]">
+    Learn Umbral
+  </h1>
+  <p class="mx-auto mt-3.5 max-w-[620px] text-[17px] leading-[1.55] text-muted">
+    Guides for every part of the framework — declare a model and get migrations, an admin, and an API almost for free.
+  </p>
+</section>
+
+<section class="mx-auto max-w-[75rem] px-7 pt-8">
+  <div class="flex flex-wrap items-center gap-5 rounded-[18px] border border-accent-line bg-accent-soft px-6 py-5">
+    <div class="min-w-[260px] flex-1">
+      <div class="text-[15px] font-bold text-[#3A2BA8]">One struct. Model, form, and serializer.</div>
+      <p class="m-0 mt-1 text-[13.5px] leading-[1.55] text-[#6E5FB8]">Umbral has no special data type — the same Rust struct is your database model, your validated form, and your JSON serializer. Declare your data once and reuse it everywhere, checked by the compiler.</p>
+    </div>
+    <a href="/features" class="btn-accent whitespace-nowrap">See how it fits together
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+</section>
+
+<section class="mx-auto max-w-[75rem] px-7 pb-12 pt-8">
+  <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+    <a href="https://github.com/dalmasonto/umbral#readme" target="_blank" rel="noopener" class="card p-5 transition hover:-translate-y-0.5">
+      <div class="mb-1.5 text-[15px] font-bold text-ink">Getting started</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">Install the CLI, scaffold a project, and run the dev server.</p>
+    </a>
+    <a href="https://github.com/dalmasonto/umbral/tree/main/documentation/docs/v0.0.1/orm" target="_blank" rel="noopener" class="card p-5 transition hover:-translate-y-0.5">
+      <div class="mb-1.5 text-[15px] font-bold text-ink">ORM</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">Models, querysets, relations, field types, and aggregation.</p>
+    </a>
+    <a href="https://github.com/dalmasonto/umbral/tree/main/documentation/docs/v0.0.1/migrations" target="_blank" rel="noopener" class="card p-5 transition hover:-translate-y-0.5">
+      <div class="mb-1.5 text-[15px] font-bold text-ink">Migrations</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">The declare → migrate → change → migrate loop, and inspectdb.</p>
+    </a>
+    <a href="https://github.com/dalmasonto/umbral/tree/main/documentation/docs/v0.0.1/admin" target="_blank" rel="noopener" class="card p-5 transition hover:-translate-y-0.5">
+      <div class="mb-1.5 text-[15px] font-bold text-ink">Admin</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">The auto-generated control panel, widgets, and permissions.</p>
+    </a>
+    <a href="https://github.com/dalmasonto/umbral/tree/main/documentation/docs/v0.0.1/auth" target="_blank" rel="noopener" class="card p-5 transition hover:-translate-y-0.5">
+      <div class="mb-1.5 text-[15px] font-bold text-ink">Auth & OAuth</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">Users, permissions, sessions, and social login.</p>
+    </a>
+    <a href="https://github.com/dalmasonto/umbral/tree/main/documentation/docs/v0.0.1/rest" target="_blank" rel="noopener" class="card p-5 transition hover:-translate-y-0.5">
+      <div class="mb-1.5 text-[15px] font-bold text-ink">REST & API</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">Serializers, viewsets, auth, OpenAPI, and the playground.</p>
+    </a>
+  </div>
+
+  <div class="mt-8 flex flex-wrap items-center gap-4 rounded-[16px] border border-hairline bg-surface px-6 py-5">
+    <p class="m-0 flex-1 text-[14px] text-muted">The full documentation site is built with Specra. Browse the source, or try the API live in the playground.</p>
+    <a href="/api/playground/" class="btn-ghost whitespace-nowrap">Open the playground</a>
+  </div>
+</section>
+
+{% endblock %}

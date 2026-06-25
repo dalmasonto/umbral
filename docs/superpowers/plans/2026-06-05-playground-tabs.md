@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add browser-style tabs to `umbra-playground` with Dexie persistence, a fixed-height request/response layout, and a snapshot export/import. Resolves `bugs/features.md` item #12.
+**Goal:** Add browser-style tabs to `umbral-playground` with Dexie persistence, a fixed-height request/response layout, and a snapshot export/import. Resolves `bugs/features.md` item #12.
 
 **Architecture:** A new `Tab` interface and `TabsSlice` on the existing `usePlayground` zustand store, persisted to a new `tabs` table in the per-app Dexie database. A new `TabStrip` component renders above the existing request/response panels, with a + popover and export/import controls. The main layout grid gains a new row and a `min-h-[640px] lg:min-h-[720px]` constraint on the request/response row.
 
@@ -34,7 +34,7 @@
 | `frontend/src/App.tsx` | Mount `<TabStrip />` between the stats row and the request/response grid; add the `min-h-[640px] lg:min-h-[720px]` height constraint; add the `useEffect` that calls `loadTabs()` on mount. |
 | `frontend/src/components/RequestBuilder.tsx` | Change `min-h-[12rem]` on the Monaco wrap to `min-h-full` so the editor fills the new fixed-height parent. |
 | `frontend/src/components/EndpointTree.tsx` | Change `onClick={() => select(e.operationId)}` to `onClick={() => openTab(e.operationId)}`. One line. |
-| `plugins/umbra-playground/README.md` | Add the manual smoke test from spec §8. |
+| `plugins/umbral-playground/README.md` | Add the manual smoke test from spec §8. |
 
 **Out of scope**
 
@@ -50,7 +50,7 @@
 ## Task 1: Add the `tabs` Dexie table
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/src/state/db.ts`
+- Modify: `plugins/umbral-playground/frontend/src/state/db.ts`
 
 - [ ] **Step 1: Add `TabsRow` interface and `TABS_SCHEMA_VERSION`**
 
@@ -140,13 +140,13 @@ export const db = new Dexie(DB_NAME) as Dexie & {
 
 - [ ] **Step 5: Verify it type-checks**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc -b`
+Run: `cd plugins/umbral-playground/frontend && npx tsc -b`
 Expected: compile error — `Tab` is referenced but not yet exported from `store.ts`. That's fine; the next task resolves it. The new `db.version(5)` line itself must produce no error.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/state/db.ts && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "feat(playground): add tabs table to Dexie schema v5
 
@@ -162,8 +162,8 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 2: Add `Tab` interface and `tabs` storage helpers
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/src/state/store.ts` (add the `Tab` interface next to the other request-related interfaces, around line 35 where `RequestDraft` is defined)
-- Create: `plugins/umbra-playground/frontend/src/state/tabsStorage.ts`
+- Modify: `plugins/umbral-playground/frontend/src/state/store.ts` (add the `Tab` interface next to the other request-related interfaces, around line 35 where `RequestDraft` is defined)
+- Create: `plugins/umbral-playground/frontend/src/state/tabsStorage.ts`
 
 - [ ] **Step 1: Add the `Tab` interface to `store.ts`**
 
@@ -232,7 +232,7 @@ export async function loadTabs(): Promise<{
     return { tabs: row.tabs, activeTabId: row.activeTabId ?? null };
   } catch (e) {
     if (typeof console !== "undefined") {
-      console.warn("[umbra-playground] tabs read failed", e);
+      console.warn("[umbral-playground] tabs read failed", e);
     }
     return EMPTY;
   }
@@ -257,7 +257,7 @@ export async function saveTabs(snapshot: {
     });
   } catch (e) {
     if (typeof console !== "undefined") {
-      console.warn("[umbra-playground] tabs save failed", e);
+      console.warn("[umbral-playground] tabs save failed", e);
     }
   }
 }
@@ -265,13 +265,13 @@ export async function saveTabs(snapshot: {
 
 - [ ] **Step 3: Verify it type-checks**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc -b`
+Run: `cd plugins/umbral-playground/frontend && npx tsc -b`
 Expected: clean compile. The `Tab` interface is now defined and `tabsStorage.ts` consumes it; `db.ts`'s `Tab` import resolves.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/state/store.ts src/state/tabsStorage.ts && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "feat(playground): add Tab interface and tabsStorage Dexie helpers
 
@@ -287,7 +287,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 3: Add the `tabs` slice to the zustand store (state + actions only)
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/src/state/store.ts`
+- Modify: `plugins/umbral-playground/frontend/src/state/store.ts`
 
 This task wires the slice into the store but only adds state and a no-op-style setter. The actions come in Task 4.
 
@@ -398,13 +398,13 @@ import { saveTabs } from "./tabsStorage";
 
 - [ ] **Step 5: Verify it type-checks**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc -b`
+Run: `cd plugins/umbral-playground/frontend && npx tsc -b`
 Expected: clean compile. The slice's state and no-op actions compile; `Tab` resolves; `saveTabs` resolves.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/state/store.ts && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "feat(playground): add tabs slice scaffolding to zustand store
 
@@ -420,7 +420,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 4: Tests for the `tabs` slice (fail first)
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/src/__tests__/tabs.test.ts`
+- Create: `plugins/umbral-playground/frontend/src/__tests__/tabs.test.ts`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -666,13 +666,13 @@ describe("playground tabs slice", () => {
 
 - [ ] **Step 2: Run the tests and confirm they fail**
 
-Run: `cd plugins/umbra-playground/frontend && npx vitest run src/__tests__/tabs.test.ts`
+Run: `cd plugins/umbral-playground/frontend && npx vitest run src/__tests__/tabs.test.ts`
 Expected: every test fails. The action bodies are still no-ops from Task 3.
 
 - [ ] **Step 3: Commit the failing tests**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/__tests__/tabs.test.ts && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "test(playground): add failing tests for tabs slice lifecycle
 
@@ -688,7 +688,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 5: Implement the `tabs` slice actions (make the tests pass)
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/src/state/store.ts`
+- Modify: `plugins/umbral-playground/frontend/src/state/store.ts`
 
 - [ ] **Step 1: Replace the no-op `openTab` with the real implementation**
 
@@ -841,18 +841,18 @@ function setActiveTabInternal(
 
 - [ ] **Step 7: Run the tests and confirm they pass**
 
-Run: `cd plugins/umbra-playground/frontend && npx vitest run src/__tests__/tabs.test.ts`
+Run: `cd plugins/umbral-playground/frontend && npx vitest run src/__tests__/tabs.test.ts`
 Expected: all tests pass.
 
 - [ ] **Step 8: Run the full test suite to make sure nothing regressed**
 
-Run: `cd plugins/umbra-playground/frontend && npx vitest run`
+Run: `cd plugins/umbral-playground/frontend && npx vitest run`
 Expected: every test in `draftPersistence.test.ts`, `saveSettings.test.ts`, `codegen.test.ts`, `buildFetchArgs.test.ts`, and the new `tabs.test.ts` passes.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/state/store.ts && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "feat(playground): implement openTab/setActiveTab/closeTab actions
 
@@ -869,7 +869,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 6: Add the popover UI primitive
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/src/components/ui/popover.tsx`
+- Create: `plugins/umbral-playground/frontend/src/components/ui/popover.tsx`
 
 - [ ] **Step 1: Create the shim**
 
@@ -928,13 +928,13 @@ export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor }
 
 - [ ] **Step 2: Verify it type-checks**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc -b`
+Run: `cd plugins/umbral-playground/frontend && npx tsc -b`
 Expected: clean compile. (No other file imports this shim yet, but the type check confirms the export shape.)
 
 - [ ] **Step 3: Commit**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/components/ui/popover.tsx && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "feat(playground): add popover UI shim
 
@@ -949,7 +949,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 7: `OpenTabPopover` component
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/src/components/OpenTabPopover.tsx`
+- Create: `plugins/umbral-playground/frontend/src/components/OpenTabPopover.tsx`
 
 - [ ] **Step 1: Create the component**
 
@@ -1103,13 +1103,13 @@ export function OpenTabPopover({ spec }: OpenTabPopoverProps) {
 
 - [ ] **Step 2: Verify it type-checks**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc -b`
+Run: `cd plugins/umbral-playground/frontend && npx tsc -b`
 Expected: clean compile.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/components/OpenTabPopover.tsx && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "feat(playground): add OpenTabPopover for the + button
 
@@ -1125,7 +1125,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 8: `ExportImportControls` component
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/src/components/ExportImportControls.tsx`
+- Create: `plugins/umbral-playground/frontend/src/components/ExportImportControls.tsx`
 
 - [ ] **Step 1: Create the component**
 
@@ -1213,7 +1213,7 @@ export function ExportImportControls() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `umbra-playground-${getAppScope()}-${formatDate(
+      a.download = `umbral-playground-${getAppScope()}-${formatDate(
         snapshot.exportedAt,
       )}.json`;
       document.body.appendChild(a);
@@ -1400,13 +1400,13 @@ export function ExportImportControls() {
 
 - [ ] **Step 2: Verify it type-checks**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc -b`
+Run: `cd plugins/umbral-playground/frontend && npx tsc -b`
 Expected: clean compile.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/components/ExportImportControls.tsx && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "feat(playground): add ExportImportControls for snapshot I/O
 
@@ -1423,7 +1423,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 9: `TabStrip` component
 
 **Files:**
-- Create: `plugins/umbra-playground/frontend/src/components/TabStrip.tsx`
+- Create: `plugins/umbral-playground/frontend/src/components/TabStrip.tsx`
 
 - [ ] **Step 1: Create the component**
 
@@ -1599,13 +1599,13 @@ export function TabStrip({ spec }: TabStripProps) {
 
 - [ ] **Step 2: Verify it type-checks**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc -b`
+Run: `cd plugins/umbral-playground/frontend && npx tsc -b`
 Expected: clean compile.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/components/TabStrip.tsx && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "feat(playground): add TabStrip with pills, + popover, and shortcut
 
@@ -1621,8 +1621,8 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 10: Wire the strip into `App.tsx` and the sidebar into `openTab`
 
 **Files:**
-- Modify: `plugins/umbra-playground/frontend/src/App.tsx`
-- Modify: `plugins/umbra-playground/frontend/src/components/EndpointTree.tsx`
+- Modify: `plugins/umbral-playground/frontend/src/App.tsx`
+- Modify: `plugins/umbral-playground/frontend/src/components/EndpointTree.tsx`
 
 - [ ] **Step 1: Mount `<TabStrip />` and add the height constraint in `App.tsx`**
 
@@ -1772,18 +1772,18 @@ Replace the `min-h-[12rem]` with `min-h-full`:
 
 - [ ] **Step 5: Verify it type-checks and the build succeeds**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc -b && npx vite build`
+Run: `cd plugins/umbral-playground/frontend && npx tsc -b && npx vite build`
 Expected: clean compile and a successful Vite build.
 
 - [ ] **Step 6: Run the full test suite**
 
-Run: `cd plugins/umbra-playground/frontend && npx vitest run`
+Run: `cd plugins/umbral-playground/frontend && npx vitest run`
 Expected: every test passes.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd plugins/umbra-playground/frontend && \
+cd plugins/umbral-playground/frontend && \
   git add src/App.tsx src/components/EndpointTree.tsx src/components/RequestBuilder.tsx && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "feat(playground): wire TabStrip into the layout, sidebar uses openTab
 
@@ -1802,11 +1802,11 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Task 11: Update the README smoke test
 
 **Files:**
-- Modify: `plugins/umbra-playground/README.md`
+- Modify: `plugins/umbral-playground/README.md`
 
 - [ ] **Step 1: Add the manual smoke test**
 
-Find the "## Manual smoke test" section in `plugins/umbra-playground/README.md` and append the new tab-focused steps (numbered to continue the existing list). The current list ends at step 8 (reload the page; the History tab should still show the entries). Add these:
+Find the "## Manual smoke test" section in `plugins/umbral-playground/README.md` and append the new tab-focused steps (numbered to continue the existing list). The current list ends at step 8 (reload the page; the History tab should still show the entries). Add these:
 
 ```
 9. Click a second endpoint in the sidebar. A second tab pill
@@ -1820,7 +1820,7 @@ Find the "## Manual smoke test" section in `plugins/umbra-playground/README.md` 
     active tab closes; the next one to the right becomes
     active.
 13. Click the download icon in the tab strip. A
-    `umbra-playground-<scope>-<YYYY-MM-DD>.json` file
+    `umbral-playground-<scope>-<YYYY-MM-DD>.json` file
     downloads.
 14. Open a private window at the same URL, click the upload
     icon, choose the file. The tabs and history appear in
@@ -1830,7 +1830,7 @@ Find the "## Manual smoke test" section in `plugins/umbra-playground/README.md` 
 - [ ] **Step 2: Commit**
 
 ```bash
-cd plugins/umbra-playground && \
+cd plugins/umbral-playground && \
   git add README.md && \
   git -c user.name="Claude" -c user.email="noreply@anthropic.com" commit -m "docs(playground): add tab-focused manual smoke test steps
 
@@ -1848,22 +1848,22 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Type-check the whole frontend**
 
-Run: `cd plugins/umbra-playground/frontend && npx tsc -b`
+Run: `cd plugins/umbral-playground/frontend && npx tsc -b`
 Expected: clean compile.
 
 - [ ] **Step 2: Run the full test suite**
 
-Run: `cd plugins/umbra-playground/frontend && npx vitest run`
+Run: `cd plugins/umbral-playground/frontend && npx vitest run`
 Expected: every test passes. (After this task there are tabs, draft, settings, codegen, and buildFetchArgs tests.)
 
 - [ ] **Step 3: Lint**
 
-Run: `cd plugins/umbra-playground/frontend && npx eslint src`
+Run: `cd plugins/umbral-playground/frontend && npx eslint src`
 Expected: no errors.
 
 - [ ] **Step 4: Build the bundle**
 
-Run: `cd plugins/umbra-playground/frontend && npx vite build`
+Run: `cd plugins/umbral-playground/frontend && npx vite build`
 Expected: build succeeds; the produced `dist/` directory has the hashed JS/CSS asset files.
 
 - [ ] **Step 5: Walk back through the spec's self-review checklist**

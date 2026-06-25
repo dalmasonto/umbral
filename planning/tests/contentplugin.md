@@ -1,19 +1,19 @@
-# umbra-content — Common Content & Site Models Plugin
+# umbral-content — Common Content & Site Models Plugin
 
 | | |
 |---|---|
-| **Type** | Optional **first-party** plugin (like `umbra-rest`) — installed, not forced |
+| **Type** | Optional **first-party** plugin (like `umbral-rest`) — installed, not forced |
 | **Purpose** | The universal content/site/CMS models almost every app needs |
 | **Status** | Draft v0.1 · May 30, 2026 |
-| **Companion** | `arch.md` (plugin contract) · `umbra-example-app.md` (the `shop` app reuses this) |
+| **Companion** | `arch.md` (plugin contract) · `umbral-example-app.md` (the `shop` app reuses this) |
 
 ---
 
 ## 1. Why this exists
 
 Every web app re-implements the same handful of models: a blog, static pages, an FAQ, a contact
-form, a newsletter list, navigation menus, site settings. `umbra-content` ships them once,
-correctly, so a new umbra project gets a working content layer by adding one plugin — the same
+form, a newsletter list, navigation menus, site settings. `umbral-content` ships them once,
+correctly, so a new umbral project gets a working content layer by adding one plugin — the same
 "batteries included" promise that makes the framework worth choosing over bare Axum.
 
 It is a **normal plugin** (implements `Plugin`, owns its migrations, registers admin models). The
@@ -36,7 +36,7 @@ a **Content** group (scoped by `plugin.name()`), beside **Shop**, **Auth**, etc.
 ## 2. Relationship to the `shop` example
 
 The `shop` example currently defines Post/Comment/Page/Faq/ContactMessage/Subscriber/Category/Tag
-inline. Those move **here**, and `shop` depends on `umbra-content` and reuses its `Category` and
+inline. Those move **here**, and `shop` depends on `umbral-content` and reuses its `Category` and
 `Tag` for products — demonstrating **cross-plugin model reuse** and cross-plugin FK ordering on
 `migrate`. `shop` keeps only e-commerce-specific models (Product, Order, …).
 
@@ -295,8 +295,8 @@ Add to the workspace plugin list (alongside the others in `arch.md` / `CLAUDE.md
 
 ```
 plugins/
-  umbra-content   # OPTIONAL first-party: Post, Page, Faq, Menu, Banner, Media, SiteSetting, …
+  umbral-content   # OPTIONAL first-party: Post, Page, Faq, Menu, Banner, Media, SiteSetting, …
 ```
 
-Depends only on the `umbra` facade (+ `umbra-auth` for the `User` FK). Apps that want a content
+Depends only on the `umbral` facade (+ `umbral-auth` for the `User` FK). Apps that want a content
 layer add `ContentPlugin`; apps that don't, omit it.

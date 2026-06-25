@@ -1,0 +1,57 @@
+[package]
+name = "umbral_website"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+# ----- Framework core (always required) ------------------------------------
+umbral         = { path = "/home/dalmas/E/projects/umbral/crates/umbral" }
+umbral-cli     = { path = "/home/dalmas/E/projects/umbral/crates/umbral-cli" }
+
+# ----- Active by default ---------------------------------------------------
+# What the generated `src/main.rs` wires in. Comment any of these out only
+# if you also remove the matching `.plugin(...)` line.
+umbral-auth     = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-auth" }
+umbral-sessions = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-sessions" }
+umbral-admin    = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-admin" }
+umbral-rest     = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-rest" }
+umbral-openapi  = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-openapi" }
+umbral-security = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-security" }
+umbral-storage  = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-storage" }  # Unified storage: static-file serving + uploaded-file storage (local FS + S3).
+umbral-playground   = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-playground" }  # Interactive API playground UI (think mini-Postman) at /playground/.
+umbral-oauth        = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-oauth" }  # OAuth / social login (Google, GitHub) + account connection.
+umbral-realtime     = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-realtime" }  # SSE + WebSocket real-time push (live note feed).
+umbral-livereload   = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-livereload" }  # Dev-only browser live-reload (SSE push + file watcher). Opt-in, inert outside Dev.
+
+# ----- Available built-ins (uncomment + register in main.rs to enable) -----
+# umbral-tasks        = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-tasks" }  # DB-backed background task queue (Celery-equivalent).
+# umbral-permissions  = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-permissions" }  # Django-style ContentType + Group + Permission model.
+# umbral-rls          = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-rls" }  # Postgres row-level security policy registration.
+umbral-cache          = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-cache" }  # In-memory/SQLite/Redis cache + cache_page middleware.
+# umbral-email        = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-email" }  # SMTP + MIME email composer + sender.
+# umbral-signals      = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-signals" }  # Pre/post save/delete signal dispatch.
+
+# ----- Third-party + framework runtime deps --------------------------------
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = "0.1"  # admin-notification superuser-lookup logging.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"  # dashboard Table widget rows are `Vec<serde_json::Value>`.
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }
+clap = "4"          # the `seed_orm_data` management command.
+async-trait = "0.1" # `PluginCommand` is an async trait.
+
+# Once you `umbral startapp <plugin>` or `umbral startplugin <plugin>`, add
+# the plugin crate here:
+site_content = { path = "plugins/site_content" }
+features = { path = "plugins/features" }
+plugin_directory = { path = "plugins/plugin_directory" }
+reviews = { path = "plugins/reviews" }
+showcase = { path = "plugins/showcase" }
+security_reports = { path = "plugins/security_reports" }
+accounts = { path = "plugins/accounts" }
+community = { path = "plugins/community" }
+sponsor = { path = "plugins/sponsor" }
+public = { path = "plugins/public" }

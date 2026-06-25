@@ -6,11 +6,11 @@
 
 **Architecture:** Server stays ORM-pure: `create_note` gains a validated optional `parent`; `render_detail_with` fetches all visible comments in one reverse query and partitions them in memory into `CommentThread { note, replies }`. Templates render a slim `_reply.html` under each note; the JS routes AJAX/SSE inserts to the right replies container by `parent_id`.
 
-**Tech Stack:** Rust (umbra ORM), minijinja templates, vanilla JS, umbra-realtime SSE.
+**Tech Stack:** Rust (umbral ORM), minijinja templates, vanilla JS, umbral-realtime SSE.
 
 **Spec:** `docs/superpowers/specs/2026-06-15-plugin-notes-chat-surface-design.md`
 
-All paths are under `umbra_website/plugins/plugin_directory/`. Cargo runs from `umbra_website/` (a standalone project) — but a dev server is live there, so tests run via the steps below without `cargo clean`. The notes test harness uses in-memory SQLite (`tests/render_pages.rs`).
+All paths are under `umbral_website/plugins/plugin_directory/`. Cargo runs from `umbral_website/` (a standalone project) — but a dev server is live there, so tests run via the steps below without `cargo clean`. The notes test harness uses in-memory SQLite (`tests/render_pages.rs`).
 
 ---
 
@@ -41,14 +41,14 @@ async fn create_note_threads_replies_under_a_visible_top_level_note() {
     seed().await;
 
     // A top-level note.
-    let note = create_note("umbra-rest", "Parent note body.", "general", None)
+    let note = create_note("umbral-rest", "Parent note body.", "general", None)
         .await
         .expect("note create ok")
         .expect("a payload for an existing plugin");
     assert!(note.parent_id.is_none(), "a top-level note has no parent_id");
 
     // A reply to it.
-    let reply = create_note("umbra-rest", "A reply body.", "general", Some(note.id))
+    let reply = create_note("umbral-rest", "A reply body.", "general", Some(note.id))
         .await
         .expect("reply create ok")
         .expect("a payload for a valid parent");
@@ -69,13 +69,13 @@ async fn create_note_threads_replies_under_a_visible_top_level_note() {
     assert_eq!(row.moderation, CommentModeration::Visible);
 
     // A reply-to-a-reply is rejected (depth-1): parent must be top-level.
-    let nested = create_note("umbra-rest", "Nested.", "general", Some(reply.id))
+    let nested = create_note("umbral-rest", "Nested.", "general", Some(reply.id))
         .await
         .expect("create ok");
     assert!(nested.is_none(), "replying to a reply is rejected (depth-1)");
 
     // A parent id that doesn't exist is rejected.
-    let bad = create_note("umbra-rest", "Orphan.", "general", Some(999_999))
+    let bad = create_note("umbral-rest", "Orphan.", "general", Some(999_999))
         .await
         .expect("create ok");
     assert!(bad.is_none(), "an unknown parent id is rejected");
@@ -83,12 +83,12 @@ async fn create_note_threads_replies_under_a_visible_top_level_note() {
 ```
 
 Then update the TWO existing `create_note` calls to pass the new trailing `None` arg:
-- ~line 599: `create_note("umbra-rest", "Works great on Postgres 16.", "usage_note", Some("Reviewer".to_string()))` → add `, None` before the closing `)`.
+- ~line 599: `create_note("umbral-rest", "Works great on Postgres 16.", "usage_note", Some("Reviewer".to_string()))` → add `, None` before the closing `)`.
 - ~line 650: `create_note("does-not-exist", "body", "general", None)` → `create_note("does-not-exist", "body", "general", None, None)`.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cd /home/dalmas/E/projects/umbra/umbra_website && cargo test -p plugin_directory --test render_pages create_note_threads_replies_under_a_visible_top_level_note`
+Run: `cd /home/dalmas/E/projects/umbral/umbral_website && cargo test -p plugin_directory --test render_pages create_note_threads_replies_under_a_visible_top_level_note`
 Expected: FAIL — compile error (`create_note` takes 4 args, `NotePayload` has no `parent_id`).
 
 - [ ] **Step 3: Add `parent_id` to `NotePayload`**
@@ -172,7 +172,7 @@ pub async fn create_note(
     let preview = CommentPreview::from_model(created);
     let html = render_comment_row(&preview)?;
 
-    umbra_realtime::Realtime::to_group(format!("public:plugin-{}", plugin.id))
+    umbral_realtime::Realtime::to_group(format!("public:plugin-{}", plugin.id))
         .send(
             "note",
             &serde_json::json!({ "id": id, "html": html, "parent_id": parent }),
@@ -190,20 +190,20 @@ Also update the ONE caller in `post_plugin_note` (it currently calls `create_not
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `cd /home/dalmas/E/projects/umbra/umbra_website && cargo test -p plugin_directory --test render_pages create_note_threads_replies_under_a_visible_top_level_note`
+Run: `cd /home/dalmas/E/projects/umbral/umbral_website && cargo test -p plugin_directory --test render_pages create_note_threads_replies_under_a_visible_top_level_note`
 Expected: PASS.
 
 - [ ] **Step 6: Run the existing note test to confirm no regression**
 
-Run: `cargo test -p plugin_directory --test render_pages` (from `umbra_website/`)
+Run: `cargo test -p plugin_directory --test render_pages` (from `umbral_website/`)
 Expected: PASS (the updated existing `create_note` calls compile + pass).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbra
-cargo fmt --manifest-path umbra_website/Cargo.toml
-git add umbra_website/plugins/plugin_directory/src/lib.rs umbra_website/plugins/plugin_directory/tests/render_pages.rs
+cd /home/dalmas/E/projects/umbral
+cargo fmt --manifest-path umbral_website/Cargo.toml
+git add umbral_website/plugins/plugin_directory/src/lib.rs umbral_website/plugins/plugin_directory/tests/render_pages.rs
 git commit -m "feat(notes): create_note accepts a validated parent (depth-1 replies)"
 ```
 
@@ -227,16 +227,16 @@ async fn detail_page_nests_replies_under_their_note() {
     boot().await;
     seed().await;
 
-    let note = create_note("umbra-rest", "Top note here.", "general", None)
+    let note = create_note("umbral-rest", "Top note here.", "general", None)
         .await
         .expect("ok")
         .expect("payload");
-    create_note("umbra-rest", "First reply.", "general", Some(note.id))
+    create_note("umbral-rest", "First reply.", "general", Some(note.id))
         .await
         .expect("ok")
         .expect("payload");
 
-    let html = render_detail("umbra-rest")
+    let html = render_detail("umbral-rest")
         .await
         .expect("render ok")
         .expect("the plugin exists");
@@ -255,7 +255,7 @@ async fn detail_page_nests_replies_under_their_note() {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cd /home/dalmas/E/projects/umbra/umbra_website && cargo test -p plugin_directory --test render_pages detail_page_nests_replies_under_their_note`
+Run: `cd /home/dalmas/E/projects/umbral/umbral_website && cargo test -p plugin_directory --test render_pages detail_page_nests_replies_under_their_note`
 Expected: FAIL (no `data-reply` / `data-replies-for` in output; replies render flat).
 
 - [ ] **Step 3: Create the slim reply partial**
@@ -298,9 +298,9 @@ struct CommentThread {
 /// [`render_comment_row`] — so a live-inserted reply is byte-identical to a
 /// reloaded one. Body sanitized by `| markdown`, safe to broadcast.
 fn render_reply_row(preview: &CommentPreview) -> Result<String, String> {
-    umbra::templates::render(
+    umbral::templates::render(
         "plugin_directory/_reply.html",
-        &umbra::templates::context! { comment => preview },
+        &umbral::templates::context! { comment => preview },
     )
     .map_err(|e| e.to_string())
 }
@@ -396,23 +396,23 @@ Leave `_comment.html` UNCHANGED (it stays a single note row so `render_comment_r
 
 - [ ] **Step 6: Run the test to verify it passes**
 
-Run: `cd /home/dalmas/E/projects/umbra/umbra_website && cargo test -p plugin_directory --test render_pages detail_page_nests_replies_under_their_note`
+Run: `cd /home/dalmas/E/projects/umbral/umbral_website && cargo test -p plugin_directory --test render_pages detail_page_nests_replies_under_their_note`
 Expected: PASS.
 
 - [ ] **Step 7: Run the full render_pages suite (no regression)**
 
-Run: `cargo test -p plugin_directory --test render_pages` (from `umbra_website/`)
+Run: `cargo test -p plugin_directory --test render_pages` (from `umbral_website/`)
 Expected: PASS.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbra
-cargo fmt --manifest-path umbra_website/Cargo.toml
-git add umbra_website/plugins/plugin_directory/src/lib.rs \
-  umbra_website/plugins/plugin_directory/templates/plugin_directory/_reply.html \
-  umbra_website/plugins/plugin_directory/templates/plugin_directory/plugin.html \
-  umbra_website/plugins/plugin_directory/tests/render_pages.rs
+cd /home/dalmas/E/projects/umbral
+cargo fmt --manifest-path umbral_website/Cargo.toml
+git add umbral_website/plugins/plugin_directory/src/lib.rs \
+  umbral_website/plugins/plugin_directory/templates/plugin_directory/_reply.html \
+  umbral_website/plugins/plugin_directory/templates/plugin_directory/plugin.html \
+  umbral_website/plugins/plugin_directory/tests/render_pages.rs
 git commit -m "feat(notes): group replies into threads and render them nested"
 ```
 
@@ -582,7 +582,7 @@ After the lib.rs edit, the dev server rebuilds. Once `http://localhost:8100` ret
 
 ```bash
 # top-level note still posts via AJAX (urlencoded) → 200 JSON with parent_id null
-curl -s http://localhost:8100/plugins/umbra-admin > /tmp/p.html
+curl -s http://localhost:8100/plugins/umbral-admin > /tmp/p.html
 grep -c 'data-note-form\|pd-composer' /tmp/p.html     # composer present (>0)
 grep -c 'pd-dialog' /tmp/p.html                       # dialog gone (0)
 grep -c 'data-reply-toggle\|data-replies-for' /tmp/p.html  # reply UI present (>0)
@@ -593,9 +593,9 @@ Then post a reply through the route (reuse the CSRF flow from the earlier fix: f
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbra
-cargo fmt --manifest-path umbra_website/Cargo.toml
-git add umbra_website/plugins/plugin_directory/src/lib.rs umbra_website/plugins/plugin_directory/templates/plugin_directory/plugin.html
+cd /home/dalmas/E/projects/umbral
+cargo fmt --manifest-path umbral_website/Cargo.toml
+git add umbral_website/plugins/plugin_directory/src/lib.rs umbral_website/plugins/plugin_directory/templates/plugin_directory/plugin.html
 git commit -m "feat(notes): inline composer + reply forms + threaded live inserts"
 ```
 
@@ -628,11 +628,11 @@ In `plugin.html`'s `{% block extra_head %}` `<style>`, append:
 
 - [ ] **Step 2: Verify live + commit**
 
-Reload `http://localhost:8100/plugins/umbra-admin#notes` and confirm the composer is compact, replies indent under their note with a rail, and the reply toggle reveals a tight form.
+Reload `http://localhost:8100/plugins/umbral-admin#notes` and confirm the composer is compact, replies indent under their note with a rail, and the reply toggle reveals a tight form.
 
 ```bash
-cd /home/dalmas/E/projects/umbra
-git add umbra_website/plugins/plugin_directory/templates/plugin_directory/plugin.html
+cd /home/dalmas/E/projects/umbral
+git add umbral_website/plugins/plugin_directory/templates/plugin_directory/plugin.html
 git commit -m "style(notes): compact chat layout for the notes thread"
 ```
 
@@ -640,7 +640,7 @@ git commit -m "style(notes): compact chat layout for the notes thread"
 
 ## Final verification
 
-- [ ] From `umbra_website/`: `cargo test -p plugin_directory --test render_pages` — all green (reply create/validate + thread grouping + existing note regression).
+- [ ] From `umbral_website/`: `cargo test -p plugin_directory --test render_pages` — all green (reply create/validate + thread grouping + existing note regression).
 - [ ] Live: posting a note appends inline (no reload); "Reply" posts a nested reply that live-updates in another tab; the dialog is gone.
 - [ ] A reply-to-a-reply / cross-plugin parent is rejected (covered by Task 1 test).
 

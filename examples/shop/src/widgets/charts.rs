@@ -10,8 +10,8 @@
 
 use ecommerce::models::{Order, order};
 use std::collections::HashMap;
-use umbra::orm::Aggregate;
-use umbra_admin::{
+use umbral::orm::Aggregate;
+use umbral_admin::{
     ChartPoint, DonutPayload, LinePayload, Series, Span, Widget, WidgetDataFn, WidgetKind,
     WidgetPayload,
 };

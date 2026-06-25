@@ -7,15 +7,15 @@
 //! NEVER ship this in production. It's a test scaffold;
 //! production would call `createsuperuser` interactively.
 
-use umbra_auth::AuthUser;
-use umbra_auth::token::AuthToken;
+use umbral_auth::AuthUser;
+use umbral_auth::token::AuthToken;
 
 pub async fn test_credentials() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if AuthUser::objects().count().await? > 0 {
         return Ok(());
     }
 
-    let user = umbra_auth::create_superuser("shopadmin", "shopadmin@example.com", "shopadmin")
+    let user = umbral_auth::create_superuser("shopadmin", "shopadmin@example.com", "shopadmin")
         .await
         .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
     let (_row, token) = AuthToken::create_for(&user, "shop-demo")

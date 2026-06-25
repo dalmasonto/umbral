@@ -1,4 +1,4 @@
-# Webserver testing for umbra
+# Webserver testing for umbral
 
 1. Using Apache Bench
 

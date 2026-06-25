@@ -1,0 +1,888 @@
+{% extends "base.html" %}
+{% import "plugin_directory/_macros.html" as media %}
+
+{% block title %}{{ plugin.name }} - Plugin Directory - Umbral{% endblock %}
+{% block meta_description %}Plugin detail page for {{ plugin.name }}, including install command, audit status, compatibility, features and community notes.{% endblock %}
+
+{% block extra_head %}
+<style>
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes pd-rise {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .pd-rise { opacity: 0; animation: pd-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: calc(var(--i, 0) * 60ms); }
+    .pd-meter-fill { animation: pd-grow 0.9s cubic-bezier(0.22, 1, 0.36, 1) both 0.2s; }
+    @keyframes pd-grow { from { width: 0; } }
+    .pd-tabpanel[data-active] { animation: pd-rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  }
+  /* Scoped helpers for utilities the purged Tailwind build doesn't ship. */
+  .pd-mt4 { margin-top: 1rem; }
+  .pd-gap4 { gap: 1rem; }
+  .pd-gap-x6 { column-gap: 1.5rem; row-gap: 0.375rem; }
+  .pd-justify-end { justify-content: flex-end; }
+  .pd-space-3-5 > * + * { margin-top: 0.875rem; }
+  .pd-space-4 > * + * { margin-top: 1rem; }
+  .pd-success { border: 1px solid #bfe3cd; }
+  .pd-p15 { padding: 15px; }
+  .pd-py2 { padding-top: 2px; padding-bottom: 2px; }
+  .pd-maxw440 { max-width: 440px; }
+  .pd-fw-normal { font-weight: 400; }
+
+  .pd-head { position: relative; }
+  .pd-head::before {
+    content: "";
+    position: absolute;
+    left: -30px; top: -50px;
+    width: 360px; height: 200px;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 14%, transparent), transparent 72%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .pd-head > * { position: relative; z-index: 1; }
+
+  /* ---- Stat cards ---- */
+  .pd-stat { border: 1px solid var(--hairline); background: var(--surface); border-radius: 14px; padding: 13px 15px; transition: border-color 0.18s ease, transform 0.18s ease; }
+  .pd-stat:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--hairline)); transform: translateY(-1px); }
+  .pd-stat-value { font-size: 21px; font-weight: 800; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; }
+  .pd-stat-label { font-size: 11.5px; color: var(--faint); margin-top: 3px; display: flex; align-items: center; gap: 5px; }
+  .pd-stat-label svg { width: 13px; height: 13px; opacity: 0.7; }
+
+  /* ---- Install / copy ---- */
+  .pd-cmd { display: flex; align-items: center; gap: 8px; border: 1px solid var(--hairline); background: var(--surface-2); border-radius: 10px; padding: 8px 8px 8px 12px; }
+  /* `min-width: 0` is load-bearing: without it a flex item won't shrink
+     below its content, so a long install command forces `.pd-cmd` (and
+     the whole 340px card column) wider and `overflow-x` never scrolls. */
+  .pd-cmd code { flex: 1; min-width: 0; overflow-x: auto; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+  .pd-cmd .copy-btn { flex-shrink: 0; }
+
+  /* ---- Progress meter ---- */
+  .pd-meter { height: 7px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .pd-meter-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--ok)); }
+
+  /* ---- Segmented tab bar ---- */
+  /* Sticky under the global header (which is `sticky top-0`, ~64px tall +
+     z-50). The tab bar pins just below it; the header's higher z-index
+     hides any overlap, and the paper background keeps scrolled content
+     from bleeding through. */
+  .pd-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--hairline); margin-bottom: 4px; position: sticky; top: 61px; z-index: 30; background: var(--paper); }
+  .pd-tab { position: relative; appearance: none; background: transparent; border: 0; cursor: pointer; padding: 11px 16px 13px; font-size: 14px; font-weight: 600; color: var(--muted); border-radius: 10px 10px 0 0; transition: color 0.15s ease, background 0.15s ease; display: inline-flex; align-items: center; gap: 7px; }
+  .pd-tab:hover { color: var(--ink-2); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .pd-tab[aria-selected="true"] { color: var(--accent-2); }
+  .pd-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2.5px; border-radius: 3px; background: var(--accent); }
+  .pd-tab .pd-tab-count { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); color: var(--faint); }
+  .pd-tab[aria-selected="true"] .pd-tab-count { background: var(--accent-soft); color: var(--accent-2); }
+  .pd-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* JS-off graceful degradation: when no panel is JS-activated, show all stacked. */
+  .pd-tabpanel { display: block; }
+  body.pd-js .pd-tabpanel { display: none; }
+  body.pd-js .pd-tabpanel[data-active] { display: block; }
+  body:not(.pd-js) .pd-tabs { display: none; }
+  body:not(.pd-js) .pd-tabpanel + .pd-tabpanel { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--hairline); }
+
+  /* ---- Backend chips ---- */
+  .pd-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); border: 1px solid var(--hairline); background: var(--surface-2); border-radius: 999px; padding: 4px 11px; }
+  .pd-chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+
+  /* ---- Links row ---- */
+  .pd-link { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--ink-2); border: 1px solid var(--hairline); background: var(--surface); border-radius: 10px; padding: 8px 13px; transition: border-color 0.16s ease, color 0.16s ease, transform 0.16s ease; }
+  .pd-link:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline)); color: var(--accent-2); transform: translateY(-1px); }
+  .pd-link svg { width: 15px; height: 15px; }
+
+  /* `.pd-prose` (the shared markdown prose component) now lives globally in
+     static/css/md-enhance.css so the plugin page, notes, and blog all render
+     identically. */
+
+  /* ---- Notes chat surface (inline composer + replies) ---- */
+  .pd-composer { margin-top: 14px; border: 1px solid var(--hairline); border-radius: 14px; background: var(--surface); padding: 10px; }
+  .pd-composer textarea { min-height: 0; resize: vertical; }
+  .pd-composer-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+  .pd-composer-row .pd-composer-name { flex: 1 1 120px; min-width: 0; }
+  .pd-composer-row .pd-composer-kind { flex: 0 1 auto; min-width: 0; max-width: 170px; }
+  .pd-form-error { margin-bottom: 8px; font-size: 12.5px; font-weight: 600; color: #A82E2E; }
+  .pd-composer-as { flex: 1; min-width: 0; font-size: 12.5px; color: var(--faint); }
+  .pd-login-cta { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border: 1px dashed var(--hairline); border-radius: 14px; background: var(--surface-2); padding: 14px 16px; font-size: 13.5px; color: var(--muted); }
+  /* The replies container is always rendered (the JS insert target); show the
+     indent + rail only when it actually has replies. */
+  .pd-replies:has(.pd-reply) { margin: 6px 0 0 30px; display: flex; flex-direction: column; gap: 6px; border-left: 2px solid var(--hairline); padding-left: 12px; }
+  .pd-reply { display: flex; gap: 8px; }
+  .pd-reply-avatar { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; background: var(--accent-line); color: var(--accent-2); font-size: 10.5px; font-weight: 700; }
+  .pd-reply-head { font-size: 11.5px; color: var(--faint); }
+  .pd-reply-name { font-weight: 700; color: var(--ink-2); }
+  .pd-reply-toggle { margin: 4px 0 0 30px; background: transparent; border: 0; color: var(--accent-2); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 2px 0; }
+  .pd-reply-form { margin: 6px 0 0 30px; }
+  .pd-reply-form textarea { min-height: 0; resize: vertical; }
+  .pd-field { width: 100%; border: 1px solid var(--hairline); background: var(--surface); border-radius: 10px; padding: 9px 12px; font-size: 14px; color: var(--ink); font-family: inherit; }
+  .pd-field:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  textarea.pd-field { min-height: 110px; resize: vertical; }
+
+  /* ---- Moderation controls (owner roster + per-note actions + issues) ---- */
+  .pd-mod-actions form { display: inline; margin: 0; }
+  .pd-mod-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--ink-2); border: 1px solid var(--hairline); background: var(--surface); border-radius: 8px; padding: 4px 10px; cursor: pointer; transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease; }
+  .pd-mod-btn:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline)); color: var(--accent-2); }
+  .pd-mod-btn[data-mod-action="flag"]:hover { border-color: color-mix(in srgb, var(--warn) 40%, var(--hairline)); color: var(--warn); }
+  .pd-mod-card { border: 1px solid var(--hairline); border-radius: 14px; background: var(--surface); padding: 16px 18px; }
+  .pd-mod-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--paper); padding: 9px 12px; }
+  .pd-mod-row form { display: inline; margin: 0; }
+  .pd-issue { border: 1px solid var(--hairline); border-radius: 14px; background: var(--paper); padding: 16px 18px; }
+  .pd-status-ok { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 700; background: var(--ok-soft); color: var(--ok); }
+  .pd-status-open { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 700; background: var(--warn-soft); color: var(--warn); }
+  .pd-status-private { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 2px 9px; font-size: 11px; font-weight: 700; background: var(--surface-2); color: var(--faint); }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[1200px] px-7 pb-0 pt-10">
+  <a href="/plugins" class="mb-6 inline-flex items-center gap-2 text-[13.5px] font-semibold text-accent-2">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+    Back to plugin directory
+  </a>
+
+  {% if submitted %}
+  <div class="mb-6 flex items-center gap-2.5 rounded-[14px] border pd-success bg-ok-soft px-4 py-3">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>
+    <span class="text-[13.5px] font-bold text-ok">Thanks - your note is live in the thread.</span>
+  </div>
+  {% endif %}
+
+  {% if plugin.flagged %}
+  <div class="mb-6 flex flex-wrap items-center gap-[9px] rounded-[14px] border border-[#F1C9C9] bg-[#FBEDEC] px-4 py-3">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#C23B3B" stroke-width="2.2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+    <span class="text-[13.5px] font-bold text-[#A82E2E]">Security advisory active. Do not install this package.</span>
+  </div>
+  {% endif %}
+
+  <div class="pd-head grid gap-7 lg:grid-cols-[1fr_340px] lg:items-start">
+    <div class="pd-rise" style="--i: 0; min-width: 0">
+      <div class="mb-5 flex flex-wrap items-start gap-4">
+        {{ media.plugin_logo(plugin.logo, plugin.name, plugin.source, plugin.flagged, plugin.icon, 64) }}
+        <div class="min-w-0">
+          <div class="mb-2 flex flex-wrap items-center gap-2.5">
+            <h1 class="m-0 text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[46px]">{{ plugin.name }}</h1>
+            {% if plugin.flagged %}
+            <span class="rounded-full bg-[#C23B3B] px-2 py-[3px] text-[11px] font-bold text-white">Flagged</span>
+            {% elif plugin.source == "community" %}
+            <span class="pill-community">Community</span>
+            {% elif plugin.source == "experimental" %}
+            <span class="rounded-full bg-accent-soft px-2 py-[3px] text-[11px] font-semibold text-accent-2">Experimental</span>
+            {% else %}
+            <span class="pill-official">Official</span>
+            {% endif %}
+            {% if plugin.featured %}
+            <span class="rounded-full bg-warn-soft px-2 py-[3px] text-[11px] font-semibold text-warn">Featured</span>
+            {% endif %}
+            <span class="text-[12.5px] text-faint">by {{ plugin.maintainer }}</span>
+          </div>
+          <p class="max-w-[720px] text-[17px] leading-[1.55] text-muted">{{ plugin.description }}</p>
+        </div>
+      </div>
+
+      <div class="mb-5 flex flex-wrap gap-2">
+        {% for tag in plugin.tags %}
+        <span class="rounded-[8px] border border-hairline bg-surface-2 px-3 py-1.5 text-[12.5px] text-body">{{ tag }}</span>
+        {% endfor %}
+      </div>
+
+      {# Cover image - sits below the header text (logo, title,
+         description, tags), not as a top-of-page banner. #}
+      {{ media.plugin_cover(plugin.cover_image, plugin.name) }}
+
+      {# ---- Links row (only present fields render) ---- #}
+      <div class="flex flex-wrap gap-2.5">
+        {% if plugin.links.docs %}
+        <a href="{{ plugin.links.docs }}" class="pd-link" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          Docs
+        </a>
+        {% endif %}
+        {% if plugin.links.source %}
+        <a href="{{ plugin.links.source }}" class="pd-link" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 16 4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16"/></svg>
+          Source
+        </a>
+        {% endif %}
+        {% if plugin.links.issues %}
+        <a href="{{ plugin.links.issues }}" class="pd-link" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+          Issues
+        </a>
+        {% endif %}
+        {% if plugin.links.github %}
+        <a href="{{ plugin.links.github }}" class="pd-link" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.71c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.3 9.3 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.35 4.79-4.58 5.05.36.32.68.94.68 1.9v2.82c0 .27.18.59.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>
+          GitHub
+        </a>
+        {% endif %}
+      </div>
+    </div>
+
+    {# ---- Install + stat panel ---- #}
+    <aside class="card pd-rise rounded-[20px] p-5 shadow-panel" style="--i: 1">
+      <div class="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <div class="text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Install</div>
+          <div class="mt-1 text-[13px] text-muted">{{ plugin.channel }}</div>
+        </div>
+        {% if plugin.status_kind == "ok" %}
+        <span class="pill-ok">{{ plugin.status }}</span>
+        {% elif plugin.status_kind == "bad" %}
+        <span class="rounded-full bg-[#C23B3B] px-2 py-[3px] text-[11.5px] font-semibold text-white">{{ plugin.status }}</span>
+        {% elif plugin.status_kind == "muted" %}
+        <span class="rounded-full bg-surface-2 px-2 py-[3px] text-[11.5px] font-semibold text-faint">{{ plugin.status }}</span>
+        {% else %}
+        <span class="pill-warn">{{ plugin.status }}</span>
+        {% endif %}
+      </div>
+
+      <div class="pd-cmd mb-2" data-copy="{{ plugin.add_line }}">
+        <code>{{ plugin.add_line }}</code>
+        <button class="copy-btn" type="button" aria-label="Copy install command" data-copy-target>
+          <svg class="icon-copy" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <svg class="icon-check" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+        </button>
+      </div>
+      {% if plugin.install != plugin.add_line %}
+      <div class="pd-cmd" data-copy="{{ plugin.install }}">
+        <code>{{ plugin.install }}</code>
+        <button class="copy-btn" type="button" aria-label="Copy command" data-copy-target>
+          <svg class="icon-copy" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <svg class="icon-check" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+        </button>
+      </div>
+      {% endif %}
+
+      {# ---- Stat cards row ---- #}
+      <div class="pd-mt4 grid grid-cols-2 gap-2">
+        <div class="pd-stat">
+          <div class="pd-stat-value">{{ plugin.stars }}</div>
+          <div class="pd-stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11.5 2.6 14 7.7l5.6.8-4 4 1 5.6-5-2.7-5 2.7 1-5.6-4-4 5.6-.8z"/></svg>
+            stars
+          </div>
+        </div>
+        <div class="pd-stat">
+          <div class="pd-stat-value">{{ plugin.installs }}</div>
+          <div class="pd-stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+            downloads
+          </div>
+        </div>
+        <div class="pd-stat">
+          <div class="pd-stat-value" data-note-count>{{ plugin.notes }}</div>
+          <div class="pd-stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            notes
+          </div>
+        </div>
+        <div class="pd-stat">
+          <div class="pd-stat-value font-mono text-[16px]">{{ plugin.version }}</div>
+          <div class="pd-stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 7h.01M3 9V5a2 2 0 0 1 2-2h4l11 11-6 6L3 9z"/></svg>
+            version
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<section class="mx-auto max-w-[1200px] px-7 pb-2 pt-8">
+  <div class="grid gap-7 lg:grid-cols-[1fr_340px]">
+    <div class="pd-rise" style="--i: 2; min-width: 0">
+      {# ---- Tab bar ---- #}
+      <div class="pd-tabs" role="tablist" aria-label="Plugin details">
+        <button class="pd-tab" role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true" data-tab="overview">Overview</button>
+        <button class="pd-tab" role="tab" id="tab-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" data-tab="features">Features<span class="pd-tab-count">{{ plugin.total_features }}</span></button>
+        <button class="pd-tab" role="tab" id="tab-compatibility" aria-controls="panel-compatibility" aria-selected="false" tabindex="-1" data-tab="compatibility">Compatibility</button>
+        <button class="pd-tab" role="tab" id="tab-notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1" data-tab="notes">Notes<span class="pd-tab-count" data-note-count>{{ plugin.notes }}</span></button>
+        <button class="pd-tab" role="tab" id="tab-issues" aria-controls="panel-issues" aria-selected="false" tabindex="-1" data-tab="issues">Issues</button>
+      </div>
+
+      <div class="space-y-5 pt-5">
+        {# ===== Overview ===== #}
+        <section class="pd-tabpanel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" data-active>
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            <h2 class="mb-4 text-[24px] font-extrabold tracking-[-0.02em]">About</h2>
+            <div class="pd-prose" data-md>{{ plugin.full_content | markdown }}</div>
+          </div>
+
+          <div class="card mt-5 rounded-[20px] p-6 sm:p-7">
+            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">{{ plugin.usage_title }}</h2>
+            <p class="mb-5 text-[14px] leading-[1.55] text-muted">{{ plugin.usage_intro }}</p>
+            <div class="overflow-hidden rounded-2xl bg-shade shadow-terminal">
+              <div class="flex items-center gap-2 border-b border-shade-2 px-4 py-[13px]">
+                <span class="h-[11px] w-[11px] rounded-full bg-[#FF6259]"></span>
+                <span class="h-[11px] w-[11px] rounded-full bg-[#FFBD2E]"></span>
+                <span class="h-[11px] w-[11px] rounded-full bg-[#28C840]"></span>
+                <span class="ml-2 font-mono text-[12px] text-shade-faint">plugin setup</span>
+              </div>
+              <pre class="overflow-x-auto px-[22px] py-5 font-mono text-[13px] leading-[1.8] text-shade-ink">{{ plugin.usage_code }}</pre>
+            </div>
+          </div>
+        </section>
+
+        {# ===== Features ===== #}
+        <section class="pd-tabpanel" id="panel-features" role="tabpanel" aria-labelledby="tab-features">
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            {% if plugin.total_features %}
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Feature tracker</h2>
+                <p class="text-[14px] text-muted">Per-feature shipping status, recorded in the directory.</p>
+              </div>
+              {% if plugin.status_kind == "bad" %}
+              <span class="rounded-full bg-[#FBEDEC] px-3 py-1.5 text-[12px] font-semibold text-[#A82E2E]">blocked</span>
+              {% else %}
+              <span class="rounded-full bg-ok-soft px-3 py-1.5 text-[12px] font-semibold text-ok">{{ plugin.shipped_features }} of {{ plugin.total_features }} shipped</span>
+              {% endif %}
+            </div>
+            <div class="pd-meter mb-5"><div class="pd-meter-fill" style="width: {{ plugin.progress_pct }}%"></div></div>
+            <div class="space-y-2.5">
+              {% for feature in plugin.features %}
+              <div class="rounded-[12px] border border-hairline bg-paper pd-p15">
+                <div class="flex flex-wrap items-center gap-2.5">
+                  {% if feature.kind == "ok" %}
+                  <span class="h-2 w-2 shrink-0 rounded-full bg-ok"></span>
+                  <span class="text-[14.5px] font-semibold">{{ feature.name }}</span>
+                  <span class="rounded-full bg-ok-soft px-2 pd-py2 text-[11px] font-semibold text-ok">{{ feature.status }}</span>
+                  {% elif feature.kind == "bad" %}
+                  <span class="h-2 w-2 shrink-0 rounded-full bg-[#C23B3B]"></span>
+                  <span class="text-[14.5px] font-semibold">{{ feature.name }}</span>
+                  <span class="rounded-full bg-[#FBEDEC] px-2 pd-py2 text-[11px] font-semibold text-[#A82E2E]">{{ feature.status }}</span>
+                  {% elif feature.kind == "muted" %}
+                  <span class="h-2 w-2 shrink-0 rounded-full bg-ghost"></span>
+                  <span class="text-[14.5px] font-semibold">{{ feature.name }}</span>
+                  <span class="rounded-full bg-surface-2 px-2 pd-py2 text-[11px] font-semibold text-faint">{{ feature.status }}</span>
+                  {% else %}
+                  <span class="h-2 w-2 shrink-0 rounded-full bg-warn"></span>
+                  <span class="text-[14.5px] font-semibold">{{ feature.name }}</span>
+                  <span class="rounded-full bg-warn-soft px-2 pd-py2 text-[11px] font-semibold text-warn">{{ feature.status }}</span>
+                  {% endif %}
+                  <span class="ml-auto text-[11.5px] text-faint">{{ feature.maturity }}</span>
+                </div>
+                {% if feature.description %}
+                <div class="pd-prose mt-2 text-[13.5px]" data-md>{{ feature.description | markdown }}</div>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <h2 class="mb-2 text-[24px] font-extrabold tracking-[-0.02em]">Feature tracker</h2>
+            <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted">No tracked features recorded yet.</p>
+            {% endif %}
+          </div>
+        </section>
+
+        {# ===== Compatibility ===== #}
+        <section class="pd-tabpanel" id="panel-compatibility" role="tabpanel" aria-labelledby="tab-compatibility">
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Compatibility</h2>
+            <p class="mb-5 text-[14px] text-muted">Declared support per Umbral version and database backend.</p>
+            {% if plugin.compat %}
+            <div class="pd-space-4">
+              {% for row in plugin.compat %}
+              <div class="rounded-[14px] border border-hairline bg-paper p-[18px]">
+                <div class="mb-3 flex flex-wrap items-center gap-2.5">
+                  <span class="font-mono text-[14px] font-bold text-ink">Umbral {{ row.umbral_version }}</span>
+                  {% if row.verified %}
+                  <span class="inline-flex items-center gap-1.5 rounded-full bg-ok-soft px-2.5 py-1 text-[11.5px] font-semibold text-ok"><span class="h-1.5 w-1.5 rounded-full bg-ok"></span>verified{% if row.verified_at %} · {{ row.verified_at }}{% endif %}</span>
+                  {% else %}
+                  <span class="inline-flex items-center gap-1.5 rounded-full bg-warn-soft px-2.5 py-1 text-[11.5px] font-semibold text-warn"><span class="h-1.5 w-1.5 rounded-full bg-warn"></span>declared</span>
+                  {% endif %}
+                </div>
+                {% if row.backends %}
+                <div class="mb-3 flex flex-wrap gap-2">
+                  {% for b in row.backends %}
+                  <span class="pd-chip">{{ b.label }}</span>
+                  {% endfor %}
+                </div>
+                {% endif %}
+                <div class="flex flex-wrap pd-gap-x6 text-[13px]">
+                  {% if row.minimum_rust_version %}
+                  <span class="text-muted">Min Rust <span class="font-mono font-semibold text-ink-2">{{ row.minimum_rust_version }}</span></span>
+                  {% endif %}
+                </div>
+                {% if row.notes %}
+                <p class="mt-2 text-[13px] leading-[1.55] text-muted">{{ row.notes }}</p>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted">No compatibility rows declared yet.</p>
+            {% endif %}
+          </div>
+        </section>
+
+        {# ===== Notes ===== #}
+        <section class="pd-tabpanel" id="panel-notes" role="tabpanel" aria-labelledby="tab-notes">
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Community notes</h2>
+                <p class="text-[14px] text-muted"><span data-note-count>{{ plugin.notes }}</span> note<span data-note-plural>{% if plugin.notes != 1 %}s{% endif %}</span> in the discussion thread.</p>
+              </div>
+            </div>
+            <div class="space-y-3" id="pd-note-list">
+              {% for thread in plugin.comments %}
+              {% set comment = thread.note %}
+              {% include "plugin_directory/_comment.html" %}
+              <div class="pd-replies" data-replies-for="{{ thread.note.id }}">
+                {% for comment in thread.replies %}
+                {% include "plugin_directory/_reply.html" %}
+                {% endfor %}
+              </div>
+              {% if user.is_authenticated %}
+              <button type="button" class="pd-reply-toggle" data-reply-toggle="{{ thread.note.id }}">Reply</button>
+              <form class="pd-reply-form hidden" method="post" action="/plugins/{{ plugin.slug }}/notes" data-reply-form="{{ thread.note.id }}">
+                <div class="hidden" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+                {{ csrf_input }}
+                <input type="hidden" name="parent_id" value="{{ thread.note.id }}">
+                <textarea class="pd-field" name="body" required rows="1" placeholder="Reply as @{{ user.username }}… Markdown supported."></textarea>
+                <div class="pd-composer-row pd-justify-end">
+                  <button type="submit" class="btn-accent">Reply</button>
+                </div>
+              </form>
+              {% endif %}
+              {% else %}
+              <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted" data-note-empty>No notes yet. Be the first to share how this plugin works for you.</p>
+              {% endfor %}
+            </div>
+            {% if user.is_authenticated %}
+            <form class="pd-composer" method="post" action="/plugins/{{ plugin.slug }}/notes" data-note-form>
+              <div class="hidden" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+              {{ csrf_input }}
+              <textarea class="pd-field" name="body" required rows="2" placeholder="Add a note — Markdown supported, code gets highlighted."></textarea>
+              <div class="pd-composer-row">
+                <select class="pd-field pd-composer-kind" name="kind">
+                  {% for opt in plugin.note_kinds %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}
+                </select>
+                <span class="pd-composer-as">Posting as <b>@{{ user.username }}</b></span>
+                <button type="submit" class="btn-accent">Post</button>
+              </div>
+            </form>
+            {% else %}
+            <div class="pd-login-cta">
+              <span>Log in to post a note and join the discussion.</span>
+              <a class="btn-accent" href="/login?next=/plugins/{{ plugin.slug }}">Log in</a>
+            </div>
+            {% endif %}
+          </div>
+        </section>
+
+        {# ===== Issues ===== #}
+        {# Issues are a distinct set from discussion notes (recon/#68): bug /
+           abuse reports a moderator resolves. Each shows an open/resolved
+           status; a moderator additionally gets Resolve / Reopen controls
+           (HTMX POST to the Task B resolve/reopen routes). Non-moderators
+           see the issues + status but no action buttons. #}
+        <section class="pd-tabpanel" id="panel-issues" role="tabpanel" aria-labelledby="tab-issues">
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Reported issues</h2>
+                <p class="text-[14px] text-muted">Bugs and abuse reports filed against this plugin.</p>
+              </div>
+              <a href="/report?plugin={{ plugin.slug }}" class="btn-ghost whitespace-nowrap">Report an issue</a>
+            </div>
+            {% if issues %}
+            <div class="space-y-3" data-issue-list>
+              {% for issue in issues %}
+              <div class="pd-issue" data-issue-id="{{ issue.id }}">
+                <div class="mb-2 flex flex-wrap items-center gap-2.5">
+                  {% if issue.resolved %}
+                  <span class="pd-status-ok" data-issue-status="resolved">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+                    Resolved
+                  </span>
+                  {% else %}
+                  <span class="pd-status-open" data-issue-status="open">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+                    Open
+                  </span>
+                  {% endif %}
+                  {% if not issue.public %}
+                  <span class="pd-status-private">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    Private
+                  </span>
+                  {% endif %}
+                  <span class="text-[12px] text-faint">{{ issue.reporter }} · {{ issue.created }}</span>
+                  {% if can_moderate %}
+                  <div class="ml-auto flex gap-2">
+                    {% if issue.resolved %}
+                    <form method="post" action="/plugins/{{ plugin.slug }}/issues/{{ issue.id }}/reopen"
+                          hx-post="/plugins/{{ plugin.slug }}/issues/{{ issue.id }}/reopen" hx-target="body" hx-swap="outerHTML">
+                      {{ csrf_input }}
+                      <button type="submit" class="pd-mod-btn" data-issue-action="reopen">Reopen</button>
+                    </form>
+                    {% else %}
+                    <form method="post" action="/plugins/{{ plugin.slug }}/issues/{{ issue.id }}/resolve"
+                          hx-post="/plugins/{{ plugin.slug }}/issues/{{ issue.id }}/resolve" hx-target="body" hx-swap="outerHTML">
+                      {{ csrf_input }}
+                      <button type="submit" class="pd-mod-btn" data-issue-action="resolve">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>
+                        Resolve
+                      </button>
+                    </form>
+                    {% endif %}
+                  </div>
+                  {% endif %}
+                </div>
+                <div class="pd-prose text-[14px]" data-md>{{ issue.body | markdown }}</div>
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <div class="text-center">
+              <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+              </div>
+              <h2 class="mb-2 text-[20px] font-extrabold tracking-[-0.02em]">No open issues</h2>
+              <p class="mx-auto mb-5 pd-maxw440 text-[14px] leading-[1.55] text-muted">No issues have been reported against this plugin. Track upstream bugs on the maintainer's tracker, or report a directory problem to the Umbral team.</p>
+              <div class="flex flex-wrap justify-center gap-2.5">
+                {% if plugin.links.issues %}
+                <a href="{{ plugin.links.issues }}" class="btn-accent" rel="noopener">Open issue tracker</a>
+                {% endif %}
+              </div>
+            </div>
+            {% endif %}
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <aside class="space-y-5 lg:sticky lg:top-[84px] lg:self-start">
+      {# ---- Moderator roster (owner-only management) ----
+         Only the plugin owner (`is_owner`) sees this. Lists current
+         moderators with a remove button each, plus an add-moderator form.
+         POSTs to the Task B owner-only routes via HTMX (csrf carried by the
+         form), swapping the page so the roster updates in place. #}
+      {% if is_owner %}
+      <div class="pd-mod-card pd-rise" style="--i: 3" data-moderator-panel>
+        <div class="mb-3 flex items-center gap-2">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+          <span class="text-[13px] font-bold uppercase tracking-[0.04em] text-ink-2">Moderators</span>
+        </div>
+        <p class="mb-3 text-[12.5px] leading-[1.5] text-muted">People you trust to hide notes and resolve issues on this plugin.</p>
+        <div class="space-y-2" data-moderator-list>
+          {% for mod in moderators %}
+          <div class="pd-mod-row" data-moderator-id="{{ mod.user_id }}">
+            <span class="flex h-7 w-7 items-center justify-center rounded-full bg-accent-line text-[11px] font-bold text-accent-2">{{ mod.username | first | upper }}</span>
+            <div class="min-w-0">
+              <div class="truncate text-[13px] font-semibold text-ink-2">@{{ mod.username }}</div>
+              <div class="text-[11px] text-faint">added {{ mod.added }}</div>
+            </div>
+            <form method="post" action="/plugins/{{ plugin.slug }}/moderators/{{ mod.user_id }}/remove"
+                  hx-post="/plugins/{{ plugin.slug }}/moderators/{{ mod.user_id }}/remove" hx-target="body" hx-swap="outerHTML"
+                  class="ml-auto">
+              {{ csrf_input }}
+              <button type="submit" class="pd-mod-btn" aria-label="Remove @{{ mod.username }}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                Remove
+              </button>
+            </form>
+          </div>
+          {% else %}
+          <p class="m-0 rounded-[10px] border border-hairline bg-paper px-3 py-3 text-[12.5px] text-muted" data-moderator-empty>No moderators yet — add one below.</p>
+          {% endfor %}
+        </div>
+        <form method="post" action="/plugins/{{ plugin.slug }}/moderators"
+              hx-post="/plugins/{{ plugin.slug }}/moderators" hx-target="body" hx-swap="outerHTML"
+              class="mt-3 flex gap-2" data-add-moderator-form>
+          {{ csrf_input }}
+          <input class="pd-field" type="text" name="username" required placeholder="username" aria-label="Username to add as a moderator">
+          <button type="submit" class="btn-accent inline-flex items-center gap-1.5 whitespace-nowrap">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+            Add
+          </button>
+        </form>
+      </div>
+      {% endif %}
+
+      <div class="card pd-rise rounded-[18px] p-5" style="--i: 3">
+        <div class="mb-4 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Health</div>
+        <div class="space-y-3">
+          <div class="flex items-center justify-between gap-3 text-[13.5px]">
+            <span class="text-muted">Audit status</span>
+            {% if plugin.audit_kind == "ok" %}
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-ok-soft px-2.5 py-1 text-[12px] font-semibold text-ok"><span class="h-1.5 w-1.5 rounded-full bg-ok"></span>{{ plugin.audit_label }}</span>
+            {% elif plugin.audit_kind == "bad" %}
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-[#FBEDEC] px-2.5 py-1 text-[12px] font-semibold text-[#A82E2E]"><span class="h-1.5 w-1.5 rounded-full bg-[#C23B3B]"></span>{{ plugin.audit_label }}</span>
+            {% else %}
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-warn-soft px-2.5 py-1 text-[12px] font-semibold text-warn"><span class="h-1.5 w-1.5 rounded-full bg-warn"></span>{{ plugin.audit_label }}</span>
+            {% endif %}
+          </div>
+          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Reviewed by</span><span class="font-semibold text-ink-2">{{ plugin.audit_date }}</span></div>
+          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Maturity</span><span class="font-semibold text-ink-2">{{ plugin.maturity }}</span></div>
+          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Version</span><span class="font-mono font-semibold text-ink-2">{{ plugin.version }}</span></div>
+          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Maintainer</span><span class="font-semibold text-ink-2">{{ plugin.maintainer }}</span></div>
+        </div>
+      </div>
+
+      {% if plugin.compatibility %}
+      <div class="card pd-rise rounded-[18px] p-5" style="--i: 4">
+        <div class="mb-4 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Compatibility</div>
+        <div class="space-y-2.5">
+          {% for item in plugin.compatibility %}
+          <div class="flex items-center gap-2 rounded-[10px] border border-hairline bg-paper px-3 py-2.5 text-[13.5px]">
+            {% if item.kind == "ok" %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-ok"></span>{{ item.label }} <span class="ml-auto text-[11px] font-semibold text-ok">{{ item.status }}</span>
+            {% elif item.kind == "bad" %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-[#C23B3B]"></span>{{ item.label }} <span class="ml-auto text-[11px] font-semibold text-[#A82E2E]">{{ item.status }}</span>
+            {% elif item.kind == "muted" %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-ghost"></span>{{ item.label }} <span class="ml-auto text-[11px] font-semibold text-faint">{{ item.status }}</span>
+            {% else %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-warn"></span>{{ item.label }} <span class="ml-auto text-[11px] font-semibold text-warn">{{ item.status }}</span>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="rounded-[18px] bg-shade p-5 text-white">
+        <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08]">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="var(--accent-ghost)" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+        </div>
+        <h2 class="mb-2 text-[18px] font-extrabold tracking-[-0.01em]">Report a security concern</h2>
+        <p class="mb-4 text-[13.5px] leading-[1.55] text-shade-muted">Every plugin page includes a direct path to responsible disclosure. Confirmed issues appear visibly in the directory.</p>
+        <a href="/security" class="inline-flex items-center gap-2 rounded-[10px] bg-white px-4 py-2.5 text-[13.5px] font-semibold text-shade">Report issue</a>
+      </div>
+    </aside>
+  </div>
+</section>
+
+{# The note composer + per-note reply forms are inline in the notes panel
+   above (the modal dialog was replaced by the chat-style composer). #}
+
+{# umbral-realtime client: shares ONE SSE connection per subscription across all
+   tabs (via a SharedWorker), so many open plugin tabs don't exhaust the
+   browser's ~6-per-host HTTP/1.1 connection budget. Falls back to a per-tab
+   EventSource where SharedWorker isn't available. #}
+<script src="/realtime/client.js"></script>
+
+<script>
+  (function () {
+    document.body.classList.add('pd-js');
+
+    // ---- Tabs ----
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('.pd-tab'));
+    var panels = {};
+    document.querySelectorAll('.pd-tabpanel').forEach(function (p) {
+      panels[p.id.replace('panel-', '')] = p;
+    });
+    function activate(name, focus) {
+      tabs.forEach(function (t) {
+        var on = t.dataset.tab === name;
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+        t.tabIndex = on ? 0 : -1;
+        if (on && focus) t.focus();
+      });
+      Object.keys(panels).forEach(function (key) {
+        if (key === name) { panels[key].setAttribute('data-active', ''); }
+        else { panels[key].removeAttribute('data-active'); }
+      });
+      if (history.replaceState) history.replaceState(null, '', '#' + name);
+    }
+    tabs.forEach(function (t, i) {
+      t.addEventListener('click', function () { activate(t.dataset.tab); });
+      t.addEventListener('keydown', function (e) {
+        var idx = null;
+        if (e.key === 'ArrowRight') idx = (i + 1) % tabs.length;
+        else if (e.key === 'ArrowLeft') idx = (i - 1 + tabs.length) % tabs.length;
+        else if (e.key === 'Home') idx = 0;
+        else if (e.key === 'End') idx = tabs.length - 1;
+        if (idx !== null) { e.preventDefault(); activate(tabs[idx].dataset.tab, true); }
+      });
+    });
+    // Deep-link via #tab hash.
+    var hash = (location.hash || '').replace('#', '');
+    if (hash && panels[hash]) activate(hash);
+
+    // ---- Copy buttons ----
+    document.querySelectorAll('[data-copy]').forEach(function (wrap) {
+      var btn = wrap.querySelector('[data-copy-target]');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        var text = wrap.getAttribute('data-copy') || '';
+        navigator.clipboard.writeText(text).then(function () {
+          btn.classList.add('copied');
+          setTimeout(function () { btn.classList.remove('copied'); }, 1500);
+        });
+      });
+    });
+
+    // ---- Note + reply composers ---- (wireForm is a global fn, defined below)
+    document.querySelectorAll('[data-note-form], [data-reply-form]').forEach(wireForm);
+
+    // Reply toggles, delegated so notes inserted live (SSE/AJAX) get a working box too.
+    document.addEventListener('click', function (e) {
+      var t = e.target.closest('[data-reply-toggle]');
+      if (!t) return;
+      var id = t.getAttribute('data-reply-toggle');
+      var f = document.querySelector('[data-reply-form="' + id + '"]');
+      if (f) {
+        f.classList.toggle('hidden');
+        var ta = f.querySelector('textarea');
+        if (ta && !f.classList.contains('hidden')) ta.focus();
+      }
+    });
+  })();
+
+  // Submit a note/reply form via fetch as application/x-www-form-urlencoded
+  // (URLSearchParams), NOT multipart — umbral's CSRF middleware + Form extractor
+  // only accept urlencoded; multipart 403/415s. On success insert the rendered
+  // row in place (no reload); the native submit is the no-JS + error fallback.
+  // Global so insertNote can wire a freshly-cloned reply form too.
+  function wireForm(form) {
+    if (!(form && window.fetch && window.FormData)) return;
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var btn = form.querySelector('button[type="submit"]');
+      var label = btn ? btn.textContent : '';
+      if (btn) btn.disabled = true;
+      fetch(form.action, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: new URLSearchParams(new FormData(form))
+      }).then(function (res) {
+        if (res.ok) {
+          return res.json().then(function (d) {
+            if (d && d.html) insertNote(d);
+            form.reset();
+            clearFormError(form);
+            if (form.classList.contains('pd-reply-form')) {
+              form.classList.add('hidden');
+            } else if (btn) {
+              // Brief inline confirmation for a top-level post (composer stays put).
+              btn.textContent = 'Posted ✓';
+              setTimeout(function () { btn.textContent = label; }, 1600);
+            }
+          });
+        }
+        // A deliberate HTTP error (e.g. the 429 throttle, or 401 login
+        // required): surface the server's message INLINE on the form — do NOT
+        // navigate to the POST url (a reload there 405s on the POST-only route).
+        return res.text().then(function (msg) {
+          showFormError(form, (msg || '').trim() || ('Couldn’t post (' + res.status + ').'));
+        });
+      }).catch(function () {
+        // Only a genuine network failure (fetch rejected) falls back to a
+        // native submit so the note isn't silently lost.
+        form.submit();
+      }).finally(function () { if (btn) btn.disabled = false; });
+    });
+  }
+
+  // Show / clear a small inline error at the top of a note or reply form.
+  function showFormError(form, msg) {
+    var el = form.querySelector('[data-form-error]');
+    if (!el) {
+      el = document.createElement('div');
+      el.setAttribute('data-form-error', '');
+      el.className = 'pd-form-error';
+      form.insertBefore(el, form.firstChild);
+    }
+    el.textContent = msg;
+  }
+  function clearFormError(form) {
+    var el = form.querySelector('[data-form-error]');
+    if (el) el.remove();
+  }
+
+  // Insert a rendered note or reply. `d` = { id, html, parent_id }. A reply
+  // (parent_id set) appends into that note's [data-replies-for]; a top-level
+  // note appends to #pd-note-list, gets its reply affordances cloned from the
+  // #pd-live-extras template (so a live-arrived note is replyable without a
+  // reload), and bumps the counters. Deduped by id so the submitter never
+  // double-sees their own row when the SSE echo of their post arrives.
+  function insertNote(d) {
+    var html = d.html, id = String(d.id);
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html.trim();
+    var row = tmp.firstElementChild;
+    if (!row) return;
+    if (document.querySelector('[data-comment-id="' + id + '"]')) return;
+    if (d.parent_id) {
+      var box = document.querySelector('[data-replies-for="' + d.parent_id + '"]');
+      if (box) box.appendChild(row);
+      return;
+    }
+    var list = document.getElementById('pd-note-list');
+    if (!list) return;
+    var empty = list.querySelector('[data-note-empty]');
+    if (empty) empty.remove();
+    list.appendChild(row);
+    // Give the live note the same reply affordances the page-load loop renders
+    // (replies container + toggle + reply form carrying THIS viewer's CSRF),
+    // keyed to its id, then wire the cloned form. Mirrors the loop markup.
+    var tpl = document.getElementById('pd-live-extras');
+    if (tpl) {
+      var ex = document.createElement('div');
+      ex.innerHTML = tpl.innerHTML.replace(/__ID__/g, id);
+      var node;
+      while ((node = ex.firstElementChild)) {
+        if (node.tagName === 'FORM') wireForm(node);
+        list.appendChild(node);
+      }
+    }
+    bumpNoteCount();
+  }
+
+  // Bump every note counter (sidebar stat, tab badge, thread heading) to one
+  // canonical next value — read once, written to all, so they can't diverge.
+  function bumpNoteCount() {
+    var next = null;
+    document.querySelectorAll('[data-note-count]').forEach(function (el) {
+      if (next === null) {
+        var n = parseInt(el.textContent.replace(/[^0-9]/g, ''), 10);
+        next = (isNaN(n) ? 0 : n) + 1;
+      }
+      el.textContent = String(next);
+    });
+    var plural = document.querySelector('[data-note-plural]');
+    if (plural && next !== null) plural.textContent = next === 1 ? '' : 's';
+  }
+
+  // Live note feed. Subscribes to this plugin's public realtime group; when
+  // anyone posts a note, insert it into the thread. Powered by umbral-realtime
+  // via umbral.realtime.subscribe, which shares ONE SSE connection across every
+  // tab with this subscription (SharedWorker, EventSource fallback). Degrades
+  // silently if neither is available.
+  if (window.umbral && umbral.realtime) {
+    umbral.realtime.subscribe('public:plugin-{{ plugin.id }}', {
+      note: function (d) { if (d && d.html) insertNote(d); }
+    });
+  }
+</script>
+
+{# Reply affordances cloned by insertNote() for live-arrived top-level notes,
+   keyed by replacing __ID__ with the note id. Mirrors the per-note markup in
+   the thread loop above — keep the two in sync. Carries the current viewer's
+   csrf (rendered here, NOT in the broadcast partial, so no token leaks). #}
+{% if user.is_authenticated %}
+<template id="pd-live-extras">
+  <div class="pd-replies" data-replies-for="__ID__"></div>
+  <button type="button" class="pd-reply-toggle" data-reply-toggle="__ID__">Reply</button>
+  <form class="pd-reply-form hidden" method="post" action="/plugins/{{ plugin.slug }}/notes" data-reply-form="__ID__">
+    <div class="hidden" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+    {{ csrf_input }}
+    <input type="hidden" name="parent_id" value="__ID__">
+    <textarea class="pd-field" name="body" required rows="1" placeholder="Reply… Markdown supported."></textarea>
+    <div class="pd-composer-row pd-justify-end">
+      <button type="submit" class="btn-accent">Reply</button>
+    </div>
+  </form>
+</template>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_scripts %}
+{# HTMX powers the moderation actions (note hide/unhide/flag, issue
+   resolve/reopen): each is a real <form> carrying {{ csrf_input }}, so it
+   degrades to a native POST/redirect when JS / HTMX is unavailable. #}
+<script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+{% endblock %}

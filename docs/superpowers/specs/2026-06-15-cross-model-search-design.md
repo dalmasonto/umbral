@@ -11,7 +11,7 @@ Give the ORM a first-class way to search several models at once and return one r
 
 - `SqlType::FullText` → a Postgres `tsvector` column type with an auto-GIN index (gap #33), `FullTextCol<T>` with `matches()` / `matches_websearch()` (boolean `@@` predicates), and a `TsVector` value type. None of this exposes a **rank**, and all of it assumes a **stored** tsvector column.
 - `QuerySet::union()` / `intersect()` / `except()` (gap #28) combine two querysets of the **same** model `T`. They can't express a cross-model union (different tables, different columns).
-- The consumer today (`umbra_website/plugins/plugin_directory/src/lib.rs::render_search`) runs `PluginModel::objects().filter(name/crate/desc LIKE q).limit(6)` and `BlogPost::objects().filter(title/body LIKE q).limit(4)`, maps each into a `SearchHit`, and concatenates plugins-then-posts. No relevance ranking; arbitrary per-model sub-limits.
+- The consumer today (`umbral_website/plugins/plugin_directory/src/lib.rs::render_search`) runs `PluginModel::objects().filter(name/crate/desc LIKE q).limit(6)` and `BlogPost::objects().filter(title/body LIKE q).limit(4)`, maps each into a `SearchHit`, and concatenates plugins-then-posts. No relevance ranking; arbitrary per-model sub-limits.
 
 The new work is therefore three things the existing infra does not cover: **ranking**, a **cross-model normalized UNION**, and doing it with **nothing persisted**.
 
@@ -56,7 +56,7 @@ pub trait Searchable: Model {
     /// Static SQL boolean ANDed into the search WHERE — the row-visibility
     /// scope (only approved / published rows). Verbatim, no user input.
     /// Default: no restriction. Soft-delete (`deleted_at IS NULL`) is applied
-    /// automatically for `#[umbra(soft_delete)]` models, so this is only for
+    /// automatically for `#[umbral(soft_delete)]` models, so this is only for
     /// business filters. Added after first integration revealed `Search::across`
     /// would otherwise surface unapproved/unpublished rows.
     fn filter_sql() -> Option<&'static str> { None }
@@ -153,7 +153,7 @@ Branches are built as sea-query `SelectStatement`s (custom expressions via `Expr
 `render_search` drops both hand-written querysets and the Rust merge, and calls:
 
 ```rust
-let hits = umbra::orm::Search::across::<(PluginModel, BlogPost)>(trimmed, 10).await;
+let hits = umbral::orm::Search::across::<(PluginModel, BlogPost)>(trimmed, 10).await;
 ```
 
 mapping each `SearchHit` to the existing template `SearchHit` shape (deriving `href` from `kind` + `pk` and the logo). The "blog table missing in a test DB" resilience stays: wrap the call so a backend error degrades to an empty list + `tracing::warn!` rather than a 500.
@@ -174,7 +174,7 @@ The website then builds `/plugins/{pk}` for `kind == "plugin"` and `/blog/{pk}` 
 
 ## Surfacing
 
-`Searchable`, `Search`, `SearchHit`, and `SearchSources` live in `umbra-core` (`src/orm/search.rs`), re-exported from the `umbra` facade as `umbra::orm::{Search, Searchable, SearchHit}`. Not added to the prelude (power-user surface; keeps the prelude unambiguous). A short user doc page lands under `documentation/docs/v0.0.1/orm/` per the "ship a feature, ship its doc page" rule.
+`Searchable`, `Search`, `SearchHit`, and `SearchSources` live in `umbral-core` (`src/orm/search.rs`), re-exported from the `umbral` facade as `umbral::orm::{Search, Searchable, SearchHit}`. Not added to the prelude (power-user surface; keeps the prelude unambiguous). A short user doc page lands under `documentation/docs/v0.0.1/orm/` per the "ship a feature, ship its doc page" rule.
 
 ## Error handling
 
@@ -195,7 +195,7 @@ Behavioral, against a real in-memory SQLite DB seeding real rows through the pub
 
 Pure-unit tests for `default_title` / `default_body` over hand-built `FieldSpec` lists (title detection precedence; exclusion rules).
 
-A `#[ignore]`/`cfg`-gated Postgres test mirrors (1) and (2) against real `ts_rank` + `setweight`, run in the same CI lane as the existing `plugins/umbra-rest/tests/rest_fts_pg.rs`.
+A `#[ignore]`/`cfg`-gated Postgres test mirrors (1) and (2) against real `ts_rank` + `setweight`, run in the same CI lane as the existing `plugins/umbral-rest/tests/rest_fts_pg.rs`.
 
 ## Future work (logged, not in scope)
 

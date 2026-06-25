@@ -1,0 +1,399 @@
+{% extends "admin/wrapper.html" %} {% block extra_head %}
+<style>
+    body {
+        font-family: "Inter", sans-serif;
+        -webkit-font-smoothing: antialiased;
+    }
+    /* Tabular numerals: apply on data-heavy contexts */
+    .tabular-nums {
+        font-variant-numeric: tabular-nums;
+    }
+    /* ============================================================
+       Theme-aware scrollbars — inline because in DEV the admin
+       loads the Tailwind CDN (utility classes only), NOT the
+       pre-compiled admin.css, so any custom CSS in `css/input.css`
+       never reaches the browser in dev. The sidebar's tighter
+       3-4px rail used to live here for the same reason; the
+       global rule for everywhere else now joins it.
+       ============================================================ */
+    /* Sidebar — tightest rail (every horizontal pixel matters in
+       a nav column). */
+    #umbral-admin-sidebar,
+    #sidebar-nav {
+        scrollbar-width: thin;
+        scrollbar-color: var(--outline-variant) var(--surface-container);
+    }
+    #umbral-admin-sidebar::-webkit-scrollbar { width: 4px; }
+    #sidebar-nav::-webkit-scrollbar         { width: 3px; }
+    #umbral-admin-sidebar::-webkit-scrollbar-track,
+    #sidebar-nav::-webkit-scrollbar-track {
+        background: var(--surface-container);
+    }
+    #umbral-admin-sidebar::-webkit-scrollbar-thumb,
+    #sidebar-nav::-webkit-scrollbar-thumb {
+        background: var(--outline-variant);
+        border-radius: 10px;
+    }
+
+    /* Global — applies to every scrollable surface in the admin
+       (feed widget, dropdowns, tables, dialogs, main content).
+       Targets the actual Tailwind utility classes used by those
+       surfaces so the selectors survive any minification quirk
+       and have enough specificity to win against UA defaults. */
+    html {
+        scrollbar-width: thin;
+        scrollbar-color: var(--outline-variant) var(--surface-container);
+    }
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-y-scroll,
+    .overflow-x-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: var(--outline-variant) var(--surface-container);
+    }
+    html ::-webkit-scrollbar,
+    .overflow-auto::-webkit-scrollbar,
+    .overflow-y-auto::-webkit-scrollbar,
+    .overflow-x-auto::-webkit-scrollbar,
+    .overflow-y-scroll::-webkit-scrollbar,
+    .overflow-x-scroll::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+    }
+    html ::-webkit-scrollbar-track,
+    .overflow-auto::-webkit-scrollbar-track,
+    .overflow-y-auto::-webkit-scrollbar-track,
+    .overflow-x-auto::-webkit-scrollbar-track,
+    .overflow-y-scroll::-webkit-scrollbar-track,
+    .overflow-x-scroll::-webkit-scrollbar-track {
+        background: var(--surface-container);
+    }
+    html ::-webkit-scrollbar-thumb,
+    .overflow-auto::-webkit-scrollbar-thumb,
+    .overflow-y-auto::-webkit-scrollbar-thumb,
+    .overflow-x-auto::-webkit-scrollbar-thumb,
+    .overflow-y-scroll::-webkit-scrollbar-thumb,
+    .overflow-x-scroll::-webkit-scrollbar-thumb {
+        background: var(--outline-variant);
+        border-radius: 10px;
+    }
+    html ::-webkit-scrollbar-thumb:hover,
+    .overflow-auto::-webkit-scrollbar-thumb:hover,
+    .overflow-y-auto::-webkit-scrollbar-thumb:hover,
+    .overflow-x-auto::-webkit-scrollbar-thumb:hover {
+        background: var(--outline);
+    }
+    html ::-webkit-scrollbar-corner {
+        background: transparent;
+    }
+    /* Topbar glass effect — translucent over the page background.
+     Uses var(--surface-container) so light mode gets a light glass,
+     dark mode a dark glass. */
+    .topbar-glass {
+        background: color-mix(
+            in srgb,
+            var(--surface-container) 85%,
+            transparent
+        );
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+    }
+    /* Sidebar link sizing. */
+    .sidebar-model-link {
+        font-size: 13px;
+        line-height: 18px;
+    }
+</style>
+{% endblock %} {% block body_attrs %}class="bg-background text-on-background
+antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body %}
+<button
+    id="umbral-admin-mobile-scrim"
+    type="button"
+    class="fixed inset-0 z-40 bg-background/65 backdrop-blur-sm"
+    onclick="umbral.closeSidebar()"
+    aria-label="Close navigation"
+></button>
+
+<!-- ========================================================
+     SIDEBAR  260px fixed left, full height, independent scroll
+     ======================================================== -->
+<aside
+    id="umbral-admin-sidebar"
+    class="fixed left-0 top-0 h-full bg-surface-container border-r border-outline-variant flex flex-col z-50 overflow-y-auto"
+    aria-label="Admin navigation"
+>
+    <!-- Logo area -->
+    <div class="p-md flex items-center gap-sm flex-shrink-0">
+        <div
+            class="w-9 h-9 rounded-lg bg-primary text-on-primary flex items-center justify-center flex-shrink-0"
+        >
+            <i
+                data-lucide="layers"
+                class="w-[18px] h-[18px]"
+            ></i>
+        </div>
+        <div class="sidebar-text min-w-0 flex-1">
+            <h2 class="font-h3 text-h3 text-on-surface leading-none">
+                {{ site_title }}
+            </h2>
+            <p
+                class="sidebar-meta text-[10px] text-outline tracking-widest uppercase mt-0.5 truncate"
+            >
+                {% if site_description %}{{ site_description }}{% else %}v0.0.1{% endif %}
+            </p>
+        </div>
+        <button
+            type="button"
+            class="md:hidden w-8 h-8 flex items-center justify-center rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-all"
+            onclick="umbral.closeSidebar()"
+            aria-label="Close navigation"
+        >
+            <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+    </div>
+
+    <!-- Model search box -->
+    <div class="sidebar-search-wrap px-md mb-md flex-shrink-0">
+        <div class="relative group">
+            <i
+                data-lucide="search"
+                class="absolute left-3 top-1/2 -translate-y-1/2 w-[16px] h-[16px] text-outline pointer-events-none"
+            ></i>
+            <input
+                id="sidebar-search"
+                type="text"
+                placeholder="Search models"
+                oninput="umbral.sidebarFilter(this.value)"
+                class="w-full bg-surface-container-high border border-transparent rounded-xl pl-9 pr-md py-2 text-body-sm text-on-surface focus:outline-none focus:ring-1 focus:ring-outline focus:border-transparent transition-all placeholder:text-outline"
+                aria-label="Filter sidebar models"
+            />
+        </div>
+    </div>
+
+    <!-- Navigation scroll area -->
+    <nav
+        class="flex-1 overflow-y-auto px-sm space-y-md pb-md"
+        id="sidebar-nav"
+        aria-label="Models"
+    >
+        <!-- Pinned dashboard link -->
+        <div id="sidebar-group-core">
+            <p
+                class="sidebar-section-label px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
+            >
+                Core
+            </p>
+            <div class="space-y-1 px-md">
+                <a
+                    href="{{ admin_base }}/?dashboard=1"
+                    class="sidebar-link sidebar-model-link flex items-center gap-2 px-sm py-1.5 rounded-xl border border-transparent {% if active_table == '' %}bg-primary-container text-on-primary-container{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+                    data-model-name="dashboard"
+                    data-sidebar-tooltip="Dashboard"
+                    aria-label="Dashboard"
+                >
+                    <i
+                        data-lucide="layout-dashboard"
+                        class="w-[18px] h-[18px] flex-shrink-0"
+                    ></i>
+                    <span class="sidebar-text truncate">Dashboard</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Per-plugin model groups from AdminRegistry -->
+        {%- for app in apps %}
+        <div class="sidebar-plugin-group" id="sidebar-group-{{ app.plugin }}">
+            <p
+                class="sidebar-section-label px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
+            >
+                {{ app.label }}
+            </p>
+            <div class="space-y-1 px-md">
+                {%- for reg in app.models %}
+                <a
+                    href="{{ admin_base }}/{{ reg.table }}/"
+                    class="sidebar-link sidebar-model-link flex items-center gap-2 px-sm py-1.5 rounded-xl border border-transparent {% if active_table == reg.table %}bg-primary-container text-on-primary-container{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+                    data-model-name="{{ reg.label | lower }}"
+                    data-sidebar-tooltip="{{ reg.label }}"
+                    aria-label="{{ reg.label }}"
+                >
+                    <i
+                        data-lucide="{{ reg.icon }}"
+                        class="w-[18px] h-[18px] flex-shrink-0"
+                    ></i>
+                    <span class="sidebar-text flex-1 truncate">{{ reg.label }}</span>
+                </a>
+                {%- endfor %}
+            </div>
+        </div>
+        {%- endfor %}
+    </nav>
+
+    <!-- Sidebar footer -->
+    <div
+        class="p-md border-t border-outline-variant bg-surface-container-low flex-shrink-0"
+    >
+        <a
+            href="{{ admin_base }}/logout"
+            class="sidebar-link flex items-center gap-3 px-md py-2 rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-body-sm transition-all"
+            data-sidebar-tooltip="Sign out"
+            aria-label="Sign out"
+        >
+            <i data-lucide="log-out" class="w-[18px] h-[18px]"></i>
+            <span class="sidebar-footer-text">Sign out</span>
+        </a>
+    </div>
+</aside>
+
+<!-- ========================================================
+     MAIN WRAPPER — everything to the right of the sidebar
+     ======================================================== -->
+<div id="umbral-admin-main" class="flex-1 flex flex-col min-h-screen min-w-0">
+    <!-- TOPBAR: sticky 56px -->
+    <header
+        id="umbral-admin-topbar"
+        class="sticky top-0 z-30 h-topbar-height topbar-glass border-b border-outline-variant flex items-center justify-between gap-md px-md sm:px-lg"
+        aria-label="Admin top bar"
+    >
+        <div class="flex items-center gap-sm min-w-0">
+            <button
+                id="sidebar-toggle"
+                aria-label="Toggle navigation"
+                aria-expanded="true"
+                type="button"
+                onclick="umbral.toggleSidebar()"
+                class="w-9 h-9 flex items-center justify-center rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-all flex-shrink-0"
+            >
+                <i data-lucide="panel-left" class="w-[18px] h-[18px]"></i>
+            </button>
+        <!-- Breadcrumbs (set by each handler via context variable `breadcrumbs`) -->
+        <nav
+            class="flex items-center gap-xs font-label-md text-label-md min-w-0"
+            aria-label="Breadcrumb"
+        >
+            <a
+                href="{{ admin_base }}/{% if restore_last_path %}?dashboard=1{% endif %}"
+                class="text-outline hover:text-on-surface transition-colors shrink-0"
+                >Home</a
+            >
+            {%- for crumb in breadcrumbs %}
+            <i
+                data-lucide="chevron-right"
+                class="w-[14px] h-[14px] text-outline"
+            ></i>
+            {%- if loop.last %}
+            <span class="text-primary font-semibold">{{ crumb.label }}</span>
+            {%- else %}
+            <a
+                href="{{ crumb.url }}"
+                class="text-outline hover:text-on-surface transition-colors"
+                >{{ crumb.label }}</a
+            >
+            {%- endif %} {%- endfor %}
+        </nav>
+        </div>
+
+        <!-- Center: command palette trigger -->
+        <button
+            id="cmd-palette-trigger"
+            aria-label="Open command palette (Ctrl+K)"
+            class="hidden md:flex bg-surface-container-high border border-transparent px-md py-1.5 rounded-xl items-center gap-xl hover:bg-surface-container-highest transition-colors min-w-[260px]"
+            onclick="
+                htmx.ajax('GET', '{{ admin_base }}/api/palette', {
+                    target: '#umbral-palette-slot',
+                    swap: 'innerHTML',
+                })
+            "
+            type="button"
+        >
+            <div class="flex items-center gap-sm">
+                <i
+                    data-lucide="search"
+                    class="w-[16px] h-[16px] text-outline"
+                ></i>
+                <span class="text-body-sm text-outline"
+                    >Search everything</span
+                >
+            </div>
+            <span
+                class="ml-sm inline-flex items-center gap-1 text-[10px] text-outline"
+                aria-hidden="true"
+            >
+                <kbd
+                    class="rounded-md border border-transparent bg-surface-container-low px-1.5 py-0.5 font-medium text-on-surface-variant"
+                    >Ctrl</kbd
+                >
+                <kbd
+                    class="rounded-md border border-transparent bg-surface-container-low px-1.5 py-0.5 font-medium text-on-surface-variant"
+                    >K</kbd
+                >
+            </span>
+        </button>
+
+        <!-- Right: theme toggle + user menu -->
+        <div class="flex items-center gap-sm sm:gap-md">
+            <!-- Theme toggle — persisted in localStorage under umbral-admin-theme -->
+            <button
+                id="theme-toggle"
+                aria-label="Toggle light/dark theme"
+                type="button"
+                onclick="umbral.toggleTheme()"
+                class="w-9 h-9 flex items-center justify-center rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-all"
+            >
+                <i
+                    data-lucide="sun"
+                    id="theme-icon-light"
+                    class="w-[18px] h-[18px] hidden"
+                ></i>
+                <i
+                    data-lucide="moon"
+                    id="theme-icon-dark"
+                    class="w-[18px] h-[18px]"
+                ></i>
+            </button>
+
+            <div class="hidden sm:block w-px h-6 bg-outline-variant"></div>
+
+            <!-- User menu -->
+            <div
+                class="hidden sm:flex items-center gap-3 cursor-pointer group"
+                role="button"
+                tabindex="0"
+                aria-label="User menu"
+                onclick="umbral.toggleUserMenu()"
+            >
+                <div class="text-right">
+                    <p
+                        class="text-body-sm font-semibold text-on-surface leading-none"
+                    >
+                        {{ user }}
+                    </p>
+                    <p
+                        class="text-[10px] text-outline uppercase tracking-wider mt-0.5"
+                    >
+                        Staff
+                    </p>
+                </div>
+                <!-- Avatar initials circle -->
+                <div
+                    class="w-9 h-9 rounded-lg bg-primary-container flex items-center justify-center border border-outline-variant group-hover:border-primary transition-colors"
+                >
+                    <span
+                        class="font-label-sm text-label-sm text-on-primary-container uppercase"
+                        >{{ user[:2] }}</span
+                    >
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- CONTENT region — overflow-x-hidden so wide tables don't push
+         the entire main area; the table wrapper has overflow-x-auto. -->
+    <main id="umbral-admin-content" class="flex-1 p-md sm:p-lg lg:p-xl overflow-x-hidden">
+        {% block content %}{% endblock %}
+    </main>
+</div>
+<!-- end main wrapper -->
+<div id="umbral-sidebar-tooltip" role="tooltip" aria-hidden="true"></div>
+{% endblock %}

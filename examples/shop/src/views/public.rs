@@ -1,7 +1,7 @@
 //! Public storefront views - anyone can hit these, no auth.
 //!
 //! Storefront pages for catalog and content plugin records. Every
-//! handler hands a minijinja context to `umbra::templates::render`
+//! handler hands a minijinja context to `umbral::templates::render`
 //! and wraps DB / template errors with `internal_error`.
 
 use std::collections::HashMap;
@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use content::models::{ContactMessage, Faq, Note, Post, faq, note, post};
 use ecommerce::models::{Brand, Product, Review, brand, product, review};
 use serde::{Deserialize, Serialize};
-use umbra::forms::Form;
-use umbra::templates::context;
-use umbra::web::{Html, IntoResponse, Json, Path, Query, Redirect, Response, StatusCode};
+use umbral::forms::Form;
+use umbral::templates::context;
+use umbral::web::{Html, IntoResponse, Json, Path, Query, Redirect, Response, StatusCode};
 
 use super::internal_error;
 
@@ -122,7 +122,7 @@ pub async fn home() -> Result<Html<String>, (StatusCode, String)> {
     let featured_count = featured.len();
     let brand_count = brands.len();
 
-    let body = umbra::templates::render(
+    let body = umbral::templates::render(
         "home.html",
         &context!(
             featured,
@@ -148,7 +148,7 @@ pub async fn product_list() -> Result<Html<String>, (StatusCode, String)> {
 
     let product_count = products.len();
 
-    let body = umbra::templates::render("product_list.html", &context!(products, product_count))
+    let body = umbral::templates::render("product_list.html", &context!(products, product_count))
         .map_err(internal_error)?;
     Ok(Html(body))
 }
@@ -161,7 +161,7 @@ pub async fn product_detail(Path(id): Path<i64>) -> Result<Html<String>, (Status
         .map_err(internal_error)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Product {id} not found")))?;
 
-    let body = umbra::templates::render("product_detail.html", &context!(product))
+    let body = umbral::templates::render("product_detail.html", &context!(product))
         .map_err(internal_error)?;
     Ok(Html(body))
 }
@@ -185,7 +185,7 @@ pub async fn post_list() -> Result<Html<String>, (StatusCode, String)> {
 
     let post_count = posts.len();
 
-    let body = umbra::templates::render("posts.html", &context!(posts, featured_posts, post_count))
+    let body = umbral::templates::render("posts.html", &context!(posts, featured_posts, post_count))
         .map_err(internal_error)?;
     Ok(Html(body))
 }
@@ -200,7 +200,7 @@ pub async fn post_detail(Path(slug): Path<String>) -> Result<Html<String>, (Stat
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Post `{slug}` not found")))?;
 
     let body =
-        umbra::templates::render("post_detail.html", &context!(post)).map_err(internal_error)?;
+        umbral::templates::render("post_detail.html", &context!(post)).map_err(internal_error)?;
     Ok(Html(body))
 }
 
@@ -214,7 +214,7 @@ pub async fn faqs() -> Result<Html<String>, (StatusCode, String)> {
 
     let faq_count = faqs.len();
 
-    let body = umbra::templates::render("faqs.html", &context!(faqs, faq_count))
+    let body = umbral::templates::render("faqs.html", &context!(faqs, faq_count))
         .map_err(internal_error)?;
     Ok(Html(body))
 }
@@ -229,7 +229,7 @@ pub async fn contact(
     let sent = query.sent.as_deref() == Some("1");
     let form = ContactMessage::default();
     let errors: HashMap<String, Vec<String>> = HashMap::new();
-    let body = umbra::templates::render("contact.html", &context!(sent, form, errors))
+    let body = umbral::templates::render("contact.html", &context!(sent, form, errors))
         .map_err(internal_error)?;
     Ok(Html(body))
 }

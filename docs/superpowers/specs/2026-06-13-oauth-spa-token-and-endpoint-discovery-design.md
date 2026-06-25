@@ -5,7 +5,7 @@ Status: approved, implementing
 
 ## Problem
 
-`umbra-oauth` today is a browser/session flow: the callback ends in `login_user_id()` (a session cookie) + a 302. That works for a server-rendered app, and — because `umbra-rest`'s auth chain includes `SessionAuthentication` — it already works for a *same-origin* SPA that sends the cookie. Two gaps remain:
+`umbral-oauth` today is a browser/session flow: the callback ends in `login_user_id()` (a session cookie) + a 302. That works for a server-rendered app, and — because `umbral-rest`'s auth chain includes `SessionAuthentication` — it already works for a *same-origin* SPA that sends the cookie. Two gaps remain:
 
 1. **A separate-origin SPA (Vite/Next) can't obtain a bearer token.** It wants `Authorization: Bearer <token>`, and the flow never hands one back.
 2. **The OAuth URLs aren't discoverable.** A client has to hardcode `/oauth/google/login`; there's no machine-readable list of what's configured, and no API-root index that advertises plugin endpoints.
@@ -16,7 +16,7 @@ In scope: (A) token return on login completion for SPAs, (B) an OAuth discovery 
 
 ## A. Token return (SPA login)
 
-Pattern: **redirect-with-token**, reusing `umbra_auth::AuthToken::create_for`.
+Pattern: **redirect-with-token**, reusing `umbral_auth::AuthToken::create_for`.
 
 Flow:
 1. SPA navigates the browser to `GET /oauth/{provider}/login?next=<spa_url>`.
@@ -32,7 +32,7 @@ Security:
 
 `FlowState` gains `return_to: Option<String>` (`#[serde(default)]` for in-flight flows). The callback loads the `AuthUser` by id (`resolve_user` returns the id) to satisfy `create_for(&AuthUser, …)`.
 
-## B. Discovery endpoint (umbra-oauth, zero coupling)
+## B. Discovery endpoint (umbral-oauth, zero coupling)
 
 `GET /oauth/providers` (public, GET, no CSRF) → JSON auto-built from the registered providers + `redirect_base`:
 
@@ -48,10 +48,10 @@ Security:
 
 ## C. Generic Plugin seam + REST API root
 
-- **Core (`umbra-core`):** new `ApiEndpoint { group, name, method, path, label }` (origin-agnostic — relative `path` only), re-exported from the facade. New default trait method `Plugin::api_endpoints(&self) -> Vec<ApiEndpoint> { Vec::new() }`.
+- **Core (`umbral-core`):** new `ApiEndpoint { group, name, method, path, label }` (origin-agnostic — relative `path` only), re-exported from the facade. New default trait method `Plugin::api_endpoints(&self) -> Vec<ApiEndpoint> { Vec::new() }`.
 - **App build:** `App::build()` already walks `sorted_plugins`; collect each `plugin.api_endpoints()` into a core `OnceLock<Vec<ApiEndpoint>>`, exposed via `pub fn registered_api_endpoints()`. (`registered_plugins()` returns only names, so a live-object iteration isn't available at request time — this global is the seam, mirroring the existing model/alias registries.)
-- **umbra-oauth:** implements `api_endpoints()` from the shared descriptor builder.
-- **umbra-rest:** a root handler at `GET {base}/` returns `{ resources, endpoints }` — `resources` = its own registered models, `endpoints` = `registered_api_endpoints()`, each annotated with an absolute `url` joined from the incoming request origin.
+- **umbral-oauth:** implements `api_endpoints()` from the shared descriptor builder.
+- **umbral-rest:** a root handler at `GET {base}/` returns `{ resources, endpoints }` — `resources` = its own registered models, `endpoints` = `registered_api_endpoints()`, each annotated with an absolute `url` joined from the incoming request origin.
 
 This is the dependency-inversion contract: OAuth *declares* endpoints, REST *discovers* them through the trait/global — neither names the other (Cargo's no-circular-dep rule still holds).
 

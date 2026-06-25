@@ -1,0 +1,13 @@
+[package]
+name = "features"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+umbral = { path = "/home/dalmas/E/projects/umbral/crates/umbral" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio", "chrono", "uuid", "json"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }  # on_ready seed + #[tokio::test].
+tracing = "0.1"

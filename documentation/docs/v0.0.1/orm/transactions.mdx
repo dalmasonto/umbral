@@ -12,7 +12,7 @@ A transaction wraps several database statements so they either all commit or all
 ## The `transaction(...)` closure
 
 ```rust
-use umbra::db::transaction;
+use umbral::db::transaction;
 
 let order = transaction(|tx| Box::pin(async move {
     // All three statements join the same transaction.
@@ -29,7 +29,7 @@ let order = transaction(|tx| Box::pin(async move {
 
 `transaction` reads the ambient pool (set by `App::build()`), starts a transaction, runs the closure, and commits on `Ok` or rolls back on `Err`. It returns the closure's `Ok` value on success.
 
-`umbra::transaction_sqlite(pool, ...)` and `umbra::transaction_pg(pool, ...)` are the backend-pinned variants for code that works with an explicit pool (or runs outside `App::build()`).
+`umbral::transaction_sqlite(pool, ...)` and `umbral::transaction_pg(pool, ...)` are the backend-pinned variants for code that works with an explicit pool (or runs outside `App::build()`).
 
 ## Threading the transaction into queries
 
@@ -96,7 +96,7 @@ The closure-based helpers (`transaction`, `transaction_sqlite`, `transaction_pg`
 For manual control, use `begin_sqlite` / `begin_pg` / `begin` to open a transaction and call `tx.commit()` or `tx.rollback()` yourself:
 
 ```rust
-use umbra::db::begin_sqlite;
+use umbral::db::begin_sqlite;
 
 let mut tx = begin_sqlite(&pool).await?;
 Post::objects().on_tx(&mut tx).create(post).await?;
@@ -164,7 +164,7 @@ Wired terminals: `Manager::create`, `Manager::bulk_create`, `QuerySet::update_va
 The safe-by-default posture: opt every wired terminal into transactional behaviour at boot, then opt specific calls out with `.non_atomic()` only where the perf or batching shape demands it.
 
 ```rust
-umbra::App::builder()
+umbral::App::builder()
     .settings(settings)
     .database("default", pool)
     .atomic_transactions(true)   // every write wraps in BEGIN/COMMIT

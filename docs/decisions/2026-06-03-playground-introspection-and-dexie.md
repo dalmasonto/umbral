@@ -2,29 +2,29 @@
 
 **Date:** 2026-06-03
 **Status:** Implemented
-**Scope:** `plugins/umbra-playground/`, `plugins/umbra-openapi/`
+**Scope:** `plugins/umbral-playground/`, `plugins/umbral-openapi/`
 
 ## Context
 
 The playground v1 shipped a working request/response loop over a localStorage history. Two follow-on asks landed at once: emulate the DRF browsable API (show model fields with their FKs, choices, multichoices, filter affordances) and replace localStorage with Dexie/IndexedDB for persistence.
 
-These two changes are independent in code but share one thing: both surface latent gaps in the umbra-rest / umbra-openapi data contract. The introspection feature is only as rich as the OpenAPI document. The Dexie work is unblocked the moment we accept a small async-boundary cost.
+These two changes are independent in code but share one thing: both surface latent gaps in the umbral-rest / umbral-openapi data contract. The introspection feature is only as rich as the OpenAPI document. The Dexie work is unblocked the moment we accept a small async-boundary cost.
 
 ## Decisions
 
-### 1. Extend `umbra-openapi` to emit choices + maxLength + default + readOnly + vendor extensions
+### 1. Extend `umbral-openapi` to emit choices + maxLength + default + readOnly + vendor extensions
 
-The `Column` struct (in `umbra-core/migrate.rs`) carries `choices`, `choice_labels`, `fk_target`, `max_length`, `default`, `noedit`, `is_string_repr`, and `is_multichoice` — but `column_schema()` in `umbra-openapi` was only emitting `type` + `format` + `nullable`. Surfacing the rest unlocks substantial Swagger UI and playground value without changing any other layer.
+The `Column` struct (in `umbral-core/migrate.rs`) carries `choices`, `choice_labels`, `fk_target`, `max_length`, `default`, `noedit`, `is_string_repr`, and `is_multichoice` — but `column_schema()` in `umbral-openapi` was only emitting `type` + `format` + `nullable`. Surfacing the rest unlocks substantial Swagger UI and playground value without changing any other layer.
 
-Choice fields (`enum`), `maxLength`, `default`, and `readOnly` use **standard** OpenAPI keys. FK target, multichoice, `__str__` marker, and per-position choice labels use **`x-umbra-*` vendor extensions**, which the OpenAPI 3.0 spec explicitly reserves for tool-specific data. Choosing extensions here (rather than re-mapping FKs to a `$ref`) was deliberate: a future pass can promote FK to a proper `$ref` without breaking the playground, but the vendor extension is the right interim signal.
+Choice fields (`enum`), `maxLength`, `default`, and `readOnly` use **standard** OpenAPI keys. FK target, multichoice, `__str__` marker, and per-position choice labels use **`x-umbral-*` vendor extensions**, which the OpenAPI 3.0 spec explicitly reserves for tool-specific data. Choosing extensions here (rather than re-mapping FKs to a `$ref`) was deliberate: a future pass can promote FK to a proper `$ref` without breaking the playground, but the vendor extension is the right interim signal.
 
-Multichoice columns deliberately **do not** emit a flat `enum`: the wire value is a CSV subset of the choices, not one choice. Emitting an enum there would mislead generated clients. Instead, `x-umbra-multichoice: true` plus `x-umbra-choices: [...]` lets aware tooling render the right widget.
+Multichoice columns deliberately **do not** emit a flat `enum`: the wire value is a CSV subset of the choices, not one choice. Emitting an enum there would mislead generated clients. Instead, `x-umbral-multichoice: true` plus `x-umbral-choices: [...]` lets aware tooling render the right widget.
 
-Six unit tests in `plugins/umbra-openapi/src/lib.rs` pin the shape per column kind (plain text, choices, multichoice, FK, noedit, maxLength+default).
+Six unit tests in `plugins/umbral-openapi/src/lib.rs` pin the shape per column kind (plain text, choices, multichoice, FK, noedit, maxLength+default).
 
 ### 2. The playground infers filter affordances from the response item schema
 
-umbra-rest's runtime filters (`?status=draft`, `?title__contains=foo`) are not declared in OpenAPI today (see `bugs/improvements.md` #1). Rather than block the playground feature on that bigger fix, the frontend infers what's filterable by walking the **list response item schema**:
+umbral-rest's runtime filters (`?status=draft`, `?title__contains=foo`) are not declared in OpenAPI today (see `bugs/improvements.md` #1). Rather than block the playground feature on that bigger fix, the frontend infers what's filterable by walking the **list response item schema**:
 
 - `listItemSchema()` in `lib/openapiSchema.ts` recognises the `{results: [Item], count}` envelope, resolves `Item` through `components.schemas`, and returns the introspected fields.
 - `RequestBuilder` renders a "Suggested filters" panel above the Params table whenever the method is GET and a list item schema is detected. Each scalar field becomes a row of clickable chips: `+ = eq`, `+ contains`, `+ icontains`, etc. — filtered by the field's type and enum-ness.
@@ -48,7 +48,7 @@ The interface change is one boundary: `loadHistory()` went from sync to `Promise
 
 ### 5. One-shot localStorage → Dexie migration
 
-`migrateFromLocalStorage()` runs at the top of every `loadHistory()` call but is gated on `db.history.count() === 0`. On the first run for an existing user, it reads the legacy `umbra-playground:history:v1` blob, bulkAdds the records, and removes the localStorage key. Subsequent loads short-circuit (legacy key absent). This is best-effort: if the legacy blob is unparseable, drop it; the in-memory history still works.
+`migrateFromLocalStorage()` runs at the top of every `loadHistory()` call but is gated on `db.history.count() === 0`. On the first run for an existing user, it reads the legacy `umbral-playground:history:v1` blob, bulkAdds the records, and removes the localStorage key. Subsequent loads short-circuit (legacy key absent). This is best-effort: if the legacy blob is unparseable, drop it; the in-memory history still works.
 
 ## Consequences
 
@@ -59,7 +59,7 @@ The interface change is one boundary: `loadHistory()` went from sync to `Promise
 
 ## Things deliberately deferred
 
-- **Filter parameter emission in umbra-openapi.** The frontend covers the gap for now. Proper fix requires `RestPlugin` to publish per-resource filter config to `OpenApiPlugin` — a new plugin-to-plugin seam that deserves its own spec.
+- **Filter parameter emission in umbral-openapi.** The frontend covers the gap for now. Proper fix requires `RestPlugin` to publish per-resource filter config to `OpenApiPlugin` — a new plugin-to-plugin seam that deserves its own spec.
 - **History click-to-replay.** Logged as improvement #7.
 - **Total history record cap.** Per-op cap survives the migration; a global cap (improvement #11) is the next obvious eviction tightening.
 - **Nested schema drill-down.** `→ ProfileRef` shows the target name; clicking through is improvement #8.

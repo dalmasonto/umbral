@@ -12,7 +12,7 @@ Stream a model's create / update / delete to the browser with zero polling — t
 `RealtimePlugin::expose::<T>(spec)` turns ORM model changes into real-time events. It wraps the lower-level `on_model` signal bridge with two things you'd otherwise hand-roll: a **field projection** (so secrets never leak) and **group routing** (static or per-row).
 
 ```rust
-use umbra_realtime::{Expose, RealtimePlugin};
+use umbral_realtime::{Expose, RealtimePlugin};
 
 RealtimePlugin::new()
     .expose::<Post>(
@@ -94,7 +94,7 @@ If you'd rather not put any model data on the wire at all, drop the whole list a
 By default all three of `Created`, `Updated`, `Deleted` are broadcast. Restrict them with `.actions(...)`:
 
 ```rust
-use umbra_realtime::{Expose, ModelAction, RealtimePlugin};
+use umbral_realtime::{Expose, ModelAction, RealtimePlugin};
 
 RealtimePlugin::new()
     .expose::<Post>(
@@ -106,12 +106,12 @@ RealtimePlugin::new()
 
 ## Subscribing from the browser
 
-Use `umbra.realtime.model(table, handlers, { group })`. It's sugar over `subscribe` that wires the `created` / `updated` / `deleted` event names for you. **`group` is required** — name the group you exposed to; there's no magic default:
+Use `umbral.realtime.model(table, handlers, { group })`. It's sugar over `subscribe` that wires the `created` / `updated` / `deleted` event names for you. **`group` is required** — name the group you exposed to; there's no magic default:
 
 ```html
 <script src="/realtime/client.js"></script>
 <script>
-  umbra.realtime.model("post", {
+  umbral.realtime.model("post", {
     created: (row) => addPostToList(row),
     updated: (row) => updatePostInList(row),
     deleted: (row) => removePostFromList(row.id),
@@ -122,7 +122,7 @@ Use `umbra.realtime.model(table, handlers, { group })`. It's sugar over `subscri
 With the id-only default, `row` is just `{ id }` — the cue to refetch:
 
 ```js
-umbra.realtime.model("post", {
+umbral.realtime.model("post", {
   updated: (row) => refetchPost(row.id),  // re-load through your authorized API
 }, { group: "public:posts" });
 ```
@@ -130,7 +130,7 @@ umbra.realtime.model("post", {
 For a per-row group exposed with `to_group_with`, subscribe to the specific group:
 
 ```js
-umbra.realtime.model("post", {
+umbral.realtime.model("post", {
   updated: (row) => render(row),
 }, { group: "post:42" });
 ```
@@ -140,7 +140,7 @@ umbra.realtime.model("post", {
 `expose` is the safe, projected path. If you need full control — push to a user, transform the payload, fan out to several targets — use the raw signal bridge directly. It hands your handler a `ModelEvent` for every change and lets you do anything:
 
 ```rust
-use umbra_realtime::{ModelAction, ModelEvent, Realtime, RealtimePlugin};
+use umbral_realtime::{ModelAction, ModelEvent, Realtime, RealtimePlugin};
 
 RealtimePlugin::new()
     .on_model::<Post, _, _>(|ev: ModelEvent| async move {

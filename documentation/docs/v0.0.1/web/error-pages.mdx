@@ -5,12 +5,12 @@ sidebar_position: 2
 icon: alert-triangle
 ---
 
-In Django you drop a `404.html` or `500.html` in your templates dir and the framework picks it up. umbra ships the same shape - two builder methods, both opt-in, both pointing at templates the existing engine renders. Out of the box, umbra also ships its own Tailwind-styled default pages that fire automatically when you haven't provided your own.
+In Django you drop a `404.html` or `500.html` in your templates dir and the framework picks it up. umbral ships the same shape - two builder methods, both opt-in, both pointing at templates the existing engine renders. Out of the box, umbral also ships its own Tailwind-styled default pages that fire automatically when you haven't provided your own.
 
 ## Quickstart
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 let app = App::builder()
     .templates_dir("templates")
@@ -24,7 +24,7 @@ Any path that doesn't match a route renders `404.html`; any handler that panics 
 
 ## Default error pages
 
-If you don't call `.not_found_template(...)` or `.server_error_template(...)`, umbra renders its own built-in pages. They use inline Tailwind utility classes and degrade gracefully when Tailwind isn't loaded - the HTML structure is functional without any CSS.
+If you don't call `.not_found_template(...)` or `.server_error_template(...)`, umbral renders its own built-in pages. They use inline Tailwind utility classes and degrade gracefully when Tailwind isn't loaded - the HTML structure is functional without any CSS.
 
 The default pages activate automatically. To opt out and revert to axum's bare behaviour (plain-text "Not Found" and empty 500 bodies):
 
@@ -62,14 +62,14 @@ The hook is **synchronous** and runs on the error path before the response is as
 
 ### Panic safety
 
-umbra wraps the entire router in `tower_http::catch_panic::CatchPanicLayer`. A handler that panics produces a graceful 500 response instead of aborting the connection. The panic message is logged via `tracing::error!` and (in dev mode) surfaced in the page body.
+umbral wraps the entire router in `tower_http::catch_panic::CatchPanicLayer`. A handler that panics produces a graceful 500 response instead of aborting the connection. The panic message is logged via `tracing::error!` and (in dev mode) surfaced in the page body.
 
 The panic layer is installed whenever:
 - A user-supplied `server_error_template` is set, OR
 - Default error pages are enabled (the default), OR
 - An `on_server_error` hook is registered.
 
-In other words: if you use umbra's defaults, you get panic safety for free.
+In other words: if you use umbral's defaults, you get panic safety for free.
 
 ## Writing the templates
 
@@ -119,15 +119,15 @@ When `settings.environment` is `Dev` (the default), the 500 template receives ex
 
 In `Prod` (or `Test`) mode all four variables are empty / false - the template's `{% if dev_mode %}` block collapses to nothing, so no internal detail leaks to end users.
 
-Set the environment in `umbra.toml` or via the environment variable:
+Set the environment in `umbral.toml` or via the environment variable:
 
 ```toml
-# umbra.toml
+# umbral.toml
 environment = "Prod"
 ```
 
 ```bash
-UMBRA_ENVIRONMENT=Prod cargo run
+UMBRAL_ENVIRONMENT=Prod cargo run
 ```
 
 ## What gets caught
@@ -146,7 +146,7 @@ struct AppError(anyhow::Error);
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         // Optionally fire the hook manually for Err paths:
-        umbra_core::errors::fire_server_error_hook(
+        umbral_core::errors::fire_server_error_hook(
             &Some(my_hook.clone()),
             &self.0.to_string(),
             "/",
@@ -161,7 +161,7 @@ impl IntoResponse for AppError {
 Use `server_error_template` for the **unexpected** path (panic = bug), and `AppError`/`IntoResponse` for **expected** errors that flow through `?`.
 
 <Callout type="info">
-**Why no context on 500 in prod?** Exposing panic messages to the browser leaks internals and occasionally credentials (e.g. a panic in a SQL query string). The umbra default keeps the message in logs only and exposes it only in dev mode. If you want to display a request ID or correlation token in prod, generate it in middleware and put it in a response header - then let your `500.html` reference it.
+**Why no context on 500 in prod?** Exposing panic messages to the browser leaks internals and occasionally credentials (e.g. a panic in a SQL query string). The umbral default keeps the message in logs only and exposes it only in dev mode. If you want to display a request ID or correlation token in prod, generate it in middleware and put it in a response header - then let your `500.html` reference it.
 </Callout>
 
 ## Composing with the trailing-slash redirect
@@ -179,7 +179,7 @@ If neither form matches, the 404 template fires. One consistent 404 page across 
 `.error_template(status, "name.html")` registers a styled page for any status code a handler returns - the same treatment 404/500 get. When a handler returns `Err((status, message))` (a bare, non-HTML error response with that status), the template renders in its place, **preserving the status code**:
 
 ```rust
-use umbra::web::StatusCode;
+use umbral::web::StatusCode;
 
 App::builder()
     .error_template(StatusCode::TOO_MANY_REQUESTS, "429.html")

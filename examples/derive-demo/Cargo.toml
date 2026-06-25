@@ -1,35 +1,35 @@
 [package]
-name = "umbra-derive-demo"
+name = "umbral-derive-demo"
 version = "0.1.0"
 edition = "2024"
-description = "Standalone umbra example: #[derive(Model)] on a custom user-defined model, served over HTTP."
+description = "Standalone umbral example: #[derive(Model)] on a custom user-defined model, served over HTTP."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-umbra = { path = "../../crates/umbra" }
+umbral = { path = "../../crates/umbral" }
 # REST plugin: auto-generates JSON CRUD over every registered model.
 # Same Article data, two surfaces (HTML + JSON), zero per-model
 # serializer code.
-umbra-rest = { path = "../../plugins/umbra-rest" }
-umbra-openapi = { path = "../../plugins/umbra-openapi" }
-umbra-playground = { path = "../../plugins/umbra-playground" }
-umbra-admin = {path = "../../plugins/umbra-admin"}
-umbra-auth = {path = "../../plugins/umbra-auth"}
-umbra-sessions = {path = "../../plugins/umbra-sessions"}
+umbral-rest = { path = "../../plugins/umbral-rest" }
+umbral-openapi = { path = "../../plugins/umbral-openapi" }
+umbral-playground = { path = "../../plugins/umbral-playground" }
+umbral-admin = {path = "../../plugins/umbral-admin"}
+umbral-auth = {path = "../../plugins/umbral-auth"}
+umbral-sessions = {path = "../../plugins/umbral-sessions"}
 # RBAC tables + has_perm + permission_required layer. Registered here
 # so the six permission models (Group, Permission, etc.) appear in the
 # admin sidebar under their own bucket.
-umbra-permissions = {path = "../../plugins/umbra-permissions"}
-# umbra-cli's library surface exposes the `dispatch(app)` entry point
+umbral-permissions = {path = "../../plugins/umbral-permissions"}
+# umbral-cli's library surface exposes the `dispatch(app)` entry point
 # that routes argv to plugin-contributed subcommands (createsuperuser
-# from umbra-auth, etc.) or falls through to the built-in `serve` /
+# from umbral-auth, etc.) or falls through to the built-in `serve` /
 # `migrate` / `makemigrations` set.
-umbra-cli = { path = "../../crates/umbra-cli" }
+umbral-cli = { path = "../../crates/umbral-cli" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 # `App::serve` logs the bound address through `tracing::info!`. Installing a
 # subscriber here turns that into visible stdout so an operator can see the
-# server is up. Mirrors the choice in umbra-cli for the same reason.
+# server is up. Mirrors the choice in umbral-cli for the same reason.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

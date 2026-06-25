@@ -6,7 +6,7 @@ icon: git-branch
 tags: [rest, versioning, api]
 ---
 
-API versioning lets one deployment serve several wire contracts at once — `v1` for old clients, `v2` for new ones — without forking the app. umbra-rest ports Django REST Framework's two most common versioning classes.
+API versioning lets one deployment serve several wire contracts at once — `v1` for old clients, `v2` for new ones — without forking the app. umbral-rest ports Django REST Framework's two most common versioning classes.
 
 Versioning is **opt-in and off by default**. A `RestPlugin` with no `.versioning(...)` call serves the unversioned API exactly as before: routes mount at `/api/<table>/`, no version is required, and `RequestContext::version` is always `None`.
 
@@ -24,7 +24,7 @@ Once resolved, the version is exposed on the request context (`RequestContext::v
 A request to a version that isn't in `allowed_versions` matches **no route** → **404** (DRF's `URLPathVersioning` behaviour). The version is **required** in the path once this scheme is on — there is no unversioned `/api/<table>/` fallback.
 
 ```rust
-use umbra_rest::{RestPlugin, VersioningConfig, VersioningScheme};
+use umbral_rest::{RestPlugin, VersioningConfig, VersioningScheme};
 
 RestPlugin::default().versioning(
     VersioningConfig::new(VersioningScheme::url_path())
@@ -46,7 +46,7 @@ Accept: application/json; version=v2
 An absent version falls back to `default_version`; a version outside `allowed_versions` is rejected with **406 Not Acceptable** (DRF's `AcceptHeaderVersioning`).
 
 ```rust
-use umbra_rest::{RestPlugin, VersioningConfig, VersioningScheme};
+use umbral_rest::{RestPlugin, VersioningConfig, VersioningScheme};
 
 RestPlugin::default().versioning(
     VersioningConfig::new(VersioningScheme::accept_header())

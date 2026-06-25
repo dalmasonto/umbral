@@ -10,7 +10,7 @@
 
 Two things, joined at the hip:
 
-- **`DatabaseBackend`**: the trait that abstracts dialect differences (type mapping, identifier quoting, `RETURNING` support, upsert syntax) over the top of sea-query (dialects) and sqlx (drivers). The backend is the bridge between umbra's column metadata and what the database can actually do.
+- **`DatabaseBackend`**: the trait that abstracts dialect differences (type mapping, identifier quoting, `RETURNING` support, upsert syntax) over the top of sea-query (dialects) and sqlx (drivers). The backend is the bridge between umbral's column metadata and what the database can actually do.
 - **The system check**: a boot-time validation pass that walks every registered model, plugin, and route, and fails loudly with a clear message if anything is incompatible with the active backend. Examples: a model uses `ArrayCol` on SQLite; two plugins both want to mount at `/auth`; a FK targets a non-existent model.
 
 The whole spec exists to move classes of bug from runtime to startup. The cost is some boot-time work; the win is "you cannot deploy a configuration that would fail at query time."
@@ -44,7 +44,7 @@ pub enum BackendFeature {
 }
 ```
 
-The umbra-shipped backends:
+The umbral-shipped backends:
 
 | Backend | `name()` | sea-query dialect | What's special |
 |---|---|---|---|
@@ -215,7 +215,7 @@ The QuerySet code uses this for `create()`. Plugins that want to use Postgres-sp
 
 ## Trade-offs and alternatives considered
 
-**One `DatabaseBackend` trait vs separate traits per concern (`Dialect`, `Quoting`, `UpsertRenderer`).** Splitting would let alternate backends mix-and-match implementations, but in practice a backend is a unit and umbra ships exactly two. A single trait keeps the type bounds where backends are passed around simple.
+**One `DatabaseBackend` trait vs separate traits per concern (`Dialect`, `Quoting`, `UpsertRenderer`).** Splitting would let alternate backends mix-and-match implementations, but in practice a backend is a unit and umbral ships exactly two. A single trait keeps the type bounds where backends are passed around simple.
 
 **`BackendFeature` enum vs duck-typed `cfg(postgres)`.** A typed enum makes the supported set queryable at runtime, supports plugin code that needs runtime branching, and surfaces in the system check as a structured value. `cfg(postgres)` would be compile-time only and force the framework to ship two builds. Runtime branching wins on flexibility; the perf cost of one branch on a backend method is negligible.
 
@@ -223,7 +223,7 @@ The QuerySet code uses this for `create()`. Plugins that want to use Postgres-sp
 
 **Errors-vs-warnings line.** Errors block boot. Warnings only log. The default is `Error`; warnings are reserved for things like "you used `null=True` but never write NULL anywhere," which are advisory but not breaking. Plugins use `Warning` sparingly so the log doesn't become noise.
 
-**Should backends live in `umbra-core` or a separate `umbra-backends` crate.** Today: in `umbra-core`. The two backends are inherently part of "what's a query"; carving them out adds a crate boundary that pays for nothing. Revisit if/when a non-Postgres-non-SQLite backend lands.
+**Should backends live in `umbral-core` or a separate `umbral-backends` crate.** Today: in `umbral-core`. The two backends are inherently part of "what's a query"; carving them out adds a crate boundary that pays for nothing. Revisit if/when a non-Postgres-non-SQLite backend lands.
 
 ## Open questions
 

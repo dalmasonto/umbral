@@ -14,12 +14,12 @@
 
 ## File Structure
 
-- **`crates/umbra-core/Cargo.toml`** — add the `syntect` dependency.
-- **`crates/umbra-core/src/templates.rs`** — all framework logic: the lazy `SyntaxSet`, `highlight_code_block`/`wrap_code_block` helpers, the rewritten `render_markdown`, `highlight_css()`, and the `highlight_styles()` global registration. (One file: highlighting is one cohesive concern living next to the filter it extends.)
-- **`crates/umbra/src/lib.rs`** — re-export `highlight_css` from the `umbra::templates` facade module.
-- **`umbra_website/templates/base.html`** — emit `{{ highlight_styles() }}` once in `<head>`.
-- **`umbra_website/static/js/md-enhance.js`** — add `enhanceTables(root)` (wrap `<table>` in a `.md-table` frame), called in the existing `[data-md]` root loop.
-- **`umbra_website/static/css/md-enhance.css`** — add the `.md-table` styles and a `border-radius` on `.md-img`.
+- **`crates/umbral-core/Cargo.toml`** — add the `syntect` dependency.
+- **`crates/umbral-core/src/templates.rs`** — all framework logic: the lazy `SyntaxSet`, `highlight_code_block`/`wrap_code_block` helpers, the rewritten `render_markdown`, `highlight_css()`, and the `highlight_styles()` global registration. (One file: highlighting is one cohesive concern living next to the filter it extends.)
+- **`crates/umbral/src/lib.rs`** — re-export `highlight_css` from the `umbral::templates` facade module.
+- **`umbral_website/templates/base.html`** — emit `{{ highlight_styles() }}` once in `<head>`.
+- **`umbral_website/static/js/md-enhance.js`** — add `enhanceTables(root)` (wrap `<table>` in a `.md-table` frame), called in the existing `[data-md]` root loop.
+- **`umbral_website/static/css/md-enhance.css`** — add the `.md-table` styles and a `border-radius` on `.md-img`.
 - **`documentation/docs/v0.0.1/web/markdown-syntax-highlighting.mdx`** — the user-facing doc page.
 
 All commands in this plan run from the framework workspace root `crates/` unless a path says otherwise. The website is a separate cargo project and is verified last.
@@ -29,12 +29,12 @@ All commands in this plan run from the framework workspace root `crates/` unless
 ### Task 1: Add syntect, lazy syntax/theme assets, and `highlight_css()`
 
 **Files:**
-- Modify: `crates/umbra-core/Cargo.toml`
-- Modify: `crates/umbra-core/src/templates.rs` (add imports + helpers near `render_markdown`, ~line 423; add test in `mod tests`, ~line 952)
+- Modify: `crates/umbral-core/Cargo.toml`
+- Modify: `crates/umbral-core/src/templates.rs` (add imports + helpers near `render_markdown`, ~line 423; add test in `mod tests`, ~line 952)
 
 - [ ] **Step 1: Write the failing test**
 
-Add to the `#[cfg(test)] mod tests` block in `crates/umbra-core/src/templates.rs`:
+Add to the `#[cfg(test)] mod tests` block in `crates/umbral-core/src/templates.rs`:
 
 ```rust
 #[test]
@@ -47,12 +47,12 @@ fn highlight_css_contains_hl_rules() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p umbra-core highlight_css_contains_hl_rules`
+Run: `cargo test -p umbral-core highlight_css_contains_hl_rules`
 Expected: FAIL — compile error, `cannot find function highlight_css in this scope`.
 
 - [ ] **Step 3: Add the syntect dependency**
 
-In `crates/umbra-core/Cargo.toml`, under `[dependencies]`, next to the existing `pulldown-cmark` / `ammonia` lines:
+In `crates/umbral-core/Cargo.toml`, under `[dependencies]`, next to the existing `pulldown-cmark` / `ammonia` lines:
 
 ```toml
 # syntect: server-side syntax highlighting for fenced code blocks in the
@@ -64,7 +64,7 @@ syntect = { version = "5", default-features = false, features = ["default-fancy"
 
 - [ ] **Step 4: Add imports + lazy assets + `highlight_css()`**
 
-At the top of `crates/umbra-core/src/templates.rs`, add to the existing `use` block (or a new one):
+At the top of `crates/umbral-core/src/templates.rs`, add to the existing `use` block (or a new one):
 
 ```rust
 use std::sync::OnceLock;
@@ -118,15 +118,15 @@ pub fn highlight_css() -> &'static str {
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p umbra-core highlight_css_contains_hl_rules`
+Run: `cargo test -p umbral-core highlight_css_contains_hl_rules`
 Expected: PASS. (First run recompiles with syntect — may take a minute.)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates
+cd /home/dalmas/E/projects/umbral/crates
 cargo fmt
-git add umbra-core/Cargo.toml umbra-core/Cargo.lock umbra-core/src/templates.rs
+git add umbral-core/Cargo.toml umbral-core/Cargo.lock umbral-core/src/templates.rs
 git commit -m "feat(templates): generate base16-ocean.dark highlight CSS via syntect"
 ```
 
@@ -137,11 +137,11 @@ git commit -m "feat(templates): generate base16-ocean.dark highlight CSS via syn
 ### Task 2: Highlight fenced code blocks in `render_markdown`
 
 **Files:**
-- Modify: `crates/umbra-core/src/templates.rs` (add `highlight_code_block` + `wrap_code_block` helpers; rewrite `render_markdown` body, ~line 423–437; add tests in `mod tests`)
+- Modify: `crates/umbral-core/src/templates.rs` (add `highlight_code_block` + `wrap_code_block` helpers; rewrite `render_markdown` body, ~line 423–437; add tests in `mod tests`)
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `#[cfg(test)] mod tests` in `crates/umbra-core/src/templates.rs`:
+Add to `#[cfg(test)] mod tests` in `crates/umbral-core/src/templates.rs`:
 
 ```rust
 #[test]
@@ -197,12 +197,12 @@ fn unknown_and_plain_fences_do_not_panic() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p umbra-core fenced_rust_block_gets_syntect_token_spans`
+Run: `cargo test -p umbral-core fenced_rust_block_gets_syntect_token_spans`
 Expected: FAIL — the current `render_markdown` emits a plain class-stripped `<pre><code>`, so `language-rust` / `hl-` are absent.
 
 - [ ] **Step 3: Add the highlighting helpers**
 
-Below `highlight_css` (still above `render_markdown`) in `crates/umbra-core/src/templates.rs`:
+Below `highlight_css` (still above `render_markdown`) in `crates/umbral-core/src/templates.rs`:
 
 ```rust
 /// Render one fenced code block to safe HTML. `lang` is the fence info
@@ -264,7 +264,7 @@ fn wrap_code_block(lang: Option<&str>, inner: &str) -> String {
 
 - [ ] **Step 4: Rewrite `render_markdown`**
 
-Replace the entire body of `pub fn render_markdown` (currently `crates/umbra-core/src/templates.rs:423-437`) with:
+Replace the entire body of `pub fn render_markdown` (currently `crates/umbral-core/src/templates.rs:423-437`) with:
 
 ```rust
 pub fn render_markdown(input: &str) -> String {
@@ -327,30 +327,30 @@ pub fn render_markdown(input: &str) -> String {
 
 - [ ] **Step 5: Run all the markdown tests to verify they pass**
 
-Run: `cargo test -p umbra-core markdown` then `cargo test -p umbra-core fenced_ -- --nocapture` and the rest:
+Run: `cargo test -p umbral-core markdown` then `cargo test -p umbral-core fenced_ -- --nocapture` and the rest:
 
 ```bash
-cargo test -p umbra-core fenced_rust_block_gets_syntect_token_spans
-cargo test -p umbra-core script_in_code_fence_is_escaped_not_executed
-cargo test -p umbra-core prose_script_is_still_stripped
-cargo test -p umbra-core markdown_allows_class_but_not_style
-cargo test -p umbra-core unknown_and_plain_fences_do_not_panic
+cargo test -p umbral-core fenced_rust_block_gets_syntect_token_spans
+cargo test -p umbral-core script_in_code_fence_is_escaped_not_executed
+cargo test -p umbral-core prose_script_is_still_stripped
+cargo test -p umbral-core markdown_allows_class_but_not_style
+cargo test -p umbral-core unknown_and_plain_fences_do_not_panic
 ```
 
 Expected: all PASS.
 
-- [ ] **Step 6: Verify the rest of umbra-core didn't regress**
+- [ ] **Step 6: Verify the rest of umbral-core didn't regress**
 
-Run: `cargo test -p umbra-core`
+Run: `cargo test -p umbral-core`
 Expected: PASS (no other markdown/template test broke).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates
+cd /home/dalmas/E/projects/umbral/crates
 cargo fmt
-cargo clippy -p umbra-core --all-targets
-git add umbra-core/src/templates.rs
+cargo clippy -p umbral-core --all-targets
+git add umbral-core/src/templates.rs
 git commit -m "feat(templates): highlight fenced code blocks server-side, safely
 
 Rewrite render_markdown to replace each code block with syntect-rendered
@@ -364,12 +364,12 @@ Implements the slice deferred at templates.rs:249."
 ### Task 3: Expose `highlight_styles()` template global + facade re-export
 
 **Files:**
-- Modify: `crates/umbra-core/src/templates.rs` (add `register_highlight_styles_function`; call it in `build_env` ~line 568; add test in `mod tests`)
-- Modify: `crates/umbra/src/lib.rs:438` (facade re-export)
+- Modify: `crates/umbral-core/src/templates.rs` (add `register_highlight_styles_function`; call it in `build_env` ~line 568; add test in `mod tests`)
+- Modify: `crates/umbral/src/lib.rs:438` (facade re-export)
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `#[cfg(test)] mod tests` in `crates/umbra-core/src/templates.rs`:
+Add to `#[cfg(test)] mod tests` in `crates/umbral-core/src/templates.rs`:
 
 ```rust
 #[test]
@@ -391,12 +391,12 @@ fn highlight_styles_global_emits_a_style_block() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p umbra-core highlight_styles_global_emits_a_style_block`
+Run: `cargo test -p umbral-core highlight_styles_global_emits_a_style_block`
 Expected: FAIL — `cannot find function register_highlight_styles_function`.
 
 - [ ] **Step 3: Add the registration function**
 
-In `crates/umbra-core/src/templates.rs`, next to `register_markdown_filter` (~line 331), add:
+In `crates/umbral-core/src/templates.rs`, next to `register_markdown_filter` (~line 331), add:
 
 ```rust
 /// Register the `{{ highlight_styles() }}` global: emits the generated
@@ -413,7 +413,7 @@ fn register_highlight_styles_function(env: &mut Environment<'static>) {
 
 - [ ] **Step 4: Wire it into `build_env`**
 
-In `crates/umbra-core/src/templates.rs`, in `build_env` (alongside the other `register_*` calls, ~line 568, right after `register_img_filter(&mut env);`), add:
+In `crates/umbral-core/src/templates.rs`, in `build_env` (alongside the other `register_*` calls, ~line 568, right after `register_img_filter(&mut env);`), add:
 
 ```rust
     // `{{ highlight_styles() }}` — the syntect token stylesheet for
@@ -423,15 +423,15 @@ In `crates/umbra-core/src/templates.rs`, in `build_env` (alongside the other `re
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p umbra-core highlight_styles_global_emits_a_style_block`
+Run: `cargo test -p umbral-core highlight_styles_global_emits_a_style_block`
 Expected: PASS.
 
 - [ ] **Step 6: Re-export `highlight_css` from the facade**
 
-In `crates/umbra/src/lib.rs`, edit the `pub use umbra_core::templates::{ … }` list (line 438) to add `highlight_css`:
+In `crates/umbral/src/lib.rs`, edit the `pub use umbral_core::templates::{ … }` list (line 438) to add `highlight_css`:
 
 ```rust
-    pub use umbra_core::templates::{
+    pub use umbral_core::templates::{
         CURRENT_CSRF, CURRENT_USER, TemplateError, TemplateRegistrar, current_csrf, highlight_css,
         merge_ambient_context, merge_ambient_value, render, resolve_static_url, with_current_csrf,
         with_current_user,
@@ -443,16 +443,16 @@ In `crates/umbra/src/lib.rs`, edit the `pub use umbra_core::templates::{ … }` 
 Run from `crates/`:
 ```bash
 cargo build
-cargo test -p umbra-core
+cargo test -p umbral-core
 ```
-Expected: PASS (facade compiles with the new re-export; all umbra-core tests green).
+Expected: PASS (facade compiles with the new re-export; all umbral-core tests green).
 
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbra/crates
+cd /home/dalmas/E/projects/umbral/crates
 cargo fmt
-git add umbra-core/src/templates.rs umbra/src/lib.rs
+git add umbral-core/src/templates.rs umbral/src/lib.rs
 git commit -m "feat(templates): add highlight_styles() global + facade highlight_css"
 ```
 
@@ -461,11 +461,11 @@ git commit -m "feat(templates): add highlight_styles() global + facade highlight
 ### Task 4: Inline the stylesheet in the website's base template
 
 **Files:**
-- Modify: `umbra_website/templates/base.html` (add `{{ highlight_styles() }}` in `<head>`, after the `md-enhance.css` link at line 18)
+- Modify: `umbral_website/templates/base.html` (add `{{ highlight_styles() }}` in `<head>`, after the `md-enhance.css` link at line 18)
 
 - [ ] **Step 1: Add the global to `<head>`**
 
-In `umbra_website/templates/base.html`, immediately after line 18 (`<link rel="stylesheet" href="/static/css/md-enhance.css">`), add:
+In `umbral_website/templates/base.html`, immediately after line 18 (`<link rel="stylesheet" href="/static/css/md-enhance.css">`), add:
 
 ```html
   {# Syntect token colors for server-highlighted fenced code. Emitted once
@@ -477,12 +477,12 @@ In `umbra_website/templates/base.html`, immediately after line 18 (`<link rel="s
 
 - [ ] **Step 2: Let the dev server rebuild, then verify the stylesheet is present**
 
-The running `cargo-watch` rebuilds the website because umbra-core (a path dep) changed. Wait for the rebuild to finish (watch the dev terminal), then:
+The running `cargo-watch` rebuilds the website because umbral-core (a path dep) changed. Wait for the rebuild to finish (watch the dev terminal), then:
 
 Run:
 ```bash
-curl -s http://localhost:8100/plugins/umbra-admin | grep -c '<style>'
-curl -s http://localhost:8100/plugins/umbra-admin | grep -oE '\.hl-[a-z]+' | head -3
+curl -s http://localhost:8100/plugins/umbral-admin | grep -c '<style>'
+curl -s http://localhost:8100/plugins/umbral-admin | grep -oE '\.hl-[a-z]+' | head -3
 ```
 Expected: at least one `<style>` block, and `.hl-…` rules present (the inlined theme CSS).
 
@@ -500,8 +500,8 @@ Expected: one or more `class="hl-…"` token spans inside the rendered post. If 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbra
-git add umbra_website/templates/base.html
+cd /home/dalmas/E/projects/umbral
+git add umbral_website/templates/base.html
 git commit -m "feat(website): inline syntect highlight stylesheet in base.html"
 ```
 
@@ -541,7 +541,7 @@ Where `post.body` contains:
 ````markdown
 ```rust
 fn main() {
-    println!("hello, umbra");
+    println!("hello, umbral");
 }
 ```
 ````
@@ -562,7 +562,7 @@ See the design rationale in `docs/superpowers/specs/2026-06-15-markdown-syntax-h
 - [ ] **Step 2: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbra
+cd /home/dalmas/E/projects/umbral
 git add documentation/docs/v0.0.1/web/markdown-syntax-highlighting.mdx
 # include documentation/docs/v0.0.1/web/_category_.json if you created it
 git commit -m "docs(web): syntax highlighting page for the markdown filter"
@@ -575,12 +575,12 @@ git commit -m "docs(web): syntax highlighting page for the markdown filter"
 These are static assets — no Rust rebuild; the dev server serves the updated files directly. No JS unit-test harness exists, so verification is "served correctly" + a visual check, mirroring Task 4.
 
 **Files:**
-- Modify: `umbra_website/static/js/md-enhance.js` (add `enhanceTables`, call it in the `[data-md]` loop)
-- Modify: `umbra_website/static/css/md-enhance.css` (add `.md-table` block; add radius to `.md-img`)
+- Modify: `umbral_website/static/js/md-enhance.js` (add `enhanceTables`, call it in the `[data-md]` loop)
+- Modify: `umbral_website/static/css/md-enhance.css` (add `.md-table` block; add radius to `.md-img`)
 
 - [ ] **Step 1: Add `enhanceTables` and call it**
 
-In `umbra_website/static/js/md-enhance.js`, update the root loop inside `ready(...)` (currently calls `enhanceCodeBlocks` + `collectImages`) to also enhance tables:
+In `umbral_website/static/js/md-enhance.js`, update the root loop inside `ready(...)` (currently calls `enhanceCodeBlocks` + `collectImages`) to also enhance tables:
 
 ```js
     roots.forEach(function (root) {
@@ -609,7 +609,7 @@ Then add the function next to `enhanceCodeBlocks`:
 
 - [ ] **Step 2: Add the table styles + image radius**
 
-Append to `umbra_website/static/css/md-enhance.css`:
+Append to `umbral_website/static/css/md-enhance.css`:
 
 ```css
 /* ===== Tables ===== */
@@ -667,8 +667,8 @@ Open a page whose markdown has a table and an image (a blog post is surest). Con
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbra
-git add umbra_website/static/js/md-enhance.js umbra_website/static/css/md-enhance.css
+cd /home/dalmas/E/projects/umbral
+git add umbral_website/static/js/md-enhance.js umbral_website/static/css/md-enhance.css
 git commit -m "feat(website): rounded table frame + image radius for markdown"
 ```
 
@@ -676,8 +676,8 @@ git commit -m "feat(website): rounded table frame + image radius for markdown"
 
 ## Final verification
 
-- [ ] From `crates/`: `cargo fmt --check && cargo clippy -p umbra-core --all-targets && cargo build && cargo test -p umbra-core` — all green.
-- [ ] The website rebuilt and `/plugins/umbra-admin` serves the inlined `<style>` with `.hl-` rules; a fenced code block renders `hl-` token spans.
+- [ ] From `crates/`: `cargo fmt --check && cargo clippy -p umbral-core --all-targets && cargo build && cargo test -p umbral-core` — all green.
+- [ ] The website rebuilt and `/plugins/umbral-admin` serves the inlined `<style>` with `.hl-` rules; a fenced code block renders `hl-` token spans.
 - [ ] `md-enhance.js`/`.css` are served with the table frame + image radius; a blog table renders a rounded scrollable frame and images are rounded + lightbox-able.
 - [ ] Notes still post via AJAX without a reload (the earlier fix is untouched).
 

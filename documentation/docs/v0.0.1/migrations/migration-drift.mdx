@@ -5,11 +5,11 @@ sidebar_position: 3
 icon: alert-triangle
 ---
 
-Migration drift is what happens when the `umbra_migrations` tracking table and the migration files on disk no longer agree. This guide explains how umbra detects drift, what the four states mean, and which CLI flag to reach for in each scenario.
+Migration drift is what happens when the `umbral_migrations` tracking table and the migration files on disk no longer agree. This guide explains how umbral detects drift, what the four states mean, and which CLI flag to reach for in each scenario.
 
 ## The four migration states
 
-umbra classifies every migration into one of four states when it runs `showmigrations` or before it applies anything. Two are healthy (`[X]` applied, `[ ]` pending); the other two, `[!]` applied-but-missing and `[?]` out-of-order, are the drift conditions this page covers.
+umbral classifies every migration into one of four states when it runs `showmigrations` or before it applies anything. Two are healthy (`[X]` applied, `[ ]` pending); the other two, `[!]` applied-but-missing and `[?]` out-of-order, are the drift conditions this page covers.
 
 | State | Marker | What it means |
 |---|---|---|
@@ -26,13 +26,13 @@ The tracking table says the migration ran, but the JSON file no longer exists. T
 - A teammate ran a migration that was not pushed and then the migration was squashed or renamed.
 - The `migrations/` directory was wiped and recreated from a partial backup.
 
-**Default behaviour:** `umbra migrate` errors with a clear message listing every missing name and three recovery options (restore the file, `--allow-drift`, or `--fake`).
+**Default behaviour:** `umbral migrate` errors with a clear message listing every missing name and three recovery options (restore the file, `--allow-drift`, or `--fake`).
 
 ### Out of order
 
-A file re-appeared on disk with a sequence number earlier than migrations already applied. umbra logs a warning but does not treat this as a hard error.
+A file re-appeared on disk with a sequence number earlier than migrations already applied. umbral logs a warning but does not treat this as a hard error.
 
-## `umbra showmigrations`
+## `umbral showmigrations`
 
 List every migration with its four-state marker, grouped by plugin:
 
@@ -60,17 +60,17 @@ Your teammate applied `0003_add_post_tag` but never pushed the file. You pull, t
 cargo run -- migrate --allow-drift
 ```
 
-umbra logs a warning for each missing file and applies the genuinely-pending migrations. No SQL is re-run for the missing migration; its row stays in the tracking table.
+umbral logs a warning for each missing file and applies the genuinely-pending migrations. No SQL is re-run for the missing migration; its row stays in the tracking table.
 
 ## Recovery: adopted a legacy database (`--fake-initial`)
 
-You have an existing database whose schema was created outside umbra (a raw SQL script, a previous framework, a manual `CREATE TABLE`). You have written the corresponding models and run `makemigrations` to produce `0001_initial.json`, but running `migrate` would fail because the tables already exist.
+You have an existing database whose schema was created outside umbral (a raw SQL script, a previous framework, a manual `CREATE TABLE`). You have written the corresponding models and run `makemigrations` to produce `0001_initial.json`, but running `migrate` would fail because the tables already exist.
 
 ```bash
 cargo run -- migrate --fake-initial
 ```
 
-For each plugin, umbra checks whether the tables the `0001_*` migration would create already exist in the database. If they do, the migration is recorded as applied in the tracking table **without running its SQL**. Subsequent `migrate` calls apply only the genuine deltas.
+For each plugin, umbral checks whether the tables the `0001_*` migration would create already exist in the database. If they do, the migration is recorded as applied in the tracking table **without running its SQL**. Subsequent `migrate` calls apply only the genuine deltas.
 
 If the tables do not exist yet, `--fake-initial` skips that plugin. Run `migrate` (without the flag) afterward to create them.
 
@@ -85,7 +85,7 @@ Sometimes you need finer control than `--fake-initial` - you want to declare a s
 cargo run -- migrate --fake app/0003_add_post_tag
 ```
 
-The format is `<plugin>/<migration_name>` (the same string shown by `showmigrations`). The command inserts a row into `umbra_migrations` but executes none of the migration's SQL operations.
+The format is `<plugin>/<migration_name>` (the same string shown by `showmigrations`). The command inserts a row into `umbral_migrations` but executes none of the migration's SQL operations.
 
 ## Worked example: lost a migration file
 
@@ -101,14 +101,14 @@ Scenario: your team applied `0003_add_post_tag` last week. Someone accidentally 
 Running `migrate` errors:
 
 ```
-error: umbra migrate: drift detected
+error: umbral migrate: drift detected
   The following migrations are in the tracking table but missing on disk:
     [!] app/0003_add_post_tag
 
   Options:
   1. Restore the file(s) from VCS.
-  2. Run `umbra migrate --allow-drift` to proceed and apply pending migrations.
-  3. Run `umbra migrate --fake <plugin/name>` to mark an individual migration as applied.
+  2. Run `umbral migrate --allow-drift` to proceed and apply pending migrations.
+  3. Run `umbral migrate --fake <plugin/name>` to mark an individual migration as applied.
 ```
 
 **Path A - restore the file.** This is the safest option. The file encodes the exact operation that changed the schema. Restore it from VCS history (`git log --all -- migrations/app/0003_add_post_tag.json`) and run `migrate` normally.
@@ -123,7 +123,7 @@ This applies `0004_add_post_author` and leaves the drift row in place. Run `show
 
 ## Worked example: adopting a legacy database
 
-You are migrating an existing app to umbra. The database has tables `post`, `category`, and `tag` that were created by hand.
+You are migrating an existing app to umbral. The database has tables `post`, `category`, and `tag` that were created by hand.
 
 1. Run `inspectdb` to generate `models.rs` and `0001_initial.json`:
 
@@ -137,7 +137,7 @@ You are migrating an existing app to umbra. The database has tables `post`, `cat
    cargo run -- migrate --fake-initial
    ```
 
-3. umbra checks whether `post`, `category`, and `tag` exist, finds them, and records `0001_initial` as applied. Your next `makemigrations` / `migrate` cycle works against the real deltas from that point forward.
+3. umbral checks whether `post`, `category`, and `tag` exist, finds them, and records `0001_initial` as applied. Your next `makemigrations` / `migrate` cycle works against the real deltas from that point forward.
 
 ## Design rationale
 

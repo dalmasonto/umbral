@@ -17,8 +17,8 @@ use ecommerce::models::{
     Address, AddressType, Coupon, Currency, Customer, DiscountType, Order, OrderItem, OrderStatus,
     Payment, PaymentMethod, PaymentStatus, Product, Review, Shipment,
 };
-use umbra::prelude::*;
-use umbra_auth::AuthUser;
+use umbral::prelude::*;
+use umbral_auth::AuthUser;
 
 pub async fn demo_data() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let now = Utc::now();
@@ -30,12 +30,12 @@ pub async fn demo_data() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         ("carol", "carol@example.com"),
     ] {
         if AuthUser::objects()
-            .filter(umbra_auth::auth_user::USERNAME.eq(*name))
+            .filter(umbral_auth::auth_user::USERNAME.eq(*name))
             .count()
             .await?
             == 0
         {
-            umbra_auth::create_user(name, email, "demo-pw-12345").await?;
+            umbral_auth::create_user(name, email, "demo-pw-12345").await?;
         }
     }
 
@@ -46,7 +46,7 @@ pub async fn demo_data() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
             Customer::objects()
                 .create(Customer {
                     id: 0,
-                    user: umbra::orm::OneToOne::new(u.id),
+                    user: umbral::orm::OneToOne::new(u.id),
                     phone: Some(format!("+15555550{:03}", 100 + i)),
                     date_of_birth: Some(
                         chrono::NaiveDate::from_ymd_opt(1990, 1, 1 + i as u32).unwrap(),

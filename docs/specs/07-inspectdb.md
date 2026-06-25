@@ -4,11 +4,11 @@
 |---|---|
 | **Status** | Draft |
 | **Maps to milestone** | M6 (introspect existing DB → models that feed straight into the M5 migration engine) |
-| **Companions** | `00-overview.md`, `04-orm-model-and-fields.md`, `06-migration-engine.md`, `arch.md §0`, `umbra-PRD.md §10` (phase 0.2 — "Porting MVP") |
+| **Companions** | `00-overview.md`, `04-orm-model-and-fields.md`, `06-migration-engine.md`, `arch.md §0`, `umbral-PRD.md §10` (phase 0.2 — "Porting MVP") |
 
 ## Purpose
 
-The porting payoff. A team running Django, Rails, Node, or anything else with a Postgres database points umbra at the existing DB and gets:
+The porting payoff. A team running Django, Rails, Node, or anything else with a Postgres database points umbral at the existing DB and gets:
 
 1. **Rust model files** — one `#[derive(Model)] struct` per table, with the right field types, options, and relations.
 2. **An initial migration file** — `0001_initial.json` that, applied to an empty database, would recreate the introspected schema.
@@ -24,14 +24,14 @@ What this spec owns:
 - **Conflict resolution** when an introspected name collides with a registered built-in plugin's table (e.g. `auth_user`).
 - The **output shape** (where files land, how the generated migration is marked applied).
 
-**What shipped at M6 v1.** SQLite-only introspection via `PRAGMA table_info`, the type-mapping subset that matches the M5 `SqlType` catalogue (integers, floats, bool, text, date / time / timestamptz, uuid, plus their nullable variants), and a flat output: one `models.rs` with `#[derive(Model)]` structs and one `migrations/0001_initial.json`. The `--mark-applied` flag inserts a row into `umbra_migrations` so a follow-up `migrate` is a no-op. The user wires the generated `models.rs` into their binary by hand (`mod models;` plus one `.model::<T>()` per struct on the builder) until the plugin contract lands.
+**What shipped at M6 v1.** SQLite-only introspection via `PRAGMA table_info`, the type-mapping subset that matches the M5 `SqlType` catalogue (integers, floats, bool, text, date / time / timestamptz, uuid, plus their nullable variants), and a flat output: one `models.rs` with `#[derive(Model)]` structs and one `migrations/0001_initial.json`. The `--mark-applied` flag inserts a row into `umbral_migrations` so a follow-up `migrate` is a no-op. The user wires the generated `models.rs` into their binary by hand (`mod models;` plus one `.model::<T>()` per struct on the builder) until the plugin contract lands.
 
 **Deferred to later milestones.**
 
 - Postgres introspection (needs the M4 backend abstraction to grow an `introspect` hook) — slated for the same milestone that adds the Postgres backend body.
 - Generated plugin crate (`lib.rs` with `impl Plugin`, `Cargo.toml`) — needs the M7 plugin contract.
 - Conflict resolution against registered plugins' migrations — needs the M7 plugin contract.
-- Foreign-key detection, M2M heuristics, `#[umbra(max_length = n)]` rendering for `VARCHAR(n)`, NUMERIC / JSON / BYTEA / array / custom-type mappings — gated on the field types existing in `umbra-core`; today's catalogue covers the scalars and date / time / uuid only.
+- Foreign-key detection, M2M heuristics, `#[umbral(max_length = n)]` rendering for `VARCHAR(n)`, NUMERIC / JSON / BYTEA / array / custom-type mappings — gated on the field types existing in `umbral-core`; today's catalogue covers the scalars and date / time / uuid only.
 - `--strip-prefix`, `--ignore-builtin`, `--plugin <name>` flags — deferred with the plugin-crate output they're attached to.
 
 The "spec owns" list above is the eventual target shape. Drift between today's code and that shape is intentional and tracked here; the same way `06-migration-engine.md` calls out the M5 / M8 split for column-level ops.
@@ -64,7 +64,7 @@ sea-schema does the heavy lifting. The result is an intermediate `IntrospectedSc
 | `REAL` | `f32` | |
 | `DOUBLE PRECISION` | `f64` | |
 | `BOOLEAN` | `bool` | |
-| `TEXT`, `VARCHAR(n)` | `String` | `VARCHAR(n)` adds `#[umbra(max_length = n)]`. |
+| `TEXT`, `VARCHAR(n)` | `String` | `VARCHAR(n)` adds `#[umbral(max_length = n)]`. |
 | `CHAR(n)` | `String` | Same, with a comment noting the original was fixed-width. |
 | `TIMESTAMPTZ` | `chrono::DateTime<Utc>` | |
 | `TIMESTAMP` (no TZ) | `chrono::NaiveDateTime` | The mapping flags this in the generated comment because TZ-naive columns are an ambiguity source. |
@@ -74,9 +74,9 @@ sea-schema does the heavy lifting. The result is an intermediate `IntrospectedSc
 | `UUID` | `uuid::Uuid` | |
 | `JSON`, `JSONB` | `serde_json::Value` | |
 | `BYTEA` | `Vec<u8>` | |
-| `TEXT[]`, `INT[]`, etc. | `Vec<T>` | Generates `#[umbra(supported_backends = ["postgres"])]` implicitly. |
+| `TEXT[]`, `INT[]`, etc. | `Vec<T>` | Generates `#[umbral(supported_backends = ["postgres"])]` implicitly. |
 | `HSTORE` | `HashMap<String, String>` | Same. |
-| `CIDR`, `INET`, `MACADDR`, `TSVECTOR`, custom types | `String` plus a `// TODO: native type` comment | Mapped to string with a comment so the user can manually upgrade once umbra grows native support. |
+| `CIDR`, `INET`, `MACADDR`, `TSVECTOR`, custom types | `String` plus a `// TODO: native type` comment | Mapped to string with a comment so the user can manually upgrade once umbral grows native support. |
 
 Nullable columns wrap the Rust type in `Option<>` (the only path; see `04-orm-model-and-fields.md` §Nullable invariant).
 
@@ -105,7 +105,7 @@ Three kinds of conflict surface:
 1. **Generated struct name collides with itself.** Two tables map to the same struct name (after prefix stripping). The importer aborts with a clear error and the user re-runs without `--strip-prefix` or chooses a different stripping rule. M6 does not try to disambiguate automatically; a wrong guess silently shadows the user's intent.
 
 2. **Introspected table collides with a registered built-in plugin's table.** Most commonly: `auth_user`, `django_session`, `auth_permission`. The importer checks every registered plugin's `Plugin::migrations()` for an introspected table name and:
-   - If the column shape matches the built-in plugin's expected shape: marks the table as "owned by the built-in plugin" and does not generate a model file for it; the built-in plugin's migration is marked applied. This is the "port a Django app to umbra-auth" path.
+   - If the column shape matches the built-in plugin's expected shape: marks the table as "owned by the built-in plugin" and does not generate a model file for it; the built-in plugin's migration is marked applied. This is the "port a Django app to umbral-auth" path.
    - If the shape doesn't match (extra columns, missing columns, different types): aborts with a diff explaining what doesn't match. The user can re-run with `--ignore-builtin auth` to put the introspected table under the imported plugin instead.
 
 3. **Cross-table FK target not found.** A FK in `post.author_id` references `author`, but no `author` table exists in the introspection. This means the user's database has dangling references; the importer surfaces them as warnings and generates the FK column as a plain `i64` with a comment.
@@ -133,14 +133,14 @@ App::builder()
     .build()?;
 ```
 
-Subsequent `cargo run -p umbra-cli -- migrate` does nothing (the migration was marked applied). When the user changes a model, `makemigrations` produces `0002_xxx.json` against the imported snapshot, and the loop runs normally.
+Subsequent `cargo run -p umbral-cli -- migrate` does nothing (the migration was marked applied). When the user changes a model, `makemigrations` produces `0002_xxx.json` against the imported snapshot, and the loop runs normally.
 
 ## API-shape sketch
 
 CLI surface:
 
 ```
-cargo run -p umbra-cli -- inspectdb \
+cargo run -p umbral-cli -- inspectdb \
     --plugin imported \
     --output plugins/imported \
     [--strip-prefix blog_] \
@@ -150,7 +150,7 @@ cargo run -p umbra-cli -- inspectdb \
 
 | Flag | Effect |
 |---|---|
-| `--plugin <name>` | The umbra plugin name to assign generated models to. Default: `imported`. |
+| `--plugin <name>` | The umbral plugin name to assign generated models to. Default: `imported`. |
 | `--output <path>` | Where to write the generated crate. Default: `plugins/<plugin>`. |
 | `--strip-prefix <p>` | Strip `p` from table names before generating struct names. Optional. |
 | `--ignore-builtin <plugin>` | Don't try to map introspected tables onto this built-in's schema; just generate models for them. Optional, repeatable. |
@@ -172,7 +172,7 @@ pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport> {
     write_outputs(&opts.output, model_files, initial_migration, plugin_lib).await?;
 
     if opts.mark_applied {
-        umbra::migrations::record_applied(&opts.plugin, "0001_initial").await?;
+        umbral::migrations::record_applied(&opts.plugin, "0001_initial").await?;
     }
 
     Ok(InspectReport { /* counts of tables, columns, FKs, warnings */ })
@@ -182,7 +182,7 @@ pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport> {
 The intermediate value (`IntermediateSchema`) is a list of model descriptors. Each descriptor has:
 
 - A struct name (post-resolution).
-- A `TABLE` (the original table name; the rendered `#[umbra(table = "…")]` may differ if the resolution stripped a prefix).
+- A `TABLE` (the original table name; the rendered `#[umbral(table = "…")]` may differ if the resolution stripped a prefix).
 - Field descriptors (Rust type, attributes, comments).
 - Relation descriptors (FK and inferred M2M relationships).
 
@@ -200,7 +200,7 @@ This is what makes "imported schema enters the M5 loop seamlessly" true. There's
 
 Marking applied is the right default when introspecting against a non-empty database, because the tables already exist. Running the migration there would fail (tables already present).
 
-The flag is **off** if the target connection points at an empty database. The user explicitly asks "I want the inspected migration applied" by running `migrate` against that empty target. The importer can detect "empty database" by checking that no tables other than `umbra_migrations` exist.
+The flag is **off** if the target connection points at an empty database. The user explicitly asks "I want the inspected migration applied" by running `migrate` against that empty target. The importer can detect "empty database" by checking that no tables other than `umbral_migrations` exist.
 
 The drift detection from `06-migration-engine.md` protects this path: if a user marks 0001_initial as applied and later edits the file, the next `migrate` run refuses to proceed with `MigrationError::DriftDetected`.
 
@@ -209,7 +209,7 @@ The drift detection from `06-migration-engine.md` protects this path: if a user 
 A table with exactly two FK columns (and optionally trivial metadata like `joined_at`, `weight`) is heuristically classed as a through-table. The importer:
 
 1. Generates the through-table model normally.
-2. Emits a comment on each of the FK-target models suggesting `#[umbra(m2m(...))]`.
+2. Emits a comment on each of the FK-target models suggesting `#[umbral(m2m(...))]`.
 
 The user accepts or rejects the suggestion by editing the generated code. M6 does **not** auto-write the m2m attribute; the heuristic is too brittle to make a hard decision (a real model with two FKs and no other state — say, a "vote" table — would be miscategorised).
 
@@ -221,7 +221,7 @@ Things the mapping table marks "+ comment":
 - Original `TIMESTAMP` without time zone (the explicit choice to use a TZ-naive type, which is usually a bug).
 - Original `NUMERIC(p, s)` precision and scale.
 - Custom Postgres types (CIDR, TSVECTOR, etc.) that mapped to `String`.
-- Check constraints whose semantics didn't fit `#[umbra(choices(...))]`.
+- Check constraints whose semantics didn't fit `#[umbral(choices(...))]`.
 
 Comments live in the generated code as `// inspectdb: original was TIMESTAMP (no TZ); consider using TIMESTAMPTZ`. They're a TODO list for the user to walk after import.
 
@@ -239,10 +239,10 @@ Comments live in the generated code as `// inspectdb: original was TIMESTAMP (no
 
 ## Open questions
 
-- **Plugin partitioning.** If the existing database has natural plugin boundaries (Django apps with table-name prefixes), the user might want one umbra plugin per Django app. M6 ships with one-plugin output; M8 or later could add a `--partition-by-prefix` mode that emits multiple plugins. Defer until users ask.
-- **View introspection.** Postgres views could be modelled as read-only umbra models. Defer to a follow-up — they're rare in the porting target.
+- **Plugin partitioning.** If the existing database has natural plugin boundaries (Django apps with table-name prefixes), the user might want one umbral plugin per Django app. M6 ships with one-plugin output; M8 or later could add a `--partition-by-prefix` mode that emits multiple plugins. Defer until users ask.
+- **View introspection.** Postgres views could be modelled as read-only umbral models. Defer to a follow-up — they're rare in the porting target.
 - **Custom-type extensibility.** Today the mapping table is hard-coded. A future hook (a config option or a derive registration) could let users plug in their own (Postgres custom-type → Rust type) entries. Defer.
-- **Detecting auth model shape against `umbra-auth`'s default `User`.** §Conflict resolution describes the "shapes match" check; the exact heuristic (which columns are required, which are bonuses) needs to be pinned to whatever shape `auth-and-sessions.md` settles on. Resolve when the auth outline gets promoted.
+- **Detecting auth model shape against `umbral-auth`'s default `User`.** §Conflict resolution describes the "shapes match" check; the exact heuristic (which columns are required, which are bonuses) needs to be pinned to whatever shape `auth-and-sessions.md` settles on. Resolve when the auth outline gets promoted.
 
 ## Cross-links
 
@@ -250,5 +250,5 @@ Comments live in the generated code as `// inspectdb: original was TIMESTAMP (no
 - The `FieldSpec` and field types the introspected columns translate to: `04-orm-model-and-fields.md`.
 - The plugin shape the importer generates: `02-plugin-contract.md`.
 - The auth plugin's expected `User` shape (for the built-in collision case): outline `auth-and-sessions.md`.
-- The PRD's "Porting MVP" phase that this spec is the centrepiece of: `umbra-PRD.md §10`.
+- The PRD's "Porting MVP" phase that this spec is the centrepiece of: `umbral-PRD.md §10`.
 - The north star this spec services: `arch.md §0`.

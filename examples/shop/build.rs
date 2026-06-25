@@ -6,7 +6,7 @@
 //! #20). If node_modules isn't installed the build silently skips and
 //! the served page falls back to plain text + the system stylesheet —
 //! the `wrapper.html` `<link>` still loads, just resolves to the empty
-//! committed CSS until the build runs. This matches umbra-admin's
+//! committed CSS until the build runs. This matches umbral-admin's
 //! build.rs posture: prod CSS is opt-in via `npm install`, dev is
 //! lenient.
 //!

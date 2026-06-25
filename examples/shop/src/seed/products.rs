@@ -5,7 +5,7 @@
 
 use content::models::Category;
 use ecommerce::models::{Brand, Currency, Product, ProductStatus};
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 pub async fn products() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if Category::objects().count().await? == 0 {
@@ -50,8 +50,8 @@ pub async fn products() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
                 },
                 Brand {
                     id: 0,
-                    name: "UmbraGear".into(),
-                    slug: "umbragear".into(),
+                    name: "UmbralGear".into(),
+                    slug: "umbralgear".into(),
                     logo: None,
                     website: None,
                     description: Some("Tools for developers".into()),

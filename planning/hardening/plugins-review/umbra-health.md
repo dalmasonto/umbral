@@ -1,8 +1,8 @@
-# Review: umbra-health
+# Review: umbral-health
 
-Read-only audit, 2026-06-16. Scope: `plugins/umbra-health/src/lib.rs` and `tests/integration.rs`. Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`, and `reviews/performance-scalability.md`.
+Read-only audit, 2026-06-16. Scope: `plugins/umbral-health/src/lib.rs` and `tests/integration.rs`. Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`, and `reviews/performance-scalability.md`.
 
-NET-NEW items only. No prior entry specifically covers `umbra-health`.
+NET-NEW items only. No prior entry specifically covers `umbral-health`.
 
 ---
 
@@ -40,11 +40,11 @@ NET-NEW items only. No prior entry specifically covers `umbra-health`.
 
 The mitigation: `SELECT 1` is a connectivity probe, not a row-level operation. It does not read, write, or mutate application data. The CLAUDE.md explicitly lists "Schema DDL ... Owned by the migration engine" as a permitted raw-SQL exception, and while `SELECT 1` is not DDL, it falls into the category of "backend-specific operation the ORM can't model" — there is no ORM equivalent of a raw connectivity ping.
 
-However, the correct approach per CLAUDE.md is: if the ORM can't express it, the right fix is to add the operation to the ORM (e.g. `umbra::db::ping()` → `SELECT 1` dispatched internally). Health checks exist in every production app; the framework should expose a typed `db::ping()` rather than requiring every plugin that needs to probe connectivity to write its own raw sqlx.
+However, the correct approach per CLAUDE.md is: if the ORM can't express it, the right fix is to add the operation to the ORM (e.g. `umbral::db::ping()` → `SELECT 1` dispatched internally). Health checks exist in every production app; the framework should expose a typed `db::ping()` rather than requiring every plugin that needs to probe connectivity to write its own raw sqlx.
 
-**Fix:** Add `pub async fn ping() -> Result<(), sqlx::Error>` to `umbra::db` (in `umbra-core`, re-exported from the facade) that issues `SELECT 1` against the ambient pool. `probe_database` then calls `umbra::db::ping().await.map_err(|e| e.to_string())`. This closes the raw-SQL exception for the health plugin and makes the connectivity probe reusable.
+**Fix:** Add `pub async fn ping() -> Result<(), sqlx::Error>` to `umbral::db` (in `umbral-core`, re-exported from the facade) that issues `SELECT 1` against the ambient pool. `probe_database` then calls `umbral::db::ping().await.map_err(|e| e.to_string())`. This closes the raw-SQL exception for the health plugin and makes the connectivity probe reusable.
 
-**Gap:** NEW — add `umbra::db::ping()` to the ORM surface. Until it exists, the current `sqlx::query("SELECT 1")` is the narrowest acceptable workaround; add a comment citing this gap.
+**Gap:** NEW — add `umbral::db::ping()` to the ORM surface. Until it exists, the current `sqlx::query("SELECT 1")` is the narrowest acceptable workaround; add a comment citing this gap.
 
 ---
 
@@ -94,7 +94,7 @@ The existing comment ("Run sequentially rather than concurrently — concurrency
 
 ## Plugin-contract
 
-- **Facade-only imports:** PARTIAL. `lib.rs:57-59` imports `umbra::db::DbPool`, `umbra::plugin::Plugin`, and `umbra::routes::RouteSpec` — all through the facade. However `lib.rs:16-17` imports `axum::...` directly (allowed — `axum` is a listed direct dep). The raw `sqlx::query` in `probe_database` is the notable exception (HE-1).
+- **Facade-only imports:** PARTIAL. `lib.rs:57-59` imports `umbral::db::DbPool`, `umbral::plugin::Plugin`, and `umbral::routes::RouteSpec` — all through the facade. However `lib.rs:16-17` imports `axum::...` directly (allowed — `axum` is a listed direct dep). The raw `sqlx::query` in `probe_database` is the notable exception (HE-1).
 - **Migrations:** None. No persisted schema. Correct.
 - **`Plugin` impl:** Complete. `name()`, `routes()`, and `route_paths()` all present. No `on_ready()` needed (state is built at `routes()` time from the registered checks).
 

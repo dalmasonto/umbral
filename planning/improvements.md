@@ -8,15 +8,15 @@ Improvements
 2026-06-02T00:54:10.767442Z  WARN sqlx::query: slow statement: execution time exceeded alert threshold summary="SELECT COUNT(\"*\") FROM \"article\"" db.statement="" rows_affected=0 rows_returned=1 elapsed=1.429625264s elapsed_secs=1.429625264 slow_threshold=1s
 2026-06-02T00:54:11.107393Z  WARN sqlx::query: slow statement: execution time exceeded alert threshold summary="INSERT INTO session (id, …" db.statement="\n\nINSERT INTO session (id, user_id, data, created_at, expires_at) VALUES (?, ?, ?, ?, ?)\n" rows_affected=1 rows_returned=0 elapsed=4.346439276s elapsed_secs=4.346439276 slow_threshold=1s
 
-Read the interpretation of this at `/home/dalmas/E/projects/umbra/bugs/helper-files/server-speed-report.md`
+Read the interpretation of this at `/home/dalmas/E/projects/umbral/bugs/helper-files/server-speed-report.md`
 
-We will need to populate our test database with almost 1/5/10/20/100 million records with faked long data to do proper testing using `ApacheBench` Ref - /home/dalmas/E/projects/umbra/bugs/tests/webservertesting.md. We will finish doing the ecomerce and contentplugin example from `tests` folder and use them to test the system end to end to see bottlenecks and improvements.
+We will need to populate our test database with almost 1/5/10/20/100 million records with faked long data to do proper testing using `ApacheBench` Ref - /home/dalmas/E/projects/umbral/bugs/tests/webservertesting.md. We will finish doing the ecomerce and contentplugin example from `tests` folder and use them to test the system end to end to see bottlenecks and improvements.
 
 ## 2026-06-02 — Improvement 1 closed
 
-Root cause: `umbra::db::connect_sqlite` used `SqlitePool::connect(url)` with zero PRAGMAs. SQLite then ran the pool in `journal_mode = DELETE` + `synchronous = FULL` — the safe defaults that serialise every concurrent writer behind a full-file lock. The user-visible symptom was sessions and writes taking 1-4 seconds per INSERT once any other connection touched the file. `SessionLayer` creates an anonymous session on every cookie-less request, so even an unauthenticated browse hammered the writer lock.
+Root cause: `umbral::db::connect_sqlite` used `SqlitePool::connect(url)` with zero PRAGMAs. SQLite then ran the pool in `journal_mode = DELETE` + `synchronous = FULL` — the safe defaults that serialise every concurrent writer behind a full-file lock. The user-visible symptom was sessions and writes taking 1-4 seconds per INSERT once any other connection touched the file. `SessionLayer` creates an anonymous session on every cookie-less request, so even an unauthenticated browse hammered the writer lock.
 
-Fix lands in `crates/umbra-core/src/db.rs`: `connect_sqlite` now applies `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 5000ms`, `foreign_keys = ON` via `SqliteConnectOptions`, plus turns the per-statement INFO logging off (it added measurable overhead at high RPS). Five regression tests in `crates/umbra-core/tests/sqlite_pragmas.rs` lock the configuration so a future "just call SqlitePool::connect" tweak can't quietly undo this.
+Fix lands in `crates/umbral-core/src/db.rs`: `connect_sqlite` now applies `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 5000ms`, `foreign_keys = ON` via `SqliteConnectOptions`, plus turns the per-statement INFO logging off (it added measurable overhead at high RPS). Five regression tests in `crates/umbral-core/tests/sqlite_pragmas.rs` lock the configuration so a future "just call SqlitePool::connect" tweak can't quietly undo this.
 
 Measured on derive-demo (`/` endpoint, anonymous browse triggers session INSERT + article COUNT):
 

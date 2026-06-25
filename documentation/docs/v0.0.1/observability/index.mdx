@@ -7,7 +7,7 @@ tags: [observability, logging, tracing, opentelemetry, otlp]
 
 # Logging and tracing
 
-umbra gives you one entry point for observability: `umbra_logs::observability::init`. It installs the global `tracing` subscriber (human-readable or JSON) and, when the `otel` feature is on and a collector is reachable, exports a span per HTTP request over OTLP to any OpenTelemetry backend — Jaeger, Grafana Tempo, Honeycomb, or an OpenTelemetry Collector.
+umbral gives you one entry point for observability: `umbral_logs::observability::init`. It installs the global `tracing` subscriber (human-readable or JSON) and, when the `otel` feature is on and a collector is reachable, exports a span per HTTP request over OTLP to any OpenTelemetry backend — Jaeger, Grafana Tempo, Honeycomb, or an OpenTelemetry Collector.
 
 It replaces the hand-rolled `tracing_subscriber::fmt().init()` that example apps used to put in `main.rs`.
 
@@ -16,7 +16,7 @@ It replaces the hand-rolled `tracing_subscriber::fmt().init()` that example apps
 Call `init` once at the top of `main`, and keep the returned guard alive for the whole program. The guard flushes and shuts down the OTLP exporter on drop, so spans buffered by the batch processor aren't lost when the process exits.
 
 ```rust
-use umbra_logs::observability::{init, ObservabilityConfig};
+use umbral_logs::observability::{init, ObservabilityConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -29,18 +29,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 ```
 
-Generated projects (`umbra startproject`) already wire this in.
+Generated projects (`umbral startproject`) already wire this in.
 
 ## Environment knobs
 
-`ObservabilityConfig::from_env()` reads the standard OpenTelemetry environment variables plus umbra's log-format switch:
+`ObservabilityConfig::from_env()` reads the standard OpenTelemetry environment variables plus umbral's log-format switch:
 
 | Variable | Default | Effect |
 |---|---|---|
 | `RUST_LOG` | `info` | The `tracing` `EnvFilter` directive (e.g. `info,tower_http=debug`). |
-| `UMBRA_LOG_FORMAT` | _(unset)_ | Set to `json` for structured JSON log lines (with `level`, `target`, fields, and `trace_id`/`span_id` under the `otel` feature). Anything else = human-readable. |
+| `UMBRAL_LOG_FORMAT` | _(unset)_ | Set to `json` for structured JSON log lines (with `level`, `target`, fields, and `trace_id`/`span_id` under the `otel` feature). Anything else = human-readable. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP **gRPC** endpoint the exporter ships spans to. `otel` feature only. |
-| `OTEL_SERVICE_NAME` | `umbra` | The `service.name` resource attribute on every span. `otel` feature only. |
+| `OTEL_SERVICE_NAME` | `umbral` | The `service.name` resource attribute on every span. `otel` feature only. |
 
 You can also set the fields explicitly instead of (or on top of) the env:
 
@@ -59,13 +59,13 @@ Span export is gated behind the `otel` cargo feature so a base build never pulls
 
 ```toml
 # Cargo.toml
-umbra-logs = { version = "0.0.1", features = ["otel"] }
+umbral-logs = { version = "0.0.1", features = ["otel"] }
 ```
 
 With the feature **off**, `init` still configures fmt/JSON logging — it just never builds the exporter. With the feature **on**, `init` builds an OTLP gRPC exporter pointed at `OTEL_EXPORTER_OTLP_ENDPOINT`, attaches it to a batch span processor on the tokio runtime, and bridges `tracing` spans into it via `tracing-opentelemetry`.
 
 <Callout type="info">
-A collector that's unreachable at startup is **not** a fatal error — the exporter connects lazily and umbra falls back to logs-only if the exporter can't even be constructed (a malformed endpoint). Your app boots either way.
+A collector that's unreachable at startup is **not** a fatal error — the exporter connects lazily and umbral falls back to logs-only if the exporter can't even be constructed (a malformed endpoint). Your app boots either way.
 </Callout>
 
 ## What gets exported

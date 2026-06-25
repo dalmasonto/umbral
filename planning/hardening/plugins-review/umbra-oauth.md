@@ -1,6 +1,6 @@
-# umbra-oauth — holistic review
+# umbral-oauth — holistic review
 
-Read-only review, 2026-06-16. Scope: `plugins/umbra-oauth/src/**` + `tests/`. Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`, `reviews/race-conditions.md`. Findings already filed are tagged **(already #N)**; everything else is **NEW**.
+Read-only review, 2026-06-16. Scope: `plugins/umbral-oauth/src/**` + `tests/`. Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`, `reviews/race-conditions.md`. Findings already filed are tagged **(already #N)**; everything else is **NEW**.
 
 ## Verdict
 
@@ -16,7 +16,7 @@ Completeness one-liner: **Login + connect + disconnect + account-linking are com
 | Authorize → callback flow | Complete | state-CSRF, provider-match check, error/denial handling all present (`routes.rs:204-220`). |
 | PKCE | **Missing** | already #74 (`providers/google.rs:106-119`). |
 | State single-use | **Missing** (replayable) | already #74 (`routes.rs:143` set, `:214` read, never deleted). |
-| Token storage at rest | Complete | `Masked<String>` access + refresh, `#[umbra(noform)]`, tested round-trip (`policy.rs:352`). |
+| Token storage at rest | Complete | `Masked<String>` access + refresh, `#[umbral(noform)]`, tested round-trip (`policy.rs:352`). |
 | Token **refresh** (use the stored refresh token) | **Missing** | NEW — see Findings. Refresh tokens are stored and rotated-on-reauth, but there is no `grant_type=refresh_token` path, so once an access token expires the app can't call the provider API on the user's behalf until the user re-authenticates. The whole "later API access (Drive, repos)" use case in the crate docs is unreachable past expiry. |
 | Account linking (user ↔ identity) | Complete | 4-rule policy in `policy.rs`; connect-mode hijack refusal tested (`:450`). |
 | Error / denial handling | Complete | `?error=` → redirect to login (`routes.rs:204`); missing code / state-mismatch → 400. |
@@ -34,7 +34,7 @@ Completeness one-liner: **Login + connect + disconnect + account-linking are com
 - **`reqwest::Client::new()` per request, with no timeout.** `providers/google.rs:122,142`, `github.rs:130,150`. Each token-exchange and identity-fetch builds a brand-new `reqwest::Client` (a fresh connection pool + TLS config every call — wasteful) **and sets no `.timeout()`**, so a hung/slow provider endpoint ties up the callback handler indefinitely (the user's browser hangs on the redirect; a worker thread is pinned). A slow-loris-y provider or a network blip becomes a request-handler stall. Fix: one lazily-initialised shared `reqwest::Client` per provider (or a module `OnceLock`) built with a sane `.timeout(Duration::from_secs(10))` / connect timeout. → **NEW gap.**
 
 ### NEW — Important (concurrency, not covered by race-conditions.md)
-- **`unique_username` SELECT-loop is a TOCTOU + unbounded retry.** `policy.rs:211-228`. Two concurrent social signups deriving the same base username both SELECT "not taken", both `create()` — the loser hits the `auth_user.username` UNIQUE constraint and the *whole resolve fails* (a 409 to the user) instead of retrying the next candidate. The loop also doesn't catch `UniqueViolation` to advance `n`. This path is **not** in `reviews/race-conditions.md` (that audit didn't cover umbra-oauth). Fix: catch `WriteError::UniqueViolation` from `create_auth_user`'s insert and retry with `n+1`, same pattern the backlog prescribes for `add_user_to_group` (#71). → **NEW gap** (sibling of #71; oauth was out of #71's scope).
+- **`unique_username` SELECT-loop is a TOCTOU + unbounded retry.** `policy.rs:211-228`. Two concurrent social signups deriving the same base username both SELECT "not taken", both `create()` — the loser hits the `auth_user.username` UNIQUE constraint and the *whole resolve fails* (a 409 to the user) instead of retrying the next candidate. The loop also doesn't catch `UniqueViolation` to advance `n`. This path is **not** in `reviews/race-conditions.md` (that audit didn't cover umbral-oauth). Fix: catch `WriteError::UniqueViolation` from `create_auth_user`'s insert and retry with `n+1`, same pattern the backlog prescribes for `add_user_to_group` (#71). → **NEW gap** (sibling of #71; oauth was out of #71's scope).
 
 ### NEW — Optional (correctness)
 - **`refresh_tokens` is a non-transactional multi-statement update, and the re-auth path has no row-lock.** `policy.rs:123-153` runs one `update_values`; benign today (single UPDATE), noted so the refresh-flow fix above doesn't reintroduce a read-modify-write. FYI.
@@ -50,7 +50,7 @@ Completeness one-liner: **Login + connect + disconnect + account-linking are com
 
 ## Architecture / plugin-contract
 
-Clean. Facade-only imports (`use umbra::prelude::*`, `umbra::orm::Masked`, `umbra::plugin::*`) — no `umbra-core` internals. Owns its one migration (`SocialAccount` via `ModelMeta::for_::<SocialAccount>()`), declares `dependencies() = ["auth"]` correctly so the FK to `auth_user` orders right. No raw `sqlx::query` in `src/` outside `#[cfg(test)]` (`policy.rs:270,304` is the documented test-table-DDL exception). `Plugin` impl is idiomatic: routes, `api_endpoints`, `on_ready` discovery publish. Provider abstraction (`OAuthProvider` trait) keeps the flow provider-agnostic. The one structural nit: the per-call `reqwest::Client::new()` (above) belongs behind a shared handle.
+Clean. Facade-only imports (`use umbral::prelude::*`, `umbral::orm::Masked`, `umbral::plugin::*`) — no `umbral-core` internals. Owns its one migration (`SocialAccount` via `ModelMeta::for_::<SocialAccount>()`), declares `dependencies() = ["auth"]` correctly so the FK to `auth_user` orders right. No raw `sqlx::query` in `src/` outside `#[cfg(test)]` (`policy.rs:270,304` is the documented test-table-DDL exception). `Plugin` impl is idiomatic: routes, `api_endpoints`, `on_ready` discovery publish. Provider abstraction (`OAuthProvider` trait) keeps the flow provider-agnostic. The one structural nit: the per-call `reqwest::Client::new()` (above) belongs behind a shared handle.
 
 ## Tests
 

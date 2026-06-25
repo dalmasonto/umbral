@@ -1,0 +1,24 @@
+[package]
+name = "umbral-playground"
+description = "Interactive API playground UI for umbral-rest. The DRF browsable API, in umbral."
+workspace = "../.."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbral = { path = "../../crates/umbral", version = "0.0.1" }
+axum = "0.8"
+# `tracing::warn!` on the no-app-name fallback (gap #71).
+tracing = "0.1"
+# `serde_json::to_string` for safely escaping the app name into the
+# inline-script `window.__UMBRAL_PLAYGROUND_APP__` assignment.
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

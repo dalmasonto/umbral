@@ -9,21 +9,21 @@ tags: [orm, search, full-text, ts_rank, relevance]
 
 `Search::across` searches every text column of each opted-in model and returns **one** list ordered by relevance. On Postgres it ranks with `ts_rank` (computed inline at query time — nothing is stored), and on SQLite it degrades to a weighted `LIKE`. One call replaces hand-merging a query per model in Rust.
 
-The surface lives in `umbra::orm`: `Searchable`, `Search`, and `SearchHit`.
+The surface lives in `umbral::orm`: `Searchable`, `Search`, and `SearchHit`.
 
 ## Opt a model in
 
 A marker `impl` is enough — the searchable columns, the title, and the routing key are read from the model's metadata. Override a default only when you need to.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
-impl umbra::orm::Searchable for Plugin {
+impl umbral::orm::Searchable for Plugin {
     fn kind() -> &'static str { "plugin" }   // result tag; default = the table name
     fn ident() -> &'static str { "slug" }    // becomes SearchHit.pk (the routing key)
 }
 
-impl umbra::orm::Searchable for BlogPost {
+impl umbral::orm::Searchable for BlogPost {
     fn kind() -> &'static str { "blog" }
     fn ident() -> &'static str { "slug" }
 }
@@ -42,7 +42,7 @@ The defaults read `Model::FIELDS`:
 The defaults cover most models, but you can name the columns explicitly — to **narrow** the search to a few meaningful fields, or to pick a title the auto-detection wouldn't. Each method returns the SQL column name(s) as plain strings:
 
 ```rust
-impl umbra::orm::Searchable for Plugin {
+impl umbral::orm::Searchable for Plugin {
     fn kind() -> &'static str { "plugin" }
     fn ident() -> &'static str { "slug" }
 
@@ -58,7 +58,7 @@ impl umbra::orm::Searchable for Plugin {
 - **`title()`** — the single column surfaced as `SearchHit.title`, and weighted highest in ranking (a title match outranks a body-only match). Default: the column named `title` or `name`, else the first text column.
 
 <Callout type="warning">
-These are the **SQL column names** passed as strings, not Rust column constants. For umbra models the column name is the struct field name — the `short_description` field is the `"short_description"` column — so use the field name verbatim.
+These are the **SQL column names** passed as strings, not Rust column constants. For umbral models the column name is the struct field name — the `short_description` field is the `"short_description"` column — so use the field name verbatim.
 </Callout>
 
 ## Restrict which rows are searchable
@@ -66,14 +66,14 @@ These are the **SQL column names** passed as strings, not Rust column constants.
 By default every row of an opted-in model is searchable. Override `filter_sql()` to scope it — typically to a published/approved state — so drafts or unmoderated rows never surface:
 
 ```rust
-impl umbra::orm::Searchable for Plugin {
+impl umbral::orm::Searchable for Plugin {
     fn kind() -> &'static str { "plugin" }
     fn ident() -> &'static str { "slug" }
     fn filter_sql() -> Option<&'static str> { Some("moderation = 'approved'") }
 }
 ```
 
-The string is a **static SQL boolean ANDed into the search `WHERE`**. Soft-delete is handled for you: a `#[umbra(soft_delete)]` model automatically excludes `deleted_at IS NULL`, so `filter_sql` is only for business rules.
+The string is a **static SQL boolean ANDed into the search `WHERE`**. Soft-delete is handled for you: a `#[umbral(soft_delete)]` model automatically excludes `deleted_at IS NULL`, so `filter_sql` is only for business rules.
 
 ### Any column, and compound conditions
 
@@ -87,7 +87,7 @@ fn filter_sql() -> Option<&'static str> {
 ```
 
 - **Choice columns** — compared to the stored string: `status = 'published'`.
-- **FK columns** — compared to the parent's id (umbra's FK column is the field name): `author = 5`, or `category IN (1, 2, 3)`.
+- **FK columns** — compared to the parent's id (umbral's FK column is the field name): `author = 5`, or `category IN (1, 2, 3)`.
 - **Booleans / numbers / dates / nullability** — `featured = true`, `price > 0`, `archived_at IS NULL`.
 
 <Callout type="warning">
@@ -115,7 +115,7 @@ BlogPost::objects()
 Pass a tuple of `Searchable` models (arity 1–6):
 
 ```rust
-let hits = umbra::orm::Search::across::<(Plugin, BlogPost)>("redis cache", 10).await?;
+let hits = umbral::orm::Search::across::<(Plugin, BlogPost)>("redis cache", 10).await?;
 for hit in hits {
     // hit.kind  — "plugin" / "blog"   (route on this)
     // hit.pk    — the ident value as text (e.g. the slug)

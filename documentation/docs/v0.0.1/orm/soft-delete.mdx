@@ -7,7 +7,7 @@ tags: [orm, soft-delete, trash]
 
 # Soft delete
 
-Tag a model `#[umbra(soft_delete)]` and the framework stops destroying its rows: `delete()` becomes an `UPDATE ... SET deleted_at = <now>` (the current UTC timestamp, bound as a parameter — not a SQL `NOW()` call, so it's identical on SQLite and Postgres), and every normal query automatically excludes rows where `deleted_at` is set. You get a trash can instead of a shredder: undo, audits, and "restore this account" flows all stay possible.
+Tag a model `#[umbral(soft_delete)]` and the framework stops destroying its rows: `delete()` becomes an `UPDATE ... SET deleted_at = <now>` (the current UTC timestamp, bound as a parameter — not a SQL `NOW()` call, so it's identical on SQLite and Postgres), and every normal query automatically excludes rows where `deleted_at` is set. You get a trash can instead of a shredder: undo, audits, and "restore this account" flows all stay possible.
 
 The rewrite is idempotent: it only touches rows where `deleted_at IS NULL`, so re-deleting an already-trashed row never bumps its timestamp.
 
@@ -15,7 +15,7 @@ You declare the timestamp column yourself (the marker doesn't synthesize it):
 
 ```rust
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(soft_delete)]
+#[umbral(soft_delete)]
 pub struct Post {
     pub id: i64,
     pub title: String,
@@ -71,7 +71,7 @@ Soft-deleted rows still exist: they count toward UNIQUE constraints, foreign key
 
 The dynamic path (`DynQuerySet`) used by the admin and the REST plugin honours soft-delete identically: list endpoints exclude trashed rows by default, and the DELETE endpoint soft-deletes instead of hard-deleting. The same `with_deleted()` / `only_deleted()` / `hard_delete()` toggles are available on `DynQuerySet`, plus a `restore()` terminal that clears `deleted_at` on the matched trashed rows (the inverse of a soft `delete()`).
 
-The admin ships a full trash UI for any `#[umbra(soft_delete)]` model, with no per-model config:
+The admin ships a full trash UI for any `#[umbral(soft_delete)]` model, with no per-model config:
 
 - A **Trash / Active toggle** in the changelist header (with a trashed-row count badge). `?trash=1` lists only soft-deleted rows; the default view shows the live set.
 - A built-in **Restore selected** bulk action (and per-row restore in the trash view) that calls `DynQuerySet::restore()`.
@@ -80,4 +80,4 @@ The admin ships a full trash UI for any `#[umbra(soft_delete)]` model, with no p
 
 Restore is gated by the `change_<model>` permission; Delete-permanently by `delete_<model>`. See the [Admin plugin docs](/docs/v0.0.1/plugins/admin) for the trash workflow.
 
-Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72, gaps2 #34), `crates/umbra-core/tests/soft_delete_dynamic.rs` (gaps2 #35), and `plugins/umbra-admin/tests/soft_delete_admin.rs` (the admin trash UI); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.
+Pinned by `crates/umbral-core/tests/soft_delete.rs` (feature #72, gaps2 #34), `crates/umbral-core/tests/soft_delete_dynamic.rs` (gaps2 #35), and `plugins/umbral-admin/tests/soft_delete_admin.rs` (the admin trash UI); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbral-core/src/orm/model.rs`.

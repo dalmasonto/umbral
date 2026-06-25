@@ -6,12 +6,12 @@ icon: route
 tags: [web, routing]
 ---
 
-`Routes` is umbra's URL-patterns builder. Each `.get(...)`, `.post(...)`, etc. call **registers the handler with the axum router AND records the path in the framework's route registry** in the same step. The dev-mode 404 page reads that registry, so the URL list it shows always matches what's actually wired in. No parallel `path_list` to drift out of sync.
+`Routes` is umbral's URL-patterns builder. Each `.get(...)`, `.post(...)`, etc. call **registers the handler with the axum router AND records the path in the framework's route registry** in the same step. The dev-mode 404 page reads that registry, so the URL list it shows always matches what's actually wired in. No parallel `path_list` to drift out of sync.
 
 ## The basic shape
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 App::builder()
     .routes(
@@ -49,7 +49,7 @@ When you need middleware (auth gating, rate-limiting, per-route timeouts) on **o
 
 ```rust
 use axum::routing::get;
-use umbra_auth::login_required::login_required_html;
+use umbral_auth::login_required::login_required_html;
 
 Routes::new()
     .get("/", home)

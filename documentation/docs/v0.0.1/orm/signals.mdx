@@ -7,9 +7,9 @@ tags: [orm, signals, hooks, audit, m2m]
 
 # Signals
 
-Umbra ships a name-keyed in-process pub/sub. Subscribers register handlers against a signal name; ORM write paths fire those names with a JSON payload. Plugins (audit logs, notifications, cache invalidation) hang functionality off the events without touching the framework's write code.
+Umbral ships a name-keyed in-process pub/sub. Subscribers register handlers against a signal name; ORM write paths fire those names with a JSON payload. Plugins (audit logs, notifications, cache invalidation) hang functionality off the events without touching the framework's write code.
 
-The facade module `umbra::signals` re-exports the full application surface: `subscribe`, `subscribe_async`, `emit`, and the actor helpers `with_actor` / `current_actor`.
+The facade module `umbral::signals` re-exports the full application surface: `subscribe`, `subscribe_async`, `emit`, and the actor helpers `with_actor` / `current_actor`.
 
 ## Signal names
 
@@ -31,14 +31,14 @@ User-defined signals keep their own namespace. The `<event>:<table>` prefix on O
 
 ### Typed and dynamic paths fire the same signals (gaps #77)
 
-`DynQuerySet` is the runtime-typed ORM surface that REST endpoints (`umbra-rest`) and admin form submits (`umbra-admin`) write through. Every signal in the table above fires from BOTH the typed `Manager` / `QuerySet` paths AND the dynamic `DynQuerySet::insert_json` / `update_json` / `delete` paths, so an audit-log subscriber on `post_save:order` sees writes from a typed handler, a REST `POST /api/order/`, and an admin form-create alike. The signal name + payload shape are identical across surfaces.
+`DynQuerySet` is the runtime-typed ORM surface that REST endpoints (`umbral-rest`) and admin form submits (`umbral-admin`) write through. Every signal in the table above fires from BOTH the typed `Manager` / `QuerySet` paths AND the dynamic `DynQuerySet::insert_json` / `update_json` / `delete` paths, so an audit-log subscriber on `post_save:order` sees writes from a typed handler, a REST `POST /api/order/`, and an admin form-create alike. The signal name + payload shape are identical across surfaces.
 
 PK shape: the `instance` JSON and `ids` array carry the row's primary key in whatever shape the model declares (`i64`, `String`, `Uuid`). Subscribers that index on PK should read the value as a `serde_json::Value` rather than assuming `i64`. The framework's planned `PrimaryKey` refactor will lift the rest of the i64-hardcoded surfaces, and signal subscribers should already be forward-compatible.
 
 ## Subscribing
 
 ```rust
-use umbra::signals::{subscribe, subscribe_async};
+use umbral::signals::{subscribe, subscribe_async};
 
 // Sync handler: runs inline during emit().
 subscribe("post_save:post", |payload| {
@@ -61,7 +61,7 @@ Handlers stack in registration order. Multiple handlers per name all run.
 Every signal payload carries an `"actor"` key whose value is whatever JSON the nearest enclosing `with_actor(...)` scope set. With no scope active, the value is `Value::Null`. This is how an audit-log plugin learns who triggered a write without each plugin reinventing the same middleware.
 
 ```rust
-use umbra::signals::with_actor;
+use umbral::signals::with_actor;
 use serde_json::json;
 
 // Typical auth middleware: resolve the request's identity into JSON,
@@ -106,13 +106,13 @@ The `created` field on `bulk_post_save` is `true` for INSERT terminals (`bulk_cr
 
 ## Update signals: the old row, snapshotted
 
-`pre_save` / `post_save` fire on **both** INSERT and UPDATE, and carry only the new instance. A whole class of subscribers — audit-log diffs, change tracking, and umbra-storage's file replace-cleanup — also need the row as it looked **before** the UPDATE. That's what `pre_update:<table>` / `post_update:<table>` add:
+`pre_save` / `post_save` fire on **both** INSERT and UPDATE, and carry only the new instance. A whole class of subscribers — audit-log diffs, change tracking, and umbral-storage's file replace-cleanup — also need the row as it looked **before** the UPDATE. That's what `pre_update:<table>` / `post_update:<table>` add:
 
 - They fire on **UPDATE only** — never INSERT. (`Manager::create` and the INSERT branch of `Manager::save` never emit them.)
 - Their payload carries **both** rows: `previous` (the pre-UPDATE row read from the DB) and `instance` (the new value, post-UPDATE for `post_update`).
 
 ```rust
-use umbra::signals::subscribe_async;
+use umbral::signals::subscribe_async;
 
 // Audit a price change with the before/after values.
 subscribe_async("post_update:product", |payload| async move {
@@ -126,7 +126,7 @@ subscribe_async("post_update:product", |payload| async move {
 
 ### The old-row read is subscriber-gated
 
-Snapshotting `previous` costs an extra `SELECT ... WHERE pk = ?` on every UPDATE. The save path only pays that cost when a `pre_update:<table>` or `post_update:<table>` subscriber actually exists — checked via `umbra::signals::has_subscribers(name)`. With nobody listening (the common case) the read is skipped entirely and the signal fires to zero handlers at no extra cost. Registering a single `*_update` handler turns the read on.
+Snapshotting `previous` costs an extra `SELECT ... WHERE pk = ?` on every UPDATE. The save path only pays that cost when a `pre_update:<table>` or `post_update:<table>` subscriber actually exists — checked via `umbral::signals::has_subscribers(name)`. With nobody listening (the common case) the read is skipped entirely and the signal fires to zero handlers at no extra cost. Registering a single `*_update` handler turns the read on.
 
 The snapshot is read just before the UPDATE, so a concurrent writer between the snapshot and the UPDATE is a best-effort TOCTOU window — `previous` reflects the row at snapshot time, not necessarily the exact row the UPDATE overwrote. For audit/cleanup use cases this is acceptable.
 
@@ -154,8 +154,8 @@ subscribe("m2m_changed:post_tags", |payload| {
 The actor merge lives inside `emit()`, not the per-helper emitters. That means user-defined signals fired through `emit("my_event", payload).await` also pick up the actor automatically:
 
 ```rust
-use umbra::signals::emit;
-use umbra::signals::with_actor;
+use umbral::signals::emit;
+use umbral::signals::with_actor;
 
 with_actor(json!({ "id": 7 }), async {
     emit("payment_captured", json!({ "amount_cents": 4200 })).await;

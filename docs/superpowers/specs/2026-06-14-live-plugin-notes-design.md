@@ -1,7 +1,7 @@
 # Live plugin notes: publish-then-moderate + instant SSE insert
 
 Date: 2026-06-14
-Area: `umbra_website` / `plugin_directory` plugin
+Area: `umbral_website` / `plugin_directory` plugin
 Status: approved (design)
 
 ## Problem

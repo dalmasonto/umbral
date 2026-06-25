@@ -9,7 +9,7 @@ tags: [orm, masked, encryption, gdpr, pii, security]
 
 `Masked<String>` is a string field that is **stored encrypted** in the database and **redacted** everywhere it would otherwise leak. Use it for PII (phone numbers, national IDs, addresses) and secrets (API keys, OAuth tokens): a stolen database dump leaks ciphertext, not plaintext.
 
-The full surface lives in `umbra::orm`: `Masked`, `MaskKeyring`, `MaskError`, `set_mask_keyring`.
+The full surface lives in `umbral::orm`: `Masked`, `MaskKeyring`, `MaskError`, `set_mask_keyring`.
 
 <Callout type="info">
 `Masked` is the building block the [OAuth plugin](../auth/oauth) uses to store provider access/refresh tokens. Anything you'd be uncomfortable seeing in a `pg_dump` is a candidate.
@@ -51,14 +51,14 @@ cargo run -- maskkeygen
 It prints two lines. Add them to your environment (a `.env` file in dev, your secret manager in prod):
 
 ```bash
-UMBRA_MASK_PUBLIC_KEY=...   # encrypts; every tier that WRITES masked data needs it
-UMBRA_MASK_PRIVATE_KEY=...  # decrypts / reveal(); keep secret; deleting it crypto-shreds
+UMBRAL_MASK_PUBLIC_KEY=...   # encrypts; every tier that WRITES masked data needs it
+UMBRAL_MASK_PRIVATE_KEY=...  # decrypts / reveal(); keep secret; deleting it crypto-shreds
 ```
 
 The keyring is resolved **once** (an ambient `OnceLock`, like the DB pool), lazily from the environment on first use. You can also inject it explicitly, useful in tests, or when loading keys from a vault rather than env vars:
 
 ```rust
-use umbra::orm::{MaskKeyring, set_mask_keyring};
+use umbral::orm::{MaskKeyring, set_mask_keyring};
 
 set_mask_keyring(MaskKeyring::from_base64(&public_b64, Some(&private_b64))?);
 ```
@@ -72,7 +72,7 @@ If a key env-var **is** set but is malformed (bad base64 or not 32 bytes), every
 ## Declaring and using a masked field
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
 pub struct Customer {
@@ -117,7 +117,7 @@ The `#[derive(Model)]` macro recognises `Masked<String>` and `Option<Masked<Stri
 |---|---|
 | `MaskKeyring::generate() -> (String, String)` | A fresh `(public_b64, private_b64)` keypair. |
 | `MaskKeyring::from_base64(pub, Some(priv))` | Build a keyring from base64 keys (private optional). |
-| `MaskKeyring::from_env()` | Read `UMBRA_MASK_PUBLIC_KEY` / `UMBRA_MASK_PRIVATE_KEY`. |
+| `MaskKeyring::from_env()` | Read `UMBRAL_MASK_PUBLIC_KEY` / `UMBRAL_MASK_PRIVATE_KEY`. |
 | `.seal(bytes) -> String` / `.open(ct) -> Result<String, MaskError>` | Low-level seal/open against this specific keyring (no ambient state). |
 
 ### `MaskError`
@@ -132,7 +132,7 @@ Each encryption uses a fresh ephemeral key, so the same plaintext seals to diffe
 
 ### Masked fields are excluded from auto-generated forms
 
-A `Masked` field is treated as `#[umbra(noform)]` automatically: a struct can derive both `Model` and `umbra::forms::Form` with masked fields and they're simply skipped (no compile error, no manual attribute). They're considered **server-set**: set them in your handler with `Masked::new(value)`.
+A `Masked` field is treated as `#[umbral(noform)]` automatically: a struct can derive both `Model` and `umbral::forms::Form` with masked fields and they're simply skipped (no compile error, no manual attribute). They're considered **server-set**: set them in your handler with `Masked::new(value)`.
 
 This is deliberate. The generic form pipeline can't safely round-trip a secret on *edit*: it can't pre-fill the existing value (the stored value is ciphertext, and revealing it into an HTML input would defeat the point), and a blank resubmit is ambiguous between "no change" and "clear it". So rather than half-support a footgun, masked fields stay off forms.
 
@@ -152,7 +152,7 @@ A sealed box adds ~48 bytes (ephemeral public key + nonce + auth tag) before bas
 
 <Steps>
 <Step title="Erasure (right to be forgotten)">
-For a clean break across *all* masked data, destroy `UMBRA_MASK_PRIVATE_KEY`: every masked column becomes permanently unrecoverable (crypto-shredding), no row updates needed. For per-user erasure, overwrite or delete that user's rows as usual.
+For a clean break across *all* masked data, destroy `UMBRAL_MASK_PRIVATE_KEY`: every masked column becomes permanently unrecoverable (crypto-shredding), no row updates needed. For per-user erasure, overwrite or delete that user's rows as usual.
 </Step>
 <Step title="Key rotation">
 Keep the old private key available, decrypt-with-old and re-encrypt-with-new in a one-off migration, then retire the old key. (A dedicated rotation command is a planned follow-up; today this is a manual pass.)

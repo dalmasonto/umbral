@@ -1,13 +1,13 @@
 ---
 title: Caching
-description: In-memory, SQLite, and Redis cache backends plus view-level cache_page middleware for umbra.
+description: In-memory, SQLite, and Redis cache backends plus view-level cache_page middleware for umbral.
 sidebar_position: 12
 tags: [cache, redis, performance, middleware]
 ---
 
 # Caching
 
-umbra's cache plugin (`umbra-cache`) mirrors Django's cache framework: one `Cache` handle over a swappable `CacheBackend` trait, three built-in backends (memory, SQLite, Redis), and a view-level `cache_page` middleware that caches full GET responses for a route subtree.
+umbral's cache plugin (`umbral-cache`) mirrors Django's cache framework: one `Cache` handle over a swappable `CacheBackend` trait, three built-in backends (memory, SQLite, Redis), and a view-level `cache_page` middleware that caches full GET responses for a route subtree.
 
 ## Backends
 
@@ -33,7 +33,7 @@ Table-backed and durable across restarts. Expired rows are skipped on read; call
 Requires the `redis` cargo feature:
 
 ```toml
-umbra-cache = { version = "0.0.1", features = ["redis"] }
+umbral-cache = { version = "0.0.1", features = ["redis"] }
 ```
 
 ```rust
@@ -44,7 +44,7 @@ URL form: `redis://[user:pass@]host:port/[db]`. Uses `redis::aio::ConnectionMana
 
 ## Registering the ambient cache
 
-`cache_page` and `umbra_cache::ambient()` both read the process-wide ambient handle. The idiomatic way to install it is to register `CachePlugin::new(cache)` on the builder - `on_ready` wires the carried cache as the ambient handle at boot:
+`cache_page` and `umbral_cache::ambient()` both read the process-wide ambient handle. The idiomatic way to install it is to register `CachePlugin::new(cache)` on the builder - `on_ready` wires the carried cache as the ambient handle at boot:
 
 ```rust
 App::builder()
@@ -62,13 +62,13 @@ CachePlugin::init(Cache::memory());
 
 ## Using the cache in handlers
 
-Reach the process-wide handle from any handler with `umbra_cache::ambient()` (it returns `Option<&'static Cache>`, `None` until `CachePlugin::init` has run):
+Reach the process-wide handle from any handler with `umbral_cache::ambient()` (it returns `Option<&'static Cache>`, `None` until `CachePlugin::init` has run):
 
 ```rust
 use std::time::Duration;
 
 async fn home() -> impl IntoResponse {
-    let cache = umbra_cache::ambient().expect("cache initialised at boot");
+    let cache = umbral_cache::ambient().expect("cache initialised at boot");
     if let Some(html) = cache.get::<String>("homepage:html").await {
         return Html(html);
     }
@@ -85,7 +85,7 @@ async fn home() -> impl IntoResponse {
 `cache_page(ttl)` is a tower `Layer` that caches full GET/HEAD responses for a route subtree - the Rust equivalent of Django's `@cache_page(seconds)`.
 
 ```rust
-use umbra_cache::cache_page;
+use umbral_cache::cache_page;
 use std::time::Duration;
 
 let public = Router::new()

@@ -29,13 +29,13 @@ The cross-backend types compile and run against both Postgres and SQLite. The Po
 | `Vec<u8>` | `Bytes` | `BYTEA` | `BLOB` |
 | `Vec<T>` (Postgres-only, `T` ≠ `u8`) | `Array(T)` | `T[]` | - (boot fails) |
 | `ipnetwork::IpNetwork` (Postgres-only) | `Inet` | `INET` | - (boot fails) |
-| `ipnetwork::IpNetwork` + `#[umbra(cidr)]` (Postgres-only) | `Cidr` | `CIDR` | - (boot fails) |
+| `ipnetwork::IpNetwork` + `#[umbral(cidr)]` (Postgres-only) | `Cidr` | `CIDR` | - (boot fails) |
 | `mac_address::MacAddress` (Postgres-only) | `MacAddr` | `MACADDR` | - (boot fails) |
-| `mac_address::MacAddress` + `#[umbra(macaddr)]` (Postgres-only) | `MacAddr` | `MACADDR` | - (boot fails) |
-| `String` + `#[umbra(xml)]` (Postgres-only) | `Xml` | `XML` | - (boot fails) |
-| `String` + `#[umbra(ltree)]` (Postgres-only) | `Ltree` | `LTREE` | - (boot fails) |
-| `String` + `#[umbra(bit)]` (Postgres-only) | `Bit` | `BIT VARYING` | - (boot fails) |
-| `umbra::orm::TsVector` (Postgres-only) | `FullText` | `TSVECTOR` | - (boot fails) |
+| `mac_address::MacAddress` + `#[umbral(macaddr)]` (Postgres-only) | `MacAddr` | `MACADDR` | - (boot fails) |
+| `String` + `#[umbral(xml)]` (Postgres-only) | `Xml` | `XML` | - (boot fails) |
+| `String` + `#[umbral(ltree)]` (Postgres-only) | `Ltree` | `LTREE` | - (boot fails) |
+| `String` + `#[umbral(bit)]` (Postgres-only) | `Bit` | `BIT VARYING` | - (boot fails) |
+| `umbral::orm::TsVector` (Postgres-only) | `FullText` | `TSVECTOR` | - (boot fails) |
 | `rust_decimal::Decimal` (Postgres-only) | `Decimal` | `NUMERIC(19, 4)` | - (boot fails) |
 | `Option<rust_decimal::Decimal>` (Postgres-only) | `Decimal` (nullable) | `NUMERIC(19, 4)` | - (boot fails) |
 | `ForeignKey<T>` | `ForeignKey` | `BIGINT REFERENCES "t"("id")` | `BIGINT REFERENCES "t"("id")` |
@@ -48,17 +48,17 @@ Off-catalogue types and the explicitly-rejected wide / unsigned ints (`i128`, `u
 
 Two layers, two knobs. Pick the one whose error site matches where you want the failure to surface.
 
-### At the model - `#[umbra(max_length = N)]`
+### At the model - `#[umbral(max_length = N)]`
 
 Declared on a `String` field in `#[derive(Model)]`. Three effects, all opt-in:
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
 pub struct Article {
     pub id: i64,
-    #[umbra(string, max_length = 64)]
+    #[umbral(string, max_length = 64)]
     pub title: String,
     pub body: String,                           // unbounded TEXT
     pub published_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -72,14 +72,14 @@ pub struct Article {
 | Admin form widget | `Text + max_length > 0` renders as `<input type="text" maxlength="64">` (single-line). Without `max_length`, the field renders as a `<textarea>` (prose). |
 | Admin changelist | The value is truncated at `N` characters when rendered in `list_display`, with `…` appended so the cut is visible. |
 
-`#[umbra(string)]` is the sibling attribute - it marks one field as the Django-style `__str__`, so the admin's default `list_display` becomes `[<that field>, <other short columns>]` when no explicit config is registered. See [Models - Display hints](./models#display-hints-string-max_length) for the full opt-in story.
+`#[umbral(string)]` is the sibling attribute - it marks one field as the Django-style `__str__`, so the admin's default `list_display` becomes `[<that field>, <other short columns>]` when no explicit config is registered. See [Models - Display hints](./models#display-hints-string-max_length) for the full opt-in story.
 
 ### At the boundary - `#[derive(Form)]`
 
 Use this when you want the validation to fire on the *request* boundary (a 400 with field-level errors), not at the database. The validator is a separate struct that deserialises the request body:
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(serde::Deserialize, Form)]
 pub struct CreatePost {
@@ -96,11 +96,11 @@ The `Form` derive produces a typed validator that returns `400 Bad Request` with
 
 | You want | Reach for |
 |---|---|
-| One length cap, enforced everywhere | `#[umbra(max_length = N)]` on the model |
+| One length cap, enforced everywhere | `#[umbral(max_length = N)]` on the model |
 | Different caps in different request flows | `#[derive(Form)]` per request |
-| Database-level enforcement on Postgres | `#[umbra(max_length = N)]` (lifts to `VARCHAR(N)`) |
+| Database-level enforcement on Postgres | `#[umbral(max_length = N)]` (lifts to `VARCHAR(N)`) |
 | Min length, email shape, password strength | `#[derive(Form)]` - model attributes don't cover these |
-| Both | Set both. They compose - `#[umbra(...)]` shapes the DDL + admin; `#[derive(Form)]` validates inputs ahead of the model. |
+| Both | Set both. They compose - `#[umbral(...)]` shapes the DDL + admin; `#[derive(Form)]` validates inputs ahead of the model. |
 
 If you need a database-level constraint the model attributes don't cover (regex, unique-conditional-on-something, computed values), edit the generated migration JSON directly. The model snapshot doesn't round-trip those, so the constraint lives in migrations only - which is fine, because at that point the DB schema is the source of truth for that rule, not the Rust struct.
 
@@ -128,15 +128,15 @@ These four attributes configure the model as a whole. They go **on the struct**,
 
 | Attribute | Effect |
 |---|---|
-| `#[umbra(table = "...")]` | Override the snake_case-of-struct-name table default. |
-| `#[umbra(plugin = "...")]` | Prefix the table with the plugin namespace (`blog_post`). Skipped silently when `plugin = "app"` since that's the implicit user-binary namespace. |
-| `#[umbra(display = "...")]` | Human label shown in the admin sidebar. Defaults to the struct name. |
-| `#[umbra(icon = "...")]` | Lucide icon slug. Defaults to `database`. |
+| `#[umbral(table = "...")]` | Override the snake_case-of-struct-name table default. |
+| `#[umbral(plugin = "...")]` | Prefix the table with the plugin namespace (`blog_post`). Skipped silently when `plugin = "app"` since that's the implicit user-binary namespace. |
+| `#[umbral(display = "...")]` | Human label shown in the admin sidebar. Defaults to the struct name. |
+| `#[umbral(icon = "...")]` | Lucide icon slug. Defaults to `database`. |
 
 ```rust
 // ← Struct-level attributes go HERE, above the struct keyword
 #[derive(Model)]
-#[umbra(table = "auth_user", display = "Users", icon = "users")]
+#[umbral(table = "auth_user", display = "Users", icon = "users")]
 pub struct User {
     pub id: i64,
     pub email: String,
@@ -152,7 +152,7 @@ Every attribute below is declared **on the field line itself**, right before the
 pub struct Post {
     pub id: i64,
     // ↓ Field-level attribute on this specific column
-    #[umbra(string, max_length = 64)]
+    #[umbral(string, max_length = 64)]
     pub title: String,
 }
 ```
@@ -163,53 +163,53 @@ The macro reads each field-level attribute straight off the struct field. Empty 
 
 | Attribute | Effect |
 |---|---|
-| `#[umbra(auto_now_add)]` | Stamp `Utc::now()` on INSERT. The required-field check skips the column; clients can omit it from the body and the ORM fills it in at the write seam. Standard `created_at` pattern. |
-| `#[umbra(auto_now)]` | Stamp `Utc::now()` on INSERT **and every UPDATE**. `auto_now_add` columns stay frozen at their creation timestamp; `auto_now` columns refresh continuously. Standard `updated_at` pattern. |
-| `#[umbra(noform)]` | Client never writes - stripped from `insert_json` / `update_json` bodies. The admin hides the column on every form. Use for `password_hash`, internal tokens, server-managed audit fields. |
-| `#[umbra(noedit)]` | Admin edit form shows the field read-only (UX hint, not an API contract). REST writes still accept the value. |
-| `#[umbra(index)]` | Single-column index in the DDL. The migration engine emits `CREATE INDEX` on both backends. |
-| `#[umbra(unique)]` | UNIQUE constraint in the DDL. UNIQUE violations on insert / update surface as `WriteError::UniqueViolation { field, value }` - REST renders them as `{ "slug": ["A row with slug='widget' already exists."] }`. |
-| `#[umbra(default = "...")]` | DDL default for the column - the string lands verbatim in the `DEFAULT` clause (booleans are translated to `1`/`0` on SQLite). For a `choices` field use the DB literal (`"draft"`), **not** the Rust path (`"PostStatus::Draft"`); see [Defaults: two mechanisms](#defaults-two-mechanisms-two-layers). Required when adding a NOT NULL column to a populated table - Postgres / SQLite reject the ALTER otherwise. Also the value the DB uses when an INSERT omits the column. |
-| `#[umbra(help = "...")]` | OpenAPI `description` + a hint line under the admin form input. One place to say "use Markdown here" or "ISO-8601 date": it reaches both the API docs and the editor. |
-| `#[umbra(widget = "markdown" \| "rte" \| "code" \| "textarea")]` | Presentation hint for form renderers (features.md #4). Metadata only, no DDL change. In the admin: `markdown` mounts an EasyMDE editor (toolbar + sandboxed live preview), `rte` a Quill rich-text editor (stores HTML, render with `\| sanitize`), `code` a CodeMirror editor (JSON syntax + line numbers) for JSON/structured text. Pair `markdown` with the [`\| markdown` filter](#rendering-markdown-safely) on the display side. An unrecognised widget name falls back to the type-derived input, so plugin-defined widgets never break the form. |
-| `#[umbra(example = "...")]` | OpenAPI `example` value. Generated clients show it as a placeholder; the playground uses it to seed the request body. |
-| `#[umbra(on_delete = "cascade" \| "restrict" \| "set_null" \| "no_action")]` | FK `ON DELETE` clause. Default `no_action` (SQL standard's default - no extra clause emitted). Applies only to `ForeignKey<T>` columns; a typed error fires at derive time if you set it on a non-FK field. |
-| `#[umbra(on_update = "...")]` | FK `ON UPDATE` clause. Same vocabulary as `on_delete`. |
-| `#[umbra(min = N)]` / `#[umbra(max = N)]` | Numeric range validator. The dynamic-write path returns `WriteError::Validator { field, message }`; Postgres also gets a DDL CHECK so direct DB writes are caught. SQLite skips the CHECK (its CHECK syntax is more friction than safety here). |
-| `#[umbra(backend = "postgres")]` / `#[umbra(backend = "sqlite")]` | Restrict this field to a specific backend. The boot-time system check fails when the active backend isn't in the allow-list. Repeat the attribute to allow several. |
-| `#[umbra(string)]` / `#[umbra(string = true)]` | Mark this field as the Django-style `__str__`. The admin uses it as the label column in the default `list_display` and as the picker label in FK / M2M choosers. See [Models - Display hints](./models#display-hints-string-max_length). |
-| `#[umbra(max_length = N)]` | Cap on a `String` field. Postgres DDL emits `VARCHAR(N)`; SQLite stays `TEXT` (affinity-equivalent). Admin form renders as `<input maxlength="N">` instead of `<textarea>`; changelist truncates display at N chars. |
-| `#[umbra(choices)]` | The field's type implements [`umbra::orm::ChoiceField`] (typically via `#[derive(Choices)]`). Stored as TEXT; admin renders a `<select>`; Postgres gets a CHECK constraint. See ["Using a Rust enum"](#derivechoices---using-a-rust-enum-as-a-field-type) below. |
-| `#[umbra(cidr)]` | On an `ipnetwork::IpNetwork` field, declare it as Postgres `CIDR` (network address) instead of the default `INET`. Postgres-only. |
-| `#[umbra(macaddr)]` | Explicit marker for a `mac_address::MacAddress` field (`MACADDR`). The type already auto-detects, so this only documents intent. Postgres-only. |
-| `#[umbra(xml)]` / `#[umbra(ltree)]` / `#[umbra(bit)]` | On a `String` (or `Option<String>`) field, declare it as a Postgres `XML` / `LTREE` / `BIT VARYING` column instead of `TEXT`. Text-backed - the Rust type stays `String`. Postgres-only. See [Text-backed Postgres types](#text-backed-postgres-types---xml-ltree-bit). |
+| `#[umbral(auto_now_add)]` | Stamp `Utc::now()` on INSERT. The required-field check skips the column; clients can omit it from the body and the ORM fills it in at the write seam. Standard `created_at` pattern. |
+| `#[umbral(auto_now)]` | Stamp `Utc::now()` on INSERT **and every UPDATE**. `auto_now_add` columns stay frozen at their creation timestamp; `auto_now` columns refresh continuously. Standard `updated_at` pattern. |
+| `#[umbral(noform)]` | Client never writes - stripped from `insert_json` / `update_json` bodies. The admin hides the column on every form. Use for `password_hash`, internal tokens, server-managed audit fields. |
+| `#[umbral(noedit)]` | Admin edit form shows the field read-only (UX hint, not an API contract). REST writes still accept the value. |
+| `#[umbral(index)]` | Single-column index in the DDL. The migration engine emits `CREATE INDEX` on both backends. |
+| `#[umbral(unique)]` | UNIQUE constraint in the DDL. UNIQUE violations on insert / update surface as `WriteError::UniqueViolation { field, value }` - REST renders them as `{ "slug": ["A row with slug='widget' already exists."] }`. |
+| `#[umbral(default = "...")]` | DDL default for the column - the string lands verbatim in the `DEFAULT` clause (booleans are translated to `1`/`0` on SQLite). For a `choices` field use the DB literal (`"draft"`), **not** the Rust path (`"PostStatus::Draft"`); see [Defaults: two mechanisms](#defaults-two-mechanisms-two-layers). Required when adding a NOT NULL column to a populated table - Postgres / SQLite reject the ALTER otherwise. Also the value the DB uses when an INSERT omits the column. |
+| `#[umbral(help = "...")]` | OpenAPI `description` + a hint line under the admin form input. One place to say "use Markdown here" or "ISO-8601 date": it reaches both the API docs and the editor. |
+| `#[umbral(widget = "markdown" \| "rte" \| "code" \| "textarea")]` | Presentation hint for form renderers (features.md #4). Metadata only, no DDL change. In the admin: `markdown` mounts an EasyMDE editor (toolbar + sandboxed live preview), `rte` a Quill rich-text editor (stores HTML, render with `\| sanitize`), `code` a CodeMirror editor (JSON syntax + line numbers) for JSON/structured text. Pair `markdown` with the [`\| markdown` filter](#rendering-markdown-safely) on the display side. An unrecognised widget name falls back to the type-derived input, so plugin-defined widgets never break the form. |
+| `#[umbral(example = "...")]` | OpenAPI `example` value. Generated clients show it as a placeholder; the playground uses it to seed the request body. |
+| `#[umbral(on_delete = "cascade" \| "restrict" \| "set_null" \| "no_action")]` | FK `ON DELETE` clause. Default `no_action` (SQL standard's default - no extra clause emitted). Applies only to `ForeignKey<T>` columns; a typed error fires at derive time if you set it on a non-FK field. |
+| `#[umbral(on_update = "...")]` | FK `ON UPDATE` clause. Same vocabulary as `on_delete`. |
+| `#[umbral(min = N)]` / `#[umbral(max = N)]` | Numeric range validator. The dynamic-write path returns `WriteError::Validator { field, message }`; Postgres also gets a DDL CHECK so direct DB writes are caught. SQLite skips the CHECK (its CHECK syntax is more friction than safety here). |
+| `#[umbral(backend = "postgres")]` / `#[umbral(backend = "sqlite")]` | Restrict this field to a specific backend. The boot-time system check fails when the active backend isn't in the allow-list. Repeat the attribute to allow several. |
+| `#[umbral(string)]` / `#[umbral(string = true)]` | Mark this field as the Django-style `__str__`. The admin uses it as the label column in the default `list_display` and as the picker label in FK / M2M choosers. See [Models - Display hints](./models#display-hints-string-max_length). |
+| `#[umbral(max_length = N)]` | Cap on a `String` field. Postgres DDL emits `VARCHAR(N)`; SQLite stays `TEXT` (affinity-equivalent). Admin form renders as `<input maxlength="N">` instead of `<textarea>`; changelist truncates display at N chars. |
+| `#[umbral(choices)]` | The field's type implements [`umbral::orm::ChoiceField`] (typically via `#[derive(Choices)]`). Stored as TEXT; admin renders a `<select>`; Postgres gets a CHECK constraint. See ["Using a Rust enum"](#derivechoices---using-a-rust-enum-as-a-field-type) below. |
+| `#[umbral(cidr)]` | On an `ipnetwork::IpNetwork` field, declare it as Postgres `CIDR` (network address) instead of the default `INET`. Postgres-only. |
+| `#[umbral(macaddr)]` | Explicit marker for a `mac_address::MacAddress` field (`MACADDR`). The type already auto-detects, so this only documents intent. Postgres-only. |
+| `#[umbral(xml)]` / `#[umbral(ltree)]` / `#[umbral(bit)]` | On a `String` (or `Option<String>`) field, declare it as a Postgres `XML` / `LTREE` / `BIT VARYING` column instead of `TEXT`. Text-backed - the Rust type stays `String`. Postgres-only. See [Text-backed Postgres types](#text-backed-postgres-types---xml-ltree-bit). |
 
 ```rust
 use chrono::{DateTime, Utc};
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
 pub struct Post {
     pub id: i64,
-    #[umbra(string, max_length = 64)]              // label + VARCHAR(64) on PG
+    #[umbral(string, max_length = 64)]              // label + VARCHAR(64) on PG
     pub title: String,
     pub body: String,                              // unbounded TEXT
-    #[umbra(unique, max_length = 80)]              // UNIQUE constraint
+    #[umbral(unique, max_length = 80)]              // UNIQUE constraint
     pub slug: String,
-    #[umbra(index)]                                // single-column index
+    #[umbral(index)]                                // single-column index
     pub status: String,
-    #[umbra(min = 0, max = 100_000)]               // bounded integer
+    #[umbral(min = 0, max = 100_000)]               // bounded integer
     pub view_count: i64,
 
     /// Set once at INSERT time, never updated.
-    #[umbra(auto_now_add)]
+    #[umbral(auto_now_add)]
     pub created_at: DateTime<Utc>,
 
     /// Refreshed on every UPDATE.
-    #[umbra(auto_now)]
+    #[umbral(auto_now)]
     pub updated_at: DateTime<Utc>,
 
-    #[umbra(noform)]                               // never appears on any form
+    #[umbral(noform)]                               // never appears on any form
     pub internal_token: String,
 }
 ```
@@ -232,23 +232,23 @@ pub struct CreateUser {
 
 `Form` and the model derive compose - the model shapes the DDL and the admin; `Form` validates inputs ahead of the model. See [`#[derive(Form)]`](#deriveform---request-boundary-validation) below.
 
-Foreign derive attributes (`#[serde(...)]`, `#[sqlx(...)]`, `#[validate(...)]`, etc.) are passed through untouched - the derive doesn't reject them, which lets you stack umbra's macro on top of whatever serialization / validation stack you already use.
+Foreign derive attributes (`#[serde(...)]`, `#[sqlx(...)]`, `#[validate(...)]`, etc.) are passed through untouched - the derive doesn't reject them, which lets you stack umbral's macro on top of whatever serialization / validation stack you already use.
 
 ## All derive macros at a glance
 
-umbra ships four proc-macros. The model derive is the most-used; the choices derive turns a Rust enum into a column field type; the form derive validates request bodies; the task attribute marks background jobs. Each gets a worked example below.
+umbral ships four proc-macros. The model derive is the most-used; the choices derive turns a Rust enum into a column field type; the form derive validates request bodies; the task attribute marks background jobs. Each gets a worked example below.
 
 ### `#[derive(Model)]` - the schema + admin surface
 
-Defined in `crates/umbra-macros/src/lib.rs::derive_model`. Reads each struct field, emits an `impl Model`, the `objects()` Manager entry point, and a sibling column module (`article::ID`, `article::TITLE`, …).
+Defined in `crates/umbral-macros/src/lib.rs::derive_model`. Reads each struct field, emits an `impl Model`, the `objects()` Manager entry point, and a sibling column module (`article::ID`, `article::TITLE`, …).
 
 **Every attribute it accepts:**
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
-#[umbra(
+#[umbral(
     table   = "blog_post",    // override the snake_case-of-struct-name default
     plugin  = "blog",         // prefix the table (no-op when plugin = "app")
     display = "Blog post",    // human label shown in the admin sidebar
@@ -257,12 +257,12 @@ use umbra::prelude::*;
 pub struct Post {
     pub id: i64,
 
-    #[umbra(string, max_length = 80)]     // __str__ label + VARCHAR(80) on PG
+    #[umbral(string, max_length = 80)]     // __str__ label + VARCHAR(80) on PG
     pub title: String,
 
     pub body: String,                      // unbounded TEXT, renders as <textarea>
 
-    #[umbra(noedit)]                       // read-only on edit, hidden on create
+    #[umbral(noedit)]                       // read-only on edit, hidden on create
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 ```
@@ -278,10 +278,10 @@ pub struct Post {
 
 ### `#[derive(Form)]` - request-boundary validation
 
-Defined in `crates/umbra-macros/src/lib.rs::derive_form`. Implements `umbra::forms::Form` so the struct can be `.parse(body)`-ed against a urlencoded or JSON body and reports field-level errors. Use it on a *separate struct* from your model - one for create, one for update, one per request shape that varies.
+Defined in `crates/umbral-macros/src/lib.rs::derive_form`. Implements `umbral::forms::Form` so the struct can be `.parse(body)`-ed against a urlencoded or JSON body and reports field-level errors. Use it on a *separate struct* from your model - one for create, one for update, one per request shape that varies.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(serde::Deserialize, Form)]
 pub struct CreateUser {
@@ -323,15 +323,15 @@ Off-catalogue field types (custom structs, `Vec<T>`, `HashMap<K,V>`) fail at der
 
 ### `#[task]` - background jobs
 
-The third macro is `#[umbra::task]`, an attribute macro on `async fn`. It emits a companion `register_<fn_name>()` you call at boot. Full reference lives with the tasks plugin - see [umbra-tasks › Declaring a task](/docs/v0.0.1/plugins/tasks#declaring-a-task-with-task).
+The third macro is `#[umbral::task]`, an attribute macro on `async fn`. It emits a companion `register_<fn_name>()` you call at boot. Full reference lives with the tasks plugin - see [umbral-tasks › Declaring a task](/docs/v0.0.1/plugins/tasks#declaring-a-task-with-task).
 
 ### `#[derive(Choices)]` - using a Rust enum as a field type
 
-A Rust enum can be used directly as a model field via `#[umbra(choices)]`. The framework stores the variant as TEXT in the database, lifts the variant list into the admin form (renders a `<select>`), and emits a Postgres `CHECK (col IN (...))` constraint so a third-party process writing directly to the database can't insert a value the enum can't model.
+A Rust enum can be used directly as a model field via `#[umbral(choices)]`. The framework stores the variant as TEXT in the database, lifts the variant list into the admin form (renders a `<select>`), and emits a Postgres `CHECK (col IN (...))` constraint so a third-party process writing directly to the database can't insert a value the enum can't model.
 
 ```rust
 use serde::{Deserialize, Serialize};
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
 #[choices(rename_all = "lowercase")]
@@ -345,10 +345,10 @@ pub enum PostStatus {
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
 pub struct Post {
     pub id: i64,
-    #[umbra(string, max_length = 80)]
+    #[umbral(string, max_length = 80)]
     pub title: String,
     pub body: String,
-    #[umbra(choices, default = "draft")]
+    #[umbral(choices, default = "draft")]
     pub status: PostStatus,
 }
 ```
@@ -368,7 +368,7 @@ let live = Post::objects()
     .await?;
 
 // Membership across several states: OR the equalities with a Q object.
-use umbra::orm::Q;
+use umbral::orm::Q;
 let active = Post::objects()
     .filter(Q::or(post::STATUS.eq("review"), post::STATUS.eq("published")))
     .fetch()
@@ -381,11 +381,11 @@ A choices field can carry two *different* defaults, and they live at different l
 
 | Mechanism | Layer | Who reads it |
 |---|---|---|
-| `#[umbra(default = "draft")]` on the **field** | Schema. The string lands **verbatim** in the migration's `DEFAULT` clause. | The database, whenever an INSERT omits the column. |
+| `#[umbral(default = "draft")]` on the **field** | Schema. The string lands **verbatim** in the migration's `DEFAULT` clause. | The database, whenever an INSERT omits the column. |
 | `#[default]` on a **variant** + `#[derive(Default)]` on the enum | Rust. Standard-library attribute; the ORM never reads it. | Anything that constructs the struct via `Default` - `T::default()` in a GET handler, the `..Default::default()` fill the Form derive uses for `noform` fields. |
 
 <Callout type="warning">
-`#[umbra(default = "...")]` takes the **DB literal** - the `rename_all`'d variant string (`"draft"`), never the Rust path. `default = "PostStatus::Draft"` emits `DEFAULT 'PostStatus::Draft'` into the DDL: on Postgres the CHECK constraint rejects it at insert time; on SQLite it stores text the enum can't decode, and the row errors on the next SELECT.
+`#[umbral(default = "...")]` takes the **DB literal** - the `rename_all`'d variant string (`"draft"`), never the Rust path. `default = "PostStatus::Draft"` emits `DEFAULT 'PostStatus::Draft'` into the DDL: on Postgres the CHECK constraint rejects it at insert time; on SQLite it stores text the enum can't decode, and the row errors on the next SELECT.
 </Callout>
 
 The two usually agree (`#[default] Draft` + `default = "draft"`), but they may differ deliberately: a public-submission form fills `source` from `Default::default()` (say `community`) while rows inserted without the column at the SQL level get the schema default (say `official`). Just be aware which path creates each row.
@@ -394,7 +394,7 @@ The two usually agree (`#[default] Draft` + `default = "draft"`), but they may d
 
 | Item | Why |
 |---|---|
-| `impl umbra::orm::ChoiceField` | Trait carrying `VALUES` (DB strings) + `LABELS` (admin display) + `as_str` + `from_str_ok`. The `Model` derive reads `VALUES` / `LABELS` at compile time to populate the column's `FieldSpec`. |
+| `impl umbral::orm::ChoiceField` | Trait carrying `VALUES` (DB strings) + `LABELS` (admin display) + `as_str` + `from_str_ok`. The `Model` derive reads `VALUES` / `LABELS` at compile time to populate the column's `FieldSpec`. |
 | `impl Display` + `impl FromStr` | String round-trip. |
 | `impl sqlx::Type` + `Encode` + `Decode` for `Sqlite` and `Postgres` | The bind / decode path. `sqlx::query!` works without per-variant glue. |
 
@@ -427,7 +427,7 @@ This composes with `#[derive(Form)]` if you have additional request-shape rules 
 `MultiChoice<E>` is the multi-valued counterpart to `#[derive(Choices)]`. Where a `Choices` field carries one variant, a `MultiChoice<E>` field carries an ordered list of distinct variants of the same enum. Storage is a single TEXT column holding a comma-separated list of the variants' DB strings - e.g. `"design,frontend"`. The admin renders the field as a checkbox-chip group (one chip per variant) backed by a hidden CSV input.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "lowercase")]
@@ -436,15 +436,15 @@ pub enum Tag { Design, Frontend, Backend, DevOps }
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
 pub struct Article {
     pub id: i64,
-    #[umbra(string, max_length = 120)]
+    #[umbral(string, max_length = 120)]
     pub title: String,
     pub body: String,
-    #[umbra(default = "design,frontend")]
+    #[umbral(default = "design,frontend")]
     pub tags: MultiChoice<Tag>,
 }
 ```
 
-The Rust type drives detection - no `#[umbra(multichoice)]` marker is required; the macro recognises `MultiChoice<E>` directly. `#[umbra(default = "...")]` is a CSV of the initial variants, used both as the SQL `DEFAULT` and as the value `ALTER TABLE ADD COLUMN` applies to existing rows.
+The Rust type drives detection - no `#[umbral(multichoice)]` marker is required; the macro recognises `MultiChoice<E>` directly. `#[umbral(default = "...")]` is a CSV of the initial variants, used both as the SQL `DEFAULT` and as the value `ALTER TABLE ADD COLUMN` applies to existing rows.
 
 **Reading and writing.** `Article { tags: vec![Tag::Design, Tag::Backend].into(), .. }` round-trips through sqlx as the TEXT value `'design,backend'`. The wrapper exposes the usual collection surface - `.as_slice()`, `.into_vec()`, `.push(...)`, `.contains(...)`, iteration, `Deref<Target=[E]>`. On the serde side it serialises to a JSON array of strings (`["design","backend"]`); deserialisation accepts both the JSON array form and the CSV string form (the latter is what HTML form posts produce).
 
@@ -453,7 +453,7 @@ The Rust type drives detection - no `#[umbra(multichoice)]` marker is required; 
 | Concern | `Choices` (single) | `MultiChoice<E>` (multi) |
 |---|---|---|
 | Rust field type | `EnumName` directly | `MultiChoice<EnumName>` wrapper |
-| Attribute marker | `#[umbra(choices)]` required | Detected from the type - no marker |
+| Attribute marker | `#[umbral(choices)]` required | Detected from the type - no marker |
 | DB storage | TEXT, one variant string | TEXT, CSV of variant strings |
 | Postgres `CHECK` | `CHECK (col IN ('a', 'b', ...))` | Skipped at v1 - application-layer enforcement via sqlx `Decode` |
 | Admin widget | `<select>` | Checkbox-chip group + hidden CSV |
@@ -467,31 +467,31 @@ The Rust type drives detection - no `#[umbra(multichoice)]` marker is required; 
 
 ## Slug, email & URL fields
 
-`umbra::orm::Slug`, `Email`, and `Url` are **validated text** types: each stores as a `TEXT` column but carries a `text_format` marker (`slug` / `email` / `url`) that flows to OpenAPI (`format` / `pattern`), the REST write path (a structured 400 on a bad value), and the admin widget. The type alone gives you the format check — you still supply the value.
+`umbral::orm::Slug`, `Email`, and `Url` are **validated text** types: each stores as a `TEXT` column but carries a `text_format` marker (`slug` / `email` / `url`) that flows to OpenAPI (`format` / `pattern`), the REST write path (a structured 400 on a bad value), and the admin widget. The type alone gives you the format check — you still supply the value.
 
 ```rust
-use umbra::orm::Slug;
+use umbral::orm::Slug;
 
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
-#[umbra(table = "articles")]
+#[umbral(table = "articles")]
 pub struct Article {
     pub id: i64,
     pub title: String,
-    #[umbra(slug_from = "title", unique)]
+    #[umbral(slug_from = "title", unique)]
     pub slug: Slug,
 }
 ```
 
 ### Auto-deriving a slug
 
-`Slug` only validates — it doesn't generate. Add `#[umbra(slug_from = "<column>")]` to fill the slug from a sibling column. `slugify` lowercases the source, replaces runs of non-alphanumerics with a single `-`, and trims dashes, so `"Hello, World!"` becomes `"hello-world"`.
+`Slug` only validates — it doesn't generate. Add `#[umbral(slug_from = "<column>")]` to fill the slug from a sibling column. `slugify` lowercases the source, replaces runs of non-alphanumerics with a single `-`, and trims dashes, so `"Hello, World!"` becomes `"hello-world"`.
 
 - **On create** — an empty or absent slug becomes `slugify(<source>)`.
 - **On update** — the slug regenerates from the source **only when the source column is in the payload**. If you don't send the source, the existing slug is left untouched, so editing an unrelated field never clobbers a hand-tuned slug.
 - **An explicit, non-empty slug always wins** — send your own value (on create or update) and `slug_from` leaves it alone.
 
 <Callout type="warning">
-`slug_from` runs on the **dynamic write path** — REST endpoints and the admin (anything going through JSON `create` / `update`). The **typed** path `Article::objects().create(obj)` does **not** auto-fill; build the value yourself with `umbra::orm::slugify(&title)`.
+`slug_from` runs on the **dynamic write path** — REST endpoints and the admin (anything going through JSON `create` / `update`). The **typed** path `Article::objects().create(obj)` does **not** auto-fill; build the value yourself with `umbral::orm::slugify(&title)`.
 </Callout>
 
 ### Editing a title, keeping the slug in sync
@@ -506,7 +506,7 @@ The two update rules combine into a predictable editing model:
 
 ### Uniqueness on update
 
-A `#[umbra(unique)]` slug is enforced by the **database constraint** — umbra runs no application-level pre-check. The dynamic update is `UPDATE … WHERE <pk> = id`, so **re-sending a row its own slug never conflicts** (no *other* row holds that value); you do **not** need to strip the slug from an update payload. A violation fires only when the slug collides with a **different** row — for example, renaming a title so its slug matches an existing post's.
+A `#[umbral(unique)]` slug is enforced by the **database constraint** — umbral runs no application-level pre-check. The dynamic update is `UPDATE … WHERE <pk> = id`, so **re-sending a row its own slug never conflicts** (no *other* row holds that value); you do **not** need to strip the slug from an update payload. A violation fires only when the slug collides with a **different** row — for example, renaming a title so its slug matches an existing post's.
 
 ## Nullability
 
@@ -545,7 +545,7 @@ Use for anything that stores opaque bytes: file uploads, encrypted envelopes, ha
 #[derive(Model)]
 pub struct Attachment {
     pub id: i64,
-    #[umbra(string, max_length = 200)]
+    #[umbral(string, max_length = 200)]
     pub filename: String,
     pub mime_type: String,
     /// Raw bytes. NULL allowed via `Option<Vec<u8>>`.
@@ -572,7 +572,7 @@ JSON wire shape (REST API request bodies, admin form values, backup `dumpdata` o
 
 ## Postgres-only types
 
-`Vec<T>`, `ipnetwork::IpNetwork`, `mac_address::MacAddress`, `umbra::orm::TsVector`, `rust_decimal::Decimal` (a fixed-point `NUMERIC(19, 4)`; both `Decimal` and `Option<Decimal>` are supported), and the text-backed types `XML` / `LTREE` / `BIT VARYING` are Postgres-only. A model that includes one of these fields:
+`Vec<T>`, `ipnetwork::IpNetwork`, `mac_address::MacAddress`, `umbral::orm::TsVector`, `rust_decimal::Decimal` (a fixed-point `NUMERIC(19, 4)`; both `Decimal` and `Option<Decimal>` are supported), and the text-backed types `XML` / `LTREE` / `BIT VARYING` are Postgres-only. A model that includes one of these fields:
 
 - Boots clean against a `PgPool`.
 - Fails the boot-time system check against a `SqlitePool` with an error pointing at the model and field name.
@@ -585,24 +585,24 @@ The per-type predicate surface (array `.contains` / `.overlaps`, JSON `.path_tex
 `XML`, `LTREE`, and `BIT VARYING` have a faithful textual representation, so they map to a Rust `String` at the value level but get their own native Postgres column type. Opt in with a field attribute on a `String` (or `Option<String>`) field:
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
 pub struct Document {
     pub id: i64,
-    #[umbra(xml)]   pub body: String,          // XML
-    #[umbra(ltree)] pub path: String,          // LTREE  (e.g. "Top.Science.Astronomy")
-    #[umbra(bit)]   pub flags: String,         // BIT VARYING  (e.g. "101")
-    #[umbra(xml)]   pub note: Option<String>,  // nullable XML
+    #[umbral(xml)]   pub body: String,          // XML
+    #[umbral(ltree)] pub path: String,          // LTREE  (e.g. "Top.Science.Astronomy")
+    #[umbral(bit)]   pub flags: String,         // BIT VARYING  (e.g. "101")
+    #[umbral(xml)]   pub note: Option<String>,  // nullable XML
 }
 ```
 
 Notes and limits at v1:
 
-- `LTREE` requires the `ltree` extension in the target database (`CREATE EXTENSION ltree`). umbra emits the bare `ltree` column type; installing the extension is the operator's job.
-- `bit` renders as variable-length `BIT VARYING`. A fixed-width `BIT(n)` needs a hand-written migration until a `#[umbra(bit_len = N)]` attribute lands for a real consumer.
-- `#[umbra(macaddr)]` is an explicit marker for a `mac_address::MacAddress` field. The type already auto-detects to `MACADDR`, so the attribute only documents intent.
-- `inspectdb` recovers these columns as plain `String` fields (the attribute lives only in the source model, not the database), so re-add `#[umbra(xml)]` / `#[umbra(ltree)]` / `#[umbra(bit)]` if you want the native type back on a re-migrate.
+- `LTREE` requires the `ltree` extension in the target database (`CREATE EXTENSION ltree`). umbral emits the bare `ltree` column type; installing the extension is the operator's job.
+- `bit` renders as variable-length `BIT VARYING`. A fixed-width `BIT(n)` needs a hand-written migration until a `#[umbral(bit_len = N)]` attribute lands for a real consumer.
+- `#[umbral(macaddr)]` is an explicit marker for a `mac_address::MacAddress` field. The type already auto-detects to `MACADDR`, so the attribute only documents intent.
+- `inspectdb` recovers these columns as plain `String` fields (the attribute lives only in the source model, not the database), so re-add `#[umbral(xml)]` / `#[umbral(ltree)]` / `#[umbral(bit)]` if you want the native type back on a re-migrate.
 
 ### Still deferred
 
@@ -628,34 +628,34 @@ At query time, `post::AUTHOR.eq(42)` filters by the raw FK integer. To load the 
 
 Two field-level attributes tell the admin how to render (or suppress) a column on create and edit forms. They are declared on the struct field alongside your normal Rust type, and take effect automatically in the admin UI.
 
-### `#[umbra(noform)]`
+### `#[umbral(noform)]`
 
 The column never appears on any form - neither create nor edit. Use this for fields the user should never touch directly:
 
 ```rust
-#[derive(Debug, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, sqlx::FromRow, umbral::orm::Model)]
 pub struct AuthUser {
     pub id: i64,
     pub username: String,
-    #[umbra(noform)]       // the admin hides this column on all forms
+    #[umbral(noform)]       // the admin hides this column on all forms
     pub password_hash: String,
 }
 ```
 
 When `noform` is set, `noedit` is moot (noform takes precedence). Sensitive columns like `password_hash` benefit from the `password_field("password_hash")` AdminModel builder instead, which adds a dedicated "Change password" dialog on edit forms.
 
-### `#[umbra(noedit)]`
+### `#[umbral(noedit)]`
 
 The column appears on the edit form as a read-only display, but cannot be changed. The user sees the value without being able to modify it. On create forms the column is omitted entirely (it has no value yet):
 
 ```rust
-#[derive(Debug, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, sqlx::FromRow, umbral::orm::Model)]
 pub struct AuthUser {
     pub id: i64,
     pub username: String,
-    #[umbra(noedit)]       // shown read-only on edit; hidden on create
+    #[umbral(noedit)]       // shown read-only on edit; hidden on create
     pub email: String,
-    #[umbra(noform)]       // never shown
+    #[umbral(noform)]       // never shown
     pub password_hash: String,
 }
 ```
@@ -672,14 +672,14 @@ See the [admin reference](../plugins/admin) for the `password_field(...)` builde
 
 ## Rendering markdown safely
 
-Text/body fields (plugin descriptions, usage docs, reviews) are usually authored in Markdown. Capture the source in a plain `String` column, hint the editor with `#[umbra(widget = "markdown")]` + `#[umbra(help = "...")]`, and render it on the display side with the built-in `| markdown` filter:
+Text/body fields (plugin descriptions, usage docs, reviews) are usually authored in Markdown. Capture the source in a plain `String` column, hint the editor with `#[umbral(widget = "markdown")]` + `#[umbral(help = "...")]`, and render it on the display side with the built-in `| markdown` filter:
 
 ```rust
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
 pub struct Plugin {
     pub id: i64,
     pub name: String,
-    #[umbra(widget = "markdown", help = "Markdown supported: headings, lists, tables, code.")]
+    #[umbral(widget = "markdown", help = "Markdown supported: headings, lists, tables, code.")]
     pub body: String,
 }
 ```
@@ -699,10 +699,10 @@ The column stays plain `TEXT`: `widget` is a rendering hint, not a data type. Sy
 
 ### The `rte` widget: rich text to HTML
 
-`#[umbra(widget = "rte")]` mounts a [Quill](https://quilljs.com) rich-text editor instead. Unlike `markdown`, the `rte` field **stores HTML**, so render it with the `| sanitize` filter (Quill's HTML, cleaned to a safe allowlist, the display companion to `| markdown`):
+`#[umbral(widget = "rte")]` mounts a [Quill](https://quilljs.com) rich-text editor instead. Unlike `markdown`, the `rte` field **stores HTML**, so render it with the `| sanitize` filter (Quill's HTML, cleaned to a safe allowlist, the display companion to `| markdown`):
 
 ```rust
-#[umbra(widget = "rte", help = "Rich text.")]
+#[umbral(widget = "rte", help = "Rich text.")]
 pub announcement: String,   // stores HTML
 ```
 
@@ -718,10 +718,10 @@ The admin editor previews are sandboxed (rendered HTML is run through DOMPurify 
 
 ### The `code` widget: JSON / structured text
 
-`#[umbra(widget = "code")]` mounts a [CodeMirror](https://codemirror.net) editor with JSON syntax highlighting and line numbers: the comfortable way to edit a `Json` column or any `String` holding structured text:
+`#[umbral(widget = "code")]` mounts a [CodeMirror](https://codemirror.net) editor with JSON syntax highlighting and line numbers: the comfortable way to edit a `Json` column or any `String` holding structured text:
 
 ```rust
-#[umbra(widget = "code", help = "JSON object, see the schema docs.")]
+#[umbral(widget = "code", help = "JSON object, see the schema docs.")]
 pub config: serde_json::Value,
 ```
 

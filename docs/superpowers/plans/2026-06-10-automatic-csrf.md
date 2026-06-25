@@ -4,7 +4,7 @@
 
 **Goal:** Django-parity CSRF — the SecurityPlugin middleware is the only token mint, templates receive `csrf_token` / `csrf_input` ambiently, view code contains zero CSRF lines.
 
-**Architecture:** A `CURRENT_CSRF` tokio task-local in `umbra-core` (mirroring the existing `CURRENT_USER` seam) is scoped by `csrf_middleware` around every non-exempt request and merged into every `templates::render` context. The middleware mints pre-handler on safe methods (first visit + rotation of stale unsigned cookies), so handlers and the admin never mint. `signed_csrf` flips to default-on.
+**Architecture:** A `CURRENT_CSRF` tokio task-local in `umbral-core` (mirroring the existing `CURRENT_USER` seam) is scoped by `csrf_middleware` around every non-exempt request and merged into every `templates::render` context. The middleware mints pre-handler on safe methods (first visit + rotation of stale unsigned cookies), so handlers and the admin never mint. `signed_csrf` flips to default-on.
 
 **Tech Stack:** Rust, axum 0.8, tokio task_local, minijinja, hmac/sha2/subtle (already deps). Spec: `docs/decisions/2026-06-10-automatic-csrf.md`.
 
@@ -18,13 +18,13 @@
 ### Task 1: Core — `CURRENT_CSRF` task-local + render merge
 
 **Files:**
-- Modify: `crates/umbra-core/src/templates.rs` (task_local block ~line 58, `merge_ambient_user` ~line 398-449)
-- Modify: `crates/umbra/src/lib.rs:331` (facade re-export)
-- Test: `crates/umbra-core/tests/csrf_context.rs` (new)
+- Modify: `crates/umbral-core/src/templates.rs` (task_local block ~line 58, `merge_ambient_user` ~line 398-449)
+- Modify: `crates/umbral/src/lib.rs:331` (facade re-export)
+- Test: `crates/umbral-core/tests/csrf_context.rs` (new)
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `crates/umbra-core/tests/csrf_context.rs`. Follow the `template_discovery.rs` boot pattern (OnceLock-guarded `templates::init` over a TempDir):
+Create `crates/umbral-core/tests/csrf_context.rs`. Follow the `template_discovery.rs` boot pattern (OnceLock-guarded `templates::init` over a TempDir):
 
 ```rust
 //! The render merge for the ambient CSRF token: `{{ csrf_token }}`
@@ -36,7 +36,7 @@ use std::fs;
 use std::sync::OnceLock;
 
 use tempfile::TempDir;
-use umbra_core::templates;
+use umbral_core::templates;
 
 static DIR: OnceLock<TempDir> = OnceLock::new();
 
@@ -96,22 +96,22 @@ async fn current_csrf_reads_the_scoped_value() {
 }
 ```
 
-NOTE for the executor: check `templates::init`'s exact signature in `templates.rs` (the discovery test calls it with an ordered dir list) and adjust the `init` call to match. If `umbra-core` lacks a `serde_json` dev-dependency, use `minijinja::context!{}` / a small `#[derive(Serialize)]` struct instead.
+NOTE for the executor: check `templates::init`'s exact signature in `templates.rs` (the discovery test calls it with an ordered dir list) and adjust the `init` call to match. If `umbral-core` lacks a `serde_json` dev-dependency, use `minijinja::context!{}` / a small `#[derive(Serialize)]` struct instead.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd crates && cargo test -p umbra-core --test csrf_context`
+Run: `cd crates && cargo test -p umbral-core --test csrf_context`
 Expected: compile error — `with_current_csrf` / `current_csrf` not found.
 
 - [ ] **Step 3: Implement the task-local and the merge**
 
-In `crates/umbra-core/src/templates.rs`, extend the existing `tokio::task_local!` block (line ~58):
+In `crates/umbral-core/src/templates.rs`, extend the existing `tokio::task_local!` block (line ~58):
 
 ```rust
 tokio::task_local! {
     pub static CURRENT_USER: Option<minijinja::Value>;
 
-    /// Per-request CSRF token, set by `umbra-security`'s middleware and
+    /// Per-request CSRF token, set by `umbral-security`'s middleware and
     /// read by [`render`] to inject `csrf_token` / `csrf_input` into every
     /// template — Django's `{% csrf_token %}` ergonomic. Outside the
     /// middleware's scope nothing is injected.
@@ -123,7 +123,7 @@ Below `with_current_user`, add:
 
 ```rust
 /// Run `fut` with the ambient CSRF token scoped for its duration.
-/// Intended for the CSRF middleware in `umbra-security`.
+/// Intended for the CSRF middleware in `umbral-security`.
 pub async fn with_current_csrf<F: std::future::Future>(token: Option<String>, fut: F) -> F::Output {
     CURRENT_CSRF.scope(token, fut).await
 }
@@ -201,10 +201,10 @@ fn merge_ambient<C: Serialize>(ctx: &C) -> minijinja::Value {
 
 Keep the existing doc-comment's intent, extending it to mention both `user` and the CSRF pair. Preserve the comment about the 500-recovery path.
 
-In `crates/umbra/src/lib.rs` line 331, widen the facade re-export:
+In `crates/umbral/src/lib.rs` line 331, widen the facade re-export:
 
 ```rust
-pub use umbra_core::templates::{
+pub use umbral_core::templates::{
     CURRENT_CSRF, CURRENT_USER, TemplateError, current_csrf, render, with_current_csrf,
     with_current_user,
 };
@@ -212,14 +212,14 @@ pub use umbra_core::templates::{
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd crates && cargo test -p umbra-core --test csrf_context`
-Expected: 4 passed. Also run `cargo test -p umbra-core` — the existing template tests (user merge, discovery, img filter) must stay green.
+Run: `cd crates && cargo test -p umbral-core --test csrf_context`
+Expected: 4 passed. Also run `cargo test -p umbral-core` — the existing template tests (user merge, discovery, img filter) must stay green.
 
 - [ ] **Step 5: Workspace verify + commit**
 
 ```bash
 cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test
-git add crates/umbra-core/src/templates.rs crates/umbra/src/lib.rs crates/umbra-core/tests/csrf_context.rs
+git add crates/umbral-core/src/templates.rs crates/umbral/src/lib.rs crates/umbral-core/tests/csrf_context.rs
 git commit -m "feat(templates): ambient CSRF token in every render via CURRENT_CSRF task-local
 
 csrf_token (raw) and csrf_input (hidden <input>, Django's {% csrf_token %}
@@ -236,12 +236,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: Security — middleware-only mint, rotation, append, signed default
 
 **Files:**
-- Modify: `plugins/umbra-security/src/lib.rs` (crate docs 34-63, `SecurityConfig::default` ~198, `CsrfState` ~365, `csrf_middleware` ~494-577, delete `ensure_csrf_cookie` ~630 + `response_sets_csrf_cookie` ~640, `tokens_match` → pub ~653)
-- Test: `plugins/umbra-security/tests/csrf_flow.rs` (new; dev-deps tokio/tower/http-body-util already present)
+- Modify: `plugins/umbral-security/src/lib.rs` (crate docs 34-63, `SecurityConfig::default` ~198, `CsrfState` ~365, `csrf_middleware` ~494-577, delete `ensure_csrf_cookie` ~630 + `response_sets_csrf_cookie` ~640, `tokens_match` → pub ~653)
+- Test: `plugins/umbral-security/tests/csrf_flow.rs` (new; dev-deps tokio/tower/http-body-util already present)
 
 - [ ] **Step 1: Write the failing integration tests**
 
-Create `plugins/umbra-security/tests/csrf_flow.rs`:
+Create `plugins/umbral-security/tests/csrf_flow.rs`:
 
 ```rust
 //! End-to-end CSRF middleware flow against a real axum Router:
@@ -256,7 +256,7 @@ use axum::routing::{get, post};
 use axum::{Router, middleware};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
-use umbra_security::test_support::csrf_layer_for_tests;
+use umbral_security::test_support::csrf_layer_for_tests;
 
 async fn body_string(resp: axum::response::Response) -> String {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -267,16 +267,16 @@ fn app(signed: bool, secret: Option<&str>) -> Router {
     let routes = Router::new()
         .route(
             "/form",
-            get(|| async { umbra::templates::current_csrf().unwrap_or_default() }),
+            get(|| async { umbral::templates::current_csrf().unwrap_or_default() }),
         )
         .route(
             "/form",
-            post(|| async { umbra::templates::current_csrf().unwrap_or_default() }),
+            post(|| async { umbral::templates::current_csrf().unwrap_or_default() }),
         )
         .route(
             "/with-session-cookie",
             get(|| async {
-                ([(header::SET_COOKIE, "umbra_session=abc; Path=/")], "ok")
+                ([(header::SET_COOKIE, "umbral_session=abc; Path=/")], "ok")
             }),
         );
     routes.layer(csrf_layer_for_tests(signed, secret.map(str::to_string)))
@@ -285,7 +285,7 @@ fn app(signed: bool, secret: Option<&str>) -> Router {
 fn cookie_token(resp: &axum::response::Response) -> Option<String> {
     resp.headers().get_all(header::SET_COOKIE).iter().find_map(|v| {
         let s = v.to_str().ok()?;
-        let rest = s.strip_prefix("umbra_csrf_token=")?;
+        let rest = s.strip_prefix("umbral_csrf_token=")?;
         Some(rest.split(';').next().unwrap_or("").to_string())
     })
 }
@@ -316,8 +316,8 @@ async fn set_cookie_is_appended_not_replaced() {
         .iter()
         .map(|v| v.to_str().unwrap().to_string())
         .collect();
-    assert!(cookies.iter().any(|c| c.starts_with("umbra_session=")), "{cookies:?}");
-    assert!(cookies.iter().any(|c| c.starts_with("umbra_csrf_token=")), "{cookies:?}");
+    assert!(cookies.iter().any(|c| c.starts_with("umbral_session=")), "{cookies:?}");
+    assert!(cookies.iter().any(|c| c.starts_with("umbral_csrf_token=")), "{cookies:?}");
 }
 
 #[tokio::test]
@@ -327,7 +327,7 @@ async fn valid_post_passes_and_has_token_in_scope_for_rerenders() {
     let resp = app
         .oneshot(
             Request::post("/form")
-                .header(header::COOKIE, format!("umbra_csrf_token={tok}"))
+                .header(header::COOKIE, format!("umbral_csrf_token={tok}"))
                 .header("x-csrf-token", tok.clone())
                 .body(Body::empty())
                 .unwrap(),
@@ -344,7 +344,7 @@ async fn mismatched_post_is_403() {
     let resp = app
         .oneshot(
             Request::post("/form")
-                .header(header::COOKIE, format!("umbra_csrf_token={}", "a".repeat(64)))
+                .header(header::COOKIE, format!("umbral_csrf_token={}", "a".repeat(64)))
                 .header("x-csrf-token", "b".repeat(64))
                 .body(Body::empty())
                 .unwrap(),
@@ -360,7 +360,7 @@ async fn stale_unsigned_cookie_rotates_under_signed_mode() {
     let resp = app
         .oneshot(
             Request::get("/form")
-                .header(header::COOKIE, format!("umbra_csrf_token={}", "a".repeat(64)))
+                .header(header::COOKIE, format!("umbral_csrf_token={}", "a".repeat(64)))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -385,7 +385,7 @@ async fn valid_signed_cookie_is_not_rotated() {
     let second = app
         .oneshot(
             Request::get("/form")
-                .header(header::COOKIE, format!("umbra_csrf_token={minted}"))
+                .header(header::COOKIE, format!("umbral_csrf_token={minted}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -429,12 +429,12 @@ NOTE for the executor: the exact `FromFnLayer` type is unwieldy — the simpler 
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd crates && cargo test -p umbra-security --test csrf_flow`
+Run: `cd crates && cargo test -p umbral-security --test csrf_flow`
 Expected: FAIL — `test_support` unimplemented / handler sees empty token (current middleware mints post-handler and never scopes).
 
 - [ ] **Step 3: Rewrite the middleware**
 
-In `plugins/umbra-security/src/lib.rs`:
+In `plugins/umbral-security/src/lib.rs`:
 
 (a) Add to `CsrfState`:
 
@@ -475,7 +475,7 @@ fn token_acceptable(&self, token: &str, session_value: Option<&str>) -> bool {
             _ => (mint_token(&state, session_value.as_deref()), true),
         };
         let mut response =
-            umbra::templates::with_current_csrf(Some(token.clone()), next.run(req)).await;
+            umbral::templates::with_current_csrf(Some(token.clone()), next.run(req)).await;
         if minted {
             let mut cookie = format!("{CSRF_COOKIE}={token}; Path=/; SameSite=Lax");
             if state.secure {
@@ -504,7 +504,7 @@ fn token_acceptable(&self, token: &str, session_value: Option<&str>) -> bool {
             if csrf_valid(&state, c, h, session_value.as_deref()) {
                 let token = c.clone();
                 return Ok(
-                    umbra::templates::with_current_csrf(Some(token), next.run(req)).await
+                    umbral::templates::with_current_csrf(Some(token), next.run(req)).await
                 );
             }
         }
@@ -524,7 +524,7 @@ fn token_acceptable(&self, token: &str, session_value: Option<&str>) -> bool {
             if let Some(s) = form_field_token(&bytes) {
                 if csrf_valid(&state, &cookie_owned, &s, session_value.as_deref()) {
                     let req = Request::from_parts(parts, Body::from(bytes));
-                    return Ok(umbra::templates::with_current_csrf(
+                    return Ok(umbral::templates::with_current_csrf(
                         Some(cookie_owned),
                         next.run(req),
                     )
@@ -552,14 +552,14 @@ pub fn tokens_match(a: &str, b: &str) -> bool {
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd crates && cargo test -p umbra-security`
+Run: `cd crates && cargo test -p umbral-security`
 Expected: all unit tests + 6 integration tests pass. The existing `unsigned_mode_is_plain_double_submit` etc. are unaffected (they build `CsrfState` directly).
 
 - [ ] **Step 5: Workspace verify + commit**
 
 ```bash
 cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test
-git add plugins/umbra-security/
+git add plugins/umbral-security/
 git commit -m "feat(security): middleware-only CSRF mint, ambient token, signed by default
 
 csrf_middleware now mints BEFORE the handler on safe methods (first
@@ -580,14 +580,14 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: Admin — ambient-first token, constant-time compare, htmx header
 
 **Files:**
-- Modify: `plugins/umbra-admin/src/auth.rs` (`ensure_csrf_token` ~196, `login_post` csrf check ~142, doc-comments ~61-69 and ~123-128)
-- Modify: `plugins/umbra-admin/templates/wrapper.html:493` (body tag)
-- Modify: `plugins/umbra-admin/src/assets/admin.js` (fetch calls ~58, ~91)
-- Test: `plugins/umbra-admin/tests/phase4_dashboard.rs` (append) + `#[cfg(test)]` in `auth.rs`
+- Modify: `plugins/umbral-admin/src/auth.rs` (`ensure_csrf_token` ~196, `login_post` csrf check ~142, doc-comments ~61-69 and ~123-128)
+- Modify: `plugins/umbral-admin/templates/wrapper.html:493` (body tag)
+- Modify: `plugins/umbral-admin/src/assets/admin.js` (fetch calls ~58, ~91)
+- Test: `plugins/umbral-admin/tests/phase4_dashboard.rs` (append) + `#[cfg(test)]` in `auth.rs`
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `plugins/umbra-admin/tests/phase4_dashboard.rs` (match the file's existing read-the-template-source style, e.g. the `admin_js_served_as_external_asset_not_inline` test):
+Append to `plugins/umbral-admin/tests/phase4_dashboard.rs` (match the file's existing read-the-template-source style, e.g. the `admin_js_served_as_external_asset_not_inline` test):
 
 ```rust
 /// docs/decisions/2026-06-10-automatic-csrf.md: every htmx request the
@@ -618,7 +618,7 @@ fn admin_js_fetches_send_csrf_header() {
 
 (Executor: check how the prefs fetches declare their method — adjust the `posts` needle to the actual source shape; the intent is "each POSTing fetch spreads the helper, plus the one definition site".)
 
-In `plugins/umbra-admin/src/auth.rs`, add at the bottom:
+In `plugins/umbral-admin/src/auth.rs`, add at the bottom:
 
 ```rust
 #[cfg(test)]
@@ -628,7 +628,7 @@ mod csrf_tests {
     #[tokio::test]
     async fn ensure_csrf_token_prefers_the_ambient_token() {
         let headers = HeaderMap::new();
-        let (tok, cookie) = umbra::templates::with_current_csrf(
+        let (tok, cookie) = umbral::templates::with_current_csrf(
             Some("ambient-token".to_string()),
             async { ensure_csrf_token(&headers) },
         )
@@ -649,7 +649,7 @@ mod csrf_tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd crates && cargo test -p umbra-admin wrapper_body_carries_csrf_hx_headers admin_js_fetches_send_csrf_header ensure_csrf_token`
+Run: `cd crates && cargo test -p umbral-admin wrapper_body_carries_csrf_hx_headers admin_js_fetches_send_csrf_header ensure_csrf_token`
 Expected: the two template/asset tests FAIL (attribute/helper absent); the ambient test FAILS (`ensure_csrf_token` reads only the cookie).
 
 - [ ] **Step 3: Implement**
@@ -659,21 +659,21 @@ Expected: the two template/asset tests FAIL (attribute/helper absent); the ambie
 ```rust
 /// Resolve the CSRF token for an admin-rendered form.
 ///
-/// 1. Ambient (`umbra::templates::current_csrf()`): `SecurityPlugin` is
+/// 1. Ambient (`umbral::templates::current_csrf()`): `SecurityPlugin` is
 ///    mounted — its middleware minted the token and owns the cookie; the
 ///    admin sets nothing.
 /// 2. Cookie fallback, then self-mint: no SecurityPlugin. The admin
 ///    stays self-protecting (login_post's own comparison is the
 ///    validator in this mode).
 fn ensure_csrf_token(headers: &HeaderMap) -> (String, Option<String>) {
-    if let Some(tok) = umbra::templates::current_csrf() {
+    if let Some(tok) = umbral::templates::current_csrf() {
         return (tok, None);
     }
-    if let Some(tok) = umbra_security::current_csrf_token(headers) {
+    if let Some(tok) = umbral_security::current_csrf_token(headers) {
         return (tok, None);
     }
-    let tok = umbra_security::generate_token();
-    let cookie = format!("umbra_csrf_token={tok}; Path=/; SameSite=Lax");
+    let tok = umbral_security::generate_token();
+    let cookie = format!("umbral_csrf_token={tok}; Path=/; SameSite=Lax");
     (tok, Some(cookie))
 }
 ```
@@ -683,7 +683,7 @@ fn ensure_csrf_token(headers: &HeaderMap) -> (String, Option<String>) {
 ```rust
     let csrf_ok = !submitted_csrf.is_empty()
         && !cookie_csrf.is_empty()
-        && umbra_security::tokens_match(submitted_csrf, &cookie_csrf);
+        && umbral_security::tokens_match(submitted_csrf, &cookie_csrf);
 ```
 
 (c) Update the `login_get` doc-comment (~61-69): the stale "the middleware mints one on the *next* GET" story is gone — with SecurityPlugin the token is ambient on the FIRST get; without it the admin self-mints immediately.
@@ -694,13 +694,13 @@ fn ensure_csrf_token(headers: &HeaderMap) -> (String, Option<String>) {
 <body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}' {% block body_attrs %}class="bg-background text-on-surface antialiased"{% endblock %}>
 ```
 
-(e) `admin.js` — add near the top (after the `umbraAdminBase` usage area):
+(e) `admin.js` — add near the top (after the `umbralAdminBase` usage area):
 
 ```js
   // Ambient CSRF: htmx requests inherit the header from <body hx-headers>;
   // raw fetch() calls read the (deliberately non-HttpOnly) cookie here.
   function csrfHeaders() {
-    var m = document.cookie.match(/(?:^|;\s*)umbra_csrf_token=([^;]*)/);
+    var m = document.cookie.match(/(?:^|;\s*)umbral_csrf_token=([^;]*)/);
     return m ? { 'X-CSRF-Token': decodeURIComponent(m[1]) } : {};
   }
 ```
@@ -708,7 +708,7 @@ fn ensure_csrf_token(headers: &HeaderMap) -> (String, Option<String>) {
 and spread it into both `/api/prefs` fetches, e.g.:
 
 ```js
-      fetch(umbraAdminBase + '/api/prefs', {
+      fetch(umbralAdminBase + '/api/prefs', {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, csrfHeaders()),
         body: JSON.stringify(payload),
@@ -719,14 +719,14 @@ and spread it into both `/api/prefs` fetches, e.g.:
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd crates && cargo test -p umbra-admin`
+Run: `cd crates && cargo test -p umbral-admin`
 Expected: new tests pass; the full admin suite (phase2/phase4, login flow) stays green.
 
 - [ ] **Step 5: Workspace verify + commit**
 
 ```bash
 cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo test
-git add plugins/umbra-admin/
+git add plugins/umbral-admin/
 git commit -m "fix(admin): carry the ambient CSRF token on every htmx and fetch write
 
 With SecurityPlugin mounted the admin's CRUD writes (sheet create/edit,
@@ -777,7 +777,7 @@ pub async fn contact(Query(query): Query<ContactQuery>) -> Result<Response, (Sta
         }
 ```
 
-Both render helpers drop the `csrf_token: &str` parameter and their `context!` calls become `context!(sent, form, errors)`. Remove the now-unused `HeaderMap` import (and `umbra::web::header::*` if nothing else uses it).
+Both render helpers drop the `csrf_token: &str` parameter and their `context!` calls become `context!(sent, form, errors)`. Remove the now-unused `HeaderMap` import (and `umbral::web::header::*` if nothing else uses it).
 
 `contact.html:29`:
 

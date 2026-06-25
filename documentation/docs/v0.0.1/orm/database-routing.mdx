@@ -7,7 +7,7 @@ tags: [orm, database, routing, multi-db, pools, multitenancy]
 
 # Database routing
 
-umbra can talk to more than one database at once. You register **named connection pools** (`"default"`, `"analytics"`, `"archive"`, …), then route individual models — or every model a plugin owns — to a specific pool. Each terminal query resolves its pool automatically; migrations split per database, each with its own tracking table.
+umbral can talk to more than one database at once. You register **named connection pools** (`"default"`, `"analytics"`, `"archive"`, …), then route individual models — or every model a plugin owns — to a specific pool. Each terminal query resolves its pool automatically; migrations split per database, each with its own tracking table.
 
 The model mirrors Django's database routers: a plugin is an "app" that can own its models' database, with per-model overrides on top.
 
@@ -16,11 +16,11 @@ The model mirrors Django's database routers: a plugin is an "app" that can own i
 `App::build()` is **synchronous**, so it does not open connections for you — connect each pool first (async), then register it under an alias. A `"default"` pool is **required**.
 
 ```rust
-use umbra::App;
+use umbral::App;
 
-// connect (async) — umbra::db::connect picks sqlite vs postgres from the URL
-let primary   = umbra::db::connect("postgres://user:pw@localhost/app").await?;
-let analytics = umbra::db::connect("postgres://user:pw@localhost/analytics").await?;
+// connect (async) — umbral::db::connect picks sqlite vs postgres from the URL
+let primary   = umbral::db::connect("postgres://user:pw@localhost/app").await?;
+let analytics = umbral::db::connect("postgres://user:pw@localhost/analytics").await?;
 
 App::builder()
     .settings(settings)
@@ -33,16 +33,16 @@ App::builder()
 `.database(alias, pool)` accepts a `sqlx::SqlitePool`, a `sqlx::PgPool`, or an already-built `DbPool`. The `"default"` pool's backend must match `settings.database_url`'s backend, or `build()` fails with a clear `DatabaseBackendMismatch` rather than a confusing query-time error.
 
 <Callout type="info">
-Connection URLs for extra databases can come from the environment: `UMBRA_DATABASES__ANALYTICS=postgres://…` populates `settings.databases["analytics"]`. umbra does **not** auto-connect those — read the URL from `settings.databases[alias]`, `connect` it, and register it with `.database(...)` yourself. (Auto-connecting the env map is a convenience that doesn't exist yet.)
+Connection URLs for extra databases can come from the environment: `UMBRAL_DATABASES__ANALYTICS=postgres://…` populates `settings.databases["analytics"]`. umbral does **not** auto-connect those — read the URL from `settings.databases[alias]`, `connect` it, and register it with `.database(...)` yourself. (Auto-connecting the env map is a convenience that doesn't exist yet.)
 </Callout>
 
 ## Route a model
 
-Point a single model at a pool with `#[umbra(database = "<alias>")]`:
+Point a single model at a pool with `#[umbral(database = "<alias>")]`:
 
 ```rust
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
-#[umbra(table = "page_view", database = "analytics")]
+#[umbral(table = "page_view", database = "analytics")]
 pub struct PageView {
     pub id: i64,
     pub path: String,
@@ -60,18 +60,18 @@ A plugin can set the default pool for **all** the models it contributes — the 
 impl Plugin for AnalyticsPlugin {
     fn database(&self) -> Option<&'static str> { Some("analytics") }
     // every model this plugin registers routes to "analytics"
-    // unless a model overrides it with #[umbra(database = "...")]
+    // unless a model overrides it with #[umbral(database = "...")]
 }
 ```
 
-A per-model `#[umbra(database = "...")]` **supersedes** the plugin default — useful when a plugin keeps most models on one database but parks one (an archive table, say) on another.
+A per-model `#[umbral(database = "...")]` **supersedes** the plugin default — useful when a plugin keeps most models on one database but parks one (an archive table, say) on another.
 
 ## Resolution order
 
 For a given query, the pool is chosen by this precedence (`resolve_pool`):
 
 1. **Explicit per-query override** — `.on(&pool)` on the QuerySet.
-2. **Per-model alias** — `#[umbra(database = "...")]` / `Model::DATABASE`.
+2. **Per-model alias** — `#[umbral(database = "...")]` / `Model::DATABASE`.
 3. **Per-plugin default** — `Plugin::database()`.
 4. **`"default"`** — everything else.
 
@@ -89,7 +89,7 @@ This is primarily a test / explicit-pool escape hatch — `.on()` currently take
 
 ## Migrations are per-database
 
-`umbra migrate` reads each model's routed alias and applies that model's migrations to the right pool. Every database gets its **own** `umbra_migrations` tracking table, and a single migration run splits its operations per database by each table's alias (`table_alias`). So `default` and `analytics` track their applied migrations independently — you can migrate one without touching the other.
+`umbral migrate` reads each model's routed alias and applies that model's migrations to the right pool. Every database gets its **own** `umbral_migrations` tracking table, and a single migration run splits its operations per database by each table's alias (`table_alias`). So `default` and `analytics` track their applied migrations independently — you can migrate one without touching the other.
 
 ## Boot-time safety
 
@@ -102,16 +102,16 @@ So a misrouted model surfaces the moment the app boots, with the offending plugi
 
 ## Cross-database foreign keys
 
-A foreign key whose target model lives on a **different** database can't be a real DB constraint — `REFERENCES` can't span pools. umbra **guards** this at boot: if a model on one database has a `ForeignKey` to a model on another, `App::build()` fails with `BuildError::CrossDatabaseForeignKey { model, field, model_db, target_db }`. You can't ship an invalid `FOREIGN KEY` by accident.
+A foreign key whose target model lives on a **different** database can't be a real DB constraint — `REFERENCES` can't span pools. umbral **guards** this at boot: if a model on one database has a `ForeignKey` to a model on another, `App::build()` fails with `BuildError::CrossDatabaseForeignKey { model, field, model_db, target_db }`. You can't ship an invalid `FOREIGN KEY` by accident.
 
 To make a cross-database relation legal, opt the field out of the physical constraint:
 
 ```rust
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
-#[umbra(table = "page_view", database = "analytics")]
+#[umbral(table = "page_view", database = "analytics")]
 pub struct PageView {
     pub id: i64,
-    #[umbra(db_constraint = false)]   // `user` lives on "default" — keep this FK logical
+    #[umbral(db_constraint = false)]   // `user` lives on "default" — keep this FK logical
     pub user: ForeignKey<User>,
     pub path: String,
 }
@@ -124,8 +124,8 @@ pub struct PageView {
 The static per-model/per-plugin routing above is resolved by name at boot. To take routing decisions over yourself — send reads to a replica and writes to the primary, or route by a per-request key — install a [**`DatabaseRouter`**](./database-router). It's a single trait impl; the models, handlers, and the rest of the ORM are untouched.
 
 ```rust
-use umbra::db::{Alias, DatabaseRouter, RouteContext};
-use umbra::migrate::ModelMeta;
+use umbral::db::{Alias, DatabaseRouter, RouteContext};
+use umbral::migrate::ModelMeta;
 
 struct ReplicaRouter;
 impl DatabaseRouter for ReplicaRouter {
@@ -152,7 +152,7 @@ These are the known gaps — the routing primitive is solid, but a few capabilit
 
 - **No schema-per-tenant or database-per-tenant management layer.** The `DatabaseRouter` foundation shipped the *routing mechanism* (trait + `RouteContext` task-local + `schema_for` SQL qualification), but the *management ergonomics* are Phase 2: a `Tenant` model, `migrate_schemas`, the `SHARED_APPS`/public split (which model tables are per-tenant vs shared), and a built-in HTTP tenant-resolver. A custom router can use `schema_for` today, but you provision schemas and seed the resolver yourself.
 - **No dynamic, per-request pool routing for multitenancy.** `App::builder().route_context(|req| RouteContext { … })` is the seam for a per-request resolver, and the task-local propagates it; what doesn't exist yet is an ambient `Tenant` registry + `migrate_schemas` that makes database-per-tenant a first-class pattern rather than DIY wiring.
-- **No row-level tenancy.** `SET LOCAL app.user_id` / Postgres RLS (`umbra-rls`) is a separate spec; it is not part of the foundation.
+- **No row-level tenancy.** `SET LOCAL app.user_id` / Postgres RLS (`umbral-rls`) is a separate spec; it is not part of the foundation.
 - **`.on()` is SQLite-typed.** It accepts a `&sqlx::SqlitePool`; there's no `PgPool` per-query override. For Postgres, rely on model/plugin routing or a custom router.
 - **The `databases` settings map isn't auto-connected** — see the callout above.
 

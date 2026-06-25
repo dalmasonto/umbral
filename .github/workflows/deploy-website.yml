@@ -1,4 +1,4 @@
-# Deploy the umbra marketing/community site (umbra_website/ — an umbra app
+# Deploy the umbral marketing/community site (umbral_website/ — an umbral app
 # backed by Postgres).
 #
 # PLACEHOLDER: manual-trigger only, no real deploy steps yet. Intentionally NOT
@@ -25,8 +25,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: TODO — build and deploy umbra_website
+      - name: TODO — build and deploy umbral_website
         run: |
           echo "Placeholder: no deploy configured yet."
-          echo "TODO: build umbra_website (cargo build --release), run migrate,"
+          echo "TODO: build umbral_website (cargo build --release), run migrate,"
           echo "      and ship to the chosen host. Add deploy secrets as env."

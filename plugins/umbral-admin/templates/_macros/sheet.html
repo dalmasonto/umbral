@@ -1,0 +1,308 @@
+{% from "admin/_macros/field_editor.html" import field_editor %}
+{% from "admin/_macros/inlines.html" import inline_formset %}
+{#
+sheet(mode, model_name, table, instance_id, fields, title, error)
+Floating right-side panel for preview and edit.
+
+Arguments: mode="preview"|"edit"|"create", model_name, table, instance_id, fields, title="", error=""
+
+Phase-3 deferred: sheet stacking requires a JS state machine.
+Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
+#}
+{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="", depth=0, password_field="", m2m_fields=[], inlines=[]) %}
+{% set sheet_title = title if title else ("New " ~ model_name if mode == "create" else ("Edit " ~ model_name ~ " #" ~ instance_id if mode == "edit" else (model_name ~ " #" ~ instance_id))) %}
+{% set is_edit = mode == "edit" or mode == "create" %}
+{% set offset = depth * 40 %}
+
+<div id="umbral-sheet-scrim" class="fixed inset-0 z-[100] bg-background/50 backdrop-blur-sm" onclick="if(event.target===this)umbral.closeSheet()" aria-hidden="true"></div>
+
+<div
+  id="umbral-sheet-panel"
+  class="fixed top-4 right-4 bottom-4 z-[110] flex flex-col bg-surface-container border border-outline-variant rounded-[14px] shadow-2xl overflow-hidden transition-transform duration-300"
+  style="width: var(--sheet-width, 640px); transform: translateX(-{{ offset }}px);"
+  role="dialog"
+  aria-modal="true"
+  aria-label="{{ sheet_title }}"
+  data-table="{{ table }}"
+  data-id="{{ instance_id }}"
+>
+  <div id="sheet-drag-handle" class="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors z-10" aria-hidden="true"></div>
+
+  <header class="sticky top-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container border-b border-outline-variant flex-shrink-0">
+    <div class="flex items-center gap-sm min-w-0 flex-1">
+      {% if depth > 0 %}
+      <button type="button"
+        onclick="umbral.popSheet()"
+        class="w-8 h-8 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-high transition-all mr-xs flex-shrink-0"
+        aria-label="Back to previous"
+      >
+        <i data-lucide="chevron-left" class="w-4 h-4"></i>
+      </button>
+      {% endif %}
+      <div class="min-w-0 flex-1">
+        <h2 class="font-h3 text-h3 text-on-surface leading-tight truncate overflow-hidden text-ellipsis whitespace-nowrap" title="{{ sheet_title }}">{{ sheet_title }}</h2>
+        {% if instance_id and mode != "create" %}
+        <p class="text-[11px] text-outline mt-0.5 font-label-sm tabular-nums truncate">#{{ instance_id }}</p>
+        {% endif %}
+      </div>
+    </div>
+    <div class="flex items-center gap-sm">
+      {% if mode != "create" %}
+      <div class="flex bg-surface-container-high rounded-lg p-0.5">
+        <button type="button"
+          hx-get="{{ admin_base }}/{{ table }}/{{ instance_id }}/sheet"
+          hx-target="#umbral-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
+          class="px-sm py-1 {% if mode == 'preview' %}bg-surface-container-highest text-primary{% else %}text-on-surface-variant hover:text-on-surface{% endif %} font-label-md text-label-md rounded-md transition-all"
+        >Preview</button>
+        <button type="button"
+          hx-get="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit-sheet"
+          hx-target="#umbral-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
+          class="px-sm py-1 {% if mode == 'edit' %}bg-surface-container-highest text-primary{% else %}text-on-surface-variant hover:text-on-surface{% endif %} font-label-md text-label-md rounded-md transition-all"
+        >Edit</button>
+      </div>
+      {% endif %}
+      <button type="button" onclick="umbral.closeSheet()" aria-label="Close sheet"
+        class="w-8 h-8 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-all">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </header>
+
+  <div class="flex-1 overflow-y-auto px-lg py-xl">
+    {% if error %}
+    <div class="mb-lg px-md py-sm bg-error-container/10 border border-error/20 rounded-xl flex items-center gap-sm text-error text-body-sm">
+      <i data-lucide="alert-circle" class="w-4 h-4 flex-shrink-0"></i>
+      {{ error }}
+    </div>
+    {% endif %}
+
+    {% if is_edit %}
+    {# Wave 4: switch the sheet form to multipart only when a file/image
+       field is present. `enctype` covers the native fallback submit and
+       `hx-encoding` makes HTMX send a FormData (so the file part rides
+       along); plain forms stay urlencoded and backend-independent. #}
+    {% set _enc = namespace(file=false) %}
+    {% for field in fields %}{% if field.kind == "file" or field.kind == "image" %}{% set _enc.file = true %}{% endif %}{% endfor %}
+    <form id="sheet-form" method="post"
+      {% if mode == "create" %}
+      action="{{ admin_base }}/{{ table }}/create"
+      hx-post="{{ admin_base }}/{{ table }}/create"
+      {% else %}
+      action="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit"
+      hx-post="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit"
+      {% endif %}
+      {% if _enc.file %}enctype="multipart/form-data" hx-encoding="multipart/form-data"{% endif %}
+      hx-target="#umbral-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
+      class="space-y-xs"
+    >
+      {{ csrf_input }}
+      {% for field in fields %}
+      {# Single field renderer — every form field (admin sheet AND the
+         full-page form) goes through the one field_editor macro so the
+         widget/markdown/rte/code/help logic lives in exactly one place.
+         Passing `field.error` (set by the handler on a validation failure)
+         makes the macro draw the red border AND render the inline per-field
+         message below the input (field_editor owns that markup — do NOT also
+         render it here, or the message double-renders). #}
+      {{ field_editor(field, field.value, table, field.readonly, field.error) }}
+      {% endfor %}
+
+      {# BUG-16 admin: M2M selection sections.
+         The form-builder hands us `m2m_fields` (one entry per
+         `Model::M2M_RELATIONS` slot on the parent), each carrying
+         the candidate child rows and the currently-selected PKs.
+         Rendered as a scrolling checkbox list — simple, works for
+         the permissions-app scale (tens of permissions). Submits
+         as repeated `m2m_<field>` values that the POST handler
+         hands to `set_junction_dynamic`. #}
+      {% for m in m2m_fields %}
+      <div class="m2m-field-picker space-y-sm mb-lg" data-page-size="12">
+        <div class="flex items-center justify-between gap-sm">
+          <div class="flex items-center gap-xs min-w-0">
+          <label class="font-label-md text-label-md text-on-surface-variant select-none">
+            {{ m.label | replace("_", " ") | title }}
+          </label>
+          <span class="text-[10px] text-outline bg-surface-container-high px-1.5 py-0.5 rounded font-label-sm">
+            {{ m.candidates | length }} available
+          </span>
+          </div>
+          <span class="text-[10px] text-outline bg-surface-container-low px-1.5 py-0.5 rounded font-label-sm" data-m2m-count>
+            {{ m.selected_values | length }} selected
+          </span>
+        </div>
+
+        <div class="rounded-xl border border-outline-variant bg-surface-container-low p-sm">
+          <p class="text-label-sm text-outline uppercase tracking-wider px-xs pb-xs">Active selection</p>
+          <div class="flex flex-wrap gap-xs min-h-7 px-xs" data-m2m-selected></div>
+          <p class="text-body-sm text-outline px-xs py-xs" data-m2m-selected-empty>No rows selected.</p>
+        </div>
+
+        {% if not m.candidates %}
+          <div class="rounded-xl border border-outline-variant bg-surface-container-low px-md py-sm">
+            <p class="text-body-sm text-outline">No candidate rows in the target table yet.</p>
+          </div>
+        {% else %}
+          <div class="relative">
+            <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-outline pointer-events-none"></i>
+            <input
+              type="text"
+              data-m2m-search
+              placeholder="Search {{ m.label | replace('_', ' ') | title }}"
+              class="w-full bg-surface-container-low border border-outline-variant rounded-xl pl-9 pr-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50"
+            />
+          </div>
+          <div class="bg-surface-container-low border border-outline-variant rounded-xl overflow-hidden">
+            <div class="max-h-64 overflow-y-auto p-sm space-y-1">
+            {% for opt in m.candidates %}
+              {% set is_selected = opt.value in m.selected_values %}
+              <label data-m2m-option data-label="{{ opt.label }}" class="flex items-center gap-sm cursor-pointer text-body-sm text-on-surface hover:bg-surface-container rounded-lg px-sm py-1.5">
+                <input type="checkbox"
+                       name="m2m_{{ m.name }}"
+                       value="{{ opt.value }}"
+                       {% if is_selected %}checked{% endif %}
+                       class="w-4 h-4 accent-primary" />
+                <span class="min-w-0 truncate">{{ opt.label }}</span>
+              </label>
+            {% endfor %}
+              <p class="hidden text-body-sm text-outline px-sm py-sm" data-m2m-empty>No matching rows.</p>
+            </div>
+            <div class="flex items-center justify-between gap-sm border-t border-outline-variant px-sm py-xs">
+              <button type="button" data-m2m-prev class="px-sm py-xs rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
+              <span class="text-label-sm text-outline tabular-nums" data-m2m-page>Page 1</span>
+              <button type="button" data-m2m-next class="px-sm py-xs rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+
+      {# Inlines: same shared formset macro the full-page change form
+         uses, so the `inline-<child>-<i>-<field>` names are identical
+         and `crud::create` / `crud::update` parse + save them
+         atomically with the parent — no sheet-specific handler. The
+         "Add another" JS in the macro re-binds on every HTMX swap. #}
+      {{ inline_formset(inlines) }}
+    </form>
+
+    {% else %}
+    {# Preview field pairs.
+
+       Hierarchy: label is the muted, eyebrow-style chip the eye skips
+       over to land on the value. We push the label down to `text-outline`
+       (the dimmest readable token) and keep the value at `text-on-surface`
+       with `font-medium` so the contrast gap is wide enough to read at a
+       glance. Separator is `outline-variant/15` — barely-there in both
+       light and dark, just enough to delineate rows without competing
+       with the value text. #}
+    <dl class="space-y-md">
+      {% for field in fields %}
+      <div class="flex flex-col gap-0.5 pb-sm border-b border-gray-300/65 dark:border-gray-800 last:border-b-0 last:pb-0">
+        <dt class="font-label-sm text-label-sm text-outline/80 uppercase tracking-wider leading-tight">
+          {{ field.name | replace("_", " ") }}
+        </dt>
+        <dd class="text-body-md font-medium text-on-surface wrap-break-word min-w-0 {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">
+          {% if field.kind == "bool" %}
+            {% if field.value == "true" %}
+            <span class="inline-flex items-center gap-xs px-sm py-xs bg-primary-container/10 text-primary border border-primary/20 rounded-full font-label-sm text-label-sm">
+              <i data-lucide="check" class="w-3 h-3"></i> Yes
+            </span>
+            {% else %}
+            <span class="inline-flex items-center gap-xs px-sm py-xs bg-surface-container-high text-on-surface-variant border border-outline-variant rounded-full font-label-sm text-label-sm">
+              <i data-lucide="x" class="w-3 h-3"></i> No
+            </span>
+            {% endif %}
+          {% elif field.value == "" or field.value is none %}
+            <span class="text-outline/60 italic font-normal text-body-sm">—</span>
+          {% elif field.kind == "image" %}
+            {# ImageField — inline thumbnail + a "view full" link. value_url
+               is the storage-resolved public URL (value stays the raw key). #}
+            <div class="flex flex-col gap-xs">
+              <img src="{{ field.value_url }}" alt="{{ field.name }}" class="rounded-xl border border-outline-variant max-h-40 w-auto object-contain bg-surface-container-low" />
+              <a href="{{ field.value_url }}" target="_blank" rel="noopener" class="text-primary text-body-sm hover:underline inline-flex items-center gap-xs">
+                <i data-lucide="image" class="w-3 h-3"></i> View full image
+              </a>
+            </div>
+          {% elif field.kind == "file" %}
+            {# FileField — download/view link instead of the raw key. #}
+            <a href="{{ field.value_url }}" target="_blank" rel="noopener" class="text-primary text-body-sm hover:underline inline-flex items-center gap-xs">
+              <i data-lucide="paperclip" class="w-3 h-3"></i> {{ field.value }}
+            </a>
+          {% else %}
+            {{ field.value }}
+          {% endif %}
+        </dd>
+      </div>
+      {% endfor %}
+    </dl>
+    {% endif %}
+  </div>
+
+  <footer class="sticky bottom-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container/95 backdrop-blur-sm border-t border-outline-variant flex-shrink-0">
+    {% if is_edit and mode != "create" %}
+    <button type="button"
+      hx-get="{{ admin_base }}/{{ table }}/{{ instance_id }}/_confirm-delete"
+      hx-target="#umbral-dialog-slot" hx-swap="innerHTML"
+      class="flex items-center gap-sm px-md py-sm text-error hover:bg-error-container/10 transition-colors rounded-xl font-label-md text-label-md focus:outline-none focus:ring-2 focus:ring-error/40">
+      <i data-lucide="trash-2" class="w-4 h-4"></i>
+      Delete
+    </button>
+    {% else %}
+    <span></span>
+    {% endif %}
+
+    <div class="flex items-center gap-md">
+      {% if mode == "preview" %}
+      <button type="button"
+        hx-get="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit-sheet"
+        hx-target="#umbral-sheet-slot" hx-swap="innerHTML"
+        class="px-lg py-sm bg-primary text-on-primary rounded-xl font-label-md text-label-md hover:opacity-90 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-primary/40">
+        <i data-lucide="pencil" class="w-4 h-4 inline-block mr-xs"></i>Edit
+      </button>
+      {% elif is_edit %}
+      {% if password_field and mode == "edit" %}
+      <button type="button"
+        onclick="umbral._openChangePasswordDialog('{{ table }}', '{{ instance_id }}')"
+        class="px-md py-sm border border-outline-variant rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all flex items-center gap-xs">
+        <i data-lucide="key" class="w-4 h-4"></i>
+        Change password
+      </button>
+      {% endif %}
+      <button type="button" onclick="umbral.closeSheet()"
+        class="px-lg py-sm text-on-surface-variant hover:text-on-surface font-label-md text-label-md transition-colors">Cancel</button>
+      <button type="submit" form="sheet-form" name="_save_continue" value="1"
+        class="px-md py-sm border border-outline-variant rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all">Save &amp; continue</button>
+      <button type="submit" form="sheet-form"
+        class="px-lg py-sm bg-primary text-on-primary rounded-xl font-label-md text-label-md hover:opacity-90 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-primary/40">Save</button>
+      {% endif %}
+    </div>
+  </footer>
+</div>
+
+<script>
+(function() {
+  var handle = document.getElementById('sheet-drag-handle');
+  var panel  = document.getElementById('umbral-sheet-panel');
+  if (!handle || !panel) return;
+  var saved = localStorage.getItem('umbral-admin-sheet-width');
+  if (saved) { panel.style.width = saved + 'px'; document.documentElement.style.setProperty('--sheet-width', saved + 'px'); }
+  var dragging = false, startX = 0, startW = 0;
+  handle.addEventListener('mousedown', function(e) {
+    dragging = true; startX = e.clientX; startW = panel.offsetWidth;
+    document.body.style.userSelect = 'none'; e.preventDefault();
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    var newW = Math.min(Math.max(startW + (startX - e.clientX), 320), window.innerWidth * 0.9);
+    panel.style.width = newW + 'px';
+    document.documentElement.style.setProperty('--sheet-width', newW + 'px');
+  });
+  document.addEventListener('mouseup', function() {
+    if (!dragging) return;
+    dragging = false; document.body.style.userSelect = '';
+    localStorage.setItem('umbral-admin-sheet-width', panel.offsetWidth);
+  });
+  // Esc is handled globally in wrapper.html (popSheet); no duplicate listener needed here.
+  if (window.lucide) lucide.createIcons();
+})();
+</script>
+{% endmacro %}

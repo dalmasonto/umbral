@@ -7,7 +7,7 @@ tags: [migrations, cli, deployment]
 
 # Checking migrations for zero-downtime safety
 
-When you deploy multiple times a day, a migration runs while the **old** code is still serving traffic. Some schema changes are fine in that window (adding a nullable column); others break it (dropping a column the old code still reads) or aren't atomic with the code rollout (renaming a table). `umbra checkmigrations` walks every **pending** operation and tags it so you know which is which before you ship.
+When you deploy multiple times a day, a migration runs while the **old** code is still serving traffic. Some schema changes are fine in that window (adding a nullable column); others break it (dropping a column the old code still reads) or aren't atomic with the code rollout (renaming a table). `umbral checkmigrations` walks every **pending** operation and tags it so you know which is which before you ship.
 
 <Callout type="info">
 This is read-only triage; it applies nothing. `migrate` still runs every operation exactly as written. `checkmigrations` is the gate you put in CI *before* `migrate`.
@@ -16,7 +16,7 @@ This is read-only triage; it applies nothing. `migrate` still runs every operati
 ## Running it
 
 ```bash
-umbra checkmigrations
+umbral checkmigrations
 ```
 
 ```text
@@ -34,7 +34,7 @@ Summary: 2 safe, 1 warning, 1 unsafe.
 The command **exits non-zero** when any `UNSAFE` operation is present, so it fails a CI pipeline by default. Add `--strict` to also fail on `WARNING`-tier operations (e.g. when even a column rename must be reviewed by a human first):
 
 ```bash
-umbra checkmigrations --strict
+umbral checkmigrations --strict
 ```
 
 ## The three tiers
@@ -64,7 +64,7 @@ The notes on each non-safe operation point at expand-contract, the standard way 
 The classification is a pure function, so a plugin or a custom command can gate its own deploys:
 
 ```rust
-use umbra::migrate::{check_pending_safety, classify_operation, OpSafety};
+use umbral::migrate::{check_pending_safety, classify_operation, OpSafety};
 
 let pending = check_pending_safety().await?;
 let blockers = pending.iter().filter(|c| c.safety.is_unsafe()).count();
@@ -77,4 +77,4 @@ if blockers > 0 {
 
 - [Adding NOT NULL columns to existing tables](./adding-not-null-columns): the safe backfill path for the WARNING case.
 - [Recovering from migration drift](./migration-drift): when the tracking table and disk disagree.
-- `crates/umbra-core/src/migrate.rs` (`classify_operation`) for the full rule set.
+- `crates/umbral-core/src/migrate.rs` (`classify_operation`) for the full rule set.

@@ -5,12 +5,12 @@ sidebar_position: 1
 icon: file-text
 ---
 
-`umbra::templates` is the server-side HTML rendering substrate. Templates live on disk under one or more directories, load at boot, and render through one ambient accessor that picks up the engine from `App::build()`'s `OnceLock` - the same pattern as the DB pool. The engine is [minijinja](https://docs.rs/minijinja), which speaks Jinja2 syntax (`{% %}` / `{{ }}`), so anyone who's used Django or Flask templates will recognise the shape immediately.
+`umbral::templates` is the server-side HTML rendering substrate. Templates live on disk under one or more directories, load at boot, and render through one ambient accessor that picks up the engine from `App::build()`'s `OnceLock` - the same pattern as the DB pool. The engine is [minijinja](https://docs.rs/minijinja), which speaks Jinja2 syntax (`{% %}` / `{{ }}`), so anyone who's used Django or Flask templates will recognise the shape immediately.
 
 ## Point the builder at a templates directory
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 App::builder()
     .settings(settings)
@@ -28,7 +28,7 @@ When `templates_dir` isn't called the engine looks for `./templates` relative to
 {/* templates/base.html */}
 <!doctype html>
 <html>
-  <head><title>{% block title %}umbra app{% endblock %}</title></head>
+  <head><title>{% block title %}umbral app{% endblock %}</title></head>
   <body>
     <header><nav><a href="/">Home</a> <a href="/articles">Articles</a></nav></header>
     <main>{% block content %}{% endblock %}</main>
@@ -39,7 +39,7 @@ When `templates_dir` isn't called the engine looks for `./templates` relative to
 ```html
 {/* templates/articles_list.html */}
 {% extends "base.html" %}
-{% block title %}Articles - umbra app{% endblock %}
+{% block title %}Articles - umbral app{% endblock %}
 {% block content %}
   <h1>Articles</h1>
   {% for article in articles %}
@@ -66,7 +66,7 @@ To extend rather than replace, call `{{ super() }}` at the top of the child's bl
 {% endblock %}
 ```
 
-This bites hardest with multi-level inheritance (`wrapper.html` → `base.html` → `child.html`). Each child that overrides a block needs `{{ super() }}` for the parent's contents to survive. Forgetting it produces pages with missing fonts, missing scripts, broken layouts - all because one intermediate template silently wiped the chain. The umbra-admin shell hit this exact bug: the changelist's `extra_head` override wiped the font-family and scrollbar styles base.html had set.
+This bites hardest with multi-level inheritance (`wrapper.html` → `base.html` → `child.html`). Each child that overrides a block needs `{{ super() }}` for the parent's contents to survive. Forgetting it produces pages with missing fonts, missing scripts, broken layouts - all because one intermediate template silently wiped the chain. The umbral-admin shell hit this exact bug: the changelist's `extra_head` override wiped the font-family and scrollbar styles base.html had set.
 
 If you find yourself wanting `super()` in every override, consider whether the styles belong in `wrapper.html` (the root) instead, where they can't be wiped.
 </Callout>
@@ -75,7 +75,7 @@ If you find yourself wanting `super()` in every override, consider whether the s
 
 A "fragment" template (no `{% extends %}`) is meant to be swapped into an existing page via HTMX (or returned as a partial). Serving a fragment to a direct browser nav (back button, bookmark, copy-paste URL) produces a naked HTML response with no `<head>`, no CSS, no fonts - the browser falls back to OS defaults and the page looks broken.
 
-The pattern in umbra-admin: handlers that return fragments check the `HX-Request` header and redirect to a full page when the request is a direct nav:
+The pattern in umbral-admin: handlers that return fragments check the `HX-Request` header and redirect to a full page when the request is a direct nav:
 
 ```rust
 async fn rows_fragment(headers: HeaderMap, ...) -> Response {
@@ -93,20 +93,20 @@ The full-page template is responsible for emitting the HTMX call that loads the 
 ## Render from a handler
 
 ```rust
-use umbra::prelude::*;
-use umbra::templates::context;
-use umbra::web::Html;
+use umbral::prelude::*;
+use umbral::templates::context;
+use umbral::web::Html;
 
 async fn list_articles() -> Result<Html<String>, (StatusCode, String)> {
     let articles = Article::objects().fetch().await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let body = umbra::templates::render("articles_list.html", &context!(articles))
+    let body = umbral::templates::render("articles_list.html", &context!(articles))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Html(body))
 }
 ```
 
-`context!` is minijinja's macro, re-exported through the facade so your crate doesn't need a direct minijinja dependency. `umbra::web::Html` is an axum re-export that sets the response's `Content-Type: text/html`.
+`context!` is minijinja's macro, re-exported through the facade so your crate doesn't need a direct minijinja dependency. `umbral::web::Html` is an axum re-export that sets the response's `Content-Type: text/html`.
 
 ## Autoescape is on by default
 
@@ -121,7 +121,7 @@ Opting out of autoescape for one value is a deliberate keystroke: pipe through t
 Plugins can contribute their own `templates/` directories by overriding `Plugin::templates_dirs()`. The template engine searches all registered directories in order and the first directory that contains a given template name wins.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 use std::path::PathBuf;
 
 pub struct AdminPlugin;
@@ -159,10 +159,10 @@ If `base.html` lives in plugin B's templates directory and plugin B is registere
 
 ### Collision policy: first-match-wins with a boot warning
 
-When two directories ship a template with the same name, the first directory in the search order wins and umbra emits a `tracing::warn!` at boot so the shadowing is visible in the log:
+When two directories ship a template with the same name, the first directory in the search order wins and umbral emits a `tracing::warn!` at boot so the shadowing is visible in the log:
 
 ```
-WARN umbra templates: template `base.html` is provided by multiple directories; the first-registered copy wins
+WARN umbral templates: template `base.html` is provided by multiple directories; the first-registered copy wins
 ```
 
 This matches Django's `APP_DIRS` loader behaviour. To override a plugin's template intentionally, place a same-named file in the app-level `templates/` directory - it is always searched first. Namespace-prefixed paths (`admin/base.html`) are the conventional way to avoid accidental collisions between unrelated plugins.

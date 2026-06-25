@@ -2,8 +2,8 @@
 //!
 //! A single trait impl is all it takes to send every READ to a replica pool
 //! and every WRITE to the primary — the ORM, models, and handlers are written
-//! exactly as a single-database app. Nothing here touches `umbra_core`
-//! directly; everything is reachable through the `umbra` facade.
+//! exactly as a single-database app. Nothing here touches `umbral_core`
+//! directly; everything is reachable through the `umbral` facade.
 //!
 //! Run it:
 //! ```text
@@ -16,21 +16,21 @@
 //! ```
 //! Watch the server log: each request prints which pool the router chose.
 //!
-//! In production, point `UMBRA_REPLICA_URL` at a real streaming read replica.
+//! In production, point `UMBRAL_REPLICA_URL` at a real streaming read replica.
 //! Unset, it falls back to the primary URL so this demo runs against one DB
 //! (reads see writes immediately); the routing code is identical either way.
 
 use chrono::Utc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use umbra::db::{Alias, DatabaseRouter, DbPool, RouteContext};
-use umbra::migrate::ModelMeta;
-use umbra::prelude::*;
+use umbral::db::{Alias, DatabaseRouter, DbPool, RouteContext};
+use umbral::migrate::ModelMeta;
+use umbral::prelude::*;
 
-/// One guestbook-style note. A plain umbra model — it has no idea routing
+/// One guestbook-style note. A plain umbral model — it has no idea routing
 /// exists.
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-#[umbra(table = "note")]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "note")]
 pub struct Note {
     pub id: i64,
     pub body: String,
@@ -66,21 +66,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Default to a sqlite FILE so the primary and replica pools share one
     // database and reads see writes. The framework default is `sqlite::memory:`,
     // which would hand each pool its own separate in-memory DB — fine for tests,
-    // confusing for this demo. Override either side with UMBRA_DATABASE_URL /
-    // UMBRA_REPLICA_URL (e.g. two Postgres URLs for a real replica split).
+    // confusing for this demo. Override either side with UMBRAL_DATABASE_URL /
+    // UMBRAL_REPLICA_URL (e.g. two Postgres URLs for a real replica split).
     if settings.database_url == "sqlite::memory:" {
         settings.database_url = "sqlite://read_replica.db?mode=rwc".to_string();
     }
 
     // Primary pool (writes), registered under the framework-required "default"
     // alias.
-    let primary = umbra::db::connect(&settings.database_url).await?;
+    let primary = umbral::db::connect(&settings.database_url).await?;
 
     // Replica pool (reads). A real read replica in production; here it falls
     // back to the primary URL so the demo is self-contained.
     let replica_url =
-        std::env::var("UMBRA_REPLICA_URL").unwrap_or_else(|_| settings.database_url.clone());
-    let replica = umbra::db::connect(&replica_url).await?;
+        std::env::var("UMBRAL_REPLICA_URL").unwrap_or_else(|_| settings.database_url.clone());
+    let replica = umbral::db::connect(&replica_url).await?;
     tracing::info!(primary = %settings.database_url, replica = %replica_url, "pools connected");
 
     // Demo shortcut: ensure the `note` table exists on both pools. A real app
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn root() -> &'static str {
-    "umbra read-replica demo\n\n\
+    "umbral read-replica demo\n\n\
      GET /notes/add  -> create a note  (WRITE routed to the primary pool)\n\
      GET /notes      -> list the notes (READ  routed to the replica pool)\n\n\
      Each request logs which pool the DatabaseRouter chose. The handlers below\n\

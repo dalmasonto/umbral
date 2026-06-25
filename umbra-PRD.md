@@ -1,8 +1,8 @@
-# Umbra — Product Requirements Document
+# Umbral — Product Requirements Document
 
 | | |
 |---|---|
-| **Product** | Umbra — a batteries-included, Django-inspired web framework for Rust |
+| **Product** | Umbral — a batteries-included, Django-inspired web framework for Rust |
 | **Status** | Draft v0.1 |
 | **Date** | May 30, 2026 |
 | **Owner** | *[you]* |
@@ -12,7 +12,7 @@
 
 ## 1. Summary
 
-Umbra is a batteries-included web framework for Rust that recreates Django's developer experience: declarative models, managed migrations, an auto-generated admin, an optional REST layer, an out-of-the-box task queue, plus Rust's compile-time safety, predictable latency, and fearless concurrency. Its defining bet is the **porting experience**: the fastest path in the Rust ecosystem to take an existing database-backed API and stand it up in Rust, rather than assembling Axum + sqlx + serde + a dozen other crates by hand.
+Umbral is a batteries-included web framework for Rust that recreates Django's developer experience: declarative models, managed migrations, an auto-generated admin, an optional REST layer, an out-of-the-box task queue, plus Rust's compile-time safety, predictable latency, and fearless concurrency. Its defining bet is the **porting experience**: the fastest path in the Rust ecosystem to take an existing database-backed API and stand it up in Rust, rather than assembling Axum + sqlx + serde + a dozen other crates by hand.
 
 At the centre of the experience is the **declare → migrate → change → migrate** cycle: declare or change a model, an autodetected migration is generated, `migrate` applies it, and the next change diffs cleanly into the right `ALTER` / `DROP`. That loop is the product, not a later feature; it lands at M5 alongside the first models.
 
@@ -36,14 +36,14 @@ together correctly. This raises the cost of two things in particular:
    into a working backend" a near-mechanical task.
 
 The result: teams that would benefit from Rust's resilience often stay on higher-level
-frameworks because the on-ramp is too steep. Umbra targets that on-ramp.
+frameworks because the on-ramp is too steep. Umbral targets that on-ramp.
 
 ---
 
 ## 3. Goals & Non-Goals
 
 ### Goals
-- **G1 — Fast porting.** Point Umbra at an existing database and generate working models +
+- **G1 — Fast porting.** Point Umbral at an existing database and generate working models +
   migrations; bring up a CRUD API over them with minimal code.
 - **G2 — Batteries included.** ORM, migrations, routing, auth, admin, sessions, caching, and a
   DB-backed task queue available without external assembly.
@@ -57,7 +57,7 @@ frameworks because the on-ramp is too steep. Umbra targets that on-ramp.
 
 ### Non-Goals
 - **N1** — Not a frontend/WASM UI framework (no Leptos-style client). Server-side first.
-- **N2** — Not attempting to beat Axum/Actix on raw benchmark throughput; Umbra *sits on* Axum
+- **N2** — Not attempting to beat Axum/Actix on raw benchmark throughput; Umbral *sits on* Axum
   and accepts a thin overhead in exchange for productivity.
 - **N3** — Not a 1:1 Django API clone; idioms are translated to Rust, not transliterated.
 - **N4** — Not multi-database-perfect at launch. **Postgres-first**; SQLite for tests; other
@@ -149,7 +149,7 @@ milestones M0–M13 in the companion plan.
 | F-PLG-1 | `Plugin` trait: models, migrations, routes, commands, settings, hooks | **P0** |
 | F-PLG-2 | Explicit builder registration (INSTALLED_APPS equivalent) | P0 |
 | F-PLG-3 | Plugin-owned migrations auto-run on `migrate` | **P0** |
-| F-PLG-4 | Facade/prelude crate for stable author surface (`use umbra::prelude::*`) | P0 |
+| F-PLG-4 | Facade/prelude crate for stable author surface (`use umbral::prelude::*`) | P0 |
 | F-PLG-5 | Optional auto-registration (inventory/linkme) | P2 |
 
 ### 7.5 Built-in Plugins
@@ -205,7 +205,7 @@ milestones M0–M13 in the companion plan.
 - **Boilerplate reduction:** lines of code for a basic CRUD resource vs. equivalent raw
   Axum + sqlx (target: a large, demonstrable reduction).
 - **Time-to-first-endpoint:** new project to first working endpoint in **< 10 minutes**.
-- **Ecosystem health (longer term):** number of third-party `umbra-*` plugins; the built-ins
+- **Ecosystem health (longer term):** number of third-party `umbral-*` plugins; the built-ins
   themselves passing the "could a stranger have written this as a plugin?" test.
 - **Safety:** classes of bug (null handling, backend mismatch, SQL typos) demonstrably moved to
   build/boot time.
@@ -222,20 +222,20 @@ milestones M0–M13 in the companion plan.
 | **0.4 — Productivity** | Batteries | M9–M12 | Task queue, optional REST, admin, OpenAPI all usable |
 | **0.5 — Polish** | DX & ecosystem | M13 | Generators, autoreload, docs, first external plugin |
 
-> Phasing is sequenced for *learning-first* development (the project's stated primary goal): each phase is independently demoable, and the plugin contract is extracted only after the primitives have been built once by hand. M5 sits inside phase 0.1 deliberately, because the declare → migrate → change → migrate cycle is what makes the framework feel Django-shape; without it, the ORM alone wouldn't be demoable as "umbra works."
+> Phasing is sequenced for *learning-first* development (the project's stated primary goal): each phase is independently demoable, and the plugin contract is extracted only after the primitives have been built once by hand. M5 sits inside phase 0.1 deliberately, because the declare → migrate → change → migrate cycle is what makes the framework feel Django-shape; without it, the ORM alone wouldn't be demoable as "umbral works."
 
 ---
 
 ## 11. Competitive Landscape
 
 - **Django + DRF (Python):** the experience being echoed. Wins on maturity & ecosystem; loses
-  on runtime performance and compile-time safety. Umbra's reference point.
-- **Loco (Rust):** Rails-style, batteries-included on SeaORM. Closest productivity peer; Umbra
+  on runtime performance and compile-time safety. Umbral's reference point.
+- **Loco (Rust):** Rails-style, batteries-included on SeaORM. Closest productivity peer; Umbral
   differentiates on Django-style migrations/`inspectdb` and porting focus.
 - **Cot (Rust):** explicitly Django-like, builds its own ORM on sea-query atop Axum. Closest
   prior art and direct comparison; not production-ready as of this writing.
-- **Axum / Actix (Rust):** the assembly-required baseline Umbra is built on and abstracts over.
-- **Differentiator:** Umbra leads with **porting** (`inspectdb` + managed migrations) and a
+- **Axum / Actix (Rust):** the assembly-required baseline Umbral is built on and abstracts over.
+- **Differentiator:** Umbral leads with **porting** (`inspectdb` + managed migrations) and a
   **dogfooded plugin system**, framed around moving existing APIs onto Rust's resilience.
 
 ---
@@ -265,12 +265,12 @@ milestones M0–M13 in the companion plan.
 
 ## 14. Out of Scope (for now) / Future
 
-Out-of-scope items are captured as a pickup-ready backlog in **`docs/specs/deferred.md`**, with structured entries (Django term, purpose, why deferred, complexity hint, suggested umbra shape, revisit signal) per item. Reorder freely; promote an entry to an outline (`docs/specs/outlines/<name>.md`) when ready to take it on.
+Out-of-scope items are captured as a pickup-ready backlog in **`docs/specs/deferred.md`**, with structured entries (Django term, purpose, why deferred, complexity hint, suggested umbral shape, revisit signal) per item. Reorder freely; promote an entry to an outline (`docs/specs/outlines/<name>.md`) when ready to take it on.
 
 The short list, grouped:
 
-- **Django `contrib` niceties**: `umbra-contenttypes`, `umbra-messages`, `umbra-sites`, `umbra-humanize`, `umbra-redirects`, `umbra-sitemaps`, `umbra-syndication`, `umbra-flatpages`.
-- **Specialty domains**: `umbra-gis` (GeoDjango), `umbra-i18n`, `umbra-channels` (websockets).
+- **Django `contrib` niceties**: `umbral-contenttypes`, `umbral-messages`, `umbral-sites`, `umbral-humanize`, `umbral-redirects`, `umbral-sitemaps`, `umbral-syndication`, `umbral-flatpages`.
+- **Specialty domains**: `umbral-gis` (GeoDjango), `umbral-i18n`, `umbral-channels` (websockets).
 - **Backend / infrastructure**: MySQL / Oracle backend support; pluggable non-DB task brokers (Redis, AMQP).
 - **Tooling and UX**: DRF browsable API; hosted deploy / runtime tooling.
 - **Cross-cutting surfaces** that haven't earned their own spec yet: error model, logging.

@@ -2,12 +2,12 @@
 name = "starknet-explorer-example"
 version = "0.1.0"
 edition = "2024"
-description = "Standalone umbra example: schema-per-tenant multitenancy where blockchain NETWORKS are tenants (Starknet Sepolia + Mainnet). Per-network explorer data is isolated per schema; access/content are shared in public."
+description = "Standalone umbral example: schema-per-tenant multitenancy where blockchain NETWORKS are tenants (Starknet Sepolia + Mainnet). Per-network explorer data is isolated per schema; access/content are shared in public."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-umbra = { path = "../../crates/umbra" }
-umbra-tenants = { path = "../../plugins/umbra-tenants" }
+umbral = { path = "../../crates/umbral" }
+umbral-tenants = { path = "../../plugins/umbral-tenants" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
 serde = { version = "1", features = ["derive"] }

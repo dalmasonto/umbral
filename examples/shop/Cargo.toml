@@ -6,30 +6,30 @@ edition = "2024"
 [dependencies]
 
 # ----- Framework core (always required) ------------------------------------
-umbra         = { path = "../../crates/umbra" }
-umbra-cli     = { path = "../../crates/umbra-cli" }
+umbral         = { path = "../../crates/umbral" }
+umbral-cli     = { path = "../../crates/umbral-cli" }
 
 # ----- Active by default ---------------------------------------------------
-umbra-auth     = { path = "../../plugins/umbra-auth" }
-umbra-sessions = { path = "../../plugins/umbra-sessions" }
-umbra-admin    = { path = "../../plugins/umbra-admin" }
-umbra-rest     = { path = "../../plugins/umbra-rest" }
-umbra-openapi  = { path = "../../plugins/umbra-openapi" }
+umbral-auth     = { path = "../../plugins/umbral-auth" }
+umbral-sessions = { path = "../../plugins/umbral-sessions" }
+umbral-admin    = { path = "../../plugins/umbral-admin" }
+umbral-rest     = { path = "../../plugins/umbral-rest" }
+umbral-openapi  = { path = "../../plugins/umbral-openapi" }
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
-umbra-playground   = { path = "../../plugins/umbra-playground" }
-# umbra-tasks        = { path = "../../plugins/umbra-tasks" }
-umbra-permissions  = { path = "../../plugins/umbra-permissions" }
-# umbra-rls          = { path = "../../plugins/umbra-rls" }
-# umbra-cache        = { path = "../../plugins/umbra-cache" }
-# umbra-email        = { path = "../../plugins/umbra-email" }
-# umbra-signals      = { path = "../../plugins/umbra-signals" }
-umbra-storage      = { path = "../../plugins/umbra-storage" }
-umbra-security     = { path = "../../plugins/umbra-security" }
+umbral-playground   = { path = "../../plugins/umbral-playground" }
+# umbral-tasks        = { path = "../../plugins/umbral-tasks" }
+umbral-permissions  = { path = "../../plugins/umbral-permissions" }
+# umbral-rls          = { path = "../../plugins/umbral-rls" }
+# umbral-cache        = { path = "../../plugins/umbral-cache" }
+# umbral-email        = { path = "../../plugins/umbral-email" }
+# umbral-signals      = { path = "../../plugins/umbral-signals" }
+umbral-storage      = { path = "../../plugins/umbral-storage" }
+umbral-security     = { path = "../../plugins/umbral-security" }
 # Observability init helper. `otel` feature on so the shop demonstrates the
 # full OpenTelemetry OTLP trace-export path (set OTEL_EXPORTER_OTLP_ENDPOINT
 # to point at a collector; without one it degrades to logs only).
-umbra-logs         = { path = "../../plugins/umbra-logs", features = ["otel"] }
+umbral-logs         = { path = "../../plugins/umbral-logs", features = ["otel"] }
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

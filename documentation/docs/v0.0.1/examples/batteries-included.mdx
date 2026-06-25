@@ -6,7 +6,7 @@ icon: package-2
 tags: [examples, full-stack]
 ---
 
-Every built-in plugin wired into one app. Use this as the reference for "what does a complete umbra app look like" and trim down from there. The point is to show every surface in one place; a real app uses some subset.
+Every built-in plugin wired into one app. Use this as the reference for "what does a complete umbral app look like" and trim down from there. The point is to show every surface in one place; a real app uses some subset.
 
 ## Project layout
 
@@ -32,14 +32,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umbra = "0.0.1"
-umbra-auth = "0.0.1"
-umbra-sessions = "0.0.1"
-umbra-admin = "0.0.1"
-umbra-rest = "0.0.1"
-umbra-openapi = "0.0.1"
-umbra-tasks = "0.0.1"
-umbra-email = "0.0.1"
+umbral = "0.0.1"
+umbral-auth = "0.0.1"
+umbral-sessions = "0.0.1"
+umbral-admin = "0.0.1"
+umbral-rest = "0.0.1"
+umbral-openapi = "0.0.1"
+umbral-tasks = "0.0.1"
+umbral-email = "0.0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -61,12 +61,12 @@ use http::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use umbra::plugin::{AppContext, Plugin, PluginError};
-use umbra::web::{Html, Json, Path, Router, StatusCode, get};
+use umbral::plugin::{AppContext, Plugin, PluginError};
+use umbral::web::{Html, Json, Path, Router, StatusCode, get};
 
-use umbra_rest::{ActionError, ActionScope, ResourceConfig};
+use umbral_rest::{ActionError, ActionScope, ResourceConfig};
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbral::orm::Model)]
 pub struct Post {
     pub id: i64,
     pub title: String,
@@ -83,9 +83,9 @@ async fn list_posts() -> Result<Html<String>, (StatusCode, String)> {
         .fetch()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let body = umbra::templates::render(
+    let body = umbral::templates::render(
         "home.html",
-        &umbra::templates::context!(posts => posts),
+        &umbral::templates::context!(posts => posts),
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Html(body))
@@ -94,7 +94,7 @@ async fn list_posts() -> Result<Html<String>, (StatusCode, String)> {
 async fn post_detail(Path(id): Path<i64>) -> Result<Json<Post>, (StatusCode, String)> {
     match Post::objects().get(post::ID.eq(id)).await {
         Ok(p) => Ok(Json(p)),
-        Err(umbra::orm::GetError::NotFound) => Err((StatusCode::NOT_FOUND, "not found".into())),
+        Err(umbral::orm::GetError::NotFound) => Err((StatusCode::NOT_FOUND, "not found".into())),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
 }
@@ -117,9 +117,9 @@ pub fn rest_resource() -> ResourceConfig {
             json!(body.chars().take(120).collect::<String>())
         })
         // Public read, staff write.
-        .permission(umbra_rest::OrPermission::new(vec![
-            Box::new(umbra_rest::ReadOnly),
-            Box::new(umbra_rest::IsStaff),
+        .permission(umbral_rest::OrPermission::new(vec![
+            Box::new(umbral_rest::ReadOnly),
+            Box::new(umbral_rest::IsStaff),
         ]))
         // DRF @action: POST /api/post/{id}/publish/
         .action(
@@ -155,8 +155,8 @@ impl Plugin for BlogPlugin {
         "blog"
     }
 
-    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
-        vec![umbra::migrate::ModelMeta::for_::<Post>()]
+    fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
+        vec![umbral::migrate::ModelMeta::for_::<Post>()]
     }
 
     fn routes(&self) -> Router {
@@ -177,11 +177,11 @@ impl Plugin for BlogPlugin {
 ```rust
 mod blog;
 
-use umbra::prelude::*;
-use umbra::web::{Form, Html, IntoResponse, Redirect, StatusCode};
+use umbral::prelude::*;
+use umbral::web::{Form, Html, IntoResponse, Redirect, StatusCode};
 
-use umbra_auth::{AuthUser, OptionalUser};
-use umbra_rest::FnAuthentication;
+use umbral_auth::{AuthUser, OptionalUser};
+use umbral_rest::FnAuthentication;
 
 #[derive(serde::Deserialize)]
 struct LoginForm {
@@ -189,20 +189,20 @@ struct LoginForm {
     password: String,
 }
 
-async fn login(Form(form): Form<LoginForm>) -> Result<umbra::web::Response, StatusCode> {
-    let user: AuthUser = umbra_auth::authenticate(&form.username, &form.password)
+async fn login(Form(form): Form<LoginForm>) -> Result<umbral::web::Response, StatusCode> {
+    let user: AuthUser = umbral_auth::authenticate(&form.username, &form.password)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let mut response = Redirect::to("/").into_response();
-    umbra_auth::login(response.headers_mut(), &user)
+    umbral_auth::login(response.headers_mut(), &user)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(response)
 }
 
-async fn logout(headers: umbra::web::HeaderMap) -> umbra::web::Response {
+async fn logout(headers: umbral::web::HeaderMap) -> umbral::web::Response {
     let mut response = Redirect::to("/").into_response();
-    umbra_auth::logout(&headers, response.headers_mut()).await.ok();
+    umbral_auth::logout(&headers, response.headers_mut()).await.ok();
     response
 }
 
@@ -214,15 +214,15 @@ async fn me(OptionalUser(maybe): OptionalUser) -> Html<String> {
 }
 
 /// Background task - would normally live in a `tasks.rs` module.
-/// `#[umbra::task]` registers the handler by name at startup, so the
+/// `#[umbral::task]` registers the handler by name at startup, so the
 /// worker (`cargo run -- tasks-worker`) can dispatch it. Enqueue work with
-/// `umbra_tasks::enqueue("send_welcome", payload, Default::default()).await?`.
-#[umbra::task]
+/// `umbral_tasks::enqueue("send_welcome", payload, Default::default()).await?`.
+#[umbral::task]
 async fn send_welcome(email: String) -> Result<(), String> {
-    let msg = umbra_email::EmailMessage::new("Welcome", vec![email])
+    let msg = umbral_email::EmailMessage::new("Welcome", vec![email])
         .from("no-reply@example.com")
         .text_body("Glad you signed up.");
-    umbra_email::send(&msg).await.map_err(|e| e.to_string())?;
+    umbral_email::send(&msg).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -236,7 +236,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let settings = Settings::from_env()?;
-    let pool = umbra::db::connect("sqlite://full-app.db?mode=rwc").await?;
+    let pool = umbral::db::connect("sqlite://full-app.db?mode=rwc").await?;
 
     let app = App::builder()
         .settings(settings)
@@ -248,38 +248,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(blog::BlogPlugin)
         // Auth: users + password hashing. Generic over the user model;
         // `AuthUser` is the built-in default.
-        .plugin(umbra_auth::AuthPlugin::<AuthUser>::default())
+        .plugin(umbral_auth::AuthPlugin::<AuthUser>::default())
         // Sessions: anonymous on every visit, fresh token on login.
-        .plugin(umbra_sessions::SessionsPlugin::default())
+        .plugin(umbral_sessions::SessionsPlugin::default())
         // REST: /api/post/ CRUD + /api/post/{id}/publish/ action.
-        // The REST resource is teed into umbra-openapi automatically.
+        // The REST resource is teed into umbral-openapi automatically.
         .plugin(
-            umbra_rest::RestPlugin::default()
+            umbral_rest::RestPlugin::default()
                 .resource(blog::rest_resource())
-                .paginate(umbra_rest::PageNumberPagination::new(20))
+                .paginate(umbral_rest::PageNumberPagination::new(20))
                 .authenticate(FnAuthentication::new(|headers| async move {
-                    let user = umbra_auth::current_user(&headers).await.ok().flatten()?;
-                    Some(umbra_rest::Identity::user(user.id).with_staff(user.is_staff))
+                    let user = umbral_auth::current_user(&headers).await.ok().flatten()?;
+                    Some(umbral_rest::Identity::user(user.id).with_staff(user.is_staff))
                 })),
         )
         // OpenAPI: Swagger UI at /openapi/ + schema at
         // /openapi/openapi.json (the default mount; override with
         // `.at("/docs")`).
         .plugin(
-            umbra_openapi::OpenApiPlugin::new()
+            umbral_openapi::OpenApiPlugin::new()
                 .title("Full-app API")
                 .version("0.1.0")
                 .description("Auto-generated from registered models + REST resources."),
         )
         // Admin: CRUD UI at /admin/, staff-only.
-        .plugin(umbra_admin::AdminPlugin::default())
+        .plugin(umbral_admin::AdminPlugin::default())
         // Background tasks: DB-backed queue. Handlers register
-        // themselves via `#[umbra::task]`, so the plugin itself takes
+        // themselves via `#[umbral::task]`, so the plugin itself takes
         // no handler list. Drain the queue with `cargo run -- tasks-worker`.
-        .plugin(umbra_tasks::TasksPlugin::default())
+        .plugin(umbral_tasks::TasksPlugin::default())
         // Email: console backend in dev (prints to stderr). Configure
         // the SMTP transport via settings for prod.
-        .plugin(umbra_email::EmailPlugin)
+        .plugin(umbral_email::EmailPlugin)
         .routes(
             Routes::new()
                 .get("/me", me)
@@ -288,8 +288,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .build()?;
 
-    umbra::migrate::make().await.ok();
-    umbra::migrate::run().await?;
+    umbral::migrate::make().await.ok();
+    umbral::migrate::run().await?;
 
     let addr = "127.0.0.1:3000".parse::<std::net::SocketAddr>()?;
     println!("listening on http://{addr}");
@@ -372,19 +372,19 @@ curl -X POST -d "username=alice&password=secret" http://127.0.0.1:3000/login
 
 | Surface | Where it comes from |
 |---------|---------------------|
-| HTML pages with templates | `templates/` + `umbra::templates::render` |
-| ORM + managed migrations | `#[derive(Model)]` + `umbra::migrate::*` |
+| HTML pages with templates | `templates/` + `umbral::templates::render` |
+| ORM + managed migrations | `#[derive(Model)]` + `umbral::migrate::*` |
 | Custom 404 / 500 pages | `not_found_template` / `server_error_template` |
-| REST CRUD | `umbra_rest::RestPlugin::default()` + `ResourceConfig` |
+| REST CRUD | `umbral_rest::RestPlugin::default()` + `ResourceConfig` |
 | REST `@action` | `ResourceConfig::action("publish", POST, Detail, ...)` |
 | REST pagination + auth + permissions | `paginate(...).authenticate(...).resource(... .permission(...))` |
-| OpenAPI schema + Swagger UI | `umbra_openapi::OpenApiPlugin` |
-| Admin UI at `/admin/` | `umbra_admin::AdminPlugin` |
-| Users + password hashing | `umbra_auth::AuthPlugin::<AuthUser>::default()` + `authenticate(...)` |
-| Sessions + `request.user` | `umbra_sessions::SessionsPlugin::default()` + `umbra_auth::OptionalUser` / `User` extractors |
-| Login / logout helpers | `umbra_auth::login(...)` / `umbra_auth::logout(...)` |
-| Background tasks | `umbra_tasks::TasksPlugin::default()` + `#[umbra::task]` (self-registering) + `tasks-worker` |
-| Email | `umbra_email::EmailPlugin` + `umbra_email::send(&msg)` |
+| OpenAPI schema + Swagger UI | `umbral_openapi::OpenApiPlugin` |
+| Admin UI at `/admin/` | `umbral_admin::AdminPlugin` |
+| Users + password hashing | `umbral_auth::AuthPlugin::<AuthUser>::default()` + `authenticate(...)` |
+| Sessions + `request.user` | `umbral_sessions::SessionsPlugin::default()` + `umbral_auth::OptionalUser` / `User` extractors |
+| Login / logout helpers | `umbral_auth::login(...)` / `umbral_auth::logout(...)` |
+| Background tasks | `umbral_tasks::TasksPlugin::default()` + `#[umbral::task]` (self-registering) + `tasks-worker` |
+| Email | `umbral_email::EmailPlugin` + `umbral_email::send(&msg)` |
 
 ## Next
 

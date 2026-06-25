@@ -1,18 +1,18 @@
 ---
 name: tasks-beat-periodic-scheduler
-description: Use when working on umbra-tasks periodic/cron "beat" scheduling — the PeriodicTask model, Schedule type, run_beat loop, the optimistic-claim double-enqueue guard, or the tasks-beat CLI command.
+description: Use when working on umbral-tasks periodic/cron "beat" scheduling — the PeriodicTask model, Schedule type, run_beat loop, the optimistic-claim double-enqueue guard, or the tasks-beat CLI command.
 ---
 
-# umbra-tasks periodic "beat" scheduler
+# umbral-tasks periodic "beat" scheduler
 
 ## Context
-umbra-tasks ships Celery-beat-style recurring tasks: a schedule (cron or fixed interval) fires a task on a cadence. Beat is the *scheduler* (a separate process from the worker); it enqueues normal `TaskRow`s that the worker then drains. All of it lives in the single file `plugins/umbra-tasks/src/lib.rs`.
+umbral-tasks ships Celery-beat-style recurring tasks: a schedule (cron or fixed interval) fires a task on a cadence. Beat is the *scheduler* (a separate process from the worker); it enqueues normal `TaskRow`s that the worker then drains. All of it lives in the single file `plugins/umbral-tasks/src/lib.rs`.
 
 ## Approach
 
 **The pieces (all in `lib.rs`):**
 - `enum Schedule { Cron(String), Every(Duration) }` — `next_after(after) -> Option<DateTime<Utc>>`, `to_storage()`/`from_storage()` round-trip to a single string column (`"cron:0 0 * * *"` / `"every:3600"`).
-- `PeriodicTask` model — added to `Plugin::models()` so `makemigrations`/`migrate` autodetects a new `periodic_task` table. NO migration file (built-in plugins ship none). `name` is `#[umbra(unique)]` (the stable key). All identity columns are written only by code; nullable/defaulted columns keep it additive.
+- `PeriodicTask` model — added to `Plugin::models()` so `makemigrations`/`migrate` autodetects a new `periodic_task` table. NO migration file (built-in plugins ship none). `name` is `#[umbral(unique)]` (the stable key). All identity columns are written only by code; nullable/defaulted columns keep it additive.
 - `PeriodicSpec { name, schedule, task, payload }` + `TasksPlugin::periodic(...)` builder — collects specs on the (now non-unit) `TasksPlugin` struct.
 - `static REGISTERED_PERIODIC: OnceLock<Vec<PeriodicSpec>>` — installed in `Plugin::on_ready` (sync); the async DB sync runs in the beat loop.
 - `run_beat(BeatOptions)` / `run_beat_once()` — mirror `run_worker`/`run_worker_once`. Startup: `sync_registered_periodic()`. Each tick: `fire_due_periodic()`.
@@ -42,7 +42,7 @@ if affected == 1 { enqueue_periodic(&row).await?; }
 - `cron = "0.12"` in Cargo.toml; `cron::Schedule::after()` returns an iterator — use `.next()`.
 
 ## See also
-- `plugins/umbra-tasks/src/lib.rs` (the whole plugin, single file)
-- `plugins/umbra-tasks/tests/beat.rs` (next_after, fire-once, double-enqueue guard, registration upsert)
+- `plugins/umbral-tasks/src/lib.rs` (the whole plugin, single file)
+- `plugins/umbral-tasks/tests/beat.rs` (next_after, fire-once, double-enqueue guard, registration upsert)
 - `documentation/docs/v0.0.1/plugins/tasks.mdx` § "Periodic tasks (beat)"
 - `planning/features.md` #82 (remaining Celery gaps: result backend, status API, priority queues)

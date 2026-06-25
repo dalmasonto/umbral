@@ -8,7 +8,7 @@
 
 ## Purpose
 
-How an umbra app is constructed at boot. Covers the two surfaces a user touches at M0:
+How an umbral app is constructed at boot. Covers the two surfaces a user touches at M0:
 
 - **`Settings`** — a typed, environment-aware configuration struct that `figment` loads from defaults plus a file plus env vars.
 - **`App::builder().build()`** — the fluent entry point that wires settings, the database pool, and (later) plugins together, runs the system check, fires `on_ready` hooks, and returns a runnable `App`.
@@ -40,10 +40,10 @@ impl Settings {
 `Settings::from_env()` is the only constructor user code calls. It layers, in order of precedence (later wins):
 
 1. The struct's `Default` (built-in defaults: `environment: Environment::Dev`, empty `databases` map, etc.).
-2. A TOML file at the configured path (default `umbra.toml`, override via `UMBRA_CONFIG_PATH`).
-3. Environment variables prefixed `UMBRA_`. Nested fields use `__` as separator: `UMBRA_DATABASES__REPLICA=postgres://…`.
+2. A TOML file at the configured path (default `umbral.toml`, override via `UMBRAL_CONFIG_PATH`).
+3. Environment variables prefixed `UMBRAL_`. Nested fields use `__` as separator: `UMBRAL_DATABASES__REPLICA=postgres://…`.
 
-Plugin settings work the same way at the plugin's own level. `umbra-rest` exposes `RestSettings`; the user instantiates it (typically `RestSettings::from_env()?`) and passes it into the plugin constructor. There is **no** shared global namespace for plugin settings. Django's "every contrib app dumps into one module" pattern is rejected here.
+Plugin settings work the same way at the plugin's own level. `umbral-rest` exposes `RestSettings`; the user instantiates it (typically `RestSettings::from_env()?`) and passes it into the plugin constructor. There is **no** shared global namespace for plugin settings. Django's "every contrib app dumps into one module" pattern is rejected here.
 
 ### App and the builder
 
@@ -74,26 +74,26 @@ Each concern lives in its own module and owns its own `OnceLock`. The builder is
 
 | Module | `OnceLock` content | Read accessor |
 |---|---|---|
-| `umbra::settings` | `Settings` | `umbra::settings()` |
-| `umbra::db` | `HashMap<String, DbPool>` (alias → pool) | `umbra::db::pool()` (default) / `umbra::db::pool_for(alias)` |
-| `umbra::plugins` | `Vec<Box<dyn Plugin>>` | internal; consumers go through plugin-specific accessors |
-| `umbra::tasks` | `TaskQueue` (set only if `umbra-tasks` was registered) | `umbra::tasks::enqueue(...)` etc. |
-| `umbra::cache` | `Cache` (set only if a cache plugin was registered) | `umbra::cache::get(...)` etc. |
+| `umbral::settings` | `Settings` | `umbral::settings()` |
+| `umbral::db` | `HashMap<String, DbPool>` (alias → pool) | `umbral::db::pool()` (default) / `umbral::db::pool_for(alias)` |
+| `umbral::plugins` | `Vec<Box<dyn Plugin>>` | internal; consumers go through plugin-specific accessors |
+| `umbral::tasks` | `TaskQueue` (set only if `umbral-tasks` was registered) | `umbral::tasks::enqueue(...)` etc. |
+| `umbral::cache` | `Cache` (set only if a cache plugin was registered) | `umbral::cache::get(...)` etc. |
 
-Per-module `OnceLock`s mean the internal crate split can refactor without forcing every consumer to update imports. The builder calls `umbra::db::init(pools)`, `umbra::settings::init(settings)`, and so on; those `init` functions are visible across the workspace's internal crates but not callable from user code.
+Per-module `OnceLock`s mean the internal crate split can refactor without forcing every consumer to update imports. The builder calls `umbral::db::init(pools)`, `umbral::settings::init(settings)`, and so on; those `init` functions are visible across the workspace's internal crates but not callable from user code.
 
 ## API-shape sketch
 
 A minimal M0 binary, using the `router(...)` escape hatch since the Plugin contract doesn't exist yet:
 
 ```rust
-use umbra::prelude::*;
-use umbra::web::{Router, get};
+use umbral::prelude::*;
+use umbral::web::{Router, get};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let settings = Settings::from_env()?;
-    let pool = umbra::db::connect(&settings.database_url).await?;
+    let pool = umbral::db::connect(&settings.database_url).await?;
 
     let app = App::builder()
         .settings(settings)
@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
     app.serve("127.0.0.1:8000").await
 }
 
-async fn hello() -> &'static str { "hello, umbra" }
+async fn hello() -> &'static str { "hello, umbral" }
 ```
 
 At M7, the `router(...)` call is replaced by `.plugin(SomePlugin)` calls; the plugins contribute their own routes. The escape hatch stays on the builder, but its typical use shrinks to "I need one ad-hoc route outside a plugin."
@@ -116,12 +116,12 @@ At M7, the `router(...)` call is replaced by `.plugin(SomePlugin)` calls; the pl
 `App::builder().build()` runs five phases in order. Each phase is a fail-loud boundary; a problem at phase N must surface as an error before phase N+1 runs.
 
 1. **Configure.** The builder collects settings, database pools (one or more aliases), plugins, and the hand-written router into builder-local state. Nothing is published to ambient `OnceLock`s yet.
-2. **Resolve order.** Plugins declare dependencies (`umbra-admin` depends on `umbra-auth`, etc.). The builder topologically sorts them. A cycle here is a `BuildError`.
-3. **Publish ambient state.** `Settings`, pools, plugin registry, task-queue handle, and cache are written into their respective `OnceLock`s, in that order. After this phase, `umbra::settings()` and `umbra::db::pool()` return real values.
+2. **Resolve order.** Plugins declare dependencies (`umbral-admin` depends on `umbral-auth`, etc.). The builder topologically sorts them. A cycle here is a `BuildError`.
+3. **Publish ambient state.** `Settings`, pools, plugin registry, task-queue handle, and cache are written into their respective `OnceLock`s, in that order. After this phase, `umbral::settings()` and `umbral::db::pool()` return real values.
 4. **System check.** The compatibility check from `05-backends-and-system-check.md` runs: every model's fields are checked against the active backend; every plugin's settings struct validates; routing collisions are detected. A failure here is a `BuildError` that names the offending field, plugin, or route.
 5. **`on_ready`.** Each plugin's `Plugin::on_ready(&self, &AppContext)` runs in dependency order. This is where signals get connected, periodic schedules start, and admin registrations are sealed. Failures propagate as `BuildError`.
 
-`App::serve(addr)` is a separate call that binds the axum listener. Tests skip `serve` and drive routes via `umbra::test::Client` (designed in outline `testing.md`).
+`App::serve(addr)` is a separate call that binds the axum listener. Tests skip `serve` and drive routes via `umbral::test::Client` (designed in outline `testing.md`).
 
 ### Test override of the ambient pool
 
@@ -129,10 +129,10 @@ At M7, the `router(...)` call is replaced by `.plugin(SomePlugin)` calls; the pl
 
 **Explicit pool on the Manager.** Every `QuerySet` constructor has a parallel form that takes an explicit pool. `Post::objects().on(&pool).filter(...)` overrides the ambient. This covers tests that drive the ORM directly.
 
-**Task-local scoping.** For tests that exercise framework code that reads the ambient pool (handlers, plugin internals), `umbra::test::with_pool` sets a `tokio::task_local!` and the ambient accessor checks it first:
+**Task-local scoping.** For tests that exercise framework code that reads the ambient pool (handlers, plugin internals), `umbral::test::with_pool` sets a `tokio::task_local!` and the ambient accessor checks it first:
 
 ```rust
-umbra::test::with_pool(test_pool, async {
+umbral::test::with_pool(test_pool, async {
     let response = client.get("/posts").send().await?;
     assert_eq!(response.status(), 200);
 }).await
@@ -143,7 +143,7 @@ The pool accessor falls back to the `OnceLock` if the task-local isn't set:
 ```rust
 pub fn pool() -> DbPool {
     TEST_POOL.try_with(|p| p.clone())
-        .unwrap_or_else(|_| POOL.get().expect("umbra: db pool not initialised").clone())
+        .unwrap_or_else(|_| POOL.get().expect("umbral: db pool not initialised").clone())
 }
 ```
 
@@ -161,17 +161,17 @@ App::builder()
     .build()?;
 ```
 
-`umbra::db::pool()` returns the `default` pool; `umbra::db::pool_for("replica")` returns any named one. At the Manager level, `Post::objects().using("replica")` selects a non-default pool without disturbing the ambient-by-default rule. The full call-site design lives in `03-orm-querysets.md`; this spec only owns the registration story.
+`umbral::db::pool()` returns the `default` pool; `umbral::db::pool_for("replica")` returns any named one. At the Manager level, `Post::objects().using("replica")` selects a non-default pool without disturbing the ambient-by-default rule. The full call-site design lives in `03-orm-querysets.md`; this spec only owns the registration story.
 
 ### Settings dispatch
 
-The framework's `Settings` struct is the only one stored in the `umbra::settings` `OnceLock`. Plugin-level settings live inside the plugin instance itself; `App::builder().plugin(RestPlugin::new(RestSettings::from_env()?))` is the canonical pattern. When code outside a plugin needs to read another plugin's setting (the admin asking the REST plugin for its `default_page_size`, say), it goes through an accessor the plugin exposes, not through the registry directly.
+The framework's `Settings` struct is the only one stored in the `umbral::settings` `OnceLock`. Plugin-level settings live inside the plugin instance itself; `App::builder().plugin(RestPlugin::new(RestSettings::from_env()?))` is the canonical pattern. When code outside a plugin needs to read another plugin's setting (the admin asking the REST plugin for its `default_page_size`, say), it goes through an accessor the plugin exposes, not through the registry directly.
 
 ## Trade-offs and alternatives considered
 
 **Why `OnceLock` instead of `State<DbPool>` in every handler signature.** Threading `State` is the idiomatic axum approach but defeats the Django shape (`Post::objects()` becomes `Post::objects(&state.pool)`). The cross-cutting rule in `arch.md §2.2` makes the call: process-scoped context is ambient, request-scoped context is explicit. This spec implements the rule.
 
-**Why one `OnceLock` per module rather than a single `OnceLock<AppContext>`.** A central context object would force every consumer to import the same type, coupling plugins to a struct whose shape changes whenever a new ambient slot is added. Per-module `OnceLock`s let `umbra::tasks` add itself without recompiling `umbra::db`. The cost is a few extra `init` functions; the benefit is keeping the internal crate split refactorable, which `arch.md §1` requires.
+**Why one `OnceLock` per module rather than a single `OnceLock<AppContext>`.** A central context object would force every consumer to import the same type, coupling plugins to a struct whose shape changes whenever a new ambient slot is added. Per-module `OnceLock`s let `umbral::tasks` add itself without recompiling `umbral::db`. The cost is a few extra `init` functions; the benefit is keeping the internal crate split refactorable, which `arch.md §1` requires.
 
 **Why `figment` over hand-rolled env parsing.** figment's provider model (defaults → file → env) matches the lifecycle exactly and gives the user the Django-shape `settings.py` + `os.environ` story without writing merging code.
 
@@ -181,7 +181,7 @@ The framework's `Settings` struct is the only one stored in the `umbra::settings
 
 ## Open questions
 
-- **Concrete `init` boundary.** The five `umbra::*::init(...)` calls need to be reachable from `App::builder().build()` but not from user code. The cleanest path is an internal trait, crate-private to `umbra-core`, that the builder uses. Verify once the workspace skeleton is in place at M0.
+- **Concrete `init` boundary.** The five `umbral::*::init(...)` calls need to be reachable from `App::builder().build()` but not from user code. The cleanest path is an internal trait, crate-private to `umbral-core`, that the builder uses. Verify once the workspace skeleton is in place at M0.
 - **Settings file format.** TOML matches the Cargo ecosystem; YAML matches Django's familiarity. TOML is recommended. Revisit if the admin or REST plugin needs nested config TOML handles awkwardly.
 - **Async settings reload.** Out of scope for M0. Settings are immutable after `build()`. A reload mechanism would reopen the ambient-state question and is intentionally deferred.
 
@@ -190,6 +190,6 @@ The framework's `Settings` struct is the only one stored in the `umbra::settings
 - The cross-cutting rule this spec implements: `arch.md §2.2`.
 - The plugin contract `.plugin(...)` calls into: `02-plugin-contract.md`.
 - The system check that runs in phase 4: `05-backends-and-system-check.md`.
-- `umbra::test::with_pool` is owned by: outline `testing.md`.
-- The task-queue handle stored in `umbra::tasks`: outline `tasks.md`.
+- `umbral::test::with_pool` is owned by: outline `testing.md`.
+- The task-queue handle stored in `umbral::tasks`: outline `tasks.md`.
 - Multi-DB call-site syntax (`.using("alias")`): `03-orm-querysets.md`.

@@ -6,15 +6,15 @@ icon: shield
 tags: [web, auth, middleware]
 ---
 
-Two complementary shapes for the Django `@login_required` pattern: an axum **extractor** for per-handler gating and a tower::Layer **middleware** for gating whole Router subtrees. Both ship from `umbra-auth`. Both share one `LoginRequired` config that picks between two error responses - JSON 401 for APIs, 302 redirect for HTML pages.
+Two complementary shapes for the Django `@login_required` pattern: an axum **extractor** for per-handler gating and a tower::Layer **middleware** for gating whole Router subtrees. Both ship from `umbral-auth`. Both share one `LoginRequired` config that picks between two error responses - JSON 401 for APIs, 302 redirect for HTML pages.
 
 The full reference lives under the auth plugin: [Guarding views](/docs/v0.0.1/plugins/auth#guarding-views).
 
 ## The two shapes
 
 ```rust
-use umbra_auth::{AuthUser, login_required::{LoggedIn, LoginRequired, login_required, login_required_html}};
-use umbra::web::{Router, get, Json, Html};
+use umbral_auth::{AuthUser, login_required::{LoggedIn, LoginRequired, login_required, login_required_html}};
+use umbral::web::{Router, get, Json, Html};
 
 // 1. Extractor - per-handler. Handler only runs on a valid session.
 async fn me(LoggedIn(user): LoggedIn<AuthUser>) -> Json<serde_json::Value> {
@@ -59,6 +59,6 @@ async fn tenant_home(LoggedIn(user): LoggedIn<TenantUser>) -> Html<String> {
 
 ## See also
 
-- [`umbra-auth` plugin docs](/docs/v0.0.1/plugins/auth) - full reference for `LoginRequired`, `LoggedIn<U>`, `LoginRequiredLayer`.
+- [`umbral-auth` plugin docs](/docs/v0.0.1/plugins/auth) - full reference for `LoginRequired`, `LoggedIn<U>`, `LoginRequiredLayer`.
 - [Users and passwords](/docs/v0.0.1/auth/users-and-passwords) - the underlying user / session story.
 - [Sessions](/docs/v0.0.1/plugins/sessions) - how the session cookie is created and validated.

@@ -12,10 +12,10 @@ For the full list of supported field types, what each maps to on Postgres vs SQL
 ## The minimal model
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 use chrono::{DateTime, Utc};
 
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
 pub struct Post {
     pub id: i64,
     pub title: String,
@@ -26,7 +26,7 @@ pub struct Post {
 
 The rules the derive enforces:
 
-- One primary-key field. By default that is a field named `id`; alternatively, mark any field with `#[umbra(primary_key)]` (e.g. a string codename). Supported PK types: every Rust integer width (`i8` / `i16` / `i32` / `i64` and `u8` / `u16` / `u32` / `u64`, with `i64` the auto-increment default), `uuid::Uuid` (no auto-generation, you supply the value), and `String` (no auto-generation, you supply the value). A custom newtype works too with one line: `impl umbra::orm::PrimaryKey for MyId {}` (the type must lower to a `sea_query::Value`).
+- One primary-key field. By default that is a field named `id`; alternatively, mark any field with `#[umbral(primary_key)]` (e.g. a string codename). Supported PK types: every Rust integer width (`i8` / `i16` / `i32` / `i64` and `u8` / `u16` / `u32` / `u64`, with `i64` the auto-increment default), `uuid::Uuid` (no auto-generation, you supply the value), and `String` (no auto-generation, you supply the value). A custom newtype works too with one line: `impl umbral::orm::PrimaryKey for MyId {}` (the type must lower to a `sea_query::Value`).
 - Field types come from the M3 catalogue: signed and small-unsigned ints (`i16` / `i32` / `i64`), `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate` / `NaiveTime` / `DateTime<Utc>`, `uuid::Uuid`, `ForeignKey<T>`.
 - `serde_json::Value` for a JSON column; `Option<serde_json::Value>` for a nullable one.
 - `Option<T>` of any of the above is the only path to a nullable column.
@@ -50,9 +50,9 @@ Pass a non-sentinel value to force a specific PK (useful for seeding or test fix
 A field typed `serde_json::Value` maps to `JSONB` on Postgres (binary storage, indexable, with Postgres's full operator surface) and to `TEXT` on SQLite (sqlx's `json` feature handles serde on the boundary). The same struct compiles and runs against either backend.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
 pub struct Event {
     pub id: i64,
     pub kind: String,
@@ -69,10 +69,10 @@ Two Postgres-native predicates let you query inside a JSON column directly from 
 - `has_key(key: &str)`: true when the JSON object contains the given top-level key (Postgres `?` operator). Returns a `Predicate` directly.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 use serde_json::Value;
 
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
 pub struct Event {
     pub id: i64,
     pub payload: Value,
@@ -100,9 +100,9 @@ A field typed `Vec<T>` maps to a native Postgres array column (`T[]`). `Option<V
 Supported element types: `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `String`, `uuid::Uuid`.
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
 pub struct Event {
     pub id: i64,
     pub kind: String,
@@ -153,19 +153,19 @@ Postgres natively stores and indexes IP addresses and MAC addresses. Three **Pos
 | `ipnetwork::IpNetwork` | `Cidr` | `CIDR`: network address, host bits enforced zero by Postgres |
 | `mac_address::MacAddress` | `MacAddr` | `MACADDR`: 6-byte hardware address |
 
-The derive defaults `ipnetwork::IpNetwork` to `Inet`. Opt into the stricter `CIDR` semantics with the field-level `#[umbra(cidr)]` attribute (the Rust type stays `ipnetwork::IpNetwork`; only the column type changes):
+The derive defaults `ipnetwork::IpNetwork` to `Inet`. Opt into the stricter `CIDR` semantics with the field-level `#[umbral(cidr)]` attribute (the Rust type stays `ipnetwork::IpNetwork`; only the column type changes):
 
 ```rust
-#[umbra(cidr)]
+#[umbral(cidr)]
 pub network: IpNetwork,                  // CIDR instead of INET
 ```
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 use ipnetwork::IpNetwork;
 use mac_address::MacAddress;
 
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
 pub struct Node {
     pub id: i64,
     pub addr: IpNetwork,                  // INET, required
@@ -189,13 +189,13 @@ Need portable IP storage without a Postgres dependency? Store addresses as `Stri
 
 ## Full-text search columns
 
-Postgres's `tsvector` type stores a pre-processed lexeme document that supports fast `@@` full-text matching. umbra exposes this as the `umbra::orm::TsVector` newtype: a `String` wrapper with sqlx `Type`/`Encode`/`Decode` impls that map to a `tsvector` column. Like array and network fields, `TsVector` is **Postgres-only**; the boot-time system check fails with a clear error if the field is registered against a SQLite backend.
+Postgres's `tsvector` type stores a pre-processed lexeme document that supports fast `@@` full-text matching. umbral exposes this as the `umbral::orm::TsVector` newtype: a `String` wrapper with sqlx `Type`/`Encode`/`Decode` impls that map to a `tsvector` column. Like array and network fields, `TsVector` is **Postgres-only**; the boot-time system check fails with a clear error if the field is registered against a SQLite backend.
 
 ```rust
-use umbra::prelude::*;
-use umbra::orm::TsVector;
+use umbral::prelude::*;
+use umbral::orm::TsVector;
 
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
 pub struct Doc {
     pub id: i64,
     pub title: String,
@@ -217,10 +217,10 @@ Two matching predicates are available on every `TsVector` column:
 
 Both predicates compile only for Postgres; use the `_pg` terminal variants (`.fetch_pg`, `.first_pg`, etc.) on any model that includes a `TsVector` field.
 
-**Indexes are automatic.** A `tsvector` column needs a GIN index to be searchable, so the migration engine emits one for you (`CREATE INDEX "idx_<table>_<col>_gin" ON "<table>" USING GIN ("<col>")`) for every `TsVector` field, on both `CreateTable` and a later `AddColumn`. You don't write `#[umbra(index)]` and you don't hand-author the GIN DDL; `migrate` does it. Populating the `tsvector` from your text columns (running `to_tsvector(...)` via a trigger or a generated column) is still yours to set up; umbra stores and queries the `tsvector`, it doesn't yet generate it from source text at write time.
+**Indexes are automatic.** A `tsvector` column needs a GIN index to be searchable, so the migration engine emits one for you (`CREATE INDEX "idx_<table>_<col>_gin" ON "<table>" USING GIN ("<col>")`) for every `TsVector` field, on both `CreateTable` and a later `AddColumn`. You don't write `#[umbral(index)]` and you don't hand-author the GIN DDL; `migrate` does it. Populating the `tsvector` from your text columns (running `to_tsvector(...)` via a trigger or a generated column) is still yours to set up; umbral stores and queries the `tsvector`, it doesn't yet generate it from source text at write time.
 
 <Callout type="info">
-umbra's migration engine emits a bare `tsvector` column. Populating it is your responsibility: use a `GENERATED ALWAYS AS (to_tsvector('english', title)) STORED` clause in a hand-edited migration, or wire up a Postgres trigger. See the live-Postgres integration test in `crates/umbra-core/tests/fulltext_field.rs` for a working example.
+umbral's migration engine emits a bare `tsvector` column. Populating it is your responsibility: use a `GENERATED ALWAYS AS (to_tsvector('english', title)) STORED` clause in a hand-edited migration, or wire up a Postgres trigger. See the live-Postgres integration test in `crates/umbral-core/tests/fulltext_field.rs` for a working example.
 </Callout>
 
 ### What full-text search matches, and what it doesn't
@@ -285,43 +285,43 @@ Rule of thumb: reach for `?search=` for quick "contains this text" filtering on 
 By default the table is snake_case of the struct name: `BlogPost` becomes `blog_post`. Override with the struct-level attribute when you need a different name:
 
 ```rust
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
-#[umbra(table = "auth_user")]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
+#[umbral(table = "auth_user")]
 pub struct User {
     pub id: i64,
     pub username: String,
 }
 ```
 
-Beyond `table`, the struct-level `#[umbra(...)]` also accepts `plugin`, `display`, `icon`, `database`, `singleton`, `soft_delete`, `unique_together = [[...]]`, `indexes = [[...]]`, and `ordering = ["-col", "col"]`. The field-level `#[umbra(...)]` accepts `primary_key`, `unique`, `index`, `default = "..."`, `on_delete = "..."` / `on_update = "..."`, `auto_now` / `auto_now_add`, `max_length = N`, `min = N` / `max = N`, `string`, `noform`, `noedit`, `help = "..."`, `example = "..."`, `widget = "..."`, `backend = "..."`, `cidr`, `db_constraint = false`, `slug_from = "..."`, `choices`, `reverse_fk = "..."`, and `no_reverse`. (`choices` pairs `#[derive(Choices)]` on the enum with `#[umbra(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
+Beyond `table`, the struct-level `#[umbral(...)]` also accepts `plugin`, `display`, `icon`, `database`, `singleton`, `soft_delete`, `unique_together = [[...]]`, `indexes = [[...]]`, and `ordering = ["-col", "col"]`. The field-level `#[umbral(...)]` accepts `primary_key`, `unique`, `index`, `default = "..."`, `on_delete = "..."` / `on_update = "..."`, `auto_now` / `auto_now_add`, `max_length = N`, `min = N` / `max = N`, `string`, `noform`, `noedit`, `help = "..."`, `example = "..."`, `widget = "..."`, `backend = "..."`, `cidr`, `db_constraint = false`, `slug_from = "..."`, `choices`, `reverse_fk = "..."`, and `no_reverse`. (`choices` pairs `#[derive(Choices)]` on the enum with `#[umbral(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
 
 ## Display hints (`string`, `max_length`)
 
 Two field-level attributes shape how the admin renders a model when no `list_display` is configured:
 
 ```rust
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
 pub struct Article {
     pub id: i64,
-    #[umbra(string, max_length = 60)]
+    #[umbral(string, max_length = 60)]
     pub title: String,
     pub body: String,
     pub published_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 ```
 
-- `#[umbra(string)]`: the Django-style `__str__`, **opt-in**. Tagging one field per model switches the admin's default `list_display` to that single column when no explicit config is registered. Without any field tagged, the changelist shows every column. The PK isn't rendered as a separate column because every row in the admin is clickable into the sheet, so the id is already reachable. The attribute is never required; it's how you ask for the compact single-column form. Equivalent shapes: `#[umbra(string)]` and `#[umbra(string = true)]`.
-- `#[umbra(max_length = N)]`: soft truncation cap for display. The admin trims the value at `N` characters when rendering it in `list_display`, appending `…` so the cut is visible. Counted in characters, not bytes, so emoji and combining characters survive intact.
+- `#[umbral(string)]`: the Django-style `__str__`, **opt-in**. Tagging one field per model switches the admin's default `list_display` to that single column when no explicit config is registered. Without any field tagged, the changelist shows every column. The PK isn't rendered as a separate column because every row in the admin is clickable into the sheet, so the id is already reachable. The attribute is never required; it's how you ask for the compact single-column form. Equivalent shapes: `#[umbral(string)]` and `#[umbral(string = true)]`.
+- `#[umbral(max_length = N)]`: soft truncation cap for display. The admin trims the value at `N` characters when rendering it in `list_display`, appending `…` so the cut is visible. Counted in characters, not bytes, so emoji and combining characters survive intact.
 
-Both attributes are display-only; they do not constrain the column at the SQL level. A `String` field with `max_length = 60` is still `TEXT` (unbounded) at the database; the cap only affects how the admin renders cells. Use `#[umbra(table = "...")]` plus a manual `CHECK` constraint via a custom migration if you want the limit enforced at the DB.
+Both attributes are display-only; they do not constrain the column at the SQL level. A `String` field with `max_length = 60` is still `TEXT` (unbounded) at the database; the cap only affects how the admin renders cells. Use `#[umbral(table = "...")]` plus a manual `CHECK` constraint via a custom migration if you want the limit enforced at the DB.
 
 ## Plugin-namespaced tables
 
 When two plugins each ship a model with the same struct name (for example, a `blog` plugin and a `shop` plugin both defining `Post`), the SQL table names collide. Add `plugin = "..."` to opt into a `<plugin>_<table>` prefix:
 
 ```rust
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
-#[umbra(plugin = "blog")]
+#[derive(Debug, Clone, sqlx::FromRow, umbral::orm::Model)]
+#[umbral(plugin = "blog")]
 pub struct Post {
     pub id: i64,
     pub title: String,
@@ -341,7 +341,7 @@ The prefix rule:
 
 When to reach for `plugin = "..."`: multi-plugin apps where two or more plugins ship a model with the same struct name, or any time you want the table name to advertise which plugin owns it. The trade-off is longer table names in the DB.
 
-**Built-in plugins keep their bare names.** `umbra-auth`, `umbra-sessions`, `umbra-admin`, and `umbra-tasks` do NOT use this attribute. Their table names (`auth_user`, `session`, etc.) are stable DB identifiers; switching them would break every existing database. If you are writing a third-party plugin, you should opt into `plugin = "..."` for every model the plugin ships to avoid future collisions with other plugins.
+**Built-in plugins keep their bare names.** `umbral-auth`, `umbral-sessions`, `umbral-admin`, and `umbral-tasks` do NOT use this attribute. Their table names (`auth_user`, `session`, etc.) are stable DB identifiers; switching them would break every existing database. If you are writing a third-party plugin, you should opt into `plugin = "..."` for every model the plugin ships to avoid future collisions with other plugins.
 
 `Model::NAME` (the Rust struct name) is not affected by the `plugin` attribute; it stays `"Post"` regardless of which table name is used. The migration engine uses `Model::NAME` as the stable identity key when detecting table renames (see [Managed migrations](/docs/v0.0.1/migrations/managed-migrations#rename-detection)).
 
@@ -373,7 +373,7 @@ Each field gets a typed column constant under the snake_case module, named in `S
 `.get()` is the Django shape for "this filter should pin one row exactly." `MultipleObjectsReturned` is a data-integrity signal, not a control-flow case; it fires when filters that should hit a UNIQUE constraint stop being unique.
 
 ```rust
-use umbra::orm::GetError;
+use umbral::orm::GetError;
 
 match Post::objects().filter(post::ID.eq(42)).get().await {
     Ok(p)                                  => render(p),
@@ -391,7 +391,7 @@ let user = User::objects().get(user::EMAIL.eq(addr)).await?;
 
 ## Writing rows
 
-Four write primitives complement the read side. All return a `Result<_, umbra::orm::WriteError>` whose variants name the offending field on type mismatch / null-on-required-column / unknown-column errors.
+Four write primitives complement the read side. All return a `Result<_, umbral::orm::WriteError>` whose variants name the offending field on type mismatch / null-on-required-column / unknown-column errors.
 
 ### `create(instance)`: INSERT one row
 
@@ -505,6 +505,6 @@ Compared to `get_or_create`, `upsert` is the right call when you want to OVERWRI
 
 - Register the model with the migration engine so [makemigrations](/docs/v0.0.1/migrations/managed-migrations) tracks it.
 - [Relationships (ForeignKey)](/docs/v0.0.1/orm/relationships): declare `ForeignKey<T>` fields, query by FK, and eager-load with `select_related`.
-- [Transactions](/docs/v0.0.1/orm/transactions): wrap multiple writes in `umbra::transaction(...)` to commit or roll back atomically.
+- [Transactions](/docs/v0.0.1/orm/transactions): wrap multiple writes in `umbral::transaction(...)` to commit or roll back atomically.
 - [Querying](/docs/v0.0.1/orm/querying): F-expressions, Q-objects, exclude, projections, sugar (earliest/latest/distinct/explain), mutate-side terminals, subqueries + set ops, JSON column ops.
 - Read the spec at `docs/specs/04-orm-model-and-fields.md` for the full field-type catalogue and the QuerySet surface.

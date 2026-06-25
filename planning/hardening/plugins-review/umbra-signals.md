@@ -1,4 +1,4 @@
-# umbra-signals review
+# umbral-signals review
 
 ## Verdict
 
@@ -25,7 +25,7 @@ The signals system is genuinely solid for an in-process pub/sub: the registry, O
 
 ### Stubs / Partial
 
-- **Typed API for bulk and m2m signals** — `on_model::<M>()` exposes only `pre_save`, `post_save`, `pre_delete`, `post_delete`. There is no `on_model::<M>().bulk_post_save(...)` or `on_model::<M>().m2m_changed(...)` typed builder. Subscribers to bulk or m2m signals must use the raw `subscribe` / `subscribe_async` functions with the string name `bulk_post_save:<table>` or `m2m_changed:<junction>` and parse the JSON payload manually. Noted as deferred in `plugins/umbra-signals/src/lib.rs:76`.
+- **Typed API for bulk and m2m signals** — `on_model::<M>()` exposes only `pre_save`, `post_save`, `pre_delete`, `post_delete`. There is no `on_model::<M>().bulk_post_save(...)` or `on_model::<M>().m2m_changed(...)` typed builder. Subscribers to bulk or m2m signals must use the raw `subscribe` / `subscribe_async` functions with the string name `bulk_post_save:<table>` or `m2m_changed:<junction>` and parse the JSON payload manually. Noted as deferred in `plugins/umbral-signals/src/lib.rs:76`.
 
 ### Missing
 
@@ -145,7 +145,7 @@ Line 188 of `plugins/signals.mdx` says:
 **Description:**
 The `ACTOR` task-local (`signals.rs:70-76`) is a `tokio::task_local!`, which means it resets to the default (access fails, `current_actor()` returns `Value::Null`) when a new tokio task starts. If a handler uses `tokio::task::spawn` for fire-and-forget work inside a `with_actor(...)` scope, the spawned task does not inherit the actor.
 
-The ORM-facing doc (`orm/signals.mdx:146`) calls this out clearly in the Pitfalls section. The plugin-facing doc (`plugins/signals.mdx`) has no equivalent warning, even though the signal handler examples in that doc use `tokio::task::spawn`-like patterns (e.g. calling `umbra_tasks::enqueue`, which internally spawns). A developer whose audit log handler spawns a task inside `with_actor(...)` will silently get `actor: null` in the audit record without any warning.
+The ORM-facing doc (`orm/signals.mdx:146`) calls this out clearly in the Pitfalls section. The plugin-facing doc (`plugins/signals.mdx`) has no equivalent warning, even though the signal handler examples in that doc use `tokio::task::spawn`-like patterns (e.g. calling `umbral_tasks::enqueue`, which internally spawns). A developer whose audit log handler spawns a task inside `with_actor(...)` will silently get `actor: null` in the audit record without any warning.
 
 **Fix:** Add a pitfall callout to `plugins/signals.mdx` matching the one in `orm/signals.mdx:146`, specifically noting that `tokio::task::spawn` inside a signal handler does not inherit the actor and showing the `let actor = current_actor(); with_actor(actor, ...)` capture pattern.
 
@@ -162,7 +162,7 @@ The ORM-facing doc (`orm/signals.mdx:146`) calls this out clearly in the Pitfall
 
 - **Async handler panic isolation** — no test that a panicking async handler is caught, skipped, and the remaining handlers still run. This would fail today (the panic propagates).
 - **`bulk_post_save` and `bulk_post_delete` via typed API** — no test that `bulk_create`, `update_values`, or `QuerySet::delete` fire `bulk_post_save` / `bulk_post_delete`. The `model_signals.rs` tests verify these DON'T fire per-row signals but do not assert the bulk signals DO fire.
-- **`m2m_changed` signal** — no test in `umbra-signals` that M2M operations fire the signal. (Tests may exist elsewhere in `umbra-core` but none in the signals plugin's own test suite.)
+- **`m2m_changed` signal** — no test in `umbral-signals` that M2M operations fire the signal. (Tests may exist elsewhere in `umbral-core` but none in the signals plugin's own test suite.)
 - **Actor envelope** — no test that the `actor` key is present in the payload a handler receives after a `with_actor(...)` scope.
 - **`on_model` typed API deserialization failure path** — no test that a payload whose `"instance"` doesn't deserialize into `M` logs a warning and skips the handler (the `decode_instance` warn path at `lib.rs:140-148`).
 - **`m2m::set(&[])` emit behavior** — no test covering the case where `set` is called with an empty slice on an already-empty relation (the inconsistency with `clear` noted in Finding #3).

@@ -1,18 +1,18 @@
-# Umbra Admin — Design PRD (UI/UX)
+# Umbral Admin — Design PRD (UI/UX)
 
 | | |
 |---|---|
-| **Scope** | Visual & interaction design for the `umbra-admin` interface |
+| **Scope** | Visual & interaction design for the `umbral-admin` interface |
 | **Audience** | Design (Google Stitch), front-end |
 | **Status** | Draft v0.2 · May 30, 2026 |
-| **Companion** | `umbra-admin-backend-prd.md` (how it's powered) · `arch.md` (architecture) |
+| **Companion** | `umbral-admin-backend-prd.md` (how it's powered) · `arch.md` (architecture) |
 
 ---
 
 ## 1. Vision — and why a dev picks this over raw Axum/Actix
 
 Spinning up a backend on bare Axum/Actix means *you* build the admin: a table, forms, auth
-screens, file handling, all of it. Most teams either skip it or ship something ugly. **Umbra's
+screens, file handling, all of it. Most teams either skip it or ship something ugly. **Umbral's
 admin is the payoff** — register a model and get a fast, modern, themeable back-office for free.
 The bar is not "Django admin in Rust"; it's "the admin a team would otherwise spend a month
 building, generated from their models."
@@ -80,15 +80,15 @@ Everything is a **semantic token** exposed as a CSS custom property, defined und
 
 | Token role | Light | Dark |
 |---|---|---|
-| `--umbra-bg-canvas` | `#F7F8FA` | `#0E1014` |
-| `--umbra-bg-surface` (cards, sheet) | `#FFFFFF` | `#171A21` |
-| `--umbra-bg-surface-2` (insets, hover) | `#F0F2F5` | `#1E222B` |
-| `--umbra-border-subtle` | `#E5E8EC` | `#262B35` |
-| `--umbra-text-primary` | `#10131A` | `#ECEFF4` |
-| `--umbra-text-secondary` | `#5B6472` | `#9AA4B2` |
-| `--umbra-accent` | `#5B5BD6` | `#7C7CF0` |
-| `--umbra-accent-quiet` (tints, selected) | `#EEEEFF` | `#22243A` |
-| `--umbra-danger` / `success` / `warning` | semantic | semantic |
+| `--umbral-bg-canvas` | `#F7F8FA` | `#0E1014` |
+| `--umbral-bg-surface` (cards, sheet) | `#FFFFFF` | `#171A21` |
+| `--umbral-bg-surface-2` (insets, hover) | `#F0F2F5` | `#1E222B` |
+| `--umbral-border-subtle` | `#E5E8EC` | `#262B35` |
+| `--umbral-text-primary` | `#10131A` | `#ECEFF4` |
+| `--umbral-text-secondary` | `#5B6472` | `#9AA4B2` |
+| `--umbral-accent` | `#5B5BD6` | `#7C7CF0` |
+| `--umbral-accent-quiet` (tints, selected) | `#EEEEFF` | `#22243A` |
+| `--umbral-danger` / `success` / `warning` | semantic | semantic |
 | chart series 1–6 | a categorical ramp legible on both canvases | |
 
 - **Type:** humanist sans (Inter). Sizes ~12/13/14(body)/16/20/24/30; tabular numerals in tables/KPIs.
@@ -101,13 +101,13 @@ The admin loads a developer-supplied **`admin.css`** *last*; it redefines any su
 variables to rebrand without forking:
 
 ```css
-:root { --umbra-accent: #0F766E; --umbra-radius-card: 12px; }
-.dark { --umbra-accent: #2DD4BF; --umbra-bg-canvas: #08100E; }
+:root { --umbral-accent: #0F766E; --umbral-radius-card: 12px; }
+.dark { --umbral-accent: #2DD4BF; --umbral-bg-canvas: #08100E; }
 ```
 
-Tailwind's theme is backed by these variables (`colors.accent = "var(--umbra-accent)"`), so
+Tailwind's theme is backed by these variables (`colors.accent = "var(--umbral-accent)"`), so
 utilities and components pick up overrides automatically; the Tailwind-config-extension path
-works too. Overriding only `--umbra-accent` is the common one-line rebrand.
+works too. Overriding only `--umbral-accent` is the common one-line rebrand.
 
 ---
 
@@ -359,4 +359,4 @@ Keep the §4 token language consistent across prompts; request light **and** dar
 ---
 
 *Backend contracts for the DataTable, relation options, extensible actions, and file previews
-live in `umbra-admin-backend-prd.md`.*
+live in `umbral-admin-backend-prd.md`.*

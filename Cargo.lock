@@ -4756,7 +4756,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
-name = "umbra"
+name = "umbral"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -4764,12 +4764,12 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "umbra-core",
- "umbra-macros",
+ "umbral-core",
+ "umbral-macros",
 ]
 
 [[package]]
-name = "umbra-admin"
+name = "umbral-admin"
 version = "0.0.1"
 dependencies = [
  "axum",
@@ -4786,16 +4786,16 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "umbra",
- "umbra-auth",
- "umbra-permissions",
- "umbra-security",
- "umbra-sessions",
+ "umbral",
+ "umbral-auth",
+ "umbral-permissions",
+ "umbral-security",
+ "umbral-sessions",
  "uuid",
 ]
 
 [[package]]
-name = "umbra-analytics"
+name = "umbral-analytics"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -4806,11 +4806,11 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "umbra",
+ "umbral",
 ]
 
 [[package]]
-name = "umbra-auth"
+name = "umbral-auth"
 version = "0.0.1"
 dependencies = [
  "argon2",
@@ -4832,13 +4832,13 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "umbra",
- "umbra-sessions",
+ "umbral",
+ "umbral-sessions",
  "uuid",
 ]
 
 [[package]]
-name = "umbra-cache"
+name = "umbral-cache"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -4858,15 +4858,15 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "umbra",
+ "umbral",
 ]
 
 [[package]]
-name = "umbra-casing"
+name = "umbral-casing"
 version = "0.0.1"
 
 [[package]]
-name = "umbra-cli"
+name = "umbral-cli"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -4876,13 +4876,13 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing-subscriber",
- "umbra",
- "umbra-casing",
- "umbra-core",
+ "umbral",
+ "umbral-casing",
+ "umbral-core",
 ]
 
 [[package]]
-name = "umbra-core"
+name = "umbral-core"
 version = "0.0.1"
 dependencies = [
  "ammonia",
@@ -4922,13 +4922,13 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "umbra",
- "umbra-casing",
+ "umbral",
+ "umbral-casing",
  "uuid",
 ]
 
 [[package]]
-name = "umbra-email"
+name = "umbral-email"
 version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
@@ -4940,11 +4940,11 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "umbra",
+ "umbral",
 ]
 
 [[package]]
-name = "umbra-health"
+name = "umbral-health"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -4955,11 +4955,11 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "umbra",
+ "umbral",
 ]
 
 [[package]]
-name = "umbra-livereload"
+name = "umbral-livereload"
 version = "0.0.1"
 dependencies = [
  "axum",
@@ -4969,11 +4969,11 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "umbra",
+ "umbral",
 ]
 
 [[package]]
-name = "umbra-logs"
+name = "umbral-logs"
 version = "0.0.1"
 dependencies = [
  "axum",
@@ -4991,12 +4991,12 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "umbra",
- "umbra-admin",
+ "umbral",
+ "umbral-admin",
 ]
 
 [[package]]
-name = "umbra-macros"
+name = "umbral-macros"
 version = "0.0.1"
 dependencies = [
  "chrono",
@@ -5008,13 +5008,13 @@ dependencies = [
  "syn 2.0.117",
  "tokio",
  "trybuild",
- "umbra",
- "umbra-casing",
- "umbra-tasks",
+ "umbral",
+ "umbral-casing",
+ "umbral-tasks",
 ]
 
 [[package]]
-name = "umbra-oauth"
+name = "umbral-oauth"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -5033,15 +5033,15 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "umbra",
- "umbra-auth",
- "umbra-sessions",
+ "umbral",
+ "umbral-auth",
+ "umbral-sessions",
  "url",
  "uuid",
 ]
 
 [[package]]
-name = "umbra-openapi"
+name = "umbral-openapi"
 version = "0.0.1"
 dependencies = [
  "axum",
@@ -5054,14 +5054,14 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
- "umbra",
- "umbra-auth",
- "umbra-casing",
- "umbra-rest",
+ "umbral",
+ "umbral-auth",
+ "umbral-casing",
+ "umbral-rest",
 ]
 
 [[package]]
-name = "umbra-permissions"
+name = "umbral-permissions"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -5075,13 +5075,13 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "umbra",
- "umbra-auth",
- "umbra-rest",
+ "umbral",
+ "umbral-auth",
+ "umbral-rest",
 ]
 
 [[package]]
-name = "umbra-playground"
+name = "umbral-playground"
 version = "0.0.1"
 dependencies = [
  "axum",
@@ -5090,11 +5090,11 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "umbra",
+ "umbral",
 ]
 
 [[package]]
-name = "umbra-realtime"
+name = "umbral-realtime"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -5111,12 +5111,12 @@ dependencies = [
  "tokio-tungstenite 0.24.0",
  "tower",
  "tracing",
- "umbra",
- "umbra-auth",
+ "umbral",
+ "umbral-auth",
 ]
 
 [[package]]
-name = "umbra-rest"
+name = "umbral-rest"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -5134,22 +5134,22 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "umbra",
+ "umbral",
  "uuid",
 ]
 
 [[package]]
-name = "umbra-rls"
+name = "umbral-rls"
 version = "0.0.1"
 dependencies = [
  "sqlx",
  "tokio",
  "tracing",
- "umbra",
+ "umbral",
 ]
 
 [[package]]
-name = "umbra-security"
+name = "umbral-security"
 version = "0.0.1"
 dependencies = [
  "axum",
@@ -5166,11 +5166,11 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "umbra",
+ "umbral",
 ]
 
 [[package]]
-name = "umbra-sessions"
+name = "umbral-sessions"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -5192,13 +5192,13 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "umbra",
- "umbra-auth",
+ "umbral",
+ "umbral-auth",
  "uuid",
 ]
 
 [[package]]
-name = "umbra-signals"
+name = "umbral-signals"
 version = "0.0.1"
 dependencies = [
  "serde",
@@ -5207,12 +5207,12 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "umbra",
- "umbra-signals",
+ "umbral",
+ "umbral-signals",
 ]
 
 [[package]]
-name = "umbra-storage"
+name = "umbral-storage"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -5237,12 +5237,12 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "umbra",
+ "umbral",
  "uuid",
 ]
 
 [[package]]
-name = "umbra-tasks"
+name = "umbral-tasks"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -5255,12 +5255,12 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "umbra",
- "umbra-admin",
+ "umbral",
+ "umbral-admin",
 ]
 
 [[package]]
-name = "umbra-tenants"
+name = "umbral-tenants"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -5273,11 +5273,11 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing",
- "umbra",
+ "umbral",
 ]
 
 [[package]]
-name = "umbra-testing"
+name = "umbral-testing"
 version = "0.0.1"
 dependencies = [
  "async-trait",
@@ -5292,7 +5292,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
- "umbra",
+ "umbral",
 ]
 
 [[package]]

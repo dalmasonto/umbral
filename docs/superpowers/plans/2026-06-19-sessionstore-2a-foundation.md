@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Route all umbra session storage through a `SessionStore` trait via a **request-scoped session** (task-local: load at `session_layer` entry, mutate in memory, save once at exit), with `DbStore` reproducing today's behavior **byte-for-byte**. No new backend yet — this is the seam that 2b (CookieStore) and 2c (RedisStore) plug into. **Strictly behavior-preserving: every existing umbra-sessions and umbra-auth test must stay green.**
+**Goal:** Route all umbral session storage through a `SessionStore` trait via a **request-scoped session** (task-local: load at `session_layer` entry, mutate in memory, save once at exit), with `DbStore` reproducing today's behavior **byte-for-byte**. No new backend yet — this is the seam that 2b (CookieStore) and 2c (RedisStore) plug into. **Strictly behavior-preserving: every existing umbral-sessions and umbral-auth test must stay green.**
 
 **Architecture:** A `SessionStore` trait (`load`/`save`/`destroy`, keyed by the cookie token) with one impl, `DbStore`, wrapping today's SQL. The active store is an ambient `OnceLock<Arc<dyn SessionStore>>` installed by `SessionsPlugin`. A `RequestSession` (token + loaded record + dirty/fresh flags) lives on a `tokio::task_local!`, scoped by `session_layer`. The public functions (`set_data`/`get_data`/`current_session`/`current_user_id_str`/`login_user_id`) operate on that task-local instead of hitting the DB directly; `session_layer` saves the record via the store at response exit, preserving lazy creation (#46).
 
@@ -16,24 +16,24 @@
 - **`login_user_id`:** (1) always `destroy_session(old)` even if the read failed (fixation defense); (2) mint new session; (3) carry the **entire `data` string** to the new row, but **only if `data != "{}"`**; (4) `Set-Cookie` written to `response_headers`, not returned. (lib.rs:493.)
 - **`session_layer` lazy creation (#46):** NEVER writes a row on entry; mints an in-memory candidate token when there's no live session; emits `Set-Cookie` at exit only if **(a)** the token was fresh AND **(b)** the response has no existing `Set-Cookie` AND **(c)** a row now exists. (lib.rs:844.)
 - **Cookie flags:** `Path=/; HttpOnly; [Secure; ]SameSite=Lax; Max-Age=<secs>` — `Secure` omitted only in `Environment::Dev`. (`set_cookie_header_named`, lib.rs:302.)
-- **`COOKIE_NAME = "umbra_session"`, `DEFAULT_TTL_SECONDS = 14*24*3600`.**
+- **`COOKIE_NAME = "umbral_session"`, `DEFAULT_TTL_SECONDS = 14*24*3600`.**
 - The `Session` model + its `ModelMeta` migration stay; `DbStore` uses the same table.
-- Public re-exports (`set_data`, `get_data`, `read_session`, `current_session`, `current_user_id_str`, `login_user_id`, `SessionToken`, `COOKIE_NAME`, …) keep their signatures so umbra-auth and the shop compile unchanged.
+- Public re-exports (`set_data`, `get_data`, `read_session`, `current_session`, `current_user_id_str`, `login_user_id`, `SessionToken`, `COOKIE_NAME`, …) keep their signatures so umbral-auth and the shop compile unchanged.
 
 ---
 
 ## File Structure
 
-- `plugins/umbra-sessions/src/store.rs` (new): `SessionStore` trait, `SessionRecord` struct, `DbStore`, the ambient `OnceLock` + `install_store`/`active_store`.
-- `plugins/umbra-sessions/src/request_session.rs` (new): `RequestSession` holder + `CURRENT_SESSION` task-local + `scope`/`current`/`with_loaded` helpers.
-- `plugins/umbra-sessions/src/lib.rs` (modify): `pub mod store; pub mod request_session;`; rewrite `session_layer` to load/scope/save; rewrite `set_data`/`get_data`/`current_session`/`current_user_id_str`/`login_user_id` to use the task-local; add `SessionsPlugin.store()` builder + install in the plugin lifecycle.
-- Tests: `plugins/umbra-sessions/tests/store_dbstore.rs`, `plugins/umbra-sessions/tests/request_session_layer.rs` (new); existing `tests/lazy_session.rs` and `tests/integration.rs` must still pass.
+- `plugins/umbral-sessions/src/store.rs` (new): `SessionStore` trait, `SessionRecord` struct, `DbStore`, the ambient `OnceLock` + `install_store`/`active_store`.
+- `plugins/umbral-sessions/src/request_session.rs` (new): `RequestSession` holder + `CURRENT_SESSION` task-local + `scope`/`current`/`with_loaded` helpers.
+- `plugins/umbral-sessions/src/lib.rs` (modify): `pub mod store; pub mod request_session;`; rewrite `session_layer` to load/scope/save; rewrite `set_data`/`get_data`/`current_session`/`current_user_id_str`/`login_user_id` to use the task-local; add `SessionsPlugin.store()` builder + install in the plugin lifecycle.
+- Tests: `plugins/umbral-sessions/tests/store_dbstore.rs`, `plugins/umbral-sessions/tests/request_session_layer.rs` (new); existing `tests/lazy_session.rs` and `tests/integration.rs` must still pass.
 
 ---
 
 ## Task 1: `SessionStore` trait + `SessionRecord` + `DbStore` + ambient install
 
-**Files:** Create `plugins/umbra-sessions/src/store.rs`; modify `plugins/umbra-sessions/src/lib.rs` (`pub mod store;`, re-exports). Test: `plugins/umbra-sessions/tests/store_dbstore.rs`.
+**Files:** Create `plugins/umbral-sessions/src/store.rs`; modify `plugins/umbral-sessions/src/lib.rs` (`pub mod store;`, re-exports). Test: `plugins/umbral-sessions/tests/store_dbstore.rs`.
 
 **Interfaces — Produces:**
 ```rust
@@ -58,23 +58,23 @@ pub trait SessionStore: Send + Sync + std::fmt::Debug {
     async fn destroy(&self, token: &str) -> Result<(), SessionError>;
 }
 
-pub fn install_store(store: std::sync::Arc<dyn SessionStore>); // sets the ambient OnceLock (idempotent: warn+ignore if already set, like umbra's pool)
+pub fn install_store(store: std::sync::Arc<dyn SessionStore>); // sets the ambient OnceLock (idempotent: warn+ignore if already set, like umbral's pool)
 pub fn active_store() -> std::sync::Arc<dyn SessionStore>;     // returns the installed store, or a default DbStore if none installed
 ```
 
 `DbStore` reproduces today's SQL: `load` = the body of `read_session` (hash, `Session::objects().filter(session::ID.eq(hash)).first()`, lazy-delete-if-expired); `save` = the `upsert_session_data_key` upsert BUT writing the FULL record (id=hash(token), user_id, data, created_at, expires_at) via an `INSERT ... ON CONFLICT(id) DO UPDATE SET user_id=, data=, expires_at=` (sqlite + postgres branches, mirroring the existing dispatch on `pool_dispatched()`), returning `token` unchanged; `destroy` = `destroy_session_by_hash`.
 
 - [ ] **Step 1: Write failing tests** — `tests/store_dbstore.rs`: boot an app with a sqlite pool + `session` table (copy the boot+CREATE TABLE harness from `tests/lazy_session.rs`), then: `DbStore.save("tok", rec)` then `load("tok")` returns the record (user_id, data round-trip); `load("missing")` → None; a record with `expires_at` in the past → `load` returns None AND the row is gone; `destroy("tok")` → subsequent `load` None. Assert the DB `id` column equals `hash_token("tok")` (token hashed at rest).
-- [ ] **Step 2: Run, confirm FAIL** — `cd crates && cargo test -p umbra-sessions --test store_dbstore` → compile error (types missing).
+- [ ] **Step 2: Run, confirm FAIL** — `cd crates && cargo test -p umbral-sessions --test store_dbstore` → compile error (types missing).
 - [ ] **Step 3: Implement `store.rs`** — define `SessionRecord`, `SessionStore`, `DbStore` (move/borrow the SQL from `read_session`/`upsert_session_data_key`/`destroy_session_by_hash`; keep `hash_token` reachable — make it `pub(crate)`). Add the `OnceLock<Arc<dyn SessionStore>>` + `install_store` (idempotent) + `active_store` (default `DbStore` if unset). Wire `pub mod store;` and re-export `SessionStore`, `SessionRecord`, `DbStore` from `lib.rs`.
-- [ ] **Step 4: Run, confirm PASS** — `cargo test -p umbra-sessions --test store_dbstore`.
+- [ ] **Step 4: Run, confirm PASS** — `cargo test -p umbral-sessions --test store_dbstore`.
 - [ ] **Step 5: Commit** — `feat(sessions): SessionStore trait + DbStore + ambient install`.
 
 ---
 
 ## Task 2: Request-scoped session + `session_layer` load/save (lazy creation preserved)
 
-**Files:** Create `plugins/umbra-sessions/src/request_session.rs`; modify `lib.rs` (`session_layer`). Test: `plugins/umbra-sessions/tests/request_session_layer.rs`.
+**Files:** Create `plugins/umbral-sessions/src/request_session.rs`; modify `lib.rs` (`session_layer`). Test: `plugins/umbral-sessions/tests/request_session_layer.rs`.
 
 **Interfaces — Consumes** Task 1 (`active_store`, `SessionRecord`). **Produces:**
 ```rust
@@ -99,7 +99,7 @@ pub fn current_mut<R>(f: impl FnOnce(&mut RequestSession) -> R) -> Option<R>; //
 - [ ] **Step 1: Write failing tests** — `tests/request_session_layer.rs` (own binary, sqlite boot harness): (a) a handler that does NOT write the session → response has **no** `Set-Cookie` and the `session` table has **0 rows** (lazy creation preserved); (b) a handler that calls `current_mut(|s| s.set_raw("k", json!(1)))` → response **has** `Set-Cookie` and **1 row** exists with that data; (c) a request carrying a live session cookie + a non-writing handler → no new row, no Set-Cookie.
 - [ ] **Step 2: Run, confirm FAIL.**
 - [ ] **Step 3: Implement** `request_session.rs` (the holder + `CURRENT_SESSION` task-local with `RefCell`, `scope`/`current`/`current_mut`) and rewrite `session_layer` per the flow above. Keep `SessionToken`/`SessionFresh` insertion.
-- [ ] **Step 4: Run, confirm PASS** + run `cargo test -p umbra-sessions --test lazy_session` (the #46 regression test) — MUST stay green.
+- [ ] **Step 4: Run, confirm PASS** + run `cargo test -p umbral-sessions --test lazy_session` (the #46 regression test) — MUST stay green.
 - [ ] **Step 5: Commit** — `feat(sessions): request-scoped session + lazy load/save in session_layer`.
 
 ---
@@ -120,14 +120,14 @@ Behavior:
 - [ ] **Step 1: Write failing test** — `tests/request_session_data.rs`: a handler that `set_data("k", 5)` then a SECOND request (same cookie) whose handler reads `get_data` / `current_user_id_str` sees the persisted value; assert the in-request `set_data` performed the write at exit (1 row), and a login rotates the cookie token (new `Set-Cookie`, old session destroyed). Use a query counter or row-count assertions to confirm the in-request read path does not re-query mid-request.
 - [ ] **Step 2: Run, confirm FAIL.**
 - [ ] **Step 3: Implement** the body rewrites with the in-request / fallback branches above.
-- [ ] **Step 4: Run the WHOLE umbra-sessions + umbra-auth suites** — `cd crates && cargo test -p umbra-sessions && cargo test -p umbra-auth`. Every existing test MUST pass (behavior-preserving is the gate). Also `cargo build -p umbra` (facade).
+- [ ] **Step 4: Run the WHOLE umbral-sessions + umbral-auth suites** — `cd crates && cargo test -p umbral-sessions && cargo test -p umbral-auth`. Every existing test MUST pass (behavior-preserving is the gate). Also `cargo build -p umbral` (facade).
 - [ ] **Step 5: Commit** — `refactor(sessions): route public API through the request-scoped session`.
 
 ---
 
 ## Task 4: `SessionsPlugin.store()` builder + install in lifecycle
 
-**Files:** Modify `lib.rs` (`SessionsPlugin` struct + `Default` + builder + `Plugin` lifecycle). Test: `plugins/umbra-sessions/tests/plugin_store.rs`.
+**Files:** Modify `lib.rs` (`SessionsPlugin` struct + `Default` + builder + `Plugin` lifecycle). Test: `plugins/umbral-sessions/tests/plugin_store.rs`.
 
 **Interfaces — Produces:** `SessionsPlugin::default().store(impl SessionStore + 'static)`; default = `DbStore`. The store is `install_store`'d during the plugin's build/`on_ready` lifecycle so `active_store()` returns it.
 
@@ -140,6 +140,6 @@ Behavior:
 ## Self-Review
 
 - **Spec coverage (spec §3 Component 2, foundation half):** the trait + DbStore + the request-scoped seam are Tasks 1–4; CookieStore (2b) and RedisStore (2c) are separate plans that implement `SessionStore` against this seam. Not a gap.
-- **Behavior preservation is the load-bearing gate:** every task ends by running the existing `lazy_session.rs` / `integration.rs` / umbra-auth suites. The riskiest invariants (lazy creation #46, login rotation + carry, cookie flags) each have an explicit preserve-this line in Global Constraints and a covering assertion.
+- **Behavior preservation is the load-bearing gate:** every task ends by running the existing `lazy_session.rs` / `integration.rs` / umbral-auth suites. The riskiest invariants (lazy creation #46, login rotation + carry, cookie flags) each have an explicit preserve-this line in Global Constraints and a covering assertion.
 - **Type consistency:** `SessionRecord` is the single record type across `store`/`request_session`/the public functions; `save` returns the cookie value (token for DbStore) consistently in Tasks 1–3.
 - **Known risk:** the in-request-vs-fallback branch in Task 3 (callers inside a request use the task-local; callers outside fall back to direct store I/O). The fallback path keeps non-request callers (e.g. background jobs creating sessions) working; the test must cover both.

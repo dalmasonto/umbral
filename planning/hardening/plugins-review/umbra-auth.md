@@ -1,10 +1,10 @@
-# Holistic review — `umbra-auth`
+# Holistic review — `umbral-auth`
 
-Read-only review, 2026-06-16. Scope: `plugins/umbra-auth/src/**` + `plugins/umbra-auth/tests/**`, against Django's `django.contrib.auth`. Cross-referenced against `planning/hardening/reviews/{race-conditions,security}.md` and `docs-audit/migrations-auth-cli-backends.md`; already-filed items are marked **already #N** and not re-counted. NEW findings (no number yet) are marked **NEW**. Severity per the code-review skill: Critical / Important / Minor / Nit.
+Read-only review, 2026-06-16. Scope: `plugins/umbral-auth/src/**` + `plugins/umbral-auth/tests/**`, against Django's `django.contrib.auth`. Cross-referenced against `planning/hardening/reviews/{race-conditions,security}.md` and `docs-audit/migrations-auth-cli-backends.md`; already-filed items are marked **already #N** and not re-counted. NEW findings (no number yet) are marked **NEW**. Severity per the code-review skill: Critical / Important / Minor / Nit.
 
 ## Verdict
 
-Solid, well-shaped plugin that proves the M7 contract cleanly. The user-model abstraction (`UserModel` + polymorphic `PrimaryKey`) is genuinely good, password hashing is correct, the bearer-token and session-auth surfaces are coherent, and the test suite is the strongest of any plugin reviewed so far (behavioral round-trips, custom-user and UUID-user coverage). **Completeness is the gap, not correctness:** the plugin covers Django's *authentication* core but explicitly defers most of the *account-lifecycle* surface (password reset, password change, email verification, lockout/throttle, permissions — the latter lives in the separate `umbra-permissions` plugin). What ships is correct; what's missing is breadth.
+Solid, well-shaped plugin that proves the M7 contract cleanly. The user-model abstraction (`UserModel` + polymorphic `PrimaryKey`) is genuinely good, password hashing is correct, the bearer-token and session-auth surfaces are coherent, and the test suite is the strongest of any plugin reviewed so far (behavioral round-trips, custom-user and UUID-user coverage). **Completeness is the gap, not correctness:** the plugin covers Django's *authentication* core but explicitly defers most of the *account-lifecycle* surface (password reset, password change, email verification, lockout/throttle, permissions — the latter lives in the separate `umbral-permissions` plugin). What ships is correct; what's missing is breadth.
 
 **Completeness one-liner:** authentication core is complete and correct; account-lifecycle (reset/change/verify) and abuse-defense (lockout/throttle) are deliberately absent, and the `Identity` boundary drops `is_superuser`.
 
@@ -18,19 +18,19 @@ Solid, well-shaped plugin that proves the M7 contract cleanly. The user-model ab
 | `User` / `OptionalUser` extractors | **Complete** | `session_user.rs:203,216`. 401 / fail-open `None`. |
 | `LoggedIn<U>` / login-required | **Complete** | Extractor + tower layer (`login_required.rs`), API-401 and HTML-302 shapes. Good. |
 | Password hashing (argon2) | **Complete** | `hash_password`/`verify_password`, random per-password salt, constant-time verify, identical `InvalidCredentials` for unknown-user vs wrong-password. |
-| `createsuperuser` | **Complete** | `CreateSuperuserCommand`, interactive + `--noinput` + `UMBRA_SUPERUSER_PASSWORD`, no-echo prompt, confirm-match. |
+| `createsuperuser` | **Complete** | `CreateSuperuserCommand`, interactive + `--noinput` + `UMBRAL_SUPERUSER_PASSWORD`, no-echo prompt, confirm-match. |
 | `with_user_in_templates` | **Complete** | Builder + `wrap_router` + `user_context_layer`; recursive relation expansion (gap2 #14). The docstring-to-method contract the CLAUDE.md cites as the canonical "fix don't patch" example is honoured — the method exists and the middleware mounts. |
 | Default `/auth` routes | **Complete (AuthUser-only)** | register / login / logout / me, OpenAPI paths, route specs. Deliberately gated to `AuthPlugin<AuthUser>` at the type level. |
-| Bearer tokens | **Complete** | Hash-at-rest, `umbra_` prefix, per-user named tokens, `ON DELETE CASCADE`, best-effort `last_used_at`. DRF-knox shape. |
+| Bearer tokens | **Complete** | Hash-at-rest, `umbral_` prefix, per-user named tokens, `ON DELETE CASCADE`, best-effort `last_used_at`. DRF-knox shape. |
 | **Password validators** | **MISSING** | No `validate_password` / min-length / common-password / numeric checks. `register` and `createsuperuser` accept any non-empty string. Django ships `AUTH_PASSWORD_VALIDATORS`. Not stubbed — simply absent. |
 | **Password reset flow** | **MISSING (deferred)** | `auth_routes.rs:30` documents it as "couples to a mail crate; lands as its own plugin." No token model, no endpoints. |
 | **Password change flow** | **MISSING** | `set_password<U>` helper exists (`lib.rs:669`) but there is no HTTP endpoint and no "old password required" check. Django ships `PasswordChangeView`. |
 | **Email verification on register** | **MISSING (deferred)** | `auth_routes.rs:31` "workflow varies per app." |
 | **Account lockout / login throttle** | **MISSING (deferred)** | `auth_routes.rs:32` "production hardening; wrong layer." No failed-attempt counter, no `axes`-equivalent. The `login` handler (`auth_routes.rs:297`) has no rate limit — unbounded credential-stuffing surface. |
 | **Remember-me** | **MISSING** | Cookie TTL is fixed at `DEFAULT_TTL_SECONDS`; no per-login "keep me signed in" toggle that extends/shortens `expires_at`. |
-| **Permissions / groups** | **Out of scope (separate plugin)** | `umbra-permissions` owns this; `lib.rs:56` notes the deferral. Correct architecturally. |
+| **Permissions / groups** | **Out of scope (separate plugin)** | `umbral-permissions` owns this; `lib.rs:56` notes the deferral. Correct architecturally. |
 | `last_login` bump | **Complete** | `login_with_request` best-effort updates it. |
-| Session fixation defense | **Complete** | Delegated to `umbra_sessions::login_user_id` (destroys anon session, mints fresh token). |
+| Session fixation defense | **Complete** | Delegated to `umbral_sessions::login_user_id` (destroys anon session, mints fresh token). |
 
 No `todo!()`, no `unimplemented!()`, no `// TODO`/`// FIXME` in `src/`. The "deliberately missing" items in `auth_routes.rs:28-34` are honestly documented as deferred, not faked.
 
@@ -38,13 +38,13 @@ No `todo!()`, no `unimplemented!()`, no `// TODO`/`// FIXME` in `src/`. The "del
 
 ### Important
 
-1. **NEW — `Identity` drops `is_superuser` at the auth boundary.** `session_user.rs:167`, `bearer_auth.rs:106`, `extractors.rs:120,137`. Every authenticator builds `Identity::user(...).with_staff(user.is_staff)` — there is no `.with_superuser(...)` and `Identity` (`umbra-rest/src/auth.rs:55-69`) has no superuser field. So a superuser arriving via REST is indistinguishable from a non-superuser staff member at the `Identity` level. **Bounded, not a bypass:** `umbra-permissions`' REST permission re-loads the `AuthUser` row and reads `is_superuser` directly (`umbra-permissions/src/rest.rs`, per `reviews/security.md`), so the superuser path still works *for that consumer*. But a third-party permission that trusts the `Identity` (the documented extension point) cannot see superuser. The contract is incomplete. **Fix:** add `is_superuser` to `Identity` + `with_superuser`, populate it in all four auth paths. Touches `umbra-rest` (the field) and `umbra-auth` (the populate). → **NEW gap (file)**.
+1. **NEW — `Identity` drops `is_superuser` at the auth boundary.** `session_user.rs:167`, `bearer_auth.rs:106`, `extractors.rs:120,137`. Every authenticator builds `Identity::user(...).with_staff(user.is_staff)` — there is no `.with_superuser(...)` and `Identity` (`umbral-rest/src/auth.rs:55-69`) has no superuser field. So a superuser arriving via REST is indistinguishable from a non-superuser staff member at the `Identity` level. **Bounded, not a bypass:** `umbral-permissions`' REST permission re-loads the `AuthUser` row and reads `is_superuser` directly (`umbral-permissions/src/rest.rs`, per `reviews/security.md`), so the superuser path still works *for that consumer*. But a third-party permission that trusts the `Identity` (the documented extension point) cannot see superuser. The contract is incomplete. **Fix:** add `is_superuser` to `Identity` + `with_superuser`, populate it in all four auth paths. Touches `umbral-rest` (the field) and `umbral-auth` (the populate). → **NEW gap (file)**.
 
 2. **NEW — no password-strength validation anywhere.** `lib.rs:565` (`create_user`), `auth_routes.rs:266` (`register`), `lib.rs:804` (`resolve_password`). The only check is `is_empty()`. A user can register with password `"a"`. Django's `AUTH_PASSWORD_VALIDATORS` (min length, common-password list, numeric-only, user-attribute-similarity) is a security baseline, not a nicety. **Fix:** a `PasswordValidator` trait + a default `MinLength(8)` + common-password set, run in `create_user`/`register`/`createsuperuser`/`set_password`. → **NEW gap (file)**.
 
 3. **NEW — `register`/login endpoints have no throttle; credential stuffing is unbounded.** `auth_routes.rs:297` (`login`), `:266` (`register`). Cross-refs the deferral note at `auth_routes.rs:32`, but the *deferral* is the finding: a framework that ships a built-in `/api/auth/login` with zero rate limiting ships a credential-stuffing endpoint by default. Even a coarse per-IP counter (or a documented "mount a throttle layer") closes it. **Fix:** ship a throttle middleware or, at minimum, a boot-time `check.rs` warning when `with_default_routes()` is mounted without one. → **NEW gap (file)**.
 
-4. **already #75 — `password_hash` is serde-`Serialize`d, guarded only by the block-list.** `lib.rs:222,233-234`. `AuthUser` derives `Serialize` with no `#[serde(skip_serializing)]` on `password_hash`; only `auth_user` being in `DEFAULT_BLOCKED_TABLES` keeps it off the wire. One `.expose(["auth_user"])` without `.hide("password_hash")` dumps argon2 hashes. The `#[umbra(noform)]` attribute keeps it off *forms* but not off *serialization*. Already filed.
+4. **already #75 — `password_hash` is serde-`Serialize`d, guarded only by the block-list.** `lib.rs:222,233-234`. `AuthUser` derives `Serialize` with no `#[serde(skip_serializing)]` on `password_hash`; only `auth_user` being in `DEFAULT_BLOCKED_TABLES` keeps it off the wire. One `.expose(["auth_user"])` without `.hide("password_hash")` dumps argon2 hashes. The `#[umbral(noform)]` attribute keeps it off *forms* but not off *serialization*. Already filed.
 
 5. **already #75 — argon2 params are implicit `Argon2::default()`.** `lib.rs:531,543`. Currently meets OWASP but unpinned; a crate bump could silently regress cost. Already filed.
 
@@ -58,7 +58,7 @@ No `todo!()`, no `unimplemented!()`, no `// TODO`/`// FIXME` in `src/`. The "del
 
 ### Nit
 
-9. **NEW — `pk_json_key` / `json_value_to_pk_string` duplicated from `umbra-core::orm::dynamic`.** `session_user.rs:486,498`, by the author's own admission in the doc-comment (`:479-485`: "Mirrors the `pk_json_key` helper in `umbra-core::orm::dynamic` — kept local"). Ties into the dedup theme in **backlog #77**; fold in.
+9. **NEW — `pk_json_key` / `json_value_to_pk_string` duplicated from `umbral-core::orm::dynamic`.** `session_user.rs:486,498`, by the author's own admission in the doc-comment (`:479-485`: "Mirrors the `pk_json_key` helper in `umbral-core::orm::dynamic` — kept local"). Ties into the dedup theme in **backlog #77**; fold in.
 
 10. **NEW — `urlencoded` in `login_required.rs:135` is a hand-rolled 7-char percent-encoder.** Covers the query-string metacharacters but not the general set (e.g. `#`, non-ASCII). For a `?next=<uri>` redirect it's adequate (the uri is server-controlled), but `percent-encoding` (already a transitive dep) would be more correct and less surprising. Minor.
 

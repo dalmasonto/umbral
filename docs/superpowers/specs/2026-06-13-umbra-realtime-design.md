@@ -1,4 +1,4 @@
-# umbra-realtime — SSE + WebSocket real-time push (features.md #45)
+# umbral-realtime — SSE + WebSocket real-time push (features.md #45)
 
 Date: 2026-06-13
 Status: design approved (autonomous), scaffolding next
@@ -12,7 +12,7 @@ This is the plugin that unblocks the SSE notification bell (#2), the playground 
 ## The shape a developer sees
 
 ```rust
-use umbra_realtime::Realtime;
+use umbral_realtime::Realtime;
 
 // From anywhere with the ambient handle (a handler, a signal, a task):
 Realtime::to_user(42).send("notification", &json!({ "title": "Build passed" })).await;
@@ -86,7 +86,7 @@ Why a broker now: targeting `to_user(42)` only works if the message reaches the 
 - **SSE** — `GET /realtime/sse?groups=chat:123,presence`. Returns axum `Sse<impl Stream>`; the conn's `mpsc::Receiver` becomes the event stream. A keep-alive comment every ~15s holds the connection through proxies. Unidirectional server→client; the default and simplest. This is where `futures-util` lands (also unblocks the QuerySet `iterator()` Stream, features.md #29 phase 2).
 - **WebSocket** — `GET /realtime/ws?groups=...`. `WebSocketUpgrade`; bidirectional. Outbound shares the same per-conn sink; inbound client frames dispatch to an app `MessageHandler` (chat send, presence ping, typed commands). Built on axum's WS (tokio-tungstenite under the hood).
 
-Both transports resolve the connection's identity at handshake from the session/bearer (reuse `umbra_auth::resolve_identity`) and validate requested groups before joining.
+Both transports resolve the connection's identity at handshake from the session/bearer (reuse `umbral_auth::resolve_identity`) and validate requested groups before joining.
 
 ## Auth + group membership (the security seam)
 
@@ -126,16 +126,16 @@ So a client opening `?groups=tenant:99` it doesn't belong to is rejected at hand
 
 - Registry unit tests: connect/disconnect maintains the indexes; `to_user`/`to_group`/`broadcast` resolve the right conn set; disconnect cleans every index (no leak).
 - `InProcessBroker`: `publish` reaches a local subscriber.
-- Transport integration (via `umbra-testing`): open an SSE stream against a test app, `Realtime::to_group(...).send(...)`, assert the event arrives; assert a `GroupPolicy`-denied group yields 403.
+- Transport integration (via `umbral-testing`): open an SSE stream against a test app, `Realtime::to_group(...).send(...)`, assert the event arrives; assert a `GroupPolicy`-denied group yields 403.
 - Signals bridge: a `post_save` on a registered model fans out to the bound group.
 
 ## Implementation plan (phases — "start executing" = phase 1+2)
 
-1. **Crate skeleton** — `plugins/umbra-realtime/`: `RealtimePlugin` (Plugin impl, mounts routes), `Realtime` ambient handle (OnceLock), `Target`/`TargetKind`, `Envelope`, `Broker` trait + `InProcessBroker`, the registry. Compiles + registry unit tests. **← start here.**
-2. **SSE transport** — `GET /realtime/sse`, keep-alive, identity + `GroupPolicy` at handshake, `ConnGuard` cleanup. Integration test via umbra-testing. Pulls in `futures-util`.
+1. **Crate skeleton** — `plugins/umbral-realtime/`: `RealtimePlugin` (Plugin impl, mounts routes), `Realtime` ambient handle (OnceLock), `Target`/`TargetKind`, `Envelope`, `Broker` trait + `InProcessBroker`, the registry. Compiles + registry unit tests. **← start here.**
+2. **SSE transport** — `GET /realtime/sse`, keep-alive, identity + `GroupPolicy` at handshake, `ConnGuard` cleanup. Integration test via umbral-testing. Pulls in `futures-util`.
 3. **WebSocket transport** — `GET /realtime/ws`, `MessageHandler` for inbound.
 4. **Signals bridge** — `on_model::<T>()`.
-5. **Demo + docs** — a live "plugin submitted → staff" feed on umbra_website (or a presence counter), playground Realtime tab (#10), `documentation/docs/v0.0.1/realtime/*.mdx`. Closes #45; unblocks #2, #10, #77.
+5. **Demo + docs** — a live "plugin submitted → staff" feed on umbral_website (or a presence counter), playground Realtime tab (#10), `documentation/docs/v0.0.1/realtime/*.mdx`. Closes #45; unblocks #2, #10, #77.
 
 ## Dependencies
 
@@ -143,4 +143,4 @@ So a client opening `?groups=tenant:99` it doesn't belong to is rejected at hand
 
 ## Crate-boundary check
 
-`umbra-realtime` depends only on the `umbra` facade (Plugin, web, auth identity, signals) — never on a concrete consumer. The signals bridge uses the existing `subscribe`/`emit` surface. No core changes required beyond what's already public (`resolve_identity`, signals, the Plugin trait).
+`umbral-realtime` depends only on the `umbral` facade (Plugin, web, auth identity, signals) — never on a concrete consumer. The signals bridge uses the existing `subscribe`/`emit` surface. No core changes required beyond what's already public (`resolve_identity`, signals, the Plugin trait).

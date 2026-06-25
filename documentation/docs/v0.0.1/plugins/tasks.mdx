@@ -5,9 +5,9 @@ sidebar_position: 10
 icon: clock
 ---
 
-`umbra-tasks` runs background work outside the request/response cycle. It uses
+`umbral-tasks` runs background work outside the request/response cycle. It uses
 your application's existing database as the broker - no Redis, no RabbitMQ, no
-separate infrastructure. A fresh umbra project gets background jobs for the cost
+separate infrastructure. A fresh umbral project gets background jobs for the cost
 of one `.plugin(TasksPlugin)` line.
 
 ## What you get from `TasksPlugin::default()`
@@ -16,7 +16,7 @@ Registering the plugin creates one migration: a `task_row` table that tracks
 every enqueued job - its name, JSON payload, status, attempt count, schedule
 time, and error message on failure. The plugin also contributes a `tasks-worker`
 management subcommand reachable via `cargo run -- tasks-worker` (your project's
-binary dispatches it through `umbra_cli::dispatch(app)`).
+binary dispatches it through `umbral_cli::dispatch(app)`).
 
 ```rust
 App::builder()
@@ -39,7 +39,7 @@ pub struct WelcomeEmailPayload {
     pub locale: String,
 }
 
-#[umbra::task]
+#[umbral::task]
 async fn send_welcome(payload: WelcomeEmailPayload) -> Result<(), String> {
     // ... send the email
     Ok(())
@@ -51,7 +51,7 @@ The macro emits two things:
 1. The original `async fn send_welcome` unchanged, so you can call it directly
    in tests or other code.
 2. A companion `pub fn register_send_welcome()` that calls
-   `umbra_tasks::register_handler("send_welcome", ...)` with a generated wrapper
+   `umbral_tasks::register_handler("send_welcome", ...)` with a generated wrapper
    that JSON-deserialises the payload and forwards to your function.
 
 Call the companion from `Plugin::on_ready` or your `main` function before the
@@ -65,7 +65,7 @@ register_send_welcome();
 Then enqueue work anywhere in your request handlers:
 
 ```rust
-use umbra_tasks::{EnqueueOptions, enqueue};
+use umbral_tasks::{EnqueueOptions, enqueue};
 
 let _task_id = enqueue(
     "send_welcome",
@@ -80,7 +80,7 @@ By default the task name equals the Rust function identifier. Override it with
 `name = "..."` when you need a dotted or namespaced key:
 
 ```rust
-#[umbra::task(name = "email.send_welcome")]
+#[umbral::task(name = "email.send_welcome")]
 async fn send_welcome(payload: WelcomeEmailPayload) -> Result<(), String> {
     Ok(())
 }
@@ -110,7 +110,7 @@ dynamically - for example, when the handler name is determined at runtime or whe
 you need to skip the macro for a generic handler.
 
 ```rust
-use umbra_tasks::{EnqueueOptions, enqueue, register_handler};
+use umbral_tasks::{EnqueueOptions, enqueue, register_handler};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -168,7 +168,7 @@ Two `EnqueueOptions` fields push a task into the future:
 ```rust
 use std::time::Duration;
 use chrono::Utc;
-use umbra_tasks::{EnqueueOptions, enqueue};
+use umbral_tasks::{EnqueueOptions, enqueue};
 
 // Run in ~60 seconds.
 enqueue("send_welcome", payload.clone(), EnqueueOptions {
@@ -192,7 +192,7 @@ default is `0` (normal); a positive value runs sooner, a negative value drains
 behind the defaults.
 
 ```rust
-use umbra_tasks::{EnqueueOptions, enqueue};
+use umbral_tasks::{EnqueueOptions, enqueue};
 
 // Urgent — claimed before any priority-0 work waiting in the queue.
 enqueue("send_password_reset", payload, EnqueueOptions {
@@ -236,7 +236,7 @@ The backoff knobs are worker-level defaults on `WorkerOptions`:
 
 ```rust
 use std::time::Duration;
-use umbra_tasks::{run_worker, WorkerOptions};
+use umbral_tasks::{run_worker, WorkerOptions};
 
 run_worker(WorkerOptions {
     retry_backoff_base: Duration::from_secs(2),     // default
@@ -265,7 +265,7 @@ exhausted) — it never holds its claim until the visibility timeout fires.
 
 ```rust
 use std::time::Duration;
-use umbra_tasks::{run_worker, WorkerOptions};
+use umbral_tasks::{run_worker, WorkerOptions};
 
 run_worker(WorkerOptions {
     task_timeout: Some(Duration::from_secs(30)), // default: 5 minutes; None disables
@@ -296,7 +296,7 @@ when building the worker:
 
 ```rust
 use std::time::Duration;
-use umbra_tasks::{run_worker, WorkerOptions};
+use umbral_tasks::{run_worker, WorkerOptions};
 
 run_worker(WorkerOptions {
     visibility_timeout: Duration::from_secs(30 * 60), // 30 minutes
@@ -316,7 +316,7 @@ job or a one-shot management command — with any timeout you choose:
 
 ```rust
 use std::time::Duration;
-use umbra_tasks::reclaim_orphaned_tasks;
+use umbral_tasks::reclaim_orphaned_tasks;
 
 let reclaimed = reclaim_orphaned_tasks(Duration::from_secs(60)).await?;
 println!("{reclaimed} orphaned task(s) reclaimed");
@@ -334,7 +334,7 @@ Register schedules on the plugin builder with `.periodic(name, schedule, task, p
 
 ```rust
 use std::time::Duration;
-use umbra_tasks::{Schedule, TasksPlugin};
+use umbral_tasks::{Schedule, TasksPlugin};
 
 App::builder()
     .plugin(
@@ -404,7 +404,7 @@ worker serializes the return value to JSON and stores it in the task row's
 a task's outcome by the id `enqueue` returned:
 
 ```rust
-use umbra_tasks::{enqueue, register_handler, task_status, await_result, TaskState, EnqueueOptions};
+use umbral_tasks::{enqueue, register_handler, task_status, await_result, TaskState, EnqueueOptions};
 use std::time::Duration;
 
 // A handler that returns a value (any `R: Serialize`):
@@ -439,18 +439,18 @@ and its result reads back as `Some(Value::Null)`. A failing handler leaves
 `result` empty and records the message in `error`.
 </Callout>
 
-See `arch.md` and `plugins/umbra-tasks/src/lib.rs` for the design rationale.
+See `arch.md` and `plugins/umbral-tasks/src/lib.rs` for the design rationale.
 
 ## Admin visibility
 
-Operators browse and inspect the task queue in the admin. `umbra_tasks::admin_model()` returns a **read-only** `AdminModel` for the `task_row` table — register it on the admin alongside your own models:
+Operators browse and inspect the task queue in the admin. `umbral_tasks::admin_model()` returns a **read-only** `AdminModel` for the `task_row` table — register it on the admin alongside your own models:
 
 ```rust
-use umbra_admin::AdminPlugin;
+use umbral_admin::AdminPlugin;
 
 App::builder()
     .plugin(TasksPlugin::default())
-    .plugin(AdminPlugin::default().register(umbra_tasks::admin_model()))
+    .plugin(AdminPlugin::default().register(umbral_tasks::admin_model()))
     .build()?;
 ```
 
@@ -464,13 +464,13 @@ The same logic is available programmatically:
 
 ```rust
 // Re-queue task #42 if (and only if) it is currently failed.
-let requeued: bool = umbra_tasks::retry_task(42).await?;
+let requeued: bool = umbral_tasks::retry_task(42).await?;
 ```
 
-The `admin_model()` function and the `umbra-admin` dependency are gated behind the `admin` feature (on by default). A tasks-only app that doesn't run the admin builds with `default-features = false` and never pulls the admin into its dependency graph:
+The `admin_model()` function and the `umbral-admin` dependency are gated behind the `admin` feature (on by default). A tasks-only app that doesn't run the admin builds with `default-features = false` and never pulls the admin into its dependency graph:
 
 ```toml
-umbra-tasks = { version = "0.0.1", default-features = false }
+umbral-tasks = { version = "0.0.1", default-features = false }
 ```
 
 ## Combining with signals
@@ -501,4 +501,4 @@ The signals docs page is at [`/docs/v0.0.1/plugins/signals`](/docs/v0.0.1/plugin
 - **Status enum.** Status is stored as a plain string (`pending`, `running`,
   `succeeded`, `failed`) because the M3 derive doesn't support enum `SqlType` yet.
 
-The spec outline lives in `docs/specs/outlines/`. Source: `plugins/umbra-tasks/src/lib.rs`.
+The spec outline lives in `docs/specs/outlines/`. Source: `plugins/umbral-tasks/src/lib.rs`.

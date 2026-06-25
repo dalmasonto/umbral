@@ -1,4 +1,4 @@
-# Umbra — Reference Example App & Acceptance Ladder
+# Umbral — Reference Example App & Acceptance Ladder
 
 **Status:** the repo is greenfield (only `arch.md` exists). Nothing runs yet. This document
 defines the single example app that **stress-tests every feature A–Z** and the milestone ladder
@@ -7,7 +7,7 @@ the tutorial, and the demo.
 
 The example is a full **e-commerce store**, deliberately complex: one app, ~22 models spanning
 catalog, sales, and content, touching every field type, every relationship kind, and every admin
-capability. If umbra can render and operate this admin cleanly, it can handle real products.
+capability. If umbral can render and operate this admin cleanly, it can handle real products.
 
 ---
 
@@ -390,7 +390,7 @@ pub struct StoreSetting {
 - **Table widgets (reuse DataTable):** Top products · Low-stock products · Recent orders.
 - **Feed:** Recent reviews awaiting approval.
 
-### Background tasks (umbra-tasks)
+### Background tasks (umbral-tasks)
 - `send_order_confirmation(order_id)` — on checkout.
 - `generate_invoice_pdf(order_id)` — populates `Order.invoice` (→ file preview).
 - `recompute_product_rating(product_id)` — on new approved review (updates `rating_avg`/`review_count`).
@@ -403,7 +403,7 @@ pub struct StoreSetting {
 
 | Milestone | First runnable thing | Test against the `shop` app |
 |---|---|---|
-| **M0** | App boots, one route | `cargo run -p umbra-cli -- runserver`; `curl /` → 200 |
+| **M0** | App boots, one route | `cargo run -p umbral-cli -- runserver`; `curl /` → 200 |
 | **M1** | QuerySet → SQL (hard-coded) | unit: build a `Product` filter, assert generated SQL |
 | **M2–M3** | `#[derive(Model)]` | derive on `Product`; assert metadata + SQL match the hand impl; cover Decimal/JSON/enum/Array field mapping |
 | **M4** | Boot system check | `Product.keywords` (ArrayField) on **SQLite** → clear error; on **Postgres** → boots |
@@ -425,10 +425,10 @@ pub struct StoreSetting {
 
 ## One-command smoke test (M5+)
 ```bash
-cargo run -p umbra-cli -- makemigrations
-cargo run -p umbra-cli -- migrate
-cargo run -p umbra-cli -- loaddata shop_seed.json   # seed categories, products, an order
-cargo run -p umbra-cli -- shell <<< 'assert Product::objects().count() > 0; \
+cargo run -p umbral-cli -- makemigrations
+cargo run -p umbral-cli -- migrate
+cargo run -p umbral-cli -- loaddata shop_seed.json   # seed categories, products, an order
+cargo run -p umbral-cli -- shell <<< 'assert Product::objects().count() > 0; \
   assert Order::objects().filter(status=OrderStatus::Paid).count() >= 0'
 ```
 Grow into a real integration test (`axum-test` + a throwaway Postgres) as features land. A seed

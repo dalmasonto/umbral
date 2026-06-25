@@ -1,0 +1,156 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Sync `color-scheme` with the active theme so native widgets (date
+   pickers, scrollbars, autofill chrome) render against the right
+   palette instead of flashing white on dark backgrounds. wrapper.html
+   toggles the `dark` class on <html>. */
+:root        { color-scheme: dark; }
+:root:not(.dark) { color-scheme: light; }
+
+/* Kill the native focus outline globally on every interactive form
+   control. Our visual focus state is a Tailwind ring (box-shadow) +
+   border-color change; the UA outline would race against those and
+   flash on focus. We restore visibility via the ring, never the
+   outline. */
+input, select, textarea, button, [tabindex] {
+  outline: none !important;
+}
+input:focus, input:focus-visible,
+select:focus, select:focus-visible,
+textarea:focus, textarea:focus-visible,
+button:focus, button:focus-visible {
+  outline: none !important;
+}
+
+/* Native date / time pickers — match the Tailwind input shell so they
+   visually belong inside the admin form, not the browser's stock
+   chrome. */
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"] {
+  @apply bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface w-full;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+input[type="date"]:hover,
+input[type="datetime-local"]:hover,
+input[type="time"]:hover {
+  border-color: var(--outline);
+}
+input[type="date"]:focus,
+input[type="datetime-local"]:focus,
+input[type="time"]:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary),
+              0 0 0 4px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.5);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+input[type="date"]:hover::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]:hover::-webkit-calendar-picker-indicator,
+input[type="time"]:hover::-webkit-calendar-picker-indicator {
+  opacity: 1;
+}
+
+/* Disabled inputs must not receive focus styling. */
+input:disabled,
+select:disabled,
+textarea:disabled {
+  outline: none !important;
+  box-shadow: none !important;
+  @apply cursor-not-allowed opacity-60;
+}
+
+/* Main content overflow containment. */
+#umbral-admin-content {
+  overflow-x: hidden;
+}
+
+/* Theme-adaptive scrollbars. The browser default scrollbar uses the
+   user-agent palette, which clashes with our dark theme — a recent-
+   signups feed inside a dark card surfaced as a thick light-grey
+   bar against the dark surface. Pinning the colors to design
+   tokens lets the same rule work in both light and dark themes
+   without per-theme overrides. `color-scheme` (set above) already
+   handles the OS-level cue; this gives us a uniform admin look on
+   top of it.
+
+   Firefox: `scrollbar-width` + `scrollbar-color`.
+   WebKit / Blink: pseudo-elements.
+   The selectors are global so cards, dropdowns, picker popovers,
+   and the main content all match. */
+/* Theme-adaptive scrollbars — two-pronged so we win regardless
+   of how the build pipeline minifies pseudo-element selectors:
+     1. `html ::-webkit-scrollbar` — descendant combinator on
+        every element under <html>. Survives cssnano's
+        "drop the leading `*`" optimization (the leading `html`
+        is a real type selector, not a universal one).
+     2. Explicit `.overflow-*` targets — Tailwind utility
+        classes used by every scrollable surface (feed widget,
+        dropdowns, dialogs, main content). Higher specificity
+        than (1), so even if a browser quirk or a third-party
+        reset wipes the universal rule, the utility-class
+        rules still apply.
+   Color tokens (outline-variant thumb on surface-container
+   track) match the sidebar override in base.html so the whole
+   admin reads as one rail family. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--outline-variant) var(--surface-container);
+}
+html ::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar,
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar,
+.overflow-y-scroll::-webkit-scrollbar,
+.overflow-x-scroll::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+html ::-webkit-scrollbar-track,
+.overflow-auto::-webkit-scrollbar-track,
+.overflow-y-auto::-webkit-scrollbar-track,
+.overflow-x-auto::-webkit-scrollbar-track,
+.overflow-y-scroll::-webkit-scrollbar-track,
+.overflow-x-scroll::-webkit-scrollbar-track {
+  background: var(--surface-container);
+}
+html ::-webkit-scrollbar-thumb,
+.overflow-auto::-webkit-scrollbar-thumb,
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-x-auto::-webkit-scrollbar-thumb,
+.overflow-y-scroll::-webkit-scrollbar-thumb,
+.overflow-x-scroll::-webkit-scrollbar-thumb {
+  background: var(--outline-variant);
+  border-radius: 10px;
+}
+html ::-webkit-scrollbar-thumb:hover,
+.overflow-auto::-webkit-scrollbar-thumb:hover,
+.overflow-y-auto::-webkit-scrollbar-thumb:hover,
+.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  /* One token brighter on hover — affordance cue. */
+  background: var(--outline);
+}
+html ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* Firefox can also pick up `scrollbar-color` per-element on the
+   common overflow utility classes so theming works there too. */
+.overflow-auto,
+.overflow-y-auto,
+.overflow-x-auto,
+.overflow-y-scroll,
+.overflow-x-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--outline-variant) var(--surface-container);
+}

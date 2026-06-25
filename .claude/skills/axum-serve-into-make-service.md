@@ -7,9 +7,9 @@ description: Use when no-keep-alive (fresh-connection) HTTP throughput is low an
 
 ## Context
 
-Symptom: an umbra app benchmarked with `ab` (no `-k`) tops out around ~1000 req/s on a trivial handler, while raw axum does tens of thousands. The number is the *same* for a static string, a JSON body, a DB read, and a DB write — so it is NOT the handler, serde, or the database. Turn on keep-alive (`ab -k`) and the same endpoint jumps to 100k+ req/s.
+Symptom: an umbral app benchmarked with `ab` (no `-k`) tops out around ~1000 req/s on a trivial handler, while raw axum does tens of thousands. The number is the *same* for a static string, a JSON body, a DB read, and a DB write — so it is NOT the handler, serde, or the database. Turn on keep-alive (`ab -k`) and the same endpoint jumps to 100k+ req/s.
 
-Root cause is in axum's `serve`, not umbra. `axum::serve(listener, router)` drives the `Router` itself as the connection-maker. Its per-connection `call` (axum-0.8.9 `src/routing/mod.rs`, `impl Service<IncomingStream> for Router<()>`) is:
+Root cause is in axum's `serve`, not umbral. `axum::serve(listener, router)` drives the `Router` itself as the connection-maker. Its per-connection `call` (axum-0.8.9 `src/routing/mod.rs`, `impl Service<IncomingStream> for Router<()>`) is:
 
 ```rust
 fn call(&mut self, _req: IncomingStream) -> Self::Future {
@@ -25,7 +25,7 @@ fn call(&mut self, _req: IncomingStream) -> Self::Future {
 Serve via `into_make_service()`, whose per-connection `call` is just `self.svc.clone()` (the O(1) Arc bump) with no `with_state`:
 
 ```rust
-// crates/umbra-core/src/app.rs — App::serve
+// crates/umbral-core/src/app.rs — App::serve
 axum::serve(listener, self.router.into_make_service()).await
 ```
 
@@ -40,10 +40,10 @@ Routing then finalizes lazily per request. Measured on the shop (hundreds of rou
 ## Pitfalls
 
 - `let _ = router.clone()` microbenchmarks are optimized away in release. Always `black_box` both the input and the result.
-- Don't blame the layers/plugins first: a plugin-less umbra app matched bare axum (34k fresh), and an 11-plugin app's `router.clone()` was still ~15 ns — the cost was axum's per-connection `with_state`, invisible until you serve a many-route router.
+- Don't blame the layers/plugins first: a plugin-less umbral app matched bare axum (34k fresh), and an 11-plugin app's `router.clone()` was still ~15 ns — the cost was axum's per-connection `with_state`, invisible until you serve a many-route router.
 - This only bites no-keep-alive clients (ab without `-k`, naïve scripts, some LBs). Real browsers/HTTP-2/SDKs keep connections alive. It is still worth fixing for "fast by default."
 
 ## See also
 
-- `crates/umbra-core/src/app.rs` — `App::serve`.
+- `crates/umbral-core/src/app.rs` — `App::serve`.
 - axum source: `~/.cargo/registry/src/*/axum-0.8.9/src/routing/mod.rs` (the `Service<IncomingStream>` impl).

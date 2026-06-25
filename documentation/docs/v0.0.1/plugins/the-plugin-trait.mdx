@@ -1,11 +1,11 @@
 ---
 title: The Plugin trait
-description: umbra's only extension mechanism. Built-ins and third-party plugins are structurally identical.
+description: umbral's only extension mechanism. Built-ins and third-party plugins are structurally identical.
 sidebar_position: 1
 icon: puzzle
 ---
 
-Every umbra extension is a `Plugin`. Auth, sessions, admin, tasks, and REST
+Every umbral extension is a `Plugin`. Auth, sessions, admin, tasks, and REST
 are plugins. So is every third-party crate that ships models, routes, or
 commands. The trait is the architectural keystone: if a built-in needed
 special-casing to fit, the contract would be wrong.
@@ -13,7 +13,7 @@ special-casing to fit, the contract would be wrong.
 ## The trait
 
 ```rust
-use umbra::prelude::*;
+use umbral::prelude::*;
 
 pub struct BlogPlugin;
 
@@ -22,8 +22,8 @@ impl Plugin for BlogPlugin {
 
     fn dependencies(&self) -> &'static [&'static str] { &["auth"] }
 
-    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
-        vec![umbra::migrate::ModelMeta::for_::<Post>()]
+    fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
+        vec![umbral::migrate::ModelMeta::for_::<Post>()]
     }
 
     fn routes(&self) -> Router {
@@ -64,7 +64,7 @@ Every method except `name()` has a default that returns the empty contribution, 
 
 ### The full method surface
 
-Every method below is a real trait method with a default impl (only `name()` is required). Signatures match `crates/umbra-core/src/plugin.rs` exactly.
+Every method below is a real trait method with a default impl (only `name()` is required). Signatures match `crates/umbral-core/src/plugin.rs` exactly.
 
 | Method | Signature | Default | What it contributes |
 |---|---|---|---|
@@ -73,10 +73,10 @@ Every method below is a real trait method with a default impl (only `name()` is 
 | `models` | `fn models(&self) -> Vec<ModelMeta>` | empty | The plugin's models, the migration diff target. |
 | `routes` | `fn routes(&self) -> Router` | `Router::new()` | HTTP routes, merged flat into the app router. |
 | `route_paths` | `fn route_paths(&self) -> Vec<RouteSpec>` | empty | Declared paths for the dev-mode 404 page (informational only). |
-| `openapi_paths` | `fn openapi_paths(&self) -> Vec<(String, serde_json::Value)>` | empty | OpenAPI path items `umbra-openapi` merges into the spec. |
+| `openapi_paths` | `fn openapi_paths(&self) -> Vec<(String, serde_json::Value)>` | empty | OpenAPI path items `umbral-openapi` merges into the spec. |
 | `system_checks` | `fn system_checks(&self) -> Vec<SystemCheck>` | empty | Boot-time invariants (phase 4). |
 | `provides_storage` | `fn provides_storage(&self) -> bool` | `false` | `true` if `on_ready` registers a `Storage` backend (e.g. `StoragePlugin`). |
-| `database` | `fn database(&self) -> Option<&'static str>` | `None` | DB alias every model this plugin owns reads/writes (umbra's `DATABASE_ROUTERS`). |
+| `database` | `fn database(&self) -> Option<&'static str>` | `None` | DB alias every model this plugin owns reads/writes (umbral's `DATABASE_ROUTERS`). |
 | `templates_dirs` | `fn templates_dirs(&self) -> Vec<PathBuf>` | empty | Template search directories. |
 | `template_registrars` | `fn template_registrars(&self) -> Vec<TemplateRegistrar>` | empty | Custom minijinja filters / functions / globals (Django's `{% load %}`). |
 | `wrap_router` | `fn wrap_router(&self, router: Router) -> Router` | router unchanged | The tower/axum middleware seam (see below). |
@@ -90,18 +90,18 @@ Every method below is a real trait method with a default impl (only `name()` is 
 
 ### Notable hooks in depth
 
-- `wrap_router(Router) -> Router` — **the middleware seam.** Each plugin wraps the merged router with its own tower / axum layers; `App::build` calls it in topological order, so a plugin's layers wrap everything declared before it. `umbra-security` (CSRF + hardening headers) and `umbra-sessions` (the session layer) both ride this hook. Returning the router shape — rather than a `Vec<Layer>` — sidesteps the trait-object lifetime problem `Layer`'s generics produce, so plugins keep the full axum/tower API at the call site.
+- `wrap_router(Router) -> Router` — **the middleware seam.** Each plugin wraps the merged router with its own tower / axum layers; `App::build` calls it in topological order, so a plugin's layers wrap everything declared before it. `umbral-security` (CSRF + hardening headers) and `umbral-sessions` (the session layer) both ride this hook. Returning the router shape — rather than a `Vec<Layer>` — sidesteps the trait-object lifetime problem `Layer`'s generics produce, so plugins keep the full axum/tower API at the call site.
 - `middleware() -> Vec<Arc<dyn Middleware>>` — the **ergonomic** alternative to `wrap_router`. Each `Middleware` gets a `before_request` / `after_response` hook and nothing else to wire; all plugins' (plus the app's) are collected into one stack installed at `App::build` in onion order. Reach for `wrap_router` when you need a real tower `Layer` (timeouts, tracing spans, body-limit); reach for `middleware` when you just want to look at the request or response.
-- `commands() -> Vec<Box<dyn PluginCommand>>` — CLI subcommands. `umbra-auth` ships `createsuperuser` and `umbra-tasks` ships `tasks-worker` through this hook. See [Management commands](/docs/v0.0.1/cli/management-commands#plugin-contributed-subcommands).
+- `commands() -> Vec<Box<dyn PluginCommand>>` — CLI subcommands. `umbral-auth` ships `createsuperuser` and `umbral-tasks` ships `tasks-worker` through this hook. See [Management commands](/docs/v0.0.1/cli/management-commands#plugin-contributed-subcommands).
 - `templates_dirs()` / `template_registrars()` — plugins contribute template directories and custom tags. See [Rendering HTML](/docs/v0.0.1/templates/rendering-html#cross-plugin-templates).
-- `static_files()` — embedded assets baked into the binary; each entry becomes one `GET <url_path>` route serving a `&'static [u8]` body (typically `include_bytes!`). `umbra-admin` ships its precompiled CSS this way. `static_dirs()` / `static_root_dirs()` instead serve assets *off disk* through the unified static pipeline (live in dev); `umbra-playground` ships its Vite bundle via `static_dirs()`.
+- `static_files()` — embedded assets baked into the binary; each entry becomes one `GET <url_path>` route serving a `&'static [u8]` body (typically `include_bytes!`). `umbral-admin` ships its precompiled CSS this way. `static_dirs()` / `static_root_dirs()` instead serve assets *off disk* through the unified static pipeline (live in dev); `umbral-playground` ships its Vite bundle via `static_dirs()`.
 
-`on_ready` receives an [`AppContext`](#the-on_ready-context) carrying the default `DbPool` and a `Settings` clone. The hook is **sync** (the trait must be object-safe for `Vec<Box<dyn Plugin>>`); bridge to async work with `umbra::plugin::block_on_ready(fut)`, which is safe under multi-thread, current-thread (`#[tokio::test]`), and no-runtime callers.
+`on_ready` receives an [`AppContext`](#the-on_ready-context) carrying the default `DbPool` and a `Settings` clone. The hook is **sync** (the trait must be object-safe for `Vec<Box<dyn Plugin>>`); bridge to async work with `umbral::plugin::block_on_ready(fut)`, which is safe under multi-thread, current-thread (`#[tokio::test]`), and no-runtime callers.
 
 ## What's deferred
 
 - A *declarative* `middleware()` whose entries are ordered tower `Layer`s. The ergonomic `before_request` / `after_response` form **is** shipped — including **declarative ordering** via `Middleware::order() -> i32` (lower = outer; the stack is stable-sorted before install, so a middleware places itself regardless of registration timing). What's still deferred is a declarative form over *raw tower `Layer`s* — cross-plugin `Layer` ordering runs into the trait-object lifetime problem `Layer`'s generics produce; use `wrap_router` when you need a raw `Layer`.
-- inventory / linkme auto-registration is **intentionally not pursued** — implicit compile-time collection contradicts umbra's explicit `App::builder().plugin(...)` / `.middleware(...)` wiring (the framework keeps exactly one intentional global). Middleware is always contributed explicitly.
+- inventory / linkme auto-registration is **intentionally not pursued** — implicit compile-time collection contradicts umbral's explicit `App::builder().plugin(...)` / `.middleware(...)` wiring (the framework keeps exactly one intentional global). Middleware is always contributed explicitly.
 
 ## The on_ready context
 
@@ -114,12 +114,12 @@ pub struct AppContext {
 }
 ```
 
-`pool` is the same value `umbra::db::pool_dispatched().clone()` returns. Plugin code that needs the database normally goes through the ORM (`Model::objects()…`); this field is the escape hatch for schema-DDL bootstrap and backend-specific features like Postgres RLS.
+`pool` is the same value `umbral::db::pool_dispatched().clone()` returns. Plugin code that needs the database normally goes through the ORM (`Model::objects()…`); this field is the escape hatch for schema-DDL bootstrap and backend-specific features like Postgres RLS.
 
 ## The proof
 
-`plugins/umbra-auth/` is the first built-in plugin and uses exactly the
-contract above with zero special-casing inside `umbra-core`. See
+`plugins/umbral-auth/` is the first built-in plugin and uses exactly the
+contract above with zero special-casing inside `umbral-core`. See
 [Users and passwords](/docs/v0.0.1/auth/users-and-passwords) for the shape.
 
 The spec lives in `docs/specs/02-plugin-contract.md`.

@@ -1,10 +1,10 @@
-# umbra-security — holistic review
+# umbral-security — holistic review
 
-Read-only review, 2026-06-16. Scope: `plugins/umbra-security/src/lib.rs` + `tests/`. Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`. Findings already filed are tagged **(already #N)**; everything else is **NEW**.
+Read-only review, 2026-06-16. Scope: `plugins/umbral-security/src/lib.rs` + `tests/`. Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`. Findings already filed are tagged **(already #N)**; everything else is **NEW**.
 
 ## Verdict
 
-**Complete and well-built for what it covers: CSRF + a configurable security-header bundle. The CSRF core is genuinely sound (signed double-submit, constant-time compare, auto-rotation). The known gaps are all already-filed config-conditional ones (#75: empty `SECRET_KEY`; exempt-prefix boundary; HSTS/CSP opt-in).** Scope is narrower than Django's `SecurityMiddleware` + the full `SECURE_*` family — notably **no rate-limiting, no CORS** (CORS lives in `umbra-core`, not here), and **no boot-time `check.rs` warnings** for the dangerous defaults. Everything it claims to do, it does, with no stubs.
+**Complete and well-built for what it covers: CSRF + a configurable security-header bundle. The CSRF core is genuinely sound (signed double-submit, constant-time compare, auto-rotation). The known gaps are all already-filed config-conditional ones (#75: empty `SECRET_KEY`; exempt-prefix boundary; HSTS/CSP opt-in).** Scope is narrower than Django's `SecurityMiddleware` + the full `SECURE_*` family — notably **no rate-limiting, no CORS** (CORS lives in `umbral-core`, not here), and **no boot-time `check.rs` warnings** for the dangerous defaults. Everything it claims to do, it does, with no stubs.
 
 Completeness one-liner: **CSRF + headers are real and complete; rate-limiting is absent, several `SECURE_*` knobs are opt-in with no fail-closed boot check, and the empty-`SECRET_KEY` hole (#75) is the one outright bug.**
 
@@ -19,14 +19,14 @@ Completeness one-liner: **CSRF + headers are real and complete; rate-limiting is
 | Request body limit | Complete | tower-http `RequestBodyLimitLayer`, tested (413). |
 | Sensitive-header redaction | Complete | authorization/cookie/set-cookie marked sensitive. |
 | **Rate limiting** | **Absent** | not in this plugin (no token-bucket / per-IP throttle). A real DoS / brute-force gap for a "security" plugin. |
-| **CORS** | Not here | lives in `umbra-core::cors` (`reviews/security.md` confirms it's strict-by-default there). FYI: a consumer looking in `umbra-security` for it won't find it. |
+| **CORS** | Not here | lives in `umbral-core::cors` (`reviews/security.md` confirms it's strict-by-default there). FYI: a consumer looking in `umbral-security` for it won't find it. |
 | `SECURE_*` parity / boot checks | **Partial** | the *headers* exist, but there's **no boot-time warning** when HSTS/CSP are off in Prod, when `secret_key` is empty, or when the exempt-prefix is dangerously broad. Django surfaces these via `manage.py check --deploy`. |
 | Stubs / `todo!()` / no-ops | **None** | clean; `strip_server_header` and `forbidden()` are real. |
 
 ## Findings
 
 ### NEW — Important (clarified from #75)
-- **Empty/whitespace `secret_key` silently signs CSRF with an empty HMAC key.** `lib.rs:392-394` + `459-460`. `from_config` treats `Some("")` as a resolved secret (`settings.map(|s| s.secret_key.clone())` — no emptiness check), and `Hmac::new_from_slice(b"")` accepts a zero-length key (the `.expect("HMAC accepts any key length")` proves it). `UMBRA_SECRET_KEY=""` ⇒ signed-mode tokens are signed under a *publicly-known empty key* ⇒ forgeable, with **no warning**. This is the one outright security bug in the plugin. **already #75 / security.md top risk #2.** Fix: treat empty/whitespace `secret_key` as `None` in `from_config` (degrade to plain double-submit, which is the intended fallback) **and** emit a `check.rs` finding.
+- **Empty/whitespace `secret_key` silently signs CSRF with an empty HMAC key.** `lib.rs:392-394` + `459-460`. `from_config` treats `Some("")` as a resolved secret (`settings.map(|s| s.secret_key.clone())` — no emptiness check), and `Hmac::new_from_slice(b"")` accepts a zero-length key (the `.expect("HMAC accepts any key length")` proves it). `UMBRAL_SECRET_KEY=""` ⇒ signed-mode tokens are signed under a *publicly-known empty key* ⇒ forgeable, with **no warning**. This is the one outright security bug in the plugin. **already #75 / security.md top risk #2.** Fix: treat empty/whitespace `secret_key` as `None` in `from_config` (degrade to plain double-submit, which is the intended fallback) **and** emit a `check.rs` finding.
 
 ### NEW — Important
 - **`csrf_exempt_paths` uses bare `path.starts_with(prefix)` — no segment boundary.** `lib.rs:407-411`. Exempting `/api` also exempts `/api-internal`, `/apikeys`, `/api.json`, and every other path sharing the prefix. A cookie-authed `/api/account/delete` under an `/api` exemption becomes fully CSRF-exempt. **already** security.md (CSRF/Headers, Important). Fix: `path == p || path.starts_with(&format!("{p}/"))`. *(Note: this is genuinely net-new vs the backlog's synthesized list, which folded only the empty-key item into #75 and omitted the exempt-prefix boundary — worth a dedicated line.)*
@@ -43,7 +43,7 @@ Completeness one-liner: **CSRF + headers are real and complete; rate-limiting is
 
 ## Architecture / plugin-contract
 
-Clean and idiomatic. Facade-only (`use umbra::prelude::*`, `umbra::settings`, `umbra::templates`) — no core internals. No models, no migrations (correct — it's middleware-only). Implements `Plugin::wrap_router` exactly as intended (the documented reason this lives there: middleware needs a `tower::Layer`). Layer ordering is deliberate and documented (CSRF innermost, body-limit outermost). `test_support` module is `#[doc(hidden)]` and honestly labeled non-stable. One observation: the plugin reads `secret_key` itself rather than the framework providing a validated secret — which is exactly how the empty-key hole slips through; a framework-validated `Secret` type would close it at the source (Fix-don't-patch).
+Clean and idiomatic. Facade-only (`use umbral::prelude::*`, `umbral::settings`, `umbral::templates`) — no core internals. No models, no migrations (correct — it's middleware-only). Implements `Plugin::wrap_router` exactly as intended (the documented reason this lives there: middleware needs a `tower::Layer`). Layer ordering is deliberate and documented (CSRF innermost, body-limit outermost). `test_support` module is `#[doc(hidden)]` and honestly labeled non-stable. One observation: the plugin reads `secret_key` itself rather than the framework providing a validated secret — which is exactly how the empty-key hole slips through; a framework-validated `Secret` type would close it at the source (Fix-don't-patch).
 
 ## Tests
 

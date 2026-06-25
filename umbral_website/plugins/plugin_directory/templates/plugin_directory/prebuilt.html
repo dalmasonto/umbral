@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Prebuilt Plugins - Umbral{% endblock %}
+{% block meta_description %}Official Umbral plugins maintained by the Umbral team: admin, REST, auth, sessions, OpenAPI, tasks, security, and static.{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[75rem] px-7 pb-2 pt-[52px] text-center">
+  <div class="kicker mb-3.5 text-accent">
+    <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+    Prebuilt Plugins
+  </div>
+  <h1 class="mx-auto max-w-[760px] text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[46px]">
+    The batteries, maintained by the Umbral team
+  </h1>
+  <p class="mx-auto mt-3.5 max-w-[640px] text-[17px] leading-[1.55] text-muted sm:text-[17.5px]">
+    Every official capability ships through the same plugin contract a community developer can use. Enable it, replace it, or extend it with your own <code class="rounded-md bg-accent-soft px-1.5 py-px font-mono text-[15px] text-accent-2">startapp</code>.
+  </p>
+</section>
+
+<section class="mx-auto max-w-[75rem] px-7 pb-2 pt-8">
+  <div class="grid gap-3.5 md:grid-cols-3">
+    <div class="card p-5 text-center">
+      <div class="mb-1.5 text-[13px] font-bold text-ok">Use it</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">
+        Add the official plugin to <code class="font-mono text-[12px] text-ink-2">plugins</code> and migrate.
+      </p>
+    </div>
+    <div class="card p-5 text-center">
+      <div class="mb-1.5 text-[13px] font-bold text-accent-2">Replace it</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">
+        Swap in a community plugin that honors the same contract.
+      </p>
+    </div>
+    <div class="card p-5 text-center">
+      <div class="mb-1.5 text-[13px] font-bold text-warn">Build your own</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">
+        Scaffold a project-specific plugin with <code class="font-mono text-[12px] text-ink-2">startapp</code>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="mx-auto flex max-w-[75rem] flex-col gap-[18px] px-7 pb-2 pt-8">
+  {% for card in plugins %}
+  <article class="card rounded-[20px] p-6 sm:p-[30px]">
+    <div class="grid gap-8 lg:grid-cols-[300px_1fr]">
+      <div>
+        <div class="mb-3.5 flex items-center gap-3">
+          <span class="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-xl bg-accent-soft font-mono text-[16px] font-bold text-accent-2">{{ card.icon }}</span>
+          <div>
+            <div class="font-mono text-[16px] font-bold">{{ card.crate_dotted }}</div>
+            {% if card.status_kind == "ok" %}<span class="pill-ok">{{ card.status }}</span>
+            {% elif card.status_kind == "warn" %}<span class="pill-warn">{{ card.status }}</span>
+            {% else %}<span class="rounded-full bg-surface-2 px-2 py-[3px] text-[11.5px] font-semibold text-faint">{{ card.status }}</span>{% endif %}
+          </div>
+        </div>
+        <p class="mb-4 text-[14px] leading-[1.55] text-muted">{{ card.short_description }}</p>
+        <code class="mb-3.5 block rounded-lg border border-hairline bg-surface-2 px-[11px] py-[9px] font-mono text-[12.5px] text-ink-2">{{ card.install }}</code>
+        <div class="flex gap-3.5 text-[13px] font-semibold text-accent-2">
+          {% if card.docs_url %}<a href="{{ card.docs_url }}">Docs</a>{% endif %}
+          <a href="/plugins/{{ card.slug }}">Plugin page</a>
+        </div>
+      </div>
+      <div>
+        <div class="mb-3.5 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Plugin feature tracker</div>
+        {% if card.features %}
+        <div class="grid gap-[9px] sm:grid-cols-2">
+          {% for f in card.features %}
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5">
+            <span class="h-2 w-2 rounded-full {% if f.kind == 'ok' %}bg-ok{% elif f.kind == 'warn' %}bg-warn{% else %}bg-ghost{% endif %}"></span>
+            <span class="text-[13.5px]">{{ f.name }}</span>
+            <span class="ml-auto text-[11px] font-semibold {% if f.kind == 'ok' %}text-ok{% elif f.kind == 'warn' %}text-warn{% else %}text-faint{% endif %}">{{ f.status }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="m-0 text-[13.5px] leading-[1.5] text-muted">Feature tracker coming soon.</p>
+        {% endif %}
+      </div>
+    </div>
+  </article>
+  {% else %}
+  <div class="card rounded-[20px] p-8 text-center text-muted">
+    No official plugins are registered yet. Run <code class="font-mono text-[13px] text-ink-2">cargo run -- seed_orm_data</code> to populate them.
+  </div>
+  {% endfor %}
+</section>
+
+<section class="mx-auto max-w-[75rem] px-7 pb-2 pt-9">
+  <div class="flex flex-wrap items-center gap-6 rounded-[20px] border border-accent-line bg-accent-soft px-6 py-7 sm:px-8">
+    <div class="min-w-[280px] flex-1">
+      <h2 class="mb-1.5 text-[22px] font-extrabold tracking-[-0.02em] text-[#3A2BA8]">Want to replace a battery?</h2>
+      <p class="m-0 text-[14.5px] leading-[1.55] text-[#6E5FB8]">Browse community plugins that honor the same contract, or scaffold your own and submit it to the directory.</p>
+    </div>
+    <a href="/plugins" class="btn-accent whitespace-nowrap">Browse the directory
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+</section>
+
+{% endblock %}

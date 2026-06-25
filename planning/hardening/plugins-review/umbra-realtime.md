@@ -1,6 +1,6 @@
-# Review: umbra-realtime
+# Review: umbral-realtime
 
-Read-only audit, 2026-06-16. Scope: `plugins/umbra-realtime/src/` (lib.rs, sse.rs, ws.rs) and `tests/` (sse.rs, ws.rs, broker.rs, signals.rs). Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`, and `reviews/performance-scalability.md`.
+Read-only audit, 2026-06-16. Scope: `plugins/umbral-realtime/src/` (lib.rs, sse.rs, ws.rs) and `tests/` (sse.rs, ws.rs, broker.rs, signals.rs). Cross-referenced against `planning/hardening/backlog.md`, `reviews/security.md`, and `reviews/performance-scalability.md`.
 
 NET-NEW items only (not already filed). Cross-refs to existing numbered entries marked "already #".
 
@@ -10,7 +10,7 @@ NET-NEW items only (not already filed). Cross-refs to existing numbered entries 
 
 **Substantially complete, shippable for single-instance.** SSE and WS transports are both real and production-shaped: group policy is enforced at handshake, identity is resolved from the session cookie, connections deregister on drop via `ConnGuard`/`WsGuard`, the `InProcessBroker` dispatches synchronously to the registry, and the `RedisBroker` multi-instance backplane is present but feature-gated. The signals bridge is wired and tested. No `todo!()`s or stub paths.
 
-**Worst finding:** The `umbra-auth` hard dependency breaks the "REST-free app" contract — any app that installs `Realttime` must also pull in auth, even if it has no users. (See Finding RT-1.)
+**Worst finding:** The `umbral-auth` hard dependency breaks the "REST-free app" contract — any app that installs `Realttime` must also pull in auth, even if it has no users. (See Finding RT-1.)
 
 ---
 
@@ -22,7 +22,7 @@ NET-NEW items only (not already filed). Cross-refs to existing numbered entries 
 | WS transport (bidirectional) | Complete. `GET /realtime/ws?groups=…` same gate, `MessageHandler` for inbound frames. |
 | Channel/group model | Complete. `groups=public:plugin-{id}` form works; `GroupPolicy` is the auth seam. |
 | Broadcast API | Complete. `Realtime::to_user`, `to_group`, `broadcast` all implemented. |
-| Auth on subscriptions | Partial — see RT-1. Policy fires, but authn is hardwired to umbra-auth session cookie with no fallback for auth-free apps. |
+| Auth on subscriptions | Partial — see RT-1. Policy fires, but authn is hardwired to umbral-auth session cookie with no fallback for auth-free apps. |
 | Reconnection / `Last-Event-ID` | Missing — see RT-2. No event IDs emitted; `Last-Event-ID` on reconnect is silently ignored. |
 | Backpressure / connection limits | Partial — see RT-3. Per-connection buffer drop is fine; no aggregate connection cap. |
 | Redis multi-instance backplane | Complete (feature-gated). `RedisBroker` with reconnect pump and cross-instance relay tested. |
@@ -32,20 +32,20 @@ NET-NEW items only (not already filed). Cross-refs to existing numbered entries 
 
 ## Findings
 
-### RT-1 — `umbra-auth` is a **hard** dependency (NEW)
+### RT-1 — `umbral-auth` is a **hard** dependency (NEW)
 
 **Severity: Important**
 
-`Cargo.toml:16` lists `umbra-auth = { path = "../umbra-auth", version = "0.0.1" }` as a non-optional dependency. Both SSE (`sse.rs:33`) and WS (`ws.rs:35`) call `umbra_auth::current_session_user_id(&headers).await` directly.
+`Cargo.toml:16` lists `umbral-auth = { path = "../umbral-auth", version = "0.0.1" }` as a non-optional dependency. Both SSE (`sse.rs:33`) and WS (`ws.rs:35`) call `umbral_auth::current_session_user_id(&headers).await` directly.
 
 This means:
-- Any app that installs `umbra-realtime` must compile `umbra-auth` even if the app has no authentication.
+- Any app that installs `umbral-realtime` must compile `umbral-auth` even if the app has no authentication.
 - An anonymous-only push use-case (a public event-feed, a status page) is architecturally impossible without dragging in the full auth stack.
 - It violates the same "plugin→plugin hard dep" concern filed as already #76 (auth→rest boundary), now mirrored here in the realtime direction.
 
 The `user_id` result is `Option<i64>` — the call returns `None` when auth is absent. The dependency could be flipped to a trait or made feature-optional.
 
-**Fix:** Make `umbra-auth` an optional dependency (`optional = true`; feature `auth`). Define a trait seam — `trait IdentityResolver: Send + Sync { async fn user_id(&self, headers: &HeaderMap) -> Option<i64>; }` — in `umbra-core` or the facade. The default resolver calls `umbra_auth::current_session_user_id` (feature-gated); the no-auth resolver returns `None`. `RealtimePlugin` stores `Box<dyn IdentityResolver>`.
+**Fix:** Make `umbral-auth` an optional dependency (`optional = true`; feature `auth`). Define a trait seam — `trait IdentityResolver: Send + Sync { async fn user_id(&self, headers: &HeaderMap) -> Option<i64>; }` — in `umbral-core` or the facade. The default resolver calls `umbral_auth::current_session_user_id` (feature-gated); the no-auth resolver returns `None`. `RealtimePlugin` stores `Box<dyn IdentityResolver>`.
 
 **Gap:** NEW — fold into the same spec as already #76 (lifting auth identity traits out of plugin-specific crates).
 
@@ -133,7 +133,7 @@ The default `GroupPolicy::can_join` has no cardinality check. This is a modest D
 
 ## Plugin-contract
 
-- **Facade-only imports:** PARTIAL. `plugins/umbra-realtime/src/lib.rs:37` imports `umbra::plugin::{AppContext, Plugin, PluginError}` and `umbra::signals::subscribe_async` — all through the facade. The `umbra::orm::Model` bound on `on_model` uses `umbra::orm`, also through the facade. **However** `sse.rs:33` and `ws.rs:35` call `umbra_auth::current_session_user_id` directly — the hard plugin-to-plugin dep noted in RT-1.
+- **Facade-only imports:** PARTIAL. `plugins/umbral-realtime/src/lib.rs:37` imports `umbral::plugin::{AppContext, Plugin, PluginError}` and `umbral::signals::subscribe_async` — all through the facade. The `umbral::orm::Model` bound on `on_model` uses `umbral::orm`, also through the facade. **However** `sse.rs:33` and `ws.rs:35` call `umbral_auth::current_session_user_id` directly — the hard plugin-to-plugin dep noted in RT-1.
 - **Migrations:** None registered. Realtime has no persisted schema — correct.
 - **`Plugin` impl:** Clean. `name()`, `routes()`, and `on_ready()` are all present and correct. No `migrations()` or `commands()` needed.
 
