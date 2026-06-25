@@ -3195,6 +3195,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-casing"
+version = "0.0.1"
+
+[[package]]
 name = "umbra-core"
 version = "0.0.1"
 dependencies = [
@@ -3232,6 +3236,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "umbra-casing",
  "uuid",
 ]
 
@@ -3242,6 +3247,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.118",
+ "umbra-casing",
 ]
 
 [[package]]
