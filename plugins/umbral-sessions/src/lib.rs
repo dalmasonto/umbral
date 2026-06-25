@@ -277,7 +277,7 @@ struct ClearSessionsCommand;
 impl umbral::cli::PluginCommand for ClearSessionsCommand {
     fn command(&self) -> clap::Command {
         clap::Command::new("clearsessions")
-            .about("Delete all expired session rows from the database (Django parity).")
+            .about("Delete all expired session rows from the database.")
     }
 
     async fn run(&self, _matches: &clap::ArgMatches) -> Result<(), umbral::cli::CliError> {

@@ -306,12 +306,12 @@ impl PasswordPolicy {
     }
 }
 
-/// The default policy IS the secure-by-default set. Mirrors Django's
-/// out-of-the-box `AUTH_PASSWORD_VALIDATORS`.
+/// The default policy IS the secure-by-default set: a sensible group of
+/// password validators that are enabled out of the box.
 impl PasswordPolicy {
-    /// The four Django-parity validators with their default settings. This
-    /// is what an unconfigured `AuthPlugin` enforces.
-    pub fn django_defaults() -> Self {
+    /// The four built-in validators with their default settings. This is
+    /// what an unconfigured `AuthPlugin` enforces.
+    pub fn recommended_defaults() -> Self {
         Self::new(vec![
             Box::new(MinLengthValidator::default()),
             Box::new(CommonPasswordValidator),
@@ -321,13 +321,13 @@ impl PasswordPolicy {
     }
 }
 
-// `Default` and `django_defaults` are the same thing; keep both so callers
+// `Default` and `recommended_defaults` are the same thing; keep both so callers
 // can read whichever is clearer at the call site.
 impl PasswordPolicy {
     /// Construct the default secure policy. Named separately from the
     /// `Default` trait impl so it reads clearly in the `OnceLock` fallback.
     fn default_secure() -> Self {
-        Self::django_defaults()
+        Self::recommended_defaults()
     }
 }
 
@@ -335,7 +335,7 @@ impl std::default::Default for PasswordPolicy {
     fn default() -> Self {
         // SECURE BY DEFAULT: a default policy is the full validator set, NOT
         // an empty one. An app that wants no validation must ask explicitly.
-        Self::django_defaults()
+        Self::recommended_defaults()
     }
 }
 

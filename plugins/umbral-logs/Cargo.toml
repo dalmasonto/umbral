@@ -1,6 +1,6 @@
 [package]
 name = "umbral-logs"
-description = "Django-request-style request logging for umbral. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin."
+description = "Request logging for umbral. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin."
 workspace = "../.."
 version.workspace = true
 edition.workspace = true

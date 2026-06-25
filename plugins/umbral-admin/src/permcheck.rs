@@ -169,7 +169,7 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn codename_follows_django_shape() {
+    fn codename_follows_expected_shape() {
         assert_eq!(codename("blog", "post", Action::View), "blog.view_post");
         assert_eq!(codename("blog", "post", Action::Add), "blog.add_post");
         assert_eq!(codename("blog", "post", Action::Change), "blog.change_post");

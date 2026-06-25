@@ -1,6 +1,6 @@
 [package]
 name = "umbral-tenants"
-description = "Schema-per-tenant multitenancy for umbral. The django-tenants shape: one Postgres database, one schema per tenant, a shared `public` for cross-tenant apps."
+description = "Schema-per-tenant multitenancy for umbral: one Postgres database, one schema per tenant, and a shared `public` schema for cross-tenant apps."
 workspace = "../.."
 version.workspace = true
 edition.workspace = true

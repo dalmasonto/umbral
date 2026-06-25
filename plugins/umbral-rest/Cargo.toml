@@ -1,6 +1,6 @@
 [package]
 name = "umbral-rest"
-description = "Auto-generated JSON REST API over umbral models. The DRF in Rust shape."
+description = "Auto-generated JSON REST API over umbral models: serializers, viewsets, and routers."
 workspace = "../.."
 version.workspace = true
 edition.workspace = true

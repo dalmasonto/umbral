@@ -307,8 +307,8 @@ umbral-logs     = {{ git = "https://github.com/dalmasonto/umbral" }}
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbral-playground   = {{ git = "https://github.com/dalmasonto/umbral" }}  # Interactive API playground UI (think mini-Postman) at /playground/.
-# umbral-tasks        = {{ git = "https://github.com/dalmasonto/umbral" }}  # DB-backed background task queue (Celery-equivalent).
-# umbral-permissions  = {{ git = "https://github.com/dalmasonto/umbral" }}  # Django-style ContentType + Group + Permission model.
+# umbral-tasks        = {{ git = "https://github.com/dalmasonto/umbral" }}  # DB-backed background task queue with a worker process.
+# umbral-permissions  = {{ git = "https://github.com/dalmasonto/umbral" }}  # ContentType + Group + Permission model.
 # umbral-rls          = {{ git = "https://github.com/dalmasonto/umbral" }}  # Postgres row-level security policy registration.
 # umbral-cache        = {{ git = "https://github.com/dalmasonto/umbral" }}  # Per-request caching helper.
 # umbral-email        = {{ git = "https://github.com/dalmasonto/umbral" }}  # SMTP + MIME email composer + sender.
@@ -742,7 +742,7 @@ pub fn overview_section() -> WidgetSection {
     // plugins/ — empty home for local app plugins (umbral startapp)        //
     // ------------------------------------------------------------------ //
     write_file(&root, "plugins/.gitkeep", "", &mut files)?;
-    let plugins_readme = "# plugins/\n\nLocal app plugins go here — create one with `umbral startapp <name>`.\nEach is its own crate (Django-app-style `lib/models/views/urls`) and is\nauto-wired into this project's `Cargo.toml` `[dependencies]`.\n";
+    let plugins_readme = "# plugins/\n\nLocal app plugins go here; create one with `umbral startapp <name>`.\nEach is its own crate (`lib/models/views/urls`) and is\nauto-wired into this project's `Cargo.toml` `[dependencies]`.\n";
     write_file(&root, "plugins/README.md", plugins_readme, &mut files)?;
 
     // ------------------------------------------------------------------ //

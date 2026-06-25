@@ -1,6 +1,6 @@
 [package]
 name = "umbral"
-description = "A Django-shape web framework for Rust. The facade: re-exports umbral-core and umbral-macros as one stable surface (`use umbral::prelude::*`)."
+description = "A batteries-included web framework for Rust. The facade: re-exports umbral-core and umbral-macros as one stable surface (`use umbral::prelude::*`)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

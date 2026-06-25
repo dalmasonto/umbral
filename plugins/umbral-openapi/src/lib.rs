@@ -1239,7 +1239,7 @@ mod tests {
     #[test]
     fn multichoice_skips_enum_and_uses_vendor_extension() {
         let mut col = base_col("tags", SqlType::Text);
-        col.choices = vec!["rust".into(), "django".into()];
+        col.choices = vec!["rust".into(), "python".into()];
         col.is_multichoice = true;
         let schema = column_schema(&col);
         assert!(
@@ -1249,7 +1249,7 @@ mod tests {
         assert_eq!(schema["x-umbral-multichoice"], true);
         assert_eq!(
             schema["x-umbral-choices"],
-            serde_json::json!(["rust", "django"])
+            serde_json::json!(["rust", "python"])
         );
     }
 

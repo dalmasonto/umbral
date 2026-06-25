@@ -1,6 +1,6 @@
 [package]
 name = "umbral-playground"
-description = "Interactive API playground UI for umbral-rest. The DRF browsable API, in umbral."
+description = "Interactive, browsable API playground UI for umbral-rest."
 workspace = "../.."
 version.workspace = true
 edition.workspace = true

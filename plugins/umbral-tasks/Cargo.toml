@@ -1,6 +1,6 @@
 [package]
 name = "umbral-tasks"
-description = "DB-backed background task queue for umbral. The Celery in Rust shape."
+description = "DB-backed background task queue for umbral: define tasks, enqueue them, and run them with a worker process."
 workspace = "../.."
 version.workspace = true
 edition.workspace = true

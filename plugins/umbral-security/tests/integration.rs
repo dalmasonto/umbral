@@ -241,7 +241,7 @@ async fn server_and_coop_headers_are_on_by_default() {
     assert_eq!(
         headers.get("server"),
         Some(&HeaderValue::from_static("umbral")),
-        "umbral advertises a Server header by default (like Django's daphne)"
+        "umbral advertises a Server header by default"
     );
     assert_eq!(
         headers.get("cross-origin-opener-policy"),

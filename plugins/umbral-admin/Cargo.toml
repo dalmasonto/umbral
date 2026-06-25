@@ -1,6 +1,6 @@
 [package]
 name = "umbral-admin"
-description = "Auto-generated CRUD admin for umbral models. The Django admin in Rust shape."
+description = "Auto-generated CRUD admin UI for umbral models."
 # Plugins live under `plugins/` (a sibling of `crates/`), so the
 # workspace pointer matches what umbral-auth does.
 workspace = "../.."
