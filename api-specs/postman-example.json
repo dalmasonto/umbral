@@ -1,0 +1,205 @@
+{
+  "info": {
+    "name": "Product API",
+    "description": "API for managing products in an e-commerce system (Postman Collection example)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "auth": {
+    "type": "bearer"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://api.store.com/v1",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Products",
+      "item": [
+        {
+          "name": "Get All Products",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/products?category=electronics&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["products"],
+              "query": [
+                {
+                  "key": "category",
+                  "value": "electronics",
+                  "description": "Filter by product category"
+                },
+                {
+                  "key": "limit",
+                  "value": "10",
+                  "description": "Maximum number of products to return"
+                }
+              ]
+            },
+            "description": "Retrieve a list of products with optional filtering"
+          },
+          "response": [
+            {
+              "name": "Success Response",
+              "code": 200,
+              "body": "[\n  {\n    \"id\": \"prod_123\",\n    \"name\": \"Laptop\",\n    \"price\": 999.99,\n    \"category\": \"electronics\",\n    \"inStock\": true\n  },\n  {\n    \"id\": \"prod_456\",\n    \"name\": \"Mouse\",\n    \"price\": 29.99,\n    \"category\": \"electronics\",\n    \"inStock\": true\n  }\n]"
+            }
+          ]
+        },
+        {
+          "name": "Get Product by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/products/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["products", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "prod_123",
+                  "description": "Product ID"
+                }
+              ]
+            },
+            "description": "Get a single product by its ID"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "code": 200,
+              "body": "{\n  \"id\": \"prod_123\",\n  \"name\": \"Laptop\",\n  \"price\": 999.99,\n  \"category\": \"electronics\",\n  \"description\": \"High-performance laptop\",\n  \"inStock\": true\n}"
+            },
+            {
+              "name": "Not Found",
+              "code": 404,
+              "body": "{\n  \"error\": \"Product not found\",\n  \"code\": \"PRODUCT_NOT_FOUND\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Wireless Keyboard\",\n  \"price\": 79.99,\n  \"category\": \"electronics\",\n  \"description\": \"Ergonomic wireless keyboard\",\n  \"inStock\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/products",
+              "host": ["{{baseUrl}}"],
+              "path": ["products"]
+            },
+            "description": "Create a new product in the catalog"
+          },
+          "response": [
+            {
+              "name": "Created",
+              "code": 201,
+              "body": "{\n  \"id\": \"prod_789\",\n  \"name\": \"Wireless Keyboard\",\n  \"price\": 79.99,\n  \"category\": \"electronics\",\n  \"description\": \"Ergonomic wireless keyboard\",\n  \"inStock\": true,\n  \"createdAt\": \"2024-01-15T10:30:00Z\"\n}"
+            },
+            {
+              "name": "Validation Error",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid product data\",\n  \"details\": {\n    \"price\": \"Price must be a positive number\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Product",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 89.99,\n  \"inStock\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/products/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["products", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "prod_123",
+                  "description": "Product ID to update"
+                }
+              ]
+            },
+            "description": "Update specific fields of a product"
+          },
+          "response": [
+            {
+              "name": "Updated",
+              "code": 200,
+              "body": "{\n  \"id\": \"prod_123\",\n  \"name\": \"Laptop\",\n  \"price\": 89.99,\n  \"category\": \"electronics\",\n  \"description\": \"High-performance laptop\",\n  \"inStock\": false,\n  \"updatedAt\": \"2024-01-16T15:45:00Z\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Delete Product",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/products/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["products", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "prod_123",
+                  "description": "Product ID to delete"
+                }
+              ]
+            },
+            "description": "Delete a product from the catalog"
+          },
+          "response": [
+            {
+              "name": "Deleted",
+              "code": 204,
+              "body": ""
+            },
+            {
+              "name": "Not Found",
+              "code": 404,
+              "body": "{\n  \"error\": \"Product not found\"\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

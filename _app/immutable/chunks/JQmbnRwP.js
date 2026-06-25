@@ -1,0 +1,1 @@
+import{s as r,a as s,c as e,C as t}from"./Tkey-Rk2.js";import{b as l}from"./C0qQQoTD.js";var d={parser:e,get db(){return new t},renderer:s,styles:r,init:l(a=>{a.class||(a.class={}),a.class.arrowMarkerAbsolute=a.arrowMarkerAbsolute},"init")};export{d as diagram};

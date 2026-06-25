@@ -1,0 +1,264 @@
+{
+  "version": "1.0.0",
+  "title": "Users API",
+  "description": "Complete API reference for managing users in the system",
+  "baseUrl": "https://api.example.com/v1",
+  "env": {
+    "AUTH_TOKEN": "your_api_token_here"
+  },
+  "auth": {
+    "type": "bearer",
+    "description": "All requests require a valid API token in the Authorization header",
+    "tokenPrefix": "Bearer"
+  },
+  "globalHeaders": [
+    {
+      "name": "Authorization",
+      "value": "Bearer {AUTH_TOKEN}",
+      "description": "Your API authentication token"
+    },
+    {
+      "name": "Content-Type",
+      "value": "application/json"
+    }
+  ],
+  "endpoints": [
+    {
+      "title": "Get User by ID",
+      "method": "GET",
+      "path": "/users/:id",
+      "description": "Retrieve detailed information about a specific user",
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "The unique identifier of the user",
+          "example": "user_123"
+        }
+      ],
+      "queryParams": [
+        {
+          "name": "fields",
+          "type": "string",
+          "description": "Comma-separated list of fields to include",
+          "example": "name,email,created_at"
+        },
+        {
+          "name": "include_metadata",
+          "type": "boolean",
+          "description": "Include additional metadata in the response",
+          "default": false
+        }
+      ],
+      "successResponse": {
+        "status": 200,
+        "description": "User retrieved successfully",
+        "example": {
+          "id": "user_123",
+          "name": "John Doe",
+          "email": "john@example.com",
+          "role": "admin",
+          "created_at": "2024-01-15T10:30:00Z",
+          "updated_at": "2024-01-20T14:22:00Z"
+        }
+      },
+      "errorResponses": [
+        {
+          "status": 404,
+          "description": "User not found",
+          "example": {
+            "error": "User not found",
+            "code": "USER_NOT_FOUND",
+            "message": "No user exists with the provided ID"
+          }
+        },
+        {
+          "status": 401,
+          "description": "Unauthorized",
+          "example": {
+            "error": "Unauthorized",
+            "code": "UNAUTHORIZED",
+            "message": "Invalid or missing authentication token"
+          }
+        }
+      ],
+      "examples": [
+        {
+          "title": "cURL",
+          "language": "bash",
+          "code": "curl -X GET \"https://api.example.com/v1/users/user_123\" \\\n  -H \"Authorization: Bearer your_api_token_here\""
+        },
+        {
+          "title": "JavaScript (fetch)",
+          "language": "javascript",
+          "code": "const response = await fetch('https://api.example.com/v1/users/user_123', {\n  headers: {\n    'Authorization': 'Bearer your_api_token_here'\n  }\n});\nconst user = await response.json();"
+        }
+      ]
+    },
+    {
+      "title": "List All Users",
+      "method": "GET",
+      "path": "/users",
+      "description": "Retrieve a paginated list of all users",
+      "queryParams": [
+        {
+          "name": "page",
+          "type": "number",
+          "description": "Page number for pagination",
+          "default": 1
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "description": "Number of users per page",
+          "default": 20
+        },
+        {
+          "name": "role",
+          "type": "string",
+          "description": "Filter users by role",
+          "example": "admin"
+        }
+      ],
+      "successResponse": {
+        "status": 200,
+        "description": "List of users retrieved successfully",
+        "example": {
+          "data": [
+            {
+              "id": "user_123",
+              "name": "John Doe",
+              "email": "john@example.com",
+              "role": "admin"
+            },
+            {
+              "id": "user_124",
+              "name": "Jane Smith",
+              "email": "jane@example.com",
+              "role": "user"
+            }
+          ],
+          "pagination": {
+            "page": 1,
+            "limit": 20,
+            "total": 42,
+            "pages": 3
+          }
+        }
+      }
+    },
+    {
+      "title": "Create New User",
+      "method": "POST",
+      "path": "/users",
+      "description": "Create a new user account",
+      "body": {
+        "description": "User data to create",
+        "example": {
+          "name": "Alice Johnson",
+          "email": "alice@example.com",
+          "role": "user",
+          "password": "secure_password_123"
+        }
+      },
+      "successResponse": {
+        "status": 201,
+        "description": "User created successfully",
+        "example": {
+          "id": "user_125",
+          "name": "Alice Johnson",
+          "email": "alice@example.com",
+          "role": "user",
+          "created_at": "2024-01-21T09:15:00Z"
+        }
+      },
+      "errorResponses": [
+        {
+          "status": 400,
+          "description": "Validation error",
+          "example": {
+            "error": "Validation failed",
+            "code": "VALIDATION_ERROR",
+            "details": {
+              "email": "Email address already exists"
+            }
+          }
+        }
+      ],
+      "examples": [
+        {
+          "title": "cURL",
+          "language": "bash",
+          "code": "curl -X POST \"https://api.example.com/v1/users\" \\\n  -H \"Authorization: Bearer your_api_token_here\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"name\": \"Alice Johnson\",\n    \"email\": \"alice@example.com\",\n    \"role\": \"user\",\n    \"password\": \"secure_password_123\"\n  }'"
+        }
+      ]
+    },
+    {
+      "title": "Update User",
+      "method": "PATCH",
+      "path": "/users/:id",
+      "description": "Update user information",
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "User ID to update"
+        }
+      ],
+      "body": {
+        "description": "Fields to update (all optional)",
+        "example": {
+          "name": "John Updated",
+          "email": "john.updated@example.com",
+          "role": "moderator"
+        }
+      },
+      "successResponse": {
+        "status": 200,
+        "description": "User updated successfully",
+        "example": {
+          "id": "user_123",
+          "name": "John Updated",
+          "email": "john.updated@example.com",
+          "role": "moderator",
+          "updated_at": "2024-01-21T10:00:00Z"
+        }
+      }
+    },
+    {
+      "title": "Delete User",
+      "method": "DELETE",
+      "path": "/users/:id",
+      "description": "Permanently delete a user account",
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "User ID to delete"
+        }
+      ],
+      "successResponse": {
+        "status": 204,
+        "description": "User deleted successfully"
+      },
+      "errorResponses": [
+        {
+          "status": 404,
+          "description": "User not found"
+        },
+        {
+          "status": 403,
+          "description": "Forbidden - Cannot delete this user",
+          "example": {
+            "error": "Forbidden",
+            "code": "CANNOT_DELETE_ADMIN",
+            "message": "Cannot delete the primary admin account"
+          }
+        }
+      ]
+    }
+  ]
+}

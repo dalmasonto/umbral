@@ -1,0 +1,256 @@
+{
+  "version": "1.0.0",
+  "title": "Test API",
+  "description": "A simple test API for demonstrating the API documentation system",
+  "baseUrl": "https://jsonplaceholder.typicode.com",
+  "auth": {
+    "type": "apiKey",
+    "description": "This is a public API - no authentication required for testing",
+    "headerName": "X-API-Key"
+  },
+  "endpoints": [
+    {
+      "title": "Get All Posts",
+      "method": "GET",
+      "path": "/posts",
+      "description": "Retrieve a list of all blog posts",
+      "queryParams": [
+        {
+          "name": "_limit",
+          "type": "number",
+          "description": "Limit the number of results",
+          "example": 5
+        },
+        {
+          "name": "userId",
+          "type": "number",
+          "description": "Filter posts by user ID",
+          "example": 1
+        }
+      ],
+      "successResponse": {
+        "status": 200,
+        "description": "List of posts retrieved successfully",
+        "example": [
+          {
+            "userId": 1,
+            "id": 1,
+            "title": "sunt aut facere repellat provident",
+            "body": "quia et suscipit..."
+          },
+          {
+            "userId": 1,
+            "id": 2,
+            "title": "qui est esse",
+            "body": "est rerum tempore vitae..."
+          }
+        ]
+      },
+      "examples": [
+        {
+          "title": "cURL",
+          "language": "bash",
+          "code": "curl https://jsonplaceholder.typicode.com/posts?_limit=5"
+        },
+        {
+          "title": "JavaScript",
+          "language": "javascript",
+          "code": "const response = await fetch('https://jsonplaceholder.typicode.com/posts?_limit=5');\nconst posts = await response.json();\nconsole.log(posts);"
+        },
+        {
+          "title": "Python",
+          "language": "python",
+          "code": "import requests\n\nresponse = requests.get('https://jsonplaceholder.typicode.com/posts', params={'_limit': 5})\nposts = response.json()\nprint(posts)"
+        }
+      ]
+    },
+    {
+      "title": "Get Post by ID",
+      "method": "GET",
+      "path": "/posts/:id",
+      "description": "Retrieve a single post by its ID",
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "number",
+          "required": true,
+          "description": "The ID of the post to retrieve",
+          "example": 1
+        }
+      ],
+      "successResponse": {
+        "status": 200,
+        "description": "Post retrieved successfully",
+        "example": {
+          "userId": 1,
+          "id": 1,
+          "title": "sunt aut facere repellat provident occaecati excepturi optio reprehenderit",
+          "body": "quia et suscipit\nsuscipit recusandae consequuntur expedita et cum\nreprehenderit molestiae ut ut quas totam\nnostrum rerum est autem sunt rem eveniet architecto"
+        }
+      },
+      "errorResponses": [
+        {
+          "status": 404,
+          "description": "Post not found",
+          "example": {}
+        }
+      ]
+    },
+    {
+      "title": "Create New Post",
+      "method": "POST",
+      "path": "/posts",
+      "description": "Create a new blog post",
+      "body": {
+        "description": "Post data to create",
+        "example": {
+          "title": "My New Post",
+          "body": "This is the content of my new post",
+          "userId": 1
+        }
+      },
+      "successResponse": {
+        "status": 201,
+        "description": "Post created successfully",
+        "example": {
+          "id": 101,
+          "title": "My New Post",
+          "body": "This is the content of my new post",
+          "userId": 1
+        }
+      },
+      "examples": [
+        {
+          "title": "cURL",
+          "language": "bash",
+          "code": "curl -X POST https://jsonplaceholder.typicode.com/posts \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"title\": \"My New Post\",\n    \"body\": \"This is the content\",\n    \"userId\": 1\n  }'"
+        },
+        {
+          "title": "JavaScript",
+          "language": "javascript",
+          "code": "const response = await fetch('https://jsonplaceholder.typicode.com/posts', {\n  method: 'POST',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({\n    title: 'My New Post',\n    body: 'This is the content',\n    userId: 1\n  })\n});\nconst post = await response.json();\nconsole.log(post);"
+        }
+      ]
+    },
+    {
+      "title": "Update Post",
+      "method": "PUT",
+      "path": "/posts/:id",
+      "description": "Update an existing post (replaces all fields)",
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "number",
+          "required": true,
+          "description": "The ID of the post to update",
+          "example": 1
+        }
+      ],
+      "body": {
+        "description": "Complete post data",
+        "example": {
+          "id": 1,
+          "title": "Updated Title",
+          "body": "Updated content",
+          "userId": 1
+        }
+      },
+      "successResponse": {
+        "status": 200,
+        "description": "Post updated successfully",
+        "example": {
+          "id": 1,
+          "title": "Updated Title",
+          "body": "Updated content",
+          "userId": 1
+        }
+      }
+    },
+    {
+      "title": "Partially Update Post",
+      "method": "PATCH",
+      "path": "/posts/:id",
+      "description": "Partially update a post (only updates provided fields)",
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "number",
+          "required": true,
+          "description": "The ID of the post to update",
+          "example": 1
+        }
+      ],
+      "body": {
+        "description": "Fields to update (all optional)",
+        "example": {
+          "title": "New Title Only"
+        }
+      },
+      "successResponse": {
+        "status": 200,
+        "description": "Post updated successfully",
+        "example": {
+          "userId": 1,
+          "id": 1,
+          "title": "New Title Only",
+          "body": "quia et suscipit..."
+        }
+      }
+    },
+    {
+      "title": "Delete Post",
+      "method": "DELETE",
+      "path": "/posts/:id",
+      "description": "Delete a post",
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "number",
+          "required": true,
+          "description": "The ID of the post to delete",
+          "example": 1
+        }
+      ],
+      "successResponse": {
+        "status": 200,
+        "description": "Post deleted successfully",
+        "example": {}
+      }
+    },
+    {
+      "title": "Get Comments for Post",
+      "method": "GET",
+      "path": "/posts/:id/comments",
+      "description": "Retrieve all comments for a specific post",
+      "pathParams": [
+        {
+          "name": "id",
+          "type": "number",
+          "required": true,
+          "description": "The post ID",
+          "example": 1
+        }
+      ],
+      "successResponse": {
+        "status": 200,
+        "description": "Comments retrieved successfully",
+        "example": [
+          {
+            "postId": 1,
+            "id": 1,
+            "name": "id labore ex et quam laborum",
+            "email": "Eliseo@gardner.biz",
+            "body": "laudantium enim quasi est quidem magnam..."
+          },
+          {
+            "postId": 1,
+            "id": 2,
+            "name": "quo vero reiciendis velit similique earum",
+            "email": "Jayne_Kuhic@sydney.com",
+            "body": "est natus enim nihil est dolore omnis..."
+          }
+        ]
+      }
+    }
+  ]
+}

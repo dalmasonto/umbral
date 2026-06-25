@@ -1,0 +1,1 @@
+import{ak as e,b0 as r}from"./CJcHQu3x.js";import{w as s}from"./CVKQtfUF.js";const n=Symbol("specra-config");function f(t){const o=s(t);return r(n,o),o}function a(){const t=e(n);if(!t)throw new Error("getConfigContext must be used within a component with setConfigContext");return t}export{a as g,f as s};
