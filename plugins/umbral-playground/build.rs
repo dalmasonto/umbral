@@ -47,26 +47,37 @@ fn main() {
     println!("cargo:rerun-if-changed=src/placeholder.html");
     println!("cargo:rerun-if-changed=src/shell.html");
 
-    fs::create_dir_all(&crate_dist).expect("create dist dir");
-    // Guarantee dist/assets/ exists so the static pipeline (which
-    // serves files off `<crate>/dist/` at runtime via the `playground`
-    // namespace registered in `Plugin::static_dirs`) always has a
-    // directory to resolve against. On a fresh checkout with no vite
-    // output yet this keeps the source dir present (empty) rather than
-    // missing.
-    let assets_subdir = crate_dist.join("assets");
-    fs::create_dir_all(&assets_subdir).expect("create dist/assets dir");
+    println!("cargo:rerun-if-changed=dist/assets");
 
-    let (js_name, css_name) = match bundle_with_vite(&frontend_dir, &frontend_dist, &crate_dist) {
-        Ok(pair) => pair,
-        Err(e) => {
-            eprintln!("cargo:warning=umbral-playground: {e}; serving placeholder");
-            // In placeholder mode `dist/assets/` will be empty —
-            // include_dir embeds an empty tree, the runtime serves
-            // the placeholder HTML for the shell route, and any
-            // request for an asset 404s. That's the expected
-            // degraded behaviour.
-            (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
+    // Two modes:
+    //  - Dev (frontend/node_modules present): rebuild the bundle from source
+    //    with vite and mirror it into dist/. The resulting dist/ is committed,
+    //    so it ships inside the published crate.
+    //  - Published crate / any checkout without a Node toolchain (node_modules
+    //    absent): use the committed prebuilt dist/ as-is. This branch is
+    //    strictly READ-ONLY w.r.t. the source tree. Creating or writing
+    //    anything here would make `cargo publish --verify` fail with
+    //    "Source directory was modified ... added files: dist/".
+    let (js_name, css_name) = if frontend_dir.join("node_modules").exists() {
+        fs::create_dir_all(&crate_dist).expect("create dist dir");
+        fs::create_dir_all(crate_dist.join("assets")).expect("create dist/assets dir");
+        match bundle_with_vite(&frontend_dir, &frontend_dist, &crate_dist) {
+            Ok(pair) => pair,
+            Err(e) => {
+                eprintln!("cargo:warning=umbral-playground: {e}; serving placeholder");
+                (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
+            }
+        }
+    } else {
+        match read_prebuilt_assets(&crate_dist) {
+            Some(pair) => pair,
+            None => {
+                eprintln!(
+                    "cargo:warning=umbral-playground: no prebuilt dist/ and no Node toolchain; \
+                     serving placeholder"
+                );
+                (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
+            }
         }
     };
 
@@ -78,6 +89,26 @@ fn main() {
          pub const CSS: &str = \"{css_name}\";\n"
     )
     .expect("write generated_assets.rs");
+}
+
+/// Read the entry bundle filenames (`index-<hash>.js` / `.css`) from a committed,
+/// prebuilt `dist/assets/`. Used in the published crate and in any checkout
+/// without a Node toolchain, so the build never invokes npm or writes into the
+/// source tree. Returns `None` if either entry file is missing.
+fn read_prebuilt_assets(crate_dist: &Path) -> Option<(String, String)> {
+    let assets_dir = crate_dist.join("assets");
+    let mut js_name: Option<String> = None;
+    let mut css_name: Option<String> = None;
+    for entry in fs::read_dir(&assets_dir).ok()? {
+        let entry = entry.ok()?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with("index-") && name.ends_with(".js") {
+            js_name = Some(name);
+        } else if name.starts_with("index-") && name.ends_with(".css") {
+            css_name = Some(name);
+        }
+    }
+    Some((js_name?, css_name?))
 }
 
 fn find_in_path(bin: &str) -> Option<PathBuf> {

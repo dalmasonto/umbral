@@ -136,10 +136,6 @@ version_group = "umbral"
 [[package]]
 name = "umbral-playground"
 version_group = "umbral"
-# Skipped for now: its build generates frontend assets (dist/) into the source
-# tree, which fails `cargo publish` verification ("added files: dist/"). Fix the
-# build to write to OUT_DIR or commit the prebuilt assets, then flip this back on.
-release = false
 
 [[package]]
 name = "umbral-health"

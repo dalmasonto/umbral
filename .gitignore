@@ -28,10 +28,12 @@ examples/cot-bench/
 # Git worktrees created by the using-git-worktrees skill
 .worktrees/
 
-# umbral-playground build artifacts
-plugins/umbral-playground/dist/
+# umbral-playground: the prebuilt frontend bundle (dist/) IS committed so it
+# ships in the published crate; build.rs uses it when no Node toolchain is
+# present. node_modules and the vite intermediate (frontend/dist/) are not.
 plugins/umbral-playground/src/generated_assets.rs
 plugins/umbral-playground/frontend/node_modules/
+plugins/umbral-playground/frontend/dist/
 
 .env
 
