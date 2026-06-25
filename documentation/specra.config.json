@@ -4,7 +4,7 @@
     "title": "Umbral",
     "description": "Batteries-included Rust web framework: ORM, managed migrations, REST API, admin, auth, sessions, tasks, email. Built on axum + sqlx.",
     "url": "https://dalmasonto.github.io/umbral",
-    "baseUrl": "/",
+    "baseUrl": "/umbral",
     "language": "en",
     "organizationName": "umbral",
     "projectName": "umbral",
