@@ -59,7 +59,10 @@ jobs:
         uses: release-plz/action@v0.5
         with:
           command: ${{ inputs.command }}
-          dry_run: ${{ inputs.dry_run }}
+          # GitHub passes workflow_dispatch booleans (and `gh -f`) as STRINGS, and
+          # the action treats any non-empty value as dry-run. So map explicitly:
+          # truthy -> "true", everything else -> "" (empty = a real publish).
+          dry_run: ${{ (inputs.dry_run == true || inputs.dry_run == 'true') && 'true' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
