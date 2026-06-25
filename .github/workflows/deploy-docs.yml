@@ -1,0 +1,32 @@
+# Deploy the user-facing documentation site (documentation/ — a SvelteKit +
+# Specra static site, built to documentation/docs/v0.0.1/).
+#
+# PLACEHOLDER: manual-trigger only, no real deploy steps yet. Intentionally NOT
+# on push — wiring the trigger + a home for secrets now so the real build/deploy
+# can drop straight in later. Fill in the TODO step (yarn install, build, ship)
+# when the hosting target is decided.
+
+name: deploy-docs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-docs
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: TODO — build and deploy the docs site
+        run: |
+          echo "Placeholder: no deploy configured yet."
+          echo "TODO: cd documentation && yarn install --frozen-lockfile &&"
+          echo "      yarn build, then publish the static output to the host."
