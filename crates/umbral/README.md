@@ -26,6 +26,7 @@ use umbral::prelude::*;
 
 ## Documentation
 
+- Guide and reference: https://dalmasonto.github.io/umbral/
 - Repository: https://github.com/dalmasonto/umbral
 - API reference: https://docs.rs/umbral
 

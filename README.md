@@ -6,7 +6,7 @@ Declare your data and you get migrations, CRUD, an admin, and an optional REST A
 
 The name is the adjective 'of the shadow' (from Latin *umbra*, shadow). umbral is a separate Rust framework inspired by Django's shape and ergonomics; it isn't a port of Django and shares no code with the Django project.
 
-> **Status: pre-alpha, design phase.** No published crate yet. The architecture, the PRD, and per-subsystem specs are written first; implementation lands milestone by milestone. See `docs/specs/` for the design and `arch.md` for the architecture.
+> **Status: early/alpha, published on crates.io.** The framework and its built-in plugins ship under the `umbral-*` namespace; start with the [`umbral`](https://crates.io/crates/umbral) facade. APIs will still move before 1.0. See `docs/specs/` for the design and `arch.md` for the architecture.
 
 ## What's in this repo
 
@@ -42,10 +42,10 @@ Today this prints a scaffold-only message; subcommands (`migrate`, `makemigratio
 
 ## Documentation
 
-The user-facing docs site lives in `documentation/` (run with `cd documentation && yarn dev`). It currently has one page (*What is Umbral?*); more pages land as features ship per the CLAUDE.md "ship a feature, ship its doc page" rule.
+The user-facing docs site is at **https://dalmasonto.github.io/umbral/** (source in `documentation/`, a SvelteKit + Specra site; run locally with `cd documentation && yarn dev`).
 
-For the design specs, start at `docs/specs/00-overview.md` for the reading order and the Django ↔ umbral glossary.
+For the design specs, start at `docs/specs/00-overview.md` for the reading order and the Django-to-umbral glossary.
 
 ## License
 
-Dual-licensed under MIT and Apache-2.0. See `LICENSE-MIT` and `LICENSE-APACHE` (to be added).
+Dual-licensed under MIT OR Apache-2.0. See `LICENSE-MIT` and `LICENSE-APACHE`. The name "umbral" is a trademark of the project (see `TRADEMARK.md`).

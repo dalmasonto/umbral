@@ -1,10 +1,17 @@
-# Deploy the user-facing documentation site (documentation/ — a SvelteKit +
-# Specra static site, built to documentation/docs/v0.0.1/).
+# Build and deploy the user-facing documentation site (documentation/ - a
+# SvelteKit + Specra static site) to GitHub Pages.
 #
-# PLACEHOLDER: manual-trigger only, no real deploy steps yet. Intentionally NOT
-# on push — wiring the trigger + a home for secrets now so the real build/deploy
-# can drop straight in later. Fill in the TODO step (yarn install, build, ship)
-# when the hosting target is decided.
+# Manual-trigger only (workflow_dispatch), not on push - dispatch it from the
+# Actions tab when you want to ship docs.
+#
+# It builds with yarn (the package manager declared in specra.config.json) and
+# publishes the static output to the `gh-pages` branch via peaceiris. The base
+# path (/umbral) is read automatically from specra.config.json `deployment.basePath`,
+# so the site resolves at https://dalmasonto.github.io/umbral/.
+#
+# ONE-TIME SETUP: enable GitHub Pages for the repo with the source set to the
+# `gh-pages` branch (Settings -> Pages -> Build and deployment -> Deploy from a
+# branch -> gh-pages / root). The first successful run creates that branch.
 
 name: deploy-docs
 
@@ -12,11 +19,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # peaceiris pushes the built site to the gh-pages branch
 
 concurrency:
   group: deploy-docs
   cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: documentation
 
 jobs:
   deploy:
@@ -25,8 +36,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: TODO — build and deploy the docs site
-        run: |
-          echo "Placeholder: no deploy configured yet."
-          echo "TODO: cd documentation && yarn install --frozen-lockfile &&"
-          echo "      yarn build, then publish the static output to the host."
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: documentation/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build the Specra site
+        run: yarn build
+
+      - name: Add .nojekyll (serve _app/ and underscore dirs)
+        run: touch build/.nojekyll
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./documentation/build # adapter-static output
+          publish_branch: gh-pages
+          user_name: "github-actions[bot]"
+          user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_message: "Deploy docs site"
+
+      - name: Summary
+        run: echo "Docs deployed to https://dalmasonto.github.io/umbral/"
