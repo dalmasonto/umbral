@@ -19,6 +19,10 @@ site_content = { path = "../site_content" }
 # via reviews::featured_reviews() — keeping byline/initials logic in one
 # place instead of duplicating it on the landing page.
 reviews = { path = "../reviews" }
+# The homepage "Join the ecosystem" grid renders the SAME model-driven
+# channel cards as /community, via community::home_channels() +
+# community::newsletter_url() — one source of truth for channels.
+community = { path = "../community" }
 
 [dev-dependencies]
 # The render smoke-test (tests/render_home.rs) drives an async handler

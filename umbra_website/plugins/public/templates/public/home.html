@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "plugin_directory/_macros.html" as media %}
+{% import "community/_channel.html" as cc %}
 
 {% block title %}Umbra - the batteries are real plugins{% endblock %}
 {% block meta_description %}Umbra gives Rust developers a complete app framework - models, migrations, admin, forms, REST, background work - with every battery delivered as a plugin you can enable, replace, or extend. This site is built with Umbra.{% endblock %}
@@ -574,35 +575,8 @@
     <p class="text-[16px] leading-[1.55] text-muted">Ship a plugin, leave a review, report an issue, or just follow along. Every channel below is managed from the same Umbra admin.</p>
   </div>
   <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-    <a href="https://github.com/dalmasonto/umbra" class="card flex items-center gap-3 rounded-[13px] p-4">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--ink)"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
-      <div><div class="text-[14px] font-bold">GitHub</div><div class="text-[12px] text-faint">Source &amp; issues</div></div>
-    </a>
-    <a href="/community" class="card flex items-center gap-3 rounded-[13px] p-4">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="#5865F2"><path d="M20 4.5A19 19 0 0 0 15.3 3l-.3.6a14 14 0 0 1 4.2 1.4A16.5 16.5 0 0 0 4.8 5 14 14 0 0 1 9 3.6L8.7 3A19 19 0 0 0 4 4.5C1.5 8.2 1 11.8 1.2 15.3A19 19 0 0 0 7 18l.6-1c-1-.4-1.9-.8-2.7-1.4l.5-.4a13 13 0 0 0 11.2 0l.5.4c-.8.6-1.7 1-2.7 1.4l.6 1a19 19 0 0 0 5.8-2.7c.4-4.2-.5-7.8-2.6-10.8ZM8.3 13.3c-.9 0-1.7-.8-1.7-1.9s.7-1.9 1.7-1.9 1.7.9 1.7 1.9-.8 1.9-1.7 1.9Zm7.4 0c-.9 0-1.7-.8-1.7-1.9s.8-1.9 1.7-1.9 1.7.9 1.7 1.9-.7 1.9-1.7 1.9Z"/></svg>
-      <div><div class="text-[14px] font-bold">Discord</div><div class="text-[12px] text-faint">Chat &amp; support</div></div>
-    </a>
-    <a href="/community" class="card flex items-center gap-3 rounded-[13px] p-4">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="#FF4500"><circle cx="12" cy="12" r="10"/><path d="M18 12a1.4 1.4 0 0 0-2.4-1 7 7 0 0 0-3.5-1.1l.6-2.8 2 .4a1 1 0 1 0 .1-.9l-2.3-.5-.7 3.3a7 7 0 0 0-3.6 1.1A1.4 1.4 0 1 0 6 13.4a2.6 2.6 0 0 0 0 .5c0 1.8 2.1 3.3 4.8 3.3s4.8-1.5 4.8-3.3a2.6 2.6 0 0 0 0-.5A1.4 1.4 0 0 0 18 12Zm-8.6 1a1 1 0 1 1 1 1 1 1 0 0 1-1-1Zm5.3 2.4a3.4 3.4 0 0 1-2.7.9 3.4 3.4 0 0 1-2.7-.9.3.3 0 0 1 .5-.4 2.8 2.8 0 0 0 2.2.7 2.8 2.8 0 0 0 2.2-.7.3.3 0 1 1 .5.4Zm-.2-1.4a1 1 0 1 1 1-1 1 1 0 0 1-1 1Z" fill="#fff"/></svg>
-      <div><div class="text-[14px] font-bold">Reddit</div><div class="text-[12px] text-faint">r/umbra</div></div>
-    </a>
-    <a href="/community" class="card flex items-center gap-3 rounded-[13px] p-4">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--ink)"><path d="M18.2 2h3.3l-7.2 8.2L23 22h-6.6l-5.2-6.8L5.3 22H2l7.7-8.8L1.4 2H8l4.7 6.2L18.2 2Zm-1.2 18h1.8L7.1 3.9H5.2L17 20Z"/></svg>
-      <div><div class="text-[14px] font-bold">X</div><div class="text-[12px] text-faint">@umbra_rs</div></div>
-    </a>
-    <a href="/blog" class="card flex items-center gap-3 rounded-[13px] p-4">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="#E8771A"><circle cx="6.2" cy="17.8" r="2.2"/><path d="M4 11a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6v-3Zm0-5a14 14 0 0 1 14 14h-3A11 11 0 0 0 4 9V6Z"/></svg>
-      <div><div class="text-[14px] font-bold">RSS</div><div class="text-[12px] text-faint">Blog feed</div></div>
-    </a>
-    <a href="/docs" class="card flex items-center gap-3 rounded-[13px] p-4">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M4 4h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2z"/><path d="M8 8h6M8 12h6"/></svg>
-      <div><div class="text-[14px] font-bold">Docs</div><div class="text-[12px] text-faint">Guides &amp; API</div></div>
-    </a>
-    <a href="https://sentinmail.app/subscribe/24479467-8815-497e-94f5-61aa11278687" target="_blank" rel="noopener" class="flex items-center gap-3.5 rounded-[13px] border border-accent-line bg-accent-soft p-4 sm:col-span-2">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
-      <div class="flex-1"><div class="text-[14px] font-bold text-[#3A2BA8]">Newsletter</div><div class="text-[12px] text-[#6E5FB8]">Monthly via Sentinmail - releases &amp; plugin spotlights.</div></div>
-      <span class="rounded-lg bg-accent px-3.5 py-2 text-[13px] font-semibold text-white">Subscribe</span>
-    </a>
+    {% for ch in channels %}{{ cc.channel_card(ch) }}{% endfor %}
+    {{ cc.subscribe_card("Newsletter", "Monthly via Sentinmail - releases & plugin spotlights.", newsletter_url) }}
   </div>
 </section>
 

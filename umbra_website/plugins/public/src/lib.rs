@@ -151,6 +151,12 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
     // honest empty state in the template — never fabricated testimonials.
     let reviews = reviews::featured_reviews(2).await.unwrap_or_default();
 
+    // "Join the ecosystem" grid — the SAME model-driven channel cards the
+    // /community page renders, sourced from the community plugin so brand
+    // colour + coming-soon state live in one place (the SocialLink model).
+    let channels = community::home_channels().await.map_err(internal_error)?;
+    let newsletter_url = community::newsletter_url().await;
+
     let body = umbra::templates::render(
         "public/home.html",
         &context! {
@@ -162,6 +168,8 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
             form_submissions => form_submissions,
             glue_lines => glue_lines,
             reviews => reviews,
+            channels => channels,
+            newsletter_url => newsletter_url,
         },
     )
     .map_err(internal_error)?;

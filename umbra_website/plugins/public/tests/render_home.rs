@@ -44,6 +44,9 @@ impl PluginTrait for TemplatesOnly {
         vec![
             manifest.join("templates"),
             plugins_dir.join("plugin_directory").join("templates"),
+            // home.html now imports `community/_channel.html` (the shared
+            // channel-card macro), so the community template dir must resolve.
+            plugins_dir.join("community").join("templates"),
         ]
     }
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
@@ -136,6 +139,24 @@ async fn home_renders_real_rows_and_honest_dash() {
     // ("Be the first…"), never fabricated testimonials.
     let reviews: Vec<i64> = Vec::new();
 
+    // Channels mirror what `home()` passes via `community::home_channels()`.
+    // The shared macro reads slug/name/url/description/external/color/coming_soon.
+    #[derive(Serialize)]
+    struct Ch {
+        slug: &'static str,
+        name: &'static str,
+        url: &'static str,
+        description: &'static str,
+        external: bool,
+        color: &'static str,
+        coming_soon: bool,
+    }
+    let channels = vec![
+        Ch { slug: "github", name: "GitHub", url: "https://github.com/dalmasonto/umbra", description: "Source, issues & pull requests", external: true, color: "var(--ink)", coming_soon: false },
+        Ch { slug: "discord", name: "Discord", url: "https://discord.gg/umbra", description: "Real-time chat & support", external: true, color: "#5865F2", coming_soon: true },
+    ];
+    let newsletter_url = "https://sentinmail.app/subscribe/test";
+
     let html = umbra::templates::render(
         "public/home.html",
         &context! {
@@ -147,9 +168,21 @@ async fn home_renders_real_rows_and_honest_dash() {
             form_submissions => form_submissions,
             glue_lines => glue_lines,
             reviews => reviews,
+            channels => channels,
+            newsletter_url => newsletter_url,
         },
     )
     .expect("home.html renders without a template error");
+
+    // 0. The reusable ecosystem cards render from the channel context:
+    //    a live channel (clickable), a coming-soon channel (muted badge),
+    //    and the subscribe card.
+    assert!(html.contains("GitHub"), "a live channel card renders its name");
+    assert!(
+        html.contains("Coming soon"),
+        "a coming-soon channel renders the muted badge"
+    );
+    assert!(html.contains("Subscribe"), "the subscribe card renders");
 
     // 1. Real plugin rows render: name, install command, status.
     assert!(
