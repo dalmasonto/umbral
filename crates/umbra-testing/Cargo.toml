@@ -1,12 +1,16 @@
 [package]
 name = "umbra-testing"
-description = "Test helpers for umbra apps. TestClient, temp pools, response assertions."
+description = "Test helpers for umbra apps: TestClient, temp pools, response assertions, and model factories (factory_boy-style)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+# Explicitly publishable: this is a user-facing crate that downstream apps
+# dev-depend to write tests (TestClient + the Factory layer). `true` is the
+# default, but we set it so it's never mistaken for internal-only scaffolding.
+publish = true
 
 [dependencies]
 umbra = { path = "../umbra", version = "0.0.1" }
