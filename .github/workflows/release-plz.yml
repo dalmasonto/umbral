@@ -28,6 +28,11 @@ on:
         options:
           - release-pr
           - release
+      dry_run:
+        description: "Dry run (only affects command=release): runs cargo publish --dry-run, publishes NOTHING"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -54,6 +59,7 @@ jobs:
         uses: release-plz/action@v0.5
         with:
           command: ${{ inputs.command }}
+          dry_run: ${{ inputs.dry_run }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
