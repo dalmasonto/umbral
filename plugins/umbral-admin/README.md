@@ -30,7 +30,7 @@ embedded into the binary via the static assets route.
 
 The Cargo build script (`build.rs`) will attempt to run this automatically if
 `node_modules/` is present in the `css/` directory. If Node is not installed,
-the build script emits a `cargo:warning` and skips the CSS build — the
+the build script emits a `cargo:warning` and skips the CSS build - the
 framework still compiles and serves via the CDN in dev mode.
 
 ## Password management
@@ -50,5 +50,5 @@ This tells the admin to:
 - Show a "Password" + "Confirm password" pair on create forms.
 - Show a "Change password" button on edit forms.
 
-Custom user models follow the same pattern — supply the column name that
+Custom user models follow the same pattern - supply the column name that
 stores the argon2 hash.

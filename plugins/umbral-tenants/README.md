@@ -1,0 +1,24 @@
+# umbral-tenants
+
+Schema-per-tenant multitenancy for umbral. The django-tenants shape: one Postgres database, one schema per tenant, a shared `public` for cross-tenant apps.
+
+This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+
+## Install
+
+```toml
+[dependencies]
+umbral = "0.0.1"
+umbral-tenants = "0.0.1"
+```
+
+Register the plugin when you build your app, then use it through the umbral facade. See the documentation for the exact builder call and the settings it exposes.
+
+## Documentation
+
+- Repository: https://github.com/dalmasonto/umbral
+- API reference: https://docs.rs/umbral-tenants
+
+## License
+
+Licensed under either of MIT or Apache-2.0, at your option.
