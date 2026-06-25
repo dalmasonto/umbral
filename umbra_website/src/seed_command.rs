@@ -28,7 +28,7 @@ impl Plugin for SeedDataPlugin {
     }
 
     fn commands(&self) -> Vec<Box<dyn PluginCommand>> {
-        vec![Box::new(SeedOrmData)]
+        vec![Box::new(SeedOrmData), Box::new(SeedChannels)]
     }
 }
 
@@ -77,6 +77,25 @@ impl PluginCommand for SeedOrmData {
         // as each page lands.
 
         println!("Done.");
+        Ok(())
+    }
+}
+
+/// `cargo run -- seed_channels` — (re)seed just the community channels.
+/// Idempotent UPSERT by slug, so re-running refreshes each channel's brand
+/// colour + coming-soon state and adds any newly-defined channels.
+struct SeedChannels;
+
+#[async_trait]
+impl PluginCommand for SeedChannels {
+    fn command(&self) -> Command {
+        Command::new("seed_channels")
+            .about("(Re)seed the community channels (idempotent upsert by slug).")
+    }
+
+    async fn run(&self, _matches: &ArgMatches) -> Result<(), CliError> {
+        let channels = community::seed::seed_social_links().await?;
+        println!("Seeded {channels} community channels.");
         Ok(())
     }
 }

@@ -70,6 +70,7 @@ async fn ensure_tables(pool: &sqlx::SqlitePool) {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL, slug TEXT NOT NULL, platform TEXT NOT NULL,
                 url TEXT NOT NULL, icon_key TEXT NOT NULL, description TEXT,
+                color TEXT, coming_soon INTEGER NOT NULL DEFAULT 0,
                 display_order INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
             )",

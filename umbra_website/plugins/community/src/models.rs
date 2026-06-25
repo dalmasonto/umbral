@@ -57,6 +57,12 @@ pub struct SocialLink {
     pub url: String,
     pub icon_key: String,
     pub description: Option<String>,
+    /// Brand colour (CSS, e.g. `#5865F2`) for the card icon + `--brand` hover
+    /// accent. `None` falls back to the theme accent.
+    pub color: Option<String>,
+    /// Render the muted "Coming soon" card instead of a clickable link.
+    #[umbra(default = "false", index)]
+    pub coming_soon: bool,
     #[umbra(default = "0", index)]
     pub display_order: i32,
     #[umbra(default = "true", index)]
