@@ -8,7 +8,7 @@
 //!
 //! Both the `/plugins` listing and the `/plugins/{slug}` detail page
 //! are DB-driven: the listing loads every approved, non-deleted
-//! `Plugin` in one annotated query (Django's
+//! `Plugin` in one annotated query (e.g.
 //! `Plugin.objects.filter(...).annotate(n=Count("comment_set"))`) and
 //! the detail page loads the plugin plus its features, compatibility
 //! rows and visible comments via the framework's reverse-relation API
@@ -411,7 +411,7 @@ pub async fn render_listing(
 
     // One annotated query: every approved, non-deleted plugin with its
     // VISIBLE comment count in a correlated subquery the ORM renders
-    // (Django's `annotate(n=Count("comment_set"))`). Soft-deleted rows
+    // (`annotate(n=Count("comment_set"))`). Soft-deleted rows
     // are excluded automatically (Plugin is `#[umbral(soft_delete)]`).
     // The ordering is pushed DB-side (featured first, then display_order,
     // then stars) so LIMIT/OFFSET slices a stable, page-consistent order

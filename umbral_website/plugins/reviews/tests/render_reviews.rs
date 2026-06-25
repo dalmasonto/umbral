@@ -73,7 +73,7 @@ async fn reviews_render_approved_testimonials() {
     let html = render_reviews().await.expect("reviews render");
 
     assert!(
-        html.contains("Django muscle memory, Rust guarantees"),
+        html.contains("Familiar workflow, Rust guarantees"),
         "a seeded review title renders"
     );
     assert!(

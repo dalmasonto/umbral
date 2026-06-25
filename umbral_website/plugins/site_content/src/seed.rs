@@ -31,13 +31,13 @@ const POSTS: &[Seed] = &[
     Seed {
         slug: "why-umbral-exists",
         title: "Why Umbral exists",
-        excerpt: "Rust has fast routers and solid ORMs. What it didn't have was the Django feeling — declare your data and get migrations, an admin, forms, and a REST API almost for free. Umbral is that feeling, rebuilt on Rust's guarantees.",
+        excerpt: "Rust has fast routers and solid ORMs. What it didn't have was the batteries-included feeling: declare your data and get migrations, an admin, forms, and a REST API almost for free. Umbral is that feeling, rebuilt on Rust's guarantees.",
         kind: BlogPostKind::DesignNote,
         reading_minutes: 7,
         featured: true,
-        body: r#"Rust already has excellent web building blocks. `axum` is a great router, `sqlx` is a great database layer, `serde` is a great serializer. What it didn't have — until now — is the thing that made Django productive: a framework where you **declare your data once** and get migrations, CRUD, an admin, forms, and an optional REST API almost for free.
+        body: r#"Rust already has excellent web building blocks. `axum` is a great router, `sqlx` is a great database layer, `serde` is a great serializer. What it didn't have, until now, is what makes a framework productive: one where you **declare your data once** and get migrations, CRUD, an admin, forms, and an optional REST API almost for free.
 
-Umbral ('of the shadow', from Latin *umbra*, shadow — it lives in Django's shadow in shape, not in code) is a deliberate attempt to recreate that feeling on top of Rust's compile-time guarantees.
+Umbral ('of the shadow', from Latin *umbra*, shadow) is a deliberate attempt to bring that batteries-included feeling to Rust's compile-time guarantees.
 
 ![The Umbral plugin directory, built with Umbral](/media/91b8f829-2e2e-4ecb-8c53-4e2fec4a7028-adem_preview2-720x405.jpg)
 
@@ -49,7 +49,7 @@ That single constraint shapes everything. There is no privileged "core" path tha
 
 ## Declare a model, get a migration
 
-The everyday loop works from the first milestone that has models — exactly like Django:
+The everyday loop works from the first milestone that has models:
 
 ```rust
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
@@ -206,7 +206,7 @@ Each plugin owns its own migrations. `migrate` walks every registered plugin, co
 
 ## What a plugin can contribute
 
-A plugin (Django's "app") can contribute any subset of:
+A plugin (an "app") can contribute any subset of:
 
 - models (which become migrations)
 - routes and views
@@ -241,7 +241,7 @@ umbral-rest  = "0.1"
 acme-graphql = "0.3"   # a community plugin, same contract
 ```
 
-That's the entire pitch: a productive, Django-shaped app framework where no capability is privileged, and the one you want to replace is always replaceable.
+That's the entire pitch: a productive, batteries-included app framework where no capability is privileged, and the one you want to replace is always replaceable.
 "#,
     },
     Seed {

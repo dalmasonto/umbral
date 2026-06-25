@@ -367,7 +367,7 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
             FeatureSeed { name: "Auto CRUD views", description: "List, create, edit, delete generated from every registered model.", status: S, maturity: STA },
             FeatureSeed { name: "Search and multi-filter", description: "Toolbar search plus combinable `list_filter` facets.", status: S, maturity: STA },
             FeatureSeed { name: "FK / M2M / O2O pickers", description: "Async relation pickers with search-as-you-type.", status: S, maturity: STA },
-            FeatureSeed { name: "Per-model permissions", description: "Django-style `view/add/change/delete` gating via umbral-permissions.", status: S, maturity: STA },
+            FeatureSeed { name: "Per-model permissions", description: "Per-action `view/add/change/delete` gating via umbral-permissions.", status: S, maturity: STA },
             FeatureSeed { name: "File and image widgets", description: "Multipart upload with image thumbnail preview.", status: S, maturity: STA },
             FeatureSeed { name: "Markdown / RTE field widgets", description: "`#[umbral(widget = ...)]` renders rich editors in the form.", status: S, maturity: STA },
             FeatureSeed { name: "Dashboard widgets", description: "KPI cards, charts, and recent-activity panels on the index.", status: IP, maturity: BETA },

@@ -26,7 +26,7 @@ umbral-livereload   = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-li
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbral-tasks        = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-tasks" }  # DB-backed background task queue (Celery-equivalent).
-# umbral-permissions  = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-permissions" }  # Django-style ContentType + Group + Permission model.
+# umbral-permissions  = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-permissions" }  # ContentType + Group + Permission model.
 # umbral-rls          = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-rls" }  # Postgres row-level security policy registration.
 umbral-cache          = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-cache" }  # In-memory/SQLite/Redis cache + cache_page middleware.
 # umbral-email        = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-email" }  # SMTP + MIME email composer + sender.

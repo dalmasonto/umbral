@@ -58,7 +58,7 @@ impl Plugin for PublicPlugin {
 async fn home() -> Result<Html<String>, (StatusCode, String)> {
     // Plugin list (filtered to first-party + approved community).
     // An empty result renders the static fallback in the template.
-    // The Django story, one query: filter DB-side, count the related
+    // The whole story, one query: filter DB-side, count the related
     // comments via a correlated subquery the ORM renders —
     // `Plugin.objects.filter(...).annotate(n=Count("comments"))`.
     // (The DB-side filter is "approved + not deprecated", which widens

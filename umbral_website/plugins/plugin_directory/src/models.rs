@@ -248,7 +248,7 @@ pub struct Plugin {
 
     /// Reverse relation to this plugin's discussion notes. Powers the
     /// one-query `annotate_count("comment_set")` on the landing page
-    /// (Django's `annotate(n=Count("comments"))`) and
+    /// (`annotate(n=Count("comments"))`) and
     /// `prefetch_related("comment_set")` when the rows themselves are
     /// needed. Not a column — skipped by sqlx, serde, and migrations.
     #[sqlx(skip)]
