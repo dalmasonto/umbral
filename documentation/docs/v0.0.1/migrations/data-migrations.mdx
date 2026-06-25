@@ -8,9 +8,9 @@ tags:
   - data
 ---
 
-Most migrations are **schema** migrations — umbral auto-detects them from a model change (`CreateTable`, `AddColumn`, …). A **data migration** changes *rows*, not the schema: backfill a new column, normalise existing values, seed lookup rows. umbral ships this as `Operation::RunSql`, a hand-authored raw-SQL op.
+Most migrations are **schema** migrations - umbral auto-detects them from a model change (`CreateTable`, `AddColumn`, …). A **data migration** changes *rows*, not the schema: backfill a new column, normalise existing values, seed lookup rows. umbral ships this as `Operation::RunSql`, a hand-authored raw-SQL op.
 
-A data migration is never auto-generated — `makemigrations` only emits schema diffs. You write it by hand, and because it has no schema effect, it never disturbs the model-snapshot chain (its `snapshot_after` equals the previous snapshot, so the next `makemigrations` still detects no change).
+A data migration is never auto-generated - `makemigrations` only emits schema diffs. You write it by hand, and because it has no schema effect, it never disturbs the model-snapshot chain (its `snapshot_after` equals the previous snapshot, so the next `makemigrations` still detects no change).
 
 ## Authoring one: `makemigrations --empty`
 
@@ -44,11 +44,11 @@ Open the file and replace the empty `operations` array:
       "reverse_sql": "UPDATE post SET status = NULL WHERE status = 'draft'"
     }
   ],
-  "snapshot_after": { /* unchanged — carried forward verbatim */ }
+  "snapshot_after": { /* unchanged - carried forward verbatim */ }
 }
 ```
 
-`sql` is the forward statement, executed verbatim on both backends (you own portability). `reverse_sql` is optional — `null` means irreversible.
+`sql` is the forward statement, executed verbatim on both backends (you own portability). `reverse_sql` is optional - `null` means irreversible.
 
 </Step>
 
@@ -65,12 +65,12 @@ The op runs inside the same per-migration transaction as the tracking-table inse
 </Steps>
 
 <Callout type="warning">
-`RunSql` runs arbitrary SQL the engine can't reason about. `checkmigrations` flags it as a WARNING — review its row impact and make it idempotent or guarded before deploying.
+`RunSql` runs arbitrary SQL the engine can't reason about. `checkmigrations` flags it as a WARNING - review its row impact and make it idempotent or guarded before deploying.
 </Callout>
 
 ## Under multitenancy: per-tenant-schema application
 
-Under [schema-per-tenant](/docs/v0.0.1/plugins/tenancy), a `RunSql` in a **tenant** app runs **once per tenant schema**, under `search_path = "<schema>", public`. That lets the data migration read shared `public` lookup tables while writing tenant rows — a boundary-spanning backfill:
+Under [schema-per-tenant](/docs/v0.0.1/plugins/tenancy), a `RunSql` in a **tenant** app runs **once per tenant schema**, under `search_path = "<schema>", public`. That lets the data migration read shared `public` lookup tables while writing tenant rows - a boundary-spanning backfill:
 
 ```jsonc
 {
@@ -85,6 +85,6 @@ Under [schema-per-tenant](/docs/v0.0.1/plugins/tenancy), a `RunSql` in a **tenan
 
 ## See also
 
-- [Managed migrations](/docs/v0.0.1/migrations/managed-migrations) — the auto-detected schema loop.
-- [Multitenancy](/docs/v0.0.1/plugins/tenancy) — boundary-spanning data migrations.
+- [Managed migrations](/docs/v0.0.1/migrations/managed-migrations) - the auto-detected schema loop.
+- [Multitenancy](/docs/v0.0.1/plugins/tenancy) - boundary-spanning data migrations.
 - `crates/umbral-core/src/migrate.rs` (the `Operation::RunSql` variant) and `docs/specs/06-migration-engine.md` for the design.

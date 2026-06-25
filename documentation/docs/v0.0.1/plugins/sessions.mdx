@@ -96,11 +96,11 @@ App::builder()
     .build()?;
 ```
 
-Default is **off** — the default path incurs zero extra writes per request.
+Default is **off** - the default path incurs zero extra writes per request.
 
 ## CookieStore (stateless sessions)
 
-By default sessions are DB rows (`DbStore`): the cookie holds an opaque token and every request reads the row from the database. `CookieStore` flips that around — it is a **stateless, AEAD-encrypted session-in-cookie** store. The entire session record (user id, JSON data, timestamps) is encrypted and stuffed into the cookie value itself, so there is **zero DB round-trip** on load or save and **no session table rows are ever created**.
+By default sessions are DB rows (`DbStore`): the cookie holds an opaque token and every request reads the row from the database. `CookieStore` flips that around - it is a **stateless, AEAD-encrypted session-in-cookie** store. The entire session record (user id, JSON data, timestamps) is encrypted and stuffed into the cookie value itself, so there is **zero DB round-trip** on load or save and **no session table rows are ever created**.
 
 ```rust
 use umbral_sessions::{SessionsPlugin, CookieStore};
@@ -114,9 +114,9 @@ Reach for it when you want sessions without a database hit per request (read-hea
 
 How it works:
 
-- **Cipher.** XChaCha20Poly1305 (AEAD) with a fresh 24-byte random nonce per save. The cookie value is `base64url(nonce || ciphertext)`. AEAD means the same key both encrypts *and* authenticates, so a **tampered or forged cookie fails the auth check and is treated as no session** (the request resolves anonymous — it never errors).
-- **Key.** The 256-bit key is `SHA-256(secret_key)`. **`secret_key` is required**: a stateless cookie session derived from an empty key is trivially forgeable. With an empty `secret_key`, `CookieStore` warns in dev/test and error-shouts in production — set `secret_key` in `umbral.toml` or via `UMBRAL_SECRET_KEY` before deploying.
-- **Size limit.** Cookies can't exceed browser limits, so the encoded value is capped at **~4 KB**. A `save` that would exceed it returns `SessionError::CookieTooLarge` rather than silently producing a cookie the browser drops — keep the session small.
+- **Cipher.** XChaCha20Poly1305 (AEAD) with a fresh 24-byte random nonce per save. The cookie value is `base64url(nonce || ciphertext)`. AEAD means the same key both encrypts *and* authenticates, so a **tampered or forged cookie fails the auth check and is treated as no session** (the request resolves anonymous - it never errors).
+- **Key.** The 256-bit key is `SHA-256(secret_key)`. **`secret_key` is required**: a stateless cookie session derived from an empty key is trivially forgeable. With an empty `secret_key`, `CookieStore` warns in dev/test and error-shouts in production - set `secret_key` in `umbral.toml` or via `UMBRAL_SECRET_KEY` before deploying.
+- **Size limit.** Cookies can't exceed browser limits, so the encoded value is capped at **~4 KB**. A `save` that would exceed it returns `SessionError::CookieTooLarge` rather than silently producing a cookie the browser drops - keep the session small.
 
 <Callout type="warning">
 `CookieStore` sessions live entirely in the client's cookie. There is no server row to invalidate, so a logout clears the cookie but a copy captured before logout stays valid until it expires. Rotate `secret_key` to mass-invalidate every outstanding cookie session.
@@ -131,11 +131,11 @@ cargo run -p umbral-cli -- clearsessions
 # Deleted 312 expired session(s).
 ```
 
-The command is registered by `SessionsPlugin` via `Plugin::commands()` — no extra wiring required.
+The command is registered by `SessionsPlugin` via `Plugin::commands()` - no extra wiring required.
 
 ## RedisStore (feature-gated)
 
-`RedisStore` is a **server-side, Redis-backed** session store — a keyed store like `DbStore` (the raw token stays in the cookie; the record lives on the server) but with µs-latency lookups, horizontal scalability, and **server-side TTL eviction**: Redis auto-expires keys when the session's TTL fires, so no `clearsessions` job is needed.
+`RedisStore` is a **server-side, Redis-backed** session store - a keyed store like `DbStore` (the raw token stays in the cookie; the record lives on the server) but with µs-latency lookups, horizontal scalability, and **server-side TTL eviction**: Redis auto-expires keys when the session's TTL fires, so no `clearsessions` job is needed.
 
 Enable the `redis` cargo feature in your app's `Cargo.toml`:
 
@@ -162,8 +162,8 @@ let store = RedisStore::from_env().await?;
 
 How it works:
 
-- **Key format.** `umbral:session:<sha256hex(token)>` — same hash-before-storage invariant as `DbStore`. The raw token never leaves the cookie.
-- **Server-side TTL.** `save` calls `SET … EX <seconds>` where the TTL is `record.expires_at - now()`. Redis evicts the key automatically when the TTL fires — no sweep job, no `clearsessions` cron.
+- **Key format.** `umbral:session:<sha256hex(token)>` - same hash-before-storage invariant as `DbStore`. The raw token never leaves the cookie.
+- **Server-side TTL.** `save` calls `SET … EX <seconds>` where the TTL is `record.expires_at - now()`. Redis evicts the key automatically when the TTL fires - no sweep job, no `clearsessions` cron.
 - **Lazy expiry double-check.** `load` still compares `expires_at` against the current time after deserialising the record, and issues a `DEL` if the record is past its time even though Redis hasn't evicted it yet (clock skew between processes).
 - **Idempotent destroy.** `DEL` on a non-existent key is a no-op in Redis, so `destroy` is always safe to call regardless of session state.
 

@@ -29,13 +29,13 @@ App::builder()
     .build()?;
 ```
 
-The single S3 backend (feature `s3`) can serve *both* sides — the media (`"default"`) and static (`"staticfiles"`) storage instances.
+The single S3 backend (feature `s3`) can serve *both* sides - the media (`"default"`) and static (`"staticfiles"`) storage instances.
 
 ---
 
 # The static side
 
-`StoragePlugin::new().static_files(mount, dir)` serves an asset tree at a URL prefix. Two source shapes ship — pick filesystem for dev / single-binary deployments, embedded for plugins that want their UI to travel with the binary.
+`StoragePlugin::new().static_files(mount, dir)` serves an asset tree at a URL prefix. Two source shapes ship - pick filesystem for dev / single-binary deployments, embedded for plugins that want their UI to travel with the binary.
 
 ## Filesystem mode
 
@@ -51,7 +51,7 @@ App::builder()
 
 ## Embedded mode
 
-`.embedded(mount, &Dir)` takes an `include_dir!`-baked asset tree and serves it straight from memory — no filesystem read, no path canonicalisation, no risk of a deleted/renamed file orphaning live browser tabs.
+`.embedded(mount, &Dir)` takes an `include_dir!`-baked asset tree and serves it straight from memory - no filesystem read, no path canonicalisation, no risk of a deleted/renamed file orphaning live browser tabs.
 
 ```rust
 use include_dir::{Dir, include_dir};
@@ -66,7 +66,7 @@ App::builder()
 
 This is what an *embeddable plugin* should use when its UI is small and rarely rebuilt: the assets travel with the plugin's crate, so when a user drops the plugin into their app, the UI comes along. No "remember to deploy a `dist/` directory next to the binary" footgun. The built-in `umbral-admin` uses embedded mode for its small CSS/JS. A plugin with a heavy, frequently-rebuilt bundle (like `umbral-playground`'s Vite output) instead declares a filesystem source via [`Plugin::static_dirs()`](#the-unified-static-pipeline) so a rebuild drops in without recompiling.
 
-Path traversal is structurally impossible against an embedded source: lookups are a tree walk against in-memory keys, not a path join — a `..` segment becomes a literal key that won't match.
+Path traversal is structurally impossible against an embedded source: lookups are a tree walk against in-memory keys, not a path join - a `..` segment becomes a literal key that won't match.
 
 ## Cache headers
 
@@ -162,7 +162,7 @@ cargo run -- collectstatic --hashed   # recommended for prod
 { "css/app.css": "css/app.9f2c1a0b3d4e.css" }
 ```
 
-With the manifest present, `{{ static('css/app.css') }}` automatically resolves to the **hashed** URL (`/static/css/app.9f2c1a0b3d4e.css`) — no template change. Because the filename changes whenever the bytes change, you can serve these assets with far-future `Cache-Control: public, max-age=31536000, immutable` headers and never worry about a stale cache masking a new build. The original (un-hashed) copies are kept too, so an old deploy referencing the plain name still resolves.
+With the manifest present, `{{ static('css/app.css') }}` automatically resolves to the **hashed** URL (`/static/css/app.9f2c1a0b3d4e.css`) - no template change. Because the filename changes whenever the bytes change, you can serve these assets with far-future `Cache-Control: public, max-age=31536000, immutable` headers and never worry about a stale cache masking a new build. The original (un-hashed) copies are kept too, so an old deploy referencing the plain name still resolves.
 
 The manifest is loaded once at `App::build()`; an app that never runs `--hashed` has no manifest and `static()` emits the plain URLs exactly as before.
 
@@ -189,11 +189,11 @@ The S3-backend env vars are now `UMBRAL_S3_*`. The legacy `UMBRAL_STATIC_BUCKET`
 The backend can also be selected via `UMBRAL_STATIC_STORAGE=s3` (the `--storage` flag overrides it). Design rationale: `planning/gaps2.md` #82 (cache-busting) and #55 (storage backend).
 
 <Callout type="info">
-The `s3` backend is **feature-gated** — `rust-s3` is only compiled when you enable the `s3` feature on `umbral-storage`, so a local-only app never pulls in the AWS client. The same feature powers the media side's S3 backend.
+The `s3` backend is **feature-gated** - `rust-s3` is only compiled when you enable the `s3` feature on `umbral-storage`, so a local-only app never pulls in the AWS client. The same feature powers the media side's S3 backend.
 </Callout>
 
 <Callout type="info">
-**Dev vs prod.** In development the pipeline serves plugin `static_dirs()` live from each source directory (rebuild, drop in, served next request — no recompile) and static-side site dirs straight off disk. In production you run `collectstatic` once and serve the resulting `static_root/` tree from the framework, nginx, or a CDN. Embedded assets (`.embedded(...)`) need neither — they ship in the binary. Design rationale: `arch.md` and `planning/gaps.md` #67.
+**Dev vs prod.** In development the pipeline serves plugin `static_dirs()` live from each source directory (rebuild, drop in, served next request - no recompile) and static-side site dirs straight off disk. In production you run `collectstatic` once and serve the resulting `static_root/` tree from the framework, nginx, or a CDN. Embedded assets (`.embedded(...)`) need neither - they ship in the binary. Design rationale: `arch.md` and `planning/gaps.md` #67.
 </Callout>
 
 ### Production note
@@ -244,7 +244,7 @@ pub trait Storage: Send + Sync {
 
 ## Choosing a backend: local dev vs S3
 
-The media side defaults to **local filesystem storage** — exactly what you want for development and single-binary deployments. Switching to S3 is a backend swap: your models, `FileField`s, and upload handlers don't change, because they all resolve through the ambient `Storage` trait.
+The media side defaults to **local filesystem storage** - exactly what you want for development and single-binary deployments. Switching to S3 is a backend swap: your models, `FileField`s, and upload handlers don't change, because they all resolve through the ambient `Storage` trait.
 
 ### Local dev (the default)
 
@@ -252,7 +252,7 @@ The media side defaults to **local filesystem storage** — exactly what you wan
 StoragePlugin::new().media("/media", "./media")
 ```
 
-`.media(mount, dir)` builds an `FsStorage`: uploads land on disk under `dir` and are served back at `mount`. **No `s3` feature, no credentials, no config** — clone the repo and uploads just work. Reach for S3 only when you actually need shared or durable object storage.
+`.media(mount, dir)` builds an `FsStorage`: uploads land on disk under `dir` and are served back at `mount`. **No `s3` feature, no credentials, no config** - clone the repo and uploads just work. Reach for S3 only when you actually need shared or durable object storage.
 
 ### Production: S3 (or MinIO / R2 / B2 / Spaces)
 
@@ -290,7 +290,7 @@ export UMBRAL_S3_REGION=us-east-1
 export UMBRAL_S3_ACCESS_KEY=…  UMBRAL_S3_SECRET_KEY=…
 ```
 
-The **same** `S3Storage` backs both instances — pass it to `.media_s3(...)` for uploads and use `collectstatic --storage s3` for assets, and one bucket serves both.
+The **same** `S3Storage` backs both instances - pass it to `.media_s3(...)` for uploads and use `collectstatic --storage s3` for assets, and one bucket serves both.
 
 ## S3-compatible providers
 
@@ -302,7 +302,7 @@ The `UMBRAL_S3_*` env vars target **any** S3-compatible provider. Set the bucket
 export UMBRAL_S3_BUCKET=my-bucket
 export UMBRAL_S3_REGION=us-east-1
 export UMBRAL_S3_ACCESS_KEY=…  UMBRAL_S3_SECRET_KEY=…
-# No endpoint, no path-style — virtual-hosted addressing is the AWS default.
+# No endpoint, no path-style - virtual-hosted addressing is the AWS default.
 ```
 </Tab>
 <Tab title="MinIO">
@@ -341,14 +341,14 @@ export UMBRAL_S3_ACCESS_KEY=…  UMBRAL_S3_SECRET_KEY=…
 </Tabs>
 
 <Callout type="info">
-**Credentials precedence.** If both `UMBRAL_S3_ACCESS_KEY` and `UMBRAL_S3_SECRET_KEY` are set, the storage backend uses them (plus optional `UMBRAL_S3_SESSION_TOKEN`) — handy when you want storage to use a different provider's keys without colliding with `AWS_*` used by other services. Otherwise it falls back to the standard AWS chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, an IAM role, `~/.aws/credentials`).
+**Credentials precedence.** If both `UMBRAL_S3_ACCESS_KEY` and `UMBRAL_S3_SECRET_KEY` are set, the storage backend uses them (plus optional `UMBRAL_S3_SESSION_TOKEN`) - handy when you want storage to use a different provider's keys without colliding with `AWS_*` used by other services. Otherwise it falls back to the standard AWS chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, an IAM role, `~/.aws/credentials`).
 
 **Path-style.** Set `UMBRAL_S3_PATH_STYLE=true` (or `.path_style(true)`) for MinIO and most self-hosted stores, which serve `endpoint/bucket/key`. Leave it off for AWS, which uses virtual-hosted addressing (`bucket.s3.region.amazonaws.com`).
 </Callout>
 
 ### Presigned URLs (private buckets)
 
-By default `S3Storage::url()` returns a **public** URL (`<public_base>/<key>`, or the bare key). For a **private** bucket, set a presign TTL and `url()` returns a signed, time-limited GET URL instead — no public bucket required:
+By default `S3Storage::url()` returns a **public** URL (`<public_base>/<key>`, or the bare key). For a **private** bucket, set a presign TTL and `url()` returns a signed, time-limited GET URL instead - no public bucket required:
 
 ```bash
 export UMBRAL_S3_PRESIGN_TTL=900    # url() returns links valid for 900 seconds
@@ -361,12 +361,12 @@ let s3 = S3Storage::builder("private-bucket")
     .build()?;
 ```
 
-`presign_ttl` takes **precedence over** `public_base`: when set, `url()` signs the request (carrying `X-Amz-Signature` / `X-Amz-Expires`) rather than joining a public base. Presigning is pure local HMAC, so `url()` stays synchronous and needs no network round-trip — but the signature is only valid against the **real** credentials configured for the bucket. This is how you serve private media without exposing a public bucket.
+`presign_ttl` takes **precedence over** `public_base`: when set, `url()` signs the request (carrying `X-Amz-Signature` / `X-Amz-Expires`) rather than joining a public base. Presigning is pure local HMAC, so `url()` stays synchronous and needs no network round-trip - but the signature is only valid against the **real** credentials configured for the bucket. This is how you serve private media without exposing a public bucket.
 
 <Callout type="warning">
 **Enabling S3 safely.**
-- **Credentials** come from explicit `UMBRAL_S3_ACCESS_KEY` / `UMBRAL_S3_SECRET_KEY` or the standard AWS chain (IAM role, `~/.aws/credentials`) — never hard-code keys in source or `settings`.
-- **Public vs signed.** Without a presign TTL, `S3Storage::url()` returns `<public_base>/<key>` (or the bare key) — built for **public-read** buckets fronted by a CDN; set `UMBRAL_S3_PUBLIC_BASE` (or `.public_base(...)`) to that origin. For **private** buckets, set `UMBRAL_S3_PRESIGN_TTL` (or `.presign(secs)`) and `url()` returns signed, time-limited URLs instead.
+- **Credentials** come from explicit `UMBRAL_S3_ACCESS_KEY` / `UMBRAL_S3_SECRET_KEY` or the standard AWS chain (IAM role, `~/.aws/credentials`) - never hard-code keys in source or `settings`.
+- **Public vs signed.** Without a presign TTL, `S3Storage::url()` returns `<public_base>/<key>` (or the bare key) - built for **public-read** buckets fronted by a CDN; set `UMBRAL_S3_PUBLIC_BASE` (or `.public_base(...)`) to that origin. For **private** buckets, set `UMBRAL_S3_PRESIGN_TTL` (or `.presign(secs)`) and `url()` returns signed, time-limited URLs instead.
 - **Feature-gated.** The `rust-s3` AWS client compiles only with the `s3` feature, so a local-only app never pulls it in.
 - The **active-content guard** (`.html` / `.svg` / `.js` → `.txt`) applies on every backend, so the stored-XSS defence travels to S3 too.
 </Callout>
@@ -410,12 +410,12 @@ async fn upload(
 
 `save` writes the bytes under `<dir>/<uuid>-<safe-filename>`, inserts a row in `media_file`, and returns:
 
-- `file: MediaFile` — the new row, with `id` populated.
-- `url: String` — the public URL (`<mount>/<key>`).
+- `file: MediaFile` - the new row, with `id` populated.
+- `url: String` - the public URL (`<mount>/<key>`).
 
 ## Streaming uploads (`save_stream`)
 
-`save` takes the whole upload as `&[u8]` — perfect for small bodies you already hold (form fields, generated content). For a **large** body that arrives as a stream (a proxied download, a big multipart part), reach for `save_stream`, which writes to disk chunk-by-chunk **without ever buffering the whole file in memory**:
+`save` takes the whole upload as `&[u8]` - perfect for small bodies you already hold (form fields, generated content). For a **large** body that arrives as a stream (a proxied download, a big multipart part), reach for `save_stream`, which writes to disk chunk-by-chunk **without ever buffering the whole file in memory**:
 
 ```rust
 use umbral::storage::ByteStream;
@@ -427,7 +427,7 @@ let outcome = storage
     .await?;
 ```
 
-`max_size` is enforced **mid-stream**, not from a declared length: when a cap is configured the body is rejected the instant its *real* bytes cross the cap, even if the client lies about or omits its `Content-Length`. A rejected stream leaves no oversized blob on disk — the filesystem backend cleans up its partial write. The recorded `MediaFile.size` is the **actual** streamed byte count, the only trustworthy length for a stream.
+`max_size` is enforced **mid-stream**, not from a declared length: when a cap is configured the body is rejected the instant its *real* bytes cross the cap, even if the client lies about or omits its `Content-Length`. A rejected stream leaves no oversized blob on disk - the filesystem backend cleans up its partial write. The recorded `MediaFile.size` is the **actual** streamed byte count, the only trustworthy length for a stream.
 
 <Callout type="info">
 The download / serve path already streams: `tower-http::ServeDir` reads the file off disk in chunks, so a large file is never loaded into memory to serve it. `save_stream` brings the same no-buffering guarantee to the *write* side.
@@ -435,18 +435,18 @@ The download / serve path already streams: `tower-http::ServeDir` reads the file
 
 The underlying `Storage` trait has two additional streaming methods with default impls, so every existing backend keeps working unchanged:
 
-- `store_stream(filename, content_type, body)` — true-streams to the backend. `FsStorage` writes chunk-by-chunk to disk; a backend that doesn't override it falls back to buffering then `store`.
-- `retrieve_stream(key)` — streams the object back. `FsStorage` reads off disk via `ReaderStream`; the default wraps `retrieve`'s bytes as a single chunk.
+- `store_stream(filename, content_type, body)` - true-streams to the backend. `FsStorage` writes chunk-by-chunk to disk; a backend that doesn't override it falls back to buffering then `store`.
+- `retrieve_stream(key)` - streams the object back. `FsStorage` reads off disk via `ReaderStream`; the default wraps `retrieve`'s bytes as a single chunk.
 
-Both `save`/`store` (buffered) and `save_stream`/`store_stream` (streaming) apply the **same** filename guards — path-separator sanitisation and active-content (`.html`/`.svg`/`.js` → `.txt`) neutralisation — so streaming never weakens the stored-XSS defence.
+Both `save`/`store` (buffered) and `save_stream`/`store_stream` (streaming) apply the **same** filename guards - path-separator sanitisation and active-content (`.html`/`.svg`/`.js` → `.txt`) neutralisation - so streaming never weakens the stored-XSS defence.
 
 ## Background uploads & processing
 
-Real uploads often need work *after* the bytes land — generate a thumbnail, transcode a video, strip EXIF, scan for malware. Doing that inline blocks the upload response on slow work. umbral-storage runs it in the background instead, and tracks where each file is in its lifecycle with `MediaFile.status`:
+Real uploads often need work *after* the bytes land - generate a thumbnail, transcode a video, strip EXIF, scan for malware. Doing that inline blocks the upload response on slow work. umbral-storage runs it in the background instead, and tracks where each file is in its lifecycle with `MediaFile.status`:
 
 | `status`     | Meaning                                                                                  |
 |--------------|------------------------------------------------------------------------------------------|
-| `ready`      | Done — the file is stored and any processors finished. The default for a plain upload.   |
+| `ready`      | Done - the file is stored and any processors finished. The default for a plain upload.   |
 | `processing` | A background task is running (processors, or a deferred write). The URL may not resolve yet. |
 | `failed`     | A processor (or a deferred write) errored. For `save`, the **original is still stored**.  |
 
@@ -467,14 +467,14 @@ StoragePlugin::new()
     })
 ```
 
-Processors are installed **ambiently** at boot (`on_ready`), so they fire on *every* save path — `StoragePlugin::save`, `save_stream`, the admin/form multipart upload, and `save_deferred` — not just one entry point.
+Processors are installed **ambiently** at boot (`on_ready`), so they fire on *every* save path - `StoragePlugin::save`, `save_stream`, the admin/form multipart upload, and `save_deferred` - not just one entry point.
 
-### `save()` — sync write, background processing (Mode A)
+### `save()` - sync write, background processing (Mode A)
 
 `save` (and `save_stream`) always writes the original **synchronously**, so the returned URL works the instant `save` returns. Processing is what moves to the background:
 
 - **No processors registered** → the row is inserted `status="ready"` and `save` returns as before.
-- **Processors registered** → the row is inserted `status="processing"`, `save` returns **immediately** (it never awaits the work), and a detached `tokio::spawn` runs every processor in order. On all-ok the row flips to `status="ready"`; on any error to `status="failed"` (the cause is logged). A processing failure **never loses the upload** — the original bytes are already stored.
+- **Processors registered** → the row is inserted `status="processing"`, `save` returns **immediately** (it never awaits the work), and a detached `tokio::spawn` runs every processor in order. On all-ok the row flips to `status="ready"`; on any error to `status="failed"` (the cause is logged). A processing failure **never loses the upload** - the original bytes are already stored.
 
 ```rust
 let MediaSaveOutcome { file, url } =
@@ -482,7 +482,7 @@ let MediaSaveOutcome { file, url } =
 // `url` resolves now; `file.status` is "processing" if processors are registered.
 ```
 
-### `save_deferred()` — deferred write (Mode B)
+### `save_deferred()` - deferred write (Mode B)
 
 When the caller mustn't block on a slow backend write either, `save_deferred` defers the **write itself**:
 
@@ -494,15 +494,15 @@ let MediaSaveOutcome { file, url } =
 
 It generates the final key + URL upfront (the same `<uuid>-<filename>` scheme `save` uses), inserts the row `status="processing"` with the known `size`, and returns immediately. A detached `tokio::spawn` then writes the bytes to the backend at that exact key and runs the processors; success → `status="ready"`, any failure (write or processor) → `status="failed"`.
 
-Because the bytes aren't written yet, the returned URL **404s until the background task finishes** — show a placeholder on the frontend until the file goes `ready` (see the realtime pattern below, or poll the row's `status`).
+Because the bytes aren't written yet, the returned URL **404s until the background task finishes** - show a placeholder on the frontend until the file goes `ready` (see the realtime pattern below, or poll the row's `status`).
 
 <Callout type="info">
-`save` vs `save_deferred`: use **`save`** when the URL must resolve the instant you return (the original is stored synchronously; only post-processing is deferred). Use **`save_deferred`** when even the write may be slow and the caller mustn't block — at the cost of a URL that resolves only after the background write.
+`save` vs `save_deferred`: use **`save`** when the URL must resolve the instant you return (the original is stored synchronously; only post-processing is deferred). Use **`save_deferred`** when even the write may be slow and the caller mustn't block - at the cost of a URL that resolves only after the background write.
 </Callout>
 
 ### Pushing "ready" to the frontend (realtime, no coupling)
 
-When a background task flips `status` through the ORM, the ORM fires `post_save:media_file`. umbral-storage does **not** depend on umbral-realtime — instead a developer who wants the frontend notified just exposes the model over realtime, and the status change is pushed automatically:
+When a background task flips `status` through the ORM, the ORM fires `post_save:media_file`. umbral-storage does **not** depend on umbral-realtime - instead a developer who wants the frontend notified just exposes the model over realtime, and the status change is pushed automatically:
 
 ```rust
 RealtimePlugin::new()
@@ -511,11 +511,11 @@ RealtimePlugin::new()
     )
 ```
 
-Now the browser that uploaded a `processing` file gets a live `status: "ready"` (and the resolvable `url`) the moment processing finishes — swap the placeholder for the real image. The frontend can also just poll the row's `status` if it isn't on a realtime transport.
+Now the browser that uploaded a `processing` file gets a live `status: "ready"` (and the resolvable `url`) the moment processing finishes - swap the placeholder for the real image. The frontend can also just poll the row's `status` if it isn't on a realtime transport.
 
 ### Durability: in-process vs crash-durable
 
-Background work runs via an in-process `tokio::spawn`. That's simple and has **no plugin dependency** — umbral-storage doesn't import umbral-tasks. The trade-off: a process crash mid-processing loses the in-flight work (the file stays `processing`). For crash-durable processing, have the processor **enqueue an `umbral-tasks` job** instead of doing the work inline:
+Background work runs via an in-process `tokio::spawn`. That's simple and has **no plugin dependency** - umbral-storage doesn't import umbral-tasks. The trade-off: a process crash mid-processing loses the in-flight work (the file stays `processing`). For crash-durable processing, have the processor **enqueue an `umbral-tasks` job** instead of doing the work inline:
 
 ```rust
 .on_upload(|media: MediaFile| async move {
@@ -524,7 +524,7 @@ Background work runs via an in-process `tokio::spawn`. That's simple and has **n
 })
 ```
 
-The job survives a restart because it's persisted in the task queue; the `on_upload` closure just hands work off to it. umbral-storage stays decoupled from both umbral-tasks and umbral-realtime — the developer composes them.
+The job survives a restart because it's persisted in the task queue; the `on_upload` closure just hands work off to it. umbral-storage stays decoupled from both umbral-tasks and umbral-realtime - the developer composes them.
 
 ## The `MediaFile` model
 
@@ -538,9 +538,9 @@ Every upload is one row:
 | `content_type`  | `String`                        | MIME type the client declared                  |
 | `size`          | `i64`                           | Byte count                                     |
 | `uploaded_at`   | `DateTime<Utc>`                 | Time of save                                   |
-| `status`        | `String`                        | `ready` \| `processing` \| `failed` — the [background-processing](#background-uploads--processing) lifecycle. Defaults to `ready`, so a plain upload is usable immediately. |
+| `status`        | `String`                        | `ready` \| `processing` \| `failed` - the [background-processing](#background-uploads--processing) lifecycle. Defaults to `ready`, so a plain upload is usable immediately. |
 
-The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate` and the admin lists it under the **storage** sidebar group automatically. Every column is `#[umbral(noedit)]` — the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
+The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate` and the admin lists it under the **storage** sidebar group automatically. Every column is `#[umbral(noedit)]` - the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
 
 To delete a file, write a small handler that removes the row with `MediaFile::objects().filter(media_file::ID.eq(id)).delete().await?` and then `Storage::delete(key)` (or `tokio::fs::remove_file(...)`). For automatic blob cleanup when a *model* row is deleted, opt that model into [file-lifecycle cleanup](#file-lifecycle--orphan-cleanup) below.
 
@@ -557,11 +557,11 @@ Files come back at `<mount>/<key>`. Reference them like any other URL:
    download="{{ doc.filename }}">Download {{ doc.filename }}</a>
 ```
 
-The plugin sets `X-Content-Type-Options: nosniff` on every media response so the browser respects the MIME type the file was uploaded with — a small defence against a user uploading an HTML file disguised as `.png` and getting it interpreted on the same origin.
+The plugin sets `X-Content-Type-Options: nosniff` on every media response so the browser respects the MIME type the file was uploaded with - a small defence against a user uploading an HTML file disguised as `.png` and getting it interpreted on the same origin.
 
 ## File lifecycle / orphan cleanup
 
-A `FileField` / `ImageField` column stores only the storage *key*; the bytes live in the backend. Delete the row and, without help, the blob is orphaned — the backend keeps accumulating files no row points at. The media side cleans them up the way Django's `FileField` does: **when a row is deleted, the blobs behind its file fields are deleted too.**
+A `FileField` / `ImageField` column stores only the storage *key*; the bytes live in the backend. Delete the row and, without help, the blob is orphaned - the backend keeps accumulating files no row points at. The media side cleans them up the way Django's `FileField` does: **when a row is deleted, the blobs behind its file fields are deleted too.**
 
 Cleanup is **opt-in per model**. Register it on the plugin builder:
 
@@ -593,8 +593,8 @@ StoragePlugin::new()
 
 Semantics:
 
-- **Best-effort, never fails the delete.** A storage delete error — including a blob that's already gone — is logged with `tracing::warn!` and swallowed. The row delete always succeeds; cleanup failure never propagates.
-- **Per-row deletes only.** `M::objects().delete_instance(&row)` fires the `pre_delete` signal the hook listens on. Bulk `QuerySet::delete()` (the filter-chain DELETE) fires only a bulk-PK signal, so it does **not** trigger cleanup — the same limitation Django's bulk `QuerySet.delete()` has for per-row hooks. Loop with `delete_instance` when cleanup matters.
+- **Best-effort, never fails the delete.** A storage delete error - including a blob that's already gone - is logged with `tracing::warn!` and swallowed. The row delete always succeeds; cleanup failure never propagates.
+- **Per-row deletes only.** `M::objects().delete_instance(&row)` fires the `pre_delete` signal the hook listens on. Bulk `QuerySet::delete()` (the filter-chain DELETE) fires only a bulk-PK signal, so it does **not** trigger cleanup - the same limitation Django's bulk `QuerySet.delete()` has for per-row hooks. Loop with `delete_instance` when cleanup matters.
 - **Empty file fields are a no-op.** A row whose `FileField` key is empty has nothing to clean and deletes normally.
 
 ### Replace cleanup (gaps2 #92)
@@ -610,7 +610,7 @@ Post::objects().save(post).await?;        // old_key's blob is deleted
 This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying both the previous and new row). The old-row read it needs is only performed when a subscriber exists, so it costs nothing for models that didn't opt in. Rules:
 
 - **Only the changed key is removed.** Saving with the **same** key deletes nothing (the file wasn't replaced). A non-file-column update deletes nothing. An INSERT (`create`) deletes nothing.
-- **Per-row updates only.** `M::objects().save(row)` fires `post_update`; the filter-chain bulk `QuerySet::update_values()` fires only a bulk-PK signal, so it does **not** trigger replace-cleanup — same per-row-hook limitation as delete cleanup above.
+- **Per-row updates only.** `M::objects().save(row)` fires `post_update`; the filter-chain bulk `QuerySet::update_values()` fires only a bulk-PK signal, so it does **not** trigger replace-cleanup - same per-row-hook limitation as delete cleanup above.
 
 ## Media configuration knobs
 
@@ -628,7 +628,7 @@ This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying bo
 
 The storage-backend trait `gaps.md #49` called for **has shipped**: it landed as `Storage` (in `umbral-core`, see above), with the filesystem `FsStorage` impl, the `s3`-gated `S3Storage` (now with `UMBRAL_S3_*` config, explicit credentials, path-style addressing, and **presigned URLs** for private buckets), and `.media_with_storage(...)` for swapping backends. One thing still deferred:
 
-1. **Image library.** A *built-in* thumbnail / EXIF-strip / format-probe implementation behind an `images` cargo feature, later. The *hook* to run that work — [`on_upload` processors](#background-uploads--processing), with the `processing`/`ready`/`failed` lifecycle and `save_deferred` — has shipped; you can wire your own image pipeline today.
+1. **Image library.** A *built-in* thumbnail / EXIF-strip / format-probe implementation behind an `images` cargo feature, later. The *hook* to run that work - [`on_upload` processors](#background-uploads--processing), with the `processing`/`ready`/`failed` lifecycle and `save_deferred` - has shipped; you can wire your own image pipeline today.
 
 Design rationale and the migration plan live in `docs/decisions/2026-06-02-media-and-s3.md` in the repo. Each step keeps the v0 public surface compatible.
 

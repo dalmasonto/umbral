@@ -27,13 +27,13 @@ A set of framework-internal tables is refused even though every other model is s
 | `session` | Serving it would leak **session identifiers**: anyone reading the table could hijack a live session. |
 | `umbral_migrations` | The migration ledger. Internal bookkeeping, never a public resource. |
 | `permissions_permission`, `permissions_contenttype`, `permissions_group`, `permissions_usergroup`, `permissions_userpermission` | The authorization tables from `umbral-permissions`. Exposing them would let a client read or rewrite who-can-do-what. |
-| `task_row` | The `umbral-tasks` queue rows — internal job state, not a public resource. |
+| `task_row` | The `umbral-tasks` queue rows - internal job state, not a public resource. |
 | `admin_audit_log` | The admin's audit trail. Internal bookkeeping. |
 
 A request to a blocked table 404s; the route is never mounted. This is the backstop that keeps the credential store (and the framework's own bookkeeping tables) off the API even though the plugin auto-exposes everything else.
 
 <Callout type="info">
-Beyond the table block-list, the field `password_hash` is **always** stripped from every response, on every table, and can never be re-exposed (not even with `.expose(...)`). It's a hard, un-overridable denylist entry — the last line of defence if a custom credential model slips past the table block-list.
+Beyond the table block-list, the field `password_hash` is **always** stripped from every response, on every table, and can never be re-exposed (not even with `.expose(...)`). It's a hard, un-overridable denylist entry - the last line of defence if a custom credential model slips past the table block-list.
 </Callout>
 
 ## Controlling what's exposed
@@ -64,10 +64,10 @@ RestPlugin::default()
 
 ### Registering many resources at once
 
-Like DRF serializers, REST customization is best defined **per app** — next to the models it describes — rather than piled into `main.rs`. Each plugin exports a `Vec<ResourceConfig>` and the app registers them in one `.resources(...)` call instead of a `.resource(...)` per model:
+Like DRF serializers, REST customization is best defined **per app** - next to the models it describes - rather than piled into `main.rs`. Each plugin exports a `Vec<ResourceConfig>` and the app registers them in one `.resources(...)` call instead of a `.resource(...)` per model:
 
 ```rust
-// plugins/blog/src/lib.rs — the blog app's REST surface, next to its models
+// plugins/blog/src/lib.rs - the blog app's REST surface, next to its models
 pub fn rest_resources() -> Vec<umbral_rest::ResourceConfig> {
     vec![
         ResourceConfig::new("post").hide("draft_notes"),
@@ -75,13 +75,13 @@ pub fn rest_resources() -> Vec<umbral_rest::ResourceConfig> {
     ]
 }
 
-// main.rs — one call per app, no per-model boilerplate
+// main.rs - one call per app, no per-model boilerplate
 RestPlugin::default()
     .resources(blog::rest_resources())
     .resources(shop::rest_resources());
 ```
 
-`.resources(iter)` accepts any `IntoIterator<Item = ResourceConfig>` (a `Vec`, an array, …) and is exactly equivalent to calling `.resource(...)` once per item — additive, same precedence.
+`.resources(iter)` accepts any `IntoIterator<Item = ResourceConfig>` (a `Vec`, an array, …) and is exactly equivalent to calling `.resource(...)` once per item - additive, same precedence.
 
 ### Precedence
 

@@ -7,13 +7,13 @@ tags: [orm, search, full-text, ts_rank, relevance]
 
 # Cross-model search
 
-`Search::across` searches every text column of each opted-in model and returns **one** list ordered by relevance. On Postgres it ranks with `ts_rank` (computed inline at query time — nothing is stored), and on SQLite it degrades to a weighted `LIKE`. One call replaces hand-merging a query per model in Rust.
+`Search::across` searches every text column of each opted-in model and returns **one** list ordered by relevance. On Postgres it ranks with `ts_rank` (computed inline at query time - nothing is stored), and on SQLite it degrades to a weighted `LIKE`. One call replaces hand-merging a query per model in Rust.
 
 The surface lives in `umbral::orm`: `Searchable`, `Search`, and `SearchHit`.
 
 ## Opt a model in
 
-A marker `impl` is enough — the searchable columns, the title, and the routing key are read from the model's metadata. Override a default only when you need to.
+A marker `impl` is enough - the searchable columns, the title, and the routing key are read from the model's metadata. Override a default only when you need to.
 
 ```rust
 use umbral::prelude::*;
@@ -33,13 +33,13 @@ impl umbral::orm::Searchable for BlogPost {
 The defaults read `Model::FIELDS`:
 
 - **`title()`** picks the text column named `title` or `name` (case-insensitive), else the first text column.
-- **`body()`** is every `Text` column, minus metadata-flagged non-content ones (slug / url / email validators and `choices` sets) — so searching `"published"` won't match every published row.
+- **`body()`** is every `Text` column, minus metadata-flagged non-content ones (slug / url / email validators and `choices` sets) - so searching `"published"` won't match every published row.
 - **`ident()`** defaults to the primary key. Override it to a natural key (a `slug`) when the model is routed by that key, so `SearchHit.pk` carries the right value for the URL.
 </Callout>
 
 ## Choose which fields are searched
 
-The defaults cover most models, but you can name the columns explicitly — to **narrow** the search to a few meaningful fields, or to pick a title the auto-detection wouldn't. Each method returns the SQL column name(s) as plain strings:
+The defaults cover most models, but you can name the columns explicitly - to **narrow** the search to a few meaningful fields, or to pick a title the auto-detection wouldn't. Each method returns the SQL column name(s) as plain strings:
 
 ```rust
 impl umbral::orm::Searchable for Plugin {
@@ -54,16 +54,16 @@ impl umbral::orm::Searchable for Plugin {
 }
 ```
 
-- **`body()`** — the columns concatenated into the searchable text (and, on Postgres, fed to `to_tsvector`). Returning a narrower list keeps noise out of results. Default: every `Text` column minus slug / url / email validators and `choices` sets.
-- **`title()`** — the single column surfaced as `SearchHit.title`, and weighted highest in ranking (a title match outranks a body-only match). Default: the column named `title` or `name`, else the first text column.
+- **`body()`** - the columns concatenated into the searchable text (and, on Postgres, fed to `to_tsvector`). Returning a narrower list keeps noise out of results. Default: every `Text` column minus slug / url / email validators and `choices` sets.
+- **`title()`** - the single column surfaced as `SearchHit.title`, and weighted highest in ranking (a title match outranks a body-only match). Default: the column named `title` or `name`, else the first text column.
 
 <Callout type="warning">
-These are the **SQL column names** passed as strings, not Rust column constants. For umbral models the column name is the struct field name — the `short_description` field is the `"short_description"` column — so use the field name verbatim.
+These are the **SQL column names** passed as strings, not Rust column constants. For umbral models the column name is the struct field name - the `short_description` field is the `"short_description"` column - so use the field name verbatim.
 </Callout>
 
 ## Restrict which rows are searchable
 
-By default every row of an opted-in model is searchable. Override `filter_sql()` to scope it — typically to a published/approved state — so drafts or unmoderated rows never surface:
+By default every row of an opted-in model is searchable. Override `filter_sql()` to scope it - typically to a published/approved state - so drafts or unmoderated rows never surface:
 
 ```rust
 impl umbral::orm::Searchable for Plugin {
@@ -86,17 +86,17 @@ fn filter_sql() -> Option<&'static str> {
 }
 ```
 
-- **Choice columns** — compared to the stored string: `status = 'published'`.
-- **FK columns** — compared to the parent's id (umbral's FK column is the field name): `author = 5`, or `category IN (1, 2, 3)`.
-- **Booleans / numbers / dates / nullability** — `featured = true`, `price > 0`, `archived_at IS NULL`.
+- **Choice columns** - compared to the stored string: `status = 'published'`.
+- **FK columns** - compared to the parent's id (umbral's FK column is the field name): `author = 5`, or `category IN (1, 2, 3)`.
+- **Booleans / numbers / dates / nullability** - `featured = true`, `price > 0`, `archived_at IS NULL`.
 
 <Callout type="warning">
-Write SQL that's valid on **every backend you run** — the same fragment is spliced into both the Postgres and SQLite query. Stick to portable expressions (the examples above are); a Postgres-only function would break SQLite.
+Write SQL that's valid on **every backend you run** - the same fragment is spliced into both the Postgres and SQLite query. Stick to portable expressions (the examples above are); a Postgres-only function would break SQLite.
 </Callout>
 
 ### What it can't do: per-request values
 
-Because `filter_sql()` returns a `&'static str`, every value in it must be a **constant you write at compile time**. It cannot carry a runtime value — there is no safe way to put "the logged-in user's id" or any request data into it (that string is interpolated into the SQL verbatim, so request data there would be a SQL-injection hole).
+Because `filter_sql()` returns a `&'static str`, every value in it must be a **constant you write at compile time**. It cannot carry a runtime value - there is no safe way to put "the logged-in user's id" or any request data into it (that string is interpolated into the SQL verbatim, so request data there would be a SQL-injection hole).
 
 So `filter_sql` answers *"which rows of this model are ever searchable"* (published, approved), **not** *"search only this author's rows for this request"*. For a per-request filter on a single model, skip `Search::across` and use a normal QuerySet, where values are safely bound:
 
@@ -117,11 +117,11 @@ Pass a tuple of `Searchable` models (arity 1–6):
 ```rust
 let hits = umbral::orm::Search::across::<(Plugin, BlogPost)>("redis cache", 10).await?;
 for hit in hits {
-    // hit.kind  — "plugin" / "blog"   (route on this)
-    // hit.pk    — the ident value as text (e.g. the slug)
-    // hit.title — the title column's value
-    // hit.snippet — leading slice of the body
-    // hit.rank  — f64, descending
+    // hit.kind  - "plugin" / "blog"   (route on this)
+    // hit.pk    - the ident value as text (e.g. the slug)
+    // hit.title - the title column's value
+    // hit.snippet - leading slice of the body
+    // hit.rank  - f64, descending
 }
 ```
 

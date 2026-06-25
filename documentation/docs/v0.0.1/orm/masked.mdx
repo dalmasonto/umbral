@@ -66,7 +66,7 @@ set_mask_keyring(MaskKeyring::from_base64(&public_b64, Some(&private_b64))?);
 A tier configured with **only** the public key can store masked data but not reveal it: `reveal()` returns `MaskError::NoPrivateKey`.
 
 <Callout type="warning">
-If a key env-var **is** set but is malformed (bad base64 or not 32 bytes), every seal/reveal fails with `MaskError::BadKey` — it never silently falls back to storing plaintext. The error is also logged once at first use so a misconfigured key surfaces in the startup logs. (With the public-key env-var simply **absent**, masking is treated as not configured, and a seal returns `NoKeyring`.)
+If a key env-var **is** set but is malformed (bad base64 or not 32 bytes), every seal/reveal fails with `MaskError::BadKey` - it never silently falls back to storing plaintext. The error is also logged once at first use so a misconfigured key surfaces in the startup logs. (With the public-key env-var simply **absent**, masking is treated as not configured, and a seal returns `NoKeyring`.)
 </Callout>
 
 ## Declaring and using a masked field

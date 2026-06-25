@@ -6,12 +6,12 @@ icon: book-open
 tags: [web, templates, orm, pagination]
 ---
 
-`umbral::pagination` is the page-of-rows helper for **server-rendered (Jinja) list views** — the Django `django.core.paginator` equivalent. A `Paginator` counts a [`QuerySet`](/docs/v0.0.1/orm) once and slices it into fixed-size `Page`s; a `Page` exposes Django's familiar `has_next()`, `start_index()`, `next_page_number()`, and a windowed `elided_page_range()` for the `1 … 4 5 [6] 7 8 … 20` nav.
+`umbral::pagination` is the page-of-rows helper for **server-rendered (Jinja) list views** - the Django `django.core.paginator` equivalent. A `Paginator` counts a [`QuerySet`](/docs/v0.0.1/orm) once and slices it into fixed-size `Page`s; a `Page` exposes Django's familiar `has_next()`, `start_index()`, `next_page_number()`, and a windowed `elided_page_range()` for the `1 … 4 5 [6] 7 8 … 20` nav.
 
-It lives in the core (no plugin to register): any handler can paginate a queryset directly. This is distinct from REST's JSON pagination — reach for this when you render HTML.
+It lives in the core (no plugin to register): any handler can paginate a queryset directly. This is distinct from REST's JSON pagination - reach for this when you render HTML.
 
 <Callout type="info">
-`per_page` is clamped to at least 1, and an empty queryset still reports `num_pages == 1` with one empty page — both matching Django.
+`per_page` is clamped to at least 1, and an empty queryset still reports `num_pages == 1` with one empty page - both matching Django.
 </Callout>
 
 ## Handler example
@@ -27,7 +27,7 @@ async fn post_list(query: Query<HashMap<String, String>>) -> Response {
     let paginator = Paginator::new(Post::objects().order_by(post::ID.asc()), 10);
 
     // page() errors on an out-of-range number; page_clamped() clamps into
-    // [1, num_pages] — handy straight off an untrusted querystring.
+    // [1, num_pages] - handy straight off an untrusted querystring.
     let page = paginator.page_clamped(page_num).await?;
 
     render("posts/list.html", &context! {
@@ -38,7 +38,7 @@ async fn post_list(query: Query<HashMap<String, String>>) -> Response {
 }
 ```
 
-`page.context()` produces a serializable `PageContext` carrying `number`, `num_pages`, `total_count`, `has_next`, `has_previous`, `next_page_number`, `previous_page_number`, `start_index`, `end_index`, and `page_range` (the elided window — each item is `{n}` or `{ellipsis: true}`).
+`page.context()` produces a serializable `PageContext` carrying `number`, `num_pages`, `total_count`, `has_next`, `has_previous`, `next_page_number`, `previous_page_number`, `start_index`, `end_index`, and `page_range` (the elided window - each item is `{n}` or `{ellipsis: true}`).
 
 ## The nav partial
 
@@ -70,5 +70,5 @@ The core engine registers a `querystring_with(current_query, key, value)` templa
 
 ## See also
 
-- Design rationale: [`arch.md`](https://github.com/) — the thin-core-plus-plugins split that keeps this an ORM-adjacent core utility rather than a plugin.
-- [The ORM and QuerySets](/docs/v0.0.1/orm) — `order_by`, `filter`, and the by-value `limit`/`offset`/`count`/`fetch` the paginator slices with.
+- Design rationale: [`arch.md`](https://github.com/) - the thin-core-plus-plugins split that keeps this an ORM-adjacent core utility rather than a plugin.
+- [The ORM and QuerySets](/docs/v0.0.1/orm) - `order_by`, `filter`, and the by-value `limit`/`offset`/`count`/`fetch` the paginator slices with.

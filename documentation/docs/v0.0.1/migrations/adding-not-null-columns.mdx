@@ -93,7 +93,7 @@ Because the autodetector refuses the unsafe shape, the common recovery is at `ma
 Nothing was written to disk and nothing reached the database, so there's no half-applied migration to clean up.
 
 <Callout type="warning" title="If an ALTER did fail at apply time">
-The NOT-NULL-without-default case is caught at `makemigrations` time. A *different* migration that was written and then failed mid-apply (e.g. a UNIQUE constraint that trips on existing duplicates) is transactional on both backends — your table is unchanged — and the file lives on disk but was never recorded in `umbral_migrations`. In that narrow case, fix the model, delete the never-applied last migration file, and re-run `makemigrations`. This is the one exception to CLAUDE.md's "never delete migration files" rule: it applies only to a file that was never recorded as applied.
+The NOT-NULL-without-default case is caught at `makemigrations` time. A *different* migration that was written and then failed mid-apply (e.g. a UNIQUE constraint that trips on existing duplicates) is transactional on both backends - your table is unchanged - and the file lives on disk but was never recorded in `umbral_migrations`. In that narrow case, fix the model, delete the never-applied last migration file, and re-run `makemigrations`. This is the one exception to CLAUDE.md's "never delete migration files" rule: it applies only to a file that was never recorded as applied.
 </Callout>
 
 ## Caveats

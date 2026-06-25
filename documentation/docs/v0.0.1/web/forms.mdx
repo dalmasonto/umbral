@@ -215,7 +215,7 @@ The lift through `WriteError` is what unifies all surfaces. A custom validator t
 ## Constraints (v1)
 
 - Content type: `application/x-www-form-urlencoded` only. `multipart/form-data` (file uploads) is a follow-up.
-- Body size: capped at **16 MiB by default**, configurable via `UMBRAL_MAX_FORM_BODY_BYTES` (or `Settings::max_form_body_bytes` in code / `umbral.toml`). Set it to `0` to **disable the cap entirely** — handy in dev. Over-limit requests return 413.
+- Body size: capped at **16 MiB by default**, configurable via `UMBRAL_MAX_FORM_BODY_BYTES` (or `Settings::max_form_body_bytes` in code / `umbral.toml`). Set it to `0` to **disable the cap entirely** - handy in dev. Over-limit requests return 413.
 - Field types: `String`, `i8`..`i64` / `u8`..`u64` / `isize` / `usize`, `f32` / `f64`, `bool`, and `Option<T>` of those. Server-managed Model fields (DateTime, choice enums) get skipped via `#[umbral(...)]` markers and need `Default`.
 - Input preservation on validation failure: the failure branch's `FormErrors` carries the raw submitted pairs (the extractor attaches them via `FormErrors::with_raw`). `render` / `render_with` bind those pairs to the `form` template key, so re-rendering keeps every value the user typed - no `axum::Form<T>` side-parse or `Default::default()` fallback needed.
 

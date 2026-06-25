@@ -160,9 +160,9 @@ a worker is free.
 
 Two `EnqueueOptions` fields push a task into the future:
 
-- `delay: Option<Duration>` — run after a relative delay (`run_at = now +
+- `delay: Option<Duration>` - run after a relative delay (`run_at = now +
   delay`).
-- `eta: Option<DateTime<Utc>>` — run at an absolute instant. `eta` takes
+- `eta: Option<DateTime<Utc>>` - run at an absolute instant. `eta` takes
   precedence over `delay` if both are set.
 
 ```rust
@@ -194,7 +194,7 @@ behind the defaults.
 ```rust
 use umbral_tasks::{EnqueueOptions, enqueue};
 
-// Urgent — claimed before any priority-0 work waiting in the queue.
+// Urgent - claimed before any priority-0 work waiting in the queue.
 enqueue("send_password_reset", payload, EnqueueOptions {
     priority: Some(9),
     ..EnqueueOptions::default()
@@ -203,7 +203,7 @@ enqueue("send_password_reset", payload, EnqueueOptions {
 
 **FIFO within a priority.** Ties on `priority` break by `scheduled_for` then
 `id`, so two tasks at the same priority are claimed in the order they were
-enqueued — priority changes *which band* runs first, never the fairness inside a
+enqueued - priority changes *which band* runs first, never the fairness inside a
 band.
 
 <Callout type="note" title="Nullable column, additive migration">
@@ -213,13 +213,13 @@ can't emit `ADD COLUMN ... NOT NULL DEFAULT` against populated tables). `enqueue
 always writes `Some(0)` when you don't set a priority, so new rows are never
 NULL; a NULL is only ever a legacy row that predates the column, and it drains at
 the **lowest** priority. (One backend caveat: under `priority DESC`, SQLite sorts
-NULLs last as intended, while Postgres sorts NULLs first — since enqueue never
+NULLs last as intended, while Postgres sorts NULLs first - since enqueue never
 writes NULL, this only affects rare pre-column rows until they drain.)
 </Callout>
 
 ## Exponential-backoff retries
 
-When a handler fails *retriably* (returns `Err`, panics, or times out — anything
+When a handler fails *retriably* (returns `Err`, panics, or times out - anything
 other than a missing handler), the worker no longer re-queues it immediately.
 Instead it pushes `run_at` into the future by an exponential backoff:
 
@@ -252,7 +252,7 @@ doesn't get retried in a tight loop.
 <Callout type="info">
 Per-task backoff overrides (and a per-task `timeout`, see below) are accepted on
 `EnqueueOptions` as a forward-compatible surface but are not yet persisted to the
-row in v1 — the worker applies its worker-level defaults to every task. Persisting
+row in v1 - the worker applies its worker-level defaults to every task. Persisting
 per-task overrides as columns is a tracked follow-up (`planning/features.md` #82).
 </Callout>
 
@@ -261,7 +261,7 @@ per-task overrides as columns is a tracked follow-up (`planning/features.md` #82
 The worker wraps each handler invocation in `tokio::time::timeout`. A handler
 that overruns `WorkerOptions::task_timeout` is cancelled and recorded as a
 retriable failure (backed off via `run_at`, or abandoned if `max_attempts` is
-exhausted) — it never holds its claim until the visibility timeout fires.
+exhausted) - it never holds its claim until the visibility timeout fires.
 
 ```rust
 use std::time::Duration;
@@ -280,7 +280,7 @@ after a *crashed* worker stops renewing its lease.
 ## Visibility timeout and at-least-once delivery
 
 When a worker claims a task it stamps `started_at = now()`. If the worker process
-crashes mid-handler that row stays in `running` forever — a silent data loss. The
+crashes mid-handler that row stays in `running` forever - a silent data loss. The
 visibility timeout closes this gap.
 
 On every poll the worker first calls `reclaim_orphaned_tasks(visibility_timeout)`:
@@ -289,7 +289,7 @@ considered abandoned. The reclaim pass:
 
 - resets the row to `pending` (clearing `started_at`) so the next worker poll
   picks it up again, as long as `attempts < max_attempts`.
-- marks the row `failed` if `attempts >= max_attempts` — no infinite retry loop.
+- marks the row `failed` if `attempts >= max_attempts` - no infinite retry loop.
 
 The default timeout is **5 minutes** (`DEFAULT_VISIBILITY_TIMEOUT`). Override it
 when building the worker:
@@ -311,8 +311,8 @@ still executing, resulting in duplicate runs (at-least-once, not exactly-once).
 Handlers must therefore be idempotent when `max_attempts > 1`.
 </Callout>
 
-You can also call `reclaim_orphaned_tasks` directly — for example, in a scheduled
-job or a one-shot management command — with any timeout you choose:
+You can also call `reclaim_orphaned_tasks` directly - for example, in a scheduled
+job or a one-shot management command - with any timeout you choose:
 
 ```rust
 use std::time::Duration;
@@ -324,8 +324,8 @@ println!("{reclaimed} orphaned task(s) reclaimed");
 
 ## Periodic tasks (beat)
 
-For *recurring* work — a nightly cleanup, an hourly digest, a job every five
-minutes — register a periodic schedule, Celery `beat_schedule` style, and run the
+For *recurring* work - a nightly cleanup, an hourly digest, a job every five
+minutes - register a periodic schedule, Celery `beat_schedule` style, and run the
 **beat** process. Beat is the scheduler; it does not run handlers itself. Each
 time a schedule is due, beat enqueues a normal task row; the **worker** drains it.
 Run them as two separate processes (exactly like Celery's `worker` and `beat`).
@@ -357,7 +357,7 @@ App::builder()
     .build()?;
 ```
 
-`name` is the schedule's **stable key** — one `periodic_task` row per name.
+`name` is the schedule's **stable key** - one `periodic_task` row per name.
 Re-registering with the same name updates the existing row (its `task`, `payload`,
 and `schedule`) instead of duplicating it; `next_run` is only recomputed when the
 schedule string actually changes, so an unchanged redeploy never starves the task.
@@ -388,8 +388,8 @@ tick (default every 5s) enqueues every due schedule.
 
 <Callout type="info">
 **Multi-instance safe.** You can run more than one `tasks-beat` process without
-double-firing. Each due row is claimed with an optimistic conditional UPDATE —
-`SET next_run = <next> WHERE id = ? AND next_run = <the value just read>` — and the
+double-firing. Each due row is claimed with an optimistic conditional UPDATE -
+`SET next_run = <next> WHERE id = ? AND next_run = <the value just read>` - and the
 task is enqueued only if that UPDATE won the race (affected exactly one row). A
 second beat instance reading the same row finds `next_run` already advanced, its
 UPDATE matches nothing, and it enqueues nothing. The same conditional-claim guard
@@ -400,7 +400,7 @@ the worker uses.
 
 A handler can return any serializable value, not just `Ok(())`. On success the
 worker serializes the return value to JSON and stores it in the task row's
-`result` column — the **result backend**, Celery's `AsyncResult` payload. Query
+`result` column - the **result backend**, Celery's `AsyncResult` payload. Query
 a task's outcome by the id `enqueue` returned:
 
 ```rust
@@ -427,7 +427,7 @@ assert_eq!(status.result, Some(serde_json::json!(6)));
 
 `task_status` returns a `TaskStatus { id, name, state, result, error, attempts,
 max_attempts, run_at, started_at, completed_at, created_at }`. `state` is a
-`TaskState` — `Pending`, `Running`, `Success`, `Failed`, or `Retrying` (a row
+`TaskState` - `Pending`, `Running`, `Success`, `Failed`, or `Retrying` (a row
 that failed an attempt but still has retries left). `await_result` polls every
 50ms until the state is terminal (`Success`/`Failed`) or `timeout` elapses, in
 which case it returns `TaskError::Timeout` carrying the last observed status.
@@ -443,7 +443,7 @@ See `arch.md` and `plugins/umbral-tasks/src/lib.rs` for the design rationale.
 
 ## Admin visibility
 
-Operators browse and inspect the task queue in the admin. `umbral_tasks::admin_model()` returns a **read-only** `AdminModel` for the `task_row` table — register it on the admin alongside your own models:
+Operators browse and inspect the task queue in the admin. `umbral_tasks::admin_model()` returns a **read-only** `AdminModel` for the `task_row` table - register it on the admin alongside your own models:
 
 ```rust
 use umbral_admin::AdminPlugin;
@@ -454,11 +454,11 @@ App::builder()
     .build()?;
 ```
 
-The list shows the columns an operator wants at a glance — `id`, `name`, `status`, `priority`, `attempts` / `max_attempts`, `run_at`, `completed_at`, `created_at` — with `status` / `priority` filters and a `name` / `status` search box. Every column is read-only: rows are written by `enqueue` and the worker, never hand-authored.
+The list shows the columns an operator wants at a glance - `id`, `name`, `status`, `priority`, `attempts` / `max_attempts`, `run_at`, `completed_at`, `created_at` - with `status` / `priority` filters and a `name` / `status` search box. Every column is read-only: rows are written by `enqueue` and the worker, never hand-authored.
 
 ### Retrying a failed task
 
-The admin model attaches a **"Retry selected"** bulk action. Select one or more failed rows and run it to re-queue them: each failed task is reset to `pending` with `run_at = now` (immediately eligible), its `error` cleared, and its `attempts` counter reset to `0` so it gets a fresh `max_attempts` budget. The action only touches rows currently in the `failed` state — a `pending`, `running`, or `succeeded` task is left untouched, so you can't disturb a task a worker is mid-flight on.
+The admin model attaches a **"Retry selected"** bulk action. Select one or more failed rows and run it to re-queue them: each failed task is reset to `pending` with `run_at = now` (immediately eligible), its `error` cleared, and its `attempts` counter reset to `0` so it gets a fresh `max_attempts` budget. The action only touches rows currently in the `failed` state - a `pending`, `running`, or `succeeded` task is left untouched, so you can't disturb a task a worker is mid-flight on.
 
 The same logic is available programmatically:
 

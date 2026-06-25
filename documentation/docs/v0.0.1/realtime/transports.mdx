@@ -7,18 +7,18 @@ tags: [realtime, sse, websockets, transport, reconnect]
 
 # Transports
 
-`umbral-realtime` ships two transports behind one targeting API. The send side (`Realtime::to_user` / `to_group` / `broadcast`) is identical for both — only how the browser connects differs.
+`umbral-realtime` ships two transports behind one targeting API. The send side (`Realtime::to_user` / `to_group` / `broadcast`) is identical for both - only how the browser connects differs.
 
 | Transport | Endpoint | Direction | Reach for it when |
 |---|---|---|---|
-| **SSE** | `GET /realtime/sse?groups=a,b` | server → client | the default — push only (notifications, live data, presence) |
+| **SSE** | `GET /realtime/sse?groups=a,b` | server → client | the default - push only (notifications, live data, presence) |
 | **WebSocket** | `GET /realtime/ws?groups=a,b` | bidirectional | the client also needs to **send** (chat, typed commands) |
 
 Both check identity and the [group policy](gating) at the handshake; a rejected group fails with `403` before any data flows.
 
 ## Connecting the browser
 
-Connect through the client helper served at `GET /realtime/client.js` — **not** a raw `EventSource`. Include it once, then subscribe with the rooms you want and a map of event-name handlers:
+Connect through the client helper served at `GET /realtime/client.js` - **not** a raw `EventSource`. Include it once, then subscribe with the rooms you want and a map of event-name handlers:
 
 ```html
 <script src="/realtime/client.js"></script>
@@ -36,11 +36,11 @@ Connect through the client helper served at `GET /realtime/client.js` — **not*
 
 `subscribe(groups, handlers)` returns `{ unsubscribe }`. `groups` is a comma-separated string (or single group); `handlers` is keyed by event name. The connection's user is resolved at handshake (see [Gating](gating)), so `to_user(...)` finds it with no extra work.
 
-There are two sugar helpers over `subscribe` — `umbral.realtime.model(...)` ([model subscriptions](model-subscriptions)) and `umbral.realtime.presence(...)` ([presence](presence)) — both share the same single connection described below.
+There are two sugar helpers over `subscribe` - `umbral.realtime.model(...)` ([model subscriptions](model-subscriptions)) and `umbral.realtime.presence(...)` ([presence](presence)) - both share the same single connection described below.
 
 ## One connection per browser
 
-A raw `new EventSource(...)` opens **one connection per tab**. Open the same page in a handful of tabs and you exhaust the browser's ~6-connections-per-host HTTP/1.1 budget — later requests on that origin start hanging as if the server were down.
+A raw `new EventSource(...)` opens **one connection per tab**. Open the same page in a handful of tabs and you exhaust the browser's ~6-connections-per-host HTTP/1.1 budget - later requests on that origin start hanging as if the server were down.
 
 `umbral.realtime.subscribe` collapses that to **exactly one** server connection per browser, no matter how many tabs are open or what mix of subscriptions they hold:
 
@@ -50,27 +50,27 @@ A raw `new EventSource(...)` opens **one connection per tab**. Open the same pag
 - When the last tab closes, the connection closes.
 
 <Callout type="info">
-**Graceful fallback.** On browsers without `SharedWorker` (or when its construction is blocked by CSP), `subscribe` transparently opens a per-tab `EventSource('/realtime/sse?groups=…')` with identical observable behavior — just one connection per tab instead of per browser. If `EventSource` is also missing, `subscribe` is a no-op returning a no-op `unsubscribe`. You never write the fallback yourself.
+**Graceful fallback.** On browsers without `SharedWorker` (or when its construction is blocked by CSP), `subscribe` transparently opens a per-tab `EventSource('/realtime/sse?groups=…')` with identical observable behavior - just one connection per tab instead of per browser. If `EventSource` is also missing, `subscribe` is a no-op returning a no-op `unsubscribe`. You never write the fallback yourself.
 </Callout>
 
 <Callout type="info">
-**The wire format is internal.** Every SSE event ships under a single `u` event type carrying a channel-tagged envelope `{c, e, d}` (channel, event-name, data) — that's what lets one union connection route each event to the right tabs. You never see it: the helper unwraps the envelope and calls your handler by event name. A group's channel is its own name; a `to_user` event is `@user:{id}` (delivered to all that browser's tabs); a `broadcast` is `@broadcast`.
+**The wire format is internal.** Every SSE event ships under a single `u` event type carrying a channel-tagged envelope `{c, e, d}` (channel, event-name, data) - that's what lets one union connection route each event to the right tabs. You never see it: the helper unwraps the envelope and calls your handler by event name. A group's channel is its own name; a `to_user` event is `@user:{id}` (delivered to all that browser's tabs); a `broadcast` is `@broadcast`.
 </Callout>
 
 ## Reconnect and replay (`Last-Event-ID`)
 
 Networks drop. When a browser's `EventSource` loses its connection it reconnects on its own, and on that reconnect it sends back the `id:` of the last event it saw as the `Last-Event-ID` header. `umbral-realtime` keys off that to fill the gap with no missed events.
 
-Every delivered event is stamped with a process-global, strictly-increasing sequence id, written as the SSE `id:` line. The registry keeps a bounded **replay buffer** of recent events. On a reconnect carrying `Last-Event-ID`, the server replays — *before* attaching the live stream — exactly the buffered events newer than that id **that this connection's target would have received** (its user, its joined groups, and broadcasts; never another user's private events). A first connection with no `Last-Event-ID` is live-only.
+Every delivered event is stamped with a process-global, strictly-increasing sequence id, written as the SSE `id:` line. The registry keeps a bounded **replay buffer** of recent events. On a reconnect carrying `Last-Event-ID`, the server replays - *before* attaching the live stream - exactly the buffered events newer than that id **that this connection's target would have received** (its user, its joined groups, and broadcasts; never another user's private events). A first connection with no `Last-Event-ID` is live-only.
 
-It's automatic — the browser side is just `umbral.realtime.subscribe(...)`; you write no resume logic. Size the buffer with `replay_buffer(n)` (default 1024; `0` disables replay):
+It's automatic - the browser side is just `umbral.realtime.subscribe(...)`; you write no resume logic. Size the buffer with `replay_buffer(n)` (default 1024; `0` disables replay):
 
 ```rust
 RealtimePlugin::new().replay_buffer(4096)
 ```
 
 <Callout type="warning">
-**Bounded-buffer caveat.** The buffer holds only the most recent `n` events. If a client is offline long enough that the event it missed has already been evicted, it resumes from the oldest *retained* event and silently skips anything older — there's no infinite history. Size `n` to cover the longest drop you want to bridge at your peak event rate.
+**Bounded-buffer caveat.** The buffer holds only the most recent `n` events. If a client is offline long enough that the event it missed has already been evicted, it resumes from the oldest *retained* event and silently skips anything older - there's no infinite history. Size `n` to cover the longest drop you want to bridge at your peak event rate.
 
 **WebSocket has no native `Last-Event-ID`,** so reconnect resume is an SSE feature; a WS client re-subscribes and gets the live stream from the moment it reconnects.
 </Callout>
@@ -115,7 +115,7 @@ ws.onmessage = (e) => {
 ws.send(JSON.stringify({ room: "public:lobby", body: "hi" }));
 ```
 
-The same [`GroupPolicy`](gating) gate applies at the WS handshake (a denied group fails the upgrade). The default `MessageHandler` (`NoopMessageHandler`) ignores inbound frames, which is fine for push-only apps — SSE is push-only, so a handler only matters for WebSocket.
+The same [`GroupPolicy`](gating) gate applies at the WS handshake (a denied group fails the upgrade). The default `MessageHandler` (`NoopMessageHandler`) ignores inbound frames, which is fine for push-only apps - SSE is push-only, so a handler only matters for WebSocket.
 
 <Callout type="info">
 The umbral `umbral.realtime` client helper uses **SSE** (the one-connection-per-browser model). Use WebSocket directly via the browser's native `WebSocket` when you need inbound frames; for pure push, prefer SSE so you get the shared connection and reconnect replay for free.
@@ -123,19 +123,19 @@ The umbral `umbral.realtime` client helper uses **SSE** (the one-connection-per-
 
 ## WebSocket Origin guard (CSWSH)
 
-CORS does **not** cover the WebSocket handshake. Without a guard, a malicious page on `evil.com` can open `wss://your-host/realtime/ws` from the victim's browser — the request carries the victim's session cookie, so it authenticates as them and subscribes to their gated rooms. That's a **cross-site WebSocket hijacking** (CSWSH) attack: the cross-origin page can't read a `fetch()` to your API (CORS blocks that), but a raw `WebSocket` slips past CORS entirely.
+CORS does **not** cover the WebSocket handshake. Without a guard, a malicious page on `evil.com` can open `wss://your-host/realtime/ws` from the victim's browser - the request carries the victim's session cookie, so it authenticates as them and subscribes to their gated rooms. That's a **cross-site WebSocket hijacking** (CSWSH) attack: the cross-origin page can't read a `fetch()` to your API (CORS blocks that), but a raw `WebSocket` slips past CORS entirely.
 
 `umbral-realtime` rejects cross-origin WebSocket upgrades **by default, in production, with no configuration**. The guard runs before the upgrade and returns `403 cross-origin WebSocket rejected`. Its rules, in order:
 
 | Request | Decision |
 |---|---|
-| No `Origin` header (curl, native apps, server-to-server) | **allow** — not a browser, so not a CSWSH vector |
-| `Environment::Dev` | **allow** — local frontends run on a different port (matches core CORS / host-validation dev pass-through) |
+| No `Origin` header (curl, native apps, server-to-server) | **allow** - not a browser, so not a CSWSH vector |
+| `Environment::Dev` | **allow** - local frontends run on a different port (matches core CORS / host-validation dev pass-through) |
 | `Origin` is in your `allowed_origins([...])` list | **allow** |
 | `Origin` is **same-origin** as the request (its `host[:port]` equals the `Host` header) | **allow** |
 | anything else (cross-origin, prod, not allowlisted) | **deny** → `403` |
 
-So a same-origin app needs nothing — the guard already protects it in prod. To permit a **specific cross-origin frontend** (a separately-deployed SPA on `https://app.example.com` talking to an API host), list it explicitly:
+So a same-origin app needs nothing - the guard already protects it in prod. To permit a **specific cross-origin frontend** (a separately-deployed SPA on `https://app.example.com` talking to an API host), list it explicitly:
 
 ```rust
 RealtimePlugin::new()
@@ -143,18 +143,18 @@ RealtimePlugin::new()
     .allowed_origins(["https://app.example.com"]);
 ```
 
-SSE is deliberately not gated this way — the browser's CORS enforcement already protects a cross-origin `EventSource`, so the guard is WebSocket-specific.
+SSE is deliberately not gated this way - the browser's CORS enforcement already protects a cross-origin `EventSource`, so the guard is WebSocket-specific.
 
 ## Remounting under a different base path
 
-The four realtime routes default to `/realtime/...`. Remount them under any base with `.at()` — exactly like `OpenApiPlugin::at` / `AdminPlugin`:
+The four realtime routes default to `/realtime/...`. Remount them under any base with `.at()` - exactly like `OpenApiPlugin::at` / `AdminPlugin`:
 
 ```rust
 RealtimePlugin::new().at("/rt");
 // → /rt/sse, /rt/ws, /rt/worker.js, /rt/client.js
 ```
 
-The served `worker.js` and `client.js` follow the base **automatically** — their `EventSource` / `SharedWorker` URLs are templated off it — so you only change the one `<script src>` in your template to match:
+The served `worker.js` and `client.js` follow the base **automatically** - their `EventSource` / `SharedWorker` URLs are templated off it - so you only change the one `<script src>` in your template to match:
 
 ```html
 <script src="/rt/client.js"></script>
@@ -164,6 +164,6 @@ The path is normalised like `OpenApiPlugin::at`: a leading slash is ensured, a t
 
 ## See also
 
-- [Getting started](getting-started) — install the plugin and send your first event.
-- [Gating access](gating) — the policy checked at every handshake.
-- [Scaling](scaling) — the Redis backplane and the proven 10k-connection numbers.
+- [Getting started](getting-started) - install the plugin and send your first event.
+- [Gating access](gating) - the policy checked at every handshake.
+- [Scaling](scaling) - the Redis backplane and the proven 10k-connection numbers.

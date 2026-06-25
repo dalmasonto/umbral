@@ -57,7 +57,7 @@ export UMBRAL_EMAIL_SMTP_TIMEOUT_SECS=10   # optional; default 10 s
 ```
 
 <Callout type="warning">
-**The console backend is dev-only.** In `Environment::Prod` (or when settings are absent), `send()` returns `EmailError::ConsoleBackendInProduction` instead of printing the message body. Printing full message bodies — including password-reset tokens and magic-link URLs — to stderr would expose secrets to log aggregators.
+**The console backend is dev-only.** In `Environment::Prod` (or when settings are absent), `send()` returns `EmailError::ConsoleBackendInProduction` instead of printing the message body. Printing full message bodies - including password-reset tokens and magic-link URLs - to stderr would expose secrets to log aggregators.
 
 To fix: set `UMBRAL_EMAIL_SMTP_HOST` in production. If you intentionally want console output in a staging environment, set `UMBRAL_EMAIL_BACKEND=console` explicitly and use `Environment::Dev` or `Environment::Test`.
 </Callout>
@@ -68,7 +68,7 @@ The SMTP transport applies a configurable per-send timeout (default: **10 second
 
 ## HTTP API backend (Resend / SendGrid)
 
-For deployments that prefer a transactional-email provider's HTTP API over an SMTP relay, `umbral-email` ships an API backend behind the optional `api` cargo feature. It POSTs the message as JSON over HTTPS — no SMTP connection, no relay to operate. It **complements** SMTP rather than replacing it; pick whichever your provider exposes.
+For deployments that prefer a transactional-email provider's HTTP API over an SMTP relay, `umbral-email` ships an API backend behind the optional `api` cargo feature. It POSTs the message as JSON over HTTPS - no SMTP connection, no relay to operate. It **complements** SMTP rather than replacing it; pick whichever your provider exposes.
 
 Enable the feature in your app's `Cargo.toml`:
 
@@ -84,7 +84,7 @@ export UMBRAL_EMAIL_API_KEY=re_xxxxxxxxxxxx  # the provider's bearer token
 export UMBRAL_EMAIL_DEFAULT_FROM=noreply@acme.test
 ```
 
-With both `email_api_provider` and `email_api_key` set, the API backend is selected automatically (or force it with `UMBRAL_EMAIL_BACKEND=api`). The `send(&EmailMessage)` call is unchanged — the same message you'd send over SMTP goes through the API path:
+With both `email_api_provider` and `email_api_key` set, the API backend is selected automatically (or force it with `UMBRAL_EMAIL_BACKEND=api`). The `send(&EmailMessage)` call is unchanged - the same message you'd send over SMTP goes through the API path:
 
 ```rust
 let msg = EmailMessage::new("Welcome to Acme", vec!["alice@example.com".into()])

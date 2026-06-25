@@ -33,7 +33,7 @@ manage your database because it doesn't know about your models.
 
 ## Plugin-contributed subcommands
 
-Built-in plugins contribute their own subcommands through the `Plugin::commands()` hook — structurally identical to a third-party plugin's. They only appear when the plugin is registered in your `App`.
+Built-in plugins contribute their own subcommands through the `Plugin::commands()` hook - structurally identical to a third-party plugin's. They only appear when the plugin is registered in your `App`.
 
 <CardGrid cols={2}>
   <Card icon="user-plus" title="createsuperuser" description="umbral-auth. Create an is_staff + is_superuser user with an argon2id-hashed password. --noinput for CI." />
@@ -374,7 +374,7 @@ cargo run -- tasks-worker --once
 
 ## tasks-beat - `umbral-tasks`
 
-Run the periodic-task scheduler (the Celery *beat* equivalent). On startup it syncs the registered periodic specs to `PeriodicTask` rows, then each tick claims every due row atomically and enqueues the underlying task. Run it as its **own** process alongside `tasks-worker` — beat fills the queue, the worker drains it.
+Run the periodic-task scheduler (the Celery *beat* equivalent). On startup it syncs the registered periodic specs to `PeriodicTask` rows, then each tick claims every due row atomically and enqueues the underlying task. Run it as its **own** process alongside `tasks-worker` - beat fills the queue, the worker drains it.
 
 ```bash
 # Long-running scheduler (run under systemd / Docker, one instance)
@@ -401,7 +401,7 @@ No flags. Deletes session rows whose `expires_at` is in the past.
 
 ## collectstatic - `umbral-storage`
 
-Collect every plugin's static assets — namespaced `static_dirs()` plus site-level `static_root_dirs()` — into `settings.static_root`. Django's `collectstatic`.
+Collect every plugin's static assets - namespaced `static_dirs()` plus site-level `static_root_dirs()` - into `settings.static_root`. Django's `collectstatic`.
 
 ```bash
 # Everyday: gather all assets into static_root

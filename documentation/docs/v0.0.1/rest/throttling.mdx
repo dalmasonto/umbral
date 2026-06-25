@@ -1,6 +1,6 @@
 ---
 title: Throttling
-description: DRF-style API rate limiting — AnonRateThrottle, UserRateThrottle, ScopedRateThrottle, the rate string format, and the 429 + Retry-After response.
+description: DRF-style API rate limiting - AnonRateThrottle, UserRateThrottle, ScopedRateThrottle, the rate string format, and the 429 + Retry-After response.
 sidebar_position: 8
 icon: gauge
 tags: [rest, throttling, rate-limiting]
@@ -16,7 +16,7 @@ Throttles are backed by an in-memory sliding-window limiter (`umbral::ratelimit:
 
 ## Adding a throttle
 
-Use `RestPlugin::default_throttle(...)` to limit **every** resource, or `ResourceConfig::throttle(...)` for one table. Throttles **stack** — call either more than once and *all* of them must pass; the first to deny wins.
+Use `RestPlugin::default_throttle(...)` to limit **every** resource, or `ResourceConfig::throttle(...)` for one table. Throttles **stack** - call either more than once and *all* of them must pass; the first to deny wins.
 
 ```rust
 use umbral_rest::{AnonRateThrottle, UserRateThrottle, ResourceConfig, RestPlugin, ScopedRateThrottle};
@@ -46,7 +46,7 @@ RestPlugin::default()
   </Card>
 </CardGrid>
 
-The scope the dispatch hands each throttle is `"<table>:<action>"` — `post:list`, `upload:create`, or the custom action's name for `@action` endpoints. That's what `ScopedRateThrottle` matches against.
+The scope the dispatch hands each throttle is `"<table>:<action>"` - `post:list`, `upload:create`, or the custom action's name for `@action` endpoints. That's what `ScopedRateThrottle` matches against.
 
 Pairing `AnonRateThrottle` with `UserRateThrottle` is the common shape: one rate for the public, a higher one for logged-in users.
 
@@ -61,7 +61,7 @@ Both `default_throttle` and `.throttle(...)` take a DRF-style `"<num>/<period>"`
 | `hour`, `h` | 1 hour |
 | `day`, `d` | 1 day |
 
-A bare number (`"5"`) is shorthand for `"5/sec"`. A malformed rate (bad count, unknown period) panics at construction — a wrong rate is always a configuration bug, surfaced loudly at startup. Use `AnonRateThrottle::try_new(...)` if you want the parse error instead.
+A bare number (`"5"`) is shorthand for `"5/sec"`. A malformed rate (bad count, unknown period) panics at construction - a wrong rate is always a configuration bug, surfaced loudly at startup. Use `AnonRateThrottle::try_new(...)` if you want the parse error instead.
 
 ## The 429 response
 
@@ -71,7 +71,7 @@ On the first throttle that denies, the request short-circuits to **429 Too Many 
 { "detail": "Request was throttled.", "retry_after": 58 }
 ```
 
-`retry_after` is the time until a slot frees for that caller — the moment the oldest request in the sliding window ages out.
+`retry_after` is the time until a slot frees for that caller - the moment the oldest request in the sliding window ages out.
 
 ## Custom throttles
 

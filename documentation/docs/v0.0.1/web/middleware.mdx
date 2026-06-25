@@ -72,7 +72,7 @@ App-level middleware is added to the stack first, then each plugin's contributio
 
 ### Controlling order
 
-That insertion order is just the **default**. Override `Middleware::order(&self) -> i32` to place a middleware declaratively — **lower values are outer** (its `before_request` runs earlier and its `after_response` runs later). The stack is stable-sorted by `order` before it's installed, so a middleware lands in the right place regardless of which plugin registered it or when:
+That insertion order is just the **default**. Override `Middleware::order(&self) -> i32` to place a middleware declaratively - **lower values are outer** (its `before_request` runs earlier and its `after_response` runs later). The stack is stable-sorted by `order` before it's installed, so a middleware lands in the right place regardless of which plugin registered it or when:
 
 ```rust
 impl Middleware for SessionLoader {

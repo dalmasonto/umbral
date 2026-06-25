@@ -467,7 +467,7 @@ The Rust type drives detection - no `#[umbral(multichoice)]` marker is required;
 
 ## Slug, email & URL fields
 
-`umbral::orm::Slug`, `Email`, and `Url` are **validated text** types: each stores as a `TEXT` column but carries a `text_format` marker (`slug` / `email` / `url`) that flows to OpenAPI (`format` / `pattern`), the REST write path (a structured 400 on a bad value), and the admin widget. The type alone gives you the format check — you still supply the value.
+`umbral::orm::Slug`, `Email`, and `Url` are **validated text** types: each stores as a `TEXT` column but carries a `text_format` marker (`slug` / `email` / `url`) that flows to OpenAPI (`format` / `pattern`), the REST write path (a structured 400 on a bad value), and the admin widget. The type alone gives you the format check - you still supply the value.
 
 ```rust
 use umbral::orm::Slug;
@@ -484,14 +484,14 @@ pub struct Article {
 
 ### Auto-deriving a slug
 
-`Slug` only validates — it doesn't generate. Add `#[umbral(slug_from = "<column>")]` to fill the slug from a sibling column. `slugify` lowercases the source, replaces runs of non-alphanumerics with a single `-`, and trims dashes, so `"Hello, World!"` becomes `"hello-world"`.
+`Slug` only validates - it doesn't generate. Add `#[umbral(slug_from = "<column>")]` to fill the slug from a sibling column. `slugify` lowercases the source, replaces runs of non-alphanumerics with a single `-`, and trims dashes, so `"Hello, World!"` becomes `"hello-world"`.
 
-- **On create** — an empty or absent slug becomes `slugify(<source>)`.
-- **On update** — the slug regenerates from the source **only when the source column is in the payload**. If you don't send the source, the existing slug is left untouched, so editing an unrelated field never clobbers a hand-tuned slug.
-- **An explicit, non-empty slug always wins** — send your own value (on create or update) and `slug_from` leaves it alone.
+- **On create** - an empty or absent slug becomes `slugify(<source>)`.
+- **On update** - the slug regenerates from the source **only when the source column is in the payload**. If you don't send the source, the existing slug is left untouched, so editing an unrelated field never clobbers a hand-tuned slug.
+- **An explicit, non-empty slug always wins** - send your own value (on create or update) and `slug_from` leaves it alone.
 
 <Callout type="warning">
-`slug_from` runs on the **dynamic write path** — REST endpoints and the admin (anything going through JSON `create` / `update`). The **typed** path `Article::objects().create(obj)` does **not** auto-fill; build the value yourself with `umbral::orm::slugify(&title)`.
+`slug_from` runs on the **dynamic write path** - REST endpoints and the admin (anything going through JSON `create` / `update`). The **typed** path `Article::objects().create(obj)` does **not** auto-fill; build the value yourself with `umbral::orm::slugify(&title)`.
 </Callout>
 
 ### Editing a title, keeping the slug in sync
@@ -506,7 +506,7 @@ The two update rules combine into a predictable editing model:
 
 ### Uniqueness on update
 
-A `#[umbral(unique)]` slug is enforced by the **database constraint** — umbral runs no application-level pre-check. The dynamic update is `UPDATE … WHERE <pk> = id`, so **re-sending a row its own slug never conflicts** (no *other* row holds that value); you do **not** need to strip the slug from an update payload. A violation fires only when the slug collides with a **different** row — for example, renaming a title so its slug matches an existing post's.
+A `#[umbral(unique)]` slug is enforced by the **database constraint** - umbral runs no application-level pre-check. The dynamic update is `UPDATE … WHERE <pk> = id`, so **re-sending a row its own slug never conflicts** (no *other* row holds that value); you do **not** need to strip the slug from an update payload. A violation fires only when the slug collides with a **different** row - for example, renaming a title so its slug matches an existing post's.
 
 ## Nullability
 

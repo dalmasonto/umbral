@@ -1,6 +1,6 @@
 ---
 title: Realtime
-description: Push live data to one user or a room over SSE/WebSocket — model subscriptions, presence, room gating, and a Redis backplane. Full guides live in the Realtime section.
+description: Push live data to one user or a room over SSE/WebSocket - model subscriptions, presence, room gating, and a Redis backplane. Full guides live in the Realtime section.
 sidebar_position: 21
 icon: radio
 tags: [realtime, sse, websocket, push, presence, redis]
@@ -8,7 +8,7 @@ tags: [realtime, sse, websocket, push, presence, redis]
 
 # Realtime
 
-`umbral-realtime` pushes data to **one user** or a **named room** without hand-rolling connection bookkeeping. It ships two transports — Server-Sent Events (push-only) and WebSocket (bidirectional) — over one connection registry, plus a `GroupPolicy` auth seam, live model-change fan-out, presence, and a Redis backplane for horizontal scale.
+`umbral-realtime` pushes data to **one user** or a **named room** without hand-rolling connection bookkeeping. It ships two transports - Server-Sent Events (push-only) and WebSocket (bidirectional) - over one connection registry, plus a `GroupPolicy` auth seam, live model-change fan-out, presence, and a Redis backplane for horizontal scale.
 
 ```rust
 use umbral_realtime::Realtime;
@@ -19,33 +19,33 @@ Realtime::to_group("public:lobby").send("message", &msg).await;
 ```
 
 ```js
-// One <script src="/realtime/client.js">, then — one shared connection across every tab:
+// One <script src="/realtime/client.js">, then - one shared connection across every tab:
 umbral.realtime.subscribe("public:lobby", { message: (m) => render(m) });
 ```
 
 <Callout type="info">
-This is the plugin overview. The full guides — **setup, room gating, model subscriptions, presence, transports, and scaling** — live in the dedicated **[Realtime section](/docs/v0.0.1/realtime/getting-started)**.
+This is the plugin overview. The full guides - **setup, room gating, model subscriptions, presence, transports, and scaling** - live in the dedicated **[Realtime section](/docs/v0.0.1/realtime/getting-started)**.
 </Callout>
 
 ## The guides
 
 <CardGrid cols={2}>
   <Card icon="rocket" title="Getting started" href="/docs/v0.0.1/realtime/getting-started" description="Install RealtimePlugin, wire identity, add the client script, and send your first event end-to-end." />
-  <Card icon="shield" title="Gating rooms" href="/docs/v0.0.1/realtime/gating" description="GroupPolicy + group_policy_fn — who may join which room. public:* is open by default; everything else is denied." />
+  <Card icon="shield" title="Gating rooms" href="/docs/v0.0.1/realtime/gating" description="GroupPolicy + group_policy_fn - who may join which room. public:* is open by default; everything else is denied." />
   <Card icon="database" title="Model subscriptions" href="/docs/v0.0.1/realtime/model-subscriptions" description="expose::<T>() pushes live model changes through a field whitelist (id-only by default). Subscribe with umbral.realtime.model(...)." />
-  <Card icon="users" title="Presence" href="/docs/v0.0.1/realtime/presence" description="Who's online in a room — opt-in per group, identity projected to id-only by default, deduped by user." />
+  <Card icon="users" title="Presence" href="/docs/v0.0.1/realtime/presence" description="Who's online in a room - opt-in per group, identity projected to id-only by default, deduped by user." />
   <Card icon="radio" title="Transports" href="/docs/v0.0.1/realtime/transports" description="SSE vs WebSocket, the one-connection-per-browser SharedWorker model, and Last-Event-ID reconnect replay." />
-  <Card icon="layers" title="Scaling" href="/docs/v0.0.1/realtime/scaling" description="A Redis backplane for multi-instance dispatch — proven non-starving to 10k connections." />
+  <Card icon="layers" title="Scaling" href="/docs/v0.0.1/realtime/scaling" description="A Redis backplane for multi-instance dispatch - proven non-starving to 10k connections." />
 </CardGrid>
 
 ## At a glance
 
-- **Two transports** — SSE (push-only, auto-reconnect) and WebSocket (bidirectional): `GET /realtime/sse`, `GET /realtime/ws` (remount all four routes under any base with `RealtimePlugin::new().at("/rt")`).
-- **Safe by default** — anonymous connections may join only `public:*` rooms; model exposure and presence are opt-in, exposed model fields are whitelisted, and a built-in **Origin guard rejects cross-origin WebSocket upgrades** (CSWSH) in prod with no config. See [Gating rooms](/docs/v0.0.1/realtime/gating) and [Transports](/docs/v0.0.1/realtime/transports#websocket-origin-guard-cswsh).
-- **One connection per browser** — a `SharedWorker` shares a single SSE stream across all tabs and subscriptions, so opening many tabs never exhausts the browser's HTTP/1.1 connection limit.
-- **Fire-and-forget sends** — `Realtime::to_user / to_group / broadcast` publish without blocking on socket I/O and no-op when the plugin isn't installed, so a handler can call them unconditionally (`Realtime::is_installed()` if you need to check).
+- **Two transports** - SSE (push-only, auto-reconnect) and WebSocket (bidirectional): `GET /realtime/sse`, `GET /realtime/ws` (remount all four routes under any base with `RealtimePlugin::new().at("/rt")`).
+- **Safe by default** - anonymous connections may join only `public:*` rooms; model exposure and presence are opt-in, exposed model fields are whitelisted, and a built-in **Origin guard rejects cross-origin WebSocket upgrades** (CSWSH) in prod with no config. See [Gating rooms](/docs/v0.0.1/realtime/gating) and [Transports](/docs/v0.0.1/realtime/transports#websocket-origin-guard-cswsh).
+- **One connection per browser** - a `SharedWorker` shares a single SSE stream across all tabs and subscriptions, so opening many tabs never exhausts the browser's HTTP/1.1 connection limit.
+- **Fire-and-forget sends** - `Realtime::to_user / to_group / broadcast` publish without blocking on socket I/O and no-op when the plugin isn't installed, so a handler can call them unconditionally (`Realtime::is_installed()` if you need to check).
 
 ## See also
 
 - The full **[Realtime section](/docs/v0.0.1/realtime/getting-started)** for setup, gating, model subscriptions, presence, transports, and scaling.
-- [The Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait) — how `RealtimePlugin` (and every plugin) plugs in.
+- [The Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait) - how `RealtimePlugin` (and every plugin) plugs in.

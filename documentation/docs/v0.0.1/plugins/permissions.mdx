@@ -111,7 +111,7 @@ let ct = ContentType::objects()
 
 Permission::objects().on(&pool).create(Permission {
     // The primary key is the composite codename string `<app_label>.<name>`
-    // (there is no separate `id` field — gap #60).
+    // (there is no separate `id` field - gap #60).
     codename: "blog.feature_post".to_string(),
     content_type_id: ForeignKey::new(ct.id),
     name: "Can feature post on homepage".to_string(),

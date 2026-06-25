@@ -14,7 +14,7 @@
   let { data } = $props();
   let config = $derived(data.config);
   const docsUrl = '/docs/v0.0.1/about';
-  const pageTitle = 'Umbral — the batteries-included Rust web framework for full-stack apps and APIs';
+  const pageTitle = 'Umbral - the batteries-included Rust web framework for full-stack apps and APIs';
   const pageDescription =
     'Umbral is a Rust web framework for shipping complete web applications: ORM with managed migrations, auto-generated REST API, admin UI, auth + sessions, background tasks, email, and a plugin system. Compile-time guarantees instead of runtime hopes.';
   const pageKeywords =
@@ -92,7 +92,7 @@
         <strong class="text-foreground font-semibold">admin UI</strong>,
         <strong class="text-foreground font-semibold">auth + sessions</strong>,
         <strong class="text-foreground font-semibold">background tasks</strong>, and
-        <strong class="text-foreground font-semibold">email</strong> — with compile-time
+        <strong class="text-foreground font-semibold">email</strong> - with compile-time
         guarantees instead of runtime hopes.
       </p>
       <p class="text-base text-muted-foreground/80 max-w-2xl mx-auto mb-10 leading-relaxed">
@@ -149,7 +149,7 @@
             </div>
             <h3 class="text-base font-semibold text-foreground mb-2">Auth, sessions, security</h3>
             <p class="text-sm text-muted-foreground leading-relaxed">
-              Argon2id password hashing. Anonymous sessions on every visit, fresh-token regeneration on login. Typed <code class="font-mono">User</code> / <code class="font-mono">OptionalUser</code> extractors. CSRF, autoescape, secure cookies — on by default.
+              Argon2id password hashing. Anonymous sessions on every visit, fresh-token regeneration on login. Typed <code class="font-mono">User</code> / <code class="font-mono">OptionalUser</code> extractors. CSRF, autoescape, secure cookies - on by default.
             </p>
           </article>
           <article>
@@ -167,7 +167,7 @@
             </div>
             <h3 class="text-base font-semibold text-foreground mb-2">Plugin-first architecture</h3>
             <p class="text-sm text-muted-foreground leading-relaxed">
-              Auth, sessions, admin, tasks, REST, OpenAPI, RLS — every built-in is a plugin. Third-party plugins use the exact same <code class="font-mono">Plugin</code> trait. Dependency-inverted, statically composed.
+              Auth, sessions, admin, tasks, REST, OpenAPI, RLS - every built-in is a plugin. Third-party plugins use the exact same <code class="font-mono">Plugin</code> trait. Dependency-inverted, statically composed.
             </p>
           </article>
         </div>
@@ -184,7 +184,7 @@
           </p>
           <p>
             <strong class="text-foreground">Umbral ships the boring stuff for you.</strong>
-            Declare your model once and the framework reads it as the source of truth for the database schema, the JSON REST API, the admin UI, and the OpenAPI document. Changes flow through one autodetected migration. Auth, sessions, CSRF, secure cookies, and HTML autoescape are on by default — the easy path and the safe path are the same path.
+            Declare your model once and the framework reads it as the source of truth for the database schema, the JSON REST API, the admin UI, and the OpenAPI document. Changes flow through one autodetected migration. Auth, sessions, CSRF, secure cookies, and HTML autoescape are on by default - the easy path and the safe path are the same path.
           </p>
           <p>
             <strong class="text-foreground">And Rust's type system carries you the rest of the way.</strong>

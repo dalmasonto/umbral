@@ -107,7 +107,7 @@ If the ambient cache was not initialised, misses and stores are silently skipped
 
 ## Opt-in compression and HTTP cache headers
 
-These are **router-wide, default-off** knobs on `CachePlugin`. They are orthogonal to `cache_page` (which caches server-side response bodies) — these emit HTTP headers that tell browsers and downstream proxies how to handle responses.
+These are **router-wide, default-off** knobs on `CachePlugin`. They are orthogonal to `cache_page` (which caches server-side response bodies) - these emit HTTP headers that tell browsers and downstream proxies how to handle responses.
 
 ### Response compression
 
@@ -144,7 +144,7 @@ App::builder()
     .await?;
 ```
 
-The three builder methods can be mixed freely with the existing `cache_page` layer — they operate at different levels of the stack.
+The three builder methods can be mixed freely with the existing `cache_page` layer - they operate at different levels of the stack.
 
 ## Scaling to production
 

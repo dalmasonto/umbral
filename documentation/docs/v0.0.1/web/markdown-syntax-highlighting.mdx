@@ -6,7 +6,7 @@ icon: code
 tags: [markdown, templates]
 ---
 
-The `| markdown` filter highlights fenced code blocks on the server. Add a language to the fence and the rendered HTML carries syntect token classes (`hl-…`), colored by a built-in `base16-ocean.dark` theme. Highlighting is class-based — never inline styles — so the sanitizer keeps its guard up: only the inert `class` attribute is allowed through, while `<script>`, event handlers, and `javascript:` URLs are still stripped. An unknown or missing language falls back to a plain (but still labelled) block, and highlighting never panics or drops your code.
+The `| markdown` filter highlights fenced code blocks on the server. Add a language to the fence and the rendered HTML carries syntect token classes (`hl-…`), colored by a built-in `base16-ocean.dark` theme. Highlighting is class-based - never inline styles - so the sanitizer keeps its guard up: only the inert `class` attribute is allowed through, while `<script>`, event handlers, and `javascript:` URLs are still stripped. An unknown or missing language falls back to a plain (but still labelled) block, and highlighting never panics or drops your code.
 
 ## Example
 
@@ -35,9 +35,9 @@ To get colors, include the generated stylesheet once in your base template's `<h
 That emits the `base16-ocean.dark` token stylesheet inline. The token colors render on top of whatever code-block frame your CSS provides.
 
 <Callout type="info">
-  The colors come from a fixed theme. To change palettes you regenerate the stylesheet from a different syntect theme — the token classes stay the same, so no template changes are needed.
+  The colors come from a fixed theme. To change palettes you regenerate the stylesheet from a different syntect theme - the token classes stay the same, so no template changes are needed.
 </Callout>
 
 <Callout type="warning">
-  The fence info-string (the language token after the opening ` ``` `) is validated before it ever reaches the rendered `class="language-…"` attribute. A token must be a short word of `[A-Za-z0-9+-_./#@]` characters; anything else — a `<script>` payload, an `onmouseover="…"` class-injection attempt — is treated as "no language", producing a plain (inert) code block. Combined with ammonia's pass, a hostile fence can't smuggle markup into the page.
+  The fence info-string (the language token after the opening ` ``` `) is validated before it ever reaches the rendered `class="language-…"` attribute. A token must be a short word of `[A-Za-z0-9+-_./#@]` characters; anything else - a `<script>` payload, an `onmouseover="…"` class-injection attempt - is treated as "no language", producing a plain (inert) code block. Combined with ammonia's pass, a hostile fence can't smuggle markup into the page.
 </Callout>

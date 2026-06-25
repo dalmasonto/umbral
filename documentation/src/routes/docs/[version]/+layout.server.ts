@@ -11,14 +11,14 @@ export const load: LayoutServerLoad = async ({ params }) => {
   const products = getProducts();
   const isProduct = products.some(p => p.slug === version);
   if (isProduct) {
-    // Return minimal data — the page will redirect before rendering
+    // Return minimal data - the page will redirect before rendering
     return { allDocs: [], versions: [], versionsMeta: [], config: getEffectiveConfig(''), products };
   }
 
   const i18nConfig = getI18nConfig();
   const defaultLocale = i18nConfig?.defaultLocale || 'en';
 
-  // Block access to hidden versions — redirect to active version
+  // Block access to hidden versions - redirect to active version
   const currentVersionConfig = loadVersionConfig(version);
   if (currentVersionConfig?.hidden) {
     const config = getEffectiveConfig(version);

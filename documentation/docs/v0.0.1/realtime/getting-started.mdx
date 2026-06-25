@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Add live data and presence to your app in five minutes — install RealtimePlugin, wire identity, drop in one script tag, and push your first event.
+description: Add live data and presence to your app in five minutes - install RealtimePlugin, wire identity, drop in one script tag, and push your first event.
 sidebar_position: 1
 tags: [realtime, getting-started, sse, push, supabase]
 ---
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## 2. Wire identity (so the framework knows who's connecting)
 
-By default **every connection is anonymous** — the identity resolver returns `None`. That's fine for a fully public feed, but if you want to gate rooms by user or use presence, the framework needs to know who's connecting. The resolved identity is `user_id: Option<String>` — the user's primary key rendered to its canonical string, so it works for any PK type (`i64` → `"42"`, `uuid` → `"550e8400-…"`).
+By default **every connection is anonymous** - the identity resolver returns `None`. That's fine for a fully public feed, but if you want to gate rooms by user or use presence, the framework needs to know who's connecting. The resolved identity is `user_id: Option<String>` - the user's primary key rendered to its canonical string, so it works for any PK type (`i64` → `"42"`, `uuid` → `"550e8400-…"`).
 
 If you use `umbral-auth`, enable the `auth` feature and call `with_auth_sessions()`. It identifies the connecting user from the session cookie at the SSE/WS handshake:
 
@@ -49,7 +49,7 @@ RealtimePlugin::new()
     .with_auth_sessions()   // requires the `auth` cargo feature
 ```
 
-For a custom scheme (JWT, API key), supply your own async resolver — see [Gating access](gating).
+For a custom scheme (JWT, API key), supply your own async resolver - see [Gating access](gating).
 
 <Callout type="warning">
 Forget this step and **everyone is anonymous**: `user_id` is always `None`, so any policy that checks the user can never grant a private room, and presence shows no one. If your app has logins, wire `with_auth_sessions()` (or a custom resolver) from the start.
@@ -65,15 +65,15 @@ The plugin serves a tiny browser helper at `GET /realtime/client.js`. Add one sc
 </>
 ```
 
-There is nothing to bundle or import — the script registers `window.umbral.realtime` with `subscribe`, `model`, and `presence`.
+There is nothing to bundle or import - the script registers `window.umbral.realtime` with `subscribe`, `model`, and `presence`.
 
 <Callout type="info">
-**Remounting.** The realtime routes default to `/realtime/...`. Call `RealtimePlugin::new().at("/rt")` to remount them (`/rt/sse`, `/rt/ws`, `/rt/worker.js`, `/rt/client.js`). The served JS templates its own URLs off the base, so you only update the `<script src="/rt/client.js">` to match — see [Transports](transports#remounting-under-a-different-base-path).
+**Remounting.** The realtime routes default to `/realtime/...`. Call `RealtimePlugin::new().at("/rt")` to remount them (`/rt/sse`, `/rt/ws`, `/rt/worker.js`, `/rt/client.js`). The served JS templates its own URLs off the base, so you only update the `<script src="/rt/client.js">` to match - see [Transports](transports#remounting-under-a-different-base-path).
 </Callout>
 
 ## 4. Your first end-to-end event
 
-Here is a full round trip on the public `public:lobby` group — allowed by the default policy with no extra wiring.
+Here is a full round trip on the public `public:lobby` group - allowed by the default policy with no extra wiring.
 
 <Steps>
 
@@ -90,7 +90,7 @@ Here is a full round trip on the public `public:lobby` group — allowed by the 
 </script>
 ```
 
-`subscribe(groups, handlers)` returns `{ unsubscribe }`. `handlers` is keyed by event name — here we listen for the `"ping"` event.
+`subscribe(groups, handlers)` returns `{ unsubscribe }`. `handlers` is keyed by event name - here we listen for the `"ping"` event.
 
 </Step>
 

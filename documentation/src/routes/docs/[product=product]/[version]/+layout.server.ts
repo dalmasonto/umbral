@@ -5,7 +5,7 @@ import type { LayoutServerLoad } from './$types';
 export const load: LayoutServerLoad = async ({ params }) => {
   const { product, version } = params;
 
-  // Verify this is a valid product — if not, fall through to 404
+  // Verify this is a valid product - if not, fall through to 404
   const products = getProducts();
   const matchedProduct = products.find(p => p.slug === product);
   if (!matchedProduct) {
@@ -15,7 +15,7 @@ export const load: LayoutServerLoad = async ({ params }) => {
   const i18nConfig = getI18nConfig();
   const defaultLocale = i18nConfig?.defaultLocale || 'en';
 
-  // Block access to hidden versions — redirect to product's active version
+  // Block access to hidden versions - redirect to product's active version
   const currentVersionConfig = loadVersionConfig(version, product);
   if (currentVersionConfig?.hidden) {
     const config = getEffectiveConfig(version, product);

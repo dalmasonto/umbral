@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `App::build()` cross-checks `settings.database_url` against the pool's runtime backend. A mismatch (URL says `postgres://` but the pool is `DbPool::Sqlite`, or vice versa) is a hard `BuildError::DatabaseBackendMismatch` at boot, not a silent failure on the first query.
 
 <Callout type="info">
-**Pooling.** `connect` returns a sqlx `PgPool` wrapped in the `DbPool` enum, with umbral's pool configuration already applied — `max_connections`, `min_connections`, a bounded `acquire_timeout` (so a saturated pool fails fast instead of blocking forever), `idle_timeout`, `max_lifetime`, and `test_before_acquire`. Tune all of them from settings (`UMBRAL_DB_*` env vars or `umbral.toml`) — see [Connection pooling](../orm/connection-pooling) for the full knob list and defaults. The pool is process-wide, shared between every handler, and emits one boot-log line with its effective configuration.
+**Pooling.** `connect` returns a sqlx `PgPool` wrapped in the `DbPool` enum, with umbral's pool configuration already applied - `max_connections`, `min_connections`, a bounded `acquire_timeout` (so a saturated pool fails fast instead of blocking forever), `idle_timeout`, `max_lifetime`, and `test_before_acquire`. Tune all of them from settings (`UMBRAL_DB_*` env vars or `umbral.toml`) - see [Connection pooling](../orm/connection-pooling) for the full knob list and defaults. The pool is process-wide, shared between every handler, and emits one boot-log line with its effective configuration.
 </Callout>
 
 ## Migrations

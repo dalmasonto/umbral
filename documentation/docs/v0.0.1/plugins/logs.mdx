@@ -7,16 +7,16 @@ tags: [logs, requests, middleware, admin, plugin]
 
 # Request logs
 
-`umbral-logs` records every HTTP request to a `RequestLog` row, browsable in the admin — the umbral take on Django's `django.request` logging. Capture is **fire-and-forget**: the response returns to the client immediately and the row is inserted on a background task, so logging never blocks a request and a DB error is swallowed (logged at `warn`, never propagated).
+`umbral-logs` records every HTTP request to a `RequestLog` row, browsable in the admin - the umbral take on Django's `django.request` logging. Capture is **fire-and-forget**: the response returns to the client immediately and the row is inserted on a background task, so logging never blocks a request and a DB error is swallowed (logged at `warn`, never propagated).
 
-Each row carries `method`, `path`, `status`, `duration_ms`, plus best-effort `user_id`, `ip` (from `X-Forwarded-For` / `X-Real-IP`), `user_agent`, and a `created_at` timestamp. The model lives in the `logs_requestlog` table — `migrate` creates it the same way the built-in auth and sessions tables are created (from the plugin's `models()`).
+Each row carries `method`, `path`, `status`, `duration_ms`, plus best-effort `user_id`, `ip` (from `X-Forwarded-For` / `X-Real-IP`), `user_agent`, and a `created_at` timestamp. The model lives in the `logs_requestlog` table - `migrate` creates it the same way the built-in auth and sessions tables are created (from the plugin's `models()`).
 
 <Callout type="info">
 **How `user_id` is resolved.** The session/identity surface lives in optional sibling plugins (`umbral-auth` / `umbral-sessions`) that `umbral-logs` deliberately doesn't depend on, so a logs-only app stays slim. v1 reads the **`X-Umbral-User-Id`** request header (when present) and parses it as an `i64`; otherwise `user_id` is `None`. Set that header from your auth middleware to attribute logged requests to a user.
 </Callout>
 
 <Callout type="info">
-Capture is non-blocking by design. The layer stamps the request duration, runs the handler, and spawns the insert — the client never waits on the database write.
+Capture is non-blocking by design. The layer stamps the request duration, runs the handler, and spawns the insert - the client never waits on the database write.
 </Callout>
 
 ## Wiring
@@ -44,7 +44,7 @@ cargo run -- migrate
 
 ## Exclusions and sampling
 
-By default the logger skips its own/asset traffic — the static mounts (`/static`, `/admin/static`), `/health`, and `/favicon.ico` — and logs every other request. Tune it with the builder:
+By default the logger skips its own/asset traffic - the static mounts (`/static`, `/admin/static`), `/health`, and `/favicon.ico` - and logs every other request. Tune it with the builder:
 
 ```rust
 LogsPlugin::default()
@@ -53,9 +53,9 @@ LogsPlugin::default()
     .min_status(400)             // …and only error responses
 ```
 
-- **`exclude_prefix(p)`** — skip any request whose path starts with `p`, on top of the built-in exclusions.
-- **`sample_rate(f)`** — fraction of requests to log, in `[0.0, 1.0]` (default `1.0` = all). Sampling is **deterministic**, not random: every Nth candidate request by an atomic counter, so it's reproducible in tests. Out-of-range values clamp to the nearest bound.
-- **`min_status(s)`** — only log responses with status `>= s` (default `0` = all). Set `400` for errors-only, `500` for server-errors-only.
+- **`exclude_prefix(p)`** - skip any request whose path starts with `p`, on top of the built-in exclusions.
+- **`sample_rate(f)`** - fraction of requests to log, in `[0.0, 1.0]` (default `1.0` = all). Sampling is **deterministic**, not random: every Nth candidate request by an atomic counter, so it's reproducible in tests. Out-of-range values clamp to the nearest bound.
+- **`min_status(s)`** - only log responses with status `>= s` (default `0` = all). Set `400` for errors-only, `500` for server-errors-only.
 
 ## See also
 

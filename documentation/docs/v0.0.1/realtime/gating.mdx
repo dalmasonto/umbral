@@ -9,10 +9,10 @@ tags: [realtime, security, gating, auth, permissions]
 
 A client subscribes to a room by joining a **group** at the SSE/WS handshake. Whether that join is allowed is decided by two gates working together:
 
-1. **Identity resolution** — the framework figures out *who* is connecting (`user_id: Option<&str>`).
-2. **Group policy** — your `GroupPolicy` decides whether *this user* may join *this group*.
+1. **Identity resolution** - the framework figures out *who* is connecting (`user_id: Option<&str>`).
+2. **Group policy** - your `GroupPolicy` decides whether *this user* may join *this group*.
 
-Identity is the user's **primary key rendered to a string**, so gating is PK-type-agnostic — an `i64`, `String`, or `uuid::Uuid` PK all arrive as the same canonical string (`"42"`, `"550e8400-…"`).
+Identity is the user's **primary key rendered to a string**, so gating is PK-type-agnostic - an `i64`, `String`, or `uuid::Uuid` PK all arrive as the same canonical string (`"42"`, `"550e8400-…"`).
 
 A group the policy rejects fails the whole handshake with `403 Forbidden` before any data flows. This is default-deny: a client can never subscribe to a room it has no claim to.
 
@@ -25,7 +25,7 @@ A group the policy rejects fails the whole handshake with `403 Forbidden` before
 With no configuration, `RealtimePlugin` uses `PublicGroupsOnly`. Its rule is exactly one line: allow only groups whose name starts with `public:`.
 
 ```rust
-// The built-in default — you get this for free:
+// The built-in default - you get this for free:
 RealtimePlugin::new()   // PublicGroupsOnly
 ```
 
@@ -36,7 +36,7 @@ To grant access to private rooms, override the policy and decide from the authen
 
 ## Gate 1: who is connecting (`user_id`)
 
-Every policy receives `user_id: Option<&str>` — the authenticated user's PK string, or `None` for anonymous. The string is the user's primary key rendered to its canonical form, so it works for any PK type (`i64` → `"42"`, `uuid` → `"550e8400-…"`). By default the identity resolver always returns `None`, so **without wiring identity your policy can never see a real user**.
+Every policy receives `user_id: Option<&str>` - the authenticated user's PK string, or `None` for anonymous. The string is the user's primary key rendered to its canonical form, so it works for any PK type (`i64` → `"42"`, `uuid` → `"550e8400-…"`). By default the identity resolver always returns `None`, so **without wiring identity your policy can never see a real user**.
 
 Two ways to populate it:
 
@@ -70,18 +70,18 @@ RealtimePlugin::new()
 **Anonymous-by-default footgun.** If you write a policy that grants `user:{id}` rooms but forget `with_auth_sessions()` / `identity_resolver(...)`, `user_id` is always `None` and every private room is silently denied. Wire identity first, then write the policy.
 </Callout>
 
-## Gate 2: the policy — `group_policy_fn`
+## Gate 2: the policy - `group_policy_fn`
 
 The ergonomic way to gate rooms is a closure: `|user_id: Option<&str>, group: &str| -> bool`. `user_id` is the user's PK string (so the same gate works for `i64`, `String`, and `uuid` PKs); return `true` to allow the join. (Under the hood this wraps your closure in `FnGroupPolicy`.)
 
-### Public rooms — anyone
+### Public rooms - anyone
 
 ```rust
 RealtimePlugin::new()
     .group_policy_fn(|_user_id, group| group.starts_with("public:"));
 ```
 
-### Per-user private room — `user:{id}`
+### Per-user private room - `user:{id}`
 
 Each user gets a room only they can join:
 
@@ -99,7 +99,7 @@ RealtimePlugin::new()
     });
 ```
 
-### Membership / multi-tenant — check the DB or the session
+### Membership / multi-tenant - check the DB or the session
 
 For a `tenant:{id}` or a `team:{id}` room, gate on a membership check. The closure is synchronous, so resolve membership from data you can read synchronously (a cache, or a check that doesn't need `.await`):
 
@@ -117,7 +117,7 @@ RealtimePlugin::new()
     });
 ```
 
-### Role-based — staff-only channels
+### Role-based - staff-only channels
 
 ```rust
 RealtimePlugin::new()
@@ -134,7 +134,7 @@ RealtimePlugin::new()
 ```
 
 <Callout type="info">
-A clean pattern for sensitive data that avoids gating logic entirely: never put it in a joinable group. Target it with `Realtime::to_user(id.to_string())` instead — a user-targeted send reaches only that user's own connections, so it's effectively a private channel a visitor can never subscribe to. `to_user` takes the PK string (`user.id().to_string()`, `uuid.to_string()`, or a literal `"42"`).
+A clean pattern for sensitive data that avoids gating logic entirely: never put it in a joinable group. Target it with `Realtime::to_user(id.to_string())` instead - a user-targeted send reaches only that user's own connections, so it's effectively a private channel a visitor can never subscribe to. `to_user` takes the PK string (`user.id().to_string()`, `uuid.to_string()`, or a literal `"42"`).
 </Callout>
 
 ## Complex policies: a named `GroupPolicy` type
@@ -175,8 +175,8 @@ The default `can_join` (if you don't override it) is the same `group.starts_with
 | Check the join | `group_policy_fn(...)` / `group_policy(...)` | allow → stream; deny → `403` |
 | Per-group dispatch | `Realtime::to_group(...).send(...)` | reaches only joined connections |
 
-Because every send to a group only reaches connections the policy already admitted, the policy is the single chokepoint for "who can see this room" — including for [model subscriptions](model-subscriptions) and [presence](presence), which both ride the same group dispatch.
+Because every send to a group only reaches connections the policy already admitted, the policy is the single chokepoint for "who can see this room" - including for [model subscriptions](model-subscriptions) and [presence](presence), which both ride the same group dispatch.
 
 <Callout type="info">
-**Transport-level security is separate from the policy.** `GroupPolicy` decides *who* may join a room. On top of that, the WebSocket handshake is guarded against **cross-site WebSocket hijacking (CSWSH)** — cross-origin WS upgrades are rejected in production by default, because CORS does not cover WebSockets. If you serve a separate frontend origin, allow it with `allowed_origins([...])`. See the [WebSocket Origin guard](transports#websocket-origin-guard-cswsh).
+**Transport-level security is separate from the policy.** `GroupPolicy` decides *who* may join a room. On top of that, the WebSocket handshake is guarded against **cross-site WebSocket hijacking (CSWSH)** - cross-origin WS upgrades are rejected in production by default, because CORS does not cover WebSockets. If you serve a separate frontend origin, allow it with `allowed_origins([...])`. See the [WebSocket Origin guard](transports#websocket-origin-guard-cswsh).
 </Callout>

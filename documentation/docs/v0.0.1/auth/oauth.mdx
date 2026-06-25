@@ -272,7 +272,7 @@ impl OAuthProvider for GitLabProvider {
 
 The framework wires three protections into every flow, so you don't have to:
 
-- **PKCE (RFC 7636), always S256.** Each flow mints a random `code_verifier`, persists it in the session, and sends only its SHA-256 hash (`code_challenge`) on the authorize redirect. The token exchange replays the verifier, so an attacker who intercepts the redirected `code` can't redeem it. Sending the challenge is harmless even against a provider that doesn't enforce PKCE — RFC 6749 §3.1 requires servers to ignore unrecognized parameters. A custom provider gets the challenge/verifier as method arguments (above); a provider that doesn't support PKCE can simply not append them.
+- **PKCE (RFC 7636), always S256.** Each flow mints a random `code_verifier`, persists it in the session, and sends only its SHA-256 hash (`code_challenge`) on the authorize redirect. The token exchange replays the verifier, so an attacker who intercepts the redirected `code` can't redeem it. Sending the challenge is harmless even against a provider that doesn't enforce PKCE - RFC 6749 §3.1 requires servers to ignore unrecognized parameters. A custom provider gets the challenge/verifier as method arguments (above); a provider that doesn't support PKCE can simply not append them.
 - **Single-use `state`.** The CSRF `state` lives in the session and is consumed on the callback, so a captured callback URL can't be replayed.
 - **Expiring `state`.** The flow rides the session, so it expires with the session TTL.
 

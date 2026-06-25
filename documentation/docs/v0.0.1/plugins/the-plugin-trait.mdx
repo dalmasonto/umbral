@@ -68,7 +68,7 @@ Every method below is a real trait method with a default impl (only `name()` is 
 
 | Method | Signature | Default | What it contributes |
 |---|---|---|---|
-| `name` | `fn name(&self) -> &'static str` | — (required) | Stable identifier; migration-tracking key. |
+| `name` | `fn name(&self) -> &'static str` | - (required) | Stable identifier; migration-tracking key. |
 | `dependencies` | `fn dependencies(&self) -> &'static [&'static str]` | `&[]` | Plugins that must load first. |
 | `models` | `fn models(&self) -> Vec<ModelMeta>` | empty | The plugin's models, the migration diff target. |
 | `routes` | `fn routes(&self) -> Router` | `Router::new()` | HTTP routes, merged flat into the app router. |
@@ -90,18 +90,18 @@ Every method below is a real trait method with a default impl (only `name()` is 
 
 ### Notable hooks in depth
 
-- `wrap_router(Router) -> Router` — **the middleware seam.** Each plugin wraps the merged router with its own tower / axum layers; `App::build` calls it in topological order, so a plugin's layers wrap everything declared before it. `umbral-security` (CSRF + hardening headers) and `umbral-sessions` (the session layer) both ride this hook. Returning the router shape — rather than a `Vec<Layer>` — sidesteps the trait-object lifetime problem `Layer`'s generics produce, so plugins keep the full axum/tower API at the call site.
-- `middleware() -> Vec<Arc<dyn Middleware>>` — the **ergonomic** alternative to `wrap_router`. Each `Middleware` gets a `before_request` / `after_response` hook and nothing else to wire; all plugins' (plus the app's) are collected into one stack installed at `App::build` in onion order. Reach for `wrap_router` when you need a real tower `Layer` (timeouts, tracing spans, body-limit); reach for `middleware` when you just want to look at the request or response.
-- `commands() -> Vec<Box<dyn PluginCommand>>` — CLI subcommands. `umbral-auth` ships `createsuperuser` and `umbral-tasks` ships `tasks-worker` through this hook. See [Management commands](/docs/v0.0.1/cli/management-commands#plugin-contributed-subcommands).
-- `templates_dirs()` / `template_registrars()` — plugins contribute template directories and custom tags. See [Rendering HTML](/docs/v0.0.1/templates/rendering-html#cross-plugin-templates).
-- `static_files()` — embedded assets baked into the binary; each entry becomes one `GET <url_path>` route serving a `&'static [u8]` body (typically `include_bytes!`). `umbral-admin` ships its precompiled CSS this way. `static_dirs()` / `static_root_dirs()` instead serve assets *off disk* through the unified static pipeline (live in dev); `umbral-playground` ships its Vite bundle via `static_dirs()`.
+- `wrap_router(Router) -> Router` - **the middleware seam.** Each plugin wraps the merged router with its own tower / axum layers; `App::build` calls it in topological order, so a plugin's layers wrap everything declared before it. `umbral-security` (CSRF + hardening headers) and `umbral-sessions` (the session layer) both ride this hook. Returning the router shape - rather than a `Vec<Layer>` - sidesteps the trait-object lifetime problem `Layer`'s generics produce, so plugins keep the full axum/tower API at the call site.
+- `middleware() -> Vec<Arc<dyn Middleware>>` - the **ergonomic** alternative to `wrap_router`. Each `Middleware` gets a `before_request` / `after_response` hook and nothing else to wire; all plugins' (plus the app's) are collected into one stack installed at `App::build` in onion order. Reach for `wrap_router` when you need a real tower `Layer` (timeouts, tracing spans, body-limit); reach for `middleware` when you just want to look at the request or response.
+- `commands() -> Vec<Box<dyn PluginCommand>>` - CLI subcommands. `umbral-auth` ships `createsuperuser` and `umbral-tasks` ships `tasks-worker` through this hook. See [Management commands](/docs/v0.0.1/cli/management-commands#plugin-contributed-subcommands).
+- `templates_dirs()` / `template_registrars()` - plugins contribute template directories and custom tags. See [Rendering HTML](/docs/v0.0.1/templates/rendering-html#cross-plugin-templates).
+- `static_files()` - embedded assets baked into the binary; each entry becomes one `GET <url_path>` route serving a `&'static [u8]` body (typically `include_bytes!`). `umbral-admin` ships its precompiled CSS this way. `static_dirs()` / `static_root_dirs()` instead serve assets *off disk* through the unified static pipeline (live in dev); `umbral-playground` ships its Vite bundle via `static_dirs()`.
 
 `on_ready` receives an [`AppContext`](#the-on_ready-context) carrying the default `DbPool` and a `Settings` clone. The hook is **sync** (the trait must be object-safe for `Vec<Box<dyn Plugin>>`); bridge to async work with `umbral::plugin::block_on_ready(fut)`, which is safe under multi-thread, current-thread (`#[tokio::test]`), and no-runtime callers.
 
 ## What's deferred
 
-- A *declarative* `middleware()` whose entries are ordered tower `Layer`s. The ergonomic `before_request` / `after_response` form **is** shipped — including **declarative ordering** via `Middleware::order() -> i32` (lower = outer; the stack is stable-sorted before install, so a middleware places itself regardless of registration timing). What's still deferred is a declarative form over *raw tower `Layer`s* — cross-plugin `Layer` ordering runs into the trait-object lifetime problem `Layer`'s generics produce; use `wrap_router` when you need a raw `Layer`.
-- inventory / linkme auto-registration is **intentionally not pursued** — implicit compile-time collection contradicts umbral's explicit `App::builder().plugin(...)` / `.middleware(...)` wiring (the framework keeps exactly one intentional global). Middleware is always contributed explicitly.
+- A *declarative* `middleware()` whose entries are ordered tower `Layer`s. The ergonomic `before_request` / `after_response` form **is** shipped - including **declarative ordering** via `Middleware::order() -> i32` (lower = outer; the stack is stable-sorted before install, so a middleware places itself regardless of registration timing). What's still deferred is a declarative form over *raw tower `Layer`s* - cross-plugin `Layer` ordering runs into the trait-object lifetime problem `Layer`'s generics produce; use `wrap_router` when you need a raw `Layer`.
+- inventory / linkme auto-registration is **intentionally not pursued** - implicit compile-time collection contradicts umbral's explicit `App::builder().plugin(...)` / `.middleware(...)` wiring (the framework keeps exactly one intentional global). Middleware is always contributed explicitly.
 
 ## The on_ready context
 

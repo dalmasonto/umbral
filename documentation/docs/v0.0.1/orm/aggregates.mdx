@@ -189,7 +189,7 @@ The relation name is matched against each candidate child's **conventional name 
 **Ambiguity.** If two candidates match (two child models that share a name form, or one child with two FK columns pointing at the same parent) the annotation is poisoned with a clear error rather than silently guessing:
 
 ```text
-umbral::orm::annotate_related: ambiguous reverse relation `order` on `Store` — candidates: [ad_order.buyer_store, ad_order.seller_store]; declare a `#[umbral(reverse_fk = "<fk>")] ReverseSet<Child>` field to disambiguate
+umbral::orm::annotate_related: ambiguous reverse relation `order` on `Store` - candidates: [ad_order.buyer_store, ad_order.seller_store]; declare a `#[umbral(reverse_fk = "<fk>")] ReverseSet<Child>` field to disambiguate
 ```
 
 Declaring a `#[umbral(reverse_fk = "buyer_store")] ReverseSet<Order>` field picks the FK explicitly and resolves it. An unknown relation name fails loudly too, and the error lists the auto-discoverable children so you can see the available names.

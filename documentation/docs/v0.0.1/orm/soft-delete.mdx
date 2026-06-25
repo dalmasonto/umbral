@@ -7,7 +7,7 @@ tags: [orm, soft-delete, trash]
 
 # Soft delete
 
-Tag a model `#[umbral(soft_delete)]` and the framework stops destroying its rows: `delete()` becomes an `UPDATE ... SET deleted_at = <now>` (the current UTC timestamp, bound as a parameter — not a SQL `NOW()` call, so it's identical on SQLite and Postgres), and every normal query automatically excludes rows where `deleted_at` is set. You get a trash can instead of a shredder: undo, audits, and "restore this account" flows all stay possible.
+Tag a model `#[umbral(soft_delete)]` and the framework stops destroying its rows: `delete()` becomes an `UPDATE ... SET deleted_at = <now>` (the current UTC timestamp, bound as a parameter - not a SQL `NOW()` call, so it's identical on SQLite and Postgres), and every normal query automatically excludes rows where `deleted_at` is set. You get a trash can instead of a shredder: undo, audits, and "restore this account" flows all stay possible.
 
 The rewrite is idempotent: it only touches rows where `deleted_at IS NULL`, so re-deleting an already-trashed row never bumps its timestamp.
 
@@ -64,7 +64,7 @@ Soft-deleted rows still exist: they count toward UNIQUE constraints, foreign key
 </Callout>
 
 <Callout type="info">
-`update_values` and `update_expr` honour the same soft-delete scope as reads: the default queryset only updates live rows (`deleted_at IS NULL`); `.with_deleted()` lifts the filter (live + trashed); `.only_deleted()` restricts to trashed rows only. This is what makes the restore pattern above safe — no explicit `filter(post::ID.eq(id))` is strictly required when `.only_deleted()` is in play, though adding one is good practice for targeted restores.
+`update_values` and `update_expr` honour the same soft-delete scope as reads: the default queryset only updates live rows (`deleted_at IS NULL`); `.with_deleted()` lifts the filter (live + trashed); `.only_deleted()` restricts to trashed rows only. This is what makes the restore pattern above safe - no explicit `filter(post::ID.eq(id))` is strictly required when `.only_deleted()` is in play, though adding one is good practice for targeted restores.
 </Callout>
 
 ## Admin and REST
@@ -75,7 +75,7 @@ The admin ships a full trash UI for any `#[umbral(soft_delete)]` model, with no 
 
 - A **Trash / Active toggle** in the changelist header (with a trashed-row count badge). `?trash=1` lists only soft-deleted rows; the default view shows the live set.
 - A built-in **Restore selected** bulk action (and per-row restore in the trash view) that calls `DynQuerySet::restore()`.
-- A built-in **Delete permanently** bulk action behind a confirm dialog — a real `hard_delete()`, so the row leaves the table entirely.
+- A built-in **Delete permanently** bulk action behind a confirm dialog - a real `hard_delete()`, so the row leaves the table entirely.
 - The default **Delete selected** action soft-deletes (moves rows to trash) on a soft-delete model, because it routes through `DynQuerySet::delete()`.
 
 Restore is gated by the `change_<model>` permission; Delete-permanently by `delete_<model>`. See the [Admin plugin docs](/docs/v0.0.1/plugins/admin) for the trash workflow.

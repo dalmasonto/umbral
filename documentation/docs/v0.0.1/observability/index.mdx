@@ -7,7 +7,7 @@ tags: [observability, logging, tracing, opentelemetry, otlp]
 
 # Logging and tracing
 
-umbral gives you one entry point for observability: `umbral_logs::observability::init`. It installs the global `tracing` subscriber (human-readable or JSON) and, when the `otel` feature is on and a collector is reachable, exports a span per HTTP request over OTLP to any OpenTelemetry backend — Jaeger, Grafana Tempo, Honeycomb, or an OpenTelemetry Collector.
+umbral gives you one entry point for observability: `umbral_logs::observability::init`. It installs the global `tracing` subscriber (human-readable or JSON) and, when the `otel` feature is on and a collector is reachable, exports a span per HTTP request over OTLP to any OpenTelemetry backend - Jaeger, Grafana Tempo, Honeycomb, or an OpenTelemetry Collector.
 
 It replaces the hand-rolled `tracing_subscriber::fmt().init()` that example apps used to put in `main.rs`.
 
@@ -20,7 +20,7 @@ use umbral_logs::observability::{init, ObservabilityConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // `_obs` MUST stay in scope for the program's lifetime — dropping it
+    // `_obs` MUST stay in scope for the program's lifetime - dropping it
     // flushes the exporter. `from_env()` reads every knob below.
     let _obs = init(ObservabilityConfig::from_env());
 
@@ -62,10 +62,10 @@ Span export is gated behind the `otel` cargo feature so a base build never pulls
 umbral-logs = { version = "0.0.1", features = ["otel"] }
 ```
 
-With the feature **off**, `init` still configures fmt/JSON logging — it just never builds the exporter. With the feature **on**, `init` builds an OTLP gRPC exporter pointed at `OTEL_EXPORTER_OTLP_ENDPOINT`, attaches it to a batch span processor on the tokio runtime, and bridges `tracing` spans into it via `tracing-opentelemetry`.
+With the feature **off**, `init` still configures fmt/JSON logging - it just never builds the exporter. With the feature **on**, `init` builds an OTLP gRPC exporter pointed at `OTEL_EXPORTER_OTLP_ENDPOINT`, attaches it to a batch span processor on the tokio runtime, and bridges `tracing` spans into it via `tracing-opentelemetry`.
 
 <Callout type="info">
-A collector that's unreachable at startup is **not** a fatal error — the exporter connects lazily and umbral falls back to logs-only if the exporter can't even be constructed (a malformed endpoint). Your app boots either way.
+A collector that's unreachable at startup is **not** a fatal error - the exporter connects lazily and umbral falls back to logs-only if the exporter can't even be constructed (a malformed endpoint). Your app boots either way.
 </Callout>
 
 ## What gets exported
@@ -76,9 +76,9 @@ The framework opens an `http.request` span around every request (a `tower_http` 
 
 ## Not yet wired (follow-ups)
 
-This slice is the foundation — structured JSON logging, OTLP export, and request spans. Deeper instrumentation is deferred:
+This slice is the foundation - structured JSON logging, OTLP export, and request spans. Deeper instrumentation is deferred:
 
 - **Per-DB-query spans** and **per-task spans** (task-queue operations) are not yet emitted; only the request span is.
-- **W3C `traceparent` propagation** — extracting an inbound trace context from the request header so a trace continues across services — is not wired yet. The request span is created locally.
+- **W3C `traceparent` propagation** - extracting an inbound trace context from the request header so a trace continues across services - is not wired yet. The request span is created locally.
 
 See `arch.md` and `planning/features.md` #48 for the design rationale and the deferred deep-instrumentation notes.

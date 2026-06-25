@@ -1,13 +1,13 @@
 ---
 title: Database router (swappable routing)
-description: Take over how umbral picks the database and read/write target per request — read replicas and custom per-request routing.
+description: Take over how umbral picks the database and read/write target per request - read replicas and custom per-request routing.
 sidebar_position: 15
 tags: [orm, database, routing, replicas]
 ---
 
 # Database router
 
-[Database routing](./database-routing) routes each model to a database statically, by name. A **`DatabaseRouter`** lets you take those decisions over yourself, per request — read/write replica split, or routing by any per-request key — without touching the ORM.
+[Database routing](./database-routing) routes each model to a database statically, by name. A **`DatabaseRouter`** lets you take those decisions over yourself, per request - read/write replica split, or routing by any per-request key - without touching the ORM.
 
 <Callout type="info">
 The default behavior is unchanged. With no router installed you get today's static per-model routing (`#[umbral(database = "…")]` → `Plugin::database()` → `"default"`). Installing a router is purely additive.
@@ -71,18 +71,18 @@ App::builder()
     .build()?;
 ```
 
-The context rides a task-local for the whole request, so every ORM call inside the handler sees it — no threading required. **Background jobs do not inherit it:** a spawned task gets the default context (no tenant) unless it opts in explicitly via `umbral::db::route_context_scope(ctx, fut)`. This is deliberate — a worker never silently runs as the wrong tenant.
+The context rides a task-local for the whole request, so every ORM call inside the handler sees it - no threading required. **Background jobs do not inherit it:** a spawned task gets the default context (no tenant) unless it opts in explicitly via `umbral::db::route_context_scope(ctx, fut)`. This is deliberate - a worker never silently runs as the wrong tenant.
 
 ## Multitenancy is not a feature yet
 
 <Callout type="warning">
-umbral ships **no multitenancy system** — no `Tenant` model, no per-tenant schema migrations, no tenant provisioning. Don't reach for the router expecting turnkey schema- or database-per-tenant tenancy; it gives you the low-level routing primitive (which database a query uses), not the management around it.
+umbral ships **no multitenancy system** - no `Tenant` model, no per-tenant schema migrations, no tenant provisioning. Don't reach for the router expecting turnkey schema- or database-per-tenant tenancy; it gives you the low-level routing primitive (which database a query uses), not the management around it.
 </Callout>
 
 The trait does carry a `schema_for(ctx) -> Option<Schema>` hook for Django-router parity, but it's a low-level building block, not a supported tenancy feature, and is intentionally undocumented here until the management layer (deferred) lands.
 
 ## See also
 
-- [Database routing](./database-routing) — the static, by-name side: named pools, per-model / per-plugin routing, per-database migrations, and the cross-DB FK guard.
-- `examples/read-replica/` — a working read/write split end to end.
+- [Database routing](./database-routing) - the static, by-name side: named pools, per-model / per-plugin routing, per-database migrations, and the cross-DB FK guard.
+- `examples/read-replica/` - a working read/write split end to end.
 - `DatabaseRouter` foundation spec: `docs/superpowers/specs/2026-06-16-database-router-foundation-design.md`.

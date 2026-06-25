@@ -224,7 +224,7 @@ Four things that matter in this shape:
    is async; `umbral::plugin::block_on_ready(...)` is the canonical bridge.
    It works under a multi-thread `#[tokio::main]` runtime, under
    `#[tokio::test]`'s current-thread runtime, and with no ambient runtime
-   at all — without panicking (a raw `Handle::current().block_on` would
+   at all - without panicking (a raw `Handle::current().block_on` would
    panic on the current-thread path). The `umbral-rls` plugin uses the same
    helper.
 

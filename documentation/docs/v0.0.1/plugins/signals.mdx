@@ -48,7 +48,7 @@ on_model::<Post>().post_save(|post, created| async move {
 | `pre_delete(handler(instance))` | before per-row DELETE | - |
 | `post_delete(handler(instance))` | after per-row DELETE | - |
 
-`pre_update` / `post_update` fire on UPDATE only (never INSERT) and hand the handler **both** the old row (`previous`) and the new one (`instance`) — ideal for audit diffs and change tracking. The ORM reads the old-row snapshot only when an `*_update` subscriber exists, so they cost nothing when nobody listens.
+`pre_update` / `post_update` fire on UPDATE only (never INSERT) and hand the handler **both** the old row (`previous`) and the new one (`instance`) - ideal for audit diffs and change tracking. The ORM reads the old-row snapshot only when an `*_update` subscriber exists, so they cost nothing when nobody listens.
 
 ```rust
 on_model::<Product>().post_update(|previous: Product, instance: Product| async move {
@@ -124,9 +124,9 @@ The signal handler's only job is to enqueue a row. The task worker handles retry
 <Callout type="info" title="Bulk methods fire bulk signals, not per-row signals">
 The following write paths fire **bulk signals** (`bulk_post_save:<table>` or `bulk_post_delete:<table>`), not per-row signals:
 
-- `Manager::bulk_create(vec)` — fires `bulk_post_save:<table>` once with `{ ids, created: true }`.
-- `QuerySet::update_values(map)` — fires `bulk_post_save:<table>` once with `{ ids, created: false }`.
-- `QuerySet::delete()` — fires `bulk_post_delete:<table>` once with `{ ids }`.
+- `Manager::bulk_create(vec)` - fires `bulk_post_save:<table>` once with `{ ids, created: true }`.
+- `QuerySet::update_values(map)` - fires `bulk_post_save:<table>` once with `{ ids, created: false }`.
+- `QuerySet::delete()` - fires `bulk_post_delete:<table>` once with `{ ids }`.
 
 `Manager::create(instance)` fires `post_save` (per-row). Use it instead of `bulk_create` when you need a per-row signal.
 

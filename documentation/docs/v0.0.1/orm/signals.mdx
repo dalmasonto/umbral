@@ -106,9 +106,9 @@ The `created` field on `bulk_post_save` is `true` for INSERT terminals (`bulk_cr
 
 ## Update signals: the old row, snapshotted
 
-`pre_save` / `post_save` fire on **both** INSERT and UPDATE, and carry only the new instance. A whole class of subscribers — audit-log diffs, change tracking, and umbral-storage's file replace-cleanup — also need the row as it looked **before** the UPDATE. That's what `pre_update:<table>` / `post_update:<table>` add:
+`pre_save` / `post_save` fire on **both** INSERT and UPDATE, and carry only the new instance. A whole class of subscribers - audit-log diffs, change tracking, and umbral-storage's file replace-cleanup - also need the row as it looked **before** the UPDATE. That's what `pre_update:<table>` / `post_update:<table>` add:
 
-- They fire on **UPDATE only** — never INSERT. (`Manager::create` and the INSERT branch of `Manager::save` never emit them.)
+- They fire on **UPDATE only** - never INSERT. (`Manager::create` and the INSERT branch of `Manager::save` never emit them.)
 - Their payload carries **both** rows: `previous` (the pre-UPDATE row read from the DB) and `instance` (the new value, post-UPDATE for `post_update`).
 
 ```rust
@@ -126,9 +126,9 @@ subscribe_async("post_update:product", |payload| async move {
 
 ### The old-row read is subscriber-gated
 
-Snapshotting `previous` costs an extra `SELECT ... WHERE pk = ?` on every UPDATE. The save path only pays that cost when a `pre_update:<table>` or `post_update:<table>` subscriber actually exists — checked via `umbral::signals::has_subscribers(name)`. With nobody listening (the common case) the read is skipped entirely and the signal fires to zero handlers at no extra cost. Registering a single `*_update` handler turns the read on.
+Snapshotting `previous` costs an extra `SELECT ... WHERE pk = ?` on every UPDATE. The save path only pays that cost when a `pre_update:<table>` or `post_update:<table>` subscriber actually exists - checked via `umbral::signals::has_subscribers(name)`. With nobody listening (the common case) the read is skipped entirely and the signal fires to zero handlers at no extra cost. Registering a single `*_update` handler turns the read on.
 
-The snapshot is read just before the UPDATE, so a concurrent writer between the snapshot and the UPDATE is a best-effort TOCTOU window — `previous` reflects the row at snapshot time, not necessarily the exact row the UPDATE overwrote. For audit/cleanup use cases this is acceptable.
+The snapshot is read just before the UPDATE, so a concurrent writer between the snapshot and the UPDATE is a best-effort TOCTOU window - `previous` reflects the row at snapshot time, not necessarily the exact row the UPDATE overwrote. For audit/cleanup use cases this is acceptable.
 
 These signals currently fire from the **typed** `Manager::save` path. The dynamic `DynQuerySet::update_json` path (REST/admin) is a filter-chain bulk update that matches a PK *set* and fires `bulk_post_save` instead; per-row `*_update` on the dynamic path is a planned follow-up.
 

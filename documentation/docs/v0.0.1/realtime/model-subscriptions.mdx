@@ -1,13 +1,13 @@
 ---
 title: Model subscriptions
-description: Subscribe to a model's live create / update / delete — Supabase-style, but safe by construction. Opt-in per model, field-whitelisted, id-only by default.
+description: Subscribe to a model's live create / update / delete - Supabase-style, but safe by construction. Opt-in per model, field-whitelisted, id-only by default.
 sidebar_position: 3
 tags: [realtime, models, subscriptions, security, sse]
 ---
 
 # Model subscriptions
 
-Stream a model's create / update / delete to the browser with zero polling — the Supabase "subscribe to a table" story, but **safe by construction**. A model is never broadcast unless you say so, and even then only the fields you list reach the wire.
+Stream a model's create / update / delete to the browser with zero polling - the Supabase "subscribe to a table" story, but **safe by construction**. A model is never broadcast unless you say so, and even then only the fields you list reach the wire.
 
 `RealtimePlugin::expose::<T>(spec)` turns ORM model changes into real-time events. It wraps the lower-level `on_model` signal bridge with two things you'd otherwise hand-roll: a **field projection** (so secrets never leak) and **group routing** (static or per-row).
 
@@ -17,7 +17,7 @@ use umbral_realtime::{Expose, RealtimePlugin};
 RealtimePlugin::new()
     .expose::<Post>(
         Expose::to_group("public:posts")        // the group you consciously broadcast to
-            .fields(&["id", "title", "slug"])    // whitelist — only these columns go on the wire
+            .fields(&["id", "title", "slug"])    // whitelist - only these columns go on the wire
     );
 ```
 
@@ -29,7 +29,7 @@ Security is the default in three layers: **(1)** a model with no `expose` is nev
 
 ## Picking the group
 
-### Static group — `to_group`
+### Static group - `to_group`
 
 Every matching change lands in one named group. `to_group` is **required** (you consciously pick the group whose visibility the policy governs):
 
@@ -37,7 +37,7 @@ Every matching change lands in one named group. `to_group` is **required** (you 
 Expose::to_group("public:posts")
 ```
 
-### Per-row group — `to_group_with`
+### Per-row group - `to_group_with`
 
 Route each event to a group computed from the row, so a client can watch a single record. The closure receives the `ModelEvent`; `ev.pk_str()` returns the row's primary key as a string, for any PK type (`i64`, `String`, `uuid`):
 
@@ -54,7 +54,7 @@ The projection is the core safety control. There are three modes:
 <Tabs>
 <Tab title="Whitelist (recommended)">
 
-`.fields(&[...])` lists exactly the columns to include. Every other key in the row — including secrets you never list — is dropped:
+`.fields(&[...])` lists exactly the columns to include. Every other key in the row - including secrets you never list - is dropped:
 
 ```rust
 Expose::to_group("public:posts").fields(&["id", "title", "slug"])
@@ -63,7 +63,7 @@ Expose::to_group("public:posts").fields(&["id", "title", "slug"])
 </Tab>
 <Tab title="Id-only (the default)">
 
-If you call neither `.fields(...)` nor `.all_fields()`, the payload carries the **primary key alone**. The client treats it as "row N changed — refetch it through your normal authorized endpoint" (the notify-then-refetch pattern):
+If you call neither `.fields(...)` nor `.all_fields()`, the payload carries the **primary key alone**. The client treats it as "row N changed - refetch it through your normal authorized endpoint" (the notify-then-refetch pattern):
 
 ```rust
 Expose::to_group("public:posts")   // payload is { "id": <pk> }
@@ -72,7 +72,7 @@ Expose::to_group("public:posts")   // payload is { "id": <pk> }
 </Tab>
 <Tab title="All fields (explicit opt-in)">
 
-`.all_fields()` broadcasts the entire row. It's conspicuously named so it can't happen by accident — by calling it you knowingly accept that every column reaches every subscriber:
+`.all_fields()` broadcasts the entire row. It's conspicuously named so it can't happen by accident - by calling it you knowingly accept that every column reaches every subscriber:
 
 ```rust
 Expose::to_group("public:posts").all_fields()
@@ -85,7 +85,7 @@ Prefer `.fields(...)` (or the id-only default) unless you genuinely need the who
 
 ### Updating the exposed fields
 
-To change what a model broadcasts, **edit the `.fields(&[...])` list**. Adding a field starts broadcasting it; removing a field stops it from ever reaching the wire. There is no separate registry — the `.fields(...)` whitelist *is* the contract.
+To change what a model broadcasts, **edit the `.fields(&[...])` list**. Adding a field starts broadcasting it; removing a field stops it from ever reaching the wire. There is no separate registry - the `.fields(...)` whitelist *is* the contract.
 
 If you'd rather not put any model data on the wire at all, drop the whole list and rely on the **id-only default**: the client gets a "something changed" nudge and refetches through its authorized endpoint, which already enforces row-level access. This is the safest option when the data is sensitive.
 
@@ -106,7 +106,7 @@ RealtimePlugin::new()
 
 ## Subscribing from the browser
 
-Use `umbral.realtime.model(table, handlers, { group })`. It's sugar over `subscribe` that wires the `created` / `updated` / `deleted` event names for you. **`group` is required** — name the group you exposed to; there's no magic default:
+Use `umbral.realtime.model(table, handlers, { group })`. It's sugar over `subscribe` that wires the `created` / `updated` / `deleted` event names for you. **`group` is required** - name the group you exposed to; there's no magic default:
 
 ```html
 <script src="/realtime/client.js"></script>
@@ -119,7 +119,7 @@ Use `umbral.realtime.model(table, handlers, { group })`. It's sugar over `subscr
 </script>
 ```
 
-With the id-only default, `row` is just `{ id }` — the cue to refetch:
+With the id-only default, `row` is just `{ id }` - the cue to refetch:
 
 ```js
 umbral.realtime.model("post", {
@@ -137,7 +137,7 @@ umbral.realtime.model("post", {
 
 ## The lower-level bridge: `on_model` / `on_table`
 
-`expose` is the safe, projected path. If you need full control — push to a user, transform the payload, fan out to several targets — use the raw signal bridge directly. It hands your handler a `ModelEvent` for every change and lets you do anything:
+`expose` is the safe, projected path. If you need full control - push to a user, transform the payload, fan out to several targets - use the raw signal bridge directly. It hands your handler a `ModelEvent` for every change and lets you do anything:
 
 ```rust
 use umbral_realtime::{ModelAction, ModelEvent, Realtime, RealtimePlugin};
@@ -164,11 +164,11 @@ RealtimePlugin::new()
 | `ev.pk()` | the row's `id` as `Option<i64>` (integer-PK convenience accessor) |
 
 <Callout type="info">
-`on_model` gives you the raw row in `instance` — **no field projection**. If you `.send(..., &ev.instance)` you broadcast every column. Use `expose` (with `.fields(...)`) whenever you want the safety rails; reach for `on_model` only when you need the extra control and are projecting the payload yourself.
+`on_model` gives you the raw row in `instance` - **no field projection**. If you `.send(..., &ev.instance)` you broadcast every column. Use `expose` (with `.fields(...)`) whenever you want the safety rails; reach for `on_model` only when you need the extra control and are projecting the payload yourself.
 </Callout>
 
 ## See also
 
-- [Gating access](gating) — the policy that governs who can join the group you expose to.
-- [Presence](presence) — "who's online" on the same connections.
-- [Transports](transports) — the connection model these events ride on.
+- [Gating access](gating) - the policy that governs who can join the group you expose to.
+- [Presence](presence) - "who's online" on the same connections.
+- [Transports](transports) - the connection model these events ride on.

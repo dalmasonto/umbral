@@ -7,7 +7,7 @@ tags: [analytics, posthog, events, middleware, plugin]
 
 # Analytics (PostHog)
 
-`umbral-analytics` wires PostHog product-analytics into your umbral app the idiomatic way: register the plugin, call `capture` or `identify` from any handler, and analytics failures are silent — they never block a response or propagate errors to callers. Every HTTP send is fire-and-forget, spawned on a background task.
+`umbral-analytics` wires PostHog product-analytics into your umbral app the idiomatic way: register the plugin, call `capture` or `identify` from any handler, and analytics failures are silent - they never block a response or propagate errors to callers. Every HTTP send is fire-and-forget, spawned on a background task.
 
 When no API key is configured the plugin is a **clean no-op**: `capture` and `identify` log at `debug` level and return immediately. You can develop and run tests without a PostHog account.
 
@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## Capturing events
 
-`capture` and `identify` are free async functions. Call them from any handler or service — no dependency injection needed, the ambient client is installed at boot.
+`capture` and `identify` are free async functions. Call them from any handler or service - no dependency injection needed, the ambient client is installed at boot.
 
 ```rust
 use umbral_analytics::{capture, identify};
@@ -73,7 +73,7 @@ The API key and host are resolved in this order (first match wins):
 
 | Source | Key |
 |---|---|
-| Builder arg (`AnalyticsPlugin::new(key)`) | — |
+| Builder arg (`AnalyticsPlugin::new(key)`) | - |
 | Environment variable | `UMBRAL_POSTHOG_API_KEY` |
 | `umbral.toml` extra key | `posthog_api_key` |
 

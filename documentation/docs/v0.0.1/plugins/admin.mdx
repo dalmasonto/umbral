@@ -178,7 +178,7 @@ App::builder()
 As with REST's [`.resources(...)`](/docs/v0.0.1/rest/exposure#registering-many-resources-at-once), keep each app's admin configs next to its models and register them in one call. `.register_many(iter)` is the batch form of `.register(...)`; `.register_for_many(plugin_name, iter)` is the batch form of `.register_for(...)` (groups the models under that plugin's sidebar section).
 
 ```rust
-// plugins/blog/src/lib.rs — the blog app's admin surface
+// plugins/blog/src/lib.rs - the blog app's admin surface
 pub fn admin_models() -> Vec<umbral_admin::AdminModel> {
     vec![post_admin(), comment_admin(), tag_admin()]
 }
@@ -243,11 +243,11 @@ Registers bulk actions. `Action::new(key, label, icon, handler)` takes a Lucide 
 
 ### Trash UI for soft-delete models
 
-Register a model tagged [`#[umbral(soft_delete)]`](/docs/v0.0.1/orm/soft-delete) and the admin grows a full trash workflow automatically — no extra config on `AdminModel`:
+Register a model tagged [`#[umbral(soft_delete)]`](/docs/v0.0.1/orm/soft-delete) and the admin grows a full trash workflow automatically - no extra config on `AdminModel`:
 
 - The changelist header gains a **Trash / Active toggle** (with a trashed-row count badge). `?trash=1` lists only soft-deleted rows; the default view shows the live set, which already excludes trashed rows.
-- The default `Action::delete_selected()` **soft-deletes** on a soft-delete model — it moves rows to the trash (sets `deleted_at`) rather than purging them, because it routes through `DynQuerySet::delete()`.
-- In the trash view, the row and bulk affordances become **Restore selected** (clears `deleted_at` via `DynQuerySet::restore()`) and **Delete permanently** (a real `hard_delete()` behind a confirm dialog — the row leaves the table entirely and cannot be restored).
+- The default `Action::delete_selected()` **soft-deletes** on a soft-delete model - it moves rows to the trash (sets `deleted_at`) rather than purging them, because it routes through `DynQuerySet::delete()`.
+- In the trash view, the row and bulk affordances become **Restore selected** (clears `deleted_at` via `DynQuerySet::restore()`) and **Delete permanently** (a real `hard_delete()` behind a confirm dialog - the row leaves the table entirely and cannot be restored).
 
 Restore is gated by the `change_<model>` permission; Delete-permanently by the stronger `delete_<model>`. A model **without** `#[umbral(soft_delete)]` is unchanged: no toggle, no restore, and `delete_selected` hard-deletes as before.
 
@@ -261,7 +261,7 @@ struct Note {
     deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-// Registration needs nothing special — the trash UI is automatic.
+// Registration needs nothing special - the trash UI is automatic.
 AdminModel::new("note")
     .list_display(&["title"])
     .actions(vec![Action::delete_selected()]) // soft-deletes for this model
@@ -369,10 +369,10 @@ ForeignKey fields currently render a plain `<input type="number">` showing the F
 
 A field rendered with the `markdown` widget mounts an [EasyMDE](https://github.com/Ionaru/easy-markdown-editor) editor. When a **storage backend** is mounted (the [`StoragePlugin`](/docs/v0.0.1/plugins/storage) media side, or any `umbral::storage::set_storage(...)` backend), the editor's toolbar gains an image button and you can **paste, drop, or pick an image**: it uploads to `POST {base}/upload-image` and the returned URL is inserted into the markdown as `![](...)`.
 
-The endpoint is **staff-gated** exactly like every other admin route (unauthenticated → login redirect, logged-in-non-staff → 403), validates the part is an image (`png`, `jpeg`, `gif`, `webp`, `svg`) under a 10 MiB cap, and stores the bytes through the ambient storage seam — the admin never names a media crate directly. The fetch carries the shared CSRF token from the `umbral_csrf_token` cookie.
+The endpoint is **staff-gated** exactly like every other admin route (unauthenticated → login redirect, logged-in-non-staff → 403), validates the part is an image (`png`, `jpeg`, `gif`, `webp`, `svg`) under a 10 MiB cap, and stores the bytes through the ambient storage seam - the admin never names a media crate directly. The fetch carries the shared CSRF token from the `umbral_csrf_token` cookie.
 
 <Callout type="info" title="Degrades gracefully">
-With no storage backend installed the route returns a `409` with a clear JSON error (`"image upload requires a storage backend — add StoragePlugin"`), which EasyMDE surfaces inline. The editor itself still works — only the image-upload affordance needs a backend. See [`arch.md`](https://github.com/) and `gaps2 #36`.
+With no storage backend installed the route returns a `409` with a clear JSON error (`"image upload requires a storage backend - add StoragePlugin"`), which EasyMDE surfaces inline. The editor itself still works - only the image-upload affordance needs a backend. See [`arch.md`](https://github.com/) and `gaps2 #36`.
 </Callout>
 
 ### Confirm dialog
@@ -694,13 +694,13 @@ For the design spec see `docs/admin-backend/backend-prd.md` and `docs/admin-back
 ## What is NOT in v1
 
 - **Postgres-only field types in a _SQLite-backed_ admin.** The ORM ships these
-  Postgres-only column types — `Array`, `Inet`, `MacAddr`, `FullText` (tsvector),
-  and `Decimal` — and they store and query in a Postgres-backed admin. What's
+  Postgres-only column types - `Array`, `Inet`, `MacAddr`, `FullText` (tsvector),
+  and `Decimal` - and they store and query in a Postgres-backed admin. What's
   deferred: they fail the boot-time
   [system check](../orm/column-types#postgres-only-types) on a **SQLite** backend
   (so a SQLite admin can't include them), and the admin renders them with a basic
   text input pending dedicated widgets. (`Cidr` exists as a column type but isn't
-  reachable from `#[derive(Model)]` yet, and PostGIS isn't implemented — see
+  reachable from `#[derive(Model)]` yet, and PostGIS isn't implemented - see
   gaps2 #70.)
 - **Per-row permissions.** Auth gating is binary: staff or not. Row-level
   restrictions and per-model action gating are deferred.

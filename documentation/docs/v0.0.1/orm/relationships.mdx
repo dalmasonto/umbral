@@ -179,15 +179,15 @@ let profile = Profile::objects()
 
 ### Reading from the parent side
 
-The relationship lives entirely on the **child** (`Profile`) — exactly like Django, where you add `OneToOneField` to `Profile` and never touch the `User` model. To read it back from the parent (Django's `user.profile.avatar`), how you spell it depends on whether you can edit the parent type.
+The relationship lives entirely on the **child** (`Profile`) - exactly like Django, where you add `OneToOneField` to `Profile` and never touch the `User` model. To read it back from the parent (Django's `user.profile.avatar`), how you spell it depends on whether you can edit the parent type.
 
 <Callout type="info">
-**For `AuthUser` — and any parent you can't edit — use the method accessor and add nothing to it.** `AuthUser` lives in `umbral-auth`; you don't fork it, and (just like Django) you don't need to. The derive on `Profile` generates `user.profile().await?` directly on `AuthUser` — the faithful equivalent of Django's `user.profile`. See the **Cross-crate back-link** section just below. The `OneToOne<C>` **struct field** described next is *only* for a parent type **you own** (e.g. a custom user model in your crate).
+**For `AuthUser` - and any parent you can't edit - use the method accessor and add nothing to it.** `AuthUser` lives in `umbral-auth`; you don't fork it, and (just like Django) you don't need to. The derive on `Profile` generates `user.profile().await?` directly on `AuthUser` - the faithful equivalent of Django's `user.profile`. See the **Cross-crate back-link** section just below. The `OneToOne<C>` **struct field** described next is *only* for a parent type **you own** (e.g. a custom user model in your crate).
 </Callout>
 
-#### `OneToOne<C>` — when you own the parent type
+#### `OneToOne<C>` - when you own the parent type
 
-If the parent model is in your crate, you can declare a `OneToOne<C>` field on it instead of using the method accessor. You get the same back-link **plus** serde-nesting (the child shows up as a nested object in REST + templates) and `prefetch_related` batch loading. No umbral attribute — the back-link is discovered at runtime by scanning the child's `FIELDS` for the unique FK pointing back:
+If the parent model is in your crate, you can declare a `OneToOne<C>` field on it instead of using the method accessor. You get the same back-link **plus** serde-nesting (the child shows up as a nested object in REST + templates) and `prefetch_related` batch loading. No umbral attribute - the back-link is discovered at runtime by scanning the child's `FIELDS` for the unique FK pointing back:
 
 ```rust
 #[derive(Model)]
@@ -195,7 +195,7 @@ pub struct Account {                  // a model YOU define
     pub id: i64,
     pub email: String,
     // Reads back the `Profile` whose `#[umbral(unique)] user: ForeignKey<Account>`
-    // points here. No `#[umbral(...)]` needed — the back-link is found at runtime.
+    // points here. No `#[umbral(...)]` needed - the back-link is found at runtime.
     #[sqlx(skip)]
     pub profile: OneToOne<Profile>,
 }
@@ -305,7 +305,7 @@ let reviewed = Post::objects()
 
 ## Reading the raw ID and resolving the referenced row
 
-`ForeignKey<T>` exposes `.id()` to read the raw primary key (a `T::PrimaryKey` — `i64` for an integer-keyed target, `String`/`Uuid` otherwise) and `.resolve(&pool)` to fetch the referenced row. `.id_ref()` borrows the PK without cloning, and `.set(pk)` replaces the stored value:
+`ForeignKey<T>` exposes `.id()` to read the raw primary key (a `T::PrimaryKey` - `i64` for an integer-keyed target, `String`/`Uuid` otherwise) and `.resolve(&pool)` to fetch the referenced row. `.id_ref()` borrows the PK without cloning, and `.set(pk)` replaces the stored value:
 
 ```rust
 let post = Post::objects()
@@ -325,7 +325,7 @@ println!("written by {}", author.name);
 
 ## Serialisation
 
-Without `select_related`, `ForeignKey<T>` serialises and deserialises as the target's bare primary key in its native JSON shape — a number for an `i64` PK, a string for a `String`/`Uuid` PK. The REST layer and the backup tool see that scalar: no nested object, no special envelope. After `select_related` has populated the resolved slot, it serialises as the full `T` object instead (see [Eager loading](#eager-loading-with-select_related)).
+Without `select_related`, `ForeignKey<T>` serialises and deserialises as the target's bare primary key in its native JSON shape - a number for an `i64` PK, a string for a `String`/`Uuid` PK. The REST layer and the backup tool see that scalar: no nested object, no special envelope. After `select_related` has populated the resolved slot, it serialises as the full `T` object instead (see [Eager loading](#eager-loading-with-select_related)).
 
 ```json
 { "id": 1, "title": "Hello", "author": 42 }
@@ -435,7 +435,7 @@ pub struct Post {
 
 The `M2M<T>` type is detected from the Rust type alone; no `#[umbral(m2m)]` marker is required. Add `#[umbral(m2m = "<child_table>")]` only when the child's table name isn't the snake_case default of `T` (e.g. the field's `T` is `Tag2` but the table is `tag`).
 
-`M2M<T, P>` carries a second type parameter `P` for the **parent** model's primary-key type, defaulting to `i64`. Override it when the parent's PK isn't `i64` — `pub tags: M2M<Tag, String>` on a model whose PK is a `String` slug. The child's PK type comes from `T::PrimaryKey` and needs no annotation.
+`M2M<T, P>` carries a second type parameter `P` for the **parent** model's primary-key type, defaulting to `i64`. Override it when the parent's PK isn't `i64` - `pub tags: M2M<Tag, String>` on a model whose PK is a `String` slug. The child's PK type comes from `T::PrimaryKey` and needs no annotation.
 
 <Callout type="info">
 First-class M2M (the `M2M<T>` field, `prefetch_related`, `join_related`, the form `ModelMultiChoice`, and `annotate_count`) is the shipped path. `examples/shop/plugins/content/src/models.rs` (`Post.tags: M2M<Tag>`) and `umbral_website/plugins/site_content/src/models.rs` (`BlogPost.tags: M2M<ContentTag>`) are real reference uses.
@@ -477,7 +477,7 @@ post.tags.set(&[&tag1, &tag2]).await?;
 let n: u64 = post.tags.clear().await?;
 ```
 
-Each method is a no-op when the `M2M` slot is unattached (the parent hasn't been persisted, so there's no `parent_id` to filter on) — `fetch` returns an empty vec, the writers return `Ok`. `add` / `remove` / `set` / `clear` also fire an `m2m_changed:<junction>` signal so audit consumers can observe the change.
+Each method is a no-op when the `M2M` slot is unattached (the parent hasn't been persisted, so there's no `parent_id` to filter on) - `fetch` returns an empty vec, the writers return `Ok`. `add` / `remove` / `set` / `clear` also fire an `m2m_changed:<junction>` signal so audit consumers can observe the change.
 
 ### Counting the related set: `annotate_count("tags")`
 
