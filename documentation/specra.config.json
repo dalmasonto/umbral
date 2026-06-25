@@ -15,6 +15,7 @@
     }
   },
   "deployment": {
+    "target": "github-pages",
     "basePath": "umbral",
     "customDomain": false
   },
@@ -67,6 +68,5 @@
     "showTags": true,
     "versioning": true,
     "i18n": false
-  },
-  "packageManager": "yarn"
+  }
 }
