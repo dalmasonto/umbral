@@ -141,4 +141,4 @@ You are migrating an existing app to umbral. The database has tables `post`, `ca
 
 ## Design rationale
 
-These flags mirror Django's `--fake` / `--fake-initial` flags directly. The internal spec is `docs/specs/06-migration-engine.md`. Drift detection is also described in `arch.md §0` under "The hard cases".
+The `--fake` flag records a migration as applied without running it; `--fake-initial` does the same for the initial migration only when the tables it would create already exist. The internal spec is `docs/specs/06-migration-engine.md`. Drift detection is also described in `arch.md §0` under "The hard cases".

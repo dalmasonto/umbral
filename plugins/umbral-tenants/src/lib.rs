@@ -1,6 +1,6 @@
 //! `umbral-tenants` — schema-per-tenant multitenancy management for umbral.
 //!
-//! The django-tenants shape: **one** Postgres database, **one schema per
+//! The shape: **one** Postgres database, **one schema per
 //! tenant**, and a shared `public` schema for cross-tenant apps (the tenant
 //! registry itself, auth, sessions, …). A request is mapped to a tenant by its
 //! `Host` subdomain or an explicit header; the rest of the request then runs
@@ -52,7 +52,7 @@ use umbral::prelude::*;
 /// Which isolation strategy the plugin wires.
 ///
 /// The plugin defaults to [`TenantStrategy::Schema`] — every existing call site
-/// and test keeps the django-tenants shape (one database, one schema per tenant)
+/// and test keeps the shape (one database, one schema per tenant)
 /// byte-for-byte. Opt into [`TenantStrategy::Database`] with
 /// [`TenantsPlugin::strategy`] for a *database per tenant* (stronger isolation,
 /// the operator provisions each tenant's database/pool).

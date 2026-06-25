@@ -1,7 +1,7 @@
-//! Django-shaped 404 / 500 page helpers.
+//! Custom 404 / 500 page helpers.
 //!
 //! Two pieces of [`AppBuilder`](crate::app::AppBuilder) state plug
-//! together with the existing templates engine to deliver Django's
+//! together with the existing templates engine to deliver the
 //! "drop a `404.html` in your templates dir" experience:
 //!
 //! - `not_found_template(name)` — installs a fallback that renders

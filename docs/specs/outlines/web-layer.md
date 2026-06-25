@@ -8,7 +8,7 @@
 
 ## Purpose
 
-`umbral::web` is the user-facing HTTP shape: the types, extractors, and middleware contract every handler and every plugin author sees. It owns the boundary that hides axum behind umbral-named types — Django-shape on the surface, axum and tower underneath — so a plugin's `routes()` and a user's hand-written route both read as umbral code, never as axum code. The web layer is deliberately *not* a deep spec yet: M0 ships one hand-written route as an escape hatch via `App::builder().router(...)`, and the concrete shape of `Router`, `Request`, `Response`, and the extractor set is best frozen once the ORM (M1–M3), the system check (M4), and the Plugin contract (M7) have settled what handlers actually need to receive.
+`umbral::web` is the user-facing HTTP shape: the types, extractors, and middleware contract every handler and every plugin author sees. It owns the boundary that hides axum behind umbral-named types - one ergonomic surface on top, axum and tower underneath - so a plugin's `routes()` and a user's hand-written route both read as umbral code, never as axum code. The web layer is deliberately *not* a deep spec yet: M0 ships one hand-written route as an escape hatch via `App::builder().router(...)`, and the concrete shape of `Router`, `Request`, `Response`, and the extractor set is best frozen once the ORM (M1–M3), the system check (M4), and the Plugin contract (M7) have settled what handlers actually need to receive.
 
 Scope, as fixed in the spec-set design §6: "`umbral::web` shape (Router, Request, Response, extractors `Auth<User>` / `Session` / `Path<T>` / `Json<T>` / `Form<T>` / `Query<T>`), middleware chain, generic views, multipart / file uploads, streaming responses, cookies, the 'hide axum' rule applied, the invariant that handler signatures never carry `State<X>` for any app-wide X."
 
@@ -16,7 +16,7 @@ Scope, as fixed in the spec-set design §6: "`umbral::web` shape (Router, Reques
 
 ### Router, Request, Response
 
-`umbral::web::Router` is a thin newtype around `axum::Router`, re-exported through the prelude alongside route-method helpers (`get`, `post`, `put`, `patch`, `delete`). `Request` and `Response` are umbral-named so day-to-day code never imports `axum::http`; the escape hatch `umbral::axum::*` exists for the rare case (`arch.md §2.1`). A `Router` composes the way Django's `urls.py` composes — nest, mount under a prefix, attach middleware — and plugins return one from `Plugin::routes()` (see `02-plugin-contract.md`).
+`umbral::web::Router` is a thin newtype around `axum::Router`, re-exported through the prelude alongside route-method helpers (`get`, `post`, `put`, `patch`, `delete`). `Request` and `Response` are umbral-named so day-to-day code never imports `axum::http`; the escape hatch `umbral::axum::*` exists for the rare case (`arch.md §2.1`). A `Router` composes by nesting, mounting under a prefix, and attaching middleware, and plugins return one from `Plugin::routes()` (see `02-plugin-contract.md`).
 
 ### Extractors
 
@@ -38,7 +38,7 @@ Middleware is configured through umbral's chain but the underlying type is a tow
 
 ### Generic views
 
-Django's generic class-based views become trait-based composition in umbral. A `ListView<T: Model>` trait fills in the boilerplate of "page through `T::objects()`, render or serialize"; no inheritance, no `View.as_view()` ceremony. The trait set is what makes the admin and REST plugin small.
+Reusable view scaffolding is expressed as trait-based composition in umbral. A `ListView<T: Model>` trait fills in the boilerplate of "page through `T::objects()`, render or serialize"; no inheritance, no view-class-to-handler conversion ceremony. The trait set is what makes the admin and REST plugin small.
 
 ### Multipart, streaming, cookies
 
@@ -49,7 +49,7 @@ File uploads use the `Multipart` extractor for parsing; storage is owned by `sta
 The web layer re-states `arch.md §2.1` and `§2.2` in its own terms:
 
 - **Hide axum.** `umbral::web::*` is the day-to-day surface; `umbral::axum::*` is the escape hatch. Plugins import only the prelude.
-- **No `State<X>` in handler signatures for any app-wide X.** Process-scoped context (DB pool, settings, task queue) is read ambiently through accessors (`Post::objects()`, `umbral::settings()`); request-scoped context is extracted. This is what makes a handler read as Django code.
+- **No `State<X>` in handler signatures for any app-wide X.** Process-scoped context (DB pool, settings, task queue) is read ambiently through accessors (`Post::objects()`, `umbral::settings()`); request-scoped context is extracted. This is what keeps a handler signature small and declarative.
 
 ## Promote-to-deep trigger
 

@@ -5,7 +5,7 @@
 //!
 //! - `Accept: application/json; version=v2` resolves to v2 on the context.
 //! - An absent version falls back to `default_version` ("v1").
-//! - A version outside `allowed_versions` → 406 Not Acceptable (DRF).
+//! - A version outside `allowed_versions` → 406 Not Acceptable.
 
 #![allow(dead_code, private_interfaces)]
 
@@ -143,6 +143,6 @@ async fn unknown_version_is_406() {
     assert_eq!(
         status,
         StatusCode::NOT_ACCEPTABLE,
-        "a version outside allowed_versions must be 406 (DRF AcceptHeaderVersioning)"
+        "a version outside allowed_versions must be 406 (version read from the Accept header)"
     );
 }

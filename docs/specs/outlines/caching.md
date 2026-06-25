@@ -8,7 +8,7 @@
 
 ## Purpose
 
-`umbral::cache` is the framework's uniform key/value cache surface, sitting in front of both an in-process backend (`moka`, the default) and a distributed one (`redis`, opt-in via feature). It exists as a core utility — not a plugin — because the same three Django-shaped use cases come up across the built-ins: caching whole responses (per-view), caching rendered HTML fragments (per-fragment), and caching arbitrary computed values (low-level). Sessions, the admin's expensive list queries, and REST's filter/serialize hot paths all want the same primitive; if each plugin shipped its own cache, swapping moka for redis would mean editing every plugin. Centralising the API while keeping backends pluggable is the Django shape, and it's the smallest surface that lets the same code run locally with moka and in production with redis.
+`umbral::cache` is the framework's uniform key/value cache surface, sitting in front of both an in-process backend (`moka`, the default) and a distributed one (`redis`, opt-in via feature). It exists as a core utility - not a plugin - because the same three use cases come up across the built-ins: caching whole responses (per-view), caching rendered HTML fragments (per-fragment), and caching arbitrary computed values (low-level). Sessions, the admin's expensive list queries, and REST's filter/serialize hot paths all want the same primitive; if each plugin shipped its own cache, swapping moka for redis would mean editing every plugin. Centralising the API while keeping backends pluggable is the smallest surface that lets the same code run locally with moka and in production with redis.
 
 ## Key concepts
 

@@ -129,7 +129,7 @@ impl JoinKind {
 /// One requested eager-join: a dotted relation path (`"plugin__author"`)
 /// plus the join type to apply to the LAST hop. `kind: None` means
 /// auto-infer per-hop from FK nullability (INNER for NOT NULL, LEFT for
-/// nullable) — Django's default. The explicit methods pin `Some(..)`.
+/// nullable), the default. The explicit methods pin `Some(..)`.
 #[derive(Debug, Clone)]
 pub(crate) struct JoinReq {
     pub(crate) path: String,
@@ -168,9 +168,8 @@ pub struct QuerySet<T> {
     pub(crate) prefetch_related: Vec<String>,
     /// BUG-8: `#[umbral(ordering = [...])]` lowers to a default ORDER
     /// BY applied at terminal time when the caller didn't supply an
-    /// explicit `.order_by(...)`. Mirrors Django's
-    /// `Meta.ordering` semantics: explicit calls REPLACE the default
-    /// rather than appending to it.
+    /// explicit `.order_by(...)`. The semantics: explicit calls REPLACE
+    /// the default rather than appending to it.
     pub(crate) default_ordering: Vec<(&'static str, bool)>,
     /// Set to `true` the first time `.order_by(...)` is called; when
     /// `false`, `build_query_for` applies `default_ordering`.
@@ -220,7 +219,7 @@ pub struct QuerySet<T> {
     /// [`Self::annotate_related`] / [`Self::annotate_count`]. Applied
     /// inside `build_query_for`, so EVERY terminal and introspection
     /// path — `fetch_annotated`, `explain`, `to_sql`, `to_sql_pg` —
-    /// sees the same correlated subqueries. That's the Django
+    /// sees the same correlated subqueries. That's the
     /// `annotate()` contract: an annotation is query-builder state,
     /// not a side query.
     pub(crate) annotations: Vec<RelatedAnnotation>,
@@ -300,7 +299,7 @@ pub(crate) struct RelatedAnnotation {
     /// `AND <child>.deleted_at IS NULL` into the correlated subquery so
     /// a trashed child stops inflating the parent's count.
     pub(crate) child_soft_delete: bool,
-    /// Optional child-side predicate (Django's `Count(filter=Q(...))`),
+    /// Optional child-side predicate (a filtered count),
     /// pre-rendered to a backend-default `SimpleExpr`. ANDed into the
     /// subquery WHERE. From `annotate_count_where`.
     pub(crate) child_filter: Option<sea_query::SimpleExpr>,
@@ -336,7 +335,7 @@ enum AutoDiscovery {
 /// and match `relation` against each candidate's conventional name
 /// forms: the child's table name, the child's struct name in
 /// snake_case and bare-lowercase, and any of those with a `_set`
-/// suffix (Django's `<model>_set`). Declared `REVERSE_FK_RELATIONS` /
+/// suffix (the `<model>_set` form). Declared `REVERSE_FK_RELATIONS` /
 /// `M2M_RELATIONS` are resolved by the caller BEFORE this runs, so
 /// they always take precedence.
 fn discover_reverse_relation<T: crate::orm::Model>(relation: &str) -> AutoDiscovery {
@@ -613,8 +612,8 @@ impl<T> QuerySet<T> {
             }
         }
         // BUG-8: default ORDER BY applies only when the caller didn't
-        // supply an explicit `.order_by(...)`. Mirrors Django's
-        // `Meta.ordering` semantics.
+        // supply an explicit `.order_by(...)`: the model-default
+        // ordering semantics.
         if !self.explicit_order {
             for (col, desc) in &self.default_ordering {
                 let order = if *desc { Order::Desc } else { Order::Asc };
@@ -645,16 +644,15 @@ impl<T> QuerySet<T> {
     /// `.filter(A).exclude(B).filter(C)` renders as `WHERE A AND NOT B
     /// AND C`. Sugar for `filter(Q::not(p))`.
     ///
-    /// Mirrors Django's `QuerySet.exclude()`.
+    /// The negated-filter terminal.
     pub fn exclude(self, p: Predicate<T>) -> Self {
         self.filter(crate::orm::Q::not(p))
     }
 
     /// Add an ORDER BY clause. Multiple `.order_by` calls append.
     /// The first explicit call also opts out of the model's
-    /// `#[umbral(ordering = [...])]` default (BUG-8) — Django semantics:
-    /// explicit ordering replaces the default rather than stacking on
-    /// top of it.
+    /// `#[umbral(ordering = [...])]` default (BUG-8): explicit ordering
+    /// replaces the default rather than stacking on top of it.
     pub fn order_by(mut self, o: OrderExpr<T>) -> Self {
         let order = if o.descending {
             Order::Desc
@@ -843,7 +841,7 @@ impl<T> QuerySet<T> {
     }
 
     /// `INNER JOIN` the related path — drops parent rows whose relation
-    /// is absent. Django's default for a NOT NULL FK.
+    /// is absent. The default for a NOT NULL FK.
     pub fn inner_join_related(mut self, path: impl Into<String>) -> Self {
         self.join_related.push(JoinReq {
             path: path.into(),
@@ -875,8 +873,7 @@ impl<T> QuerySet<T> {
     /// is populated with its matching children.
     ///
     /// The M2M counterpart of [`Self::select_related`] for FKs —
-    /// same goal of killing N+1. Mirrors Django's
-    /// `prefetch_related('tags')`.
+    /// same goal of killing N+1: a batch-loaded `prefetch_related('tags')`.
     ///
     /// ## Reverse-FK collections (post-#44)
     ///
@@ -1401,8 +1398,8 @@ impl<T: Model> QuerySet<T> {
                     let hop_alias = Alias::new(format!("__j_{field_name}_h{idx}"));
                     // Last hop: explicit request, else infer from THIS
                     // hop's nullability. Intermediate hops always infer
-                    // per-hop (Django nests an INNER inside an outer
-                    // LEFT etc.) — an explicit kind only pins the leaf.
+                    // per-hop (an INNER can nest inside an outer
+                    // LEFT etc.); an explicit kind only pins the leaf.
                     let kind = if idx == last {
                         jr.kind.unwrap_or(if hop.nullable {
                             JoinKind::Left
@@ -1769,11 +1766,11 @@ impl<T: Model> QuerySet<T> {
     }
 
     /// Return the row with the smallest value in `col_name`. Sugar
-    /// for `order_by(col.asc()).first()`. Mirrors Django's
-    /// `QuerySet.earliest('created_at')`.
+    /// for `order_by(col.asc()).first()`. The `earliest('created_at')`
+    /// terminal.
     ///
     /// Takes a `&'static str` column name (same shape as
-    /// `select_related`) so the call site stays Django-flavoured —
+    /// `select_related`) so the call site stays terse:
     /// `.earliest("created_at")` reads naturally without spelling out
     /// `.asc()`.
     pub async fn earliest(self, col_name: &'static str) -> Result<Option<T>, sqlx::Error>
@@ -1786,8 +1783,8 @@ impl<T: Model> QuerySet<T> {
     }
 
     /// Return the row with the largest value in `col_name`. Sugar
-    /// for `order_by(col.desc()).first()`. Mirrors Django's
-    /// `QuerySet.latest('created_at')`.
+    /// for `order_by(col.desc()).first()`. The `latest('created_at')`
+    /// terminal.
     pub async fn latest(self, col_name: &'static str) -> Result<Option<T>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
@@ -1965,7 +1962,7 @@ impl<T: Model> QuerySet<T> {
         Ok(!rows.is_empty())
     }
 
-    /// `.get()` — Django's exactly-one terminal.
+    /// `.get()` — the exactly-one terminal.
     ///
     /// Returns `Ok(row)` when the filter chain matches exactly one
     /// row. The two not-exactly-one cases each get their own
@@ -2042,7 +2039,7 @@ impl<T: Model> QuerySet<T> {
 
     /// Project the query to only the named columns, returning a
     /// vector of `serde_json::Value::Object` rows instead of typed
-    /// `T` instances. Mirrors Django's `QuerySet.values('id', 'title')`.
+    /// `T` instances. The columns-projection terminal: `values('id', 'title')`.
     ///
     /// Use when a list view only needs a few fields — skipping the
     /// 50KB body BLOB on every Post saves both memory and the
@@ -2590,7 +2587,7 @@ impl<T: Model> QuerySet<T> {
         }
     }
 
-    /// Django's chainable `annotate(alias=Agg("relation"))`: attach a
+    /// The chainable `annotate(alias=Agg("relation"))`: attach a
     /// related-aggregate annotation to this QuerySet. The annotation
     /// is **query-builder state** — it renders as a correlated scalar
     /// subquery inside the one SELECT every terminal builds, so it
@@ -2627,7 +2624,7 @@ impl<T: Model> QuerySet<T> {
     /// builder — it poisons the annotation, and every fallible
     /// consumer (`fetch_annotated`, `explain`) reports it loudly.
     /// v1 caveats: child rows aggregate unconditionally — a
-    /// child-side predicate (Django's `Count(..., filter=Q(...))`)
+    /// child-side predicate (a filtered count)
     /// and child soft-delete awareness are tracked follow-ups
     /// (gaps2 #39).
     pub fn annotate_related(
@@ -2732,7 +2729,7 @@ impl<T: Model> QuerySet<T> {
     }
 
     /// Like [`Self::annotate_count`] but counts only the children
-    /// matching `pred` — Django's `Count("comments", filter=Q(...))`.
+    /// matching `pred` — a filtered count over `"comments"`.
     /// `C` is the CHILD model, so the predicate is typed against the
     /// child's columns (`comment::MODERATION.eq("visible")`). The
     /// predicate renders into the correlated count subquery's WHERE
@@ -3428,7 +3425,7 @@ impl<T: Model> Manager<T> {
         self.queryset().exclude(p)
     }
 
-    /// A bare [`QuerySet`] over every row — Django's `Model.objects.all()`.
+    /// A bare [`QuerySet`] over every row — the `Model::objects().all()` form.
     ///
     /// The entry point when you need a `QuerySet` terminal without a
     /// filter: a grouped aggregate over the whole table, an unfiltered
@@ -3452,7 +3449,7 @@ impl<T: Model> Manager<T> {
     ///
     /// Forwards from the manager so the documented
     /// `Model::objects().annotate(&["status"], &[("count", Aggregate::count())])`
-    /// (Django's `.values("status").annotate(count=Count("id"))`) compiles
+    /// (a grouped count over `"status"`) compiles
     /// directly, without a filter first.
     pub async fn annotate(
         &self,
@@ -3638,7 +3635,7 @@ impl<T: Model> Manager<T> {
 
     /// `.get(predicate)` — sugar for `.filter(predicate).get()`.
     ///
-    /// The Django-shape one-liner: `User::objects().get(user::ID.eq(1))`.
+    /// The one-liner: `User::objects().get(user::ID.eq(1))`.
     /// See [`QuerySet::get`] for error-variant semantics.
     pub async fn get(&self, p: Predicate<T>) -> Result<T, GetError>
     where
@@ -3952,7 +3949,7 @@ impl<T: Model> Manager<T> {
         Ok(count)
     }
 
-    /// Django's `get_or_create`: fetch the first row matching `predicate`;
+    /// The `get_or_create` terminal: fetch the first row matching `predicate`;
     /// if none exists, insert `defaults` and return it. Returns
     /// `(row, created)` so the caller can branch on whether the write
     /// happened. Two queries on the miss path (filter+first then create),
@@ -4027,7 +4024,7 @@ impl<T: Model> Manager<T> {
         }
     }
 
-    /// Django's `update_or_create`: fetch the first row matching
+    /// The `update_or_create` terminal: fetch the first row matching
     /// `predicate`; if found, update its non-PK columns with the
     /// `defaults` instance's values and return the fresh row;
     /// otherwise insert `defaults` and return it. Returns
@@ -4267,7 +4264,7 @@ impl<T: Model> Manager<T> {
     /// THEN ... END` per non-PK column, plus a `WHERE pk IN (...)`
     /// to scope the update.
     ///
-    /// Mirrors Django's `QuerySet.bulk_update(objs, fields)` but
+    /// A `bulk_update(objs, fields)` that
     /// updates every non-PK column rather than asking the caller to
     /// list them. Returns the number of rows affected.
     ///
@@ -4551,15 +4548,15 @@ impl<T: Model> Manager<T> {
     // fire the ORM lifecycle signals (`pre_save` / `post_save` /
     // `pre_delete` / `post_delete`). The existing bulk methods
     // (`create`, `bulk_create`, `QuerySet::update_values`,
-    // `QuerySet::delete`) remain signal-free, matching Django's own
-    // behaviour: bulk operations bypass signals for performance.
+    // `QuerySet::delete`) remain signal-free by design:
+    // bulk operations bypass signals for performance.
     //
     // Signal name format: `<event>:<table>` — e.g. `post_save:post`.
     // Payload shapes:
     //   save:   `{ "instance": <M as JSON>, "created": bool }`
     //   delete: `{ "instance": <M as JSON> }`
     //
-    // The `created` flag on save follows Django's convention:
+    // The `created` flag on save follows the convention:
     //   `true`  when the PK is the default sentinel → INSERT path.
     //   `false` when the PK is non-default           → UPDATE path.
     // =====================================================================

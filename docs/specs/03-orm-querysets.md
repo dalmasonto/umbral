@@ -8,7 +8,7 @@
 
 ## Purpose
 
-The user-facing query API. `QuerySet<T>` is umbral's equivalent of Django's `QuerySet`: a lazy, chainable builder whose terminal methods drive sea-query → sqlx → a real Postgres or SQLite query. `T::objects()` is the entry point.
+The user-facing query API. `QuerySet<T>` is a lazy, chainable builder whose terminal methods drive sea-query → sqlx → a real Postgres or SQLite query. `T::objects()` is the entry point.
 
 This spec defines the call-site shape (filter/exclude/order/limit, the F/Q analog, aggregates, relation loading, transactions, the raw-SQL escape hatch) and the resolution model (ambient pool, explicit pool, alias). Field-side types (`post::title`, `post::published_at`, etc.) are defined in `04-orm-model-and-fields.md`; this spec uses them but doesn't own them.
 
@@ -113,7 +113,7 @@ Post::objects()
     .await?
 ```
 
-This is umbral's analog to Django's `Q` composition. F-expressions (referring to one column from another's RHS, e.g. `salary__lt=F('budget')`) reuse the same column constants: `salary.lt(employee::budget)` works because the column constants implement `Into<Expr<...>>`.
+This is umbral's predicate composition: boolean predicates combined with operator overloads. F-expressions (referring to one column from another column on the right-hand side) reuse the same column constants: `salary.lt(employee::budget)` works because the column constants implement `Into<Expr<...>>`.
 
 ### `.using(alias)` and `.on(pool)` (pool resolution)
 
@@ -202,13 +202,13 @@ Every terminal returns `Result<_, umbral::Error>`. `umbral::Error` carries a `Fr
 
 ## Trade-offs and alternatives considered
 
-**Field constants as a sibling module, vs Django's `field__lookup` string scheme, vs closure-based.** Django's string scheme leans on Python's dynamism. Closures (`filter(|p| p.title.eq("rust"))`) require the closure parameter to enumerate every field. Sibling modules with typed column constants give type safety, autocomplete, and a Django-shape call site without parsing strings or instantiating dummies. The cost is generating a module per model, which `#[derive(Model)]` handles at M3.
+**Field constants as a sibling module, vs a `field__lookup` string scheme, vs closure-based.** A `field__lookup` string scheme (passing `"title__icontains"` as a string) leans on runtime reflection and gives up compile-time checking. Closures (`filter(|p| p.title.eq("rust"))`) require the closure parameter to enumerate every field. Sibling modules with typed column constants give type safety, autocomplete, and a concise call site without parsing strings or instantiating dummies. The cost is generating a module per model, which `#[derive(Model)]` handles at M3.
 
-**Predicate composition with `&` and `|`, vs a `q!()` macro.** `&` and `|` lean on `BitAnd`/`BitOr` operator overloads, which gives a syntax close to logical AND/OR without a macro. A `q!()` macro could mirror Django's `Q(title='rust') | Q(title='postgres')` more closely, but operator overloading on column-built predicates reads naturally to Rust developers and saves a macro. Revisit if proc-macros for complex expressions (subqueries, EXISTS) prove easier inside a `q!()`.
+**Predicate composition with `&` and `|`, vs a `q!()` macro.** `&` and `|` lean on `BitAnd`/`BitOr` operator overloads, which gives a syntax close to logical AND/OR without a macro. A `q!()` macro could give a more macro-driven composition syntax (`q!(title == "rust" | title == "postgres")`), but operator overloading on column-built predicates reads naturally to Rust developers and saves a macro. Revisit if proc-macros for complex expressions (subqueries, EXISTS) prove easier inside a `q!()`.
 
 **`.values((col1, col2)).annotate(...)` vs returning `HashMap<String, Value>`.** Typed projection is more verbose at the call site but the result type is `(i64, i64)` not `HashMap<String, Value>`. The Rust-shape win is worth the verbosity; users who genuinely want dynamic results drop down to the raw-SQL hatch.
 
-**Lazy evaluation that holds a `SelectStatement`, vs evaluating on every method.** Django's QuerySet is lazy to make chaining cheap. The lazy form makes `.clone()` cheap and the call site free of `.await` until the user wants results. The cost is reasoning about when the SQL gets emitted; the rule is "exactly when a terminal is awaited."
+**Lazy evaluation that holds a `SelectStatement`, vs evaluating on every method.** A lazy query builder makes chaining cheap. The lazy form makes `.clone()` cheap and the call site free of `.await` until the user wants results. The cost is reasoning about when the SQL gets emitted; the rule is "exactly when a terminal is awaited."
 
 ## Open questions
 

@@ -109,7 +109,7 @@ Ranked by pain-relief (proposed module trees in the report):
 
 ## Wave C — per-plugin review (all 19 built-in plugins)
 
-> One report per plugin in `planning/hardening/plugins-review/<plugin>.md` (the detailed single source). Standard 5 axes **plus completeness** (stubs / no-op hooks / half-features / what's missing vs the Django·Celery·DRF peer). Net-new findings filed as **gaps2 #79–#86**; the per-plugin reports hold the full long tail.
+> One report per plugin in `planning/hardening/plugins-review/<plugin>.md` (the detailed single source). Standard 5 axes **plus completeness** (stubs / no-op hooks / half-features / what's missing vs a mature batteries-included peer). Net-new findings filed as **gaps2 #79–#86**; the per-plugin reports hold the full long tail.
 
 **Verdicts**
 
@@ -118,7 +118,7 @@ Ranked by pain-relief (proposed module trees in the report):
 | umbral-rest | Solid (strongest) | `?ordering=` reserved+doc'd but never read → silent unsorted (#79); confirms #76 from REST side |
 | umbral-auth | Solid | `Identity` drops `is_superuser` at REST boundary (#80); no pw-strength/throttle (#82) |
 | umbral-sessions | Solid | no rolling expiry / no `clearsessions` / no `SessionStore` trait (#80/#82) |
-| umbral-permissions | Solid (~90% DRF parity) | `table_app_label` splits at first `_` → wrong Permission row (#80) |
+| umbral-permissions | Solid (~90% REST-layer parity) | `table_app_label` splits at first `_` → wrong Permission row (#80) |
 | umbral-email | Solid v1 | no CRLF/header-injection guard+test on `subject` (#81); console leaks tokens |
 | umbral-signals | Solid (w/ fix) | async handler panics not isolated → kill the request (#80) |
 | umbral-realtime | Solid (single-instance) | hard non-optional `umbral-auth` dep (#84); no Last-Event-ID resume (#82) |

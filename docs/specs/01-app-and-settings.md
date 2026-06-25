@@ -43,7 +43,7 @@ impl Settings {
 2. A TOML file at the configured path (default `umbral.toml`, override via `UMBRAL_CONFIG_PATH`).
 3. Environment variables prefixed `UMBRAL_`. Nested fields use `__` as separator: `UMBRAL_DATABASES__REPLICA=postgres://…`.
 
-Plugin settings work the same way at the plugin's own level. `umbral-rest` exposes `RestSettings`; the user instantiates it (typically `RestSettings::from_env()?`) and passes it into the plugin constructor. There is **no** shared global namespace for plugin settings. Django's "every contrib app dumps into one module" pattern is rejected here.
+Plugin settings work the same way at the plugin's own level. `umbral-rest` exposes `RestSettings`; the user instantiates it (typically `RestSettings::from_env()?`) and passes it into the plugin constructor. There is **no** shared global namespace for plugin settings. The "every plugin dumps its config into one shared module" pattern is rejected here.
 
 ### App and the builder
 
@@ -169,11 +169,11 @@ The framework's `Settings` struct is the only one stored in the `umbral::setting
 
 ## Trade-offs and alternatives considered
 
-**Why `OnceLock` instead of `State<DbPool>` in every handler signature.** Threading `State` is the idiomatic axum approach but defeats the Django shape (`Post::objects()` becomes `Post::objects(&state.pool)`). The cross-cutting rule in `arch.md §2.2` makes the call: process-scoped context is ambient, request-scoped context is explicit. This spec implements the rule.
+**Why `OnceLock` instead of `State<DbPool>` in every handler signature.** Threading `State` is the idiomatic axum approach but defeats the declarative ORM shape (`Post::objects()` becomes `Post::objects(&state.pool)`). The cross-cutting rule in `arch.md §2.2` makes the call: process-scoped context is ambient, request-scoped context is explicit. This spec implements the rule.
 
 **Why one `OnceLock` per module rather than a single `OnceLock<AppContext>`.** A central context object would force every consumer to import the same type, coupling plugins to a struct whose shape changes whenever a new ambient slot is added. Per-module `OnceLock`s let `umbral::tasks` add itself without recompiling `umbral::db`. The cost is a few extra `init` functions; the benefit is keeping the internal crate split refactorable, which `arch.md §1` requires.
 
-**Why `figment` over hand-rolled env parsing.** figment's provider model (defaults → file → env) matches the lifecycle exactly and gives the user the Django-shape `settings.py` + `os.environ` story without writing merging code.
+**Why `figment` over hand-rolled env parsing.** figment's provider model (defaults → file → env) matches the lifecycle exactly and gives the user the familiar settings-file + environment-variable layering story without writing merging code.
 
 **Why not auto-register plugins with `inventory` by default.** Decided in `02-plugin-contract.md`. The short version: explicit registration is debuggable; auto-registration is layered on top as an opt-in for plugin authors who want zero-config installation.
 
@@ -182,7 +182,7 @@ The framework's `Settings` struct is the only one stored in the `umbral::setting
 ## Open questions
 
 - **Concrete `init` boundary.** The five `umbral::*::init(...)` calls need to be reachable from `App::builder().build()` but not from user code. The cleanest path is an internal trait, crate-private to `umbral-core`, that the builder uses. Verify once the workspace skeleton is in place at M0.
-- **Settings file format.** TOML matches the Cargo ecosystem; YAML matches Django's familiarity. TOML is recommended. Revisit if the admin or REST plugin needs nested config TOML handles awkwardly.
+- **Settings file format.** TOML matches the Cargo ecosystem; YAML is familiar from other ecosystems. TOML is recommended. Revisit if the admin or REST plugin needs nested config TOML handles awkwardly.
 - **Async settings reload.** Out of scope for M0. Settings are immutable after `build()`. A reload mechanism would reopen the ambient-state question and is intentionally deferred.
 
 ## Cross-links

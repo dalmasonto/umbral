@@ -2,7 +2,7 @@
 
 Role-based access control for umbral: ContentType, Permission, Group, user-group and user-permission M2M tables, plus the has_perm / user_perms query layer.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

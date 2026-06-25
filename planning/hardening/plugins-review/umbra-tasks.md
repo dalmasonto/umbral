@@ -6,7 +6,7 @@ The plugin is a functional, surprisingly lean v1: the core claim/dispatch/retry 
 
 ---
 
-## Completeness (vs Celery)
+## Completeness (vs a full background-task queue)
 
 ### Implemented
 

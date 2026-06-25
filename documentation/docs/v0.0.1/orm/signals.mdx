@@ -145,7 +145,7 @@ subscribe("m2m_changed:post_tags", |payload| {
 });
 ```
 
-`set` reports the SQL-level reality: every prior child lands in `removed` (the DB DELETE wiped them all) and every supplied child lands in `added` (the DB INSERTs re-built the set). Subscribers that want a Django-style diff compute it in their handler.
+`set` reports the SQL-level reality: every prior child lands in `removed` (the DB DELETE wiped them all) and every supplied child lands in `added` (the DB INSERTs re-built the set). Subscribers that want a minimal added/removed diff compute it in their handler.
 
 `clear` on an empty relation skips emission: there is nothing to report.
 

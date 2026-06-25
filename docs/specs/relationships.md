@@ -41,7 +41,7 @@ Post::objects().filter(post::AUTHOR.eq(user.id)).fetch().await
 
 ### Many-to-many relationships
 
-Many-to-many needs a join-table helper type (Django's `ManyToManyField` emits a hidden table). Deferred.
+Many-to-many needs a join-table helper type (the relation is backed by a junction table). Deferred.
 
 ### Eager loading / `select_related` / `prefetch_related`
 

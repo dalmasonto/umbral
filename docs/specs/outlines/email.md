@@ -8,7 +8,7 @@
 
 ## Purpose
 
-`umbral::mail` is the framework's outbound-email pipeline: a Django-shape `send_mail(...)` helper for the simple case, a structured `EmailMessage` for everything else, and a pluggable `EmailBackend` so dev, test, and prod each get the right delivery semantics without changing call sites. It is core utility rather than an optional plugin — the moment password reset lands in `umbral-auth` (cross-link: outline `auth-and-sessions.md`), the framework needs a guaranteed way to deliver a token to a user's inbox, and a "maybe install this crate" story would let security-critical flows silently no-op. Backends matter because the right behaviour is environment-specific: dev wants to *see* the mail (console), tests want to *assert* on it without sending (dummy capture), staging wants to *review* it offline (file), and prod wants real SMTP. One module, four backends, one accessor — the same shape the DB pool and task queue from `01-app-and-settings.md` already use.
+`umbral::mail` is the framework's outbound-email pipeline: a simple `send_mail(...)` helper for the simple case, a structured `EmailMessage` for everything else, and a pluggable `EmailBackend` so dev, test, and prod each get the right delivery semantics without changing call sites. It is core utility rather than an optional plugin - the moment password reset lands in `umbral-auth` (cross-link: outline `auth-and-sessions.md`), the framework needs a guaranteed way to deliver a token to a user's inbox, and a "maybe install this crate" story would let security-critical flows silently no-op. Backends matter because the right behaviour is environment-specific: dev wants to *see* the mail (console), tests want to *assert* on it without sending (dummy capture), staging wants to *review* it offline (file), and prod wants real SMTP. One module, four backends, one accessor - the same shape the DB pool and task queue from `01-app-and-settings.md` already use.
 
 ## Key concepts
 
@@ -60,7 +60,7 @@ Promote at M9 entry, the moment `umbral-auth`'s password-reset flow needs to del
 - **Attachment representation.** Three options: a filesystem path (cheap, but couples to local disk), in-memory `Bytes` (works everywhere, ugly for large files), or a `Storage` handle from outline `static-and-media.md` (clean cross-link, requires that outline to land first). The right answer probably blends path-or-bytes for now and adds the `Storage` variant once media storage is concrete.
 - **HTML vs text alternative parts.** Convention is "ship both, let the client pick"; open is whether the templates pair is *required* (system-check warns on `.html.j2` without `.txt.j2`) or merely conventional.
 - **DKIM / SPF / DMARC integration.** Likely "use your SMTP relay" — umbral signs nothing itself in the first iteration. Revisit if a credible self-signing story surfaces; until then, the docs point users at SES / Postmark / Mailgun / a self-hosted Postfix relay.
-- **Inbound email.** Out of scope. Django doesn't ship inbound either; if a real ask appears, it lands as its own outline.
+- **Inbound email.** Out of scope; if a real ask appears, it lands as its own outline.
 
 ## Cross-links
 

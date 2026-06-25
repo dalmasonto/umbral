@@ -1,6 +1,6 @@
 //! End-to-end coverage for `Manager::get_or_create` and `Manager::upsert`.
 //!
-//! Both terminals are the ORM's answer to common Django patterns
+//! Both terminals are the ORM's answer to common write patterns
 //! (`get_or_create`) and the SQLite-native `INSERT ... ON CONFLICT DO
 //! UPDATE` (upsert). The tests pin the round-trip and the
 //! `(row, created)` flag for `get_or_create`.

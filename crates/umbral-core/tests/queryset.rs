@@ -433,7 +433,7 @@ async fn count_returns_total_rows() {
     assert_eq!(total, 5);
 }
 
-/// `count` respects the active filters, just like Django's `.count()`.
+/// `count` respects the active filters.
 #[tokio::test]
 async fn count_with_filter_counts_matching_rows() {
     let pool = fresh_pool().await;

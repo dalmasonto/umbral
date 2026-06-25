@@ -137,7 +137,7 @@ The argument order in the doc matches the real code. However, the doc says the r
 
 **Finding: Important — §Flash messages: `logout` call-site uses `umbral_sessions::logout`**
 
-The doc's logout example (line 89) calls `umbral_sessions::logout(&headers, response.headers_mut())`. `umbral_auth::logout` is also available (it's a re-export of the same function at `session_user.rs:525`). The doc showing `umbral_sessions::logout` directly is not wrong, but the doc earlier (line 10) says "Together they give you the Django shape" suggesting `umbral_auth` is the unified import. Minor inconsistency. Not a breaking bug.
+The doc's logout example (line 89) calls `umbral_sessions::logout(&headers, response.headers_mut())`. `umbral_auth::logout` is also available (it's a re-export of the same function at `session_user.rs:525`). The doc showing `umbral_sessions::logout` directly is not wrong, but the doc earlier (line 10) presents `umbral_auth` and `umbral_sessions` together, suggesting `umbral_auth` is the unified import. Minor inconsistency. Not a breaking bug.
 
 **Finding: FYI — `User` / `OptionalUser` extractors are `AuthUser`-specific (not generic)**
 

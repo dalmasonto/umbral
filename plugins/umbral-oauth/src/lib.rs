@@ -1,5 +1,5 @@
-//! `umbral-oauth` — OAuth / social authentication for umbral, the
-//! django-allauth equivalent.
+//! `umbral-oauth`: OAuth / social authentication for umbral.
+//! Social login and account connection.
 //!
 //! Layered on `umbral-auth`: it adds a `SocialAccount` table that links
 //! external identities (Google, GitHub, …) to an `AuthUser` **without

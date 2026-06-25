@@ -50,7 +50,7 @@ REST endpoints work for list/retrieve/create.
 
 ### BUG-5: `#[umbral(auto_now_add)]` and `#[umbral(auto_now)]` not supported
 **Where:** `crates/umbral-macros/src/lib.rs`
-**What:** These Django-style timestamp auto-populate attributes are documented in the spec but rejected by the macro.
+**What:** These timestamp auto-populate attributes are documented in the spec but rejected by the macro.
 **Workaround:** Use plain `DateTime<Utc>` fields and set values manually in code.
 **Fix suggestion:** Add these attributes to the macro and have the ORM write layer auto-populate them on `create` / `update`.
 
@@ -220,10 +220,10 @@ REST endpoints work for list/retrieve/create.
      - respects the backend dialect (SQLite vs Postgres)
    - This abstraction would then power FK, M2M, and any admin autocomplete uniformly.
 
-**Django comparison:**
-- Django admin renders FKs with a `<select>` (or `raw_id_fields` popup search). For large tables it uses `autocomplete_fields` with a search-powered AJAX dropdown.
-- Django renders M2M with a dual multi-select widget (left = available, right = selected) or a filter_horizontal/filter_vertical widget.
-- Django's `Model.__str__()` is the display label for FK/M2M options. Umbral's equivalent is `#[umbral(string)]` on a field, but there's no uniform "get display string for this row" API.
+**Prior-art comparison:**
+- Mature admin UIs render FKs with a `<select>` (or a popup search for raw ids). For large tables they use a search-powered AJAX autocomplete dropdown.
+- Mature admin UIs render M2M with a dual multi-select widget (left = available, right = selected) or a horizontal/vertical filter widget.
+- A model's string representation method is the display label for FK/M2M options. Umbral's equivalent is `#[umbral(string)]` on a field, but there's no uniform "get display string for this row" API.
 
 **Workaround:**
 - For FK: the existing async combobox works for moderate tables. For large tables the current `page_size=20` search is functional but not as rich as a shadcn Select.

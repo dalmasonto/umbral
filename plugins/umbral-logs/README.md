@@ -1,8 +1,8 @@
 # umbral-logs
 
-Django-request-style request logging for umbral. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin.
+Request logging for umbral. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

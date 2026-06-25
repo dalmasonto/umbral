@@ -1,6 +1,6 @@
-//! umbral-tasks — DB-backed background task queue. The Celery-equivalent
-//! shape: enqueue work that runs outside the request/response cycle,
-//! with retries and a worker process you run alongside the web server.
+//! umbral-tasks — DB-backed background task queue: enqueue work that runs
+//! outside the request/response cycle, with retries and a worker process
+//! you run alongside the web server.
 //! v1 uses the application's own SQLite/Postgres pool as the broker, so
 //! a fresh umbral project gets background work for the cost of one
 //! `.plugin(TasksPlugin)` line.
@@ -46,7 +46,7 @@
 //!   model carries a stable `name`, the handler `task` to fire, its JSON
 //!   `payload`, a serialized [`Schedule`] (cron expression or fixed
 //!   interval) and the computed `next_run`. [`TasksPlugin::periodic`]
-//!   registers a recurring task Celery-`beat_schedule` style; [`run_beat`]
+//!   registers a recurring task on a schedule; [`run_beat`]
 //!   is the separate beat process that, each tick, atomically claims every
 //!   due row (an optimistic conditional `UPDATE` advances `next_run` so a
 //!   second beat instance can't double-fire it) and enqueues the underlying
@@ -55,8 +55,8 @@
 //!   any `R: Serialize`; on success the worker serializes it into the
 //!   additive [`TaskRow::result`] column. [`task_status`] queries a task's
 //!   [`TaskStatus`] (state/result/error) by the id [`enqueue`] returned, and
-//!   [`await_result`] polls until the task reaches a terminal state — the
-//!   Celery `AsyncResult` / `AsyncResult.get()` equivalent. Unit-returning
+//!   [`await_result`] polls until the task reaches a terminal state,
+//!   returning a handle you can poll for the result. Unit-returning
 //!   handlers (`Ok(())`) stay source-compatible: `()` serializes to `null`.
 //! - Priority queues (this revision): [`TaskRow`] carries a nullable
 //!   `priority: Option<i32>` (higher = claimed first, default `0`).
@@ -132,8 +132,8 @@ pub struct TaskRow {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub error: Option<String>,
-    /// The handler's JSON-serialized return value (the result backend —
-    /// Celery's `AsyncResult` payload). `NULL` until the task succeeds; a
+    /// The handler's JSON-serialized return value (the result backend, i.e.
+    /// the result payload). `NULL` until the task succeeds; a
     /// unit-returning handler stores `"null"`. Left `NULL` on failure (the
     /// failure reason lives in `error`).
     ///
@@ -202,7 +202,7 @@ impl Plugin for TasksPlugin {
 }
 
 impl TasksPlugin {
-    /// Register a recurring task, Celery `beat_schedule` style. `name` is
+    /// Register a recurring task on a schedule. `name` is
     /// the schedule's stable key (one `PeriodicTask` row per name); `task`
     /// is the handler name [`run_beat`] enqueues each time the schedule
     /// fires; `payload` is the JSON args the handler receives.
@@ -279,7 +279,7 @@ impl umbral::cli::PluginCommand for WorkerCommand {
     }
 }
 
-/// `tasks-beat`: run the periodic-task scheduler (Celery beat).
+/// `tasks-beat`: run the periodic-task scheduler.
 ///
 /// On startup it syncs the registered [`PeriodicSpec`]s to `PeriodicTask`
 /// rows, then each tick claims every due row atomically and enqueues the
@@ -295,7 +295,7 @@ pub struct BeatCommand;
 impl umbral::cli::PluginCommand for BeatCommand {
     fn command(&self) -> clap::Command {
         clap::Command::new("tasks-beat")
-            .about("Run the umbral-tasks periodic scheduler (Celery beat)")
+            .about("Run the umbral-tasks periodic scheduler")
             .arg(
                 clap::Arg::new("once")
                     .long("once")
@@ -398,7 +398,8 @@ pub struct EnqueueOptions {
     /// whose `scheduled_for` is in the future stay invisible to the
     /// claim query. Defaults to `Utc::now()`.
     pub scheduled_for: Option<DateTime<Utc>>,
-    /// Absolute instant the task becomes eligible to run (Celery's `eta`).
+    /// Absolute instant the task becomes eligible to run (the `eta` /
+    /// scheduled instant).
     /// Mutually exclusive with [`Self::delay`]; if both are set, `eta`
     /// wins. When neither is set the task is eligible immediately.
     pub eta: Option<DateTime<Utc>>,
@@ -414,8 +415,8 @@ pub struct EnqueueOptions {
     /// columns is the documented follow-up (planning/features.md #82). The
     /// field is accepted now so callers don't have to change later.
     pub timeout: Option<Duration>,
-    /// Claim priority: **higher number = claimed first** (Celery has no
-    /// direct equivalent; this is closer to a classic job-queue priority).
+    /// Claim priority: **higher number = claimed first** (a classic
+    /// job-queue priority).
     /// `Some(9)` jumps ahead of the `0` default; `Some(-1)` drains behind
     /// it. Within a single priority, claims stay FIFO (ordered by
     /// `scheduled_for` then `id`). `None` (the default) enqueues at `0`.
@@ -1044,7 +1045,7 @@ async fn process_one(row: TaskRow, policy: RetryPolicy) -> Result<(), TaskError>
                 // count is accurate. Clear `started_at` so the next claim
                 // stamps a fresh timestamp, and push `run_at` into the
                 // future by the exponential backoff so the row isn't
-                // re-claimed until the delay elapses (Celery-style retry
+                // re-claimed until the delay elapses (delayed retry
                 // backoff instead of the old immediate re-queue).
                 let run_at = policy.next_run_at(row.attempts, now);
                 patch.insert(
@@ -1065,12 +1066,11 @@ async fn process_one(row: TaskRow, policy: RetryPolicy) -> Result<(), TaskError>
 }
 
 // =========================================================================
-// Result backend + task-status API (Celery `AsyncResult` parity).
+// Result backend + task-status API.
 // =========================================================================
 
 /// The lifecycle state of a task, derived from its row's `status` plus the
-/// `attempts` / `max_attempts` counters. The Celery `AsyncResult.state`
-/// equivalent.
+/// `attempts` / `max_attempts` counters. The task state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskState {
     /// Enqueued and waiting to be claimed (or backed off between retries).
@@ -1114,8 +1114,8 @@ impl TaskState {
     }
 }
 
-/// A snapshot of one task's status — the result backend query result. The
-/// Celery `AsyncResult` equivalent: query by the id [`enqueue`] returned to
+/// A snapshot of one task's status: the result backend query result.
+/// Query by the id [`enqueue`] returned to
 /// see whether the task ran, what it returned, or why it failed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskStatus {
@@ -1175,8 +1175,8 @@ impl TaskStatus {
     }
 }
 
-/// Query a task's status by the id [`enqueue`] returned (Celery's
-/// `AsyncResult(id)`). Loads the row via the ORM and maps it to a
+/// Query a task's status by the id [`enqueue`] returned.
+/// Loads the row via the ORM and maps it to a
 /// [`TaskStatus`], parsing the stored result JSON. Returns `Ok(None)` if no
 /// row with that id exists (e.g. it was drained).
 pub async fn task_status(id: i64) -> Result<Option<TaskStatus>, TaskError> {
@@ -1188,8 +1188,8 @@ pub async fn task_status(id: i64) -> Result<Option<TaskStatus>, TaskError> {
 }
 
 /// Poll [`task_status`] until the task reaches a terminal state
-/// ([`TaskState::is_terminal`]) or `timeout` elapses — Celery's
-/// `AsyncResult.get(timeout=...)`. Polls on a short fixed interval
+/// ([`TaskState::is_terminal`]) or `timeout` elapses.
+/// Polls on a short fixed interval
 /// ([`AWAIT_POLL_INTERVAL`]).
 ///
 /// On a terminal state, returns the final [`TaskStatus`]. On timeout,
@@ -1220,7 +1220,7 @@ pub async fn await_result(id: i64, timeout: Duration) -> Result<TaskStatus, Task
 pub const AWAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // =========================================================================
-// Periodic / cron scheduling — the "beat" (Celery beat parity).
+// Periodic / cron scheduling: the periodic scheduler ("beat").
 // =========================================================================
 
 /// A recurring schedule: either a standard cron expression or a fixed
@@ -1448,7 +1448,7 @@ pub async fn sync_periodic_specs(specs: &[PeriodicSpec]) -> Result<u64, TaskErro
 }
 
 /// Default beat poll interval: how long to sleep between ticks when no row
-/// is due. Celery beat defaults to a 5-minute max-loop but checks far more
+/// is due. A typical scheduler uses a max loop interval but checks far more
 /// often; 5s is a reasonable resolution for second-granularity crons.
 pub const DEFAULT_BEAT_POLL_INTERVAL: Duration = Duration::from_secs(5);
 

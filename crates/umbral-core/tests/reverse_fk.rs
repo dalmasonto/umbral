@@ -3,7 +3,7 @@
 //! For every `ForeignKey<T>` field on a child model, the macro emits an
 //! `impl T { fn <child_snake>_set(&self) -> QuerySet<Child> }` method
 //! that returns a QuerySet pre-filtered to the FK column. This is the
-//! Rust equivalent of Django's `user.comment_set.all()` — the parent
+//! reverse accessor `user.comment_set.all()`: the parent
 //! gets a typed accessor for each child relation pointing at it.
 
 #![allow(dead_code)]

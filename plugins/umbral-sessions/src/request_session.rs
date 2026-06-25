@@ -7,7 +7,7 @@
 //! against the [`SessionStore`]), parks a `RequestSession` in the
 //! `CURRENT_SESSION` task-local for the duration of the handler, and — at
 //! exit — persists the record back via the store ONLY if the handler
-//! mutated it (`dirty`). This reproduces Django's lazy-creation contract
+//! mutated it (`dirty`). This is the lazy-creation contract
 //! (gaps2 #46): a request that never writes the session leaves zero rows
 //! and sets no cookie.
 //!

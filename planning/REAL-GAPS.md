@@ -15,7 +15,7 @@ Anything in **Part B** that Umbral does not yet cover is a strategic gap — it 
 
 | # | Feature | Why it matters | Umbral status |
 |---|---------|----------------|--------------|
-| 1 | **Auto-generated Admin UI** | Visual CRUD without writing HTML/JS. Django's killer feature. | ✅ `umbral-admin` — list, create, edit, delete, search, filters |
+| 1 | **Auto-generated Admin UI** | Visual CRUD without writing HTML/JS. A batteries-included killer feature. | ✅ `umbral-admin` - list, create, edit, delete, search, filters |
 | 2 | **Built-in Auth** | Users, login, logout, password reset, session management out of the box. | ✅ `umbral-auth` + `umbral-sessions` |
 | 3 | **REST API Auto-generation** | Expose models as JSON endpoints with pagination, filtering, sorting with zero config. | ✅ `umbral-rest` — list, retrieve, create, update, delete |
 | 4 | **Database Migrations** | `makemigrations` + `migrate` that diffs models and generates safe SQL. | ✅ Phase 1 complete — autodetect, apply, track |
@@ -77,7 +77,7 @@ Anything in **Part B** that Umbral does not yet cover is a strategic gap — it 
 Umbral now covers roughly **85% of Part A** — 17/20 ✅ (admin, auth, REST, migrations, CLI, hot-reload, deploy, **tasks**, **email**, media, OpenAPI, OAuth, realtime, **caching**, **form validation**, testing, **dashboard**); only FTS and the plugin ecosystem are partial and i18n is unstarted — and **~30% of Part B** (health checks, RBAC, CSRF/XSS hardening, vendor-neutral abstractions ✅; data-masking via `Masked<T>`, RLS, audit log, backup, pooling partial). Updated 2026-06-14.
 
 The gap pattern is clear:
-- **Developer features** that Django already solved are being rebuilt well (admin, auth, REST, migrations, CLI).
+- **Developer features** that mature batteries-included frameworks already solved are being rebuilt well (admin, auth, REST, migrations, CLI).
 - **Organization features** are almost entirely untouched (SSO, multi-tenancy, observability, rate limiting, compliance).
 
 The next high-value milestone is not adding more ORM sugar. It is picking 3–4 organization-grade features (SSO/OIDC, rate limiting, structured logging/observability, multi-tenancy) and shipping them as first-class plugins. That changes the conversation from "this is a cool side-project framework" to "we can pilot this internally."

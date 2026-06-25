@@ -59,7 +59,7 @@
 //! ## What is deferred
 //!
 //! - **Reverse accessors** (`tag.post_set`). Needs a runtime registry walk.
-//! - **`through=` models** (Django's M2M with extra fields on the
+//! - **`through=` models** (an M2M with extra fields on the
 //!   junction). The current shape only covers the implicit join table.
 //! - **Cross-database M2M** (parent on DB-A, child on DB-B). Rejected at boot.
 //! - **`prefetch_related` (batch-load)** — the QuerySet plumbing that
@@ -423,7 +423,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
 
     /// `(parent_id, junction_table)` shorthand. Returns `None` when
     /// either side is unset — the public CRUD treats that as "nothing
-    /// to do" rather than an error, matching Django's behaviour on
+    /// to do" rather than an error, matching the behaviour on
     /// unsaved parent instances.
     fn junction_handle(&self) -> Option<(P, &'static str)> {
         Some((self.parent_id.clone()?, self.junction_table?))
@@ -990,7 +990,7 @@ async fn execute_delete(q: &sea_query::DeleteStatement) -> Result<u64, sqlx::Err
 
 // =========================================================================
 // serde: serialise as an array of resolved rows when prefetch_related
-// fired; empty array otherwise. Mirrors Django's M2M serialisation.
+// fired; empty array otherwise.
 // =========================================================================
 
 impl<T: Model + Serialize, P: PrimaryKey> Serialize for M2M<T, P> {

@@ -15,16 +15,15 @@
 //! - [`NoPagination`] — the default. Returns every row in a
 //!   `{ results: [...], count: N }` envelope. Same shape as before
 //!   pagination existed; doesn't run a separate COUNT query.
-//! - [`PageNumberPagination`] — Django's `PageNumberPagination`
-//!   shape. `?page=N&page_size=M`. Envelope carries `count`,
+//! - [`PageNumberPagination`] — page-number shape.
+//!   `?page=N&page_size=M`. Envelope carries `count`,
 //!   `total_pages`, `current_page`, `page_size`, `next`, `previous`,
 //!   `results`.
 //! - [`LimitOffsetPagination`] — REST classic. `?limit=N&offset=M`.
 //!   Envelope carries `count`, `next`, `previous` (as offset deltas),
 //!   `limit`, `offset`, `results`.
 //!
-//! Custom shapes implement the trait directly. The DRF "custom
-//! paginator" pattern maps 1:1.
+//! Custom shapes implement the trait directly.
 
 use std::collections::HashMap;
 
@@ -173,11 +172,10 @@ impl Pagination for NoPagination {
 }
 
 // =========================================================================
-// Built-in 2: PageNumberPagination — Django default.
+// Built-in 2: PageNumberPagination — page-number shape.
 // =========================================================================
 
-/// `?page=N&page_size=M` shape. Django's `PageNumberPagination`
-/// equivalent.
+/// `?page=N&page_size=M` page-number shape.
 ///
 /// Envelope:
 ///
@@ -200,7 +198,7 @@ impl Pagination for NoPagination {
 #[derive(Debug, Clone, Copy)]
 pub struct PageNumberPagination {
     /// Default rows-per-page when the client doesn't pass
-    /// `?page_size=...`. 50 matches Django's pragmatic default.
+    /// `?page_size=...`. 50 is the common default.
     pub page_size: u64,
     /// Hard ceiling on `?page_size=...`. Stops a curious client
     /// from asking for `?page_size=1000000` and DoSing the API.

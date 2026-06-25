@@ -335,18 +335,18 @@ impl From<std::io::Error> for StorageError {
 }
 
 /// The conventional name of the **media** (user-upload) storage instance,
-/// Django's `STORAGES["default"]`. The back-compat accessors
+/// the `"default"` entry in the storage registry. The back-compat accessors
 /// ([`storage`], [`set_storage`], …) operate on this name.
 pub const DEFAULT: &str = "default";
 
 /// The conventional name of the **static-files** storage instance,
-/// Django's `STORAGES["staticfiles"]` — where `collectstatic` writes
-/// collected assets. Resolved independently of [`DEFAULT`].
+/// the `"staticfiles"` entry in the storage registry, where `collectstatic`
+/// writes collected assets. Resolved independently of [`DEFAULT`].
 pub const STATICFILES: &str = "staticfiles";
 
 /// The ambient, **named** storage registry, published at boot.
 ///
-/// Django's `STORAGES` setting, recreated: a small map from a static name
+/// The named storage map: a small map from a static name
 /// (`"default"` for media, `"staticfiles"` for collected assets) to its
 /// backend. Replaces the former single-global `OnceLock<Arc<dyn Storage>>`
 /// so media and static can resolve independent backends under one

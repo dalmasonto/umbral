@@ -6,7 +6,7 @@ icon: radio
 tags: [plugins, signals, events, orm]
 ---
 
-`umbral-signals` brings Django's signal shape to Rust: subscribe to per-model lifecycle events and the ORM fires your handler automatically on every `save` or `delete`. It's strictly **in-process** at v1 - no cross-process broker, no persistence, no replay. For work that must survive a process crash, pair signals with [`umbral-tasks`](/docs/v0.0.1/plugins/tasks): the signal handler enqueues a task; the worker runs it.
+`umbral-signals` lets you subscribe to per-model lifecycle events: the ORM fires your handler automatically on every `save` or `delete`. It's strictly **in-process** at v1 - no cross-process broker, no persistence, no replay. For work that must survive a process crash, pair signals with [`umbral-tasks`](/docs/v0.0.1/plugins/tasks): the signal handler enqueues a task; the worker runs it.
 
 ## Register the plugin
 

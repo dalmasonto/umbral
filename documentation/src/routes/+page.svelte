@@ -19,7 +19,7 @@
   const pageDescription =
     'Umbral is a Rust web framework for shipping complete web applications: ORM with managed migrations, auto-generated REST API, admin UI, auth + sessions, background tasks, email, and a plugin system. Compile-time guarantees instead of runtime hopes.';
   const pageKeywords =
-    'Rust web framework, Rust ORM, Rust web framework with API, Rust admin panel, Rust REST framework, Rust Django alternative, full-stack Rust, sqlx ORM, axum framework, Rust web development, batteries-included Rust';
+    'Rust web framework, Rust ORM, Rust web framework with API, Rust admin panel, Rust REST framework, full-stack Rust, sqlx ORM, axum framework, Rust web development, batteries-included Rust';
   let siteUrl = $derived((config?.site?.url || 'http://localhost:5173').replace(/\/$/, ''));
 
   let jsonLd = $derived({
@@ -132,7 +132,7 @@
             </div>
             <h3 class="text-base font-semibold text-foreground mb-2">Auto-generated REST API</h3>
             <p class="text-sm text-muted-foreground leading-relaxed">
-              Every model gets <code class="font-mono">/api/&lt;table&gt;</code> CRUD. DRF-style <code class="font-mono">ResourceConfig</code> hides/transforms/computes fields and registers <code class="font-mono">@action</code> endpoints. OpenAPI schema for free.
+              Every model gets <code class="font-mono">/api/&lt;table&gt;</code> CRUD. <code class="font-mono">ResourceConfig</code> hides/transforms/computes fields and registers <code class="font-mono">@action</code> endpoints. OpenAPI schema for free.
             </p>
           </article>
           <article>

@@ -1,8 +1,8 @@
 # umbral-oauth
 
-OAuth / social-auth for umbral (django-allauth equivalent): social login and account connection for Google, GitHub, and more, layered on umbral-auth. Provider tokens are stored encrypted via Masked<T>.
+OAuth / social-auth for umbral: social login and account connection for Google, GitHub, and more, layered on umbral-auth. Provider tokens are stored encrypted via Masked<T>.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

@@ -45,7 +45,7 @@ Every method except `name()` has a default that returns the empty contribution. 
 | `migrations()` | Plugin-owned migrations. Each plugin owns its tables; no special-casing. | `06-migration-engine.md`'s tracking table, ordered by `dependencies()`. |
 | `routes()` | An axum-shape `Router` that mounts under the plugin's path (e.g. `/auth/...`). | The `App`'s top-level Router. |
 | `middleware()` | tower layers added to the global middleware chain. | The middleware chain (see open questions for cross-plugin ordering). |
-| `commands()` | clap-shape subcommands extending the `manage.py`-equivalent CLI. | The `umbral-cli` binary. |
+| `commands()` | clap-shape subcommands extending the project management CLI. | The `umbral-cli` binary. |
 | `system_checks()` | Boot-time checks the plugin needs to pass before `on_ready` fires (settings validation, custom invariants). | The system-check phase in `01-app-and-settings.md` §Lifecycle phases. |
 | `on_ready()` | Wire signals, start background work, seal admin registrations. | Called after system checks pass, in dependency order. |
 
@@ -205,7 +205,7 @@ The linker caveat is unavoidable: Rust's linker drops crates that nothing refere
 
 ## Trade-offs and alternatives considered
 
-**One trait with many default-noop methods, vs separate traits per concern (`MigrationProvider`, `RouteProvider`, …).** Separate traits would be more compositional but require the plugin struct to implement N traits, and the builder to query each one separately. A single trait with default methods reads cleanly at the impl site (the methods are right there to override), keeps the builder code simple, and matches Django's `AppConfig` ergonomically. The trait surface is wide but shallow.
+**One trait with many default-noop methods, vs separate traits per concern (`MigrationProvider`, `RouteProvider`, …).** Separate traits would be more compositional but require the plugin struct to implement N traits, and the builder to query each one separately. A single trait with default methods reads cleanly at the impl site (the methods are right there to override) and keeps the builder code simple: a plugin author overrides only the handful of methods their plugin needs and ignores the rest. The trait surface is wide but shallow.
 
 **Explicit registration as the default, not inventory.** Three reasons:
 

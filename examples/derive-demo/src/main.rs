@@ -18,7 +18,7 @@
 //! - Rendering HTML pages with `umbral::templates`: a `base.html` carrying
 //!   the layout, child templates extending it with `{% block content %}`,
 //!   and autoescape on by default for the XSS guarantee.
-//! - Wiring the Django-shaped 404/500 fallback: drop a `404.html` and
+//! - Wiring the convention-based 404/500 fallback: drop a `404.html` and
 //!   `500.html` in the templates dir, point at them with
 //!   `not_found_template` / `server_error_template`, and the framework
 //!   renders them for unhandled routes and handler panics. The user
@@ -150,13 +150,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // at an absolute path or use the default `./templates`
         // relative to its deploy layout).
         .templates_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/templates"))
-        // Django-shaped 404: the framework renders `templates/404.html`
+        // Convention-based 404: the framework renders `templates/404.html`
         // for any route that doesn't match. The request path lands in
         // the template's `path` context variable. Replaces the
         // pre-builtin `not_found` fallback handler this example used
         // to carry inline.
         // .not_found_template("404.html")
-        // Django-shaped 500: a `tower_http::catch_panic` layer
+        // Convention-based 500: a `tower_http::catch_panic` layer
         // installed by the builder turns handler panics into a 500
         // response rendered through `templates/500.html`. In dev mode
         // the template receives `error_display`, `error_chain`, and

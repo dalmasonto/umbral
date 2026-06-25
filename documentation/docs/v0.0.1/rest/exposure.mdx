@@ -64,7 +64,7 @@ RestPlugin::default()
 
 ### Registering many resources at once
 
-Like DRF serializers, REST customization is best defined **per app** - next to the models it describes - rather than piled into `main.rs`. Each plugin exports a `Vec<ResourceConfig>` and the app registers them in one `.resources(...)` call instead of a `.resource(...)` per model:
+REST customization is best defined **per app** - next to the models it describes - rather than piled into `main.rs`. Each plugin exports a `Vec<ResourceConfig>` and the app registers them in one `.resources(...)` call instead of a `.resource(...)` per model:
 
 ```rust
 // plugins/blog/src/lib.rs - the blog app's REST surface, next to its models

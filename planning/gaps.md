@@ -5,7 +5,7 @@
 | # | Gap | Status |
 |---|-----|--------|
 | 1 | Email plugin attachments | done — `abf502c` |
-| 2 | Django-style 404 / 500 pages | done — `e42f408` |
+| 2 | Built-in 404 / 500 pages | done — `e42f408` |
 | 3 | CLI: `umbral startproject` / `startapp` + dispatch shape | done — `95f0709` + `e5645a4` |
 | 4 | Plugin docs + REST custom field rendering | done — `1cdbc18` (docs) + `dc84dbf` (code) |
 | 5 | OpenAPI customisation params (`.description()`) | done — `e42f408` |
@@ -24,7 +24,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 > `[x]` write-ups are archived verbatim (same numbers) in `archive/gaps-done.md`. Only open `[ ]` and partial `[~]` entries keep full text here.
 
 1. [x] Email plugin lacks the ability to do file attachments — archived
-2. [x] Django has special way of doing pages ie 404, 500 (Internal server error) which is quite symbol and … — archived
+2. [x] We need a clean built-in way of doing pages ie 404, 500 (Internal server error) which is quite simple and … — archived
 3. [x] The current version does not make use of the cli. Ie instead of `cargo run`, you must use `umbral … — archived
 4. [x] Docs are out of sync with the current version ie how to use plugins. There is no plugin section on … — archived
 5. [x] The openapi plugin should allow the user to pass in params to customize the openapi schema. ie the … — archived
@@ -40,26 +40,26 @@ All known gaps closed. New gaps land below as they're surfaced.
 15. [x] What have we done to make sure the system can handle many requests safely. Things like proper … — archived
 16. [x] Minininja already supports context, can we have the same for us here ie when returning a page, we can return it with a context that contains the data needed for the page - This seems to be done already
 17. [x] There is no `.get` method on the model to get a single record by id or by any other field. Also we … — archived
-18. [x] Django admin is so extensive ie you get alot of things out of the box by extending it ie you can … — archived
+18. [x] A good admin should be extensive ie you get alot of things out of the box by extending it ie you can … — archived
 19. [x] Defer this but have it somehwere as a pending task - We shall use tailwind css for everything, we … — archived
 20. [x] When I start a project, do I get a complete scaffold out of the box? ie all the basic setup and … — archived
-21. [x] DRF views, ie ApiView, has a way of extending and adding custom actions. Can we be able to have the … — archived
+21. [x] REST views, ie an ApiView, should have a way of extending and adding custom actions. Can we be able to have the … — archived
 22. [x] How do we do templates discovery? ie a template in app1 might be referenced in a view in app2 ie … — archived
 23. [x] Update the docs landing page to have complete SEO as to why this is the best Rust web framework for … — archived
 24. [x] How do we handle cases where a user deleted some migrations but in the db there are migrations. We … — archived
 25. [x] How do we handle primary keys? when they are ints and when they are uuids, strings? By default, in … — archived
-26. [x] In django, for view, we had this decorator called `login_required` (It has something like … — archived
+26. [x] For a view, we want a `login_required` gate (It has something like … — archived
 27. [x] In docs, under backends, we have only shown postgresql but no sqlite! We need to add sqlite to the … — archived
-28. [x] Django has a way of doing `prefetch_related` and other helpers like `select_related`, `F`, `Q` to … — archived
-29. [x] The rest framework is also extended by some packages like `django-filter`, `django-rest-swagger`, … — archived
+28. [x] We want a way of doing `prefetch_related` and other helpers like `select_related`, `F`, `Q` to … — archived
+29. [x] The REST layer should be extensible with add-ons like a query-string filter plugin, a Swagger UI plugin, … — archived
 30. [x] Do we create tables based on plugin namespace ie `blogs_Post` `main_Category`? I ask this since it … — archived
 31. [x] Custom User Model implementation and setting the custom user model in settings — archived
 32. [x] There is no dedicated docs page for template helpers like humanize etc — archived
-33. [x] We don't have proper role management, hence contenttypes and user groups. Django has groups which … — archived
+33. [x] We don't have proper role management, hence content types and user groups. We want groups which … — archived
 34. [x] Related to #32 - Add the third column in the tables for `usage` — archived
 35. [x] We should catch internal server errors and allow the developer to use/display the error if they … — archived
 36. [x] Related to #26, update the docs on how to use this structure for auth gating! And its like you … — archived
-37. [x] In django, if you have a `Post` model, and it has `author` which is an fk to User model, when you … — archived
+37. [x] If you have a `Post` model, and it has `author` which is an fk to User model, when you … — archived
 38. [x] How do we handle atomic txs here? We need this since its veryvery critical and nice to have — archived
 39. [x] The startapp command should check if there is an existing app to avoid app confusions (Check if it … — archived
 40. [x] I haven't seen any places for signals! Also this goes hand in hand with the Tasks plugin. We need … — archived
@@ -68,7 +68,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 43. [ ] Can a plugin be extended ie extension of AdminPlugin with more features maybe, like more pages, components, etc
 44. [x] I forgot - When creating models, is it possible we define display name and icon (ie "users" for a … — archived
 45. [x] The admin templates, both base.html and login.html have the same general layout ie tailwind config, … — archived
-46. [x] Django has a way of defining the string method of a column. Instead of displaying all the columns, … — archived
+46. [x] We want a way of defining the string method of a column. Instead of displaying all the columns, … — archived
 47. [x] Complete Admin Rename ie site title, description, default colorscheme (primary color and theming) — archived
 48. [x] Plugin of `#umbral(plugin = "app")` needs further details ie I tried to change the plugin the … — archived
 49. [/] Static plugin and media plugins, we need this out of the box for files under `static` or `assets` or `media` folders. Also, we need this for `S3` or create a new `S3 compatible` plugin (We should use any existing libraries for this) including a library to handle images, generate metadata for them like thumbnails and store to db. Like we need a proper media/file handler a user can easily integrate as a plugin and get some things automagically like file upload and url back etc.
@@ -79,7 +79,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 53. [x] We have support for different dbs in one go, but we haven't fully mapped out the way models are … — archived
 54. [x] Default files need updates ie `default_500.html` and `default_404.html` to use tailwind cdn with … — archived
 55. [x] In dev mode, the default 404 should atleast show available paths ie shown with deep nesting per … — archived
-56. [x] In templates, with django, you can directly do `request.user` and get a complete user object … — archived
+56. [x] In templates, we want to directly do `request.user` and get a complete user object … — archived
 57. [x] We have the permissions plugin, how can we make it work with our rest plugin? as an extension. They … — archived
 58. [x] Permissions models gain noedit + admin FK/M2M picker is searchable (not load-all) — archived
        — Parts 1-3 shipped. `plugins/umbral-permissions/src/models.rs` now carries the edit policy as `#[umbral(noedit)]` markers on every column that would corrupt the permission system if renamed. The policy table:
@@ -130,7 +130,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 66. [ ] We shall need support for MySQL - Defer this but we shall work on it.
 67. [x] Static files pipeline — STATIC_URL/static_root settings, Plugin::static_dirs(), collect_static command, unified /static/ serving (admin + playground migrated) — archived
 68. [x] Expose on_delete and on_update for ForeignKeys — archived
-69. [x] How do we do foreignkeys to self, in django we use a string rep of the model name to refer to … — archived
+69. [x] How do we do foreignkeys to self, some frameworks use a string rep of the model name to refer to … — archived
 70. [ ] Cache middleware improvements ie ability to control cache through redis, in memory or in other ways. Should be easy to use. Redis has sorted sets and can be used for caching with TTL. So for caching, we should fully explore redis options and have it as CachePlugin::Redis, or memcache as CachePlugin::Memcache etc
 71. [x] The current PLaygroundPlugin does not take in app name, meaning the playground is not properly … — archived
 72. [x] /home/dalmas/E/projects/umbral/plugins/umbral-rest/src/auth.rs ln 57 is wrong, I thought we improved … — archived
@@ -152,15 +152,15 @@ All known gaps closed. New gaps land below as they're surfaced.
 86. [x] In the playground plugin - In the body, json autofills the required fields but form does not. Form … — archived
 87. [x] The playground plugin - It does not save endpoint changes like what the user selected and entered … — archived
 88. [x] Autodetector: column rename detection — `RenameColumn` operation missing. Renaming `title` → … — archived
-89. [~] Autodetector: no data migrations — RunSql SHIPPED (2026-06-24): `Operation::RunSql { sql, reverse_sql }` + `makemigrations --empty` give the RunSQL escape hatch (hand-authored data migrations, applied per-tenant-schema under multitenancy). REMAINING: `RunPython`/`RunCode` (arbitrary Rust in a migration) — needs a callback-registration mechanism, deferred. (Autodetecting data migrations is intentionally absent — Django doesn't either; they're hand-authored.)
-90. [ ] Autodetector: no `SeparateDatabaseAndState` — Django can run schema operations that touch the DB but *not* the model state (or vice versa). This is critical for zero-downtime deploys where you add a column as nullable, deploy code, backfill, then make it non-nullable in a second migration. Umbral's `operations` and `snapshot_after` are tightly coupled; every op updates the snapshot.
+89. [~] Autodetector: no data migrations - RunSql SHIPPED (2026-06-24): `Operation::RunSql { sql, reverse_sql }` + `makemigrations --empty` give the RunSQL escape hatch (hand-authored data migrations, applied per-tenant-schema under multitenancy). REMAINING: `RunPython`/`RunCode` (arbitrary Rust in a migration) - needs a callback-registration mechanism, deferred. (Autodetecting data migrations is intentionally absent - hand-authored is the norm.)
+90. [ ] Autodetector: no `SeparateDatabaseAndState` - the ability to run schema operations that touch the DB but *not* the model state (or vice versa). This is critical for zero-downtime deploys where you add a column as nullable, deploy code, backfill, then make it non-nullable in a second migration. Umbral's `operations` and `snapshot_after` are tightly coupled; every op updates the snapshot.
 91. [x] Autodetector: multi-step `AlterColumn` is not batched — changing `nullable`, `default`, and … — archived
 92. [x] Autodetector: constraint-level operations missing — adding a `unique_together` or an `index` on an … — archived
-93. [ ] Autodetector: M2M junction table rename not handled — renaming a model that has `M2M<T>` fields drops and recreates the junction table instead of renaming it. The code explicitly acknowledges this: "Renames of the parent model trip a Drop + Create on the junction — same semantics as Django, and the rename-tracking we'd need to do better is ambitious enough to defer."
-94. [ ] Autodetector: no migration squashing — Django's `squashmigrations` collapses N migrations into 1 for cleaner history. Umbral has no equivalent. For long-running projects, the `migrations/` directory grows unbounded.
-95. [ ] No interactive shell / REPL — Django's `python manage.py shell` (and `shell_plus` from django-extensions) is the primary exploration tool for the ORM: inspect live models, run ad-hoc queries, test filter predicates, prototype aggregates, and debug data issues without recompiling. Umbral has no equivalent. A Rust REPL is harder than Python's because of the compile step, but `evcxr` (a Rust Jupyter kernel) proves it's possible. The right shape for Umbral: `cargo run -- shell` spawns an `evcxr`-like session with the app's `AppContext`, `DbPool`, and `Settings` pre-loaded into scope, so `Post::objects().filter(...).fetch().await` works interactively. Without this, every ORM exploration requires writing a test or a handler, compiling, and running — a 30-second loop instead of instant feedback.
+93. [ ] Autodetector: M2M junction table rename not handled - renaming a model that has `M2M<T>` fields drops and recreates the junction table instead of renaming it. The code explicitly acknowledges this: "Renames of the parent model trip a Drop + Create on the junction, and the rename-tracking we'd need to do better is ambitious enough to defer."
+94. [ ] Autodetector: no migration squashing - a `squashmigrations` command would collapse N migrations into 1 for cleaner history. Umbral has no equivalent. For long-running projects, the `migrations/` directory grows unbounded.
+95. [ ] No interactive shell / REPL - an interactive shell command would be the primary exploration tool for the ORM: inspect live models, run ad-hoc queries, test filter predicates, prototype aggregates, and debug data issues without recompiling. Umbral has no equivalent. A Rust REPL is harder than a scripting language's because of the compile step, but `evcxr` (a Rust Jupyter kernel) proves it's possible. The right shape for Umbral: `cargo run -- shell` spawns an `evcxr`-like session with the app's `AppContext`, `DbPool`, and `Settings` pre-loaded into scope, so `Post::objects().filter(...).fetch().await` works interactively. Without this, every ORM exploration requires writing a test or a handler, compiling, and running - a 30-second loop instead of instant feedback.
 96. [x] `/home/dalmas/E/projects/umbral/bugs/db-testing.md` - Fix the bugs here and close them. — archived
-97. [x] Migrations: In django, if you add a field which is not optional to an already existing model, the … — archived
+97. [x] Migrations: If you add a field which is not optional to an already existing model, the … — archived
 98. [x] Do we really have auto-detection for same tables and or models? — archived
 99. [x] Playground: Environment variables not saved - a bug — archived
 100. [x] Playground: Not all requests are recorded ie I saved my base url to `https://google.com` and then … — archived
@@ -169,7 +169,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 103. [x] Playground: Search on the sidebar also searches through the term "Post" since all post requests are … — archived
 104. [ ] Under migrations: If you disable a plugin/app, do we delete the underlying tables? Do we need to ask the user what happens? Since they can just re-enable and expect everything as was. What really happens in such a scenario? This goes hand in hand with, if I change the plugin name on the model, does it produce the proper rename table? Also, if it had linked m2m/fk/1to1 relationships, do they get renamed as well?
 105. [x] Reverse-FK accessors across crates — replace `#[umbral(no_reverse)]` with a trait-based emission. … — archived
-106. [x] Timezone awareness — Django `USE_TZ` / `TIME_ZONE` equivalent. — archived
+106. [x] Timezone awareness - a `USE_TZ` / `TIME_ZONE` style setting. — archived
 107. [x] The base path for admin plugin is fixed at `/admin/`. Can this be made dynamic so a user can use … — archived
 108. [x] How can we safely do api versioning using our rest plugin? — ANSWERED/SHIPPED: `umbral-rest` versioning (`versioning.rs`) — URL-path versions with `.default_version(...)`/`.allowed_version(...)` (features #63).
 109. [x] We need an auto-slugify field given a field value ie `title` -> `title-slug`. Should be a model … — archived

@@ -47,8 +47,8 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             // would break out of the script element and run attacker JS in
             // the admin origin. Escape those to their `\uXXXX` JSON forms
             // (still valid JSON, parses to the same value) plus the U+2028/
-            // U+2029 line separators that terminate JS strings. Mirrors
-            // Django's `json_script`.
+            // U+2029 line separators that terminate JS strings. Produces an
+            // inline JSON script block (a json_script-style embed).
             let safe = json
                 .replace('<', "\\u003c")
                 .replace('>', "\\u003e")
@@ -57,7 +57,7 @@ pub(crate) fn engine() -> &'static Environment<'static> {
                 .replace('\u{2029}', "\\u2029");
             minijinja::Value::from_safe_string(safe)
         });
-        // Django-style date/datetime humanizers. Templates render
+        // Date/datetime humanizers. Templates render
         // raw RFC3339 / SQL-shaped timestamps through one of these
         // instead of dumping the unreadable `2026-06-08T21:23:20.619...`
         // straight at the user:

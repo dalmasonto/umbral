@@ -11,9 +11,9 @@ without any additional infrastructure.
 
 ## What you get from `SessionsPlugin::default()`
 
-Registering the plugin creates one migration: a `session` table with columns `id` (the SHA-256 digest of the raw cookie token - the raw token only ever lives in the cookie, so a DB leak can't replay sessions), `user_id` (nullable, the user PK stringified - `TEXT`, not a typed FK, so any PK type round-trips), `data` (JSON string), `created_at`, and `expires_at`. The plugin has no hard dependency on `umbral-auth`; anonymous sessions are valid. The `umbral_session` cookie is set with `Secure`, `HttpOnly`, `SameSite=Lax`, and `Max-Age=1209600` (14 days, matching Django's `SESSION_COOKIE_AGE` default).
+Registering the plugin creates one migration: a `session` table with columns `id` (the SHA-256 digest of the raw cookie token - the raw token only ever lives in the cookie, so a DB leak can't replay sessions), `user_id` (nullable, the user PK stringified - `TEXT`, not a typed FK, so any PK type round-trips), `data` (JSON string), `created_at`, and `expires_at`. The plugin has no hard dependency on `umbral-auth`; anonymous sessions are valid. The `umbral_session` cookie is set with `Secure`, `HttpOnly`, `SameSite=Lax`, and `Max-Age=1209600` (14 days by default).
 
-By default `SessionsPlugin` auto-applies its `session_layer` middleware through `Plugin::wrap_router`. The layer creates a session row **lazily on first write** (Django-style): every request gets a session token in memory, but the row is only persisted when something actually writes the session (`set_data`, `Messages`, login). A cookie-less request that never writes the session (a favicon, a CSS/JS asset, an anonymous read-only page) leaves no row and sets no `Set-Cookie`. The first write materialises exactly one row and emits the cookie. Call `.without_auto_layer()` to skip the layer entirely and apply it only to a sub-router.
+By default `SessionsPlugin` auto-applies its `session_layer` middleware through `Plugin::wrap_router`. The layer creates a session row **lazily on first write**: every request gets a session token in memory, but the row is only persisted when something actually writes the session (`set_data`, `Messages`, login). A cookie-less request that never writes the session (a favicon, a CSS/JS asset, an anonymous read-only page) leaves no row and sets no `Set-Cookie`. The first write materialises exactly one row and emits the cookie. Call `.without_auto_layer()` to skip the layer entirely and apply it only to a sub-router.
 
 ```rust
 App::builder()
@@ -38,9 +38,9 @@ async fn dashboard(headers: HeaderMap) -> Result<Html<String>, StatusCode> {
 }
 ```
 
-## Expose the current user in every template (Django-style)
+## Expose the current user in every template
 
-Opt in with `.with_user_in_templates()` and every template render in the app gets `{{ user }}` for free - Django's `request.user` shape, no per-handler ctx threading. The method lives on `AuthPlugin`, not `SessionsPlugin`: the layer needs to name the concrete user model to hydrate it, which is `umbral-auth`'s job. `SessionsPlugin` still has to be registered for the underlying session lookup to work:
+Opt in with `.with_user_in_templates()` and every template render in the app gets `{{ user }}` for free - no per-handler ctx threading. The method lives on `AuthPlugin`, not `SessionsPlugin`: the layer needs to name the concrete user model to hydrate it, which is `umbral-auth`'s job. `SessionsPlugin` still has to be registered for the underlying session lookup to work:
 
 ```rust
 App::builder()
@@ -88,7 +88,7 @@ let count: Option<u32> = umbral_sessions::get_data(&session, "cart_count")?;
 
 ## Sliding (rolling) expiry
 
-By default a session's `expires_at` is fixed at creation time. A session started on Monday with a 14-day TTL expires on Monday two weeks later, regardless of activity. Call `.sliding_expiry()` to enable Django's `SESSION_SAVE_EVERY_REQUEST = True` equivalent: every request that resolves a live session extends `expires_at` to `now + 14 days`, so an actively-used session never hard-expires mid-use.
+By default a session's `expires_at` is fixed at creation time. A session started on Monday with a 14-day TTL expires on Monday two weeks later, regardless of activity. Call `.sliding_expiry()` so that every request that resolves a live session extends `expires_at` to `now + 14 days`, so an actively-used session never hard-expires mid-use.
 
 ```rust
 App::builder()

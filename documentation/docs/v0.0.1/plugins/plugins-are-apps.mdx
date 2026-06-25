@@ -1,33 +1,29 @@
 ---
-title: Plugins are apps
-description: umbral's `Plugin` is the Django-app concept under a different name.
+title: What a plugin is
+description: A `Plugin` is a self-contained, swappable unit that bundles models, routes, and logic into one builder call.
 sidebar_position: 2
 icon: package
 ---
 
-If you came to umbral from Django and went looking for `INSTALLED_APPS`, you
-probably didn't find it. The reason is naming, not a missing feature.
+A `Plugin` is umbral's unit of composition: a self-contained, swappable bundle of everything one slice of an app contributes, registered with a single builder call.
 
-**A `Plugin` is an app.** The umbral `Plugin` trait carries every contribution a Django app makes (models, routes, system checks, an `on_ready` hook, middleware via `wrap_router`, management commands via `commands()`, template directories, and embedded static files) through one trait, into one builder call. The built-in `umbral-auth` plugin is the
-canonical example: it ships a `User` model, password hashing helpers, a
-`Plugin` impl that registers the model under the `"auth"` namespace, and
-lives in its own crate under `plugins/umbral-auth/`. Structurally it's
-identical to anything you'd write yourself.
+**One trait carries every contribution.** The `Plugin` trait gathers models, routes, system checks, an `on_ready` startup hook, middleware via `wrap_router`, management commands via `commands()`, template directories, and embedded static files - all through one trait, into one `.plugin(...)` line. The built-in `umbral-auth` plugin is the canonical example: it ships a `User` model, password hashing helpers, a `Plugin` impl that registers the model under the `"auth"` namespace, and lives in its own crate under `plugins/umbral-auth/`. Structurally it's identical to anything you'd write yourself - there's no special-casing between built-in and third-party.
 
-## The Django → umbral mapping
+## What a plugin contributes
 
-| Django | umbral |
+A single `Plugin` impl can register any subset of the following surface:
+
+| You declare | Through |
 |---|---|
-| `django.apps.AppConfig` | `impl umbral::prelude::Plugin for MyPlugin` |
-| `INSTALLED_APPS = ['my_app']` | `App::builder().plugin(MyPlugin)` |
-| `my_app/models.py` | `pub struct ... ` with `#[derive(Model)]` |
-| `my_app/migrations/` | `plugins/my-app/migrations/<my-app>/` |
-| `my_app/urls.py` | `Plugin::routes()` returning an axum `Router` |
-| `apps.py` `ready()` | `Plugin::on_ready(&ctx)` |
-| `my_app/management/commands/` | `Plugin::commands()`; `umbral-auth` contributes `createsuperuser` this way (see the [Plugin trait page](/docs/v0.0.1/plugins/the-plugin-trait)) |
-| `auth_user`, `auth_permission` (Django's auto-prefixed table names) | Up to you. `#[umbral(table = "...")]` overrides the snake-case default |
+| The plugin itself | `App::builder().plugin(MyPlugin)` |
+| Models (become migrations) | `pub struct ...` with `#[derive(Model)]`, returned from `Plugin::models()` |
+| Migration files | `plugins/<my-app>/migrations/<my-app>/` |
+| Routes | `Plugin::routes()` returning an axum `Router` |
+| Startup work | `Plugin::on_ready(&ctx)` |
+| CLI subcommands | `Plugin::commands()`; `umbral-auth` contributes `createsuperuser` this way (see the [Plugin trait page](/docs/v0.0.1/plugins/the-plugin-trait)) |
+| Table names | Snake-case of the struct by default; `#[umbral(table = "...")]` overrides it |
 
-## Where apps live
+## Where plugins live
 
 The convention is `plugins/<name>/` at the repo root, as its own Cargo
 project. `plugins/umbral-auth/` is the live example. The pattern matches
@@ -37,26 +33,18 @@ no special-casing between "built-in" and "third-party".
 
 A small project that doesn't yet need its own crate can register the
 `Plugin` impl right next to `main.rs`. Both shapes work; the crate split
-matters when you want the app to be reusable.
+matters when you want the plugin to be reusable.
 
-## Why the rename
+## Why "plugin"
 
-"App" is a Django-specific word - it overloads "application" (the whole
-project) and creates a layer of confusion every Django newcomer asks
-about. "Plugin" is the broader, cross-ecosystem name for the same shape:
-a self-contained unit that extends a framework. The plugin contract spec
-(`docs/specs/02-plugin-contract.md`) makes the same argument from the
-architecture side: built-ins and third-parties have to be structurally
-identical, which "plugin" expresses more honestly than "app".
-
-The mental model is the same. The keyword is different.
+The name says what the unit is: a self-contained, swappable piece that extends the framework. Every capability - whether it ships with umbral or you wrote it - plugs in the same way, through the same trait, with the same `.plugin(...)` call. The plugin contract spec (`docs/specs/02-plugin-contract.md`) makes the requirement explicit from the architecture side: built-ins and third-parties have to be structurally identical, and "plugin" names that contract directly.
 
 ## A complete plugin
 
-Here's the whole shape in one file - a `blog` plugin (think Django's
-`blog` app) that owns its own `Post` model, exposes a couple of
-routes that hit the ORM from the plugin code, customises REST via a
-`ResourceConfig`, and runs a one-shot seed on startup via
+Here's the whole shape in one file - a `blog` plugin that owns its own
+`Post` model, exposes a couple of routes that hit the ORM from the
+plugin code, customises REST via a `ResourceConfig`, and runs a one-shot
+seed on startup via
 `on_ready`. Drop this in `plugins/blog/src/lib.rs` and add a single
 `.plugin(blog::BlogPlugin)` line to your `App::builder()` chain.
 

@@ -1,4 +1,4 @@
-//! Django-style admin **inlines**: edit a child model's reverse-FK rows
+//! Admin **inlines**: edit a child model's reverse-FK rows
 //! directly on the parent's change form (add new / edit existing /
 //! delete), saved atomically with the parent.
 //!

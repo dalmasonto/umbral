@@ -95,7 +95,7 @@ CREATE TABLE permissions_group_permissions (
 ```
 
 - Composite PK enforces uniqueness — adding the same (group, permission) twice is a silent no-op via `ON CONFLICT DO NOTHING`.
-- `ON DELETE CASCADE` on both sides matches Django's default. A removed parent or related row cleans up its junction rows.
+- `ON DELETE CASCADE` on both sides is the default. A removed parent or related row cleans up its junction rows.
 - Both FK column types come from the FK-target's `Model::PrimaryKey` lookup — same `fk_target_pk` helper introduced in gap #60.
 
 ### Macro extension
@@ -126,9 +126,9 @@ Two pieces:
 
 ## Open questions for the build session
 
-1. **Reverse accessor.** Django's `Permission.group_set.all()` is the symmetric M2M traversal. The framework can synthesize a `reverse_m2m::<Group>()` helper on `Permission` at derive time iff Permission's derive runs after Group's — which it might not, depending on declaration order. Resolution at boot rather than derive (walk the registered models, build the reverse map) is the right shape.
+1. **Reverse accessor.** The symmetric M2M traversal walks the relation in the opposite direction (from `Permission` back to the `Group`s that hold it). The framework can synthesize a `reverse_m2m::<Group>()` helper on `Permission` at derive time iff Permission's derive runs after Group's — which it might not, depending on declaration order. Resolution at boot rather than derive (walk the registered models, build the reverse map) is the right shape.
 
-2. **Through models.** Django's `through="MyJunction"` lets the user add extra columns to the junction (a `granted_at: DateTime` on `group ↔ permission`). v1 of `M2M<T>` is auto-junction-only; the user wanting extras keeps using an explicit junction model (the `GroupPermission` shape that exists today). Through-model support lands in v2.
+2. **Through models.** A through (junction) model with extra columns lets the user add fields to the junction itself (a `granted_at: DateTime` on `group ↔ permission`). v1 of `M2M<T>` is auto-junction-only; the user wanting extras keeps using an explicit junction model (the `GroupPermission` shape that exists today). Through-model support lands in v2.
 
 3. **Cascade semantics.** `ON DELETE CASCADE` for the junction is non-negotiable for the auto shape. But cascading FROM the junction (deleting a junction row triggering parent deletion) doesn't apply — the junction is owned by the framework, not user code.
 

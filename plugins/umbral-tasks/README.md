@@ -2,7 +2,7 @@
 
 DB-backed background task queue for umbral. The Celery in Rust shape.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

@@ -1,4 +1,4 @@
-//! Trailing-slash redirect policy — Django's `APPEND_SLASH` port.
+//! Trailing-slash redirect policy.
 //!
 //! axum's Router treats `/foo` and `/foo/` as distinct paths; a route
 //! registered as one returns 404 for the other. Most real apps want
@@ -6,11 +6,10 @@
 //! across handlers (so users can't break sharing a URL just because
 //! they happened to type or omit a trailing slash).
 //!
-//! Django's `APPEND_SLASH = True` (the framework default) handles this
-//! by intercepting 404 responses, checking whether the path with a
-//! trailing slash added would have matched, and 301-redirecting if so.
-//! umbral ports that shape — opt-in, default off — under
-//! [`SlashRedirect`].
+//! The append-slash policy handles this by intercepting 404 responses,
+//! checking whether the path with a trailing slash added would have
+//! matched, and redirecting if so. umbral offers that shape, opt-in,
+//! default off, under [`SlashRedirect`].
 //!
 //! ## Usage
 //!
@@ -19,7 +18,7 @@
 //! use umbral::web::SlashRedirect;
 //!
 //! let app = App::builder()
-//!     .slash_redirect(SlashRedirect::Append)  // Django's APPEND_SLASH=True shape
+//!     .slash_redirect(SlashRedirect::Append)  // append a trailing slash and retry
 //!     .routes(Routes::new().get("/articles", handler))
 //!     .build()?;
 //! ```
@@ -36,8 +35,7 @@
 //! 301 historically converted POST → GET. The current consensus is to
 //! use 308 / 307 for slash normalisation so a POST to `/api/users` (no
 //! slash) doesn't silently become a GET when the canonical URL is
-//! `/api/users/`. Django uses 301 for backwards compatibility; umbral
-//! picks 308 since it's a greenfield framework.
+//! `/api/users/`. umbral picks 308 since it's a greenfield framework.
 //!
 //! ## Implementation: fallback handler, not tower layer
 //!
@@ -67,14 +65,14 @@ use tower::Service;
 /// that don't match a registered route.
 ///
 /// The default is [`Self::Off`] — no redirects, requests reach axum's
-/// routing table as-is. Users opt into Django-style behaviour via
+/// routing table as-is. Users opt into redirect behaviour via
 /// [`crate::app::AppBuilder::slash_redirect`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SlashRedirect {
     /// Default. No redirects. `/foo` and `/foo/` are distinct.
     #[default]
     Off,
-    /// Django's `APPEND_SLASH = True` shape. On a 404 for `/foo`,
+    /// Append-slash shape. On a 404 for `/foo`,
     /// the framework probes `/foo/`; if that would match, returns a
     /// 308 redirect. Most app frameworks default to this.
     Append,

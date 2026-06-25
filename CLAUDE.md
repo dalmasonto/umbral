@@ -6,7 +6,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 Greenfield. No Cargo workspace or source yet. Before scaffolding anything, read `arch.md`; that's the authoritative design spec.
 
-umbral is a Django-inspired web framework in Rust (*umbral* means 'of the shadow', from Latin *umbra* — the framework lives in Django's shadow in shape, not in code). It's a separate project that shares no code with Django; the goal is to recreate Django's *feeling*: declare data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees. The name is a placeholder; the whole tree can be renamed later with `sed 's/umbral/yourname/g'`.
+umbral is a batteries-included web framework in Rust (*umbral* means 'of the shadow', from Latin *umbra*). The goal is to recreate that batteries-included, declare-your-data-and-get-everything feeling: declare data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees. The name is a placeholder; the whole tree can be renamed later with `sed 's/umbral/yourname/g'`.
 
 ## The one idea that matters most
 
@@ -21,27 +21,27 @@ crates/
   umbral-core     # ORM, migrations, routing, DB backends, the Plugin TRAIT. No plugin deps.
   umbral-macros   # #[derive(Model)], #[task], etc.
   umbral          # FACADE: re-exports core + macros as one stable surface (umbral::prelude::*)
-  umbral-cli      # the `manage.py` equivalent binary
+  umbral-cli      # the umbral command-line tool binary
 plugins/         # built-in plugins, each its own crate (from M9 onward)
   umbral-auth      # built-in: users, permissions, password hashing (argon2)
   umbral-sessions  # built-in: session store + middleware (tower-sessions)
   umbral-admin     # built-in: auto CRUD UI
-  umbral-tasks     # built-in: DB-backed task queue (Celery equivalent)
-  umbral-rest      # OPTIONAL: serializers, viewsets, routers (the "DRF")
+  umbral-tasks     # built-in: DB-backed background task queue
+  umbral-rest      # OPTIONAL: serializers, viewsets, routers (the REST layer)
   umbral-openapi   # OPTIONAL: Swagger UI / schema gen; depends on umbral-rest
 ```
 
 ## Dependency inversion is the whole game
 
 - **Dependencies point inward toward core. Control flows outward through the trait.**
-- Every plugin depends on the `umbral` facade, never the reverse. `umbral-core` defines the `Plugin` trait but never names a concrete plugin; it touches plugins only as `Box<dyn Plugin>`. That trait object is the dynamic seam standing in for Django's `INSTALLED_APPS`.
+- Every plugin depends on the `umbral` facade, never the reverse. `umbral-core` defines the `Plugin` trait but never names a concrete plugin; it touches plugins only as `Box<dyn Plugin>`. That trait object is the dynamic seam that holds the registry of installed plugins.
 - The user's binary crate depends on core plus every chosen plugin and wires them via an explicit builder: `App::builder().plugin(...).build()`.
 - `umbral-core` depends on neither `umbral-rest` nor `umbral-openapi`. That's the structural proof that "serializers are a plugin." Cargo's ban on circular deps enforces it for us.
 - Plugins import only the facade (`use umbral::prelude::*`), never `umbral-core` internals. The internal crate split can then be refactored without breaking any plugin.
 
 ## The Plugin contract
 
-A plugin (Django's "app") implements the `Plugin` trait. It can contribute any subset of: models (which become migrations), routes and views, middleware, management commands, a typed settings schema with defaults, admin registrations, and lifecycle hooks (`on_ready()` is the Rust version of `AppConfig.ready()`).
+A plugin (the framework's unit of installable app) implements the `Plugin` trait. It can contribute any subset of: models (which become migrations), routes and views, middleware, management commands, a typed settings schema with defaults, admin registrations, and lifecycle hooks (`on_ready()` is the startup lifecycle hook).
 
 Each plugin owns its own migrations. `migrate` walks every registered plugin, collects `plugin.migrations()`, orders them by a dependency graph (cross-plugin FKs allowed), and runs only those not yet recorded in an umbral-owned tracking table. The built-in auth, sessions, and tasks tables are created this exact way. Nothing is special-cased.
 
@@ -51,7 +51,7 @@ For `Post::objects().filter(...)` to work without threading a pool through every
 
 ## North star: managed migrations from day one
 
-The everyday loop has to work from the first milestone that has models, exactly like Django:
+The everyday loop has to work from the first milestone that has models:
 
 1. Declare or change a model. An autodetected migration is generated.
 2. `migrate` applies all pending migrations to the database.
@@ -62,7 +62,7 @@ This **declare → migrate → change → migrate** cycle *is* the product. It's
 - **Autodetection.** Diff the current models against the last migration snapshot, emit ordered, reversible operations (create/alter/drop table, add/alter/drop column). Ship the basic cases (new/dropped model, added/removed/altered field) on day one.
 - **`inspectdb`.** The porting on-ramp. Introspect an existing DB and generate models so an existing schema drops straight into the same managed-migration loop.
 
-The hard cases Django spent years on (rename vs. drop+add disambiguation, data-preserving alters, complex constraint changes) get iterated on. They don't gate anything.
+The hard cases that mature migration engines spent years on (rename vs. drop+add disambiguation, data-preserving alters, complex constraint changes) get iterated on. They don't gate anything.
 
 ### Never wipe the database (or migration files) to bypass a migration
 
@@ -160,7 +160,7 @@ cargo build                      # build all workspace crates
 cargo test                       # run all tests
 cargo test -p umbral-core         # test a single crate
 cargo test <test_name>           # run a single test by name
-cargo run -p umbral-cli -- <cmd>  # the manage.py equivalent (migrate, makemigrations, worker, inspectdb, ...)
+cargo run -p umbral-cli -- <cmd>  # the umbral command-line tool (migrate, makemigrations, worker, inspectdb, ...)
 cargo clippy --all-targets       # lint
 cargo fmt                        # format
 ```
@@ -365,7 +365,7 @@ Right after you understand or solve something, while the context is fresh. Don't
 
 ## Prior art worth studying
 
-**Cot** (Django-like; builds its own ORM on sea-query + axum, the closest prior art), **Loco** (Rails-style on SeaORM), and **SeaORM** itself (ORM on sea-query).
+**Cot** (a batteries-included Rust web framework; builds its own ORM on sea-query + axum, the closest prior art), **Loco** (Rails-style on SeaORM), and **SeaORM** itself (ORM on sea-query).
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

@@ -249,8 +249,8 @@ pub(crate) async fn index(
     //
     // When `restore_last_path` is enabled (the default), redirect the
     // user to the last changelist they visited unless they explicitly
-    // asked for the dashboard via `?dashboard=1`. This is the Django-
-    // style opt-out: on by default, disable with
+    // asked for the dashboard via `?dashboard=1`. This is an opt-out:
+    // on by default, disable with
     // `AdminPlugin::default().restore_last_path(false)`.
     //
     // When the flag is false, always render the dashboard — no read,

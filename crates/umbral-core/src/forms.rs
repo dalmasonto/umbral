@@ -17,10 +17,8 @@
 //!
 //! The piece that fills out the request-handling story between axum's
 //! `Form<T>` extractor (raw key/value access) and a typed Rust struct
-//! (the application's view of validated input). Django's
-//! `forms.Form` and `forms.ModelForm` are the closest reference;
-//! umbral's first cut is the primitive layer those abstractions sit
-//! on top of.
+//! (the application's view of validated input). umbral's first cut is
+//! the primitive layer richer form abstractions sit on top of.
 //!
 //! ## v1 shape
 //!
@@ -33,8 +31,7 @@
 //!   `Pattern` against an email regex by default).
 //! - [`ValidationErrors`] is a map of field-name -> error messages.
 //!   Forms accumulate every per-field error before returning, so the
-//!   user sees the whole form's problems at once, the same way Django
-//!   does.
+//!   user sees the whole form's problems at once.
 //! - HTML rendering: every field type has [`Field::render_html`]
 //!   that emits a single `<input>` (or `<textarea>`) with the right
 //!   `type`, `name`, `value`, and a `required` attribute when the
@@ -924,7 +921,7 @@ impl FormErrors {
     }
 
     /// Move out the underlying [`WriteError`] (e.g. to feed a
-    /// REST-style DRF body builder).
+    /// REST-style error-body builder).
     pub fn into_write_error(self) -> WriteError {
         self.inner
     }
@@ -962,7 +959,7 @@ impl FormErrors {
         out
     }
 
-    /// Render `template` with this failed submission bound Django-style
+    /// Render `template` with this failed submission bound into scope
     /// and return the complete HTTP response. The one-liner for a form
     /// handler's `Err` arm:
     ///

@@ -1,20 +1,19 @@
-//! Password-strength validation — umbral's `AUTH_PASSWORD_VALIDATORS` equivalent.
+//! Password-strength validation.
 //!
-//! Django ships a small set of validators that every password is checked
-//! against before it's hashed: minimum length, a common-password denylist,
-//! an all-numeric reject, and a similarity-to-user-attributes guard. umbral
-//! mirrors that surface here, with one deliberate difference: **it's on by
-//! default with no opt-in.** A fresh `AuthPlugin::default()` enforces the
-//! full set, so `create_user("a", ...)` is rejected out of the box. An app
-//! that genuinely wants no policy must say so explicitly via
+//! A small set of validators that every password is checked against before
+//! it's hashed: minimum length, a common-password denylist, an all-numeric
+//! reject, and a similarity-to-user-attributes guard. umbral provides this
+//! surface here, with one deliberate property: **it's on by default with no
+//! opt-in.** A fresh `AuthPlugin::default()` enforces the full set, so
+//! `create_user("a", ...)` is rejected out of the box. An app that genuinely
+//! wants no policy must say so explicitly via
 //! [`crate::AuthPlugin::disable_password_validation`].
 //!
 //! ## The contract
 //!
 //! A [`PasswordValidator`] is `fn validate(&self, password, ctx) -> Result<(), String>`,
 //! where the `String` is a human-readable reason the password was rejected
-//! (Django returns a `ValidationError` with a message; we return the message
-//! directly). [`PasswordContext`] carries the username / email so the
+//! (the message is returned directly). [`PasswordContext`] carries the username / email so the
 //! similarity validator can compare against them — both are `None` when
 //! there's no user context (e.g. a standalone strength check).
 //!
@@ -82,10 +81,10 @@ pub trait PasswordValidator: Send + Sync + std::fmt::Debug {
 }
 
 // =========================================================================
-// Default validators (Django parity)
+// Default validators
 // =========================================================================
 
-/// Reject passwords shorter than `min` characters. Django's default is 8.
+/// Reject passwords shorter than `min` characters. The default is 8.
 ///
 /// Length is counted in Unicode scalar values (`chars().count()`), not
 /// bytes, so a password of 8 emoji counts as 8.
@@ -119,9 +118,9 @@ const COMMON_PASSWORDS: &str = include_str!("common_passwords.txt");
 
 /// Reject passwords that appear in an embedded denylist of common
 /// passwords. Matching is case-insensitive (`PASSWORD` and `password` are
-/// both rejected). Django loads a 20k-entry gzip list; we embed a curated
-/// few hundred — the entries that matter most — to keep the binary small
-/// while still catching the obvious choices.
+/// both rejected). We embed a curated few hundred entries (the ones that
+/// matter most) to keep the binary small while still catching the obvious
+/// choices.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CommonPasswordValidator;
 
@@ -163,9 +162,8 @@ impl PasswordValidator for NumericPasswordValidator {
 }
 
 /// Reject passwords that are too similar to the username or the email
-/// local-part. Django uses a `SequenceMatcher` ratio with a 0.7 threshold;
-/// we approximate with a cheaper two-pronged check that catches the same
-/// real-world cases:
+/// local-part. Uses a similarity ratio with a 0.7 threshold, approximated
+/// with a cheaper two-pronged check that catches the same real-world cases:
 ///
 /// 1. **Substring containment** — the password contains the attribute (or
 ///    vice-versa), case-insensitive. Catches `alice` → `alice123`.
@@ -178,7 +176,7 @@ impl PasswordValidator for NumericPasswordValidator {
 /// its local-part (before `@`).
 #[derive(Debug, Clone, Copy)]
 pub struct UserAttributeSimilarityValidator {
-    /// Overlap ratio at or above which the password is rejected. Django's
+    /// Overlap ratio at or above which the password is rejected. The
     /// default is 0.7.
     pub threshold: f64,
 }
@@ -244,7 +242,7 @@ impl PasswordValidator for UserAttributeSimilarityValidator {
 
 /// An ordered set of [`PasswordValidator`]s applied to every password.
 ///
-/// [`PasswordPolicy::default`] is the Django-parity set: min-length 8,
+/// [`PasswordPolicy::default`] is the default set: min-length 8,
 /// common-password denylist, all-numeric reject, and user-attribute
 /// similarity. Construct a custom policy with [`PasswordPolicy::new`] +
 /// [`PasswordPolicy::with`], or start from the defaults and tweak.

@@ -52,8 +52,8 @@ use tower_http::services::ServeFile;
 use crate::plugin::{Plugin, StaticDir};
 
 /// The on-disk name of the hashed-asset manifest written into
-/// `static_root` by `collectstatic --hashed`. Django calls the same file
-/// `staticfiles.json`; we keep the name so the concept ports directly.
+/// `static_root` by `collectstatic --hashed`. The conventional name is
+/// `staticfiles.json`.
 pub const MANIFEST_FILENAME: &str = "staticfiles.json";
 
 /// Anything that can go wrong writing an asset through a
@@ -93,8 +93,8 @@ impl std::error::Error for StaticError {
     }
 }
 
-/// A swappable destination for collected static assets — Django's
-/// `STATICFILES_STORAGE`. `collectstatic` writes every file *through* a
+/// A swappable destination for collected static assets, the
+/// static-files storage backend. `collectstatic` writes every file *through* a
 /// `StaticStorage` rather than calling `std::fs` directly, so the same
 /// collect path targets the local filesystem ([`LocalStorage`], the
 /// default) or a remote object store (the feature-gated S3 backend in
@@ -163,8 +163,8 @@ impl StaticStorage for LocalStorage {
     }
 }
 
-/// Compute the content-hash filename fragment Django's
-/// `ManifestStaticFilesStorage` uses: the first 12 hex chars of the
+/// Compute the content-hash filename fragment the hashed static-file
+/// storage uses: the first 12 hex chars of the
 /// SHA-256 of the file bytes. 48 bits is ample for cache-busting (a
 /// collision needs ~16M distinct versions of one asset) while keeping the
 /// hashed filename short.
@@ -178,7 +178,7 @@ pub fn content_hash(bytes: &[u8]) -> String {
 /// Insert the content hash before the final extension of a logical path:
 /// `"css/app.css"` → `"css/app.<hash>.css"`, `"js/x"` (no extension) →
 /// `"js/x.<hash>"`, `"a/b.min.css"` → `"a/b.min.<hash>.css"` (only the
-/// LAST `.` segment is treated as the extension, matching Django).
+/// LAST `.` segment is treated as the extension).
 pub fn hashed_name(rel_path: &str, hash: &str) -> String {
     // Split off the final path segment so a `.` in a directory name (rare
     // but possible) never gets mistaken for the file extension.
@@ -238,7 +238,7 @@ impl StaticContribution {
 
     /// Collect every plugin's [`Plugin::static_root_dirs`] into a flat
     /// list of app/site root dirs, copied into `<static_root>/` root at
-    /// collect time (Django `STATICFILES_DIRS` parity).
+    /// collect time (extra static-dirs collected to the root).
     pub fn collect_root_dirs(plugins: &[Box<dyn Plugin>]) -> Vec<PathBuf> {
         plugins.iter().flat_map(|p| p.static_root_dirs()).collect()
     }
@@ -646,7 +646,7 @@ pub struct CollectSummary {
     pub static_root: PathBuf,
     /// Count of files copied from app/site root dirs
     /// ([`Plugin::static_root_dirs`]) into the `<static_root>/` ROOT
-    /// (no namespace) — Django `STATICFILES_DIRS` parity. Counted
+    /// (no namespace) - extra static-dirs collected to the root. Counted
     /// separately from namespaced files so the CLI can report both.
     ///
     /// [`Plugin::static_root_dirs`]: crate::plugin::Plugin::static_root_dirs
@@ -717,7 +717,7 @@ impl std::error::Error for CollectError {
 
 /// Collect every registered plugin's `static_dirs()` into `static_root`.
 ///
-/// Django's `collectstatic`. For each `StaticDir { namespace, source_dir }`,
+/// The `collectstatic` operation. For each `StaticDir { namespace, source_dir }`,
 /// the entire `source_dir` tree is recursively copied into
 /// `<static_root>/<namespace>/`, preserving each file's path RELATIVE to
 /// its `source_dir`: `source_dir/assets/index.js` lands at
@@ -764,8 +764,8 @@ pub fn collect_static(
 ///
 /// Copies each `StaticContribution`'s `source_dir` tree into
 /// `<static_root>/<namespace>/`, and each app/site `root_dir` into the
-/// `<static_root>/` ROOT (no namespace) — Django `STATICFILES_DIRS`
-/// parity, so `static_root` is a complete CDN-servable tree.
+/// `<static_root>/` ROOT (no namespace), so `static_root` is a complete
+/// CDN-servable tree.
 ///
 /// No collision check: the contributions are pre-validated (either by
 /// [`collect_static`]'s `from_plugins` call, or at `App::build` before
@@ -812,7 +812,7 @@ pub fn collect_into(
 /// manifest is written for [`LocalStorage`]); the bytes themselves go
 /// through `storage.put(rel_path, ..)`.
 ///
-/// When `hashed` is true (Django's `ManifestStaticFilesStorage`), each
+/// When `hashed` is true (the hashed static-file storage), each
 /// file is *also* written under a content-hashed name
 /// (`app.<hash>.css`), and a `<logical path> -> <hashed path>` mapping is
 /// recorded into a `staticfiles.json` manifest written at the
@@ -1502,7 +1502,7 @@ mod tests {
         );
         // No extension: hash appended.
         assert_eq!(hashed_name("js/bundle", "deadbe"), "js/bundle.deadbe");
-        // Only the LAST dot is the extension (Django parity).
+        // Only the LAST dot is the extension.
         assert_eq!(
             hashed_name("a/b.min.css", "0f0f0f"),
             "a/b.min.0f0f0f.css"

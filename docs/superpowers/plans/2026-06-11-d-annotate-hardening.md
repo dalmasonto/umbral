@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Make `annotate_count` Django-faithful — exclude soft-deleted children automatically, accept a child-side predicate (`annotate_count_where`), count M2M junction rows, and carry the child's `soft_delete` flag onto `ReverseFkRelationSpec` + `ModelMeta` (the shared #35 enabler).
+**Goal:** Make `annotate_count` count what users expect - exclude soft-deleted children automatically, accept a child-side predicate (`annotate_count_where`), count M2M junction rows, and carry the child's `soft_delete` flag onto `ReverseFkRelationSpec` + `ModelMeta` (the shared #35 enabler).
 
 **Architecture:** The correlated-subquery emission already lives in `QuerySet::build_query_for` (`crates/umbral-core/src/orm/queryset/mod.rs` ~354-378), so every annotation rides the one SELECT through `fetch_annotated` / `explain` / `to_sql`. We extend the `RelatedAnnotation` resolution carried by `annotate_related` to (a) remember whether the child is soft-delete and fold `AND <child>.deleted_at IS NULL` into the subquery, (b) carry an optional child `SimpleExpr` predicate, and (c) recognise M2M relations (fall back to `M2M_RELATIONS`) and emit `SELECT COUNT(*) FROM <parent>_<field> WHERE parent_id = parent.<pk>`. The `soft_delete` bit is surfaced from the typed `Model::SOFT_DELETE` onto `ReverseFkRelationSpec` (filled by the Model derive from the child model) and onto `ModelMeta` (filled by `ModelMeta::for_::<T>()` from `T::SOFT_DELETE`).
 
@@ -370,7 +370,7 @@ This is a pure plumbing/refactor step. The "test" is the workspace compiling + a
       /// Child model is `#[umbral(soft_delete)]` — fold
       /// `AND <child>.deleted_at IS NULL` into the correlated subquery.
       pub(crate) child_soft_delete: bool,
-      /// Optional child-side predicate (Django's `Count(filter=Q(...))`),
+      /// Optional child-side predicate that filters which children count,
       /// pre-rendered to a backend-default `SimpleExpr`. ANDed into the
       /// subquery WHERE. From `annotate_count_where`.
       pub(crate) child_filter: Option<sea_query::SimpleExpr>,
@@ -563,7 +563,7 @@ This is a pure plumbing/refactor step. The "test" is the workspace compiling + a
 - [ ] **Implement.** In `crates/umbral-core/src/orm/queryset/mod.rs`, add after `annotate_count` (~2130). The child predicate is `Predicate<C>`; render it to a backend-default `SimpleExpr` via the existing `cond_for` (use the default/postgres rendering — the count subquery embeds one expression; SQLite-specific predicate overrides aren't needed for the moderation-equality case, and `cond_for("postgres")` returns the default `cond`):
   ```rust
   /// Like [`Self::annotate_count`] but counts only the children
-  /// matching `pred` — Django's `Count("comments", filter=Q(...))`.
+  /// matching `pred` (e.g. count only `moderation = "visible"` comments).
   /// `C` is the CHILD model, so the predicate is typed against the
   /// child's columns (`comment::MODERATION.eq("visible")`). The
   /// predicate renders into the correlated count subquery's WHERE

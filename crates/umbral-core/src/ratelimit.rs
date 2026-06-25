@@ -1,7 +1,7 @@
 //! A dependency-light, in-memory **sliding-window rate limiter**.
 //!
 //! The single sliding-window limiter in the tree: it backs umbral-rest's
-//! DRF-style API throttles ([`umbral_rest::throttle`]) AND umbral-auth's
+//! API throttles ([`umbral_rest::throttle`]) AND umbral-auth's
 //! login/register brute-force throttle (`plugins/umbral-auth/src/throttle.rs`,
 //! consolidated onto this primitive — see the note below). It
 //! tracks per-key timestamps in a `Mutex<HashMap<String, VecDeque<Instant>>>`
@@ -58,7 +58,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// A rate: `num` events per `period`. Build by hand or parse the DRF
+/// A rate: `num` events per `period`. Build by hand or parse the
 /// `"<num>/<period>"` string with [`Rate::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rate {
@@ -74,7 +74,7 @@ impl Rate {
         Self { num, period }
     }
 
-    /// Parse a DRF-style rate string: `"<num>/<period>"`.
+    /// Parse a rate string: `"<num>/<period>"`.
     ///
     /// `num` is a positive integer; `period` is one of (case-insensitive):
     ///
@@ -86,7 +86,7 @@ impl Rate {
     /// | `day`, `d` | 86400 seconds |
     ///
     /// A bare number with no separator is also accepted as a per-second
-    /// rate (DRF's `"<num>"` shorthand), e.g. `"5"` ≡ `"5/sec"`. Anything
+    /// rate (the `"<num>"` shorthand), e.g. `"5"` ≡ `"5/sec"`. Anything
     /// else — empty string, non-numeric count, zero count, unknown period
     /// — returns `Err` with a short message.
     ///
@@ -104,7 +104,7 @@ impl Rate {
         }
         let (num_part, period_part) = match s.split_once('/') {
             Some((n, p)) => (n.trim(), p.trim()),
-            // Bare number → per-second (DRF shorthand).
+            // Bare number → per-second (shorthand).
             None => (s, "sec"),
         };
         let num: u32 = num_part

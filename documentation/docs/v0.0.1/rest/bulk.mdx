@@ -1,6 +1,6 @@
 ---
 title: Bulk endpoints
-description: Opt-in DRF-style bulk create / update / delete - one transaction, all-or-nothing, with the same permissions, throttle, and field denylist as the single-object endpoints.
+description: Opt-in bulk create / update / delete - one transaction, all-or-nothing, with the same permissions, throttle, and field denylist as the single-object endpoints.
 sidebar_position: 10
 icon: layers
 tags: [rest, bulk, transactions, api]
@@ -8,7 +8,7 @@ tags: [rest, bulk, transactions, api]
 
 # Bulk endpoints
 
-Create, update, or delete many rows in **one request and one transaction**. This ports DRF's bulk-operation pattern: send an array (or a list of ids) and the whole batch commits together - or rolls back together if any item fails.
+Create, update, or delete many rows in **one request and one transaction**: send an array (or a list of ids) and the whole batch commits together - or rolls back together if any item fails.
 
 Bulk is **opt-in and off by default**. A resource you don't enable keeps the exact behaviour it has today: a `POST` of a JSON array is rejected (it isn't a single-object body), and there's no collection-level `PATCH` / `DELETE`.
 

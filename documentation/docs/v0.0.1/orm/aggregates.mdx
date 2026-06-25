@@ -97,7 +97,7 @@ ORDER BY / LIMIT / OFFSET are intentionally dropped on the aggregate paths.
 
 ## Related aggregates: `.annotate_related(...)` / `.annotate_count(...)`
 
-Aggregate over a relation, like Django's `Post.objects.filter(...).annotate(comments=Count("comments"), rating=Avg("reviews__rating"))`. The annotation is query-builder state: it renders as a correlated scalar subquery inside the one SELECT every terminal builds, so it stacks, composes with `.filter` / `.order_by` / `.limit`, and shows up in `.to_sql()` and `.explain()`. The work happens in one query.
+Aggregate over a relation: count a parent's children, or average a column on the related rows, in the same query. The annotation is query-builder state: it renders as a correlated scalar subquery inside the one SELECT every terminal builds, so it stacks, composes with `.filter` / `.order_by` / `.limit`, and shows up in `.to_sql()` and `.explain()`. The work happens in one query.
 
 The relation is the same `ReverseSet` name `prefetch_related` accepts (`#[umbral(reverse_fk = "...")]` on the model). Any `Aggregate` works, with non-count aggregates naming a column on the **child** model:
 
@@ -135,7 +135,7 @@ When the child model is `#[umbral(soft_delete)]`, `annotate_count` folds `AND <c
 
 ### Filtered counts: `.annotate_count_where(...)`
 
-Django's `Count("comments", filter=Q(moderation="visible"))`. `annotate_count_where::<C>(alias, relation, pred)` counts only the children matching `pred`, where `C` is the **child** model so the predicate is typed against the child's columns. It renders into the same correlated subquery alongside the FK correlation and the automatic soft-delete filter:
+Count only the children that match a predicate. `annotate_count_where::<C>(alias, relation, pred)` counts only the children matching `pred`, where `C` is the **child** model so the predicate is typed against the child's columns. It renders into the same correlated subquery alongside the FK correlation and the automatic soft-delete filter:
 
 ```rust
 use plugin_directory::models::{self as pd, plugin, plugin_comment};
@@ -182,7 +182,7 @@ let rows = Blog::objects()
 
 All five aggregate kinds (count / sum / avg / min / max) work over an auto-discovered relation exactly as they do over a declared one, and an auto-discovered child that is `#[umbral(soft_delete)]` still has its trashed rows excluded.
 
-The relation name is matched against each candidate child's **conventional name forms**: the child's table name, the child's struct name in `snake_case` and bare `lowercase`, and any of those with a Django-style `_set` suffix. So a child `struct Entry` with table `ad_entry` answers to `"ad_entry"`, `"entry"`, `"entry_set"`, `"ad_entry_set"`, and so on.
+The relation name is matched against each candidate child's **conventional name forms**: the child's table name, the child's struct name in `snake_case` and bare `lowercase`, and any of those with a `_set` suffix. So a child `struct Entry` with table `ad_entry` answers to `"ad_entry"`, `"entry"`, `"entry_set"`, `"ad_entry_set"`, and so on.
 
 **Precedence.** A declared `ReverseSet` (or `M2M`) field always wins over auto-discovery. Declaring a field never changes existing behavior. Auto-discovery only runs as a fallback when no declared relation matches.
 

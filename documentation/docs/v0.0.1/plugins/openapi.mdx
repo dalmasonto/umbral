@@ -105,7 +105,7 @@ OpenAPI 3.0 reserves `x-*` keys for tool-specific data. The plugin emits these f
 
 ## Filter parameters
 
-Django-style filtering is on by default for every resource (opt out per resource with `ResourceConfig::disable_filters()`). For each filterable resource the plugin emits one OpenAPI `parameters` entry per `(column, lookup)` pair on the list operation. Generated clients, Swagger UI, and the playground all see what's filterable without re-implementing the lookup grammar.
+Query-string filtering is on by default for every resource (opt out per resource with `ResourceConfig::disable_filters()`). For each filterable resource the plugin emits one OpenAPI `parameters` entry per `(column, lookup)` pair on the list operation. Generated clients, Swagger UI, and the playground all see what's filterable without re-implementing the lookup grammar.
 
 Parameter naming follows the runtime parser:
 

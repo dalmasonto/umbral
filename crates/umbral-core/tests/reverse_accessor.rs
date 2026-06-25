@@ -1,5 +1,5 @@
 //! gaps2 #45 (accessor half) — the ZERO-DECLARATION instance
-//! reverse-relation accessor: Django's `post.comment_set.all()` as a
+//! reverse-relation accessor: `post.comment_set.all()` as a
 //! generic runtime method on any model instance.
 //!
 //! Unlike the macro-emitted `<child>_set()` accessor (which the parent

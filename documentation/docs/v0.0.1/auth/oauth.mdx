@@ -2,12 +2,12 @@
 title: OAuth / social login
 description: Sign in with Google or GitHub and connect external accounts to a user, with provider tokens encrypted at rest.
 sidebar_position: 4
-tags: [auth, oauth, social-login, google, github, allauth]
+tags: [auth, oauth, social-login, google, github]
 ---
 
 # OAuth / social login
 
-`umbral-oauth` is umbral's [django-allauth](https://docs.allauth.org/) equivalent. It does two things with one flow, layered on `umbral-auth`:
+`umbral-oauth` adds social login and OAuth account connection, layered on `umbral-auth`. It does two things with one flow:
 
 - **Social login**: "Sign in with Google" resolves (or creates) an `AuthUser` and logs them in.
 - **Account connection**: a logged-in user attaches a provider ("Connect GitHub"), which is how the app later gets API access (Drive, repos, …) on their behalf.

@@ -1,7 +1,7 @@
-//! `@login_required` equivalent for umbral handlers.
+//! A login-required gate for umbral handlers.
 //!
-//! Django's `@login_required` decorator gates a view behind authentication.
-//! umbral ships the same idea in two composable shapes:
+//! Gates a view behind authentication. umbral ships the idea in two
+//! composable shapes:
 //!
 //! - [`LoggedIn<U>`] — a per-handler axum extractor. Drop it in a handler
 //!   signature and the handler only runs when a valid session exists.
@@ -85,7 +85,7 @@ impl LoginRequired {
     };
 
     /// HTML shape: redirect to `login_url?next=<original-uri>`. The `next`
-    /// parameter is named `"next"` by default, matching Django's convention.
+    /// parameter is named `"next"` by default.
     pub fn html(login_url: impl Into<String>) -> Self {
         Self {
             login_url: Some(login_url.into()),

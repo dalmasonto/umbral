@@ -1,6 +1,6 @@
 //! umbral-permissions — Role-Based Access Control plugin for umbral.
 //!
-//! Provides Django-style groups + permissions + content_type tables,
+//! Provides groups + permissions + content_type tables,
 //! plus the `has_perm` / `user_perms` query layer. Admin UI for managing
 //! groups and permissions is deferred (depends on gap 19's Tailwind admin
 //! work). RLS predicate injection is also deferred — that is
@@ -203,12 +203,12 @@ async fn ensure_standard_permissions(_pool: &umbral::db::DbPool) -> Result<(), s
     for meta in &registered_models {
         // Derive app_label and model_name from the ModelMeta.
         //
-        // Django uses:
+        // Convention:
         //   - app_label = app name (e.g. "blog")
-        //   - model     = lowercase class name (e.g. "post" for class
+        //   - model     = lowercase struct name (e.g. "post" for struct
         //                 Post, "blogpost" for BlogPost)
         //
-        // We mirror this: `model` is `meta.name.to_lowercase()`. The
+        // `model` is `meta.name.to_lowercase()`. The
         // `app_label` is the authoritative value carried on the model's
         // `#[umbral(plugin = "...")]` attribute (gaps2 #80g), surfaced via
         // `Model::APP_LABEL` → `ModelMeta::app_label`; bare models default

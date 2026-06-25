@@ -10,9 +10,9 @@
 
 ---
 
-## Completeness vs Django cache framework
+## Completeness vs a full cache framework
 
-| Django cache feature | umbral-cache status |
+| Cache feature | umbral-cache status |
 |---|---|
 | In-memory backend | Shipped — `MemoryBackend` (`tokio::sync::Mutex<HashMap>`) |
 | DB backend | Shipped — `SqliteBackend` (SQLite only; no Postgres backend) |
@@ -25,7 +25,7 @@
 | Key prefixing / versioning | Not present, not deferred — entirely absent |
 | Per-view cache (`@cache_page`) | Shipped — tower `Layer` |
 | Template-fragment cache | Not present, not mentioned |
-| Django `UpdateCacheMiddleware` / `FetchFromCacheMiddleware` | Not present — the `cache_page` layer is the only cache middleware |
+| Site-wide update/fetch cache middleware | Not present - the `cache_page` layer is the only cache middleware |
 | `cache.clear()` | Shipped (Redis: `FLUSHDB`; SQLite: `DELETE FROM`; memory: `HashMap::clear`) |
 | Cache middleware (site-wide) | Not present; `cache_page` is route-subtree only |
 | `Vary`-header awareness in `cache_page` | Deferred (doc-comment) |
@@ -46,11 +46,11 @@
 let cache_key = format!("cache:page:{}:{}", method, uri);
 ```
 
-`uri` in a Tower/axum context is the request URI, which is path-plus-query (e.g. `/page?x=1`) — it does **not** include the `Host` header. In a multi-domain deployment (two virtual hosts served by one process, which is idiomatic Django-style multi-tenancy), `https://site-a.example.com/home` and `https://site-b.example.com/home` produce the identical key `cache:page:GET:/home` and will serve each other's cached pages. Fix: include `req.headers().get(header::HOST)` (lowercased, stripped of port) in the key. Django's `cache_page` includes the `Host` header precisely for this reason (`django/views/decorators/cache.py::_cache_controller`).
+`uri` in a Tower/axum context is the request URI, which is path-plus-query (e.g. `/page?x=1`) - it does **not** include the `Host` header. In a multi-domain deployment (two virtual hosts served by one process, an idiomatic multi-tenancy setup), `https://site-a.example.com/home` and `https://site-b.example.com/home` produce the identical key `cache:page:GET:/home` and will serve each other's cached pages. Fix: include `req.headers().get(header::HOST)` (lowercased, stripped of port) in the key. A correct per-view cache includes the `Host` header in its key precisely for this reason.
 
 **[NEW] [Required] `cache_page` serves cached responses to unauthenticated callers without checking request `Cookie`/`Authorization`** — `src/cache_page.rs:153–159`
 
-The middleware looks up the cache key before calling the handler but never inspects the incoming request's `Cookie` or `Authorization` headers. A handler that renders personalised content for logged-in users (e.g. "Welcome, Alice") and returns a `200` without `Set-Cookie` on the response (a common pattern when the session cookie is already set) will have its response cached and then served verbatim to every subsequent caller at the same URI, including anonymous visitors. The `Set-Cookie` bypass guard (line 231) only inspects the *response* headers, not the request. Fix: either (a) include a stable, privacy-safe representation of the identity in the cache key (Django uses `Vary: Cookie` awareness for this), or (b) document prominently that `cache_page` is unsafe on any route reachable by authenticated users unless the response carries `Set-Cookie` or `Cache-Control: no-store`. A plain doc-callout is not enough — this needs a runtime check: if the request carries a `Cookie` or `Authorization` header, bypass the cache (serve through and do not store), mirroring Django's `has_vary_header(response, "Cookie")` logic.
+The middleware looks up the cache key before calling the handler but never inspects the incoming request's `Cookie` or `Authorization` headers. A handler that renders personalised content for logged-in users (e.g. "Welcome, Alice") and returns a `200` without `Set-Cookie` on the response (a common pattern when the session cookie is already set) will have its response cached and then served verbatim to every subsequent caller at the same URI, including anonymous visitors. The `Set-Cookie` bypass guard (line 231) only inspects the *response* headers, not the request. Fix: either (a) include a stable, privacy-safe representation of the identity in the cache key (using `Vary: Cookie` awareness for this), or (b) document prominently that `cache_page` is unsafe on any route reachable by authenticated users unless the response carries `Set-Cookie` or `Cache-Control: no-store`. A plain doc-callout is not enough - this needs a runtime check: if the request carries a `Cookie` or `Authorization` header, bypass the cache (serve through and do not store), mirroring the standard `Vary: Cookie` handling.
 
 **[NEW] [Important] `clear()` on Redis uses `FLUSHDB` — silent data loss if the cache DB is shared** — `src/lib.rs:465–470`
 
@@ -137,7 +137,7 @@ This is the standard "buffer-or-clone" Tower pattern: `poll_ready` readies `self
 
 **[NEW] [Important] No memory bound on `MemoryBackend`** — `src/lib.rs:238`
 
-`MemoryBackend` is an unbounded `HashMap`. There is no max-entry count, no max-total-bytes limit, and no LRU eviction. `cache_page` stores full response bodies — a workload with 10,000 distinct URIs (pagination, search queries with arbitrary params) will grow the map without bound until OOM. Django's `LocMemCache` has a `MAX_ENTRIES` (default 300) with a `CULL_FREQUENCY` eviction pass. Fix: add a `max_entries: Option<usize>` field to `MemoryBackend` (defaulting to, say, 1,000 or `None` for unlimited); on `set` when the limit is reached, evict a random sample (simple) or LRU (track insertion order with a `VecDeque` of keys). This is a Required fix for any production use of the memory backend with `cache_page`.
+`MemoryBackend` is an unbounded `HashMap`. There is no max-entry count, no max-total-bytes limit, and no LRU eviction. `cache_page` stores full response bodies - a workload with 10,000 distinct URIs (pagination, search queries with arbitrary params) will grow the map without bound until OOM. A typical in-memory cache backend caps this with a max-entries limit (e.g. a default of 300) and a periodic cull/eviction pass. Fix: add a `max_entries: Option<usize>` field to `MemoryBackend` (defaulting to, say, 1,000 or `None` for unlimited); on `set` when the limit is reached, evict a random sample (simple) or LRU (track insertion order with a `VecDeque` of keys). This is a Required fix for any production use of the memory backend with `cache_page`.
 
 **[NEW] [FYI] SQLite `sweep` is caller-driven with no auto-scheduling integration** — `src/lib.rs:327`
 

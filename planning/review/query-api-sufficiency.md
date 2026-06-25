@@ -30,7 +30,7 @@ Can the query builder express what a real app needs, so plugin code never has to
 | prefetch_related (reverse FK / M2M batched) | present | `prefetch_related`, `prefetch_related_many` |
 | M2M add/remove/set/clear | present | `M2M::add/remove/clear/set/fetch` |
 | **reverse-relation filtering** (`.filter(comments__author=…)`) | **absent** | predicates span only the base table |
-| **prefetch with a filtered queryset** (Django `Prefetch(qs)`) | **absent** | prefetch takes a field name only |
+| **prefetch with a filtered queryset** (prefetch a relation constrained by its own predicate) | **absent** | prefetch takes a field name only |
 
 ### Aggregation
 | Capability | Status | Method / gap |
@@ -91,7 +91,7 @@ Can the query builder express what a real app needs, so plugin code never has to
 ## Prioritized gaps
 
 ### High — forces raw SQL, commonly needed
-1. **`select_for_update` (row locking).** Absent. Django `.select_for_update()`. Any "decrement stock / claim a job / debit balance" flow needs `SELECT … FOR UPDATE` to avoid lost-update races; today the only path is raw `sqlx`. Real in-tree consumers at risk: **`umbral-tasks`** job-claiming (already buggy — see [BROKEN-1](broken-features.md)) and **`examples/shop` ecommerce stock**. This is the single most important gap and is the same item as MISS-1 from the first review round — both audits converged on it independently.
+1. **`select_for_update` (row locking).** Absent. No `.select_for_update()` primitive. Any "decrement stock / claim a job / debit balance" flow needs `SELECT … FOR UPDATE` to avoid lost-update races; today the only path is raw `sqlx`. Real in-tree consumers at risk: **`umbral-tasks`** job-claiming (already buggy - see [BROKEN-1](broken-features.md)) and **`examples/shop` ecommerce stock**. This is the single most important gap and is the same item as MISS-1 from the first review round - both audits converged on it independently.
 2. **Reverse-relation filtering** (`Post::objects().filter(comments__author=…)`). Absent — predicates target the base table only. "Posts that have a comment by X" / "orders containing product Y" force a hand-rolled subquery or an N+1 in Rust. `umbral-admin`'s related-filter UI and M2M-faceted listings want this.
 3. **EXISTS / correlated subqueries (OuterRef).** Absent — `Subquery` only feeds `IN (…)`. "Rows where a related thing exists" with a correlated condition can't be expressed; `IN` degrades on large id-sets.
 

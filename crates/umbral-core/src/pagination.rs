@@ -1,10 +1,8 @@
-//! Template-rendered list-view pagination — a `Paginator`/`Page` pair with
-//! Django `django.core.paginator` parity.
+//! Template-rendered list-view pagination - a `Paginator`/`Page` pair.
 //!
 //! This is the page-of-rows helper for **server-rendered (Jinja) list
 //! views**, distinct from REST's JSON pagination. It lives in `umbral-core`
-//! (an ORM-adjacent core utility, exactly like Django's
-//! `django.core.paginator`) so any handler can paginate a [`QuerySet`]
+//! as an ORM-adjacent core utility so any handler can paginate a [`QuerySet`]
 //! without registering a plugin:
 //!
 //! ```rust,ignore
@@ -35,7 +33,7 @@ use crate::orm::{HydrateRelated, Model};
 /// Error raised when a requested page number is invalid for the paginator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaginationError {
-    /// The page number is `< 1` or `> num_pages` (Django's `InvalidPage`).
+    /// The page number is `< 1` or `> num_pages`.
     InvalidPage {
         /// The page number that was requested.
         requested: i64,
@@ -46,8 +44,7 @@ pub enum PaginationError {
     Db(String),
 }
 
-/// Alias matching Django's `EmptyPage`/`PageNotAnInteger` umbrella name so
-/// call-sites and docs can refer to a `PageError`.
+/// Umbrella alias so call-sites and docs can refer to a `PageError`.
 pub type PageError = PaginationError;
 
 impl fmt::Display for PaginationError {
@@ -94,9 +91,8 @@ where
 {
     /// Build a paginator over `queryset`, `per_page` rows per page.
     ///
-    /// `per_page` is clamped to a minimum of 1 (Django raises on 0; we take
-    /// the forgiving route and treat 0 as 1 so a misconfigured page size
-    /// never divides by zero).
+    /// `per_page` is clamped to a minimum of 1: we take the forgiving route
+    /// and treat 0 as 1 so a misconfigured page size never divides by zero.
     pub fn new(queryset: QuerySet<T>, per_page: usize) -> Self {
         Self {
             queryset,
@@ -115,14 +111,14 @@ where
     }
 
     /// Number of pages. Always `>= 1` (an empty queryset still has one
-    /// empty page — Django's behavior).
+    /// empty page).
     pub async fn num_pages(&self) -> Result<i64, PaginationError> {
         let count = self.count().await?;
         Ok(num_pages_for(count, self.per_page))
     }
 
     /// Fetch the slice for `number`, **erroring** on an out-of-range page
-    /// (Django's strict `Paginator.page`). Page numbers are 1-based.
+    /// (the strict page accessor). Page numbers are 1-based.
     pub async fn page(&self, number: i64) -> Result<Page<T>, PaginationError> {
         let count = self.count().await?;
         let num_pages = num_pages_for(count, self.per_page);
@@ -173,7 +169,7 @@ where
 }
 
 /// `ceil(count / per_page)`, clamped to a minimum of 1 even for an empty
-/// queryset (Django: an empty paginator reports `num_pages == 1`).
+/// queryset (an empty paginator reports `num_pages == 1`).
 fn num_pages_for(count: i64, per_page: usize) -> i64 {
     if count <= 0 {
         return 1;
@@ -187,8 +183,8 @@ fn num_pages_for(count: i64, per_page: usize) -> i64 {
 
 /// A single page of paginated rows.
 ///
-/// All the page-relative helpers (`has_next`, `start_index`, …) mirror
-/// Django's `Page` semantics 1-for-1. [`Page::context`] derives the
+/// All the page-relative helpers (`has_next`, `start_index`, …) follow
+/// conventional page semantics. [`Page::context`] derives the
 /// serializable [`PageContext`] a template renders the nav from.
 #[derive(Debug, Clone)]
 pub struct Page<T> {
@@ -231,8 +227,7 @@ impl<T> Page<T> {
     }
 
     /// 1-based index of this page's first row within the full result set.
-    /// Returns 0 when the page is empty (Django returns 0 for an empty
-    /// page).
+    /// Returns 0 when the page is empty.
     pub fn start_index(&self) -> i64 {
         if self.total_count == 0 {
             return 0;
@@ -253,7 +248,7 @@ impl<T> Page<T> {
     /// either side of the current page, `on_ends` numbers pinned to each
     /// end, and [`PageItem::Ellipsis`] markers where the run is elided.
     ///
-    /// Mirrors Django's `Paginator.get_elided_page_range`. For 20 pages on
+    /// For 20 pages on
     /// page 6 with `(on_each_side, on_ends) = (2, 1)` this yields
     /// `1 … 4 5 [6] 7 8 … 20`.
     pub fn elided_page_range(&self, on_each_side: i64, on_ends: i64) -> Vec<PageItem> {
@@ -261,8 +256,7 @@ impl<T> Page<T> {
     }
 
     /// Derive the serializable template view of this page (the nav uses a
-    /// default `(on_each_side, on_ends)` of `(3, 1)`, matching Django's
-    /// default elided range).
+    /// default `(on_each_side, on_ends)` of `(3, 1)`).
     pub fn context(&self) -> PageContext {
         self.context_with(3, 1)
     }
@@ -302,7 +296,7 @@ pub enum PageItem {
 /// Build the windowed range `[1 .. on_ends] … [n-on_each_side .. n+on_each_side] … [last-on_ends .. last]`.
 ///
 /// Free function so it's unit-testable without a `Page`/DB. Collapses an
-/// ellipsis to nothing when the gap is a single missing page (Django shows
+/// ellipsis to nothing when the gap is a single missing page (we show
 /// the number rather than a `…` that hides exactly one page).
 fn elided_range(current: i64, num_pages: i64, on_each_side: i64, on_ends: i64) -> Vec<PageItem> {
     let on_each_side = on_each_side.max(0);
@@ -499,7 +493,7 @@ mod tests {
         assert_eq!(num_pages_for(23, 10), 3);
         assert_eq!(num_pages_for(20, 10), 2);
         assert_eq!(num_pages_for(21, 10), 3);
-        // Empty set: still one page (Django behavior).
+        // Empty set: still one page.
         assert_eq!(num_pages_for(0, 10), 1);
         assert_eq!(num_pages_for(-5, 10), 1);
         // per_page clamps to >= 1.

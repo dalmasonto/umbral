@@ -4,7 +4,7 @@ Read-only review, 2026-06-16. Scope: `plugins/umbral-security/src/lib.rs` + `tes
 
 ## Verdict
 
-**Complete and well-built for what it covers: CSRF + a configurable security-header bundle. The CSRF core is genuinely sound (signed double-submit, constant-time compare, auto-rotation). The known gaps are all already-filed config-conditional ones (#75: empty `SECRET_KEY`; exempt-prefix boundary; HSTS/CSP opt-in).** Scope is narrower than Django's `SecurityMiddleware` + the full `SECURE_*` family — notably **no rate-limiting, no CORS** (CORS lives in `umbral-core`, not here), and **no boot-time `check.rs` warnings** for the dangerous defaults. Everything it claims to do, it does, with no stubs.
+**Complete and well-built for what it covers: CSRF + a configurable security-header bundle. The CSRF core is genuinely sound (signed double-submit, constant-time compare, auto-rotation). The known gaps are all already-filed config-conditional ones (#75: empty `SECRET_KEY`; exempt-prefix boundary; HSTS/CSP opt-in).** Scope is narrower than a full security-middleware + transport-hardening family - notably **no rate-limiting, no CORS** (CORS lives in `umbral-core`, not here), and **no boot-time `check.rs` warnings** for the dangerous defaults. Everything it claims to do, it does, with no stubs.
 
 Completeness one-liner: **CSRF + headers are real and complete; rate-limiting is absent, several `SECURE_*` knobs are opt-in with no fail-closed boot check, and the empty-`SECRET_KEY` hole (#75) is the one outright bug.**
 
@@ -20,7 +20,7 @@ Completeness one-liner: **CSRF + headers are real and complete; rate-limiting is
 | Sensitive-header redaction | Complete | authorization/cookie/set-cookie marked sensitive. |
 | **Rate limiting** | **Absent** | not in this plugin (no token-bucket / per-IP throttle). A real DoS / brute-force gap for a "security" plugin. |
 | **CORS** | Not here | lives in `umbral-core::cors` (`reviews/security.md` confirms it's strict-by-default there). FYI: a consumer looking in `umbral-security` for it won't find it. |
-| `SECURE_*` parity / boot checks | **Partial** | the *headers* exist, but there's **no boot-time warning** when HSTS/CSP are off in Prod, when `secret_key` is empty, or when the exempt-prefix is dangerously broad. Django surfaces these via `manage.py check --deploy`. |
+| Transport-hardening parity / boot checks | **Partial** | the *headers* exist, but there's **no boot-time warning** when HSTS/CSP are off in Prod, when `secret_key` is empty, or when the exempt-prefix is dangerously broad. A deploy-readiness check command would surface these. |
 | Stubs / `todo!()` / no-ops | **None** | clean; `strip_server_header` and `forbidden()` are real. |
 
 ## Findings
@@ -32,7 +32,7 @@ Completeness one-liner: **CSRF + headers are real and complete; rate-limiting is
 - **`csrf_exempt_paths` uses bare `path.starts_with(prefix)` — no segment boundary.** `lib.rs:407-411`. Exempting `/api` also exempts `/api-internal`, `/apikeys`, `/api.json`, and every other path sharing the prefix. A cookie-authed `/api/account/delete` under an `/api` exemption becomes fully CSRF-exempt. **already** security.md (CSRF/Headers, Important). Fix: `path == p || path.starts_with(&format!("{p}/"))`. *(Note: this is genuinely net-new vs the backlog's synthesized list, which folded only the empty-key item into #75 and omitted the exempt-prefix boundary — worth a dedicated line.)*
 
 ### NEW — Important (defense-in-depth, missing capability)
-- **No rate-limiting / brute-force throttle anywhere in the plugin.** A framework "security" plugin with CSRF + headers but no per-IP / per-route rate limit leaves login brute-force, OAuth-callback hammering, and generic request-flood DoS entirely to the deployer's reverse proxy. Django leans on third-party (`django-ratelimit`) too, so this is *defensible as out-of-scope*, but it should be an explicit deferred entry, not an unstated absence. → **NEW gap** (deferred / explicit-scope).
+- **No rate-limiting / brute-force throttle anywhere in the plugin.** A framework "security" plugin with CSRF + headers but no per-IP / per-route rate limit leaves login brute-force, OAuth-callback hammering, and generic request-flood DoS entirely to the deployer's reverse proxy. Rate-limiting is commonly left to a dedicated library too, so this is *defensible as out-of-scope*, but it should be an explicit deferred entry, not an unstated absence. → **NEW gap** (deferred / explicit-scope).
 
 ### NEW — Important (boot-time safety, ties to gaps2 #25)
 - **No `check.rs` boot warnings for the dangerous defaults this plugin ships with.** HSTS default `false` and CSP default `None` (`lib.rs:220,224`) mean a Prod app mounting `SecurityPlugin::new()` ships **no** `Strict-Transport-Security` (SSL-stripping) and **no** CSP (no XSS backstop), silently. **already** security.md (CSRF/Headers, Important) but worth restating as a *boot-check* item: when `Environment::Prod` + this plugin mounted + `hsts==false`/CSP `None`, warn. Fix lives in the framework boot `check.rs` (the plugin should contribute system checks). → fold into **gaps2 #25** / **#75**.

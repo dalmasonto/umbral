@@ -188,8 +188,8 @@ struct CalendarRow {
 }
 
 /// `chrono::NaiveDate` should classify into `SqlType::Date` and
-/// `chrono::NaiveTime` into `SqlType::Time`, mirroring Django's split
-/// between `DateField` and `TimeField`.
+/// `chrono::NaiveTime` into `SqlType::Time`, keeping date and time as
+/// distinct column types.
 #[test]
 fn chrono_date_and_time_classify_correctly() {
     assert_eq!(
@@ -493,8 +493,8 @@ struct PkString {
     title: String,
 }
 
-/// `id: String` is the slug-style key pattern (Django's `SlugField`
-/// PK). The trait bound is now `Clone`, not `Copy`, so non-Copy types
+/// `id: String` is the slug-style key pattern (a string PK).
+/// The trait bound is now `Clone`, not `Copy`, so non-Copy types
 /// like `String` work the same way as the integer types.
 #[test]
 fn primary_key_string_works() {

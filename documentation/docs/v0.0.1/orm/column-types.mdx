@@ -72,7 +72,7 @@ pub struct Article {
 | Admin form widget | `Text + max_length > 0` renders as `<input type="text" maxlength="64">` (single-line). Without `max_length`, the field renders as a `<textarea>` (prose). |
 | Admin changelist | The value is truncated at `N` characters when rendered in `list_display`, with `…` appended so the cut is visible. |
 
-`#[umbral(string)]` is the sibling attribute - it marks one field as the Django-style `__str__`, so the admin's default `list_display` becomes `[<that field>, <other short columns>]` when no explicit config is registered. See [Models - Display hints](./models#display-hints-string-max_length) for the full opt-in story.
+`#[umbral(string)]` is the sibling attribute - it marks one field as the model's human-readable label, so the admin's default `list_display` becomes `[<that field>, <other short columns>]` when no explicit config is registered. See [Models - Display hints](./models#display-hints-string-max_length) for the full opt-in story.
 
 ### At the boundary - `#[derive(Form)]`
 
@@ -177,7 +177,7 @@ The macro reads each field-level attribute straight off the struct field. Empty 
 | `#[umbral(on_update = "...")]` | FK `ON UPDATE` clause. Same vocabulary as `on_delete`. |
 | `#[umbral(min = N)]` / `#[umbral(max = N)]` | Numeric range validator. The dynamic-write path returns `WriteError::Validator { field, message }`; Postgres also gets a DDL CHECK so direct DB writes are caught. SQLite skips the CHECK (its CHECK syntax is more friction than safety here). |
 | `#[umbral(backend = "postgres")]` / `#[umbral(backend = "sqlite")]` | Restrict this field to a specific backend. The boot-time system check fails when the active backend isn't in the allow-list. Repeat the attribute to allow several. |
-| `#[umbral(string)]` / `#[umbral(string = true)]` | Mark this field as the Django-style `__str__`. The admin uses it as the label column in the default `list_display` and as the picker label in FK / M2M choosers. See [Models - Display hints](./models#display-hints-string-max_length). |
+| `#[umbral(string)]` / `#[umbral(string = true)]` | Mark this field as the model's human-readable label (display field). The admin uses it as the label column in the default `list_display` and as the picker label in FK / M2M choosers. See [Models - Display hints](./models#display-hints-string-max_length). |
 | `#[umbral(max_length = N)]` | Cap on a `String` field. Postgres DDL emits `VARCHAR(N)`; SQLite stays `TEXT` (affinity-equivalent). Admin form renders as `<input maxlength="N">` instead of `<textarea>`; changelist truncates display at N chars. |
 | `#[umbral(choices)]` | The field's type implements [`umbral::orm::ChoiceField`] (typically via `#[derive(Choices)]`). Stored as TEXT; admin renders a `<select>`; Postgres gets a CHECK constraint. See ["Using a Rust enum"](#derivechoices---using-a-rust-enum-as-a-field-type) below. |
 | `#[umbral(cidr)]` | On an `ipnetwork::IpNetwork` field, declare it as Postgres `CIDR` (network address) instead of the default `INET`. Postgres-only. |

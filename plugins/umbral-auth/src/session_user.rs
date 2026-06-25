@@ -418,7 +418,7 @@ fn expand_relations<'a>(
 
         // -- Reverse-O2O: child models with a UNIQUE FK to this
         // table get injected under the child's table name. Naming
-        // convention matches Django's lower-case-model-name idiom
+        // convention uses the lower-case-model-name idiom
         // (`Customer { user: FK<User> (unique) }` → `user.customer`).
         let Some(parent_pk_col) = meta.pk_column() else {
             return;

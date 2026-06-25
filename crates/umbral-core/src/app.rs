@@ -347,11 +347,11 @@ impl AppBuilder {
         self
     }
 
-    /// Set the trailing-slash redirect policy. Django's `APPEND_SLASH`
-    /// port — see [`crate::slash::SlashRedirect`].
+    /// Set the trailing-slash redirect policy. See
+    /// [`crate::slash::SlashRedirect`].
     ///
     /// Default is `Off` (axum's strict matching). Most apps want
-    /// `Append` (Django default: `/foo` 404 → 308 → `/foo/`) so that
+    /// `Append` (`/foo` 404 → 308 → `/foo/`) so that
     /// the same URL works with or without the trailing slash.
     ///
     /// ```ignore
@@ -367,7 +367,7 @@ impl AppBuilder {
         self
     }
 
-    /// Set the template rendered on a 404. Mirrors Django's
+    /// Set the template rendered on a 404. Follows the
     /// `404.html` convention.
     ///
     /// The template gets `{ path }` in scope — the request path that
@@ -385,8 +385,8 @@ impl AppBuilder {
         self
     }
 
-    /// Set the template rendered on a panicking handler. Mirrors
-    /// Django's `500.html` convention.
+    /// Set the template rendered on a panicking handler. Follows
+    /// the `500.html` convention.
     ///
     /// Installs a `tower-http` `CatchPanic` layer around the router.
     /// A panic in any handler is caught, logged via `tracing::error`,
@@ -901,7 +901,7 @@ impl AppBuilder {
         // plugin system_check that wants to inspect the loaded
         // templates can.
         //
-        // Search order (first-match-wins, matches Django's APP_DIRS semantics):
+        // Search order (first-match-wins across all template directories):
         //   1. App-level dir: set via `.templates_dir(...)` or `./templates`.
         //   2. Plugin dirs: each plugin's `templates_dirs()` contributions,
         //      in topological dependency order.
@@ -1228,7 +1228,7 @@ impl AppBuilder {
             ));
         }
 
-        // Phase 5.95 — Host-header validation (Django ALLOWED_HOSTS). Applied
+        // Phase 5.95 — Host-header validation (allowed-hosts allowlist). Applied
         // outermost so a forged `Host` is rejected with a 400 before any
         // handler, plugin, or CORS logic runs. Enforced only in
         // `Environment::Prod`; dev passes through. Allowlist is

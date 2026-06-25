@@ -14,7 +14,7 @@ This is a point-in-time review, not a tracker. Each finding has `file:line`, evi
 | [`performance.md`](performance.md) | ORM runtime performance: unbounded REST default, missing FK auto-index, `bulk_create` validation N+1, pool config, per-row materialization. |
 | [`query-api-sufficiency.md`](query-api-sufficiency.md) | Does the query builder cover what apps need without raw SQL? Coverage table + prioritized gaps (`select_for_update`, reverse-relation filtering, EXISTS, `Case`/`When`). |
 | [`broken-features.md`](broken-features.md) | Code that can't work as written: task double-claim/loss, signal-mutex poisoning, error-swallowing, panics on reachable paths. |
-| [`missing-features.md`](missing-features.md) | Django-parity gaps grounded in an in-tree need (e.g. `select_for_update`). |
+| [`missing-features.md`](missing-features.md) | Feature-parity gaps grounded in an in-tree need (e.g. `select_for_update`). |
 
 ## Severity summary
 
@@ -32,7 +32,7 @@ This is a point-in-time review, not a tracker. Each finding has `file:line`, evi
 - **BROKEN-2** — Tasks: worker crash mid-task strands the row in `running` forever (no visibility-timeout/reclaim). At-most-once, not the advertised with-retries durability.
 - **BROKEN-3** — Core signals: one panicking sync handler poisons the registry mutex and turns **every** subsequent ORM write into a 500.
 - **PERF-1** — `RestPlugin::default()` applies no LIMIT (default `NoPagination` → `limit: u64::MAX`); `GET /api/<table>/` loads the whole table into RAM. DoS surface; compounds WEB-1.
-- **PERF-2** — FK columns are never auto-indexed (only explicit `#[umbral(index)]` emits `CREATE INDEX`). Every join/`?include=`/`WHERE fk_id=?` seq-scans. Django auto-indexes every FK; umbral doesn't.
+- **PERF-2** - FK columns are never auto-indexed (only explicit `#[umbral(index)]` emits `CREATE INDEX`). Every join/`?include=`/`WHERE fk_id=?` seq-scans. Some mature frameworks auto-index every FK; umbral doesn't.
 - **PERF-3** — `bulk_create` runs one FK-existence `COUNT` per FK per row before the single INSERT — `bulk_create(1000)` with 2 FKs ≈ 2000 round-trips, defeating the bulk path.
 
 ### Medium

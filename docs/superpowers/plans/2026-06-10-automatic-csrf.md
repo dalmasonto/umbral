@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Django-parity CSRF — the SecurityPlugin middleware is the only token mint, templates receive `csrf_token` / `csrf_input` ambiently, view code contains zero CSRF lines.
+**Goal:** Zero-ceremony CSRF - the SecurityPlugin middleware is the only token mint, templates receive `csrf_token` / `csrf_input` ambiently, view code contains zero CSRF lines.
 
 **Architecture:** A `CURRENT_CSRF` tokio task-local in `umbral-core` (mirroring the existing `CURRENT_USER` seam) is scoped by `csrf_middleware` around every non-exempt request and merged into every `templates::render` context. The middleware mints pre-handler on safe methods (first visit + rotation of stale unsigned cookies), so handlers and the admin never mint. `signed_csrf` flips to default-on.
 
@@ -113,8 +113,8 @@ tokio::task_local! {
 
     /// Per-request CSRF token, set by `umbral-security`'s middleware and
     /// read by [`render`] to inject `csrf_token` / `csrf_input` into every
-    /// template — Django's `{% csrf_token %}` ergonomic. Outside the
-    /// middleware's scope nothing is injected.
+    /// template, so a form template need only drop in `{{ csrf_input }}`.
+    /// Outside the middleware's scope nothing is injected.
     pub static CURRENT_CSRF: Option<String>;
 }
 ```
@@ -222,9 +222,9 @@ cd crates && cargo fmt && cargo clippy --all-targets && cargo build && cargo tes
 git add crates/umbral-core/src/templates.rs crates/umbral/src/lib.rs crates/umbral-core/tests/csrf_context.rs
 git commit -m "feat(templates): ambient CSRF token in every render via CURRENT_CSRF task-local
 
-csrf_token (raw) and csrf_input (hidden <input>, Django's {% csrf_token %}
-equivalent) merge into every template context when a middleware scopes
-the token. Explicit ctx keys win, same precedence as the user merge.
+csrf_token (raw) and csrf_input (a ready-to-drop-in hidden <input>)
+merge into every template context when a middleware scopes the token.
+Explicit ctx keys win, same precedence as the user merge.
 
 Part 1/4 of docs/decisions/2026-06-10-automatic-csrf.md.
 
@@ -799,7 +799,7 @@ git commit -m "refactor(shop): drop all manual CSRF plumbing from the contact vi
 The middleware mints + scopes the token and render injects
 {{ csrf_input }}; the views' HeaderMap params, ensure_csrf_cookie
 call, Set-Cookie attach, and csrf_token threading all disappear.
-This is the Django-parity payoff the decision doc promised: zero
+This is the zero-ceremony payoff the decision doc promised: zero
 CSRF lines in view code, one token in the template.
 
 Part 4/4 of docs/decisions/2026-06-10-automatic-csrf.md.
@@ -828,7 +828,7 @@ tags: [security, csrf, middleware]
 
 # Security
 
-`SecurityPlugin` gives every non-safe request automatic CSRF validation (signed double-submit, Django's `CsrfViewMiddleware` equivalent) and a modern security-header bundle. Mount it and you're done — the middleware mints the token, your templates receive it ambiently, and a missing or forged token on any POST/PUT/PATCH/DELETE returns 403.
+`SecurityPlugin` gives every non-safe request automatic CSRF validation (signed double-submit) and a modern security-header bundle. Mount it and you're done - the middleware mints the token, your templates receive it ambiently, and a missing or forged token on any POST/PUT/PATCH/DELETE returns 403.
 
 ```rust
 App::builder()

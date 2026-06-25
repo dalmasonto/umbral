@@ -7,7 +7,7 @@ tags: [templates, plugins, filters, minijinja]
 
 # Custom template tags
 
-Django plugins ship template libraries you `{% load %}` to get extra filters and tags. umbral's equivalent is the `Plugin::template_registrars` hook: a plugin returns closures that mutate the minijinja [`Environment`](https://docs.rs/minijinja/latest/minijinja/struct.Environment.html) at engine-build time, adding filters, functions, and globals that every app-level template can then use.
+A plugin can extend the template engine with its own filters and tags through the `Plugin::template_registrars` hook: the plugin returns closures that mutate the minijinja [`Environment`](https://docs.rs/minijinja/latest/minijinja/struct.Environment.html) at engine-build time, adding filters, functions, and globals that every app-level template can then use.
 
 <Callout type="info">
 This is the app-level surface. The admin plugin keeps its own private environment with its own filters (e.g. `naturaltime`); those are not visible to app templates. A registrar returned from `template_registrars` *is*.

@@ -37,8 +37,9 @@ use crate::auth::Identity;
 
 /// The operations a REST resource can expose. The five built-ins
 /// (`List` / `Retrieve` / `Create` / `Update` / `Delete`) cover the
-/// standard CRUD surface; `Custom(name)` is the DRF `@action` shape
-/// for endpoints that don't fit CRUD (publish, archive, recent,
+/// standard CRUD surface; `Custom(name)` is the custom-action shape
+/// (`/api/<table>/<id>/<name>/`) for endpoints that don't fit CRUD
+/// (publish, archive, recent,
 /// etc.).
 ///
 /// Permission impls dispatch on this enum so one `Permission` can

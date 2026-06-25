@@ -97,7 +97,7 @@ pub(super) fn build_insert_one_for<T: Model>(
             continue;
         }
         // gaps2 #19 follow-up: `auto_now_add` / `auto_now` columns
-        // are framework-managed timestamps. Django's behavior: the
+        // are framework-managed timestamps. The behavior: the
         // INSERT path always writes `now()` regardless of what the
         // struct carries (the user can't override via Model.save()).
         // Without this overwrite, `Manager::create(instance)` where

@@ -1,17 +1,17 @@
 ---
 title: Pagination (template list views)
-description: Paginate a QuerySet into fixed-size pages for server-rendered list views with Paginator and Page (Django core.paginator parity).
+description: Paginate a QuerySet into fixed-size pages for server-rendered list views with Paginator and Page.
 sidebar_position: 12
 icon: book-open
 tags: [web, templates, orm, pagination]
 ---
 
-`umbral::pagination` is the page-of-rows helper for **server-rendered (Jinja) list views** - the Django `django.core.paginator` equivalent. A `Paginator` counts a [`QuerySet`](/docs/v0.0.1/orm) once and slices it into fixed-size `Page`s; a `Page` exposes Django's familiar `has_next()`, `start_index()`, `next_page_number()`, and a windowed `elided_page_range()` for the `1 … 4 5 [6] 7 8 … 20` nav.
+`umbral::pagination` is the page-of-rows helper for **server-rendered (Jinja) list views**. A `Paginator` counts a [`QuerySet`](/docs/v0.0.1/orm) once and slices it into fixed-size `Page`s; a `Page` exposes `has_next()`, `start_index()`, `next_page_number()`, and a windowed `elided_page_range()` for the `1 … 4 5 [6] 7 8 … 20` nav.
 
 It lives in the core (no plugin to register): any handler can paginate a queryset directly. This is distinct from REST's JSON pagination - reach for this when you render HTML.
 
 <Callout type="info">
-`per_page` is clamped to at least 1, and an empty queryset still reports `num_pages == 1` with one empty page - both matching Django.
+`per_page` is clamped to at least 1, and an empty queryset still reports `num_pages == 1` with one empty page.
 </Callout>
 
 ## Handler example
@@ -65,7 +65,7 @@ The core engine registers a `querystring_with(current_query, key, value)` templa
 
 | Method | Out-of-range page |
 | --- | --- |
-| `paginator.page(n)` | Errors `PaginationError::InvalidPage` (Django's strict `Paginator.page`) |
+| `paginator.page(n)` | Errors `PaginationError::InvalidPage` (strict) |
 | `paginator.page_clamped(n)` | Clamps `n` into `[1, num_pages]` and returns that page |
 
 ## See also

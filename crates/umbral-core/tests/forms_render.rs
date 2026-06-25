@@ -1,4 +1,4 @@
-//! `FormErrors::render` — the Django-bound-form ergonomic: a failed
+//! `FormErrors::render` — the bound-form ergonomic: a failed
 //! submission renders the form template itself (422), binding `form`
 //! to the user's raw keystrokes and `errors` to the flat per-field
 //! view plus a default form-level summary banner. One line in the

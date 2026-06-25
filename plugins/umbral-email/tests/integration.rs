@@ -109,7 +109,7 @@ async fn missing_recipients_returns_an_error_variant() {
 }
 
 /// Empty `from` with no `email_default_from` configured surfaces as
-/// `MissingFrom`. Mirrors Django's "either configure DEFAULT_FROM_EMAIL
+/// `MissingFrom`. Mirrors the "either configure a default from-address
 /// or specify a from on the message" contract.
 #[tokio::test]
 async fn missing_from_returns_an_error_when_default_is_also_unset() {

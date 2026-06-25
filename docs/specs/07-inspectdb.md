@@ -8,7 +8,7 @@
 
 ## Purpose
 
-The porting payoff. A team running Django, Rails, Node, or anything else with a Postgres database points umbral at the existing DB and gets:
+The porting payoff. A team running any existing stack with a Postgres database points umbral at the existing DB and gets:
 
 1. **Rust model files** — one `#[derive(Model)] struct` per table, with the right field types, options, and relations.
 2. **An initial migration file** — `0001_initial.json` that, applied to an empty database, would recreate the introspected schema.
@@ -104,8 +104,8 @@ Three kinds of conflict surface:
 
 1. **Generated struct name collides with itself.** Two tables map to the same struct name (after prefix stripping). The importer aborts with a clear error and the user re-runs without `--strip-prefix` or chooses a different stripping rule. M6 does not try to disambiguate automatically; a wrong guess silently shadows the user's intent.
 
-2. **Introspected table collides with a registered built-in plugin's table.** Most commonly: `auth_user`, `django_session`, `auth_permission`. The importer checks every registered plugin's `Plugin::migrations()` for an introspected table name and:
-   - If the column shape matches the built-in plugin's expected shape: marks the table as "owned by the built-in plugin" and does not generate a model file for it; the built-in plugin's migration is marked applied. This is the "port a Django app to umbral-auth" path.
+2. **Introspected table collides with a registered built-in plugin's table.** Most commonly tables holding users, sessions, and permissions (whatever the source stack named them). The importer checks every registered plugin's `Plugin::migrations()` for an introspected table name and:
+   - If the column shape matches the built-in plugin's expected shape: marks the table as "owned by the built-in plugin" and does not generate a model file for it; the built-in plugin's migration is marked applied. This is the "adopt an existing auth schema into umbral-auth" path.
    - If the shape doesn't match (extra columns, missing columns, different types): aborts with a diff explaining what doesn't match. The user can re-run with `--ignore-builtin auth` to put the introspected table under the imported plugin instead.
 
 3. **Cross-table FK target not found.** A FK in `post.author_id` references `author`, but no `author` table exists in the introspection. This means the user's database has dangling references; the importer surfaces them as warnings and generates the FK column as a plain `i64` with a comment.
@@ -227,7 +227,7 @@ Comments live in the generated code as `// inspectdb: original was TIMESTAMP (no
 
 ## Trade-offs and alternatives considered
 
-**One initial migration vs N per-table migrations.** A single `0001_initial.json` is easier to reason about and matches Django's `inspectdb` behavior. The trade-off is that a partial-import error rolls back all of `0001_initial` in one transaction; for a database with thousands of tables, that's a lot to be inside one tx. Defer to per-table fragments only if a real workload runs into the limit. Spec defaults to one file.
+**One initial migration vs N per-table migrations.** A single `0001_initial.json` is easier to reason about and keeps the whole import as one reviewable unit. The trade-off is that a partial-import error rolls back all of `0001_initial` in one transaction; for a database with thousands of tables, that's a lot to be inside one tx. Defer to per-table fragments only if a real workload runs into the limit. Spec defaults to one file.
 
 **Native vs fallback type mapping.** The table picks the most precise Rust type that has stable representation. `UUID` is `uuid::Uuid`, not `String`, even though `String` would work; later code (admin forms, REST serializers) gets to use the precise type without explicit conversion. The cost is the user needing the `uuid` crate as a dep; the importer notes this in a `README.md` it generates next to the plugin.
 
@@ -239,7 +239,7 @@ Comments live in the generated code as `// inspectdb: original was TIMESTAMP (no
 
 ## Open questions
 
-- **Plugin partitioning.** If the existing database has natural plugin boundaries (Django apps with table-name prefixes), the user might want one umbral plugin per Django app. M6 ships with one-plugin output; M8 or later could add a `--partition-by-prefix` mode that emits multiple plugins. Defer until users ask.
+- **Plugin partitioning.** If the existing database has natural module boundaries (groups of tables sharing a name prefix), the user might want one umbral plugin per group. M6 ships with one-plugin output; M8 or later could add a `--partition-by-prefix` mode that emits multiple plugins. Defer until users ask.
 - **View introspection.** Postgres views could be modelled as read-only umbral models. Defer to a follow-up — they're rare in the porting target.
 - **Custom-type extensibility.** Today the mapping table is hard-coded. A future hook (a config option or a derive registration) could let users plug in their own (Postgres custom-type → Rust type) entries. Defer.
 - **Detecting auth model shape against `umbral-auth`'s default `User`.** §Conflict resolution describes the "shapes match" check; the exact heuristic (which columns are required, which are bonuses) needs to be pinned to whatever shape `auth-and-sessions.md` settles on. Resolve when the auth outline gets promoted.

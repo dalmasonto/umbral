@@ -201,7 +201,7 @@ fn parse_any_datetime(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     None
 }
 
-/// Django-style absolute datetime humanizer:
+/// Absolute datetime humanizer:
 ///   `2026-06-08T21:23:20.619672614+00:00` → `Jun 8, 2026 at 9:23 PM`
 /// The default format hits the common case (audit trails, "joined
 /// on" labels). Falls back to the raw input if parsing fails so
@@ -213,7 +213,7 @@ pub(crate) fn humanize_date(raw: &str) -> String {
     }
 }
 
-/// Django-style relative time humanizer:
+/// Relative time humanizer:
 ///   `2026-06-08T21:23:20Z` → "2 hours ago" / "yesterday" / "just now"
 /// The "now" reference is `chrono::Utc::now()` — UTC-only at v1
 /// (matches the rest of the timestamp handling). Negative deltas

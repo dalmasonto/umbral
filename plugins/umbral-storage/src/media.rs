@@ -276,7 +276,7 @@ pub(crate) struct CleanupSpec {
 /// Register the file-lifecycle cleanup signal handlers for one model:
 ///
 /// 1. **`pre_delete:<table>`** — deletes the blobs behind `columns` on the
-///    row about to be deleted (Django's `FileField` delete cleanup).
+///    row about to be deleted (file cleanup on row delete).
 /// 2. **`post_update:<table>`** — replace-cleanup (gaps2 #92): when a file
 ///    column changes from an old key to a new one, the OLD blob is deleted
 ///    so the backend doesn't accumulate orphans on file replace.

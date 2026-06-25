@@ -16,8 +16,8 @@
 //!
 //! When two directories both provide a template with the same name, the
 //! first-match-wins policy applies and a `tracing::warn!` is emitted at
-//! boot so the collision is visible in the log. This matches Django's
-//! `APP_DIRS` loader semantics. Silently-overridden templates are a
+//! boot so the collision is visible in the log. First-match-wins across
+//! all template directories. Silently-overridden templates are a
 //! well-known footgun, so the warning is non-optional.
 //!
 //! Rendering goes through one ambient accessor, [`render`], which reads
@@ -65,7 +65,7 @@ use syntect::util::LinesWithEndings;
 tokio::task_local! {
     /// Per-request ambient user value, set by a session-aware layer
     /// (typically `umbral_sessions::UserContextLayer<U>`) and read by
-    /// [`render`] to mirror Django's `request.user` ergonomic in
+    /// [`render`] to expose the current `user` in
     /// templates. `None` means an anonymous request.
     ///
     /// Outside the layer's scope, `try_with` returns `Err(AccessError)`
@@ -75,7 +75,7 @@ tokio::task_local! {
 
     /// Per-request CSRF token, set by `umbral-security`'s middleware and
     /// read by [`render`] to inject `csrf_token` / `csrf_input` into
-    /// every template — Django's `{% csrf_token %}` ergonomic. Outside
+    /// every template, for the `{% csrf_token %}` ergonomic. Outside
     /// the middleware's scope nothing is injected (a template that
     /// references `{{ csrf_token }}` then renders it empty under the
     /// engine's lenient-undefined behaviour).
@@ -224,7 +224,7 @@ static ENGINE: OnceLock<Environment<'static>> = OnceLock::new();
 
 /// A plugin-contributed mutation of the template [`Environment`]: adds
 /// custom filters, functions, or globals at engine-build time
-/// (feature #67 — Django's custom template tags/filters). Returned by
+/// (feature #67 - custom template tags/filters). Returned by
 /// `Plugin::template_registrars` and stored process-wide so the dev-mode
 /// hot-reload rebuild re-applies it.
 ///
@@ -463,7 +463,7 @@ pub fn resolve_static_url(path: &str) -> String {
         .map(|s| s.static_url.clone())
         .unwrap_or_else(|| "/static/".to_string());
 
-    // Manifest cache-busting (Django's ManifestStaticFilesStorage): when
+    // Manifest cache-busting (hashed static-file storage): when
     // `collectstatic --hashed` has run, a `staticfiles.json` maps the
     // logical path the template wrote (`css/app.css`) to its
     // content-hashed name (`css/app.<hash>.css`). Resolving to the hashed

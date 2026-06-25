@@ -9,7 +9,7 @@ tags:
   - postgres
 ---
 
-`umbral-tenants` lets one app serve many **tenants** with their data isolated, without you threading a tenant id through every query. It's the *django-tenants* shape in Rust: **one** Postgres database, **one schema per tenant**, plus a shared `public` schema for cross-tenant data. A request is mapped to a tenant by its `Host` subdomain or a header; the rest of that request runs scoped to the tenant, and every tenant-owned table is **schema-qualified to the tenant's schema with zero extra round-trips** - no `SET search_path` per request.
+`umbral-tenants` lets one app serve many **tenants** with their data isolated, without you threading a tenant id through every query. It uses a schema-per-tenant model: **one** Postgres database, **one schema per tenant**, plus a shared `public` schema for cross-tenant data. A request is mapped to a tenant by its `Host` subdomain or a header; the rest of that request runs scoped to the tenant, and every tenant-owned table is **schema-qualified to the tenant's schema with zero extra round-trips** - no `SET search_path` per request.
 
 <Callout type="warning">
 Schema-per-tenant is **Postgres-only**, and registering `TenantsPlugin` on a non-Postgres pool **fails fast at boot** - `App::build()` returns an error naming the offending backend, rather than letting you discover it later inside a migrate. SQLite has no schemas to isolate tenants with. Point `UMBRAL_DATABASE_URL` at a Postgres.
@@ -283,7 +283,7 @@ plugin
 
 The pool lands in a runtime registry (`umbral::db::register_tenant_pool`), so `pool_for_dispatched` resolves it even though it was added after `App::build`. Each tenant database carries its own `umbral_migrations` ledger.
 
-**Picking a strategy.** Schema-per-tenant is the default django-tenants shape - cheaper (one pool, zero-round-trip routing), ideal for many tenants. Database-per-tenant is for stronger isolation, per-tenant backup/restore, compliance boundaries, or a few large tenants - at the cost of a pool per tenant.
+**Picking a strategy.** Schema-per-tenant is the default - cheaper (one pool, zero-round-trip routing), ideal for many tenants. Database-per-tenant is for stronger isolation, per-tenant backup/restore, compliance boundaries, or a few large tenants - at the cost of a pool per tenant.
 
 ## How resolution works
 

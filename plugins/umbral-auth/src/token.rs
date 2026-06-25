@@ -1,4 +1,4 @@
-//! Opaque DB-backed bearer tokens — the Django REST shape.
+//! Opaque DB-backed bearer tokens.
 //!
 //! A user can hold any number of named tokens (laptop, CI, iOS, …).
 //! Each token is a long random string with a `umbral_` prefix; only
@@ -22,9 +22,9 @@
 //!
 //! ## Why hash at rest
 //!
-//! DRF's classic `authtoken` table stores plaintext. The modern
-//! recommendation (and what `django-rest-knox` does) is to hash so
-//! a DB read leak (backup, SQL injection, exposed dump) doesn't hand
+//! Classic token tables store plaintext. The modern recommendation is to
+//! hash the token so a DB read leak (backup, SQL injection, exposed dump)
+//! doesn't hand
 //! the attacker live API keys. The lookup cost is one SHA-256 per
 //! request, which is microseconds. The only ergonomic loss is "show
 //! me my token again" — which is the security boundary working as

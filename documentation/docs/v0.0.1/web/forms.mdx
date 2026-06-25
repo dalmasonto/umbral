@@ -205,7 +205,7 @@ T::validate(&data)          (FormValidate trait, derived)
               ▼
         handler renders:
           ├ as_template_ctx()   → flat HTML form errors
-          ├ field_errors()      → DRF-style {"field": ["msg"]} for REST
+          ├ field_errors()      → {"field": ["msg"]} for REST
           ├ non_field_errors()  → form-level banner messages
           └ into_write_error()  → feed to admin form-span renderer
 ```

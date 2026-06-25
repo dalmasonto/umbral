@@ -57,7 +57,7 @@ pub trait HydrateRelated {
     /// A field name that doesn't match any FK on this model is silently
     /// ignored (a noop). Deserialisation errors are also silently swallowed —
     /// the FK keeps its raw-integer form without a resolved object. This
-    /// matches Django's behaviour: a bad `select_related` name is a
+    /// is intentional: a bad `select_related` name is a
     /// programming error caught in tests, not a runtime panic.
     fn hydrate_fk(&mut self, field_name: &str, row: &serde_json::Value);
 
@@ -206,7 +206,7 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// overrides it.
     const TABLE: &'static str;
 
-    /// The app label (Django's app name) this model belongs to.
+    /// The app label (the owning plugin's name) this model belongs to.
     ///
     /// Sourced from `#[umbral(plugin = "...")]`; defaults to `"app"` (the
     /// registry's default key) when the attribute is absent. Authoritative
@@ -251,7 +251,7 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// Single-row-marker. When `true`, the admin auto-redirects the
     /// list view to the (sole) row's edit form, hides the "+ New"
     /// button, and surfaces the model as a settings-style screen.
-    /// Mirrors the `django-solo` community plugin's shape. Set via
+    /// The single-row settings model pattern. Set via
     /// `#[umbral(singleton)]` on the struct. Closes BUG-9 in
     /// `bugs/tests/testBugs.md`.
     ///
@@ -516,7 +516,7 @@ pub struct FieldSpec {
 
     /// For `SqlType::ForeignKey` fields: whether the migration engine
     /// emits a *physical* `FOREIGN KEY ... REFERENCES` constraint.
-    /// Mirrors Django's `ForeignKey(db_constraint=...)`. Set via
+    /// Toggles the physical FK constraint. Set via
     /// `#[umbral(db_constraint = false)]`; defaults to `true` (today's
     /// behaviour — emit the constraint).
     ///
@@ -546,7 +546,7 @@ pub struct FieldSpec {
     /// Has no effect when `noform` is also set.
     pub noedit: bool,
 
-    /// When `true`, this field is the Django-style `__str__` for the
+    /// When `true`, this field is the display string for the
     /// model — the admin uses it as the default label in
     /// `list_display` when the developer hasn't specified one
     /// explicitly. Set via `#[umbral(string)]` /
@@ -622,7 +622,7 @@ pub struct FieldSpec {
     /// Referential action emitted on `UPDATE` of the FK target row's
     /// primary key. Same FK-only semantics as `on_delete`; almost
     /// nobody touches this in practice (PKs rarely move) but the
-    /// symmetry matches `REFERENCES ... ON UPDATE ...` and Django's
+    /// symmetry matches `REFERENCES ... ON UPDATE ...` and the
     /// `on_delete` / `on_update` pair. Set via
     /// `#[umbral(on_update = "...")]`.
     pub on_update: FkAction,
@@ -639,8 +639,7 @@ pub struct FieldSpec {
     pub index: bool,
 
     /// When `true`, the column gets populated with `Utc::now()` at
-    /// row-creation time *only*. Mirrors Django's
-    /// `auto_now_add=True`. Set via `#[umbral(auto_now_add)]`.
+    /// row-creation time *only*. Set via `#[umbral(auto_now_add)]`.
     /// Closes BUG-5 in `bugs/tests/testBugs.md`.
     ///
     /// **Where this fires:** the dynamic write path
@@ -652,8 +651,7 @@ pub struct FieldSpec {
     pub auto_now_add: bool,
 
     /// When `true`, the column gets populated with `Utc::now()` on
-    /// every write (create AND update). Mirrors Django's
-    /// `auto_now=True`. Set via `#[umbral(auto_now)]`. Closes
+    /// every write (create AND update). Set via `#[umbral(auto_now)]`. Closes
     /// BUG-5 in `bugs/tests/testBugs.md`.
     ///
     /// **Where this fires:** the dynamic write path
@@ -662,12 +660,12 @@ pub struct FieldSpec {
     /// user-controlled at v1. Body-supplied values are kept —
     /// users can override `auto_now` columns on the dynamic
     /// path, matching the lenient "fill if missing" shape of
-    /// `auto_now_add`. Django's "always override" shape lands as
+    /// `auto_now_add`. An "always override" shape lands as
     /// a future v2 toggle if a real consumer asks.
     pub auto_now: bool,
 
-    /// Human-readable column description, mirroring Django's
-    /// `help_text=`. Set via `#[umbral(help = "...")]`. Flows
+    /// Human-readable column description (help text).
+    /// Set via `#[umbral(help = "...")]`. Flows
     /// through to:
     ///
     /// - OpenAPI `description` on the property schema (closes
@@ -772,8 +770,7 @@ pub struct FieldSpec {
 }
 
 /// Referential action emitted in the SQL `REFERENCES ... ON
-/// {DELETE,UPDATE} <action>` clause. Mirrors the standard SQL set;
-/// Django uses the same vocabulary minus the SQL-level names.
+/// {DELETE,UPDATE} <action>` clause. Mirrors the standard SQL set.
 ///
 /// Copy + 'static so it can live on `FieldSpec` (which is itself
 /// `Copy` for storage in `&'static [FieldSpec]`).
@@ -837,8 +834,8 @@ impl FkAction {
 /// the M4 `DatabaseBackend` abstraction. This enum is the abstract
 /// classification umbral reasons about.
 ///
-/// The catalogue follows spec 04 §4.1: each variant covers one Django-
-/// shape field type. Rust types in the field declaration map to a
+/// The catalogue follows spec 04 §4.1: each variant covers one
+/// field type. Rust types in the field declaration map to a
 /// variant via the M3 derive's `classify_field_type`; the table is in
 /// `umbral-macros/src/lib.rs` alongside the derive.
 ///
@@ -886,8 +883,8 @@ pub enum SqlType {
     /// index / operator support); SQLite stores `TEXT` (JSON-as-string).
     /// `serde_json::Value` round-trips through both via sqlx's `json`
     /// feature, so a user model with a `Value` field works on either
-    /// backend without code changes. This mirrors Django's JSONField:
-    /// portable shape, dialect-specific storage. Native JSONB-only
+    /// backend without code changes: a portable JSON field with a
+    /// portable shape and dialect-specific storage. Native JSONB-only
     /// operators (`@>`, `->`, `->>` etc.) are a deferred follow-on
     /// landed alongside Postgres-specific column predicates.
     Json,
@@ -909,7 +906,7 @@ pub enum SqlType {
     Array(ArrayElement),
     /// `INET` — Postgres IP address column with optional netmask.
     /// Maps to `ipnetwork::IpNetwork` in Rust. **Postgres-only.**
-    /// Closest Django analogue is `GenericIPAddressField`.
+    /// Stores a generic IP address.
     Inet,
     /// `CIDR` — Postgres network address column. Same Rust type as
     /// `Inet` (`ipnetwork::IpNetwork`) but with the constraint that
@@ -924,8 +921,8 @@ pub enum SqlType {
     /// Postgres does that on insert). **Postgres-only.** Reach for this
     /// over `Text` only when you want Postgres' `xml` type checking and
     /// the `xpath` / `xmlexists` operator surface; otherwise `Text`
-    /// stores XML strings just fine. Closest Django analogue: there's
-    /// none — Django models XML as a plain `TextField`.
+    /// stores XML strings just fine (XML is otherwise modelled as plain
+    /// text).
     Xml,
     /// `LTREE` — Postgres hierarchical label-path column (the `ltree`
     /// extension). Maps to `String` in Rust (the dotted path, e.g.
@@ -940,8 +937,8 @@ pub enum SqlType {
     /// **Postgres-only.** v1 renders as `BIT VARYING` (variable-length);
     /// a fixed-width `BIT(n)` needs a hand-written migration after the
     /// initial create until a `#[umbral(bit_len = N)]` attribute lands
-    /// for a real consumer. The Django analogue is again a plain
-    /// `TextField` (Django has no bit-string field).
+    /// for a real consumer. There is otherwise no dedicated bit-string
+    /// type; the fallback is plain text.
     Bit,
     /// `TSVECTOR` — Postgres full-text search lexeme vector. Maps to
     /// [`crate::orm::TsVector`] in Rust (a thin newtype around
@@ -979,8 +976,7 @@ pub enum SqlType {
     /// `Array(_)` — apps deploying to SQLite either pick a
     /// portable type (`Real` or `Text` with manual formatting) or
     /// use Postgres for the parts of their schema that need
-    /// decimal arithmetic. Closest Django analogue is
-    /// `DecimalField`.
+    /// decimal arithmetic. A fixed-precision decimal column.
     ///
     /// **v1 scope.** Precision and scale are fixed at `(19, 4)` —
     /// 19 significant digits, 4 after the decimal point. That's

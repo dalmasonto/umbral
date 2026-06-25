@@ -154,7 +154,7 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 /** Lookup suffixes the umbral-rest list view recognises. Mirrors the
- *  __eq/__contains/etc grammar Django-filter exposes, scoped per
+ *  __eq/__contains/etc filter grammar exposed, scoped per
  *  scalar type to keep the chip palette short. */
 const LOOKUPS_BY_TYPE: Record<string, string[]> = {
   string: ["", "__contains", "__icontains", "__startswith", "__in"],

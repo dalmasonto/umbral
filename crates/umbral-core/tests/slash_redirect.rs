@@ -57,7 +57,7 @@ async fn off_policy_does_not_redirect_slashless_to_slashed() {
 }
 
 // =====================================================================
-// SlashRedirect::Append — Django default. `/foo` → 308 → `/foo/`.
+// SlashRedirect::Append. `/foo` → 308 → `/foo/`.
 // =====================================================================
 
 #[tokio::test]

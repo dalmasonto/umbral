@@ -232,8 +232,8 @@ impl<'a> DynQuerySet<'a> {
     /// `1 + len(hops)` per chain regardless of how many parent rows
     /// came back (no N+1) — gap2 #18.
     ///
-    /// Names may use either `.` (URL-natural) or `__` (Django
-    /// muscle-memory) as the hop separator; both normalize to the
+    /// Names may use either `.` (URL-natural) or `__` (lookup
+    /// style) as the hop separator; both normalize to the
     /// same canonical chain internally. Mixed separators in one
     /// token (e.g. `author.profile__org`) are accepted too.
     ///
@@ -287,8 +287,7 @@ impl<'a> DynQuerySet<'a> {
     ///   don't exist on the model are silently dropped.
     /// - **Empty:** every column on the model is a candidate; the
     ///   per-type table above decides which actually contribute. This
-    ///   is the "no `search_fields` configured" default Django gives
-    ///   you out of the box.
+    ///   is the "no `search_fields` configured" default behaviour.
     ///
     /// Empty `term` (after trimming) is always a no-op. If the column
     /// selection results in zero predicates (e.g. `term = "abc"` and
@@ -345,7 +344,7 @@ impl<'a> DynQuerySet<'a> {
     /// Splice an externally-built `sea_query::Condition` into the
     /// accumulated WHERE clauses. Used by callers that need lookups
     /// the typed builder methods don't cover (e.g. umbral-rest's
-    /// django-filter-style parser produces a `Condition` per
+    /// query-string filter parser produces a `Condition` per
     /// `field__lookup=value` triple and feeds it in here).
     pub fn filter_condition(mut self, cond: sea_query::Condition) -> Self {
         self.where_clauses.push(cond);

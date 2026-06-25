@@ -6,7 +6,7 @@
 
 ## Context
 
-The playground v1 shipped a working request/response loop over a localStorage history. Two follow-on asks landed at once: emulate the DRF browsable API (show model fields with their FKs, choices, multichoices, filter affordances) and replace localStorage with Dexie/IndexedDB for persistence.
+The playground v1 shipped a working request/response loop over a localStorage history. Two follow-on asks landed at once: emulate a browsable-API view (show model fields with their FKs, choices, multichoices, filter affordances) and replace localStorage with Dexie/IndexedDB for persistence.
 
 These two changes are independent in code but share one thing: both surface latent gaps in the umbral-rest / umbral-openapi data contract. The introspection feature is only as rich as the OpenAPI document. The Dexie work is unblocked the moment we accept a small async-boundary cost.
 

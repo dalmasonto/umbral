@@ -1,27 +1,27 @@
-//! API versioning — DRF's versioning classes, ported.
+//! API versioning.
 //!
 //! Versioning is **opt-in**. A [`RestPlugin`](crate::RestPlugin) with no
 //! `.versioning(...)` call behaves exactly as before: routes mount at
 //! `/api/<table>/` with no version segment and `RequestContext::version`
 //! is always `None`.
 //!
-//! Two schemes ship, mirroring DRF:
+//! Two schemes ship:
 //!
 //! - [`VersioningScheme::UrlPath`] — the version is a path segment right
 //!   after the base path: `/api/v1/<table>/`. Routes mount under
 //!   `{base}/{version}/...` for **each** allowed version, so `/api/v1/...`
 //!   and `/api/v2/...` both resolve when both are allowed. A request to a
 //!   version that isn't in `allowed_versions` matches no route → **404**.
-//!   DRF treats the version as required in the path once this scheme is on;
-//!   we follow that — there is no unversioned `/api/<table>/` fallback when
-//!   UrlPath versioning is configured.
+//!   The version is required in the path once this scheme is on; there is
+//!   no unversioned `/api/<table>/` fallback when UrlPath versioning is
+//!   configured.
 //!
 //! - [`VersioningScheme::AcceptHeader`] — paths stay `/api/<table>/`; the
 //!   version comes from the `Accept` header's media-type `version` param
 //!   (`Accept: application/json; version=v2`) or a configurable header
 //!   (e.g. `X-API-Version`). An absent version falls back to
 //!   `default_version`; a version that isn't in `allowed_versions` is
-//!   rejected with **406 Not Acceptable** (DRF-aligned).
+//!   rejected with **406 Not Acceptable**.
 //!
 //! Once resolved, the version is exposed on
 //! [`RequestContext`](crate::resource::RequestContext) so handlers,
@@ -31,25 +31,24 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersioningScheme {
     /// The version is a path segment after the base path
-    /// (`/api/v1/<table>/`). DRF's `URLPathVersioning`.
+    /// (`/api/v1/<table>/`): version in the URL path.
     UrlPath,
     /// The version comes from a request header. `header` is the header
     /// name to read; the special value `"Accept"` (case-insensitive)
     /// reads the media-type `version` param from the `Accept` header
     /// (`application/json; version=v2`). Any other name is read as a
-    /// plain header value (e.g. `X-API-Version: v2`). DRF's
-    /// `AcceptHeaderVersioning` (+ a flavour of `HostNameVersioning`'s
-    /// header trick).
+    /// plain header value (e.g. `X-API-Version: v2`): version read from a
+    /// request header.
     AcceptHeader { header: String },
 }
 
 impl VersioningScheme {
-    /// DRF's `URLPathVersioning`: version in the URL path.
+    /// Version in the URL path.
     pub fn url_path() -> Self {
         Self::UrlPath
     }
 
-    /// DRF's `AcceptHeaderVersioning`: read `Accept: ...; version=<v>`.
+    /// Version read from the Accept header: `Accept: ...; version=<v>`.
     pub fn accept_header() -> Self {
         Self::AcceptHeader {
             header: "Accept".to_string(),

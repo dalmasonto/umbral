@@ -138,7 +138,7 @@ It walks both and produces operations:
 | Index in `previous`, not in `current` | `DropIndex` |
 | Constraint changes (unique, check, foreign-key) | `AddConstraint` / `DropConstraint` pairs |
 
-At M5, **rename detection is not performed**: a column renamed from `body` to `content` produces `DropColumn("body")` + `AddColumn("content")`. The data is lost. The user can override by editing the migration file to use `AlterColumn(rename)` once the M8 detector lands. This is intentional; the cases Django spent years on (rename ambiguity, data-preserving alters, complex constraint changes) are iterated at M8, not gated on at M5.
+At M5, **rename detection is not performed**: a column renamed from `body` to `content` produces `DropColumn("body")` + `AddColumn("content")`. The data is lost. The user can override by editing the migration file to use `AlterColumn(rename)` once the M8 detector lands. This is intentional; the hard cases (rename ambiguity, data-preserving alters, complex constraint changes) are iterated at M8, not gated on at M5.
 
 After diffing, the engine orders operations within the migration so each one is valid when applied:
 
@@ -158,7 +158,7 @@ cargo run -p umbral-cli -- sqlmigrate PLUGIN MIGRATION
 
 - **`makemigrations`** generates new migration files. With no argument, runs over every registered plugin. The filenames it picks come from a deterministic naming rule (the dominant op's table name plus suffix), so two developers running `makemigrations` against the same model change get the same filename.
 - **`migrate`** applies pending migrations in topological order. With no argument, brings every plugin up to the latest. With `PLUGIN`, brings one plugin up. With `PLUGIN:MIGRATION`, applies (or rolls back to) a specific target migration.
-- **`showmigrations`** prints the per-plugin migration list and a tick next to applied ones, mirroring Django's output.
+- **`showmigrations`** prints the per-plugin migration list and a tick next to applied ones.
 - **`sqlmigrate`** prints the SQL a specific migration would emit against the active backend without applying it. Useful for review.
 
 ## API-shape sketch
@@ -217,13 +217,13 @@ M5 ships with `Plugin::dependencies()` driving the order. At M8, the autodetecto
 
 ## Trade-offs and alternatives considered
 
-**JSON migration files vs Rust migration modules.** Django uses Python files because migrations sometimes need code. Rust migration modules would mean every migration is a .rs file checked in and compiled into the binary. JSON files are programmatically easier to diff, easier to inspect by hand, and harder to break by editing. The `RunCode` operation references named Rust functions when a data migration is needed; that's the only place real Rust code lives in the migration pipeline.
+**JSON migration files vs Rust migration modules.** Migrations sometimes need code, which is why some frameworks make each migration a source file. Rust migration modules would mean every migration is a .rs file checked in and compiled into the binary. JSON files are programmatically easier to diff, easier to inspect by hand, and harder to break by editing. The `RunCode` operation references named Rust functions when a data migration is needed; that's the only place real Rust code lives in the migration pipeline.
 
 **Snapshots in every file vs reconstructing on demand.** Reconstructing the schema state by replaying every migration would mean `makemigrations` cost scales with migration count. Storing the post-state in each file makes it O(1) to read the latest. The cost is bigger migration files; that's fine because they're JSON and disk is cheap.
 
-**One file per migration vs one file per plugin.** One file per plugin would put every change in one place, but conflicts on every change. One file per migration is what Django does and what version control wants.
+**One file per migration vs one file per plugin.** One file per plugin would put every change in one place, but conflicts on every change. One file per migration is what version control wants.
 
-**At M5, drop+add for renames vs prompt the user.** Django's `makemigrations` interactively asks "did you rename `body` to `content`?" That UX is hard to do well in a non-Python ecosystem. M5 says "drop+add by default; edit the file to use `AlterColumn(rename)` if you need to preserve data." M8 introduces the heuristic detector (Hamming distance of `FieldSpec` shapes, name similarity); the spec note already plans for it.
+**At M5, drop+add for renames vs prompt the user.** An interactive `makemigrations` could ask "did you rename `body` to `content`?" at generation time. That UX is hard to do well from a compiled-binary CLI. M5 says "drop+add by default; edit the file to use `AlterColumn(rename)` if you need to preserve data." M8 introduces the heuristic detector (Hamming distance of `FieldSpec` shapes, name similarity); the spec note already plans for it.
 
 **Tracking-table location: shared `umbral_migrations` vs per-plugin tracking tables.** A shared table is much easier to reason about (one row per applied migration, anywhere). Per-plugin tables would let plugins manage their own state but force the engine to query N tables to know "has X been applied?". The shared design wins on simplicity and the cost (one table the engine owns) is trivial.
 
@@ -232,7 +232,7 @@ M5 ships with `Plugin::dependencies()` driving the order. At M8, the autodetecto
 - **Exact `RunCode` registration shape.** A migration file references a function by name; the plugin's `migrations` module needs to publish a registry mapping names to function pointers. The exact API (proc macro that auto-registers? trait the user impls?) is open. Pick at M5 when the first data migration needs to be written.
 - **`AlterColumn` for non-castable type changes.** Changing a column from `i32` to `String` is not safely automatic. The engine should produce a multi-step migration (add new column, RunSql to copy values, drop old, rename new) when the user explicitly opts in. M5 surfaces `MigrationError::UnsafeAlter` and refuses; M8 introduces opt-in synthesis.
 - **Snapshot format versioning.** Adding a new `FieldSpec` field changes the snapshot shape. Old snapshots need to be readable forever. Strategy: include a `snapshot_format_version: N` field in every snapshot; the engine has a chain of upgraders that walk older snapshots forward. Implement at M5 entry.
-- **`--fake` and `--fake-initial`.** Django supports marking a migration as applied without actually running it (useful when porting in via `inspectdb`). Hooks for this lurk in `07-inspectdb.md`. Pick the exact CLI flag and the safety guards (don't fake against an inconsistent state) at M6.
+- **`--fake` and `--fake-initial`.** Marking a migration as applied without actually running it is useful when porting in via `inspectdb` (the schema already exists). Hooks for this lurk in `07-inspectdb.md`. Pick the exact CLI flag and the safety guards (don't fake against an inconsistent state) at M6.
 
 ## Cross-links
 

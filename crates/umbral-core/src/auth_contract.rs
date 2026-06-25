@@ -54,10 +54,10 @@ pub struct Identity {
     /// (`identity.user_id.parse::<i64>()`); the framework's own
     /// permissions plugin and session store already speak strings.
     pub user_id: String,
-    /// Staff flag, mirroring Django's `User.is_staff`. Used by the
+    /// Staff flag. Used by the
     /// built-in `IsStaff` permission class in `umbral-rest`.
     pub is_staff: bool,
-    /// Superuser flag, mirroring Django's `User.is_superuser`. A
+    /// Superuser flag. A
     /// superuser bypasses all permission checks in the built-in
     /// permission classes; custom permission impls can consult this
     /// field to grant unconditional access.

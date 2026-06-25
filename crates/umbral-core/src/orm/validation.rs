@@ -6,7 +6,7 @@
 //! 1. **Required-field check.** Walks the model's columns and
 //!    rejects any required column that's missing or blank in the
 //!    body. Empty strings on Text columns count as blank
-//!    (Django's CharField with `blank=False`); JSON `{}` does
+//!    (a non-blank text column); JSON `{}` does
 //!    not (legitimate JSONB value). FK numeric `0` does NOT —
 //!    that's the FK existence check's job, where the truthful
 //!    message ("row not found") replaces a synthetic "required."

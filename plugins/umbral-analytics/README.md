@@ -2,7 +2,7 @@
 
 Product-analytics event capture for umbral. PostHog backend with fire-and-forget capture, ambient client, and opt-in per-request middleware.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

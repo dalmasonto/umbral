@@ -41,7 +41,7 @@ use crate::orm::SqlType;
 /// Errors that can surface when converting JSON values to bindable
 /// sea-query values, when pre-validating against the schema, or
 /// when the write itself fails. Every variant that the REST /
-/// admin plugins surface as a DRF-style field error has its own
+/// admin plugins surface as a per-field error has its own
 /// structured shape so the boundary translation is a `match`, not
 /// a string parse.
 #[derive(Debug)]
@@ -50,8 +50,8 @@ pub enum WriteError {
     /// create). Names the offending field.
     RequiredFieldMissing { field: String },
     /// A non-nullable text field received an empty string where a
-    /// meaningful value was required (Django's CharField with
-    /// `blank=False`). Surfaced by pre-validation in `insert_json`.
+    /// meaningful value was required (a non-blank text column).
+    /// Surfaced by pre-validation in `insert_json`.
     BlankNotAllowed { field: String },
     /// A foreign-key column references a row that doesn't exist in
     /// the target table. Pre-validated against the live DB before
@@ -111,7 +111,7 @@ pub enum WriteError {
 }
 
 impl WriteError {
-    /// Flatten into a DRF-style `{field: [messages, ...]}` map.
+    /// Flatten into a `{field: [messages, ...]}` map.
     /// Used by the REST plugin to render the 400 body; the admin
     /// plugin will use the same shape for inline form errors.
     /// Variants that aren't tied to a specific field (raw sqlx,
@@ -211,7 +211,7 @@ impl WriteError {
         }
     }
 
-    /// Non-field-level errors, for the DRF `non_field_errors`
+    /// Non-field-level errors, for the `non_field_errors`
     /// array. Only populated for the parseable-but-non-keyed
     /// constraint variants and the multi-error wrapper.
     pub fn non_field_errors(&self) -> Vec<String> {
@@ -492,7 +492,7 @@ pub fn json_to_sea_value(
             //   1. RFC3339 with offset / Z — the canonical machine form
             //      and what serde / API clients emit.
             //   2. Naive `YYYY-MM-DDTHH:MM:SS` — common for hand-written
-            //      JSON and Django's default form serializer.
+            //      JSON and typical form serializers.
             //   3. Naive `YYYY-MM-DDTHH:MM` — the literal output of HTML
             //      `<input type="datetime-local">`. The admin's
             //      auto-generated forms post exactly this shape, so
@@ -665,7 +665,7 @@ fn hex_nibble(b: u8) -> Option<u8> {
 /// non-time columns at derive time; we defer that polish to the
 /// macro pass where it lands alongside other "wrong attribute on
 /// wrong type" diagnostics.
-/// Gap 109: Django-style slug derivation. Lowercases the input, replaces
+/// Gap 109: slug derivation. Lowercases the input, replaces
 /// runs of non-alphanumeric ASCII characters with a single `-`, trims
 /// leading/trailing dashes, and collapses repeated dashes. Empty / pure-
 /// punctuation input returns the empty string.
@@ -925,8 +925,8 @@ impl From<WriteError> for SaveError {
 /// trigger autoincrement rather than be bound as an explicit value.
 ///
 /// Conventions:
-/// - Integer PK: 0 is the autoincrement sentinel (matches Django's
-///   default, matches SQLite's `INTEGER PRIMARY KEY AUTOINCREMENT`).
+/// - Integer PK: 0 is the autoincrement sentinel (matches
+///   SQLite's `INTEGER PRIMARY KEY AUTOINCREMENT`).
 /// - UUID PK: nil / all-zeros UUID is the sentinel.
 /// - String PK: empty string. Users with non-empty string PKs always
 ///   supply them; an empty string makes no sense as a real PK.
@@ -1001,7 +1001,7 @@ mod tests {
         };
         assert_eq!(dt.to_rfc3339(), "2026-06-03T22:24:00+00:00");
 
-        // Naive with seconds — common JSON / Django-form shape.
+        // Naive with seconds — common JSON / HTML-form shape.
         let v = json_to_sea_value(
             SqlType::Timestamptz,
             &json!("2026-06-03T22:24:00"),

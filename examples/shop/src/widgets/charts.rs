@@ -128,8 +128,8 @@ pub fn shop_order_status_donut() -> Widget {
         data: WidgetDataFn::new(|_user| async move {
             // GROUP BY status in SQL — one row per status with its
             // count — instead of fetching every order into memory and
-            // tallying client-side (gaps2 #56). The ORM equivalent of
-            // Django's `.values("status").annotate(count=Count("id"))`.
+            // tallying client-side (gaps2 #56). Expressed with the ORM's
+            // `.only(["status"]).annotate(["status"], count)` aggregation.
             let rows = Order::objects()
                 .only(&["id", "status"])
                 .annotate(&["status"], &[("count", Aggregate::count())])

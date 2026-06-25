@@ -1,10 +1,9 @@
 //! umbral-cache — pluggable cache for umbral.
 //!
-//! Django's cache framework, the slice that matters for production:
+//! A cache framework, the slice that matters for production:
 //! a [`Cache`] handle over a [`CacheBackend`] trait, three built-in
 //! backends (in-memory, SQLite, Redis), and a [`cache_page`] view
-//! middleware that caches full GET responses, matching Django's
-//! `@cache_page` decorator.
+//! middleware that caches full GET responses.
 //!
 //! ```ignore
 //! // Boot wiring (App::builder)

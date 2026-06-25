@@ -112,7 +112,7 @@ Write to `plugins/umbral-playground/Cargo.toml`:
 ```toml
 [package]
 name = "umbral-playground"
-description = "Interactive API playground UI for umbral-rest. The DRF browsable API, in umbral."
+description = "Interactive API playground UI for umbral-rest. A browsable API explorer for your endpoints."
 workspace = "../../crates"
 version.workspace = true
 edition.workspace = true

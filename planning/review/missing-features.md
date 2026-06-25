@@ -3,7 +3,7 @@
 > **Sweep status — 2026-06-14**
 > - **Closed — delivered elsewhere:** MISS-1's only in-tree need (the tasks double-claim) is fixed by BROKEN-1's conditional `UPDATE ... WHERE status='pending'` guard (`98ef6e9`), correct on both backends. `FOR UPDATE SKIP LOCKED` has no other caller — a speculative optimization, not a gap.
 
-Django-parity gaps grounded in an actual in-tree need (not speculation). Broad, already-tracked gaps live in `bugs/features.md`, `gaps.md`, `gaps2.md`, `REAL-GAPS.md` — see the "already tracked" list in [`broken-features.md`](broken-features.md). Only the evidence-grounded new gap is below.
+Feature-parity gaps grounded in an actual in-tree need (not speculation). Broad, already-tracked gaps live in `bugs/features.md`, `gaps.md`, `gaps2.md`, `REAL-GAPS.md` - see the "already tracked" list in [`broken-features.md`](broken-features.md). Only the evidence-grounded new gap is below.
 
 ---
 
@@ -22,4 +22,4 @@ Django-parity gaps grounded in an actual in-tree need (not speculation). Broad, 
 
 ## Note on scope
 
-The broken-features audit deliberately did **not** generate a long Django-parity wishlist — the repo already tracks those in `features.md`/`gaps.md` and the project's build order (`arch.md §8`) sequences them intentionally. The only new "missing" item reported is the one with a concrete in-tree consumer (tasks) and a CLAUDE.md rule pointing straight at it. Everything else a Django dev might miss (multipart uploads, periodic task scheduling, test factories, `collect_static`, etc.) is already logged — cross-referenced in the "already tracked" table.
+The broken-features audit deliberately did **not** generate a long feature-parity wishlist - the repo already tracks those in `features.md`/`gaps.md` and the project's build order (`arch.md §8`) sequences them intentionally. The only new "missing" item reported is the one with a concrete in-tree consumer (tasks) and a CLAUDE.md rule pointing straight at it. Everything else a developer coming from a mature batteries-included framework might miss (multipart uploads, periodic task scheduling, test factories, static-file collection, etc.) is already logged - cross-referenced in the "already tracked" table.

@@ -4,8 +4,8 @@
 //!
 //! 1. **`TokenSchemeAuthentication`** — a custom `Authentication`
 //!    implementation that reads `Authorization: Token <key>` instead
-//!    of the canonical `Bearer <key>`. Some legacy APIs (DRF's
-//!    original `TokenAuthentication`, GitHub's older PAT shape) use
+//!    of the canonical `Bearer <key>`. Some legacy APIs (older
+//!    token-auth schemes, GitHub's older PAT shape) use
 //!    this prefix; the framework lets you plug it in without
 //!    forking the bearer backend.
 //!

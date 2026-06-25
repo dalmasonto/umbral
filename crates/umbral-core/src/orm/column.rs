@@ -64,7 +64,7 @@ impl<T> IntCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Mirrors the REST filter
+    /// Lookup-style alias for [`Self::le`]. Matches the REST filter
     /// parser's `__lte` lookup name so handler-side code and URL
     /// filters spell the same operation the same way.
     pub fn lte(&self, val: i64) -> Predicate<T> {
@@ -81,7 +81,7 @@ impl<T> IntCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: i64) -> Predicate<T> {
         self.ge(val)
@@ -304,7 +304,7 @@ impl<T> DateTimeCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: chrono::DateTime<chrono::Utc>) -> Predicate<T> {
         self.le(val)
@@ -320,7 +320,7 @@ impl<T> DateTimeCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: chrono::DateTime<chrono::Utc>) -> Predicate<T> {
         self.ge(val)
@@ -381,7 +381,7 @@ impl<T> NullableDateTimeCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: chrono::DateTime<chrono::Utc>) -> Predicate<T> {
         self.le(val)
@@ -397,7 +397,7 @@ impl<T> NullableDateTimeCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: chrono::DateTime<chrono::Utc>) -> Predicate<T> {
         self.ge(val)
@@ -519,7 +519,7 @@ impl<T> F64Col<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: f64) -> Predicate<T> {
         self.le(val)
@@ -535,7 +535,7 @@ impl<T> F64Col<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: f64) -> Predicate<T> {
         self.ge(val)
@@ -671,7 +671,7 @@ impl<T> DateCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: chrono::NaiveDate) -> Predicate<T> {
         self.le(val)
@@ -687,7 +687,7 @@ impl<T> DateCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: chrono::NaiveDate) -> Predicate<T> {
         self.ge(val)
@@ -748,7 +748,7 @@ impl<T> TimeCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: chrono::NaiveTime) -> Predicate<T> {
         self.le(val)
@@ -764,7 +764,7 @@ impl<T> TimeCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: chrono::NaiveTime) -> Predicate<T> {
         self.ge(val)
@@ -832,7 +832,7 @@ impl<T> NullableIntCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: i64) -> Predicate<T> {
         self.le(val)
@@ -848,7 +848,7 @@ impl<T> NullableIntCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: i64) -> Predicate<T> {
         self.ge(val)
@@ -1006,7 +1006,7 @@ impl<T> NullableF64Col<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: f64) -> Predicate<T> {
         self.le(val)
@@ -1022,7 +1022,7 @@ impl<T> NullableF64Col<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: f64) -> Predicate<T> {
         self.ge(val)
@@ -1188,7 +1188,7 @@ impl<T> NullableDateCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: chrono::NaiveDate) -> Predicate<T> {
         self.le(val)
@@ -1204,7 +1204,7 @@ impl<T> NullableDateCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: chrono::NaiveDate) -> Predicate<T> {
         self.ge(val)
@@ -1275,7 +1275,7 @@ impl<T> NullableTimeCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: chrono::NaiveTime) -> Predicate<T> {
         self.le(val)
@@ -1291,7 +1291,7 @@ impl<T> NullableTimeCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: chrono::NaiveTime) -> Predicate<T> {
         self.ge(val)
@@ -2551,7 +2551,7 @@ impl<T> ForeignKeyCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`]. Same as `__lte` in URL
+    /// Lookup-style alias for [`Self::le`]. Same as `__lte` in URL
     /// filter strings.
     pub fn lte(&self, val: i64) -> Predicate<T> {
         self.le(val)
@@ -2567,7 +2567,7 @@ impl<T> ForeignKeyCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`]. Same as `__gte` in URL
+    /// Lookup-style alias for [`Self::ge`]. Same as `__gte` in URL
     /// filter strings.
     pub fn gte(&self, val: i64) -> Predicate<T> {
         self.ge(val)
@@ -2769,7 +2769,7 @@ impl<T> DecimalCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`].
+    /// Lookup-style alias for [`Self::le`].
     pub fn lte(&self, val: rust_decimal::Decimal) -> Predicate<T> {
         self.le(val)
     }
@@ -2784,7 +2784,7 @@ impl<T> DecimalCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`].
+    /// Lookup-style alias for [`Self::ge`].
     pub fn gte(&self, val: rust_decimal::Decimal) -> Predicate<T> {
         self.ge(val)
     }
@@ -2841,7 +2841,7 @@ impl<T> NullableDecimalCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
     }
 
-    /// Django-style alias for [`Self::le`].
+    /// Lookup-style alias for [`Self::le`].
     pub fn lte(&self, val: rust_decimal::Decimal) -> Predicate<T> {
         self.le(val)
     }
@@ -2856,7 +2856,7 @@ impl<T> NullableDecimalCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
     }
 
-    /// Django-style alias for [`Self::ge`].
+    /// Lookup-style alias for [`Self::ge`].
     pub fn gte(&self, val: rust_decimal::Decimal) -> Predicate<T> {
         self.ge(val)
     }

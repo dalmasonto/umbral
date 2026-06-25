@@ -10,9 +10,8 @@ binary**. Your `main.rs` hosts the commands via
 [`umbral_cli::dispatch`](#how-it-works); `cargo run -- <command>` is
 how you invoke them.
 
-This is the Django `manage.py` shape: a project-local script that
-imports project code, so the commands see your models and your
-plugins. The framework-global [`umbral`](./startproject) binary handles
+This is a project-local entry point that runs your own project code,
+so the commands see your models and your plugins. The framework-global [`umbral`](./startproject) binary handles
 scaffolding (`startproject`, `startapp`) and nothing else - it can't
 manage your database because it doesn't know about your models.
 
@@ -38,8 +37,8 @@ Built-in plugins contribute their own subcommands through the `Plugin::commands(
 <CardGrid cols={2}>
   <Card icon="user-plus" title="createsuperuser" description="umbral-auth. Create an is_staff + is_superuser user with an argon2id-hashed password. --noinput for CI." />
   <Card icon="cpu" title="tasks-worker" description="umbral-tasks. Drain the task queue. --once runs one batch and exits (cron-friendly)." />
-  <Card icon="clock" title="tasks-beat" description="umbral-tasks. Run the periodic-task scheduler (Celery beat). --once syncs schedules, runs one tick, exits." />
-  <Card icon="trash-2" title="clearsessions" description="umbral-sessions. Delete all expired session rows from the database (Django parity)." />
+  <Card icon="clock" title="tasks-beat" description="umbral-tasks. Run the periodic-task scheduler. --once syncs schedules, runs one tick, exits." />
+  <Card icon="trash-2" title="clearsessions" description="umbral-sessions. Delete all expired session rows from the database." />
   <Card icon="folder-down" title="collectstatic" description="umbral-storage. Collect every plugin's static assets into static_root. --clear / --hashed / --storage." />
 </CardGrid>
 
@@ -374,7 +373,7 @@ cargo run -- tasks-worker --once
 
 ## tasks-beat - `umbral-tasks`
 
-Run the periodic-task scheduler (the Celery *beat* equivalent). On startup it syncs the registered periodic specs to `PeriodicTask` rows, then each tick claims every due row atomically and enqueues the underlying task. Run it as its **own** process alongside `tasks-worker` - beat fills the queue, the worker drains it.
+Run the periodic-task scheduler. On startup it syncs the registered periodic specs to `PeriodicTask` rows, then each tick claims every due row atomically and enqueues the underlying task. Run it as its **own** process alongside `tasks-worker` - beat fills the queue, the worker drains it.
 
 ```bash
 # Long-running scheduler (run under systemd / Docker, one instance)
@@ -390,7 +389,7 @@ cargo run -- tasks-beat --once
 
 ## clearsessions - `umbral-sessions`
 
-Delete every expired session row from the database (Django's `clearsessions`). Run it periodically (cron / a scheduled task) to keep the session table from accumulating dead rows.
+Delete every expired session row from the database. Run it periodically (cron / a scheduled task) to keep the session table from accumulating dead rows.
 
 ```bash
 cargo run -- clearsessions
@@ -401,7 +400,7 @@ No flags. Deletes session rows whose `expires_at` is in the past.
 
 ## collectstatic - `umbral-storage`
 
-Collect every plugin's static assets - namespaced `static_dirs()` plus site-level `static_root_dirs()` - into `settings.static_root`. Django's `collectstatic`.
+Collect every plugin's static assets - namespaced `static_dirs()` plus site-level `static_root_dirs()` - into `settings.static_root`.
 
 ```bash
 # Everyday: gather all assets into static_root
@@ -418,7 +417,7 @@ cargo run -- collectstatic --hashed
 | Flag | Default | Effect |
 |---|---|---|
 | `--clear` | off | Empty `static_root` before collecting (no confirmation prompt), dropping assets no plugin ships any more. |
-| `--hashed` | off | Write content-hashed copies (`app.<hash>.css`) alongside each asset plus a `staticfiles.json` manifest (Django's `ManifestStaticFilesStorage`). Use in production. |
+| `--hashed` | off | Write content-hashed copies (`app.<hash>.css`) alongside each asset plus a `staticfiles.json` manifest for far-future cache headers. Use in production. |
 | `--storage <backend>` | `local` | Where to write: `local` (the on-disk `static_root`) or `s3` (requires the umbral-storage `s3` feature and `UMBRAL_STATIC_BUCKET` / `UMBRAL_STATIC_REGION`). Overrides `UMBRAL_STATIC_STORAGE`. |
 
 ## Errors

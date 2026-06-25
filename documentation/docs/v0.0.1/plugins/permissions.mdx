@@ -1,6 +1,6 @@
 ---
 title: Permissions (RBAC)
-description: Django-style groups, permissions, and content types for umbral. The has_perm query layer.
+description: Groups, permissions, and content types for umbral. The has_perm query layer.
 sidebar_position: 5
 icon: shield-check
 tags: [plugins, auth, permissions, rbac]
@@ -171,10 +171,10 @@ In practice the single-layer form `permission_required_html(perm, login_url)` is
 
 ## What's not shipped at v0.0.1
 
-- Built-in admin UI for editing group → permission and user → group assignments. The RBAC tables (`permissions_contenttype`, `permissions_permission`, `permissions_group`, `permissions_usergroup`, `permissions_userpermission`, plus the framework-managed `permissions_group_permissions` M2M junction) are visible to the admin as standard models; an assignment-matrix UI (Django's "permission widget") lands in a follow-up.
+- Built-in admin UI for editing group → permission and user → group assignments. The RBAC tables (`permissions_contenttype`, `permissions_permission`, `permissions_group`, `permissions_usergroup`, `permissions_userpermission`, plus the framework-managed `permissions_group_permissions` M2M junction) are visible to the admin as standard models; an assignment-matrix UI (a permission-grid widget) lands in a follow-up.
 - `Meta.permissions = [...]` syntax for declaring custom perms on a model - custom perms ship via direct INSERT in a data migration today.
 - RLS predicate injection from permissions - that's `umbral-rls`'s responsibility.
-- Object-level permissions (per-row grants) - Django needs `django-guardian` for this; same shape would land as a follow-up crate.
+- Object-level permissions (per-row grants) - this would land as a follow-up crate.
 
 ## See also
 

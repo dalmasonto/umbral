@@ -25,8 +25,8 @@ all backend-defined and API-served; the front-end composes and renders them.*
 
 ## 2. Model registration (`AdminModel`)
 
-A developer opts a model into the admin and customizes its presentation, mirroring Django's
-`ModelAdmin`:
+A developer opts a model into the admin and customizes its presentation through a per-model
+configuration type:
 
 ```rust
 admin.register::<Post>(AdminModel {
@@ -125,7 +125,7 @@ namespaced under `/admin/api/`.
 | `POST /admin/api/models/{model}/actions/{action}` | bulk action over selected ids |
 
 ### 5.3 Relation options (powers async FK/M2M selectors)
-The admin **must not** load entire related tables into the form (the Django default that fails on
+The admin **must not** load entire related tables into the form (the naive approach that fails on
 large tables). FK and M2M selectors fetch options on demand from a dedicated endpoint:
 
 | Endpoint | Purpose |
@@ -234,7 +234,7 @@ preview kind so the front-end never sniffs bytes:
 - `admin_audit_log` — actor, action, model, object id, timestamp, diff summary — powers the
   activity feed widget and the per-object history link.
 
-These appear automatically on `manage.py migrate` once the admin plugin is registered — the same
+These appear automatically when you run `migrate` once the admin plugin is registered - the same
 mechanism every plugin uses.
 
 ---
@@ -246,7 +246,7 @@ mechanism every plugin uses.
 - The **nav, catalog, and schema responses are pre-filtered** so the front-end only ever knows
   about what the user may access (no hidden-but-present items).
 - Object-level permissions are supported via an optional hook on `AdminModel`.
-- Staff/superuser flags gate admin access entirely (Django parity).
+- Staff/superuser flags gate admin access entirely.
 
 ---
 

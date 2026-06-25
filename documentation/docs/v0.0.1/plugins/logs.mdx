@@ -1,13 +1,13 @@
 ---
 title: Request logs
-description: Django-request-style request logging for umbral. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin.
+description: Request logging for umbral. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin.
 sidebar_position: 20
 tags: [logs, requests, middleware, admin, plugin]
 ---
 
 # Request logs
 
-`umbral-logs` records every HTTP request to a `RequestLog` row, browsable in the admin - the umbral take on Django's `django.request` logging. Capture is **fire-and-forget**: the response returns to the client immediately and the row is inserted on a background task, so logging never blocks a request and a DB error is swallowed (logged at `warn`, never propagated).
+`umbral-logs` records every HTTP request to a `RequestLog` row, browsable in the admin. Capture is **fire-and-forget**: the response returns to the client immediately and the row is inserted on a background task, so logging never blocks a request and a DB error is swallowed (logged at `warn`, never propagated).
 
 Each row carries `method`, `path`, `status`, `duration_ms`, plus best-effort `user_id`, `ip` (from `X-Forwarded-For` / `X-Real-IP`), `user_agent`, and a `created_at` timestamp. The model lives in the `logs_requestlog` table - `migrate` creates it the same way the built-in auth and sessions tables are created (from the plugin's `models()`).
 

@@ -40,8 +40,8 @@ pub(crate) fn pk_column(model: &ModelMeta) -> Option<&Column> {
 /// Two-state behaviour:
 ///
 /// 1. If at least one field is tagged `#[umbral(string)]`, render
-///    `[<tagged field>, <other short fields>]` — Django-style
-///    `__str__()` plus any column compact enough to fit in a table
+///    `[<tagged field>, <other short fields>]` — the string
+///    representation plus any column compact enough to fit in a table
 ///    cell. "Short" excludes unbounded `Text` (no `max_length`),
 ///    `Json`, `Array`, and `FullText` because those tend to be
 ///    long-form content that blows out the row. The PK isn't

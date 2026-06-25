@@ -109,8 +109,8 @@ pub async fn blogs() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ),
             (
                 10,
-                "building-django-like-frameworks",
-                "Building Django-Like Frameworks in Rust",
+                "building-batteries-included-frameworks",
+                "Building Batteries-Included Frameworks in Rust",
             ),
             (
                 11,

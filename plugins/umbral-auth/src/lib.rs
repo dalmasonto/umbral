@@ -3,12 +3,12 @@
 //! The first crate under `plugins/` and the proof of the M7 plugin
 //! contract: a real built-in expressed through `umbral::prelude::Plugin`
 //! with no special-casing inside `umbral-core`. Auth is the most common
-//! Django plugin, so getting it right here also pressure-tests the
+//! plugin, so getting it right here also pressure-tests the
 //! contract for the rest.
 //!
 //! ## M9 v1 scope
 //!
-//! - [`AuthUser`] model: the canonical Django-shape User (username,
+//! - [`AuthUser`] model: the canonical User model (username,
 //!   email, password hash, `is_active` / `is_staff` / `is_superuser`,
 //!   `date_joined`, `last_login`).
 //! - [`UserModel`] trait: the minimum surface a custom user model must
@@ -24,7 +24,7 @@
 //! - [`login_required`] module: `LoginRequired` config, `LoggedIn<U>`
 //!   extractor, `LoginRequiredLayer` middleware, and the
 //!   `login_required()` / `login_required_html()` convenience
-//!   constructors. Django's `@login_required` in two shapes.
+//!   constructors. A login-required gate in two shapes.
 //!
 //! ## Custom user models
 //!
@@ -407,7 +407,7 @@ impl<U: UserModel> AuthPlugin<U> {
 
     /// Replace the default password-strength policy with a custom one.
     /// The full [`PasswordPolicy`] you pass becomes the active set at boot;
-    /// the Django-default validators are NOT merged in. Build the policy
+    /// the default validators are NOT merged in. Build the policy
     /// you want from scratch:
     ///
     /// ```ignore
@@ -631,7 +631,7 @@ pub enum AuthError {
     ///
     /// This is NOT produced by the low-level creation helpers anymore
     /// (`create_user` / `create_user_with_flags` / `create_superuser` /
-    /// `set_password` are all Django-parity and do not validate). It is
+    /// `set_password` are all low-level and do not validate). It is
     /// constructed at the **registration boundary** — the `register` route
     /// calls [`crate::validate_password`] up front and wraps any failure in
     /// this variant, which the route layer then maps to 400. A custom signup
@@ -778,8 +778,8 @@ pub async fn create_superuser(
     plaintext: &str,
 ) -> Result<AuthUser, AuthError> {
     // Low-level, like every other creation helper: it inserts a row and
-    // does NOT run the password-strength policy. This is Django parity —
-    // `User.objects.create_superuser()` doesn't validate either; only the
+    // does NOT run the password-strength policy. By design, the low-level
+    // create_superuser doesn't validate; only the
     // registration boundary (the `register` route) and any custom signup
     // form do. A trusted operator path (the `createsuperuser` command, a
     // seed script, a test) chooses the password deliberately, so there's
@@ -807,7 +807,7 @@ pub async fn create_user_with_flags(
 ///
 /// This is the **low-level** creation primitive: it hashes the plaintext and
 /// writes the row, but it does NOT run the password-strength policy. That's
-/// deliberate Django parity — `User.objects.create_user()` doesn't validate;
+/// deliberate: by design the low-level `create_user` doesn't validate;
 /// the registration boundary does (in umbral, the `register` route, which calls
 /// [`validate_password`] itself before reaching here). Keeping validation out
 /// of the insert path means seed scripts, bulk imports, and the workspace test
@@ -903,8 +903,8 @@ where
     // boundary — a password-change route or form should call
     // `validate_password` (with whatever user context it has) BEFORE invoking
     // `set_password`, exactly as the `register` route gates `create_user`.
-    // Keeping the helper non-validating matches Django's `set_password`, which
-    // is a pure setter; the form is what validates.
+    // Keeping the helper non-validating makes `set_password` a pure setter;
+    // the form is what validates.
     let hash = hash_password_async(plaintext).await?;
     let mut patch = serde_json::Map::new();
     patch.insert(
@@ -923,14 +923,14 @@ where
 // Management command: createsuperuser
 // =========================================================================
 
-/// `createsuperuser` - Django's interactive superuser creation,
+/// `createsuperuser` - interactive superuser creation,
 /// dispatched via `cargo run -- createsuperuser` from any umbral
 /// project that registers [`AuthPlugin`].
 ///
 /// Prompts for username, email, and password (the password input
 /// is read without terminal echo via `rpassword`). The new user
 /// lands with `is_active = true`, `is_staff = true`, `is_superuser =
-/// true` - the standard Django shape for the bootstrap admin account.
+/// true` - the standard shape for the bootstrap admin account.
 ///
 /// Flags:
 ///

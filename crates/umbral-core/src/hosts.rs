@@ -1,6 +1,6 @@
 //! Host-header validation — the request-time half of `settings.allowed_hosts`.
 //!
-//! Django's `ALLOWED_HOSTS`: a request whose `Host` header isn't on the
+//! Host allowlisting: a request whose `Host` header isn't on the
 //! allowlist is rejected with a 400 *before* any handler runs. This defends
 //! against Host-header injection — cache poisoning and poisoned absolute-URL /
 //! password-reset links that trust an attacker-supplied `Host`.
@@ -9,7 +9,7 @@
 //! development passes through so a `localhost` / LAN-IP / tunnel host doesn't
 //! 400 mid-iteration. The allowlist comes from `settings.allowed_hosts`
 //! (default `["localhost", "127.0.0.1"]`, set via `UMBRAL_ALLOWED_HOSTS` or
-//! `umbral.toml`). Patterns mirror Django:
+//! `umbral.toml`). Patterns:
 //!
 //! - `"example.com"` — exact match.
 //! - `".example.com"` — the domain itself and any subdomain.

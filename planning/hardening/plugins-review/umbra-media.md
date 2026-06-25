@@ -10,7 +10,7 @@ umbral-media is structurally sound for a v0 filesystem-backend plugin: the `Stor
 
 ## Completeness
 
-| Django feature | umbral-media v0 status |
+| Feature | umbral-media v0 status |
 |---|---|
 | `FileField` / `ImageField` ORM types | **Exists** — `crates/umbral-core/src/orm/file_field.rs`; TEXT-backed newtypes with `key()`, `url()`, `is_empty()`, `Display`; serde + sqlx impls for both SQLite and Postgres |
 | DB column round-trip | **Exists** — tested in `file_field_roundtrip.rs` and `file_image_field.rs` |

@@ -1,4 +1,4 @@
-//! `permission_required(perm)` — the Django-style perm-gate axum layer.
+//! `permission_required(perm)`: the perm-gate axum layer.
 //!
 //! Where [`LoginRequiredLayer`](umbral_auth::LoginRequiredLayer) gates a
 //! Router subtree on "is the user logged in?", this layer adds a second
@@ -71,7 +71,7 @@ pub struct PermissionRequired {
     /// = 302 to `login_url?next=<uri>`.
     pub login_url: Option<String>,
     /// The query-string parameter to append to the redirect URI when
-    /// `login_url` is `Some`. `Some("next")` is Django's convention;
+    /// `login_url` is `Some`. `Some("next")` is the convention;
     /// pass `None` to drop the parameter.
     pub next_param: Option<String>,
 }

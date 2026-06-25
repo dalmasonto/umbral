@@ -192,7 +192,7 @@ fn collision_first_registered_wins_and_is_reported() {
 }
 
 // =========================================================================
-// Test 3 — ambient user merge (Django's `request.user` shape)
+// Test 3 — ambient user merge (the `user` template variable)
 //
 // The session-aware layer in `umbral-sessions` calls `with_current_user`
 // to scope the per-request user value. `render` reads the task-local

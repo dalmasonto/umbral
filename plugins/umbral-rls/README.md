@@ -2,7 +2,7 @@
 
 Postgres Row-Level Security plugin for umbral. Declares policies once at App::build; the plugin's on_ready hook applies them via ALTER TABLE ENABLE ROW LEVEL SECURITY + CREATE POLICY.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

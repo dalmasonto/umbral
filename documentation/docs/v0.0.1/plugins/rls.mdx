@@ -112,7 +112,7 @@ framework code.
 logs a `tracing::warn` and returns `Ok(())` from `on_ready` - it does not
 refuse to boot. All declared tables and policies are silently skipped.
 
-This matches the Django convention for backend-specific features: the feature
+This follows umbral's convention for backend-specific features: the feature
 is absent, not fatal, on an incompatible backend. If you want a hard failure
 on misconfiguration, check the pool variant yourself in your boot path:
 

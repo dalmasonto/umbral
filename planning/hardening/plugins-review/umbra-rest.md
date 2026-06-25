@@ -4,11 +4,11 @@ Read-only review, 2026-06-16. Scope: `plugins/umbral-rest/src/{lib.rs (2668 LOC)
 
 ## Verdict
 
-**Strong, genuinely DRF-shaped, and safe-by-default.** umbral-rest is the most complete plugin in the tree: ViewSet-equivalent auto-CRUD, pluggable Authentication + Permission classes with sane combinators, three paginators, full django-filter grammar, `?search=`/`?include=`/`?fields=`, transactional nested writes, CSV export, and `@action` endpoints with JSON-Schema validation. The architecture is clean: facade-only imports, no `umbral-core` leak, no `sqlx::query`/`query_as` raw SQL (every row op routes through `DynQuerySet`), no migrations of its own (correct — it owns no tables). Completeness one-liner: **~90% of DRF's everyday surface ships; the real holes are `?ordering=` (reserved but never applied — a silent no-op), no throttling/versioning (deferred), and no bulk endpoints.** Worst net-new finding: **`?ordering=` is a documented-looking reserved key that the list handler never reads → clients sort and get unsorted data with no error.**
+**Strong, genuinely a full REST toolkit, and safe-by-default.** umbral-rest is the most complete plugin in the tree: ViewSet-equivalent auto-CRUD, pluggable Authentication + Permission classes with sane combinators, three paginators, a full declarative filter grammar, `?search=`/`?include=`/`?fields=`, transactional nested writes, CSV export, and `@action` endpoints with JSON-Schema validation. The architecture is clean: facade-only imports, no `umbral-core` leak, no `sqlx::query`/`query_as` raw SQL (every row op routes through `DynQuerySet`), no migrations of its own (correct - it owns no tables). Completeness one-liner: **~90% of the everyday REST surface ships; the real holes are `?ordering=` (reserved but never applied - a silent no-op), no throttling/versioning (deferred), and no bulk endpoints.** Worst net-new finding: **`?ordering=` is a documented-looking reserved key that the list handler never reads → clients sort and get unsorted data with no error.**
 
-## Completeness (vs Django REST Framework)
+## Completeness (vs a full REST framework)
 
-| DRF capability | umbral-rest | Notes |
+| REST capability | umbral-rest | Notes |
 |---|---|---|
 | ViewSets / auto-CRUD | ✅ | list/retrieve/create/update(PUT+PATCH)/destroy auto-mounted per model |
 | `@action` (detail/collection) | ✅ | `ResourceConfig::action(name, Method, ActionScope, closure)`; trailing-slash mirror; method→405 fallthrough |
@@ -16,7 +16,7 @@ Read-only review, 2026-06-16. Scope: `plugins/umbral-rest/src/{lib.rs (2668 LOC)
 | Serializers (model-as-serializer) | ✅ | `hide`/`hide_model`/`transform`/`computed` + `ResourceConfig` ("serializers.py next to models.py") |
 | Permission classes | ✅ | AllowAny/IsAuthenticated/IsStaff/ReadOnly + And/Or combinators + custom trait; **default ReadOnly** (safe) |
 | Authentication classes | ✅ | trait + NoAuth/Fn/Chain; Session/Bearer live in umbral-auth (the #76 boundary) |
-| Filtering (django-filter) | ✅ | full lookup grammar (eq/ne/gte/lte/gt/lt/in/contains/icontains/startswith/isnull), type-validated, choice-validated, LIKE-escaped |
+| Filtering (declarative query filters) | ✅ | full lookup grammar (eq/ne/gte/lte/gt/lt/in/contains/icontains/startswith/isnull), type-validated, choice-validated, LIKE-escaped |
 | Search (`SearchFilter`) | ✅ | `?search=` ORs across searchable cols incl. FTS `@@ websearch_to_tsquery` on Postgres; `search_fields` allow-list |
 | **Ordering (`OrderingFilter`)** | ❌ **MISSING** | `"ordering"` is in `RESERVED_KEYS` (filtering.rs:65) but **no handler ever reads `?ordering=`** — see Finding 1 |
 | Pagination | ✅ | NoPagination (default) / PageNumber / LimitOffset; client page-size clamp; COUNT skip on NoPagination |
@@ -27,7 +27,7 @@ Read-only review, 2026-06-16. Scope: `plugins/umbral-rest/src/{lib.rs (2668 LOC)
 | Bulk endpoints | ❌ | no bulk create/update/delete; `bulk_create` exists on the ORM but isn't surfaced |
 | Throttling / rate-limit | ❌ | none. No gaps2 #46 entry exists; backlog only sketches a future `umbral-ratelimit` plugin (gaps2 #10 middleware-slots) |
 | Versioning | ❌ deferred | `at("/v1")` gives URL-prefix versioning, but no header/accept/namespace versioning — **gap #108 (open)** |
-| Error envelope | ✅ | DRF-flat field errors + `non_field_errors` + machine `code`; dev-only 404 endpoint discovery; DB text never echoed (WEB-5) |
+| Error envelope | ✅ | flat per-field errors + `non_field_errors` + machine `code`; dev-only 404 endpoint discovery; DB text never echoed (WEB-5) |
 | `.resource()`/`.resources()` config | ✅ | single + batch; additive per-table merge |
 | API root / browsable index | ✅ | `/api/` lists resources + every plugin's `api_endpoints()` |
 
@@ -37,7 +37,7 @@ Read-only review, 2026-06-16. Scope: `plugins/umbral-rest/src/{lib.rs (2668 LOC)
 
 ### NEW — Important
 
-**1. `?ordering=` is reserved but never applied — sorts silently no-op.** `filtering.rs:65` lists `"ordering"` in `RESERVED_KEYS` (so the filter parser skips it instead of 400ing it as an unknown field), and the comment at `:56-57` claims it's "consumed elsewhere (… + ordering)". It is **not**: the `list` handler (`lib.rs:1706-1772`) parses filters, search, include, fields, format, and pagination, but never reads `params.get("ordering")` and never calls `.order_by(...)` on the queryset. `DynQuerySet` has `order_by_col` (used by admin). Effect: a client that sends `?ordering=-created_at` (the DRF/Django muscle-memory spelling, which `RESERVED_KEYS` deliberately accommodates) gets **unsorted rows and no error** — the worst failure mode (looks like it worked). This is also why the OpenAPI spec emits no ordering param. Fix: implement `?ordering=field,-field2` in the list handler against `model.fields` (reject unknown columns with 400, like filters do), then advertise it as an OpenAPI param. → file **NEW gap** (REST ordering). Severity: Important (silent-wrong-result on a standard DRF query param the code half-wired).
+**1. `?ordering=` is reserved but never applied — sorts silently no-op.** `filtering.rs:65` lists `"ordering"` in `RESERVED_KEYS` (so the filter parser skips it instead of 400ing it as an unknown field), and the comment at `:56-57` claims it's "consumed elsewhere (… + ordering)". It is **not**: the `list` handler (`lib.rs:1706-1772`) parses filters, search, include, fields, format, and pagination, but never reads `params.get("ordering")` and never calls `.order_by(...)` on the queryset. `DynQuerySet` has `order_by_col` (used by admin). Effect: a client that sends `?ordering=-created_at` (the conventional muscle-memory spelling, which `RESERVED_KEYS` deliberately accommodates) gets **unsorted rows and no error** - the worst failure mode (looks like it worked). This is also why the OpenAPI spec emits no ordering param. Fix: implement `?ordering=field,-field2` in the list handler against `model.fields` (reject unknown columns with 400, like filters do), then advertise it as an OpenAPI param. → file **NEW gap** (REST ordering). Severity: Important (silent-wrong-result on a standard REST query param the code half-wired).
 
 **2. OpenAPI CRUD paths hardcode `/api/...`, ignoring `RestPlugin::at(...)`.** (Cross-plugin, surfaces from the REST side: `base_path()` is `pub` on `RestPlugin` at `lib.rs:396` *specifically* so the spec can mirror live routes — its doc-comment says exactly that.) But `umbral-openapi/lib.rs:282,293` build collection/item paths with `format!("/api/{}/", model.table)` — a hardcoded literal. Only `@action` paths read the real base (`action.base_path`, openapi:316-320). So `RestPlugin::default().at("/v1")` produces a spec whose CRUD paths say `/api/post/` while the server serves `/v1/post/` — Swagger UI "Try it" hits 404. Fix: expose the REST base_path through a `umbral_rest::base_path()` free reader (parallel to `is_exposed`/`registered_action_schemas`) and use it in `build_spec`. → file **NEW gap**. Severity: Important (spec/route divergence breaks the playground for any versioned/re-based API). *Logged primarily in the openapi report; noted here because the fix needs a new reader on the REST side.*
 

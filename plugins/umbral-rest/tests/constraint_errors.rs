@@ -1,4 +1,4 @@
-//! DRF-style validation errors for DB constraint failures.
+//! Validation errors for DB constraint failures.
 //!
 //! Boots an app with a tiny schema that has every constraint
 //! shape we care about:
@@ -14,7 +14,7 @@
 //!   surfaces in the response body.
 //!
 //! The pre-fix shape was a 500 with `{ "error": "...", "code":
-//! "database_error" }`. The post-fix shape is a 400 with DRF-flat
+//! "database_error" }`. The post-fix shape is a 400 with flat
 //! field errors (`{ "category": ["..."], "code":
 //! "fk_constraint" }`).
 

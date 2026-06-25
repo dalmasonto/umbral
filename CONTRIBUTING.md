@@ -1,6 +1,6 @@
 # Contributing to umbral
 
-Thanks for considering a contribution! umbral is a Django-inspired web framework in Rust — declare your data and get migrations, CRUD, an admin, and an optional REST API almost for free, with compile-time guarantees. This guide covers how to get set up, the conventions we hold to, and how changes land.
+Thanks for considering a contribution! umbral is a batteries-included web framework in Rust — declare your data and get migrations, CRUD, an admin, and an optional REST API almost for free, with compile-time guarantees. This guide covers how to get set up, the conventions we hold to, and how changes land.
 
 If anything here is unclear or out of date, open an issue — improving this doc is itself a welcome contribution.
 
@@ -13,8 +13,6 @@ Be kind, be constructive, assume good faith. Harassment or hostility isn't welco
 umbral is dual-licensed under [MIT](LICENSE-MIT) **OR** [Apache-2.0](LICENSE-APACHE). 
 
 > Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in the work (as defined in the Apache-2.0 license) shall be dual-licensed as above, without any additional terms or conditions.
-
-The **name** "umbral" and the project's branding are covered separately — see [TRADEMARK.md](TRADEMARK.md). Short version: the code is yours to fork and ship; the name stays pointing at the official project.
 
 ## Project layout
 

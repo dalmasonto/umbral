@@ -111,8 +111,8 @@ async fn to_sql_emits_inner_join_with_aliased_child_columns() {
         .join_related("category")
         .to_sql();
     // The JOIN itself must be present. `Product.category` is a NOT NULL
-    // FK, so plain `join_related` now auto-infers INNER (gap 4c —
-    // Django-parity: a NOT NULL FK can't be a LEFT-JOIN miss, so INNER
+    // FK, so plain `join_related` now auto-infers INNER (gap 4c):
+    // a NOT NULL FK can't be a LEFT-JOIN miss, so INNER
     // is correct and lets the planner drop the outer-join bookkeeping).
     // The nullable `brand` FK still LEFT-joins — see
     // `left_join_miss_for_null_fk_leaves_field_as_none`.

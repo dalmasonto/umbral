@@ -1,13 +1,13 @@
 ---
 title: What is Umbral?
-description: A Django-shape web framework for Rust.
+description: A batteries-included web framework for Rust.
 sidebar_position: 1
 icon: info
 ---
 
-**Umbral** is a batteries-included web framework for Rust, shaped like Django. You declare your data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees instead of runtime hope.
+**Umbral** is a batteries-included web framework for Rust. You declare your data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees instead of runtime hope.
 
-The name is the adjective 'of the shadow' (from Latin *umbra*, shadow). umbral is a separate Rust framework inspired by Django's shape and ergonomics. It isn't a port and shares no code with Django.
+The name is the adjective 'of the shadow' (from Latin *umbra*, shadow).
 
 <Callout type="info">
 Umbral is pre-alpha. The architecture and specs are settled and the milestones are landing in code. Pages get added here as features ship. Today there's enough to declare a model, run managed migrations, port an existing database via `inspectdb`, wire the built-in plugins (auth, sessions, admin, REST, OpenAPI, tasks, permissions, security, static), render HTML through the templates substrate, and drive the whole thing through the project's `cargo run -- <command>` CLI (plus the global `umbral` scaffolding binary from `cargo install umbral-cli`). Start at [Your first app](/docs/v0.0.1/getting-started/your-first-app).
@@ -15,7 +15,7 @@ Umbral is pre-alpha. The architecture and specs are settled and the milestones a
 
 ## Why Umbral exists
 
-Web development in Rust is unassembled. Unlike Django or Rails, there's no mainstream "just works" path. Every team picks and wires a web framework, a database layer, a migration tool, serialization, auth, and background jobs.
+Web development in Rust is unassembled. Unlike Rails, there's no mainstream "just works" path. Every team picks and wires a web framework, a database layer, a migration tool, serialization, auth, and background jobs.
 
 Two things suffer:
 
@@ -91,7 +91,7 @@ Notable items on the backlog. Pages land here as each one ships. See `planning/f
   <Card
     icon="activity"
     title="Logs plugin"
-    description="django-logs-style auto-logging of every DB action. Registers a logs table, surfaces 'Recent activity' in the admin."
+    description="Auto-logging of every DB action. Registers a logs table, surfaces 'Recent activity' in the admin."
   />
   <Card
     icon="bell"

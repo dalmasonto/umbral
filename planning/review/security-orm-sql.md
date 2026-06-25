@@ -34,7 +34,7 @@ The ORM is built on **sea-query** (`Expr::col(Alias::new(...))` for identifiers,
   ```
   No `ESCAPE` clause and no escaping of `%`/`_`/`\` anywhere (grep for `ESCAPE`/`escape_like` returns nothing).
 - **Attack path:** `GET /api/posts/?title__contains=%25` (or `_`) treats the metacharacter as a wildcard, matching far more rows than intended (discloses rows the caller meant to filter past, silent semantic breakage). A pathological pattern (`%a%a%...` against a large text column) can force expensive scans (DB DoS). The value is bound, so this cannot escape the string literal — hence not SQLi.
-- **Fix:** Escape `\`, `%`, `_` in the user substring before wrapping with framework wildcards and emit `ESCAPE '\'`. Centralize in one `escape_like_literal` helper called from all four sites. (Django does exactly this in its `contains`/`startswith` lookups.)
+- **Fix:** Escape `\`, `%`, `_` in the user substring before wrapping with framework wildcards and emit `ESCAPE '\'`. Centralize in one `escape_like_literal` helper called from all four sites. (Mature ORMs do exactly this in their `contains`/`startswith` lookups.)
 
 ---
 

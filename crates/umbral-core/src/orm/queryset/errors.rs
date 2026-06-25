@@ -6,7 +6,7 @@
 //! `From<sqlx::Error>`.
 
 /// Error type for [`super::QuerySet::get`] / [`super::Manager::get`]
-/// (Django's exactly-one shape).
+/// (the exactly-one shape).
 ///
 /// `.get()` deliberately returns this rather than `Result<Option<T>,
 /// sqlx::Error>` because three outcomes need three branches:

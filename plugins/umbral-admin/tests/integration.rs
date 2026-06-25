@@ -8,7 +8,7 @@
 //! to get a CSRF token and then POSTs credentials to obtain a session
 //! cookie, which is passed on subsequent requests.
 //!
-//! Covers the full Django-shape flow:
+//! Covers the full admin flow:
 //!
 //! - GET /admin without session → 302 to /admin/login
 //! - GET /admin with a non-staff user → 403

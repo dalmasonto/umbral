@@ -68,7 +68,7 @@ App::builder()
 The file columns are auto-detected from `M`'s metadata (any column the macro tagged with the `file` / `image` widget). If you overrode the widget on a file column, name the columns explicitly with `StoragePlugin::cleanup_files::<M>(&["..."])` instead.
 
 <Callout type="warning">
-Cleanup is best-effort (a storage-delete error is logged, never failing the row delete) and is wired to the per-row `pre_delete` signal. A bulk `QuerySet::delete()` fires only `bulk_post_delete` (PKs, no instances), so it does **not** trigger file cleanup - call `delete_instance` per row when the file must go too. This mirrors Django's bulk-delete cascade limitation.
+Cleanup is best-effort (a storage-delete error is logged, never failing the row delete) and is wired to the per-row `pre_delete` signal. A bulk `QuerySet::delete()` fires only `bulk_post_delete` (PKs, no instances), so it does **not** trigger file cleanup - call `delete_instance` per row when the file must go too. A bulk delete intentionally skips per-row cleanup because it never loads the instances.
 </Callout>
 
 ### Replace cleanup

@@ -2,7 +2,7 @@
 
 Real-time push for umbral - SSE + WebSocket, with user- and group/room-targeted delivery over a pluggable broker.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

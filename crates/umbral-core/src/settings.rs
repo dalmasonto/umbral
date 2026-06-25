@@ -64,7 +64,7 @@ fn default_allowed_hosts() -> Vec<String> {
 /// bracketed env value like `["a.com","b.com"]`) OR a single comma-separated
 /// string (`UMBRAL_ALLOWED_HOSTS=a.com,b.com`). Env vars are scalar strings, so
 /// without this a list-valued setting can only be set with the non-obvious
-/// bracketed form — the natural `HOST1,HOST2` (Django's convention) would error
+/// bracketed form; the natural `HOST1,HOST2` comma-separated form would error
 /// with "expected a sequence". Whitespace is trimmed and empty entries dropped.
 fn deserialize_string_list<'de, D>(de: D) -> Result<Vec<String>, D::Error>
 where
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn allowed_hosts_accepts_comma_separated_env() {
-        // The Django-style natural form: `UMBRAL_ALLOWED_HOSTS=a.com,b.com`.
+        // The natural comma-separated form: `UMBRAL_ALLOWED_HOSTS=a.com,b.com`.
         Jail::expect_with(|jail| {
             jail.set_env("UMBRAL_ALLOWED_HOSTS", "example.com, www.example.com");
             let s = Settings::from_env().unwrap();

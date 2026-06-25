@@ -478,7 +478,7 @@ fn foreign_key_deserialises_from_integer() {
 // =========================================================================
 // Gap #69: self-referential foreign keys.
 //
-// Django uses a string sentinel (`models.ForeignKey('self', ...)`)
+// Some frameworks use a string sentinel for self-references
 // because the model class isn't bound yet when the field is declared.
 // Rust solves the same problem differently: `ForeignKey<T>` stores
 // `T::PrimaryKey` and `Option<Box<T>>` (boxed so the type stays

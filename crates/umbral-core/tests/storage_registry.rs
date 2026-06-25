@@ -1,6 +1,6 @@
 //! Named storage registry (storage-unification stage 1).
 //!
-//! Proves the Django-`STORAGES`-style named registry: `"default"` (media)
+//! Proves the named storage registry: `"default"` (media)
 //! and `"staticfiles"` (static) resolve to independent backends, the
 //! back-compat accessors (`storage`/`set_storage`/`storage_opt`) operate on
 //! `"default"`, and registration is set-once per name.

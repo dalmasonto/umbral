@@ -1,5 +1,5 @@
-//! Related-aggregate annotations — Django's chainable
-//! `Post.objects.filter(...).annotate(n=Count("comments"))`:
+//! Related-aggregate annotations — the chainable
+//! `Post::objects().filter(...).annotate(n=Count("comments"))`:
 //! annotations are QUERY-BUILDER STATE, applied inside the one SELECT
 //! every terminal builds. Pins:
 //!
@@ -245,7 +245,7 @@ async fn counts_arrive_with_the_rows_in_one_query() {
 #[tokio::test]
 async fn annotations_stack_count_and_avg_in_one_query() {
     boot().await;
-    // The Django story: .annotate(comments_count).annotate(rating_avg).
+    // The story: .annotate(comments_count).annotate(rating_avg).
     let rows = Post::objects()
         .annotate_count("comment_set")
         .annotate_related("rating_avg", "review_set", Aggregate::avg("rating"))

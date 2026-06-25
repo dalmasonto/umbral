@@ -316,7 +316,7 @@ async fn missing_required_field_returns_400_with_error_envelope() {
     // The 400 envelope has a stable `code` field; the body
     // payload is either the legacy `{error, code}` shape (when
     // the failure surfaced from the ORM as a Protocol error) or
-    // the new DRF-flat shape with per-field arrays plus
+    // the new flat field-error shape with per-field arrays plus
     // `code = "required_field"` (when pre-validation caught it).
     assert!(err["code"].is_string(), "got body: {err}");
     let has_field_error = err["body"].is_array();

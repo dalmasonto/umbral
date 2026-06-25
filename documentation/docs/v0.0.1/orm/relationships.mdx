@@ -100,7 +100,7 @@ pub struct Category {
 }
 ```
 
-No `Self` keyword (Rust doesn't allow `Self` in a field type), no string sentinel like Django's `ForeignKey('self', ...)`, just the struct's own name. Why it works: `ForeignKey<T>` stores `T::PrimaryKey` and `Option<Box<T>>` (boxed so the type stays finite-size), and `<T as Model>::TABLE` resolves at the same expansion step that emits `impl Model for Category`, so `T = Category` is satisfied within one derive pass.
+No `Self` keyword (Rust doesn't allow `Self` in a field type), no string sentinel for "this model", just the struct's own name. Why it works: `ForeignKey<T>` stores `T::PrimaryKey` and `Option<Box<T>>` (boxed so the type stays finite-size), and `<T as Model>::TABLE` resolves at the same expansion step that emits `impl Model for Category`, so `T = Category` is satisfied within one derive pass.
 
 The DDL is a normal inline `REFERENCES` clause: the table references itself within the same `CREATE TABLE` statement, which both SQLite and Postgres handle natively:
 
@@ -124,7 +124,7 @@ let children = Category::objects()
 
 ## One-to-one relationships
 
-Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbral ships two equivalent spellings on the child (referencing) side. Pick whichever reads cleaner; both compile to the same column shape and emit the same back-link accessors.
+A one-to-one relationship is a foreign key with a UNIQUE constraint underneath. Umbral ships two equivalent spellings on the child (referencing) side. Pick whichever reads cleaner; both compile to the same column shape and emit the same back-link accessors.
 
 ### Sugar spelling: `OneToOne<T>`
 
@@ -179,10 +179,10 @@ let profile = Profile::objects()
 
 ### Reading from the parent side
 
-The relationship lives entirely on the **child** (`Profile`) - exactly like Django, where you add `OneToOneField` to `Profile` and never touch the `User` model. To read it back from the parent (Django's `user.profile.avatar`), how you spell it depends on whether you can edit the parent type.
+The relationship lives entirely on the **child** (`Profile`): you declare the one-to-one field on `Profile` and never touch the `User` model. To read it back from the parent (e.g. `user.profile.avatar`), how you spell it depends on whether you can edit the parent type.
 
 <Callout type="info">
-**For `AuthUser` - and any parent you can't edit - use the method accessor and add nothing to it.** `AuthUser` lives in `umbral-auth`; you don't fork it, and (just like Django) you don't need to. The derive on `Profile` generates `user.profile().await?` directly on `AuthUser` - the faithful equivalent of Django's `user.profile`. See the **Cross-crate back-link** section just below. The `OneToOne<C>` **struct field** described next is *only* for a parent type **you own** (e.g. a custom user model in your crate).
+**For `AuthUser` - and any parent you can't edit - use the method accessor and add nothing to it.** `AuthUser` lives in `umbral-auth`; you don't fork it, and you don't need to. The derive on `Profile` generates `user.profile().await?` directly on `AuthUser`, a one-call accessor for the related row. See the **Cross-crate back-link** section just below. The `OneToOne<C>` **struct field** described next is *only* for a parent type **you own** (e.g. a custom user model in your crate).
 </Callout>
 
 #### `OneToOne<C>` - when you own the parent type
@@ -530,7 +530,7 @@ Limitations: parent type must be local (Rust's orphan rule on inherent impls); p
 
 ### Declared `ReverseSet<Child>` + batched `prefetch_related`
 
-The `_set()` accessor above fetches one parent's children on demand. When you have **N parents** and want their children without an N+1 fetch loop, declare a typed `ReverseSet<Child>` field on the Parent and batch-load it with `prefetch_related` (Django's `Author.objects.prefetch_related("books")`):
+The `_set()` accessor above fetches one parent's children on demand. When you have **N parents** and want their children without an N+1 fetch loop, declare a typed `ReverseSet<Child>` field on the Parent and batch-load it with `prefetch_related`, fetching every parent's children in one extra query:
 
 ```rust
 use umbral::orm::{ForeignKey, ReverseSet};
@@ -576,7 +576,7 @@ for p in &parents {
 
 ### Generic instance accessor: `instance.reverse::<Child>()`
 
-The macro-emitted `comment_set()` only exists because the Child's `ForeignKey<Parent>` is visible where the Child is derived. When the Parent lives in another crate (e.g. `AuthUser` in `umbral-auth`) the macro can't enumerate its children, so there's a zero-declaration runtime accessor on **every** model instance, Django's `post.comment_set.all()` reached generically. The Child type is named at the call site; the FK column on the Child is discovered at runtime from `Child::FIELDS`:
+The macro-emitted `comment_set()` only exists because the Child's `ForeignKey<Parent>` is visible where the Child is derived. When the Parent lives in another crate (e.g. `AuthUser` in `umbral-auth`) the macro can't enumerate its children, so there's a zero-declaration runtime accessor on **every** model instance that reaches a parent's children generically. The Child type is named at the call site; the FK column on the Child is discovered at runtime from `Child::FIELDS`:
 
 ```rust
 use umbral::prelude::*; // brings ReverseRelations into scope

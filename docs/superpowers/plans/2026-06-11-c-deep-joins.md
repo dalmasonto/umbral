@@ -4,7 +4,7 @@
 
 **Goal:** Make `join_related` span multiple relation hops in a single round-trip with explicit or auto-inferred INNER/LEFT/RIGHT join types, covering FK, forward O2O (a unique FK), and M2M hops, with a boot warning for RIGHT JOIN on old SQLite.
 
-**Architecture:** `QuerySet<T>` already carries `join_related: Vec<String>` and emits one-hop hard-coded `LeftJoin`s in `apply_join_related` (`queryset/mod.rs:858`). We replace that field with `Vec<JoinReq>` where each `JoinReq { path: String, kind: Option<JoinKind> }` records a dotted path and an optional explicit join type. `apply_join_related` is rewritten to split each path on `__`, resolve each hop's `(table, fk_column, target_table, target_pk)` from `T::FIELDS` / the migrate registry (the exact resolution `hydrate_select_related_nested` already does at `hydration.rs:162`), chain one JOIN per hop with per-hop aliases, and alias the deepest child's columns by the full dotted path. Hydration builds a nested JSON object bottom-up from those dotted-alias columns and feeds the top hop to `HydrateRelated::hydrate_fk`, whose macro-generated body recursively deserialises nested `ForeignKey<T>` slots — so `comment.plugin.author` populates from one query. Join-type per hop defaults to INNER for a NOT NULL FK and LEFT for a nullable FK (read from `FieldSpec.nullable` / `Column.nullable`), matching Django.
+**Architecture:** `QuerySet<T>` already carries `join_related: Vec<String>` and emits one-hop hard-coded `LeftJoin`s in `apply_join_related` (`queryset/mod.rs:858`). We replace that field with `Vec<JoinReq>` where each `JoinReq { path: String, kind: Option<JoinKind> }` records a dotted path and an optional explicit join type. `apply_join_related` is rewritten to split each path on `__`, resolve each hop's `(table, fk_column, target_table, target_pk)` from `T::FIELDS` / the migrate registry (the exact resolution `hydrate_select_related_nested` already does at `hydration.rs:162`), chain one JOIN per hop with per-hop aliases, and alias the deepest child's columns by the full dotted path. Hydration builds a nested JSON object bottom-up from those dotted-alias columns and feeds the top hop to `HydrateRelated::hydrate_fk`, whose macro-generated body recursively deserialises nested `ForeignKey<T>` slots - so `comment.plugin.author` populates from one query. Join-type per hop defaults to INNER for a NOT NULL FK and LEFT for a nullable FK (read from `FieldSpec.nullable` / `Column.nullable`): a required FK can never miss, so INNER is safe and cheaper, while a nullable FK keeps parent rows whose FK is null.
 
 **Tech Stack:** Rust, sea-query, sqlx
 
@@ -68,7 +68,7 @@ impl JoinKind {
 /// One requested eager-join: a dotted relation path (`"plugin__author"`)
 /// plus the join type to apply to the LAST hop. `kind: None` means
 /// auto-infer per-hop from FK nullability (INNER for NOT NULL, LEFT for
-/// nullable) — Django's default. The explicit methods pin `Some(..)`.
+/// nullable), the safe default. The explicit methods pin `Some(..)`.
 #[derive(Debug, Clone)]
 pub(crate) struct JoinReq {
     pub(crate) path: String,
@@ -139,8 +139,8 @@ Steps:
         self
     }
 
-    /// `INNER JOIN` the related path — drops parent rows whose relation
-    /// is absent. Django's default for a NOT NULL FK.
+    /// `INNER JOIN` the related path - drops parent rows whose relation
+    /// is absent. The inferred default for a NOT NULL FK.
     pub fn inner_join_related(mut self, path: impl Into<String>) -> Self {
         self.join_related.push(JoinReq { path: path.into(), kind: Some(JoinKind::Inner) });
         self
@@ -478,8 +478,8 @@ fn resolve_join_hops<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
                         // hop's nullability.
                         jr.kind.unwrap_or(if hop.nullable { JoinKind::Left } else { JoinKind::Inner })
                     } else {
-                        // Intermediate hops infer per-hop (Django nests
-                        // INNER inside an outer LEFT etc.).
+                        // Intermediate hops infer per-hop (an INNER hop
+                        // can nest inside an outer LEFT, etc.).
                         if hop.nullable { JoinKind::Left } else { JoinKind::Inner }
                     };
                     // FK column lives on `prev_alias`; its name is hop.fk_col.

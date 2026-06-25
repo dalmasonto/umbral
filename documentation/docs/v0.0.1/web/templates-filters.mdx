@@ -211,7 +211,7 @@ fn template_registrars(&self) -> Vec<TemplateRegistrar> {
 ```
 
 <Callout type="info">
-  Filters and functions registered this way are available globally - no `{% load %}` equivalent is needed, unlike Django's custom template tags. Every template in the project sees them once the plugin is installed.
+  Filters and functions registered this way are available globally - there is no per-template import or load step. Every template in the project sees them once the plugin is installed.
 </Callout>
 
 ## See also

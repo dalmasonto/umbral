@@ -2,8 +2,8 @@
 //!
 //! Registered via [`crate::AdminPlugin::models`] so they flow through the
 //! framework's migration engine like any other plugin's models. No raw
-//! `CREATE TABLE`, no `on_ready` bootstrap — the same path Django takes
-//! for `django.contrib.admin.LogEntry`.
+//! `CREATE TABLE`, no `on_ready` bootstrap — the same path used for
+//! the admin LogEntry table.
 //!
 //! ## AdminUserPref
 //! One row per admin user. Created the first time a user lands on

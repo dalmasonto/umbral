@@ -1,6 +1,6 @@
 //! umbral-testing — test helpers for umbral apps.
 //!
-//! Django's `TestCase` + `Client` ergonomics, in the Rust shape. The
+//! Test-case + client ergonomics, in the Rust shape. The
 //! repeated work in every plugin's `tests/integration.rs` was four
 //! things: spin up a fresh sqlite pool, build the router, send
 //! requests, read the response. This crate collapses those into:

@@ -1,4 +1,4 @@
-//! End-to-end tests for django-filter-style query-string filtering on
+//! End-to-end tests for query-string filtering on
 //! the REST list endpoint.
 //!
 //! All tests share one booted app (process-wide OnceLock state can only

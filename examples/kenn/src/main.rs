@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .not_found_template("404.html")
         .server_error_template("500.html")
 
-        // Redirect /foo → /foo/  (Django-style).
+        // Redirect /foo to /foo/  (append trailing slash).
         .slash_redirect(SlashRedirect::Append)
 
         // --- Routes ----------------------------------------------------------

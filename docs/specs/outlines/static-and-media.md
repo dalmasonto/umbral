@@ -56,7 +56,7 @@ Promote alongside `web-layer.md` (which owns multipart parsing and dev-time `Ser
 - **File naming strategy.** Three candidates: keep the original filename (collision-prone), generate a UUID v7 prefix (sortable, unique, opaque), or content-hash the bytes (deduplicates, breaks rename). The default is likely UUID v7 with `#[umbral(upload_to = "...")]` controlling the directory prefix, but the matrix isn't decided.
 - **`ImageField` metadata extraction: synchronous on upload vs background task.** Probing dimensions on the upload request is simple but blocks the handler on a slow decoder for large images. Enqueueing an `umbral-tasks` job (`tasks.md`) keeps the request fast but means `width` / `height` are momentarily NULL. The deep spec picks per-field via an opt-in attribute.
 - **Dev-vs-prod serving boundaries.** `runserver` mounts `/static/` and `/media/` in dev; production serves both via nginx. The line between "framework convenience" and "production misconfiguration" needs a system check that warns if `Environment::Prod` is paired with the dev-style mount being active.
-- **`collectstatic` manifest / fingerprinting.** Django's `ManifestStaticFilesStorage` hashes filenames for cache busting. Whether umbral ships this in v1 or defers to the CDN's own cache-busting story is open; the answer depends on how many users deploy without a CDN.
+- **`collectstatic` manifest / fingerprinting.** A manifest storage backend that hashes filenames for cache busting is a common need. Whether umbral ships this in v1 or defers to the CDN's own cache-busting story is open; the answer depends on how many users deploy without a CDN.
 
 ## Cross-links
 

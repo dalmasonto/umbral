@@ -7,7 +7,7 @@ tags: [cache, redis, performance, middleware]
 
 # Caching
 
-umbral's cache plugin (`umbral-cache`) mirrors Django's cache framework: one `Cache` handle over a swappable `CacheBackend` trait, three built-in backends (memory, SQLite, Redis), and a view-level `cache_page` middleware that caches full GET responses for a route subtree.
+umbral's cache plugin (`umbral-cache`) gives you one `Cache` handle over a swappable `CacheBackend` trait, three built-in backends (memory, SQLite, Redis), and a view-level `cache_page` middleware that caches full GET responses for a route subtree.
 
 ## Backends
 
@@ -82,7 +82,7 @@ async fn home() -> impl IntoResponse {
 
 ## View-level caching (cache_page)
 
-`cache_page(ttl)` is a tower `Layer` that caches full GET/HEAD responses for a route subtree - the Rust equivalent of Django's `@cache_page(seconds)`.
+`cache_page(ttl)` is a tower `Layer` that caches full GET/HEAD responses for a route subtree, keyed by method and URI.
 
 ```rust
 use umbral_cache::cache_page;

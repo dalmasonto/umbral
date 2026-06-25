@@ -41,10 +41,8 @@
 //!     .hide("audit_log", "user_id")          // one-off case in main.rs
 //! ```
 //!
-//! The DRF analog: each Django app has a `serializers.py` next to its
-//! `models.py`. `ResourceConfig` plays the same role — the per-model
-//! REST shape lives next to the model, not in the project's wiring
-//! layer.
+//! `ResourceConfig` keeps the per-model REST shape next to the model
+//! (serializers per app/model), not in the project's wiring layer.
 
 use std::collections::HashSet;
 use std::future::Future;
@@ -61,8 +59,7 @@ use crate::{ComputedFn, HideFields, TransformFn};
 
 /// Whether a custom action is mounted on the collection
 /// (`/api/<table>/<name>/`) or on a single row
-/// (`/api/<table>/<id>/<name>/`). DRF's `detail=False` / `detail=True`
-/// flag.
+/// (`/api/<table>/<id>/<name>/`): collection-scoped vs row-scoped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionScope {
     /// Mounted on the resource as a whole: no `{id}` segment. Use for
@@ -237,11 +234,11 @@ pub struct ResourceConfig {
     /// backward-compatible default. `Some(set)` restricts the
     /// resource to exactly that set; everything else 404s.
     pub(crate) view_scope: Option<HashSet<Action>>,
-    /// DRF-style `@action` endpoints registered on this resource.
+    /// Custom-action endpoints registered on this resource.
     /// Merged into the plugin's per-table action map at `.resource()`
     /// time; mounted as new axum routes at `RestPlugin::routes()`.
     pub(crate) actions: Vec<ActionDef>,
-    /// Opt OUT of django-filter-style query-string filtering on the
+    /// Opt OUT of query-string filtering on the
     /// list endpoint for this resource. Filters are ON by default —
     /// every column gets the standard lookup grammar (`__eq`, `__in`,
     /// `__contains`, etc.) — and `.disable_filters()` removes them
@@ -261,7 +258,7 @@ pub struct ResourceConfig {
     /// then each child (with its FK to the parent set), returning the full
     /// nested object. Declared via [`ResourceConfig::nested`].
     pub(crate) nested: Vec<(String, String)>,
-    /// Opt IN to DRF-style bulk endpoints (gaps2 #82). `false` (the
+    /// Opt IN to bulk endpoints (gaps2 #82). `false` (the
     /// default) keeps the resource byte-for-byte unchanged: a `POST` with
     /// a JSON array is rejected as a bad single-object body, and no
     /// collection-level `PATCH` / `DELETE` is mounted. `true` enables:
@@ -305,7 +302,7 @@ impl ResourceConfig {
         }
     }
 
-    /// Opt IN to DRF-style bulk endpoints for this resource.
+    /// Opt IN to bulk endpoints for this resource.
     ///
     /// Off by default. Without this call the resource behaves exactly as
     /// before: a `POST` whose body is a JSON array is rejected, and no
@@ -370,7 +367,7 @@ impl ResourceConfig {
         Self::new(M::TABLE)
     }
 
-    /// Opt OUT of django-filter-style query-string filtering on the
+    /// Opt OUT of query-string filtering on the
     /// list endpoint for this resource.
     ///
     /// Filtering is ON by default. Query-string keys of the form
@@ -401,7 +398,7 @@ impl ResourceConfig {
     /// Search is ON by default. A `?search=foo` query string ORs an
     /// `icontains` predicate across every Text column with `eq`
     /// predicates against numeric / FK / Boolean columns when the
-    /// term parses as those types — DRF's `SearchFilter` shape.
+    /// term parses as those types.
     /// Call this on resources where free-text matching makes no
     /// sense (event streams, metric samples, opaque payloads).
     pub fn disable_search(mut self) -> Self {
@@ -543,16 +540,8 @@ impl ResourceConfig {
         self
     }
 
-    /// Register a DRF-style `@action` endpoint.
-    ///
-    /// In Django REST Framework you write:
-    ///
-    /// ```python
-    /// class PostViewSet(ViewSet):
-    ///     @action(detail=True, methods=['post'])
-    ///     def publish(self, request, pk=None):
-    ///         ...
-    /// ```
+    /// Register a custom-action endpoint
+    /// (`/api/<table>/<id>/<name>/`) for behaviour that doesn't fit CRUD.
     ///
     /// The umbral-rest shape is a builder call on the resource:
     ///

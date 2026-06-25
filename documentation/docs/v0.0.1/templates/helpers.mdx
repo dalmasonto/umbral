@@ -25,7 +25,7 @@ These are registered by umbral-core's template engine (`crates/umbral-core/src/t
 | `querystring_with` | function | Rebuild the current querystring replacing one key, preserving the rest - for pagination links that carry filters. No leading `?`. | `?{{ querystring_with(current_query, "page", page.next_page_number) }}` |
 | `highlight_styles` | function | Emit the `base16-ocean.dark` syntect token stylesheet (wrapped in `<style>`) for `\| markdown` server-side code highlighting. Call once in `<head>`. | `{{ highlight_styles() }}` |
 | `csrf_token` | global | The current request's CSRF token string. Injected ambiently when a CSRF middleware scoped a token for the request. | `<input name="csrf_token" value="{{ csrf_token }}">` |
-| `csrf_input` | global | A ready-made `<input type="hidden" name="csrf_token" ...>`, marked safe. Django's `{% csrf_token %}` ergonomic. | `<form method="post">{{ csrf_input }}</form>` |
+| `csrf_input` | global | A ready-made `<input type="hidden" name="csrf_token" ...>`, marked safe. Drop it straight into a form. | `<form method="post">{{ csrf_input }}</form>` |
 | `user` | global | The current user, injected into every render. Authenticated requests get the full serialized user when `AuthPlugin::with_user_in_templates()` is on; otherwise the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }`, so `user.is_authenticated` always resolves. | `{% if user.is_authenticated %}...{% endif %}` |
 
 `img`, `markdown`, and `sanitize` all return safe (pre-escaped) values, so autoescape won't double-encode the markup they generate. The kwargs on `img` are strict: a typo'd key like `alt_text` raises a clear template error rather than being silently dropped.
@@ -134,7 +134,7 @@ Plugins register their own app-level filters and functions through `Plugin::temp
 
 ## Control-flow tags (not filters, but commonly confused)
 
-These are Jinja2 tags, not pipe filters. They're included here because they solve the same problems humanize helpers solve in Django.
+These are Jinja2 tags, not pipe filters. They're included here because they solve the same display problems that humanize-style filters solve.
 
 ```html
 {# Conditional blocks #}
@@ -183,7 +183,7 @@ There is no global escape bypass. See [Rendering HTML](rendering-html#autoescape
 
 ## What is missing today: humanize helpers
 
-Django's `django.contrib.humanize` provides filters like `naturalday`, `naturaltime`, `intcomma`, `ordinal`, and `filesizeformat`. minijinja 2 does not ship these, and umbral-core does not register app-level equivalents yet (the admin plugin ships a `naturaltime` filter, but it's scoped to admin templates only). When humanize-style filters land for app templates they will be documented here.
+Humanize-style filters - the friendly date/number formatters like `naturalday`, `naturaltime`, `intcomma`, `ordinal`, and `filesizeformat` - are a known category of template helper. minijinja 2 does not ship these, and umbral-core does not register app-level equivalents yet (the admin plugin ships a `naturaltime` filter, but it's scoped to admin templates only). When humanize-style filters land for app templates they will be documented here.
 
 In the meantime, compute humanized representations in the handler and pass them as context values:
 

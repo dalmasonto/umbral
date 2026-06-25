@@ -205,7 +205,7 @@ async fn sugar_field_also_emits_cross_crate_reverse_accessor() {
         .await
         .expect("insert");
 
-    // The reverse accessor — Django's `request.user.profile.bio` analog.
+    // The reverse accessor (e.g. user.profile.bio).
     let profile = user
         .shopper_profile()
         .await

@@ -5,7 +5,7 @@ sidebar_position: 3
 icon: user-check
 ---
 
-Django's templates have `{% if user.is_authenticated %}` and `{% if user.is_staff %}` because Django's `auth` middleware injects `request.user` into every template context for free. Umbral ships the same shape, opt-in, one builder call.
+With one builder call, umbral injects the current user into every HTML template's context, so templates can write `{% if user.is_authenticated %}` and `{% if user.is_staff %}` directly. It's opt-in.
 
 ## The one-line opt-in
 
@@ -131,7 +131,7 @@ The serialized shape carries every column on `AuthUser`. If you've added a `disp
 
   Then in the template: `{{ customer_id }}`, `{{ loyalty }}`, flat keys, pre-resolved.
 
-  **What's coming**: `planning/gaps2.md` #14 captures the design space. The front-runner is an eager-prefetch declaration that mirrors Django's `select_related` / `prefetch_related`: the handler declares "this template will walk user.customer.address," the framework resolves those before rendering, and the template uses dot-notation against the pre-loaded values. No ETA; logged as a focused follow-on.
+  **What's coming**: `planning/gaps2.md` #14 captures the design space. The front-runner is an eager-prefetch declaration built on `select_related` / `prefetch_related`: the handler declares "this template will walk user.customer.address," the framework resolves those before rendering, and the template uses dot-notation against the pre-loaded values. No ETA; logged as a focused follow-on.
 </Callout>
 
 For now, `user.<column>` works only for **columns on the AuthUser table itself**: `is_authenticated`, `is_staff`, `is_superuser`, `username`, `email`, `date_joined`, etc. Anything that requires a SQL query to fetch (relations, computed fields, M2M sets) has to be resolved in the handler.

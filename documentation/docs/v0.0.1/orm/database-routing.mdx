@@ -9,7 +9,7 @@ tags: [orm, database, routing, multi-db, pools, multitenancy]
 
 umbral can talk to more than one database at once. You register **named connection pools** (`"default"`, `"analytics"`, `"archive"`, …), then route individual models - or every model a plugin owns - to a specific pool. Each terminal query resolves its pool automatically; migrations split per database, each with its own tracking table.
 
-The model mirrors Django's database routers: a plugin is an "app" that can own its models' database, with per-model overrides on top.
+The routing model works at two levels: a plugin can own the database for all the models it contributes, with per-model overrides on top.
 
 ## Register named pools
 
@@ -54,7 +54,7 @@ Every `PageView::objects()…` query and `PageView`'s migrations now run against
 
 ## Route a whole plugin
 
-A plugin can set the default pool for **all** the models it contributes - the Django-app shape - by overriding `Plugin::database()`:
+A plugin can set the default pool for **all** the models it contributes by overriding `Plugin::database()`:
 
 ```rust
 impl Plugin for AnalyticsPlugin {
@@ -117,7 +117,7 @@ pub struct PageView {
 }
 ```
 
-`db_constraint = false` keeps the FK **logical**: the column and its `fk_target` are unchanged, so joins, `select_related`, and app-level existence checks all keep working - but the migration emits no physical `REFERENCES`. It mirrors Django's `ForeignKey(db_constraint=False)` and works for same-database FKs too (e.g. to break a circular dependency). The default is `true` (emit the constraint).
+`db_constraint = false` keeps the FK **logical**: the column and its `fk_target` are unchanged, so joins, `select_related`, and app-level existence checks all keep working - but the migration emits no physical `REFERENCES`. It works for same-database FKs too (e.g. to break a circular dependency). The default is `true` (emit the constraint).
 
 ## Read/write (replica) split
 

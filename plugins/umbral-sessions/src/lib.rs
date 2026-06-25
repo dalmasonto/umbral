@@ -10,7 +10,7 @@
 //! - `Session` model (id, user_id, data, created_at, expires_at)
 //! - `SessionsPlugin` registers the model AND auto-applies
 //!   `session_layer`. A session row is created **lazily on first
-//!   write** (Django-style): a cookie-less request that never writes
+//!   write**: a cookie-less request that never writes
 //!   the session (favicon, CSS, an anonymous read-only page) leaves no
 //!   row and no cookie. The first write — anonymous or authed —
 //!   materialises exactly one row and emits the `Set-Cookie`. Opt out
@@ -74,8 +74,7 @@ static SLIDING_EXPIRY_ENABLED: OnceLock<bool> = OnceLock::new();
 /// when they need a project-specific name.
 pub const COOKIE_NAME: &str = "umbral_session";
 
-/// Default session TTL: 14 days. Matches Django's
-/// `SESSION_COOKIE_AGE` default.
+/// Default session TTL: 14 days.
 pub const DEFAULT_TTL_SECONDS: i64 = 14 * 24 * 60 * 60;
 
 /// The session row.
@@ -106,11 +105,11 @@ pub struct Session {
 
 /// The plugin. Registers the `Session` model and (by default)
 /// auto-applies [`session_layer`], which creates a session row
-/// lazily on the first write (Django-style — see `session_layer`).
+/// lazily on the first write (see `session_layer`).
 /// Opt out with [`Self::without_auto_layer`] if you want to control
 /// session creation by hand (rare).
 ///
-/// ## Sliding expiry (Django `SESSION_SAVE_EVERY_REQUEST` parity)
+/// ## Sliding expiry (refresh the TTL on every request)
 ///
 /// By default a session's `expires_at` is fixed at creation time:
 /// a session started at noon on Monday with a 14-day TTL expires at
@@ -196,7 +195,7 @@ impl SessionsPlugin {
     /// `now + DEFAULT_TTL_SECONDS`. Off by default — the default
     /// fixed-expiry path incurs no extra write per request.
     ///
-    /// Django parity: equivalent to `SESSION_SAVE_EVERY_REQUEST = True`.
+    /// Refresh the session TTL on every request.
     pub fn sliding_expiry(mut self) -> Self {
         self.sliding_expiry = true;
         self
@@ -263,7 +262,7 @@ impl Plugin for SessionsPlugin {
 }
 
 // =========================================================================
-// `clearsessions` management command — Django parity.
+// `clearsessions` management command.
 //
 // Deletes all session rows whose `expires_at < now()`. Rows accumulate
 // forever without this; the lazy-cleanup in `read_session` only fires
@@ -906,7 +905,7 @@ pub async fn logout(
 // read the row and then hydrate `AuthUser` themselves.
 
 // =========================================================================
-// Messages — Django's `contrib.messages` shape.
+// Messages: one-shot flash messages.
 // =========================================================================
 
 /// Flash messages that survive one redirect cycle, stored under a
@@ -940,8 +939,7 @@ pub mod messages {
     /// the `Messages` API.
     pub const SESSION_KEY: &str = "_umbral_messages";
 
-    /// Severity / intent of a flash message. Matches Django's
-    /// constants so existing templates port over.
+    /// Severity / intent of a flash message.
     #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
     #[serde(rename_all = "lowercase")]
     pub enum MessageLevel {
@@ -1123,7 +1121,7 @@ pub use messages::{Message, MessageLevel, Messages};
 //   injects it; the row only materialises when a handler writes the
 //   session (via `set_data`, `Messages`, login, etc.). A cookie-less
 //   request that never writes (favicon, CSS, an anonymous read page)
-//   leaves zero rows and sets no cookie. This is Django's behaviour and
+//   leaves zero rows and sets no cookie. This is the intended behaviour and
 //   it kills the "fresh browser load randomly leaves 3 anonymous rows"
 //   bug that eager per-request INSERTs caused.
 // - Login transforms an anonymous session into an authenticated one
@@ -1147,7 +1145,7 @@ pub struct SessionToken(pub String);
 struct SessionFresh;
 
 /// axum middleware that gives every request a request-scoped session, and
-/// lets the session ROW be created lazily on first write (Django-style).
+/// lets the session ROW be created lazily on first write.
 ///
 /// On entry:
 /// 1. Read the session cookie from the request.
@@ -1200,7 +1198,7 @@ pub async fn session_layer(
             // Cookie present but stale/expired/destroyed (or a load
             // error). Mint a candidate token IN MEMORY only — no DB row
             // yet. A row materialises lazily iff the handler writes the
-            // session (Django-style). Until then this request leaves no
+            // session. Until then this request leaves no
             // trace.
             _ => (Uuid::new_v4().to_string(), true, None),
         },

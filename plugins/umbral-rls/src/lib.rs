@@ -31,7 +31,7 @@
 //! logs a warning via `tracing` and returns `Ok(())` from `on_ready`
 //! without running any DDL. The plugin doesn't refuse to boot
 //! against SQLite — RLS policies are simply silently skipped, which
-//! matches Django's behavior when a Postgres-only feature isn't
+//! matches the behavior when a Postgres-only feature isn't
 //! reachable. Users who want a hard failure on misconfiguration
 //! check `crate::db::pool_dispatched()` in their own boot path.
 //!

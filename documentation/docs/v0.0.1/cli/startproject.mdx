@@ -1,6 +1,6 @@
 ---
 title: Scaffolding (startproject, startapp, startplugin)
-description: The `umbral` global binary creates new projects (`startproject`), minimal plugin stubs (`startapp`), and richer distributable-plugin scaffolds (`startplugin`). Like `django-admin startproject` and `python manage.py startapp`.
+description: "The `umbral` global binary creates new projects (`startproject`), minimal plugin stubs (`startapp`), and richer distributable-plugin scaffolds (`startplugin`)."
 sidebar_position: 1
 icon: layers
 ---
@@ -184,14 +184,15 @@ a build step. Replace the CDN tag with a compiled stylesheet for production.
 
 ## startapp
 
-A plugin in umbral is what Django calls an app. `startapp` scaffolds a
-new plugin crate at `plugins/<name>/`:
+A plugin is a self-contained unit that bundles a slice of your app's
+models, routes, and logic. `startapp` scaffolds a new plugin crate at
+`plugins/<name>/`:
 
 ```bash
 umbral startapp posts
 ```
 
-Generates a **Django-app-style per-concern layout** - one file per concern, so a new plugin opens to obvious "what's in which file" structure:
+Generates a **per-concern layout** - one file per concern, so a new plugin opens to obvious "what's in which file" structure:
 
 ```
 plugins/posts/
@@ -200,7 +201,7 @@ plugins/posts/
     ├── lib.rs          # the Plugin impl (name/models/routes/on_ready)
     ├── models.rs       # #[derive(Model)] structs (this app's tables)
     ├── views.rs        # HTTP handlers
-    └── urls.rs         # the URL conf (router()), like Django's urls.py
+    └── urls.rs         # the route table (router()) mapping paths to handlers
 ```
 
 The generated `lib.rs` glues the modules together; `routes()` returns `urls::router()` so the route table lives in one place:
@@ -240,7 +241,7 @@ impl Plugin for PostsPlugin {
 }
 ```
 
-`urls.rs` is the app's URL conf - the route table that maps paths to `views::` handlers, like Django's `urls.py`:
+`urls.rs` is the plugin's route table - it maps paths to `views::` handlers:
 
 ```rust
 use umbral::web::{Router, routing::get};
@@ -337,7 +338,7 @@ After scaffolding, the printed next-steps walk you through wiring it into your p
 
 | Choosing... | Use |
 |---|---|
-| A local app plugin for your project | `startapp` (Django-app-style `lib`/`models`/`views`/`urls`, auto-wired into your `Cargo.toml`) |
+| A local app plugin for your project | `startapp` (per-concern `lib`/`models`/`views`/`urls` layout, auto-wired into your `Cargo.toml`) |
 | A reusable plugin you'll share or publish | `startplugin` (adds a README + example model with field attributes + real deps for a distributable crate) |
 | You're learning the Plugin trait surface | `startplugin` - the example model + handler show the attributes and patterns you hit on day one |
 

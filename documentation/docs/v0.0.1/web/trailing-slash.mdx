@@ -1,6 +1,6 @@
 ---
 title: Trailing-slash redirects
-description: Django's `APPEND_SLASH` for umbral - opt-in 308 redirects between `/foo` and `/foo/` so URL typos still reach the right handler.
+description: Opt-in 308 redirects between `/foo` and `/foo/` so URL typos still reach the right handler.
 sidebar_position: 1
 icon: arrow-right
 ---
@@ -10,10 +10,10 @@ registered as one returns 404 for the other. Most apps want both
 forms to reach the same handler - users shouldn't be able to break
 sharing a URL by typing or omitting a trailing slash.
 
-Django solved this with `APPEND_SLASH = True`: on a 404 for `/foo`,
-Django checks whether `/foo/` would have matched, and 301-redirects if
-so. umbral ports the same shape under [`SlashRedirect`](#policies),
-opt-in via `App::builder().slash_redirect(...)`.
+umbral solves this with [`SlashRedirect`](#policies), opt-in via
+`App::builder().slash_redirect(...)`. On a 404 for `/foo`, the
+framework checks whether `/foo/` would have matched and redirects to
+it if so (and vice versa, depending on the policy).
 
 ## Quickstart
 
@@ -22,7 +22,7 @@ use umbral::prelude::*;
 use umbral::web::SlashRedirect;
 
 let app = App::builder()
-    .slash_redirect(SlashRedirect::Append)   // Django's APPEND_SLASH = True
+    .slash_redirect(SlashRedirect::Append)   // add the trailing slash on a 404
     .routes(
         Routes::new()
             .get("/articles/", list_articles)
@@ -44,7 +44,7 @@ zero overhead.
 | Policy | Behaviour |
 |--------|-----------|
 | `Off` (default) | No redirects. `/foo` and `/foo/` are distinct, axum-style. |
-| `Append` | Django shape. `/foo` (404) → 308 → `/foo/`. |
+| `Append` | Add the slash. `/foo` (404) → 308 → `/foo/`. |
 | `Strip` | REST-API convention. `/foo/` (404) → 308 → `/foo`. |
 
 Pick one per app. Mixing isn't supported - the policy is global to
@@ -53,9 +53,8 @@ the App builder.
 <Callout type="info">
 **Why 308 instead of 301?** 308 preserves the HTTP method and body;
 301 historically converted POST → GET, which silently dropped form
-data. Django uses 301 for backwards compat; umbral picked 308 since
-it's greenfield. A `POST /api/users` redirected to `POST /api/users/`
-keeps the body intact.
+data. umbral picked 308 so a `POST /api/users` redirected to
+`POST /api/users/` keeps the body intact.
 </Callout>
 
 ## How it works
@@ -80,7 +79,7 @@ doesn't have a fallback installed).
 
 ## When to pick which
 
-- **`Append`** if you came from Django or any HTML-shaped app. Both
+- **`Append`** for an HTML-shaped app. Both
   `/articles` and `/articles/` work, but `/articles/` is canonical.
   Search engines see one URL for indexing.
 - **`Strip`** if you're building a JSON REST API where slashless URLs

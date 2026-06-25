@@ -7,7 +7,7 @@ tags: [testing, test-client, integration]
 
 # Test client
 
-`umbral-testing` gives you Django's `TestCase` + `Client` ergonomics in Rust. The repeated work in every integration test (spin up a pool, build the router, send a request, read the response) collapses into three types:
+`umbral-testing` gives you ergonomic integration-test helpers: a test database plus an in-process HTTP client. The repeated work in every integration test (spin up a pool, build the router, send a request, read the response) collapses into three types:
 
 - **`TempPool`**: a tempfile-backed SQLite pool, deleted when the guard drops.
 - **`TestClient`**: wraps an `axum::Router` with HTTP-verb methods, a per-client cookie jar (a session set on one request rides on the next), and JSON helpers.

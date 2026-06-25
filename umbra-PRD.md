@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Product** | Umbral — a batteries-included, Django-inspired web framework for Rust |
+| **Product** | Umbral — a batteries-included, declarative web framework for Rust |
 | **Status** | Draft v0.1 |
 | **Date** | May 30, 2026 |
 | **Owner** | *[you]* |
@@ -12,7 +12,7 @@
 
 ## 1. Summary
 
-Umbral is a batteries-included web framework for Rust that recreates Django's developer experience: declarative models, managed migrations, an auto-generated admin, an optional REST layer, an out-of-the-box task queue, plus Rust's compile-time safety, predictable latency, and fearless concurrency. Its defining bet is the **porting experience**: the fastest path in the Rust ecosystem to take an existing database-backed API and stand it up in Rust, rather than assembling Axum + sqlx + serde + a dozen other crates by hand.
+Umbral is a batteries-included web framework for Rust that delivers a declarative developer experience: declarative models, managed migrations, an auto-generated admin, an optional REST layer, an out-of-the-box task queue, plus Rust's compile-time safety, predictable latency, and fearless concurrency. Its defining bet is the **porting experience**: the fastest path in the Rust ecosystem to take an existing database-backed API and stand it up in Rust, rather than assembling Axum + sqlx + serde + a dozen other crates by hand.
 
 At the centre of the experience is the **declare → migrate → change → migrate** cycle: declare or change a model, an autodetected migration is generated, `migrate` applies it, and the next change diffs cleanly into the right `ALTER` / `DROP`. That loop is the product, not a later feature; it lands at M5 alongside the first models.
 
@@ -23,16 +23,16 @@ The architecture is **thin-core + plugin-heavy**, and the framework **dogfoods i
 ## 2. Problem & Motivation
 
 Rust offers safety and performance that make it attractive for production APIs, but web
-development in Rust is *unassembled*. Unlike Django (Python) or Rails (Ruby), there is no
+development in Rust is *unassembled*. Unlike batteries-included frameworks in other languages (Python, Ruby), there is no
 mainstream "just works" path: developers must individually choose and integrate a web framework,
 a database layer, a migration tool, serialization, auth, and background jobs, then wire them
 together correctly. This raises the cost of two things in particular:
 
 1. **Greenfield productivity** — spinning up a conventional CRUD/REST API takes days of plumbing
    instead of minutes.
-2. **Porting** — moving an existing API (from Django, Rails, Node, etc.) to Rust for performance
+2. **Porting** — moving an existing API (from any existing Python, Ruby, or Node stack) to Rust for performance
    or cost reasons means re-deriving schema, models, and conventions by hand. There is no
-   equivalent of Django's `inspectdb` + managed migrations that makes "lift an existing database
+   equivalent of database introspection (`inspectdb`) + managed migrations that makes "lift an existing database
    into a working backend" a near-mechanical task.
 
 The result: teams that would benefit from Rust's resilience often stay on higher-level
@@ -52,14 +52,14 @@ frameworks because the on-ramp is too steep. Umbral targets that on-ramp.
   not in production.
 - **G4 — Extensible by design.** A first-class plugin system where a plugin can own models,
   migrations, routes, commands, and settings — and "just works" after `cargo add` + register.
-- **G5 — Familiar.** A Django/Rails developer should find concepts (models, migrations, apps,
-  `manage.py`, admin) recognizable.
+- **G5 — Familiar.** A developer coming from a batteries-included framework in another language should find concepts (models, migrations, apps,
+  the management CLI, admin) recognizable.
 
 ### Non-Goals
 - **N1** — Not a frontend/WASM UI framework (no Leptos-style client). Server-side first.
 - **N2** — Not attempting to beat Axum/Actix on raw benchmark throughput; Umbral *sits on* Axum
   and accepts a thin overhead in exchange for productivity.
-- **N3** — Not a 1:1 Django API clone; idioms are translated to Rust, not transliterated.
+- **N3** — Not a 1:1 clone of any existing framework's API; idioms are translated to Rust, not transliterated.
 - **N4** — Not multi-database-perfect at launch. **Postgres-first**; SQLite for tests; other
   backends gated behind a compatibility check.
 - **N5** — Not a hosting/deploy product. Deployment is the user's choice.
@@ -68,12 +68,12 @@ frameworks because the on-ramp is too steep. Umbral targets that on-ramp.
 
 ## 4. Target Users & Personas
 
-- **Persona A — The Migrator.** A team running a Django/Rails/Node API hitting performance or
+- **Persona A — The Migrator.** A team running an API on an existing Python/Ruby/Node stack hitting performance or
   infrastructure-cost ceilings, wanting Rust without a ground-up rewrite. *Primary persona.*
 - **Persona B — The Assembly-Fatigued Rustacean.** A Rust developer who likes the language but is
   tired of hand-wiring Axum + sqlx + serde + auth for every new service.
-- **Persona C — The Django Refugee.** A developer who loves Django's ergonomics, is learning
-  Rust, and wants the same shape of productivity.
+- **Persona C — The Ergonomics Seeker.** A developer who wants a high-productivity, batteries-included
+  framework, is learning Rust, and wants the same shape of productivity.
 - **Persona D — The Plugin Author.** A developer building a reusable extension (e.g. a payments
   integration, a CMS module) who needs the framework's ORM and lifecycle without fighting it.
 
@@ -87,10 +87,10 @@ frameworks because the on-ramp is too steep. Umbral targets that on-ramp.
   the schema change safely and reversibly.
 - As an **Assembly-Fatigued Rustacean**, I define a struct, derive `Model`, and immediately get a
   typed query API and a REST endpoint, without choosing or wiring five crates.
-- As a **Django Refugee**, I register a model with the admin and get a working CRUD UI to manage
+- As an **Ergonomics Seeker**, I register a model with the admin and get a working CRUD UI to manage
   data during development.
 - As any user, I enqueue a background job with a typed argument and a worker runs it reliably,
-  with retries, without standing up Redis or RabbitMQ first.
+  with retries, without standing up an external message broker first.
 - As a **Plugin Author**, I `cargo add` the framework facade, implement one trait, ship my crate,
   and a consumer registers it — their `migrate` provisions my tables automatically.
 
@@ -147,7 +147,7 @@ milestones M0–M13 in the companion plan.
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | F-PLG-1 | `Plugin` trait: models, migrations, routes, commands, settings, hooks | **P0** |
-| F-PLG-2 | Explicit builder registration (INSTALLED_APPS equivalent) | P0 |
+| F-PLG-2 | Explicit builder registration (the plugin-registration list) | P0 |
 | F-PLG-3 | Plugin-owned migrations auto-run on `migrate` | **P0** |
 | F-PLG-4 | Facade/prelude crate for stable author surface (`use umbral::prelude::*`) | P0 |
 | F-PLG-5 | Optional auto-registration (inventory/linkme) | P2 |
@@ -165,7 +165,7 @@ milestones M0–M13 in the companion plan.
 ### 7.6 Tooling & DX
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| F-DX-1 | `manage.py`-equivalent CLI with extensible subcommands | P0 |
+| F-DX-1 | Project management CLI with extensible subcommands | P0 |
 | F-DX-2 | Project/app scaffolding & generators | P1 |
 | F-DX-3 | Typed, environment-aware settings | P0 |
 | F-DX-4 | Boot-time system check (config + backend-field compatibility) | P0 |
@@ -222,17 +222,17 @@ milestones M0–M13 in the companion plan.
 | **0.4 — Productivity** | Batteries | M9–M12 | Task queue, optional REST, admin, OpenAPI all usable |
 | **0.5 — Polish** | DX & ecosystem | M13 | Generators, autoreload, docs, first external plugin |
 
-> Phasing is sequenced for *learning-first* development (the project's stated primary goal): each phase is independently demoable, and the plugin contract is extracted only after the primitives have been built once by hand. M5 sits inside phase 0.1 deliberately, because the declare → migrate → change → migrate cycle is what makes the framework feel Django-shape; without it, the ORM alone wouldn't be demoable as "umbral works."
+> Phasing is sequenced for *learning-first* development (the project's stated primary goal): each phase is independently demoable, and the plugin contract is extracted only after the primitives have been built once by hand. M5 sits inside phase 0.1 deliberately, because the declare → migrate → change → migrate cycle is what makes the framework feel complete and declarative; without it, the ORM alone wouldn't be demoable as "umbral works."
 
 ---
 
 ## 11. Competitive Landscape
 
-- **Django + DRF (Python):** the experience being echoed. Wins on maturity & ecosystem; loses
-  on runtime performance and compile-time safety. Umbral's reference point.
+- **Mature batteries-included frameworks (dynamic languages):** the long-standing Python and Ruby full-stack frameworks set the productivity bar. They win on maturity & ecosystem; they lose
+  on runtime performance and compile-time safety. A reference point for the productivity bar.
 - **Loco (Rust):** Rails-style, batteries-included on SeaORM. Closest productivity peer; Umbral
-  differentiates on Django-style migrations/`inspectdb` and porting focus.
-- **Cot (Rust):** explicitly Django-like, builds its own ORM on sea-query atop Axum. Closest
+  differentiates on managed migrations/`inspectdb` and porting focus.
+- **Cot (Rust):** another batteries-included Rust framework that builds its own ORM on sea-query atop Axum. Closest
   prior art and direct comparison; not production-ready as of this writing.
 - **Axum / Actix (Rust):** the assembly-required baseline Umbral is built on and abstracts over.
 - **Differentiator:** Umbral leads with **porting** (`inspectdb` + managed migrations) and a
@@ -244,10 +244,10 @@ milestones M0–M13 in the companion plan.
 
 | Risk | Impact | Mitigation |
 |------|--------|-----------|
-| Migration autodetector complexity (Django spent years on edge cases) | High | Ship `inspectdb` + forward-only first; treat autodetection as iterative; constrain scope to Postgres |
+| Migration autodetector complexity (edge cases are notoriously hard) | High | Ship `inspectdb` + forward-only first; treat autodetection as iterative; constrain scope to Postgres |
 | ORM "magic" fights Rust ownership/idioms | High | Lean into owned builder patterns; decide ambient-pool strategy deliberately (`OnceLock`) |
 | Proc-macro complexity slows progress | Medium | Build the `Model` impl by hand first, then automate; isolate macro crate |
-| Scope creep (Django is enormous) | High | Strict P0/P1/P2; defer all contrib-style extras |
+| Scope creep (a batteries-included framework's surface is enormous) | High | Strict P0/P1/P2; defer all contrib-style extras |
 | Solo/learning project bandwidth | Medium | Phasing optimized for demoable slices; output is secondary to the learning goal |
 | Multi-DB expectations | Medium | Be explicit: Postgres-first, guardrails enforce it |
 
@@ -259,20 +259,20 @@ milestones M0–M13 in the companion plan.
 - Registration default: explicit builder vs. inventory auto-registration as the recommended path.
 - Admin UI rendering: server-rendered templates vs. a small embedded SPA.
 - Async story for signals/hooks: sync callbacks vs. async, and ordering guarantees.
-- Custom user model mechanism: how to allow override without Django's runtime swapping tricks.
+- Custom user model mechanism: how to allow override without runtime type-swapping tricks.
 
 ---
 
 ## 14. Out of Scope (for now) / Future
 
-Out-of-scope items are captured as a pickup-ready backlog in **`docs/specs/deferred.md`**, with structured entries (Django term, purpose, why deferred, complexity hint, suggested umbral shape, revisit signal) per item. Reorder freely; promote an entry to an outline (`docs/specs/outlines/<name>.md`) when ready to take it on.
+Out-of-scope items are captured as a pickup-ready backlog in **`docs/specs/deferred.md`**, with structured entries (prior-art term, purpose, why deferred, complexity hint, suggested umbral shape, revisit signal) per item. Reorder freely; promote an entry to an outline (`docs/specs/outlines/<name>.md`) when ready to take it on.
 
 The short list, grouped:
 
-- **Django `contrib` niceties**: `umbral-contenttypes`, `umbral-messages`, `umbral-sites`, `umbral-humanize`, `umbral-redirects`, `umbral-sitemaps`, `umbral-syndication`, `umbral-flatpages`.
-- **Specialty domains**: `umbral-gis` (GeoDjango), `umbral-i18n`, `umbral-channels` (websockets).
+- **Bundled convenience plugins**: `umbral-contenttypes`, `umbral-messages`, `umbral-sites`, `umbral-humanize`, `umbral-redirects`, `umbral-sitemaps`, `umbral-syndication`, `umbral-flatpages`.
+- **Specialty domains**: `umbral-gis` (geospatial support, PostGIS), `umbral-i18n`, `umbral-channels` (websockets).
 - **Backend / infrastructure**: MySQL / Oracle backend support; pluggable non-DB task brokers (Redis, AMQP).
-- **Tooling and UX**: DRF browsable API; hosted deploy / runtime tooling.
+- **Tooling and UX**: a browsable API UI; hosted deploy / runtime tooling.
 - **Cross-cutting surfaces** that haven't earned their own spec yet: error model, logging.
 
 Revisit after 0.5 based on real usage. Each entry's revisit-signal field names the concrete trigger.

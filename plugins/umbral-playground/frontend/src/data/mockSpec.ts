@@ -396,7 +396,7 @@ export const mockResponseBodies: Record<string, unknown> = {
         title: "Getting Started with Umbral",
         slug: "getting-started-with-umbral",
         content:
-          "Umbral is a Django-inspired web framework in Rust. It gives you migrations, CRUD, admin, and REST APIs with compile-time guarantees.",
+          "Umbral is a batteries-included web framework in Rust. It gives you migrations, CRUD, admin, and REST APIs with compile-time guarantees.",
         author_id: 1,
         published_at: "2026-05-15T10:00:00Z",
         tags: ["rust", "tutorial"],
@@ -421,7 +421,7 @@ export const mockResponseBodies: Record<string, unknown> = {
     title: "Getting Started with Umbral",
     slug: "getting-started-with-umbral",
     content:
-      "Umbral is a Django-inspired web framework in Rust. It gives you migrations, CRUD, admin, and REST APIs with compile-time guarantees.",
+      "Umbral is a batteries-included web framework in Rust. It gives you migrations, CRUD, admin, and REST APIs with compile-time guarantees.",
     author_id: 1,
     published_at: "2026-05-15T10:00:00Z",
     tags: ["rust", "tutorial"],

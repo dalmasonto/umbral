@@ -76,9 +76,9 @@ Every method below is a real trait method with a default impl (only `name()` is 
 | `openapi_paths` | `fn openapi_paths(&self) -> Vec<(String, serde_json::Value)>` | empty | OpenAPI path items `umbral-openapi` merges into the spec. |
 | `system_checks` | `fn system_checks(&self) -> Vec<SystemCheck>` | empty | Boot-time invariants (phase 4). |
 | `provides_storage` | `fn provides_storage(&self) -> bool` | `false` | `true` if `on_ready` registers a `Storage` backend (e.g. `StoragePlugin`). |
-| `database` | `fn database(&self) -> Option<&'static str>` | `None` | DB alias every model this plugin owns reads/writes (umbral's `DATABASE_ROUTERS`). |
+| `database` | `fn database(&self) -> Option<&'static str>` | `None` | DB alias every model this plugin owns reads/writes, for multi-database routing. |
 | `templates_dirs` | `fn templates_dirs(&self) -> Vec<PathBuf>` | empty | Template search directories. |
-| `template_registrars` | `fn template_registrars(&self) -> Vec<TemplateRegistrar>` | empty | Custom minijinja filters / functions / globals (Django's `{% load %}`). |
+| `template_registrars` | `fn template_registrars(&self) -> Vec<TemplateRegistrar>` | empty | Custom minijinja filters / functions / globals the plugin makes available in templates. |
 | `wrap_router` | `fn wrap_router(&self, router: Router) -> Router` | router unchanged | The tower/axum middleware seam (see below). |
 | `middleware` | `fn middleware(&self) -> Vec<Arc<dyn Middleware>>` | empty | Ergonomic `before_request` / `after_response` hooks, stacked in onion order. |
 | `static_files` | `fn static_files(&self) -> Vec<StaticFile>` | empty | Assets baked into the binary (`&'static [u8]` bodies). |

@@ -1,4 +1,4 @@
-//! Django-filter-style query-string parser for `umbral-rest`.
+//! Query-string filter parser for `umbral-rest`.
 //!
 //! Parses query-string keys of the form `<field>` or `<field>__<lookup>`
 //! into a `sea_query::Condition` that the list endpoint splices into

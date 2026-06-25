@@ -310,7 +310,7 @@ async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response 
     }
     // Enforce the password-strength policy HERE, at the registration boundary —
     // this is the untrusted surface (a client submitting a password) and the
-    // single point Django validates (forms / views, not `create_user`). The
+    // single point we validate (routes / views, not `create_user`). The
     // low-level `create_user` is intentionally non-validating so seed scripts
     // and the test suite aren't broken by it. `validate_password` reads the
     // ambiently-installed policy, so `AuthPlugin::disable_password_validation`

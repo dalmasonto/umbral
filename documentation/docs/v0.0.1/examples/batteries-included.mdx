@@ -55,7 +55,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```rust
 //! The blog plugin - owns the Post model, mounts /blog routes,
 //! bundles REST customisation (hide/transform/computed) and a
-//! DRF-style @action endpoint for publishing.
+//! custom @action endpoint for publishing.
 
 use http::Method;
 use serde::{Deserialize, Serialize};
@@ -121,7 +121,7 @@ pub fn rest_resource() -> ResourceConfig {
             Box::new(umbral_rest::ReadOnly),
             Box::new(umbral_rest::IsStaff),
         ]))
-        // DRF @action: POST /api/post/{id}/publish/
+        // @action: POST /api/post/{id}/publish/
         .action(
             "publish",
             Method::POST,

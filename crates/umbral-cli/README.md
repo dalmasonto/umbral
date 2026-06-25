@@ -2,7 +2,7 @@
 
 The `manage.py` equivalent for umbral. Library exposes `dispatch(app)` for user binaries; binary `umbral` is a global scaffolding tool (startproject / startapp).
 
-This is the command-line tool for the umbral framework, the equivalent of Django's manage.py. It provides commands such as `migrate`, `makemigrations`, `inspectdb`, and `worker`.
+This is the command-line tool for the umbral framework. It provides commands such as `migrate`, `makemigrations`, `inspectdb`, and `worker`.
 
 ## Install
 

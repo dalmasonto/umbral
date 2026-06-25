@@ -2,7 +2,7 @@
 
 Authentication plugin for umbral: User model, argon2 password hashing, login helpers.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

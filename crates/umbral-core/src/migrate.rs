@@ -384,7 +384,7 @@ pub struct ModelMeta {
     /// typed trait. Shared enabler for gaps2 #35 + #39a.
     #[serde(default, skip_serializing_if = "is_false")]
     pub soft_delete: bool,
-    /// The app label (Django's app name), mirrors `Model::APP_LABEL`.
+    /// The app label (the owning plugin's name), mirrors `Model::APP_LABEL`.
     /// Sourced from `#[umbral(plugin = "...")]`; `"app"` when absent.
     /// Authoritative for permission codenames (gaps2 #80g): replaces the
     /// old table-name-split heuristic that collided distinct models. The
@@ -744,7 +744,7 @@ pub struct Column {
     /// Propagated from `FieldSpec::noedit`.
     #[serde(default)]
     pub noedit: bool,
-    /// Django-style `__str__` marker — propagated from
+    /// Display-string marker — propagated from
     /// `FieldSpec::is_string_repr`. The admin uses the first column
     /// with this flag as the default `list_display` label when no
     /// explicit one is configured.
@@ -1682,8 +1682,8 @@ async fn run_in_postgres_for_alias(
     Ok(applied_count)
 }
 
-/// Migrate the **tenant** apps into a named Postgres schema (schema-per-tenant,
-/// django-tenants style). The migration engine owns all schema DDL; this is the
+/// Migrate the **tenant** apps into a named Postgres schema (schema-per-tenant
+/// style). The migration engine owns all schema DDL; this is the
 /// sanctioned `CREATE SCHEMA` / `SET search_path` exception (a plugin calls this
 /// rather than writing raw schema SQL itself).
 ///
@@ -2315,7 +2315,7 @@ pub async fn fake_apply_in(plugin: &str, name: &str, dir: &Path) -> Result<(), M
 /// database. If they do, fake-apply the migration (mark it applied
 /// without running its SQL).
 ///
-/// This is Django's `--fake-initial` path: the operator has a database
+/// This is the `--fake-initial` path: the operator has a database
 /// bootstrapped outside umbral (a dump restore, a manual `CREATE TABLE`,
 /// or a previous schema manager) and wants to bring the tracking table
 /// into sync so subsequent `migrate` calls apply only the genuine
@@ -2949,9 +2949,8 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
     // Treat each (parent_table, field_name) pair as a junction-table
     // identity. Compare the flattened set across snapshots and emit
     // CreateM2MTable / DropM2MTable per delta. Renames of the parent
-    // model trip a Drop + Create on the junction — same semantics as
-    // Django, and the rename-tracking we'd need to do better is
-    // ambitious enough to defer.
+    // model trip a Drop + Create on the junction; the rename-tracking
+    // we'd need to do better is ambitious enough to defer.
     let prev_m2m = collect_m2m_pairs(previous);
     let curr_m2m = collect_m2m_pairs(current);
     for (key, spec) in &curr_m2m {
@@ -3334,8 +3333,8 @@ fn diff_columns(
     // mismatched shapes) falls back to the drop+add path so the
     // rename is never inferred against the user's actual intent.
     //
-    // The heuristic deliberately stays conservative — Django's
-    // makemigrations asks interactively in this case; we don't have
+    // The heuristic deliberately stays conservative: some tools ask
+    // interactively in this case; we don't have
     // a prompt at v1, so the conservative auto-pair is the safest
     // shape. Users can always override by writing the
     // `RenameColumn` op into the migration file by hand.

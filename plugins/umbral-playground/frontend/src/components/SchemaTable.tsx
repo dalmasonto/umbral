@@ -53,7 +53,7 @@ export function SchemaTable({ fields, emptyLabel }: SchemaTableProps) {
                   <span>{f.name}</span>
                   {f.isStringRepr && (
                     <span
-                      title="Used as the model's display label (Django __str__ equivalent)"
+                      title="Used as the model's display label"
                       className="text-muted-foreground"
                     >
                       <Key className="size-3" />

@@ -1,4 +1,4 @@
-//! DRF-style bulk endpoints (gaps2 #82) — happy path + atomicity +
+//! Bulk endpoints (gaps2 #82) — happy path + atomicity +
 //! back-compat for the `.bulk()`-opted-in resource. One App::build per
 //! test binary (umbral-core's settings/pool OnceLock is one-shot), so the
 //! off-by-default / security / soft-delete cases live in sibling files

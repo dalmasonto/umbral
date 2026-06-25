@@ -116,7 +116,7 @@ impl Permission for StaffWritesOnly {
 }
 ```
 
-`PUT` and `PATCH` both map to `Action::Update`; the plugin doesn't separate the two (DRF's `update` / `partial_update` split was a design choice; ours is simpler).
+`PUT` and `PATCH` both map to `Action::Update`; the plugin doesn't separate full and partial updates - a single `Update` action covers both.
 
 ### Custom actions
 

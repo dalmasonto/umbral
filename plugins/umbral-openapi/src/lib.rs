@@ -841,7 +841,7 @@ fn include_parameter(model: &ModelMeta) -> Value {
 /// parameters that match the configured backend, not a hardcoded
 /// `page`/`page_size` pair.
 ///
-/// - [`PaginationStyle::PageNumber`] → `page` + `page_size` (Django default)
+/// - [`PaginationStyle::PageNumber`] → `page` + `page_size` (the common default)
 /// - [`PaginationStyle::LimitOffset`] → `limit` + `offset` (REST classic)
 /// - [`PaginationStyle::None`] / [`PaginationStyle::Custom`] → empty Vec
 ///   (NoPagination has no URL params; unknown custom backends are opaque)
@@ -891,7 +891,7 @@ fn pagination_parameters_for_style(style: umbral_rest::PaginationStyle) -> Vec<V
 }
 
 /// Build the OpenAPI `parameters` entries that document the
-/// django-filter-style query-string filters on a list endpoint.
+/// query-string filters on a list endpoint.
 /// One entry per (column, lookup) pair.
 ///
 /// Skips the primary key (filtering on `id` adds no value over the

@@ -1,6 +1,6 @@
 //! The render merge for the ambient CSRF token: `{{ csrf_token }}`
-//! (raw value) and `{{ csrf_input }}` (pre-built hidden input — the
-//! Django `{% csrf_token %}` equivalent) appear in every template
+//! (raw value) and `{{ csrf_input }}` (pre-built hidden input, for
+//! the `{% csrf_token %}` ergonomic) appear in every template
 //! rendered inside `with_current_csrf` scope; explicit ctx keys win;
 //! outside the scope nothing is injected.
 //!

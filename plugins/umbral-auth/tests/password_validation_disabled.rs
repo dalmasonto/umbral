@@ -10,7 +10,7 @@
 //!
 //! Note the layer this tests: enforcement now lives at the registration
 //! boundary (the `register` route), not in `create_user` — which never
-//! validates regardless of the flag (Django parity). So the disabled-flag
+//! validates regardless of the flag (by design). So the disabled-flag
 //! contract is observed where it actually matters: the route that WOULD
 //! reject `"a"` under the default policy now accepts it.
 

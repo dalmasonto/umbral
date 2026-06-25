@@ -246,7 +246,7 @@ async fn server_and_coop_headers_are_on_by_default() {
     assert_eq!(
         headers.get("cross-origin-opener-policy"),
         Some(&HeaderValue::from_static("same-origin")),
-        "COOP on by default, matching Django 4.0+"
+        "COOP on by default"
     );
 }
 

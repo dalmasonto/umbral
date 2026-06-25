@@ -17,8 +17,8 @@
 //! ## Model naming convention
 //!
 //! `ContentType.model` stores `meta.name.to_lowercase()`, i.e. the Rust struct
-//! name lowercased — same as Django's `ContentType.model` which is the
-//! lowercase class name. So `BlogPost` → model `"blogpost"`, `Post` → `"post"`.
+//! name lowercased (the content-type model name, which is the
+//! lowercase struct name). So `BlogPost` → model `"blogpost"`, `Post` → `"post"`.
 //! `app_label` is the authoritative `#[umbral(plugin = "...")]` value carried on
 //! the model and surfaced via `Model::APP_LABEL` → `ModelMeta::app_label`
 //! (gaps2 #80g). A model with no `plugin` attribute defaults to `"app"`. This

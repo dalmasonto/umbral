@@ -3,7 +3,7 @@
 //! The admin gates every non-login route through [`require_staff`].
 //! Login is plain HTML-form POST; the form carries the shared CSRF
 //! token from `umbral-security` — same cookie everything else in the
-//! app uses, so a Django-style single token works across admin and
+//! app uses, so a single token works across admin and
 //! end-user routes.
 //!
 //! `sanitise_next` rejects open-redirect attempts in the `?next=` URL

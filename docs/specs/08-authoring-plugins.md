@@ -10,7 +10,7 @@
 
 The author-side complement of `02-plugin-contract.md`. That spec says **what the `Plugin` contract is**; this spec says **how you build one**.
 
-The reader is a Rust developer who wants to ship `umbral-cors`, `umbral-audit-log`, an OAuth integration, or anything else that plugs into umbral the way `django-cors-headers`, `django-debug-toolbar`, or DRF plug into Django. They've installed umbral in a project and want to know: how do I package a feature so someone can `cargo add umbral-foo` and `.plugin(FooPlugin::default())`?
+The reader is a Rust developer who wants to ship `umbral-cors`, `umbral-audit-log`, an OAuth integration, or anything else that plugs into umbral the way a CORS layer, a debug toolbar, or a REST layer plugs into a batteries-included framework. They've installed umbral in a project and want to know: how do I package a feature so someone can `cargo add umbral-foo` and `.plugin(FooPlugin::default())`?
 
 The framework owes you a walked path from `cargo new` to `cargo publish`. This is it.
 
@@ -22,7 +22,7 @@ One plugin equals one crate. The crate depends on the **`umbral` facade only** �
 
 ### Naming convention
 
-Crate name: **`umbral-<thing>`**. Mirrors Django's `django-<thing>`. Examples: `umbral-cors`, `umbral-audit-log`, `umbral-oauth`. The crate name's suffix matches what your plugin's `Plugin::name()` returns: `umbral-cors` → `fn name(&self) -> &'static str { "cors" }`. That match is what makes "plugin `cors`" in error messages and migration tracking unambiguous.
+Crate name: **`umbral-<thing>`**. The shared `umbral-` prefix makes plugin crates discoverable as a family. Examples: `umbral-cors`, `umbral-audit-log`, `umbral-oauth`. The crate name's suffix matches what your plugin's `Plugin::name()` returns: `umbral-cors` → `fn name(&self) -> &'static str { "cors" }`. That match is what makes "plugin `cors`" in error messages and migration tracking unambiguous.
 
 ### Project layout
 
@@ -282,7 +282,7 @@ impl Plugin for OAuthPlugin {
 
 **Author depends on the facade only, vs depending on `umbral-core` directly.** Some plugin systems let "advanced" authors drop down to internal types. umbral deliberately doesn't: the facade is the stable surface, and dropping the facade-only rule would couple plugins to umbral's internal crate split. If a plugin author legitimately needs something the facade doesn't re-export, the right fix is to add the re-export, not bypass it.
 
-**Per-plugin settings struct, vs one global settings registry.** Django's `settings.py` is one flat namespace where every contrib app dumps its config. That works because Python's settings are dynamically typed. In Rust, one global struct would have to know every plugin's settings shape at compile time — impossible. The per-plugin struct lives with the plugin, takes `from_env()` for layering, and gets passed to the constructor.
+**Per-plugin settings struct, vs one global settings registry.** A single flat namespace where every plugin dumps its config works in a dynamically-typed language, but in Rust one global struct would have to know every plugin's settings shape at compile time, which is impossible for third-party plugins the framework has never seen. The per-plugin struct lives with the plugin, takes `from_env()` for layering, and gets passed to the constructor.
 
 **One JSON file per migration, vs one Rust module per migration.** This is the framework's choice from `06-migration-engine.md` and it benefits plugin authors: you don't write migration code by hand. `makemigrations` produces JSON; you commit it; consumers `migrate` and it works. A Rust-module approach would force authors to compile-test every migration; JSON keeps the author surface declarative.
 

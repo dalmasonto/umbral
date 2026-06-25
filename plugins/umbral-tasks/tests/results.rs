@@ -1,4 +1,4 @@
-//! Result backend + task-status API coverage (Celery `AsyncResult` parity).
+//! Result backend + task-status API coverage.
 //!
 //! Same boot shape as `integration.rs`: one OnceCell-backed tempfile sqlite
 //! pool, a registered `TasksPlugin`, and a raw-SQL `CREATE TABLE` (the test

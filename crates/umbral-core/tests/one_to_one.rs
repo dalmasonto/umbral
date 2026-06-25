@@ -1,5 +1,5 @@
 //! `OneToOne<C>` — attribute-free reverse OneToOne accessor on a
-//! parent model. Mirrors the Django pattern `user.profile.avatar`
+//! parent model. Backs the `user.profile.avatar` pattern
 //! where every user has at most one profile (enforced by the
 //! child's UNIQUE FK).
 //!

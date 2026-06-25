@@ -2,7 +2,7 @@
 
 Opt-in dev live-reload for umbral - a file watcher pushes reload / CSS-swap events to the browser over SSE; the client script is auto-injected into HTML responses. Dev-only, zero per-app code.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

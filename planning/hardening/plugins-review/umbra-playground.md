@@ -6,7 +6,7 @@ Read-only audit, 2026-06-16. Scope: `plugins/umbral-playground/src/` (lib.rs, ro
 
 ## Verdict
 
-**A real plugin, but the "belongs as a built-in" question deserves an honest answer: conditionally yes.** The playground is an interactive REST API explorer for `umbral-rest` — the framework's equivalent of DRF's Browsable API or Swagger UI (but opinionated/React-based). It is shippable and not a scratchpad. It has a sensible prod-gating story (`allow_in_prod` opt-in), escape-safe app-name injection, a graceful placeholder build path, and a clean `Plugin` implementation.
+**A real plugin, but the "belongs as a built-in" question deserves an honest answer: conditionally yes.** The playground is an interactive REST API explorer for `umbral-rest` - the framework's equivalent of a browsable API or Swagger UI (but opinionated/React-based). It is shippable and not a scratchpad. It has a sensible prod-gating story (`allow_in_prod` opt-in), escape-safe app-name injection, a graceful placeholder build path, and a clean `Plugin` implementation.
 
 **Why it is controversial as a built-in:** It carries a React/Vite frontend that must be built with `npm` before the plugin is useful. The `build.rs` degrades gracefully to a placeholder, but any contributor who lacks Node.js gets a non-functional playground silently. It also has no direct equivalent in the plugin-contract checklist (no models, no migrations, no routes beyond the shell) — it is purely a dev/DX tool. Its only real runtime value is in conjunction with `umbral-rest` and `umbral-openapi`, which it is not declared to depend on at the Cargo level (it reads the OpenAPI URL via a registry call at route-build time).
 
@@ -122,8 +122,8 @@ The gap is in staging/review environments that are configured as `Dev` but expos
 
 **Yes, with caveats.**
 
-The plugin is not a scratchpad. It provides the interactive REST explorer that every DRF user reaches for (`/api/` in Django), implemented correctly with:
-- Prod gating by default (unlike DRF's browsable API, which ships on in all environments and must be explicitly disabled).
+The plugin is not a scratchpad. It provides the interactive REST explorer that every REST-API developer reaches for (a browsable `/api/` root), implemented correctly with:
+- Prod gating by default (unlike a typical browsable API, which often ships on in all environments and must be explicitly disabled).
 - App-name storage scoping (the `gap #71` fix is already shipped).
 - A graceful no-npm degradation path so the Rust build never fails.
 - Clean `Plugin` contract with no side-effects outside its own routes/static dir.

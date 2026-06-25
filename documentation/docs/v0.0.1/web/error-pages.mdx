@@ -5,7 +5,7 @@ sidebar_position: 2
 icon: alert-triangle
 ---
 
-In Django you drop a `404.html` or `500.html` in your templates dir and the framework picks it up. umbral ships the same shape - two builder methods, both opt-in, both pointing at templates the existing engine renders. Out of the box, umbral also ships its own Tailwind-styled default pages that fire automatically when you haven't provided your own.
+Drop a `404.html` or `500.html` in your templates dir and the framework picks it up - two builder methods, both opt-in, both pointing at templates the existing engine renders. Out of the box, umbral also ships its own Tailwind-styled default pages that fire automatically when you haven't provided your own.
 
 ## Quickstart
 
@@ -192,7 +192,7 @@ API / AJAX clients are respected: a request with `Accept: application/json` keep
 
 ## Falling back to the raw axum API
 
-The Django-shaped helpers cover the easy case. If you need more control - e.g. different 404 pages for `/api/...` vs everything else, or matching on the Accept header - use `Router::fallback` directly:
+The builder helpers cover the easy case. If you need more control - e.g. different 404 pages for `/api/...` vs everything else, or matching on the Accept header - use `Router::fallback` directly:
 
 ```rust
 async fn custom_404(req: Request<Body>) -> Response {

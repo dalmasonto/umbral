@@ -1,6 +1,6 @@
 //! `inspectdb` — introspect an existing database into umbral models.
 //!
-//! The porting payoff. A team running Django or anything else with a
+//! The porting payoff. A team with an existing
 //! SQLite database points `inspectdb` at it and gets a `models.rs`
 //! with `#[derive(Model)]` structs plus a `0001_initial.json`
 //! migration carrying one `CreateTable` op per table. The migration
@@ -615,7 +615,7 @@ use umbral::prelude::*;
 /// Render a single `#[derive(Model)]` struct for one introspected table.
 /// The `#[umbral(table = "...")]` attribute is emitted only when the
 /// derive's auto-derived table name (snake_case of the struct name)
-/// doesn't equal the SQL table name. For the typical Django shape
+/// doesn't equal the SQL table name. For the typical snake_case shape
 /// (`blog_post` -> `BlogPost` -> derive computes `"blog_post"`), the
 /// attribute is redundant and is left off. For unusual SQL casings
 /// (`POSTS` -> `Posts` -> derive computes `"posts"` not `"POSTS"`),
@@ -905,7 +905,7 @@ mod tests {
     fn non_round_tripping_table_name_keeps_attribute() {
         // SQL tables with names the derive's snake_case won't reach
         // (e.g. uppercase, runs of capitals, leading digits) need the
-        // explicit attribute. This case is rare in Django ports but
+        // explicit attribute. This case is rare in real ports but
         // the renderer should still cover it for the derive's eventual
         // attribute-support landing.
         let schema = IntrospectedSchema {
@@ -1067,7 +1067,7 @@ mod tests {
     /// Postgres-specific types umbral doesn't model yet surface as
     /// `None` so the caller produces `UnsupportedColumnType` with the
     /// raw type string preserved. The catalogue lookups most likely to
-    /// bite a Django port: numeric, bytea, arrays, network types. The
+    /// bite a port: numeric, bytea, arrays, network types. The
     /// user fixes by hand or waits for the catalogue to grow.
     ///
     /// Note `json`/`jsonb` are NOT on this list — Phase 4's `Json`

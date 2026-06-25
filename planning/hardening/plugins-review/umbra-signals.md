@@ -6,7 +6,7 @@ The signals system is genuinely solid for an in-process pub/sub: the registry, O
 
 ---
 
-## Completeness (vs Django signals)
+## Completeness (vs a full model-signals system)
 
 ### Implemented
 
@@ -70,7 +70,7 @@ The fix is the same pattern used for sync handlers: `tokio::task::spawn` each as
 **Description:**
 The `<Callout type="warning">` at `plugins/signals.mdx:112-133` states:
 
-> The following write paths bypass signals entirely — matching Django's own behaviour:
+> The following write paths bypass signals entirely (a common bulk-write convention):
 > - `Manager::bulk_create(vec)` — never fires signals …
 > - `QuerySet::update_values(map)` — bulk UPDATE, no signals.
 > - `QuerySet::delete()` — bulk DELETE, no signals.

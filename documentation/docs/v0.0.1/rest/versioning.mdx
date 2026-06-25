@@ -1,12 +1,12 @@
 ---
 title: Versioning
-description: Opt-in DRF-style API versioning - URL-path (/api/v1/...) and accept-header (Accept; version=v2) schemes, allowed/default versions, and reading the resolved version on the request context.
+description: Opt-in API versioning - URL-path (/api/v1/...) and accept-header (Accept; version=v2) schemes, allowed/default versions, and reading the resolved version on the request context.
 sidebar_position: 9
 icon: git-branch
 tags: [rest, versioning, api]
 ---
 
-API versioning lets one deployment serve several wire contracts at once - `v1` for old clients, `v2` for new ones - without forking the app. umbral-rest ports Django REST Framework's two most common versioning classes.
+API versioning lets one deployment serve several wire contracts at once - `v1` for old clients, `v2` for new ones - without forking the app. umbral-rest offers two versioning schemes.
 
 Versioning is **opt-in and off by default**. A `RestPlugin` with no `.versioning(...)` call serves the unversioned API exactly as before: routes mount at `/api/<table>/`, no version is required, and `RequestContext::version` is always `None`.
 
@@ -21,7 +21,7 @@ Once resolved, the version is exposed on the request context (`RequestContext::v
 
 `VersioningScheme::url_path()` puts the version in the path, right after the base path: `/api/v1/<table>/`. The resource route-set mounts under `{base}/{version}/...` for **each** allowed version, so `/api/v1/post/` and `/api/v2/post/` both resolve when both are allowed.
 
-A request to a version that isn't in `allowed_versions` matches **no route** → **404** (DRF's `URLPathVersioning` behaviour). The version is **required** in the path once this scheme is on - there is no unversioned `/api/<table>/` fallback.
+A request to a version that isn't in `allowed_versions` matches **no route** → **404**. The version is **required** in the path once this scheme is on - there is no unversioned `/api/<table>/` fallback.
 
 ```rust
 use umbral_rest::{RestPlugin, VersioningConfig, VersioningScheme};
@@ -43,7 +43,7 @@ RestPlugin::default().versioning(
 Accept: application/json; version=v2
 ```
 
-An absent version falls back to `default_version`; a version outside `allowed_versions` is rejected with **406 Not Acceptable** (DRF's `AcceptHeaderVersioning`).
+An absent version falls back to `default_version`; a version outside `allowed_versions` is rejected with **406 Not Acceptable**.
 
 ```rust
 use umbral_rest::{RestPlugin, VersioningConfig, VersioningScheme};
@@ -94,4 +94,4 @@ Safe-by-default exposure (blocked tables, the `password_hash` strip), permission
 
 - [Exposure](/docs/v0.0.1/rest/exposure) - which tables are served, and the base path (`RestPlugin::at`).
 - [Permissions](/docs/v0.0.1/rest/permissions) and [Throttling](/docs/v0.0.1/rest/throttling) - both apply under versioned paths.
-- Design rationale: gaps2 #82 (REST remainder) and DRF's versioning classes.
+- Design rationale: gaps2 #82 (REST remainder).

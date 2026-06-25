@@ -1,4 +1,4 @@
-//! A Django-shape web framework for Rust.
+//! A batteries-included web framework for Rust.
 //!
 //! `umbral` is the stable surface for users and plugin authors. Code in
 //! user crates and third-party plugins should `use umbral::prelude::*;`
@@ -470,8 +470,7 @@ pub mod templates {
 }
 
 pub mod pagination {
-    //! Template-rendered list-view pagination (Django `core.paginator`
-    //! parity).
+    //! Template-rendered list-view pagination.
     //!
     //! A [`Paginator`] counts a [`QuerySet`](crate::orm::QuerySet) once and
     //! slices it into fixed-size [`Page`]s for server-rendered (Jinja) list
@@ -493,7 +492,7 @@ pub mod ratelimit {
     //! umbral-rest's API throttles ([`umbral_rest::throttle`]).
     //!
     //! Not a plugin: a [`RateLimiter`] is a standalone keyed counter a
-    //! throttle (or any caller) wraps. Build a [`Rate`] from a DRF-style
+    //! throttle (or any caller) wraps. Build a [`Rate`] from a rate
     //! string (`Rate::parse("100/hour")`) and ask `limiter.check(key)` for
     //! a [`RateDecision`]. See `umbral-core`'s `ratelimit` module for the
     //! window semantics and the single-process / multi-instance caveats.

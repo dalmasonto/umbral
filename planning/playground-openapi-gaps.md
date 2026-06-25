@@ -1,6 +1,6 @@
 # Playground-surfaced REST/OpenAPI improvements
 
-Captured 2026-06-03 while wiring DRF-style introspection into umbral-playground. The playground exposed which schema metadata the REST + OpenAPI plugins currently omit; this file is the punch-list to close the loop.
+Captured 2026-06-03 while wiring REST-style introspection into umbral-playground. The playground exposed which schema metadata the REST + OpenAPI plugins currently omit; this file is the punch-list to close the loop.
 
 ## Done in this pass
 
@@ -21,7 +21,7 @@ Captured 2026-06-03 while wiring DRF-style introspection into umbral-playground.
 
 4. **No `securitySchemes` block.** `AuthPlugin` registers cookie + session auth backends; OpenAPI is silent about them. Swagger UI's "Authorize" button doesn't appear, and clients can't generate auth-aware code. Needs a hook on `RestPlugin` (or a callback on the OpenAPI plugin) to publish which schemes are active.
 
-5. **No column descriptions.** `Column` has no `description: Option<String>` field. Django's `help_text=` would map naturally. Adding `#[umbral(help = "...")]` and threading it through `FieldSpec` → `Column` → OpenAPI `description` would make Swagger UI vastly more readable.
+5. **No column descriptions.** `Column` has no `description: Option<String>` field. A field-level help-text attribute would map naturally. Adding `#[umbral(help = "...")]` and threading it through `FieldSpec` → `Column` → OpenAPI `description` would make Swagger UI vastly more readable.
 
 6. **No examples.** OpenAPI `example` / `examples` are missing. Could be auto-generated from `default` (already in `Column`) for primitives, or from a new `#[umbral(example = "...")]` attribute.
 

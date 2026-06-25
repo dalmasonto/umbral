@@ -5,7 +5,7 @@ sidebar_position: 1
 icon: file-text
 ---
 
-`umbral::templates` is the server-side HTML rendering substrate. Templates live on disk under one or more directories, load at boot, and render through one ambient accessor that picks up the engine from `App::build()`'s `OnceLock` - the same pattern as the DB pool. The engine is [minijinja](https://docs.rs/minijinja), which speaks Jinja2 syntax (`{% %}` / `{{ }}`), so anyone who's used Django or Flask templates will recognise the shape immediately.
+`umbral::templates` is the server-side HTML rendering substrate. Templates live on disk under one or more directories, load at boot, and render through one ambient accessor that picks up the engine from `App::build()`'s `OnceLock` - the same pattern as the DB pool. The engine is [minijinja](https://docs.rs/minijinja), which speaks Jinja2 syntax (`{% %}` / `{{ }}`), so anyone who's used Jinja2 or Flask templates will recognise the shape immediately.
 
 ## Point the builder at a templates directory
 
@@ -165,7 +165,7 @@ When two directories ship a template with the same name, the first directory in 
 WARN umbral templates: template `base.html` is provided by multiple directories; the first-registered copy wins
 ```
 
-This matches Django's `APP_DIRS` loader behaviour. To override a plugin's template intentionally, place a same-named file in the app-level `templates/` directory - it is always searched first. Namespace-prefixed paths (`admin/base.html`) are the conventional way to avoid accidental collisions between unrelated plugins.
+Plugin template directories are searched in registration order, with the app-level `templates/` directory first. To override a plugin's template intentionally, place a same-named file in the app-level `templates/` directory - it is always searched first. Namespace-prefixed paths (`admin/base.html`) are the conventional way to avoid accidental collisions between unrelated plugins.
 
 ## What ships at v1
 

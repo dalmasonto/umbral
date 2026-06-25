@@ -1,6 +1,6 @@
 //! Lazy session creation — core reproduction (gaps2 #46).
 //!
-//! Django-style: a session row is created lazily on first WRITE, not
+//! A session row is created lazily on first WRITE, not
 //! eagerly on every cookie-less request. A fresh browser firing
 //! several parallel cookie-less requests (page + favicon + assets)
 //! must NOT leave a pile of anonymous rows behind — none of those

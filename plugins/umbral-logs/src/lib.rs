@@ -1,6 +1,6 @@
-//! umbral-logs — Django-request-style request logging for umbral.
+//! umbral-logs: request logging for umbral.
 //!
-//! Django's `django.request` logging, the umbral way: register the plugin and
+//! Request logging, the umbral way: register the plugin and
 //! every HTTP request is recorded to a [`RequestLog`] row, browsable in the
 //! admin. Capture is **fire-and-forget** — the response is returned to the
 //! client immediately, and the DB insert happens on a background task. A

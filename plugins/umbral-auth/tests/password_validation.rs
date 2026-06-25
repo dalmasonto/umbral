@@ -1,9 +1,9 @@
 //! End-to-end coverage for the secure-by-default password-strength
-//! validators (umbral's `AUTH_PASSWORD_VALIDATORS` equivalent).
+//! validators.
 //!
 //! Enforcement lives at the **registration boundary** (the `register`
-//! route), matching Django: `User.objects.create_user()` does NOT validate;
-//! forms / views do. So this file covers two layers:
+//! route): the low-level `create_user` helper does NOT validate;
+//! routes / views do. So this file covers two layers:
 //!
 //! 1. **Validator-level** — each of the four default validators rejects
 //!    the canonical weak input and accepts a strong one, and
@@ -12,7 +12,7 @@
 //!    weak password returns 400 carrying the reasons; with a strong password
 //!    it creates the user (201). The low-level `create_user` helper, by
 //!    contrast, accepts a weak password directly (it does NOT validate) — we
-//!    assert that too, to document the Django-parity split.
+//!    assert that too, to document the split.
 //!
 //! See `plugins/umbral-auth/src/password_validation.rs` for the surface and
 //! `CLAUDE.md` "secure-by-default" for why this is on with no opt-in.
@@ -233,7 +233,7 @@ async fn post_register(json: &str) -> (http::StatusCode, Vec<u8>) {
 /// The load-bearing secure-by-default test, now at the right layer: the
 /// `register` ROUTE rejects the weak password `"a"` with 400 and surfaces the
 /// failure reasons. Registration accepting `"a"` is exactly the bug the
-/// password policy closes — and the route is where Django enforces it.
+/// password policy closes — and the route is where we enforce it.
 #[tokio::test]
 async fn register_route_rejects_weak_password() {
     boot().await;
@@ -295,7 +295,7 @@ async fn register_route_accepts_strong_password() {
     );
 }
 
-/// The Django-parity split, asserted directly: the low-level `create_user`
+/// The split, asserted directly: the low-level `create_user`
 /// helper is NON-validating. The same weak password the route rejects above
 /// sails straight through `create_user` and persists a row. This is what lets
 /// seed scripts / bulk imports / the workspace test suite create users with

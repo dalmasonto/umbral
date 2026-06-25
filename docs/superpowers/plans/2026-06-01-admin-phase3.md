@@ -209,7 +209,7 @@ impl Action {
         self
     }
 
-    /// Built-in bulk-delete. Equivalent to Django's "Delete selected" default.
+    /// Built-in bulk-delete: the "delete selected rows" action available by default.
     pub fn delete_selected() -> Self {
         Self::new(
             "delete_selected",

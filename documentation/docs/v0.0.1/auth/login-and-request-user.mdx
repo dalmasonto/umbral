@@ -6,7 +6,7 @@ icon: log-in
 ---
 
 `umbral-auth` verifies credentials. `umbral-sessions` stores sessions
-and reads cookies. Together they give you the Django shape: every
+and reads cookies. Together they give you this shape: every
 browser has a session from the first request (anonymous), login
 transforms it into an authenticated session, and handlers extract
 the current user via type-driven extractors.
@@ -102,7 +102,7 @@ async fn logout(headers: HeaderMap) -> Response {
 
 ## `request.user` - `User` / `OptionalUser` extractors
 
-axum extractors give you Django's `request.user` ergonomics.
+axum extractors give you ergonomic access to the current user.
 
 ```rust
 use umbral::prelude::*;
@@ -134,16 +134,16 @@ custom user model, reach for the generic `LoggedIn<U>` extractor (see
 [Auth gating](/docs/v0.0.1/web/auth-gating)) instead.
 
 <Callout type="info">
-**Why not a middleware that injects on every request?** That's what
-Django's `AuthenticationMiddleware` does. axum has a cleaner answer
-- the extractor pattern. Saying `User(user): User` in the handler
-signature makes the auth requirement *visible at the call site*:
+**Why not a middleware that injects the user on every request?**
+umbral uses the extractor pattern instead. Saying `User(user): User`
+in the handler signature makes the auth requirement *visible at the
+call site*:
 you can tell from the type whether a route is gated without
 reading the middleware stack. The cost (a DB round-trip per request
 that needs `request.user`) is the same either way.
 </Callout>
 
-## Flash messages - Django's `contrib.messages` shape
+## Flash messages
 
 `umbral_sessions::Messages` is an extractor that lets any handler
 push flash messages into the session and any later handler drain

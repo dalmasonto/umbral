@@ -1,12 +1,12 @@
 ---
 title: Throttling
-description: DRF-style API rate limiting - AnonRateThrottle, UserRateThrottle, ScopedRateThrottle, the rate string format, and the 429 + Retry-After response.
+description: API rate limiting - AnonRateThrottle, UserRateThrottle, ScopedRateThrottle, the rate string format, and the 429 + Retry-After response.
 sidebar_position: 8
 icon: gauge
 tags: [rest, throttling, rate-limiting]
 ---
 
-A throttle answers *how often may this caller hit this resource?*. It's the third request-time gate, run **after** [authentication](/docs/v0.0.1/rest/authentication) resolves an `Identity` and the [permission](/docs/v0.0.1/rest/permissions) check approves the action, but **before** the handler runs (the same order as Django REST Framework). A request that passes auth and permission can still be rejected with **429 Too Many Requests** if the caller is over their rate.
+A throttle answers *how often may this caller hit this resource?*. It's the third request-time gate, run **after** [authentication](/docs/v0.0.1/rest/authentication) resolves an `Identity` and the [permission](/docs/v0.0.1/rest/permissions) check approves the action, but **before** the handler runs. A request that passes auth and permission can still be rejected with **429 Too Many Requests** if the caller is over their rate.
 
 Throttling is **opt-in**: a `RestPlugin` with no throttle configured imposes no limits, so adding it never surprises an existing API with a rate cap.
 
@@ -52,7 +52,7 @@ Pairing `AnonRateThrottle` with `UserRateThrottle` is the common shape: one rate
 
 ## Rate format
 
-Both `default_throttle` and `.throttle(...)` take a DRF-style `"<num>/<period>"` string. The period token is case-insensitive:
+Both `default_throttle` and `.throttle(...)` take a `"<num>/<period>"` rate string. The period token is case-insensitive:
 
 | Token | Window |
 |---|---|
@@ -65,7 +65,7 @@ A bare number (`"5"`) is shorthand for `"5/sec"`. A malformed rate (bad count, u
 
 ## The 429 response
 
-On the first throttle that denies, the request short-circuits to **429 Too Many Requests** with a `Retry-After` header (whole seconds, rounded up) and a DRF-shaped body:
+On the first throttle that denies, the request short-circuits to **429 Too Many Requests** with a `Retry-After` header (whole seconds, rounded up) and a JSON body:
 
 ```json
 { "detail": "Request was throttled.", "retry_after": 58 }

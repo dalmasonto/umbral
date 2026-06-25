@@ -21,7 +21,7 @@ Last updated: 2026-06-04 after BUG-11/12/13 (`e2661f8`).
 | BUG-5 | `#[umbral(auto_now)]` / `#[umbral(auto_now_add)]` populate via `Utc::now()` on the dynamic write path. Typed path stays user-controlled. | `a6c1325` |
 | BUG-6 | `#[umbral(unique_together = [[..]])]` → inline `UNIQUE (col1, col2)` on `CREATE TABLE`. | `d2cdc54` |
 | BUG-7 | `#[umbral(indexes = [[..]])]` → follow-up `CREATE INDEX IF NOT EXISTS` after the table. | `d2cdc54` |
-| BUG-8 | `#[umbral(ordering = ["-col", "col"])]` → default `ORDER BY` applied when no explicit `.order_by`. Django semantics: explicit ordering REPLACES the default. | `d2cdc54` |
+| BUG-8 | `#[umbral(ordering = ["-col", "col"])]` → default `ORDER BY` applied when no explicit `.order_by`. Semantics: explicit ordering REPLACES the default. | `d2cdc54` |
 | BUG-9 | `#[umbral(singleton)]` flips `Model::SINGLETON` + `ModelMeta.singleton`. | `5a5b18c` |
 | BUG-10 | `rust_decimal::Decimal` field type (Postgres-only, gated by the field-backend system check). | `dac7c99` |
 | BUG-11 | `Slug` wrapper type → `text_format = "slug"` marker + OpenAPI `pattern`. | `e2661f8` |

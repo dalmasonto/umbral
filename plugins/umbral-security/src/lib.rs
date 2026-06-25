@@ -1,6 +1,6 @@
 //! umbral-security — CSRF protection and a configurable security-header bundle.
 //!
-//! Django's `CsrfViewMiddleware` plus the `SecurityMiddleware` header bundle,
+//! CSRF protection plus a security-header bundle,
 //! widened to the modern header set. Plug it into the app and every non-safe
 //! request must carry a matching CSRF token; every response gets the hardening
 //! headers you've enabled.
@@ -33,8 +33,7 @@
 //!
 //! ## CSRF
 //!
-//! Signed double-submit cookie pattern, fully automatic (the Django
-//! `CsrfViewMiddleware` + `{% csrf_token %}` split — see
+//! Signed double-submit cookie pattern, fully automatic (see
 //! `docs/decisions/2026-06-10-automatic-csrf.md`):
 //!
 //! 1. **The middleware is the only mint.** On GET / HEAD / OPTIONS it mints a
@@ -79,7 +78,7 @@
 //! Enabled by default: `X-Content-Type-Options: nosniff`, `X-Frame-Options:
 //! DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-XSS-Protection:
 //! 0` (modern guidance disables the legacy auditor), `Cross-Origin-Opener-Policy:
-//! same-origin` (matches Django 4.0+), and a `Server: umbral` header. Opt-in
+//! same-origin`, and a `Server: umbral` header. Opt-in
 //! (default off, each a field on [`SecurityConfig`]): `Strict-Transport-Security`,
 //! `Content-Security-Policy`, `Permissions-Policy`, `Cross-Origin-Resource-Policy`,
 //! `Cross-Origin-Embedder-Policy`. CSP and HSTS are off by default because a wrong
@@ -147,7 +146,7 @@ pub struct SecurityConfig {
     /// When `signed_csrf` is on, also bind the token to this cookie's value
     /// (typically the session cookie). Default `None`.
     pub session_bind_cookie: Option<String>,
-    /// Request-path prefixes exempt from CSRF (Django's `@csrf_exempt`).
+    /// Request-path prefixes exempt from CSRF (CSRF-exempt paths).
     /// A token-authenticated REST API carries no session cookie, so a
     /// bearer-auth `POST /api/...` would otherwise 403; exempt `"/api"` to
     /// keep it working. Matched as a path prefix. Default empty.
@@ -177,8 +176,8 @@ pub struct SecurityConfig {
     pub content_security_policy: Option<String>,
     /// `Permissions-Policy`. Default `None`.
     pub permissions_policy: Option<String>,
-    /// `Cross-Origin-Opener-Policy`. Default `Some("same-origin")` (matches
-    /// Django 4.0+). Set `None` to omit — e.g. apps relying on cross-origin
+    /// `Cross-Origin-Opener-Policy`. Default `Some("same-origin")`.
+    /// Set `None` to omit, e.g. apps relying on cross-origin
     /// popups (some OAuth flows).
     pub cross_origin_opener_policy: Option<String>,
     /// `Cross-Origin-Resource-Policy` (e.g. `"same-origin"`). Default `None`.
@@ -188,8 +187,8 @@ pub struct SecurityConfig {
 
     // ---- Server identity ----
     /// Set the `Server` response header. Default `Some("umbral")` — a bare
-    /// product name (no version, so no info disclosure), the way Django's
-    /// daphne/gunicorn advertise one. Set `None` to omit. Prefer no version.
+    /// product name (no version, so no info disclosure), the way many app
+    /// servers advertise one. Set `None` to omit. Prefer no version.
     pub server_header: Option<String>,
     /// Strip any `Server` header the stack set. Default `false`. Ignored when
     /// `server_header` is `Some` (the set wins) — to strip, also set
@@ -223,14 +222,13 @@ impl Default for SecurityConfig {
             hsts_preload: false,
             content_security_policy: None,
             permissions_policy: None,
-            // On by default, matching Django's `SECURE_CROSS_ORIGIN_OPENER_POLICY`
-            // (default `same-origin` since Django 4.0). Isolates the browsing
+            // On by default (same-origin). Isolates the browsing
             // context group; only affects apps that rely on cross-origin popups.
             cross_origin_opener_policy: Some("same-origin".to_string()),
             cross_origin_resource_policy: None,
             cross_origin_embedder_policy: None,
-            // Advertise the framework (no version — no info disclosure), the way
-            // Django's daphne/gunicorn emit a `Server` header. Set `None` to omit
+            // Advertise the framework (no version, no info disclosure). Many app
+            // servers emit a `Server` header. Set `None` to omit
             // or pair `None` + `hide_server_header` to strip an upstream one.
             server_header: Some("umbral".to_string()),
             hide_server_header: false,

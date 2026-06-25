@@ -220,7 +220,7 @@ impl Action {
         self
     }
 
-    /// Built-in bulk-delete. Equivalent to Django's "Delete selected" default.
+    /// Built-in bulk-delete. The built-in "Delete selected" action.
     pub fn delete_selected() -> Self {
         Self::new(
             "delete_selected",
@@ -401,10 +401,9 @@ fn is_action_key_char(c: char) -> bool {
 /// How an inline's children are laid out on the parent change form.
 ///
 /// `Tabular` (the default) renders the children as a `<table>` — one
-/// column per displayed field, one row per child, like Django's
-/// `TabularInline`. `Stacked` renders each child as a vertical sub-form,
-/// like Django's `StackedInline`, which reads better when a child has
-/// many fields.
+/// column per displayed field, one row per child, a tabular layout.
+/// `Stacked` renders each child as a vertical sub-form, a stacked
+/// layout, which reads better when a child has many fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InlineKind {
     /// Children as table rows (default).

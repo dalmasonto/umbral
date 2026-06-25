@@ -132,7 +132,7 @@ Password strength and rate limiting are both **on by default** and run at the re
 
 ## Guarding views
 
-Django has a `@login_required` decorator that gates a view behind authentication. umbral ships the same idea in two complementary shapes: a per-handler extractor and a per-Router layer. Both share one config struct that controls the unauthenticated response.
+umbral gates a view behind authentication in two complementary shapes: a per-handler extractor and a per-Router layer. Both share one config struct that controls the unauthenticated response.
 
 ### The `LoginRequired` config
 
@@ -253,7 +253,7 @@ Mix both in one app: wrap the `/api/*` subtree with `login_required()` and the `
 
 ## Swapping the user model
 
-This is umbral's equivalent of Django's `AUTH_USER_MODEL`. In Django you set a string (`AUTH_USER_MODEL = "myapp.CustomUser"`); in umbral you use the type parameter directly, so the swap is validated at compile time with no runtime reflection involved.
+umbral lets you replace the built-in user model with your own struct. You select it through the `AuthPlugin<U>` type parameter directly, so the swap is validated at compile time with no runtime reflection involved.
 
 ### Why it exists
 
@@ -332,7 +332,7 @@ impl UserModel for EmailUser {
 }
 ```
 
-Then `authenticate::<EmailUser>("alice@example.com", "s3cret").await?` looks the row up by `email`. This is the same role Django's `USERNAME_FIELD` setting plays - except in umbral it's a trait method on your struct, not a separate config string.
+Then `authenticate::<EmailUser>("alice@example.com", "s3cret").await?` looks the row up by `email`. Which column serves as the login handle is a trait method on your struct, not a separate config string.
 
 The framework never assumes your handle column is called `username`. The only requirement: a unique column the user supplies at login time, and you point `username()` at it.
 

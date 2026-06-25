@@ -181,7 +181,7 @@ pub struct AdminPlugin {
     /// Optional one-line subtitle under the heading.
     dashboard_models_subtitle: Option<String>,
     /// gaps2 #33 — "restore where I left off" feature flag. Default
-    /// `true` (Django-style: on by default, opt out to disable).
+    /// `true` (on by default; opt out to disable).
     /// When `true`: `/admin/` 302-redirects to `last_path` if one is
     /// stored; the changelist handler writes `last_path` on every visit;
     /// the "Home" breadcrumb carries `?dashboard=1` as an escape hatch.
@@ -210,7 +210,7 @@ impl AdminPlugin {
     /// Register an [`AdminModel`] for one model. Chainable.
     ///
     /// If two configs are registered for the same table the last one wins
-    /// (same semantics as Django's `site.register` overwriting on duplicate).
+    /// (a duplicate registration overwrites the earlier one).
     ///
     /// The plugin name defaults to `"admin"` for models registered before
     /// the plugin is installed into the app. From M7+ plugins will pass

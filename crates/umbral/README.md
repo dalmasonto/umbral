@@ -1,8 +1,8 @@
 # umbral
 
-A Django-inspired web framework for Rust. Declare your data and you get migrations, an admin, CRUD, and an optional REST API, backed by Rust's compile-time guarantees.
+A batteries-included web framework for Rust. Declare your data and you get migrations, an admin, CRUD, and an optional REST API, backed by Rust's compile-time guarantees.
 
-The name "umbral" means "of the shadow" (from the Latin umbra, shadow): the framework lives in Django's shadow in shape, not in code. It shares no code with Django, it recreates the feeling on top of Rust.
+The name "umbral" means "of the shadow" (from the Latin umbra, shadow).
 
 ## Install
 
@@ -33,5 +33,3 @@ use umbral::prelude::*;
 ## License
 
 Licensed under either of MIT or Apache-2.0, at your option.
-
-The name "umbral" and the project branding are trademarks of the project and are not covered by the code license. See TRADEMARK.md.

@@ -1,4 +1,4 @@
-//! Auto-discovered reverse-FK annotations (gaps2 #45) — Django's
+//! Auto-discovered reverse-FK annotations (gaps2 #45):
 //! `Parent.objects.annotate(Count("child"))` working with NO
 //! `child_set: ReverseSet<Child>` field declared on the parent.
 //!
@@ -176,7 +176,7 @@ async fn auto_discovers_count_by_table_name() {
 #[tokio::test]
 async fn auto_discovers_count_by_snake_struct_and_set_suffix() {
     boot().await;
-    // "entry" (snake struct), "entry_set" (Django <model>_set) both
+    // "entry" (snake struct), "entry_set" (the <model>_set suffix) both
     // resolve to the same child.
     for rel in ["entry", "entry_set"] {
         let rows = Blog::objects()

@@ -2,7 +2,7 @@
 
 Pluggable cache backend for umbral. In-memory, SQLite, and Redis backends, plus view-level cache_page middleware.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

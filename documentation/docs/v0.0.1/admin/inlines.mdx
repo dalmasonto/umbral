@@ -5,7 +5,7 @@ sidebar_position: 2
 icon: rows
 ---
 
-An **inline** lets you edit a child model's rows directly on its parent's change form. Open a `Post`, and right below its fields you get its `Comment`s - add new ones, edit existing ones, tick a box to delete. When you hit Save, the parent and all its children are written in **one transaction**: if any child fails to save, the whole thing rolls back and nothing changes. This is umbral's take on Django's `TabularInline` / `StackedInline`.
+An **inline** lets you edit a child model's rows directly on its parent's change form. Open a `Post`, and right below its fields you get its `Comment`s - add new ones, edit existing ones, tick a box to delete. When you hit Save, the parent and all its children are written in **one transaction**: if any child fails to save, the whole thing rolls back and nothing changes. Inlines come in tabular and stacked layouts.
 
 ## When you'd reach for it
 
@@ -35,7 +35,7 @@ The FK column is set to the parent automatically on every child write. You never
 
 ## Tabular vs stacked
 
-Two layouts, like Django:
+Two layouts:
 
 <Tabs defaultValue="Tabular (default)">
 <Tab label="Tabular (default)">

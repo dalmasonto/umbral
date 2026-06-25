@@ -2,7 +2,7 @@
 //!
 //! Returns `(row, created)`. On match: update the matched row with the
 //! defaults' non-PK fields, return the fresh row. On miss: insert the
-//! defaults, return it. Mirrors Django's `update_or_create`.
+//! defaults, return it. The `update_or_create` terminal.
 
 #![allow(dead_code)]
 

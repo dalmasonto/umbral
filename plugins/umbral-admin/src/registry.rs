@@ -73,8 +73,8 @@ impl AdminRegistry {
     /// Register an [`AdminModel`] under the given plugin name.
     ///
     /// If a model with the same table was already registered, the new
-    /// registration wins (last-write-wins, same as Django's
-    /// `admin.site.register` on duplicates).
+    /// registration wins (last-write-wins; a duplicate registration
+    /// overwrites the earlier one).
     pub fn register(&mut self, plugin: &str, model: AdminModel) {
         let label = model.label.clone().unwrap_or_else(|| {
             // Default: title-case the table name (replace `_` with space).

@@ -1,6 +1,6 @@
 //! End-to-end tests for `?ordering=` on the REST list endpoint.
 //!
-//! Verifies that the DRF-style comma-separated ordering param is actually
+//! Verifies that the comma-separated ordering param is actually
 //! applied: ascending, descending, multi-field, and that unknown fields
 //! are silently ignored (degrading to default DB order rather than 400).
 

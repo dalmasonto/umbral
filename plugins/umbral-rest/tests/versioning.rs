@@ -4,9 +4,9 @@
 //!
 //! - `GET /api/v1/<table>/` and `GET /api/v2/<table>/` both resolve.
 //! - `GET /api/v3/<table>/` matches no route → 404 (unknown version isn't
-//!   routable — DRF's URLPathVersioning behaviour).
+//!   routable, with version in the URL path).
 //! - The resolved version reaches handler-visible context: a custom
-//!   `@action` echoes `ctx.version`, proving "v1"/"v2" thread through.
+//!   action echoes `ctx.version`, proving "v1"/"v2" thread through.
 //! - Safe-by-default still holds under a versioned path: `password_hash`
 //!   is stripped and a default-blocked table 404s.
 
@@ -157,7 +157,7 @@ async fn unknown_version_is_404() {
 
 #[tokio::test]
 async fn unversioned_path_is_404_when_url_path_versioning_is_on() {
-    // DRF-aligned: with URL-path versioning the version is required in the
+    // With URL-path versioning the version is required in the
     // path; there is no unversioned `/api/<table>/` fallback.
     let (status, _body) = get_json("/api/post/").await;
     assert_eq!(

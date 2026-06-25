@@ -1,4 +1,4 @@
-# ORM relations, forms, and joins — hardening for Django-parity templating
+# ORM relations, forms, and joins - hardening for ceremony-free templating
 
 **Date:** 2026-06-11
 **Status:** Approved design, pending implementation plan
@@ -7,9 +7,9 @@
 
 ## Goal
 
-Django's ORM feels good in templates because relations traverse without ceremony: `{{ comment.plugin.author.name }}` just works, `post.comments.all` just works, and `annotate(Count("comments"))` collapses to one query. umbral already has most of the *read* machinery (`ReverseSet`, `prefetch_related`, nested `select_related`, `annotate_count`). The gaps that break the Django feel are concentrated in two places:
+umbral's ORM should feel good in templates because relations traverse without ceremony: `{{ comment.plugin.author.name }}` just works, `post.comments.all` just works, and `annotate(Count("comments"))` collapses to one query. umbral already has most of the *read* machinery (`ReverseSet`, `prefetch_related`, nested `select_related`, `annotate_count`). The gaps that break that ceremony-free feel are concentrated in two places:
 
-1. **The write/form half.** `#[derive(Form)]` rejects `ForeignKey<T>`, `ReverseSet<T>`, and choices enums outright, forcing the `#[umbral(noform)]` + hand-rolled `Default` boilerplate that litters `PluginComment` and keeps its public submission form commented out. The admin's dynamic save path binds an FK id as TEXT, producing `column "plugin" is of type bigint but expression is of type text`.
+1. **The write/form half.** `#[derive(Form)]` rejects `ForeignKey<T>`, `ReverseSet<T>`, and choices enums outright, forcing the `#[umbral(noform)]` plus hand-rolled `Default` boilerplate that litters `PluginComment` and keeps its public submission form commented out. The admin's dynamic save path binds an FK id as TEXT, producing `column "plugin" is of type bigint but expression is of type text`.
 2. **Join depth and type.** `join_related` is one-hop and LEFT-only. Real apps need nested joins in one round-trip and the ability to pick INNER vs LEFT vs RIGHT.
 
 This spec hardens both halves so a model with FKs and choices is form-submittable end to end, and so the JOIN builder spans relations with full join-type control.
@@ -61,7 +61,7 @@ pub enum InputKind {
 
 ### 1c. `ForeignKey<T>` / forward `OneToOne<T>` → a `ModelChoice` field (#40)
 
-A `ForeignKey<T>` (or `Option<ForeignKey<T>>`), and equally a forward `OneToOne<T>` (the non-`#[sqlx(skip)]` variant — a unique FK with a real column), becomes a `ModelChoice` — Django's `ModelChoiceField`. It carries the target table and the value's PK type so `validate()` can parse the submitted id, and it knows how to fetch `(id, label)` rows so the render path can emit a populated `<select>`. The two field types resolve identically here because a forward O2O is a unique FK; the only difference is the DB's UNIQUE constraint, which the existence/uniqueness errors surface through the same `WriteError` path.
+A `ForeignKey<T>` (or `Option<ForeignKey<T>>`), and equally a forward `OneToOne<T>` (the non-`#[sqlx(skip)]` variant - a unique FK with a real column), becomes a `ModelChoice` field: a single-select bound to the rows of the related model. It carries the target table and the value's PK type so `validate()` can parse the submitted id, and it knows how to fetch `(id, label)` rows so the render path can emit a populated `<select>`. The two field types resolve identically here because a forward O2O is a unique FK; the only difference is the DB's UNIQUE constraint, which the existence/uniqueness errors surface through the same `WriteError` path.
 
 ```rust
 pub enum InputKind {
@@ -82,7 +82,7 @@ This unblocks deriving `Form` directly on `PluginComment`, deleting its hand-rol
 
 ### 1d. `M2M<T>` → a `ModelMultiChoice` field
 
-`M2M<T, P=i64>` has **no column on the parent** — it's junction rows written *after* the parent insert. In a form it's Django's `ModelMultipleChoiceField`: a multi-select of related rows. The Form derive emits a `ModelMultiChoice` field; `validate()` parses the submitted id *list* (HTML multi-value, the `m2m_<field>` convention the admin already uses) and verifies each id exists; rendering fetches `(id, label)` candidates and emits a multi-select / chip-picker.
+`M2M<T, P=i64>` has **no column on the parent** - it's junction rows written *after* the parent insert. In a form it's a `ModelMultiChoice`: a multi-select of related rows. The Form derive emits a `ModelMultiChoice` field; `validate()` parses the submitted id *list* (HTML multi-value, the `m2m_<field>` convention the admin already uses) and verifies each id exists; rendering fetches `(id, label)` candidates and emits a multi-select / chip-picker.
 
 ```rust
 pub enum InputKind {
@@ -156,7 +156,7 @@ Split the path on `__`, resolve each hop's `(table, fk_column, target_table, tar
 
 ### 4c. Auto-inference default
 
-A plain `join_related` (and a hop with no explicit type) picks `INNER` for a `NOT NULL` FK and `LEFT` for a nullable FK — Django's exact rule, read from `FieldSpec.nullable`. The common case needs no annotation; the explicit methods override.
+A plain `join_related` (and a hop with no explicit type) picks `INNER` for a `NOT NULL` FK and `LEFT` for a nullable FK, read from `FieldSpec.nullable`. This is the rule a relational query planner wants: a required FK can never produce a null match, so the inner join is safe and cheaper, while a nullable FK keeps parent rows whose FK is null. The common case needs no annotation; the explicit methods override.
 
 ### 4d. Backend note
 
@@ -166,7 +166,7 @@ RIGHT/FULL JOIN requires SQLite ≥ 3.39 (Postgres is unconditional). The boot-t
 
 - **Forward `OneToOne<T>`** is a unique FK — it joins through the exact FK path above, no special case.
 - **`M2M<T>`** already routes through a double LEFT JOIN (junction → child). The join-type method applies to the **child** hop (the junction hop stays INNER — a parent only reaches a child *through* an existing junction row), and a nested chain can pass *through* an M2M hop (`tags__category`). The per-hop alias scheme extends to the junction alias.
-- **Reverse relations** (`ReverseSet`, reverse `OneToOne`) are *not* joined — their multiplicity (or back-pointer nature) makes `prefetch_related`'s batched-IN the right tool, exactly as Django uses `prefetch_related` rather than `select_related` for reverse FKs.
+- **Reverse relations** (`ReverseSet`, reverse `OneToOne`) are *not* joined - their multiplicity (or back-pointer nature) makes `prefetch_related`'s batched-IN the right tool: a join would multiply parent rows by their children, whereas a batched second query keeps one row per parent and stitches the children in memory.
 
 ---
 
@@ -190,13 +190,13 @@ pub fn annotate_count_where<C: Model>(
 ) -> Self;
 ```
 
-Renders the child `Predicate<C>` into the subquery WHERE alongside the correlation. Mirrors Django's `Count("comments", filter=Q(moderation="visible"))`. Generic over the child model `C` so the predicate is typed against the child's columns.
+Renders the child `Predicate<C>` into the subquery WHERE alongside the correlation, so the count tallies only children matching the predicate (e.g. count comments whose `moderation` is `"visible"`). Generic over the child model `C` so the predicate is typed against the child's columns.
 
 The umbral.dev homepage moves from `annotate_count("comment_set")` to `annotate_count_where::<PluginComment>("notes", "comment_set", comment::MODERATION.eq("visible"))`, counting visible-only.
 
 ### 5d. `annotate_count` over M2M
 
-`annotate_count("tags")` resolves an `M2M<Tag>` relation too (Django's `Count("tags")`). Resolution falls back to `M2M_RELATIONS` when the name isn't a reverse-FK relation, and the correlated subquery counts **junction rows** (`SELECT COUNT(*) FROM <parent>_<field> WHERE parent_id = parent.id`). Reverse `OneToOne` and forward O2O annotate to 0/1 and aren't worth a count helper — they're omitted (a clean "use `prefetch_related`/the FK directly" error if asked).
+`annotate_count("tags")` resolves an `M2M<Tag>` relation too, counting how many related rows a parent links to. Resolution falls back to `M2M_RELATIONS` when the name isn't a reverse-FK relation, and the correlated subquery counts **junction rows** (`SELECT COUNT(*) FROM <parent>_<field> WHERE parent_id = parent.id`). Reverse `OneToOne` and forward O2O annotate to 0/1 and aren't worth a count helper - they're omitted (a clean "use `prefetch_related`/the FK directly" error if asked).
 
 ---
 

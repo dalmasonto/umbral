@@ -14,7 +14,7 @@
 Spinning up a backend on bare Axum/Actix means *you* build the admin: a table, forms, auth
 screens, file handling, all of it. Most teams either skip it or ship something ugly. **Umbral's
 admin is the payoff** — register a model and get a fast, modern, themeable back-office for free.
-The bar is not "Django admin in Rust"; it's "the admin a team would otherwise spend a month
+The bar is not "a generic CRUD scaffold"; it's "the admin a team would otherwise spend a month
 building, generated from their models."
 
 What makes it a *reason to choose the framework*:

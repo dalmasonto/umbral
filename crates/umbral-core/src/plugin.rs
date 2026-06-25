@@ -139,7 +139,7 @@ where
 /// The trait is `Send + Sync + 'static` so `App::builder()` can store a
 /// homogeneous `Vec<Box<dyn Plugin>>` and the runtime can hand the
 /// plugin reference to threads (e.g. for background tasks spawned in
-/// `on_ready`). The bounds match Django's `AppConfig` ergonomics: any
+/// `on_ready`). The bounds are deliberately permissive: any
 /// reasonable Rust struct meets them by default.
 pub trait Plugin: Send + Sync + 'static {
     /// A stable identifier. Used as the key in the migration tracking
@@ -251,7 +251,7 @@ pub trait Plugin: Send + Sync + 'static {
     /// be read from and written to. Returns `None` to use the
     /// `"default"` pool (the same one `umbral::db::pool()` returns).
     ///
-    /// This is umbral's answer to Django's `DATABASE_ROUTERS`. The
+    /// This is umbral's per-plugin database routing hook. The
     /// builder reads it during phase 3 and the QuerySet's
     /// `resolve_pool` defers to it when no `.on(&pool)` override is
     /// set on the chain. Per-plugin granularity (every model the
@@ -278,7 +278,7 @@ pub trait Plugin: Send + Sync + 'static {
     /// When two plugins (or the app directory and a plugin) ship a
     /// template with the same name, the first directory in the list wins
     /// and a tracing warning is emitted at boot so the collision is
-    /// visible. This matches Django's `APP_DIRS` loader semantics.
+    /// visible. First-match-wins across all template directories.
     ///
     /// Default: no directories. A plugin that renders no HTML leaves
     /// this alone.
@@ -287,7 +287,7 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     /// Custom template tags / filters this plugin contributes
-    /// (feature #67 — Django's `{% load %}`-able template library).
+    /// (feature #67 - a loadable template tag/filter library).
     ///
     /// Each returned [`TemplateRegistrar`] is a closure that mutates the
     /// minijinja [`Environment`](minijinja::Environment) at engine-build

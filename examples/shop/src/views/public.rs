@@ -219,7 +219,7 @@ pub async fn faqs() -> Result<Html<String>, (StatusCode, String)> {
     Ok(Html(body))
 }
 
-/// `GET /contact` — render the empty form. The Django shape:
+/// `GET /contact`: render the empty form. The shape:
 /// CSRF is ambient (`{{ csrf_input }}` in the template), `errors`
 /// is simply absent, and `?sent=1` after a successful redirect
 /// shows the thank-you banner.

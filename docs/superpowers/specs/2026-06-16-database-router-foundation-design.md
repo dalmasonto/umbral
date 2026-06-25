@@ -13,7 +13,7 @@ This spec is the **foundation only**, but a *complete* one: every trait method s
 The foundation delivers a complete, working routing+schema *mechanism*. The following management/ergonomic layers are separate follow-up specs that build on it:
 
 - A `Tenant` model and tenant provisioning.
-- `migrate_schemas` — create + migrate every tenant schema (Django `django-tenants`' `migrate_schemas` equivalent).
+- `migrate_schemas` - a command that creates and migrates every tenant schema in one pass.
 - The tenant-vs-shared model classification (`SHARED_APPS`/`TENANT_APPS`): which models live in `public` vs each tenant schema. In the foundation, when a schema is active, *all* model tables are qualified with it.
 - A built-in HTTP tenant-resolver (subdomain/header → tenant). The foundation ships the seam (`App::builder().route_context(...)`); the app supplies the resolver closure.
 - Row-level (`tenant_id` column) tenancy and RLS activation (`SET LOCAL app.user_id`, ties gaps2 #79) — a different strategy, separate spec.

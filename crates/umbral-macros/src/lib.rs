@@ -186,7 +186,7 @@ struct UmbralFieldAttr {
     noform: bool,
     /// `#[umbral(db_constraint = false)]` — keep the FK logical (column +
     /// `fk_target`) but emit no physical `FOREIGN KEY ... REFERENCES`
-    /// constraint. Mirrors Django's `ForeignKey(db_constraint=False)`.
+    /// constraint. Disables the physical FK constraint.
     /// Required for an FK whose target lives on a different database
     /// (a DB constraint can't span databases); the boot guard in
     /// `App::build` rejects an un-opted-out cross-DB FK. Defaults to
@@ -211,7 +211,7 @@ struct UmbralFieldAttr {
     /// non-FK fields and on `Option<ForeignKey<_>>` (nullable FKs
     /// already skip reverse-set generation).
     no_reverse: bool,
-    /// `#[umbral(string)]` — Django-style "__str__" marker. The admin's
+    /// `#[umbral(string)]` — display-string marker. The admin's
     /// default `list_display` falls back to this field when the model
     /// has no explicit `list_display` config, so the table shows a
     /// human label instead of every column. Only meaningful on
@@ -876,7 +876,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let struct_attr = parse_umbral_struct_attr(&input.attrs)?;
     let bare_name = to_snake_case(&struct_name.to_string());
     // gaps2 #80g: the `#[umbral(plugin = "...")]` value is the authoritative
-    // app_label (Django's app name). Capture it BEFORE `struct_attr.plugin`
+    // app_label (the owning plugin's name). Capture it BEFORE `struct_attr.plugin`
     // is moved into the table-name computation below. Absent attribute →
     // `"app"`, the registry's default key. umbral-permissions reads this off
     // `Model::APP_LABEL` to build collision-free permission codenames rather
@@ -1821,7 +1821,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // `ForeignKey<AuthUser>` from `umbral-auth` consumed by a model in
     // an app crate. The user imports the trait
     // (`use blog::PostAuthorReverse;` or `use blog::*;`) and writes
-    // `user.post_set()` exactly like Django.
+    // `user.post_set()` as a reverse accessor.
     //
     // Trait naming: `<Child><FieldPascal>Reverse`. One trait per
     // `(Child, field)` pair, scoped to this crate, so unique within
@@ -3398,7 +3398,7 @@ fn parse_form_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormFieldAttr> {
                 // gaps2 #19: `required` is the explicit form of the
                 // default behaviour. No-op (the derive already
                 // emits Required unless `optional` is set), but
-                // accepting it lets users mirror Django's positive
+                // accepting it lets users spell the positive
                 // declaration shape (`#[form(required, length(...))]`).
                 Ok(())
             } else if meta.path.is_ident("min_length") {

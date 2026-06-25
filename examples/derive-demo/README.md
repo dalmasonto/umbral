@@ -40,7 +40,7 @@ The first call returns `umbral-derive-demo`. The second returns a JSON array of 
 ]
 ```
 
-The handler is the Django ergonomic the framework promises: `Article::objects().order_by(article::ID.asc()).fetch().await` with no pool parameter, no `.on(&pool)`, no `State<DbPool>` extractor. The Manager picks up the ambient pool installed by `App::build()`.
+The handler is the ergonomic the framework promises: `Article::objects().order_by(article::ID.asc()).fetch().await` with no pool parameter, no `.on(&pool)`, no `State<DbPool>` extractor. The Manager picks up the ambient pool installed by `App::build()`.
 
 ## What it demonstrates
 

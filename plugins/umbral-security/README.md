@@ -2,7 +2,7 @@
 
 Security headers + CSRF middleware plugin for umbral.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

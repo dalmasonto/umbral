@@ -39,7 +39,7 @@ Status legend: **FIXED** = real bug fixed; **PINNED** = already fixed since the 
 | #73b float `min`/`max` validation | PINNED (already fixed via `validate_numeric_bounds`/`as_f64`) + 7 tests | `6053fe0` |
 | #73c admin inline-edit writes `""` on parse failure | PINNED (already 400s via `DynQuerySet::update_one`) + 2 tests | `e029202` |
 | #73d Masked malformed key → silent None keyring | **FIXED** — keyring now `Result`; present-but-bad key → `BadKey` (never silent plaintext) | `d979e9c` |
-| #79a REST `?ordering=` reserved but never applied | **FIXED** — DRF-style, field-validated, multi-field | `ee9d5bf` |
+| #79a REST `?ordering=` reserved but never applied | **FIXED** - REST-style, field-validated, multi-field | `ee9d5bf` |
 | #71b `set_user_groups` non-transactional | PINNED (already uses `umbral::db::transaction` since c818cab) + rollback test | `a4cdbd8` |
 | #86 doc drifts (signals.mdx, openapi `//!`, tasks.mdx) | **FIXED** | `5d5f745` |
 

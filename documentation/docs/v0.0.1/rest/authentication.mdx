@@ -22,8 +22,8 @@ One auth class is wired per `RestPlugin` (one plugin-wide backend, not per-resou
 ```rust
 pub struct Identity {
     pub user_id: String,      // the authenticated user's PK, stringified (PK-type-agnostic)
-    pub is_staff: bool,       // mirrors Django's User.is_staff
-    pub is_superuser: bool,   // mirrors Django's User.is_superuser
+    pub is_staff: bool,       // staff flag, gates admin access
+    pub is_superuser: bool,   // superuser flag, grants all permissions
     pub extras: HashMap<String, Value>,  // app-specific (roles, org id, scopes)
 }
 ```
@@ -71,7 +71,7 @@ Anonymous sessions (no logged-in user yet) resolve to `None`; the permission cla
 
 ### BearerAuthentication
 
-The opaque DB-backed bearer-token path, the same shape DRF ships. Each user can hold any number of named tokens; the row stores `sha256(plaintext)` so a DB leak does not surrender live tokens.
+The opaque DB-backed bearer-token path. Each user can hold any number of named tokens; the row stores `sha256(plaintext)` so a DB leak does not surrender live tokens.
 
 ```rust
 use umbral_auth::{AuthToken, BearerAuthentication};

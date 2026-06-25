@@ -14,10 +14,10 @@ Completeness one-liner: **Core `send`/`compose`/templates/attachments are comple
 |---|---|---|
 | SMTP backend | **Complete** | `lettre` STARTTLS relay on port 587, optional SASL creds, rustls. |
 | Console backend (dev default) | Complete | prints rendered RFC822 to stderr; auto-selected when `email_smtp_host` unset or `UMBRAL_EMAIL_BACKEND=console`. |
-| File backend | **Absent** | Django has `filebased.EmailBackend`. Not shipped; not documented as deferred either → small doc gap. |
+| File backend | **Absent** | A file-based backend (writing each message to a file) is a common option. Not shipped; not documented as deferred either → small doc gap. |
 | Dummy / locmem backend | Absent | tests use console; no in-memory capture backend for assertions. |
 | `send` API | Complete | resolves From (message → `email_default_from` → error), validates recipients. |
-| `EmailMessage` builder | Complete | from/to/add_to/subject/text_body/html_body/reply_to/attach. Django `EmailMessage` parity for the common path. |
+| `EmailMessage` builder | Complete | from/to/add_to/subject/text_body/html_body/reply_to/attach. Full coverage of the common message-builder path. |
 | HTML + text alternatives | Complete | `multipart/alternative`, tested. |
 | Attachments | Complete | bytes-only, `multipart/mixed`, base64 by lettre, invalid-content-type → named error. Tested thoroughly (`tests/attachments.rs`). |
 | Templated emails | Complete | `render_email_body` → `umbral::templates::render`, tested against a real template file. |
@@ -38,7 +38,7 @@ Completeness one-liner: **Core `send`/`compose`/templates/attachments are comple
 ### NEW — Optional (correctness / availability)
 - **SMTP send has no timeout.** `lib.rs:557-575` builds the transport with no connection/operation timeout, so a black-holed relay hangs the awaiting task indefinitely. Fix: `.timeout(Some(Duration::from_secs(...)))` on the `AsyncSmtpTransport` builder. → **NEW gap.**
 - **`EmailConfig` is cached in a process-lifetime `OnceLock` (`lib.rs:344-348`)** — consistent with the framework's ambient-handle convention and documented, but means a settings reload needs a restart. FYI, not a defect.
-- **No backend abstraction trait.** The backend is a `BackendKind` enum dispatched in `send` (`lib.rs:433`). A third-party can't add (say) an SES-API backend without forking. Django exposes a pluggable `EmailBackend`. Fine for v1; note for the future. FYI.
+- **No backend abstraction trait.** The backend is a `BackendKind` enum dispatched in `send` (`lib.rs:433`). A third-party can't add (say) an SES-API backend without forking. A pluggable email-backend trait would allow this. Fine for v1; note for the future. FYI.
 
 ### Already filed (cross-ref)
 - The docs-audit "`umbral-email` crate doesn't exist" entry in `backlog.md` P1 docs long-tail is **stale** — the crate ships. The doc page (`documentation/docs/v0.0.1/plugins/email.mdx`) exists. → flag for the doc-fix batch to drop that line.

@@ -305,7 +305,7 @@ pub(crate) fn form_fields_for(
 /// editable fields, returning `field_name → message` for every
 /// failure (gaps2 #43).
 ///
-/// Django shows ALL field errors at once, each below its own input;
+/// We show ALL field errors at once, each below its own input;
 /// this is the server-side pass that produces them. It walks the SAME
 /// `FormField` list the form renders (via `form_fields_for`) so the
 /// exclusion logic — pk / noform / auto_now / auto_now_add / password —

@@ -93,4 +93,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, the architecture rules, and 
 
 ## License
 
-Dual-licensed under MIT OR Apache-2.0. See [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE). The name "umbral" is a trademark of the project (see [`TRADEMARK.md`](TRADEMARK.md)).
+Dual-licensed under MIT OR Apache-2.0. See [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).

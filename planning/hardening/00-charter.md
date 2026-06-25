@@ -7,7 +7,7 @@
 **Harden what we already have. No new plugins.** The framework surface is wide enough; the job now is to make it correct, safe, fast, and maintainable, and to make the docs match the code. Two strategic items are called out as "fix early to avoid later chaos":
 
 - **The database router (gaps2 #69)** — extract routing into a swappable `DatabaseRouter` trait. It is the keystone for **multitenancy** (schema-per-tenant) and absorbs #22 (done) / #23 (read-write split). Best done early while the ORM is still malleable.
-- **Multitenancy** — schema-per-tenant (`django-tenants` model), built-in. Depends on #69 + a per-request routing context.
+- **Multitenancy** - schema-per-tenant, built-in. Depends on #69 + a per-request routing context.
 
 Quick win to fold in: **gaps2 #66** (document minijinja filters + custom template tags).
 
@@ -29,7 +29,7 @@ Run against the core (ORM, migrations, macros, the dynamic write path, app/build
 - **`reviews/race-conditions.md`** — *the ORM is DB-heavy: can two concurrent requests diverge data?* Audit the ambient pool (`OnceLock`), session create/lookup, signals registry, `update_or_create`/`get_or_create`, M2M junction writes, the dynamic `insert_json`/`update_json` paths, soft-delete filters, and any check-then-write (TOCTOU) — does it need a transaction / `SELECT … FOR UPDATE` / unique constraint? Concurrency tests where gaps exist.
 - **`reviews/security.md`** — SQL injection (every `sqlx::query`/`query_as` + `Expr::cust` + any string-built SQL incl. `filter_sql`, search branch SQL), authn/authz gates (REST default perms, admin staff gating, permissions plugin), CSRF, secrets in code/logs, input validation at boundaries, XSS/template autoescape, the `Masked` field, allowed-hosts/CORS. Reuse `references/security-checklist.md`.
 - **`reviews/performance-scalability.md`** — N+1 (prefetch/select_related coverage, REST `?include=`, admin changelists), unbounded queries / missing pagination/LIMIT, hot paths (per-request allocations, `to_value`), the 200M-row concern (gaps2 #63), index coverage. Reuse `references/performance-checklist.md`.
-- **`reviews/correctness-domain.md`** — does the ORM/migrations/plugin behavior match the spec + Django parity? Edge cases (empty/null/boundary), error paths (not just happy path), soft-delete dynamic-path gaps (gaps2 #34/#35), PK-type assumptions (the i64 lift), the migration autodetector's known holes (gaps #89/#90/#93/#94).
+- **`reviews/correctness-domain.md`** — does the ORM/migrations/plugin behavior match the spec? Edge cases (empty/null/boundary), error paths (not just happy path), soft-delete dynamic-path gaps (gaps2 #34/#35), PK-type assumptions (the i64 lift), the migration autodetector's known holes (gaps #89/#90/#93/#94).
 - **`reviews/architecture-modularity.md`** — module boundaries + **file size / cohesion** (QA): the 5 files >2,800 LOC (`queryset/mod.rs` 4846, `migrate.rs` 4660, `umbral-macros/lib.rs` 4521, `dynamic.rs` 3009, `column.rs` 2845) are split candidates — propose **module** splits (a directory of focused files that belong together), not arbitrary file cuts. Dead code, the plugin-contract/facade boundary, dependency direction, duplication.
 - **`reviews/static-analysis.md`** — `cargo clippy --workspace --all-targets` landscape (umbral-admin alone had ~44 warnings; umbral-macros has several), `unwrap()`/`expect()`/`panic!` in non-test/prod paths, `unwrap_or_default()` masking, `.ok()` swallowing, `#[allow(...)]` audit, TODO/FIXME inventory.
 

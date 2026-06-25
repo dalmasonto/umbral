@@ -4,14 +4,14 @@ Date: 2026-06-10. Companion to `competitive-positioning.md`. The reasoning here 
 
 ## The strategic core
 
-Django, cot, and loco all compete on the same axis — **developer ease**:
-- Django: *"The web framework for perfectionists with deadlines."*
+The established batteries-included frameworks, cot, and loco all compete on the same axis, **developer ease**:
+- the incumbent batteries-included frameworks: *"The web framework for perfectionists with deadlines."*
 - cot.rs: *"The Rust web framework for lazy developers."*
 - loco.rs: *"Productivity-first… the one-person framework."*
 
-That axis is crowded, and on it umbral is the fourth voice saying a version of *fast and pleasant* — and it would lose the fight on maturity (cot ships, loco is mature).
+That axis is crowded, and on it umbral is the fourth voice saying a version of *fast and pleasant*, and it would lose the fight on maturity (cot ships, loco is mature).
 
-umbral's genuinely unique, audit-verified truth lives on a **different axis: radical modularity.** Auth, sessions, admin, tasks, and REST are all plugins, registered through the *same trait a third party uses*, enforced by Cargo's ban on circular crate dependencies. No competitor can claim this without re-architecting. **The motto should plant a flag on the axis umbral already owns — not fight on ease.**
+umbral's genuinely unique, audit-verified truth lives on a **different axis: radical modularity.** Auth, sessions, admin, tasks, and REST are all plugins, registered through the *same trait a third party uses*, enforced by Cargo's ban on circular crate dependencies. No competitor can claim this without re-architecting. **The motto should plant a flag on the axis umbral already owns, not fight on ease.**
 
 ## Recommended motto
 
@@ -32,12 +32,12 @@ Why this is the line:
 |---|---|---|
 | Provocative / minimal | **"There is no core."** | Maximum intrigue; makes people click to find out what you mean. Riskier — needs the subline to land. |
 | The contract angle | **"One trait away from anything."** | Leans technical; speaks to Rust devs who'll appreciate the Plugin-trait seam. |
-| Identity / who-it's-for | **"For builders who refuse to inherit someone else's monolith."** | If you'd rather name the audience (Django/Rails refugees who hit the wall of an un-swappable core). |
+| Identity / who-it's-for | **"For builders who refuse to inherit someone else's monolith."** | If you'd rather name the audience (refugees from monolithic batteries frameworks who hit the wall of an un-swappable core). |
 
 ## Why not the others
 
 - **Ease/speed lines** ("fast", "productive", "for X developers") are taken, and umbral loses that fight on maturity today.
-- **"Django for Rust"** is literally cot's slot.
+- **"The batteries-included framework for Rust"** is literally cot's slot.
 - **Shadow/umbral puns** are clever but fragile (placeholder name) and inward-looking.
 
 Modularity is the open lane, and the only one the code can survive being fact-checked on.
@@ -78,19 +78,19 @@ Each is headline + subline + three proof-points. The proof-points are grounded i
 ### Variation 4 — Identity / who-it's-for
 
 > # For builders who refuse to inherit someone else's monolith.
-> umbral gives you Django's shape — models, migrations, an admin, a real REST framework, a task queue — on Rust, with one difference that changes everything: nothing is built-in. Everything is a plugin, including the parts we wrote.
+> umbral gives you the full batteries-included shape - models, migrations, an admin, a real REST framework, a task queue - on Rust, with one difference that changes everything: nothing is built-in. Everything is a plugin, including the parts we wrote.
 
 - **Outgrow nothing.** When you need to replace the admin, the auth, or the API layer, there's no privileged core fighting you — just another plugin.
-- **More batteries than a starter kit.** Auth, permissions, sessions, admin with dashboards, DRF-style REST, OpenAPI, a background task queue, email, cache, media. *(Harden tasks-queue correctness before leading with it — see broken-features.md.)*
+- **More batteries than a starter kit.** Auth, permissions, sessions, admin with dashboards, full serializer/viewset REST, OpenAPI, a background task queue, email, cache, media. *(Harden tasks-queue correctness before leading with it - see broken-features.md.)*
 - **Safety the compiler enforces, not the docs.** argon2 hashing, template autoescaping, always-parameterized SQL.
 
-### Variation 5 — Hybrid for Django refugees (leads familiar, pivots to the wedge)
+### Variation 5 - Hybrid for refugees from monolithic batteries frameworks (leads familiar, pivots to the wedge)
 
-> # The framework that feels like Django — and gets out of your way completely.
-> Declare your data and get migrations, an admin, CRUD, and an optional API almost for free. Then discover the part Django never gave you: every one of those features is a plugin you can swap, on a core that holds no special privileges.
+> # The framework that feels effortless - and gets out of your way completely.
+> Declare your data and get migrations, an admin, CRUD, and an optional API almost for free. Then discover the part the monolithic batteries frameworks never gave you: every one of those features is a plugin you can swap, on a core that holds no special privileges.
 
 - **The loop you already know.** Declare → migrate → change → migrate, generated and reversible, from the first model.
-- **The extensibility you always wanted.** No `contrib` tier above your code — auth and admin are peers of your plugins.
+- **The extensibility you always wanted.** No `contrib` tier above your code; auth and admin are peers of your plugins.
 - **Rust underneath.** Compile-time guarantees, Postgres-first, axum-fast, secure primitives by default.
 
 ---

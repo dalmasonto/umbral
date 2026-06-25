@@ -5,7 +5,7 @@ sidebar_position: 6
 icon: shield
 ---
 
-`umbral-security` gives every non-safe request automatic CSRF validation (signed double-submit, the equivalent of Django's `CsrfViewMiddleware`) plus a modern security-header bundle. Mount it and you're done: the middleware mints the token before your handler runs, your templates receive it ambiently, and a missing or forged token on any POST / PUT / PATCH / DELETE returns 403. Your view code never touches CSRF.
+`umbral-security` gives every non-safe request automatic CSRF validation (signed double-submit) plus a modern security-header bundle. Mount it and you're done: the middleware mints the token before your handler runs, your templates receive it ambiently, and a missing or forged token on any POST / PUT / PATCH / DELETE returns 403. Your view code never touches CSRF.
 
 ```rust
 App::builder()

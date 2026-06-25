@@ -1,14 +1,14 @@
-# Building a Django-Inspired Web Framework in Rust — Architecture, Features & Build Strategy
+# Building a Batteries-Included Web Framework in Rust - Architecture, Features & Build Strategy
 
-The goal is not to clone Django line-for-line, but to recreate the *feeling*: declare your data, get migrations, CRUD, an admin, and (optionally) an API almost for free, while gaining Rust's compile-time resilience. umbral is a separate Rust framework inspired by Django's shape and ergonomics; it isn't a port and shares no code with the Django project. The framework is **thin-core + plugin-heavy**, and it **dogfoods its own plugin system** for every built-in feature.
+The goal is a particular *feeling*: declare your data, get migrations, CRUD, an admin, and (optionally) an API almost for free, while gaining Rust's compile-time resilience. umbral is a self-contained Rust framework with its own ORM, migration engine, and plugin system. The framework is **thin-core + plugin-heavy**, and it **dogfoods its own plugin system** for every built-in feature.
 
-> **Project name: `umbral`** ('of the shadow', from Latin *umbra*, shadow; the framework lives in Django's shadow in shape, not in code). Placeholder; rename the whole tree later with a single `sed 's/umbral/yourname/g'`. Convention: the facade crate is `umbral`, internals are `umbral-*`, and third-party plugins follow `umbral-<thing>` the way Django plugins are `django-<thing>`.
+> **Project name: `umbral`** ('of the shadow', from Latin *umbra*, shadow). Placeholder; rename the whole tree later with a single `sed 's/umbral/yourname/g'`. Convention: the facade crate is `umbral`, internals are `umbral-*`, and third-party plugins follow the `umbral-<thing>` naming pattern.
 
 ---
 
 ## 0. The North Star: make *porting* easy
 
-Django makes porting an existing API trivial because of two features above all others:
+Porting an existing API becomes trivial because of two features above all others:
 
 1. **`inspectdb`.** Point it at an existing database and it generates models.
 2. **Managed migrations.** Describe the desired schema; the framework computes the steps. The everyday loop is **declare → migrate → change → migrate**: declare or change a model, an autodetected migration is generated, `migrate` applies it, and the diff between consecutive snapshots produces the right `ALTER` / `DROP` next time.
@@ -27,7 +27,7 @@ The core ships only what every app needs no matter what. Serializers/REST, admin
 
 ### Pillar 2 — The framework dogfoods its own plugin system
 
-This mirrors Django's `contrib` apps. Auth, admin, sessions, and tasks register through the same mechanism, own their own migrations, and expose routes and commands the same way a stranger's plugin would. If the built-ins can't be expressed as plugins, the plugin contract is wrong.
+The built-in features ship as ordinary plugins. Auth, admin, sessions, and tasks register through the same mechanism, own their own migrations, and expose routes and commands the same way a stranger's plugin would. If the built-ins can't be expressed as plugins, the plugin contract is wrong.
 
 ### Pillar 3 — Cargo workspace encodes core-vs-plugin
 
@@ -38,13 +38,13 @@ workspace/
 ├── umbral-core        # ORM, migrations, routing, DB backends, the Plugin TRAIT. Depends on nothing plugin-related.
 ├── umbral-macros      # #[derive(Model)], #[task], etc.
 ├── umbral             # FACADE: re-exports core (+ macros) as one stable surface → `use umbral::prelude::*`
-├── umbral-cli         # the `manage.py` equivalent binary
+├── umbral-cli         # the project management CLI binary
 ├── plugins/
 │   ├── umbral-auth     # built-in plugin: users, permissions, password hashing
 │   ├── umbral-sessions # built-in plugin: session store + middleware
 │   ├── umbral-admin    # built-in plugin: auto CRUD UI
-│   ├── umbral-tasks    # built-in plugin: DB-backed Celery-equivalent
-│   ├── umbral-rest     # OPTIONAL plugin: serializers, viewsets, routers (the "DRF")
+│   ├── umbral-tasks    # built-in plugin: DB-backed task queue
+│   ├── umbral-rest     # OPTIONAL plugin: serializers, viewsets, routers (the REST layer)
 │   └── umbral-openapi  # OPTIONAL plugin: Swagger UI / schema gen, depends on umbral-rest
 ```
 
@@ -62,7 +62,7 @@ Two rules apply across every subsystem and shape umbral's *feel*. They sit here,
 
 | Crate | Visibility | Notes |
 |---|---|---|
-| **axum** | **Hidden** by default. `umbral::web::{Router, Request, Response, Json, Path, Query, Form}`. Escape hatch: `umbral::axum::*`. | Day-to-day umbral looks Django-shape. |
+| **axum** | **Hidden** by default. `umbral::web::{Router, Request, Response, Json, Path, Query, Form}`. Escape hatch: `umbral::axum::*`. | Day-to-day umbral looks declarative and framework-native. |
 | **sqlx** | **Hidden** behind `QuerySet` / `Manager`. Escape hatch: `umbral::db::query!` is `sqlx::query!`. | Compile-time-checked SQL remains available. |
 | **sea-query** | **Fully hidden.** | Pure implementation detail. |
 | **tower / tower-http** | **Mixed.** Middleware is configured through umbral's chain, but the underlying type is a tower service so standard layers compose. | Contract reads as umbral; ecosystem still works. |
@@ -80,7 +80,7 @@ Two rules apply across every subsystem and shape umbral's *feel*. They sit here,
 | **App-wide / process-scoped** | DB pool, `Settings`, plugin registry, task-queue handle, cache, template engine | **Ambient.** Set during `App::build()` (stored in `OnceLock`s inside the relevant module). Reached via accessors: `Post::objects()`, `umbral::settings()`, `umbral::tasks::enqueue(...)`. **No `State<…>` in the handler signature.** |
 | **Per-request / request-scoped** | The Request, parsed body, path/query params, the session, the authenticated user, an active transaction handle | **Explicit arguments.** Extracted into the handler signature: `Request`, `Path<T>`, `Json<T>`, `Form<T>`, `Query<T>`, `Session`, `Auth<User>`. Uses axum extractors under the hood; the user sees umbral types only. |
 
-A Django-shape umbral handler — no `State`, no `axum`, ambient ORM:
+A framework-native umbral handler, with no `State`, no `axum`, and an ambient ORM:
 
 ```rust
 use umbral::prelude::*;
@@ -106,24 +106,24 @@ async fn create_post(
 
 ## 3. The Plugin Contract (the heart of extensibility)
 
-A plugin (Django's "app") is a unit that can contribute any subset of:
+A plugin (the framework's unit of pluggable functionality, the equivalent of a self-contained "app") can contribute any subset of:
 
 - **Models** → and therefore **migrations** (the killer requirement below)
 - **Routes / views**
 - **Middleware**
-- **Management commands** (extend `manage.py`)
+- **Management commands** (extend the CLI)
 - **Settings schema + defaults** (typed config the plugin owns)
 - **Admin registrations**
-- **Signals / lifecycle hooks** (an `on_ready()` equivalent of Django's `AppConfig.ready()`)
+- **Signals / lifecycle hooks** (an `on_ready()` hook that runs once at boot)
 
 ### How a plugin is written (and why there is no cycle)
 
-This is the crux of the whole ecosystem. Django plugins import the framework (`from django.db import models`) but the framework never imports the plugin — it discovers plugins through `INSTALLED_APPS` *strings* resolved at runtime. One-directional static dependency; dynamic config-based discovery. Replicate it with **dependency inversion**:
+This is the crux of the whole ecosystem. A plugin imports the framework (its ORM, the `Plugin` trait) but the framework never imports the plugin; it reaches plugin code only through a trait object resolved at runtime. One-directional static dependency, dynamic registration. The mechanism is **dependency inversion**:
 
 1. `umbral-core` owns the ORM and **defines the `Plugin` trait** (the contract). Depends on no plugin.
-2. A plugin depends on the `umbral` facade, implements `Plugin`, and `use`s the ORM freely. The direct equivalent of `from django.db import models`. It "magically" has the ORM because it imports it.
+2. A plugin depends on the `umbral` facade, implements `Plugin`, and `use`s the ORM freely. It "magically" has the ORM because it imports it.
 3. The user's **binary** depends on core plus every plugin and composes them.
-4. Core only ever touches plugins as `Box<dyn Plugin>`. The trait object is the dynamic seam that stands in for `INSTALLED_APPS`. Core reaches plugin code without statically naming it.
+4. Core only ever touches plugins as `Box<dyn Plugin>`. The trait object is the dynamic seam: the binary lists which plugins it uses and the framework wires them in without core ever statically naming a concrete plugin.
 
 Mantra: **dependencies point inward toward core; control flows outward through the trait.** Cargo forbids circular crate deps, which simply enforces this architecture.
 
@@ -142,7 +142,7 @@ impl Plugin for BlogPlugin {
     fn migrations(&self) -> Vec<Migration> { generated_migrations!() } // auto-run on `migrate`
     fn routes(&self) -> Router { /* ... */ }
     fn commands(&self) -> Vec<Command> { vec![] }
-    fn on_ready(&self, _ctx: &AppContext) {}                           // AppConfig.ready()
+    fn on_ready(&self, _ctx: &AppContext) {}                           // runs once at boot
 }
 ```
 
@@ -150,7 +150,7 @@ The author experience is: `cargo add umbral-blog`, then register it (see below).
 
 ### Ambient ORM access (the one place to decide deliberately)
 
-For `Post::objects().filter(...)` to work without threading a pool through every call (the Django feel), managers need ambient access to the DB pool. Django uses a global app registry; idiomatic Rust threads `State<Pool>` explicitly. The clean compromise: store the pool in a `OnceLock<DbPool>` set during `App::build()` so managers can read it ambiently, while still allowing an explicit pool to be passed in tests. Choose this on purpose; don't let globals creep in by accident. See §2.2 for the broader rule this fits inside.
+For `Post::objects().filter(...)` to work without threading a pool through every call (the declarative ORM feel), managers need ambient access to the DB pool. Idiomatic Rust threads `State<Pool>` explicitly. The clean compromise: store the pool in a `OnceLock<DbPool>` set during `App::build()` so managers can read it ambiently, while still allowing an explicit pool to be passed in tests. Choose this on purpose; don't let globals creep in by accident. See §2.2 for the broader rule this fits inside.
 
 ### Registration
 
@@ -167,18 +167,18 @@ App::builder()
     .build();
 ```
 
-Each plugin implements a `Plugin` trait whose methods return its migrations, routes, commands, and config defaults. Explicit builder registration is the Django-`INSTALLED_APPS`-like, debuggable default. For the zero-boilerplate "`cargo add umbral-blog` and it just works" experience, *optionally* layer in `inventory`/`linkme` distributed slices so a plugin self-registers at static-init — no `.plugin()` call needed. One caveat: the linker drops crates nothing references, so the binary must still list the plugin as a dependency for auto-registration to fire (which it does the moment you `cargo add` it).
+Each plugin implements a `Plugin` trait whose methods return its migrations, routes, commands, and config defaults. Explicit builder registration is the debuggable default: the binary spells out exactly which plugins it uses, in order. For the zero-boilerplate "`cargo add umbral-blog` and it just works" experience, *optionally* layer in `inventory`/`linkme` distributed slices so a plugin self-registers at static-init — no `.plugin()` call needed. One caveat: the linker drops crates nothing references, so the binary must still list the plugin as a dependency for auto-registration to fire (which it does the moment you `cargo add` it).
 
 ### Automagic migrations on `migrate`
 
 Once a plugin is registered:
 
-1. `manage.py migrate` walks every registered plugin and collects `plugin.migrations()`.
+1. `migrate` walks every registered plugin and collects `plugin.migrations()`.
 2. Migrations are ordered by a dependency graph (cross-plugin FKs allowed).
 3. Applied migrations are tracked in a umbral-owned table; only new ones run.
-4. A third-party plugin "just works" — drop it in, register it, `migrate`, done.
+4. A third-party plugin "just works": drop it in, register it, `migrate`, done.
 
-The framework's own auth/sessions/tasks tables are created this exact way — they are plugin migrations, not special-cased.
+The framework's own auth/sessions/tasks tables are created this exact way; they are plugin migrations, not special-cased.
 
 ---
 
@@ -227,7 +227,7 @@ The framework's own auth/sessions/tasks tables are created this exact way — th
 - **Secret signing.** *(reuse: hmac/ring)*
 
 ### 4.6 CLI / Tooling
-- **`manage.py` equivalent** — extensible subcommands. *(reuse: clap; build extension point)*
+- **Project management CLI** — extensible subcommands. *(reuse: clap; build extension point)*
 - **`startproject`/`startapp`/generators.** *(build: CLI)*
 - **Dev server + autoreload.** *(reuse: cargo-watch/listenfd)*
 - **Fixtures, test client, rich error pages.** *(build on serde/axum-test)*
@@ -239,7 +239,7 @@ The framework's own auth/sessions/tasks tables are created this exact way — th
 
 ## 5. Database Backends & DB-Specific Fields
 
-Django abstracts most differences but also exposes backend-specific power (`django.contrib.postgres`: `ArrayField`, `HStoreField`, range fields, full-text search). Replicate both halves.
+Abstract most dialect differences but also expose backend-specific power (Postgres extras: `ArrayField`, `HStoreField`, range fields, full-text search). Provide both halves.
 
 ### 5.1 Backend abstraction
 - A `DatabaseBackend` trait covering dialect differences: type mapping, identifier quoting, upsert syntax, `RETURNING` support, etc. *(reuse: sea-query already abstracts dialects; sqlx abstracts drivers — Postgres/MySQL/SQLite)*
@@ -262,15 +262,15 @@ Session store + middleware. *(reuse: tower-sessions)* Owns its migrations (DB se
 ### 6.3 `umbral-admin`
 Register a model → auto CRUD UI: list display, filters, search, inlines, bulk actions, permission integration. The flagship "wow" feature. *(build)*
 
-### 6.4 `umbral-tasks` — DB-backed task queue (Celery out of the box)
+### 6.4 `umbral-tasks` — DB-backed task queue (background work out of the box)
 - **`#[task]` macro / `Task` trait** to define tasks; typed args via serde.
-- **DB-backed broker** — owns a `tasks` table via its own migration; no Redis/RabbitMQ required to start. *(reuse: `underway` (Postgres-native) or `apalis` (multi-backend) as the engine)*
-- **Worker process** — `manage.py worker` polls and executes.
-- **Retries, scheduling/periodic ("beat"), result storage.**
+- **DB-backed broker** — owns a `tasks` table via its own migration; no Redis or external message broker required to start. *(reuse: `underway` (Postgres-native) or `apalis` (multi-backend) as the engine)*
+- **Worker process** — the `worker` command polls and executes.
+- **Retries, scheduling/periodic (a beat-style scheduler), result storage.**
 - **Pluggable broker later** (Redis, etc.) behind the same task API.
-- Because it's DB-backed and registered like any plugin, `migrate` provisions its tables automatically — exactly the "plugin owns its migrations" story.
+- Because it's DB-backed and registered like any plugin, `migrate` provisions its tables automatically: exactly the "plugin owns its migrations" story.
 
-### 6.5 `umbral-rest` — the "DRF" (OPTIONAL)
+### 6.5 `umbral-rest` — the REST layer (OPTIONAL)
 - **Serializers / ModelSerializer** — struct ↔ JSON + validation. *(reuse: serde; build mapping)*
 - **ViewSets & routers** — auto-generate CRUD URL sets. *(build)*
 - **Auth/permission/throttle classes, pagination, filtering, ordering.** *(build; reuse tower-governor for throttle)*
@@ -355,4 +355,4 @@ Each milestone is independently demoable. Build the primitives by hand first, th
 | Dev reload         | cargo-watch, listenfd                     |
 | Testing            | axum-test                                 |
 
-> Worth studying for seams (even while building your own): **SeaORM** (ORM on sea-query), **Loco** (Rails-style app framework on SeaORM), and **Cot** (Django-like, builds its own ORM on sea-query and sits on axum — the closest prior art to this project).
+> Worth studying for seams (even while building your own): **SeaORM** (ORM on sea-query), **Loco** (full-stack app framework on SeaORM), and **Cot** (a batteries-included Rust framework that builds its own ORM on sea-query and sits on axum, the closest prior art to this project).

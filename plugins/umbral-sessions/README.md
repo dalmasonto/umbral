@@ -2,7 +2,7 @@
 
 Session storage + cookie helpers for umbral. DB-backed sessions linked to umbral-auth users.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

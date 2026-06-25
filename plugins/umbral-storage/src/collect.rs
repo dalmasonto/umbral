@@ -78,14 +78,14 @@ impl umbral::cli::PluginCommand for CollectStaticCommand {
         clap::Command::new("collectstatic")
             .about(
                 "Collect every plugin's static_dirs() (namespaced) and static_root_dirs() \
-                 (site dirs) into settings.static_root. Django's collectstatic.",
+                 (site dirs) into settings.static_root.",
             )
             .arg(
                 clap::Arg::new("clear")
                     .long("clear")
                     .help(
                         "Empty static_root before collecting, dropping stale assets no plugin \
-                         ships any more. Like Django's --clear. No confirmation prompt.",
+                         ships any more. No confirmation prompt.",
                     )
                     .action(clap::ArgAction::SetTrue),
             )
@@ -94,7 +94,7 @@ impl umbral::cli::PluginCommand for CollectStaticCommand {
                     .long("hashed")
                     .help(
                         "Write content-hashed copies (app.<hash>.css) alongside each asset and a \
-                         staticfiles.json manifest. Django's ManifestStaticFilesStorage. Use in \
+                         staticfiles.json manifest. Use in \
                          PROD: the hashed filename changes when bytes do, so assets can carry \
                          far-future cache headers without stale-cache risk.",
                     )

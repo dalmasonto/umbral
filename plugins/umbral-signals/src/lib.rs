@@ -1,4 +1,4 @@
-//! umbral-signals — Django-style per-model lifecycle signals + generic
+//! umbral-signals: per-model lifecycle signals + generic
 //! name-keyed pub/sub.
 //!
 //! ## Quick start — model signals
@@ -39,8 +39,8 @@
 //!
 //! **Bulk methods do NOT fire signals.** `Manager::create`,
 //! `Manager::bulk_create`, `QuerySet::update_values`, and
-//! `QuerySet::delete` are signal-free for performance reasons,
-//! matching Django's own behaviour. See the doc callout in the
+//! `QuerySet::delete` are signal-free for performance reasons.
+//! See the doc callout in the
 //! user-facing docs at `documentation/docs/v0.0.1/plugins/signals.mdx`.
 //!
 //! ## Signal name format
@@ -125,7 +125,7 @@ pub fn on_model<M: Model>() -> ModelSignals<M> {
 ///
 /// All four methods take an async closure that returns a `Future<Output = ()>`
 /// and is `Send + Sync + 'static`. Handlers are awaited in series by the
-/// emitter (same semantics as Django's `Signal.send`). Spawn a
+/// emitter (fire-and-collect semantics). Spawn a
 /// `tokio::task::spawn` inside the handler for fire-and-forget work.
 pub struct ModelSignals<M: Model> {
     _m: PhantomData<M>,

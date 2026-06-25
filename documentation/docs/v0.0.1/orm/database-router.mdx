@@ -79,7 +79,7 @@ The context rides a task-local for the whole request, so every ORM call inside t
 umbral ships **no multitenancy system** - no `Tenant` model, no per-tenant schema migrations, no tenant provisioning. Don't reach for the router expecting turnkey schema- or database-per-tenant tenancy; it gives you the low-level routing primitive (which database a query uses), not the management around it.
 </Callout>
 
-The trait does carry a `schema_for(ctx) -> Option<Schema>` hook for Django-router parity, but it's a low-level building block, not a supported tenancy feature, and is intentionally undocumented here until the management layer (deferred) lands.
+The trait does carry a `schema_for(ctx) -> Option<Schema>` hook for qualifying queries with a schema name, but it's a low-level building block, not a supported tenancy feature, and is intentionally undocumented here until the management layer (deferred) lands.
 
 ## See also
 

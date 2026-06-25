@@ -201,8 +201,8 @@ Compute the per-bucket counts in SQL with a grouped [`annotate`](/docs/v0.0.1/or
 use umbral::orm::Aggregate;
 
 data: WidgetDataFn::new(|_user| async move {
-    // GROUP BY status, COUNT(*) per group, Django's
-    // `.values("status").annotate(count=Count("id"))`.
+    // GROUP BY status with COUNT(*) per group: one row
+    // per status, the count aliased as "count".
     let rows = Order::objects()
         .annotate(&["status"], &[("count", Aggregate::count())])
         .await

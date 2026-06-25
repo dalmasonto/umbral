@@ -2,7 +2,7 @@
 
 Unified storage plugin for umbral: merges static-file serving (umbral-static) and media uploads (umbral-media) onto one Storage trait, with an optional S3 backend.
 
-This is a built-in plugin for umbral, a Django-inspired web framework for Rust.
+This is a built-in plugin for umbral, a batteries-included web framework for Rust.
 
 ## Install
 

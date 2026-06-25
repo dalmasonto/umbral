@@ -8,7 +8,7 @@
 
 ## Purpose
 
-Index to the umbral deep specs. Read this before the others. It pins down the canonical example app that every spec uses, names the Django ↔ umbral translations, and establishes the naming conventions so the rest of the doc set doesn't drift over time.
+Index to the umbral deep specs. Read this before the others. It pins down the canonical example app that every spec uses, maps each core concept to the file that owns it, and establishes the naming conventions so the rest of the doc set doesn't drift over time.
 
 ## How to read this doc set
 
@@ -23,7 +23,7 @@ The deep specs are numbered in the order someone reading the design from scratch
 7. **`07-inspectdb.md`.** Introspect an existing database into models that feed straight back into the migration engine. The porting payoff.
 8. **`08-authoring-plugins.md`.** The author-side walkthrough — from `cargo new umbral-foo --lib` to `cargo publish`. Complements `02-plugin-contract.md` (what the contract is) with how you actually build one.
 
-Outlines under `outlines/*.md` cover M7–M13 surfaces at half-page depth. Each one is promoted to a deep spec when its milestone is approached. Items deferred beyond M13 live as structured backlog entries in `deferred.md`. The full coverage audit (every Django capability mapped to a spec, outline, or deferred entry) lives in `docs/decisions/2026-05-30-spec-set-design.md §7`.
+Outlines under `outlines/*.md` cover M7–M13 surfaces at half-page depth. Each one is promoted to a deep spec when its milestone is approached. Items deferred beyond M13 live as structured backlog entries in `deferred.md`. The full coverage audit (every framework capability mapped to a spec, outline, or deferred entry) lives in `docs/decisions/2026-05-30-spec-set-design.md §7`.
 
 ## Naming conventions
 
@@ -32,43 +32,43 @@ Outlines under `outlines/*.md` cover M7–M13 surfaces at half-page depth. Each 
 | Workspace facade crate | `umbral`. The only stable surface user code imports. |
 | Internal crates | `umbral-core`, `umbral-macros`, `umbral-cli`. Refactorable; users never depend on them directly. |
 | Built-in plugins | `umbral-auth`, `umbral-sessions`, `umbral-admin`, `umbral-tasks`, `umbral-rest`, `umbral-openapi`. |
-| Third-party plugins | `umbral-<thing>`. Mirrors Django's `django-<thing>`. |
+| Third-party plugins | `umbral-<thing>`. |
 | Prelude | `use umbral::prelude::*`. |
 | Modules ambient state lives in | One `OnceLock` per concern, owned by the relevant module: `umbral::db` (pool), `umbral::settings` (the `Settings` struct), `umbral::plugins` (the registry), `umbral::tasks` (the task queue handle), etc. Concrete placement is the subject of `01-app-and-settings.md`. |
 | File names in `docs/specs/` | `<NN>-<kebab-case>.md`, two-digit prefix. |
 | File names in `docs/specs/outlines/` | `<kebab-case>.md`, no prefix (order is determined by the milestone they map to, not a numeric sort). |
 
-## Django ↔ umbral glossary
+## Concept reference
 
-The translations are deliberate, not literal. The right-hand column captures what umbral calls the concept and points at the file that owns its design. Where the spec doesn't exist yet, the column names the future home.
+A map of umbral's core concepts to the file that owns each one's design. Where the spec doesn't exist yet, the table names the future home. Use this to find which document specifies a given piece of surface.
 
-| Django term | umbral term | Owned by |
+| Concept | umbral surface | Owned by |
 |---|---|---|
-| Project | App + binary crate | `arch.md §1`, `01-app-and-settings.md` |
-| App | Plugin | `02-plugin-contract.md` |
-| `INSTALLED_APPS` | `App::builder().plugin(...)` (explicit) plus optional `inventory` auto-registration | `02-plugin-contract.md` |
-| `Model` (class) | `#[derive(Model)] struct` | `04-orm-model-and-fields.md` |
-| Field type (`CharField`, `IntegerField`, ...) | Rust type plus attribute (`String`, `i64`, `Option<DateTime<Utc>>`, ...) | `04-orm-model-and-fields.md` |
-| Manager (`Foo.objects`) | `T::objects()` (free function on the type) | `03-orm-querysets.md` |
-| `QuerySet` | `QuerySet<T>` | `03-orm-querysets.md` |
-| `F()` / `Q()` expressions | Macro form to be designed in spec 03 | `03-orm-querysets.md` |
-| `select_related` / `prefetch_related` | Method form to be designed in spec 03 | `03-orm-querysets.md` |
-| `makemigrations` / `migrate` | `cargo run -p umbral-cli -- makemigrations` / `migrate` | `06-migration-engine.md` |
-| `inspectdb` | `cargo run -p umbral-cli -- inspectdb` | `07-inspectdb.md` |
-| `AppConfig.ready()` | `Plugin::on_ready(&self, &AppContext)` | `02-plugin-contract.md` |
-| `settings.py` | `Settings` struct, layered via figment | `01-app-and-settings.md` |
-| `manage.py <cmd>` | `cargo run -p umbral-cli -- <cmd>` (binary) plus per-plugin `Command`s | `02-plugin-contract.md` |
-| `request` | `Request` (`umbral::web`) plus extractors as handler arguments | outline `web-layer.md` |
-| `auth.User` | `User`, with custom-user-model swap path designed in the auth outline | outline `auth-and-sessions.md` |
-| `ModelForm` | Designed in outline `forms.md` | outline `forms.md` |
-| `ModelSerializer` | Designed in outline `rest.md` | outline `rest.md` |
-| `pre_save` / `post_save` signals | Designed in outline `signals.md` | outline `signals.md` |
-| `default_storage` (file storage) | Designed in outline `static-and-media.md` | outline `static-and-media.md` |
-| `cache_page` (per-view caching) | Designed in outline `caching.md` | outline `caching.md` |
-| Django admin | `umbral-admin` (auto CRUD UI) | outline `admin.md` |
-| DRF | `umbral-rest` (optional plugin) | outline `rest.md` |
+| Project (the whole app) | App + binary crate | `arch.md §1`, `01-app-and-settings.md` |
+| Pluggable unit of functionality (an "app") | Plugin | `02-plugin-contract.md` |
+| Plugin registration | `App::builder().plugin(...)` (explicit) plus optional `inventory` auto-registration | `02-plugin-contract.md` |
+| Model definition | `#[derive(Model)] struct` | `04-orm-model-and-fields.md` |
+| Field types | Rust type plus attribute (`String`, `i64`, `Option<DateTime<Utc>>`, ...) | `04-orm-model-and-fields.md` |
+| Per-model query entry point | `T::objects()` (free function on the type) | `03-orm-querysets.md` |
+| Lazy query builder | `QuerySet<T>` | `03-orm-querysets.md` |
+| Field references / boolean composition (`F()` / `Q()`) | Macro form to be designed in spec 03 | `03-orm-querysets.md` |
+| Eager relation loading (joins / N+1 fix) | Method form to be designed in spec 03 | `03-orm-querysets.md` |
+| Generate / apply migrations | `cargo run -p umbral-cli -- makemigrations` / `migrate` | `06-migration-engine.md` |
+| Introspect an existing DB into models | `cargo run -p umbral-cli -- inspectdb` | `07-inspectdb.md` |
+| Boot-time lifecycle hook | `Plugin::on_ready(&self, &AppContext)` | `02-plugin-contract.md` |
+| Settings | `Settings` struct, layered via figment | `01-app-and-settings.md` |
+| Management commands | `cargo run -p umbral-cli -- <cmd>` (binary) plus per-plugin `Command`s | `02-plugin-contract.md` |
+| Request access | `Request` (`umbral::web`) plus extractors as handler arguments | outline `web-layer.md` |
+| User model | `User`, with custom-user-model swap path designed in the auth outline | outline `auth-and-sessions.md` |
+| Model-backed forms | Designed in outline `forms.md` | outline `forms.md` |
+| Model serializers | Designed in outline `rest.md` | outline `rest.md` |
+| Pre/post-save signals | Designed in outline `signals.md` | outline `signals.md` |
+| File storage | Designed in outline `static-and-media.md` | outline `static-and-media.md` |
+| Per-view caching | Designed in outline `caching.md` | outline `caching.md` |
+| Auto CRUD admin UI | `umbral-admin` | outline `admin.md` |
+| REST layer | `umbral-rest` (optional plugin) | outline `rest.md` |
 
-When in doubt, the umbral term is whatever reads naturally to a Rust developer; the Django term is the bridge that helps porters orient. Both columns matter.
+When in doubt, the umbral term is whatever reads naturally to a Rust developer.
 
 ## Canonical example app
 

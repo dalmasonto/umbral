@@ -2,7 +2,8 @@
 //!
 //! Authentication ([`crate::auth`]) identifies the caller, permission
 //! ([`crate::permission`]) decides what they may do — throttling decides
-//! how fast. It's DRF's third request-time gate, run **after** auth
+//! how fast. It's the third request-time gate (after auth and
+//! permission), run **after** auth
 //! resolves but **before** the handler: a request that passes auth and
 //! permission can still be rejected with **429 Too Many Requests** if the
 //! caller is over their rate.
@@ -23,7 +24,7 @@
 //! table). Multiple throttles **stack**: all must pass, and the FIRST to
 //! deny wins.
 //!
-//! ## Built-ins (mirroring DRF)
+//! ## Built-ins
 //!
 //! - [`AnonRateThrottle`] — limits only **anonymous** requests, keyed by
 //!   client IP. Authenticated requests pass through untouched.
@@ -98,8 +99,8 @@ fn decide(limiter: &RateLimiter, key: &str) -> Result<(), ThrottleDenied> {
 /// Limit **anonymous** requests, keyed by client IP. Authenticated
 /// requests are a no-op pass (use [`UserRateThrottle`] for those).
 ///
-/// The DRF analog: `AnonRateThrottle` with `DEFAULT_THROTTLE_RATES =
-/// {"anon": "100/hour"}`.
+/// Limits anonymous requests by IP; configure with a rate string like
+/// `"100/hour"`.
 ///
 /// ```ignore
 /// RestPlugin::default().default_throttle(AnonRateThrottle::new("100/hour"))
@@ -109,7 +110,7 @@ pub struct AnonRateThrottle {
 }
 
 impl AnonRateThrottle {
-    /// Build from a DRF rate string (`"100/hour"`, `"10/min"`, …).
+    /// Build from a rate string (`"100/hour"`, `"10/min"`, …).
     ///
     /// # Panics
     /// Panics if `rate` doesn't parse — a malformed rate is always a
@@ -150,7 +151,8 @@ impl Throttle for AnonRateThrottle {
 /// [`Identity`]. Anonymous requests are a no-op pass (use
 /// [`AnonRateThrottle`] for those).
 ///
-/// The DRF analog: `UserRateThrottle` with `{"user": "1000/day"}`.
+/// Limits authenticated requests by user id; configure with a rate string
+/// like `"1000/day"`.
 ///
 /// ```ignore
 /// RestPlugin::default().default_throttle(UserRateThrottle::new("1000/day"))
@@ -160,7 +162,7 @@ pub struct UserRateThrottle {
 }
 
 impl UserRateThrottle {
-    /// Build from a DRF rate string. See [`AnonRateThrottle::new`] for the
+    /// Build from a rate string. See [`AnonRateThrottle::new`] for the
     /// panic-on-bad-rate contract.
     pub fn new(rate: &str) -> Self {
         Self::try_new(rate).unwrap_or_else(|e| panic!("UserRateThrottle::new({rate:?}): {e}"))
@@ -196,8 +198,8 @@ impl Throttle for UserRateThrottle {
 /// and authenticated callers, but only when the request's
 /// [`ThrottleContext::scope`] matches the configured `scope`.
 ///
-/// The DRF analog: `ScopedRateThrottle` driven by a viewset's
-/// `throttle_scope = "uploads"`. Here the scope is the resource/action
+/// Limits requests for a named scope (e.g. `"uploads"`). The scope is the
+/// resource/action
 /// label the dispatch passes; attach the throttle to the resource(s) you
 /// want it to govern.
 ///
@@ -213,7 +215,7 @@ pub struct ScopedRateThrottle {
 }
 
 impl ScopedRateThrottle {
-    /// Build from a DRF rate string and the scope name this throttle
+    /// Build from a rate string and the scope name this throttle
     /// governs. See [`AnonRateThrottle::new`] for the panic-on-bad-rate
     /// contract.
     pub fn new(rate: &str, scope: &str) -> Self {

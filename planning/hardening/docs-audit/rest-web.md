@@ -158,7 +158,7 @@ OK — the page is accurate.
 
 ## web/trailing-slash.mdx
 
-**Nit:** Doc says Django uses 301 for trailing-slash redirects; umbral picks 308. Confirmed at `crates/umbral-core/src/slash.rs:197` where `StatusCode::PERMANENT_REDIRECT` (308) is used. Accurate.
+**Nit:** Doc notes umbral picks 308 for trailing-slash redirects (rather than 301). Confirmed at `crates/umbral-core/src/slash.rs:197` where `StatusCode::PERMANENT_REDIRECT` (308) is used. Accurate.
 
 **Nit:** Doc says the `Append` example "a request to `/articles` (no trailing slash) that would have 404'd gets re-checked: if `/articles/` exists, the response becomes a 308 redirect there." The implementation in `slash.rs:96-114` shows that `Append` only fires `alternate_path` when the path does NOT end with `/`. The doc example shows `.get("/articles/", list_articles)` and a request to `/articles` — correct direction. Accurate.
 

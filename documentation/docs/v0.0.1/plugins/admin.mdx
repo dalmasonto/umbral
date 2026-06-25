@@ -1,6 +1,6 @@
 ---
 title: Admin plugin
-description: Auto-generated CRUD UI for your models. Django's admin in Rust.
+description: Auto-generated CRUD UI for your models, served at /admin/.
 sidebar_position: 7
 icon: shield
 ---
@@ -239,7 +239,7 @@ Default sort order for the list view. Each entry is a column name optionally pre
 ])
 ```
 
-Registers bulk actions. `Action::new(key, label, icon, handler)` takes a Lucide icon name and an async handler receiving an `ActionInvocation` (selected `ids`, plus `username` / `table` / `pool` context) and returning a `Result<ActionResult, String>`. `Action::delete_selected()` is the built-in bulk delete equivalent to Django's default. The full descriptor surface (`.scope(...)`, `.danger()`, `.confirm(...)`, and the `ActionResult` variants) is documented under [Phase 3](#phase-3-actions-async-fk-pickers-sheet-stacking-inline-cell-edit) below.
+Registers bulk actions. `Action::new(key, label, icon, handler)` takes a Lucide icon name and an async handler receiving an `ActionInvocation` (selected `ids`, plus `username` / `table` / `pool` context) and returning a `Result<ActionResult, String>`. `Action::delete_selected()` is the built-in bulk-delete action registered by default. The full descriptor surface (`.scope(...)`, `.danger()`, `.confirm(...)`, and the `ActionResult` variants) is documented under [Phase 3](#phase-3-actions-async-fk-pickers-sheet-stacking-inline-cell-edit) below.
 
 ### Trash UI for soft-delete models
 

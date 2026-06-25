@@ -8,7 +8,7 @@
 
 ## Purpose
 
-`umbral-openapi` is the optional plugin that turns a running umbral REST surface into a browsable, machine-readable API description: an OpenAPI 3.x JSON/YAML document plus a Swagger UI mounted at a configurable path (default `/api/docs`). It exists so a team that has already declared models, `ModelSerializer`s, and `ViewSet`s in `umbral-rest` does not also have to hand-write schemas — the description is *derived* from the REST surface that already runs the requests. Structurally, the plugin is the cleanest possible demonstration of the dependency direction from `arch.md §1`: `umbral-openapi` depends on `umbral-rest`, `umbral-rest` depends on `umbral` (the facade), and `umbral-core` depends on neither. A REST-free app cannot need OpenAPI, so the build graph forbids it — Cargo's ban on circular crate deps doing the same enforcement work the spec asks of it. The user-experience target is the Django-shape one-liner: `cargo add umbral-openapi`, add `.plugin(OpenApiPlugin::default())` to `App::builder()`, and a working Swagger UI appears at `/api/docs` describing every registered viewset.
+`umbral-openapi` is the optional plugin that turns a running umbral REST surface into a browsable, machine-readable API description: an OpenAPI 3.x JSON/YAML document plus a Swagger UI mounted at a configurable path (default `/api/docs`). It exists so a team that has already declared models, `ModelSerializer`s, and `ViewSet`s in `umbral-rest` does not also have to hand-write schemas — the description is *derived* from the REST surface that already runs the requests. Structurally, the plugin is the cleanest possible demonstration of the dependency direction from `arch.md §1`: `umbral-openapi` depends on `umbral-rest`, `umbral-rest` depends on `umbral` (the facade), and `umbral-core` depends on neither. A REST-free app cannot need OpenAPI, so the build graph forbids it - Cargo's ban on circular crate deps doing the same enforcement work the spec asks of it. The user-experience target is the one-liner: `cargo add umbral-openapi`, add `.plugin(OpenApiPlugin::default())` to `App::builder()`, and a working Swagger UI appears at `/api/docs` describing every registered viewset.
 
 ## Key concepts
 
@@ -24,7 +24,7 @@ App::builder()
     .build()?;
 ```
 
-**Schema customisation.** A `#[openapi(...)]` attribute on a serializer or viewset adds descriptions, tags, examples, and operation IDs without forcing every field to be annotated. Defaults come from doc-comments where possible, matching DRF's tendency to surface docstrings as descriptions:
+**Schema customisation.** A `#[openapi(...)]` attribute on a serializer or viewset adds descriptions, tags, examples, and operation IDs without forcing every field to be annotated. Defaults come from doc-comments where possible, surfacing them as descriptions:
 
 ```rust
 #[derive(ModelSerializer)]
@@ -46,7 +46,7 @@ Promote at M12 entry, once `umbral-rest` (M10) has frozen its serializer/viewset
 - **API versioning.** When the same app exposes `/api/v1/...` and `/api/v2/...` as distinct viewset groups, the plugin can emit one merged document with `servers` entries or one document per version. Likely needs a `versions(["v1", "v2"])` builder method; defer until a real consumer asks.
 - **Security-scheme registration.** Built-in reflection of `Auth<User>` and `Session` is straightforward; a third-party auth plugin that ships a custom permission class needs a way to declare its OpenAPI security scheme. Probably an extra trait method on the REST permission trait, but the shape lives with `rest.md`.
 - **Alternative UIs.** Swagger UI is the default, but ReDoc and Stoplight Elements are common asks. Settle on a single bundled UI vs a `ui(OpenApiUi::Redoc)` choice with extra crates feature-gated behind it.
-- **Schema export at build time.** `manage.py spectacular --file schema.yml` (DRF-style) for CI consumers. Probably a `commands()` contribution exposing `umbral-cli openapi export`; defer until a real need arises.
+- **Schema export at build time.** A CLI command that writes the schema document to a file (e.g. `--file schema.yml`) for CI consumers. Probably a `commands()` contribution exposing `umbral-cli openapi export`; defer until a real need arises.
 
 ## Cross-links
 

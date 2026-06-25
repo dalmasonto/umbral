@@ -1,4 +1,4 @@
-//! End-to-end tests for DRF-style `@action` endpoints registered
+//! End-to-end tests for custom-action endpoints registered
 //! through `ResourceConfig::action(...)`.
 //!
 //! All tests share one booted app (process-wide `OnceLock` state in

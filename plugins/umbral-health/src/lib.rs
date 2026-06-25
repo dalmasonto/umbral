@@ -20,8 +20,8 @@
 //!   deploys.
 //!
 //! The split mirrors what every production-grade framework
-//! eventually settles on (Spring, Rails ActionCable, Django via
-//! third-party plugins). Without it, infrastructure has no way to
+//! eventually settles on (Spring, Rails ActionCable). Without it,
+//! infrastructure has no way to
 //! tell "the binary is alive" from "the binary can serve work" —
 //! a Postgres outage during a deploy would flap every pod even
 //! though restarting them won't help.

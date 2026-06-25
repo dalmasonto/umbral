@@ -1,5 +1,4 @@
-//! View-level caching middleware — the Rust equivalent of Django's
-//! `@cache_page(seconds)` decorator.
+//! View-level caching middleware.
 //!
 //! Wrap a [`Router`] subtree with [`cache_page`] and every eligible
 //! `GET` or `HEAD` response for that subtree is cached for the

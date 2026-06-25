@@ -9,7 +9,7 @@ tags: [storage, static, media, assets, uploads, files, cache, admin]
 
 `umbral-storage` is the framework's one file-bytes plugin. It has **two sides** that you opt into independently on the same builder:
 
-- The **static side** serves developer-shipped assets (your CSS, JS, fonts, favicon) through the unified `STATIC_URL` pipeline, with `collectstatic`, manifest-hash cache-busting, and `Cache-Control` headers. This is Django's `staticfiles`.
+- The **static side** serves developer-shipped assets (your CSS, JS, fonts, favicon) through the unified `STATIC_URL` pipeline, with `collectstatic`, manifest-hash cache-busting, and `Cache-Control` headers.
 - The **media side** serves *user*-supplied content (avatars, attachments, generated reports), tracks every file in the `media_file` model, enforces an upload-size cap, and runs file-lifecycle cleanup on delete / replace.
 
 Either side is optional. A static-only app omits `.media(...)`; a media-only app omits `.static_files(...)`. An app that needs both wires one plugin:
@@ -96,7 +96,7 @@ The dev-mode check reads the ambient settings at route-build time (when `Plugin:
 
 ## The unified static pipeline
 
-Beyond serving one directory, the framework runs a single static handler at a configurable base (`STATIC_URL`, default `/static/`) that every plugin can contribute to. This is Django's `staticfiles` model. Two settings drive it:
+Beyond serving one directory, the framework runs a single static handler at a configurable base (`STATIC_URL`, default `/static/`) that every plugin can contribute to. Two settings drive it:
 
 | Setting | Env | Default | Purpose |
 |---|---|---|---|
@@ -136,7 +136,7 @@ Use the `static()` template global so URLs follow `static_url` wherever it's con
 <script src="{{ static('playground/assets/app.js') }}"></script>
 ```
 
-`{{ static('css/app.css') }}` resolves to `<static_url>css/app.css`: `/static/css/app.css` by default, or `https://cdn.example.com/s/css/app.css` when `static_url` points at a CDN. This is umbral's equivalent of Django's `{% static "..." %}` tag.
+`{{ static('css/app.css') }}` resolves to `<static_url>css/app.css`: `/static/css/app.css` by default, or `https://cdn.example.com/s/css/app.css` when `static_url` points at a CDN. The `static()` global is the canonical way to reference an asset so the URL always tracks `static_url`.
 
 ## collectstatic
 
@@ -151,7 +151,7 @@ The command is **provided by `StoragePlugin` itself** when a static side is conf
 
 ## Cache-busting with `--hashed`
 
-In production, run `collectstatic --hashed` (umbral's `ManifestStaticFilesStorage`). For each collected file it writes a content-hashed copy alongside the original (`css/app.css` → `css/app.<hash>.css`, the hash being the first 12 hex of the SHA-256 of the bytes) and records a `static_root/staticfiles.json` manifest mapping the logical path to the hashed one:
+In production, run `collectstatic --hashed`. For each collected file it writes a content-hashed copy alongside the original (`css/app.css` → `css/app.<hash>.css`, the hash being the first 12 hex of the SHA-256 of the bytes) and records a `static_root/staticfiles.json` manifest mapping the logical path to the hashed one:
 
 ```bash
 cargo run -- collectstatic --hashed   # recommended for prod
@@ -168,7 +168,7 @@ The manifest is loaded once at `App::build()`; an app that never runs `--hashed`
 
 ## Static storage backend (`--storage s3`)
 
-`collectstatic` writes through the unified `Storage` backend's `"staticfiles"` instance (Django's `STATICFILES_STORAGE`). The default is the local filesystem (`static_root/`); pass `--storage s3` to upload the collected tree (and, with `--hashed`, the hashed copies + manifest) straight to an S3 bucket or S3-compatible store (MinIO, Cloudflare R2):
+`collectstatic` writes through the unified `Storage` backend's `"staticfiles"` instance. The default is the local filesystem (`static_root/`); pass `--storage s3` to upload the collected tree (and, with `--hashed`, the hashed copies + manifest) straight to an S3 bucket or S3-compatible store (MinIO, Cloudflare R2):
 
 ```bash
 # Build umbral-storage with the optional `s3` feature:
@@ -561,7 +561,7 @@ The plugin sets `X-Content-Type-Options: nosniff` on every media response so the
 
 ## File lifecycle / orphan cleanup
 
-A `FileField` / `ImageField` column stores only the storage *key*; the bytes live in the backend. Delete the row and, without help, the blob is orphaned - the backend keeps accumulating files no row points at. The media side cleans them up the way Django's `FileField` does: **when a row is deleted, the blobs behind its file fields are deleted too.**
+A `FileField` / `ImageField` column stores only the storage *key*; the bytes live in the backend. Delete the row and, without help, the blob is orphaned - the backend keeps accumulating files no row points at. The media side cleans them up automatically: **when a row is deleted, the blobs behind its file fields are deleted too.**
 
 Cleanup is **opt-in per model**. Register it on the plugin builder:
 
@@ -594,7 +594,7 @@ StoragePlugin::new()
 Semantics:
 
 - **Best-effort, never fails the delete.** A storage delete error - including a blob that's already gone - is logged with `tracing::warn!` and swallowed. The row delete always succeeds; cleanup failure never propagates.
-- **Per-row deletes only.** `M::objects().delete_instance(&row)` fires the `pre_delete` signal the hook listens on. Bulk `QuerySet::delete()` (the filter-chain DELETE) fires only a bulk-PK signal, so it does **not** trigger cleanup - the same limitation Django's bulk `QuerySet.delete()` has for per-row hooks. Loop with `delete_instance` when cleanup matters.
+- **Per-row deletes only.** `M::objects().delete_instance(&row)` fires the `pre_delete` signal the hook listens on. Bulk `QuerySet::delete()` (the filter-chain DELETE) fires only a bulk-PK signal, so it does **not** trigger cleanup - bulk deletes skip per-row hooks by design. Loop with `delete_instance` when cleanup matters.
 - **Empty file fields are a no-op.** A row whose `FileField` key is empty has nothing to clean and deletes normally.
 
 ### Replace cleanup (gaps2 #92)

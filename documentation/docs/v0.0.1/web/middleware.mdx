@@ -7,7 +7,7 @@ tags: [web, middleware, plugins]
 
 # Middleware
 
-axum and tower already give you `Layer` + `Service`, but writing one means learning poll-readiness, boxed futures, and the `Service` ownership rules. Most application middleware only wants two things: look at the request before the handler, and look at the response after. umbral's `Middleware` trait is exactly that: Django's `process_request` / `process_response`, typed for Rust.
+axum and tower already give you `Layer` + `Service`, but writing one means learning poll-readiness, boxed futures, and the `Service` ownership rules. Most application middleware only wants two things: look at the request before the handler, and look at the response after. umbral's `Middleware` trait is exactly that: a `before_request` / `after_response` pair, typed for Rust.
 
 <Callout type="info">
 Reach for `Middleware` for the common "inspect/modify every request or response" case. When you genuinely need a tower `Layer` (timeouts, body-size limits, tracing spans), use a plugin's `wrap_router` to layer the raw axum router instead.

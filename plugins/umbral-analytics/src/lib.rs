@@ -1,6 +1,6 @@
 //! umbral-analytics — product-analytics event capture for umbral.
 //!
-//! Django's analytics instrumentation, the Rust way: declare the plugin, call
+//! Analytics instrumentation, the umbral way: declare the plugin, call
 //! [`capture`] / [`identify`] from any handler or service, and analytics
 //! failures never break a request. The PostHog backend is fire-and-forget;
 //! every send is spawned on a background task so the caller returns

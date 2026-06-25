@@ -1,6 +1,6 @@
 //! umbral-email. SMTP + template-driven transactional email.
 //!
-//! Django's `django.core.mail` shape. The 80% case is a single
+//! A simple mail API. The 80% case is a single
 //! `send(&EmailMessage)` call against an ambient SMTP transport
 //! configured from `umbral::Settings`. The dev default is a stderr
 //! "console" backend that prints the rendered message instead of
@@ -70,8 +70,7 @@ use umbral::prelude::*;
 use umbral::templates::TemplateError;
 
 /// Default sender used when an `EmailMessage` has no explicit `from`
-/// and no `email_default_from` setting is configured. Matches Django's
-/// `DEFAULT_FROM_EMAIL` shape. A real deployment overrides it.
+/// and no `email_default_from` setting is configured. A real deployment overrides it.
 pub const FALLBACK_FROM: &str = "webmaster@localhost";
 
 // =========================================================================

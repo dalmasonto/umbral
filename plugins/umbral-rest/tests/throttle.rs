@@ -106,7 +106,7 @@ async fn throttle_returns_429_with_retry_after_after_limit() {
     }
 
     // Third request is over the limit → 429 with a Retry-After header and
-    // the DRF body shape.
+    // the standard body shape.
     let resp = router.clone().oneshot(list_from(ip)).await.expect("oneshot");
     assert_eq!(
         resp.status(),

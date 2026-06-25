@@ -351,7 +351,7 @@ impl RestPlugin {
     }
 
     /// Add a throttle that applies to EVERY resource. Run after auth
-    /// resolves and before the handler (DRF order); on the first denial
+    /// resolves and before the handler; on the first denial
     /// the request returns **429 Too Many Requests** with a `Retry-After`
     /// header and a `{"detail":"Request was throttled.","retry_after":N}`
     /// body.
@@ -414,7 +414,7 @@ impl RestPlugin {
     }
 
     /// Run every applicable throttle for `(table, action)` after auth has
-    /// resolved, before the handler (DRF order). Returns
+    /// resolved, before the handler. Returns
     /// `Err(ApiError::Throttled { retry_after })` on the FIRST denial so
     /// the handler's `?` surfaces a 429 with a `Retry-After` header.
     ///
@@ -518,7 +518,7 @@ impl RestPlugin {
         }
     }
 
-    /// Opt into DRF-style API versioning (gaps2 #82). **Off by default** —
+    /// Opt into API versioning (gaps2 #82). **Off by default** —
     /// without this call the API is unversioned (`/api/<table>/`) and
     /// [`RequestContext::version`] is always `None`.
     ///
@@ -529,7 +529,7 @@ impl RestPlugin {
     ///   for **each** allowed version, so `/api/v1/post/` and
     ///   `/api/v2/post/` both resolve when both are allowed. An unknown
     ///   version matches no route → **404**. The version is required in the
-    ///   path (DRF-aligned); there is no unversioned `/api/<table>/`
+    ///   path; there is no unversioned `/api/<table>/`
     ///   fallback once this scheme is on.
     /// - [`VersioningScheme::accept_header()`] — paths stay
     ///   `/api/<table>/`; the version comes from the `Accept` header
@@ -705,7 +705,7 @@ impl RestPlugin {
     /// Three built-ins ship:
     /// - [`NoPagination`] (default) — `{ results, count }` envelope,
     ///   no LIMIT applied, no extra COUNT query.
-    /// - [`PageNumberPagination::new(page_size)`] — Django default.
+    /// - [`PageNumberPagination::new(page_size)`] — page-number shape.
     ///   `?page=N&page_size=M`.
     /// - [`LimitOffsetPagination::new(default_limit)`] — REST classic.
     ///   `?limit=N&offset=M`.
@@ -793,7 +793,7 @@ impl RestPlugin {
     /// Register many [`ResourceConfig`]s at once — the batch form of
     /// [`resource`](Self::resource). Lets each plugin export a
     /// `Vec<ResourceConfig>` (its REST surface, declared next to its
-    /// models, the way DRF keeps serializers per app) and the app register
+    /// models, keeping serializers per app/model) and the app register
     /// them in one call instead of a `.resource(...)` per model in `main.rs`.
     ///
     /// ```ignore
@@ -1602,7 +1602,7 @@ impl Plugin for RestPlugin {
         // URL-path versioning it's `{base}/{version}` for EACH allowed
         // version, so `/api/v1/...` and `/api/v2/...` both resolve. An
         // unknown version matches none of these prefixes → axum 404,
-        // which is exactly DRF's "unknown version is not routable".
+        // which is exactly "unknown version is not routable".
         let prefixes = self.mount_prefixes();
 
         let mut router = Router::new();
@@ -1826,13 +1826,13 @@ async fn detail_options() -> Response {
 struct ApiErrorBody {
     /// Stable machine-readable error code. Always populated.
     code: &'static str,
-    /// DRF-style field-level errors flattened to the top level
+    /// Field-level errors flattened to the top level
     /// (`{ "category": ["..."], "sku": ["..."] }`). Empty for
     /// non-validation errors.
     #[serde(flatten)]
     field_errors: BTreeMap<String, Vec<String>>,
-    /// Validation errors not tied to a specific field. Mirrors
-    /// DRF's `non_field_errors`. Empty for non-validation errors.
+    /// Validation errors not tied to a specific field
+    /// (`non_field_errors`). Empty for non-validation errors.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     non_field_errors: Vec<String>,
     /// Operator-facing summary. Used for 404 / 401 / 403 / 500
@@ -1859,7 +1859,7 @@ struct ApiErrorBody {
 enum ApiError {
     NotFound(String),
     BadInput(String),
-    /// 400 — DB constraint violation reshaped into DRF-style
+    /// 400 — DB constraint violation reshaped into
     /// field-level errors. Lets clients render
     /// `{ category: ["Referenced row does not exist."] }` next to
     /// the offending input instead of guessing from an opaque
@@ -1884,13 +1884,13 @@ enum ApiError {
     Forbidden,
     /// 406 — the request asked (via the `Accept` / configured version
     /// header) for an API version that isn't in `allowed_versions`.
-    /// DRF's `AcceptHeaderVersioning` rejects an unknown version this
+    /// Accept-header versioning rejects an unknown version this
     /// way; URL-path versioning 404s instead (no matching route).
     NotAcceptable(String),
     /// 429 — the caller is over their rate. Raised when a
     /// [`Throttle`] denied the request (after auth, before the
     /// handler). Carries the retry hint that becomes a `Retry-After`
-    /// header (seconds, rounded up). The body is the DRF shape
+    /// header (seconds, rounded up). The body is
     /// `{"detail":"Request was throttled.","retry_after":N}`.
     Throttled {
         retry_after: Option<std::time::Duration>,
@@ -1933,8 +1933,8 @@ impl From<umbral::orm::write::WriteError> for ApiError {
         // sqlx::Error not classified as a constraint, JSON
         // serialization failure, NotAnObject) bubble out as 500
         // via the `Sqlx` path. Everything else is a 400 with the
-        // structured WriteError shape rendered into the DRF-flat
-        // body via `field_errors()` + `non_field_errors()`.
+        // structured WriteError shape rendered into the flat
+        // field-error body via `field_errors()` + `non_field_errors()`.
         if let WriteError::Sqlx(sqlx_err) = &e {
             return Self::Sqlx(sqlx_err_clone(sqlx_err));
         }
@@ -1960,7 +1960,7 @@ fn sqlx_err_clone(e: &sqlx::Error) -> sqlx::Error {
 
 impl umbral::web::IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        // Validation errors take the DRF-flat field shape; the
+        // Validation errors take the flat field-error shape; the
         // catch-all path below covers the single-message envelope.
         if let ApiError::Validation {
             code,
@@ -1979,7 +1979,7 @@ impl umbral::web::IntoResponse for ApiError {
             return (StatusCode::BAD_REQUEST, Json(body)).into_response();
         }
 
-        // 429 takes a DRF-shaped body (`detail` + `retry_after`) plus a
+        // 429 takes a body (`detail` + `retry_after`) plus a
         // `Retry-After` header, so it's built here rather than through the
         // single-message envelope below.
         if let ApiError::Throttled { retry_after } = self {
@@ -2233,7 +2233,7 @@ async fn list(
         }
     }
 
-    // `?ordering=-created_at,name` — DRF-style sort: comma-separated
+    // `?ordering=-created_at,name` — comma-separated
     // field names, leading `-` for DESC. Unknown fields are silently
     // dropped (same as DynQuerySet::order_by_col does internally).
     let ordering: Vec<(String, bool)> = params
@@ -3198,7 +3198,7 @@ fn parse_include(raw: Option<&str>, model: &ModelMeta) -> Result<Vec<String>, Ap
         if name.is_empty() {
             continue;
         }
-        // Accept both `.` (URL-natural) and `__` (Django/DRF
+        // Accept both `.` (URL-natural) and `__` (common
         // muscle-memory) as hop separators (gap2 #18). Mixed
         // separators in one token flatten the same way; the
         // canonical internal form is dotted.

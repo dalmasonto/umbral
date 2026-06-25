@@ -4,7 +4,7 @@
 
 ## Problem
 
-The validation half of CSRF is already automatic (`umbral-security`'s `csrf_middleware` rejects unsafe methods without a matching token). The token-delivery half is manual: every form view calls `ensure_csrf_cookie(&headers)`, threads `csrf_token` through its render helpers, and hand-attaches the `Set-Cookie`. Django's developer writes `{% csrf_token %}` in the template and nothing else; umbral's developer writes ~20 lines of plumbing per form view.
+The validation half of CSRF is already automatic (`umbral-security`'s `csrf_middleware` rejects unsafe methods without a matching token). The token-delivery half is manual: every form view calls `ensure_csrf_cookie(&headers)`, threads `csrf_token` through its render helpers, and hand-attaches the `Set-Cookie`. The target experience is that a developer writes one token tag (`{% csrf_token %}`) in the template and nothing else; today umbral's developer writes ~20 lines of plumbing per form view.
 
 Three secondary problems share the same root cause (no single owner for token minting):
 
@@ -14,9 +14,9 @@ Three secondary problems share the same root cause (no single owner for token mi
 
 ## Decision
 
-Mirror Django's `CsrfViewMiddleware` + `{% csrf_token %}` split, reusing the existing `CURRENT_USER` task-local seam in `umbral-core`:
+Adopt a two-part split (validation middleware + a template token tag), reusing the existing `CURRENT_USER` task-local seam in `umbral-core`:
 
-1. **Core (`crates/umbral-core/src/templates.rs`).** New `CURRENT_CSRF: Option<String>` task-local + `with_current_csrf(token, fut)` scope fn + `current_csrf() -> Option<String>` read accessor. `render` merges `csrf_token` (raw value, for `X-CSRF-Token` headers / htmx) and `csrf_input` (pre-built safe-string hidden `<input name="csrf_token">`, the `{% csrf_token %}` equivalent) into every template context. Explicit ctx keys win, same precedence as the `user` merge. Facade re-export under `umbral::templates`, not in the prelude.
+1. **Core (`crates/umbral-core/src/templates.rs`).** New `CURRENT_CSRF: Option<String>` task-local + `with_current_csrf(token, fut)` scope fn + `current_csrf() -> Option<String>` read accessor. `render` merges `csrf_token` (raw value, for `X-CSRF-Token` headers / htmx) and `csrf_input` (pre-built safe-string hidden `<input name="csrf_token">`, the value the `{% csrf_token %}` tag emits) into every template context. Explicit ctx keys win, same precedence as the `user` merge. Facade re-export under `umbral::templates`, not in the prelude.
 
 2. **Middleware is the only mint (`plugins/umbral-security/src/lib.rs`).** `csrf_middleware` resolves the cookie token for *all* methods (POST error re-renders need it in scope too), mints **before** `next.run` on safe methods when the cookie is missing **or fails signed-mode validation** (rotation — so flipping `signed_csrf` on doesn't 403 browsers holding old unsigned cookies), scopes `with_current_csrf` around the handler, and `append`s (not `insert`s) the `Set-Cookie` when it minted. `ensure_csrf_cookie` and `response_sets_csrf_cookie` are **deleted** — with the task-local in place no handler ever needs to mint.
 
@@ -38,7 +38,7 @@ Mirror Django's `CsrfViewMiddleware` + `{% csrf_token %}` split, reusing the exi
 
 - A form view is CSRF-complete with zero view code and one template token. REST/API paths keep using `csrf_exempt_paths`.
 - Exactly one mint site when SecurityPlugin is mounted; the admin's fallback mint runs only when it isn't.
-- Old unsigned cookies rotate transparently; in-flight forms rendered before a deploy lose one POST (403, refresh re-renders with a valid token) — same trade-off Django accepts on `CSRF_COOKIE` changes.
+- Old unsigned cookies rotate transparently; in-flight forms rendered before a deploy lose one POST (403, refresh re-renders with a valid token), an acceptable trade-off for a cookie-secret rotation.
 - Apps that template `csrf_token` explicitly keep working (explicit ctx wins over the merge).
 
 ## Tests

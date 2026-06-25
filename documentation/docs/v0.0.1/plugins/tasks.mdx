@@ -1,6 +1,6 @@
 ---
 title: Tasks plugin
-description: Database-backed background task queue. The Celery shape in Rust.
+description: Database-backed background task queue for running work outside the request cycle.
 sidebar_position: 10
 icon: clock
 ---
@@ -325,10 +325,10 @@ println!("{reclaimed} orphaned task(s) reclaimed");
 ## Periodic tasks (beat)
 
 For *recurring* work - a nightly cleanup, an hourly digest, a job every five
-minutes - register a periodic schedule, Celery `beat_schedule` style, and run the
-**beat** process. Beat is the scheduler; it does not run handlers itself. Each
-time a schedule is due, beat enqueues a normal task row; the **worker** drains it.
-Run them as two separate processes (exactly like Celery's `worker` and `beat`).
+minutes - register a periodic schedule and run the **beat** process. Beat is the
+periodic-task scheduler; it does not run handlers itself. Each time a schedule is
+due, beat enqueues a normal task row; the **worker** drains it. Run them as two
+separate processes: the worker that executes handlers, and beat that schedules them.
 
 Register schedules on the plugin builder with `.periodic(name, schedule, task, payload)`:
 
@@ -400,8 +400,8 @@ the worker uses.
 
 A handler can return any serializable value, not just `Ok(())`. On success the
 worker serializes the return value to JSON and stores it in the task row's
-`result` column - the **result backend**, Celery's `AsyncResult` payload. Query
-a task's outcome by the id `enqueue` returned:
+`result` column - the **result backend** payload. Query a task's outcome by the
+id `enqueue` returned:
 
 ```rust
 use umbral_tasks::{enqueue, register_handler, task_status, await_result, TaskState, EnqueueOptions};
@@ -419,7 +419,7 @@ let id = enqueue("sum", vec![1, 2, 3], EnqueueOptions::default()).await?;
 let status = task_status(id).await?.expect("task exists");
 assert_eq!(status.state, TaskState::Pending); // not run yet
 
-// Blocking with a timeout: poll until terminal (Celery's AsyncResult.get()).
+// Blocking with a timeout: poll until terminal.
 let status = await_result(id, Duration::from_secs(5)).await?;
 assert_eq!(status.state, TaskState::Success);
 assert_eq!(status.result, Some(serde_json::json!(6)));

@@ -5,8 +5,8 @@
 //! `Service` trait's ownership rules. Most application middleware only
 //! wants two things: *look at the request before the handler*, and
 //! *look at the response after*. The [`Middleware`] trait is that
-//! narrow, ergonomic surface — Django's `process_request` /
-//! `process_response`, typed for Rust.
+//! narrow, ergonomic surface: a request-side hook and a
+//! response-side hook, typed for Rust.
 //!
 //! Plugins contribute middleware via `Plugin::middleware`; an app adds
 //! its own via `AppBuilder::middleware`. `App::build` collects them all
