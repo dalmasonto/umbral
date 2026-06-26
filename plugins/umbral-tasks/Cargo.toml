@@ -10,12 +10,12 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.1" }
+umbral = { path = "../../crates/umbral", version = "0.0.2" }
 # Direct dep on the built-in admin: admin_model() returns an AdminModel for
 # TaskRow so an app can register it (browse the queue + a retry action).
 # Feature-gated so a tasks-only app (no admin) compiles without pulling the
 # admin into its dependency graph.
-umbral-admin = { path = "../umbral-admin", version = "0.0.1", optional = true }
+umbral-admin = { path = "../umbral-admin", version = "0.0.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
