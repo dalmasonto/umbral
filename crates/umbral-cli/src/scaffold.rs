@@ -140,9 +140,9 @@ fn validate_name(name: &str) -> Result<(), ScaffoldError> {
 /// BUG-17 in `bugs/tests/testBugs.md` — `umbral startproject --local
 /// /path/to/umbral foo` now produces a `Cargo.toml` that path-deps
 /// every umbral crate against the local checkout instead of the
-/// `git = "..."` URL. Comments + commented-out optional plugin
-/// lines all flow through; the line trailing whatever follows the
-/// dep block (descriptive comment, version pin) is preserved.
+/// published crates.io version. Comments + commented-out optional
+/// plugin lines all flow through; any trailing descriptive comment
+/// after the dependency spec is preserved.
 ///
 /// Subdirectory mapping mirrors the umbral repo layout: facade
 /// crates (`umbral`, `umbral-cli`, `umbral-core`, `umbral-macros`,
@@ -150,25 +150,24 @@ fn validate_name(name: &str) -> Result<(), ScaffoldError> {
 /// (`umbral-auth`, `umbral-sessions`, `umbral-admin`, …) lives
 /// under `plugins/`.
 pub(crate) fn localize_deps(text: &str, umbral_repo: &Path) -> String {
-    const GIT_URL: &str = "https://github.com/dalmasonto/umbral";
     let repo_str = umbral_repo.display().to_string();
     let mut out = String::with_capacity(text.len());
     for line in text.split_inclusive('\n') {
-        out.push_str(&rewrite_line(line, GIT_URL, &repo_str));
+        out.push_str(&rewrite_line(line, &repo_str));
     }
     out
 }
 
-fn rewrite_line(line: &str, git_url: &str, repo: &str) -> String {
-    // Look for `<crate> = { git = "<url>" }` (optionally preceded by
-    // `#` for commented-out lines, optionally followed by a
-    // descriptive `# ...` comment). Bail out cheaply if the URL
-    // marker isn't present.
-    if !line.contains(git_url) {
-        return line.to_string();
-    }
-    // Find the LHS crate name. Strip any leading `#` and whitespace,
-    // then take the substring up to the first `=`.
+/// Rewrite one `Cargo.toml` line: if it declares an umbral dependency
+/// (`umbral-xxx = "<version>"` or `umbral-xxx = { ... }`, optionally
+/// commented out with a leading `#`), replace the dependency spec with a
+/// local `{ path = "<repo>/<subdir>/<crate>" }`. Any other line is
+/// returned unchanged, including the otel example comment whose left
+/// side is prose, not a bare crate name.
+fn rewrite_line(line: &str, repo: &str) -> String {
+    // Find the LHS crate name. Strip a leading `#` (commented-out
+    // optional plugins) and whitespace, then take the substring up to
+    // the first `=`.
     let body_start = line
         .char_indices()
         .find(|(_, c)| !matches!(*c, '#' | ' ' | '\t'))
@@ -179,26 +178,39 @@ fn rewrite_line(line: &str, git_url: &str, repo: &str) -> String {
         return line.to_string();
     };
     let crate_name = body[..eq_idx].trim();
-    if !crate_name.starts_with("umbral") {
+    // Only bare umbral crate names get localized (skips prose comments
+    // like the otel example, whose LHS contains spaces/backticks).
+    if !crate_name.starts_with("umbral") || crate_name.contains(|c: char| c.is_whitespace()) {
         return line.to_string();
     }
+    // The dependency spec follows `=`: either a version string
+    // (`"0.0.1"`) or an inline table (`{ ... }`). Find where it ends so
+    // any trailing descriptive `# comment` survives verbatim.
+    let after_eq = &body[eq_idx + 1..];
+    let spec_offset = after_eq.len() - after_eq.trim_start().len();
+    let spec = after_eq.trim_start();
+    let spec_len = if let Some(rest) = spec.strip_prefix('"') {
+        match rest.find('"') {
+            Some(i) => 1 + i + 1,
+            None => return line.to_string(),
+        }
+    } else if spec.starts_with('{') {
+        match spec.find('}') {
+            Some(i) => i + 1,
+            None => return line.to_string(),
+        }
+    } else {
+        return line.to_string();
+    };
+    let spec_start = body_start + eq_idx + 1 + spec_offset;
+    let spec_end = spec_start + spec_len;
     let subdir = match crate_name {
         "umbral" | "umbral-cli" | "umbral-core" | "umbral-macros" | "umbral-testing" => "crates",
         _ => "plugins",
     };
     let path = format!("{repo}/{subdir}/{crate_name}");
-    // Replace the entire `{ git = "<url>" }` substring. We don't
-    // know the exact spacing inside, so find the `{` and the matching
-    // `}` and substitute.
-    let Some(lbrace_idx) = body.find('{') else {
-        return line.to_string();
-    };
-    let Some(rbrace_offset) = body[lbrace_idx..].find('}') else {
-        return line.to_string();
-    };
-    let rbrace_idx = lbrace_idx + rbrace_offset;
-    let prefix = &line[..body_start + lbrace_idx];
-    let suffix = &line[body_start + rbrace_idx + 1..];
+    let prefix = &line[..spec_start];
+    let suffix = &line[spec_end..];
     format!("{prefix}{{ path = \"{path}\" }}{suffix}")
 }
 
@@ -279,6 +291,7 @@ pub fn scaffold_project(
     // ------------------------------------------------------------------ //
     // Cargo.toml                                                           //
     // ------------------------------------------------------------------ //
+    let version = env!("CARGO_PKG_VERSION");
     let cargo_toml = format!(
         r#"[package]
 name = "{name}"
@@ -288,33 +301,33 @@ edition = "2024"
 [dependencies]
 
 # ----- Framework core (always required) ------------------------------------
-umbral         = {{ git = "https://github.com/dalmasonto/umbral" }}
-umbral-cli     = {{ git = "https://github.com/dalmasonto/umbral" }}
+umbral         = "{version}"
+umbral-cli     = "{version}"
 
 # ----- Active by default ---------------------------------------------------
 # What the generated `src/main.rs` wires in. Comment any of these out only
 # if you also remove the matching `.plugin(...)` line.
-umbral-auth     = {{ git = "https://github.com/dalmasonto/umbral" }}
-umbral-sessions = {{ git = "https://github.com/dalmasonto/umbral" }}
-umbral-admin    = {{ git = "https://github.com/dalmasonto/umbral" }}
-umbral-rest     = {{ git = "https://github.com/dalmasonto/umbral" }}
-umbral-openapi  = {{ git = "https://github.com/dalmasonto/umbral" }}
-umbral-security = {{ git = "https://github.com/dalmasonto/umbral" }}
+umbral-auth     = "{version}"
+umbral-sessions = "{version}"
+umbral-admin    = "{version}"
+umbral-rest     = "{version}"
+umbral-openapi  = "{version}"
+umbral-security = "{version}"
 # Observability init helper (structured JSON logging). Enable the `otel`
 # feature to ALSO export OpenTelemetry traces over OTLP to a collector
-# (Jaeger/Tempo/Honeycomb): `umbral-logs = {{ git = "...", features = ["otel"] }}`.
-umbral-logs     = {{ git = "https://github.com/dalmasonto/umbral" }}
+# (Jaeger/Tempo/Honeycomb): `umbral-logs = {{ version = "{version}", features = ["otel"] }}`.
+umbral-logs     = "{version}"
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
-# umbral-playground   = {{ git = "https://github.com/dalmasonto/umbral" }}  # Interactive API playground UI (think mini-Postman) at /playground/.
-# umbral-tasks        = {{ git = "https://github.com/dalmasonto/umbral" }}  # DB-backed background task queue with a worker process.
-# umbral-permissions  = {{ git = "https://github.com/dalmasonto/umbral" }}  # ContentType + Group + Permission model.
-# umbral-rls          = {{ git = "https://github.com/dalmasonto/umbral" }}  # Postgres row-level security policy registration.
-# umbral-cache        = {{ git = "https://github.com/dalmasonto/umbral" }}  # Per-request caching helper.
-# umbral-email        = {{ git = "https://github.com/dalmasonto/umbral" }}  # SMTP + MIME email composer + sender.
-# umbral-storage      = {{ git = "https://github.com/dalmasonto/umbral" }}  # Unified storage: static-file serving (prod, whitenoise-equivalent) + uploaded-file storage (local FS + S3).
-# umbral-signals      = {{ git = "https://github.com/dalmasonto/umbral" }}  # Pre/post save/delete signal dispatch.
-# umbral-livereload   = {{ git = "https://github.com/dalmasonto/umbral" }}  # Dev-only browser live-reload (SSE push + file watcher). Add `.plugin(LiveReloadPlugin::new())`.
+# umbral-playground   = "{version}"  # Interactive API playground UI (think mini-Postman) at /playground/.
+# umbral-tasks        = "{version}"  # DB-backed background task queue with a worker process.
+# umbral-permissions  = "{version}"  # ContentType + Group + Permission model.
+# umbral-rls          = "{version}"  # Postgres row-level security policy registration.
+# umbral-cache        = "{version}"  # Per-request caching helper.
+# umbral-email        = "{version}"  # SMTP + MIME email composer + sender.
+# umbral-storage      = "{version}"  # Unified storage: static-file serving (prod, whitenoise-equivalent) + uploaded-file storage (local FS + S3).
+# umbral-signals      = "{version}"  # Pre/post save/delete signal dispatch.
+# umbral-livereload   = "{version}"  # Dev-only browser live-reload (SSE push + file watcher). Add `.plugin(LiveReloadPlugin::new())`.
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
@@ -328,12 +341,12 @@ sqlx = {{ version = "0.8", features = ["macros", "sqlite", "postgres", "chrono",
 # {crate_name}-posts = {{ path = "plugins/posts" }}
 "#
     );
-    // BUG-17 fix: when `--local <PATH>` is set, rewrite every
-    // `{ git = "..." }` dependency to a `{ path = "<umbral>/<sub>/<crate>" }`
-    // form anchored at the supplied umbral-repo path. Comments,
-    // active and commented-out dep lines all go through. Without
-    // the flag, the git-deps shape is preserved verbatim — that's
-    // what a user installing umbral from crates.io / GitHub gets.
+    // BUG-17 fix: when `--local <PATH>` is set, rewrite every umbral
+    // dependency to a `{ path = "<umbral>/<sub>/<crate>" }` form
+    // anchored at the supplied umbral-repo path. Comments, active and
+    // commented-out dep lines all go through. Without the flag, the
+    // published crates.io version deps are kept verbatim, which is what
+    // a user installing umbral from crates.io gets.
     let cargo_toml = match local_umbral_repo {
         Some(repo) => localize_deps(&cargo_toml, repo),
         None => cargo_toml,
@@ -1036,6 +1049,7 @@ pub fn scaffold_app(
     let pascal = pascal_case_from_ident(name);
     let mut files = Vec::new();
 
+    let version = env!("CARGO_PKG_VERSION");
     let cargo_toml = format!(
         r#"[package]
 name = "{name}"
@@ -1043,7 +1057,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umbral = {{ git = "https://github.com/dalmasonto/umbral" }}
+umbral = "{version}"
 serde = {{ version = "1", features = ["derive"] }}
 sqlx = {{ version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }}
 chrono = {{ version = "0.4", features = ["serde"] }}
@@ -1265,6 +1279,7 @@ pub fn scaffold_plugin(
     // the generated handlers.rs example uses an async axum extractor,
     // and most plugins grow async work quickly. Cheap to ship now,
     // saves the user a Cargo.toml edit later.
+    let version = env!("CARGO_PKG_VERSION");
     let cargo_toml = format!(
         r#"[package]
 name = "{name}"
@@ -1273,7 +1288,7 @@ edition = "2024"
 description = "A {crate_name} plugin for umbral."
 
 [dependencies]
-umbral = {{ git = "https://github.com/dalmasonto/umbral" }}
+umbral = "{version}"
 serde = {{ version = "1", features = ["derive"] }}
 sqlx = {{ version = "0.8", default-features = false, features = ["macros", "runtime-tokio"] }}
 chrono = {{ version = "0.4", features = ["serde"] }}
