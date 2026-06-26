@@ -6,6 +6,7 @@ This is an internal crate of the umbral framework. You almost certainly want the
 
 ## Documentation
 
+- Guide and reference: https://dalmasonto.github.io/umbral/
 - Repository: https://github.com/dalmasonto/umbral
 - API reference: https://docs.rs/umbral-core
 

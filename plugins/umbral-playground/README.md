@@ -60,3 +60,9 @@ After `cargo build -p umbral-playground` with the CLIs installed:
 12. Press `Cmd/Ctrl+W` (or `Ctrl+W` on Linux/Windows). The active tab closes; the next one to the right becomes active.
 13. Click the download icon in the tab strip. A `umbral-playground-<scope>-<YYYY-MM-DD>.json` file downloads.
 14. Open a private window at the same URL, click the upload icon, choose the file. The tabs and history appear in the import; the local empty workspace is filled.
+
+## Documentation
+
+- Guide: https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/playground
+- Repository: https://github.com/dalmasonto/umbral
+- API reference: https://docs.rs/umbral-playground

@@ -12,6 +12,7 @@ cargo install umbral-cli
 
 ## Documentation
 
+- Guide and reference: https://dalmasonto.github.io/umbral/
 - Repository: https://github.com/dalmasonto/umbral
 - API reference: https://docs.rs/umbral-cli
 
