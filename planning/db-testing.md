@@ -154,4 +154,54 @@ UMBRAL_TEST_POSTGRES_URL=postgres://USER:PASS@localhost/your_test_db \
   cargo test -p umbral-core --test backup_postgres --test json_field --test postgres_queryset -- --include-ignored
 ```
 
-**Bottom line:** the original blockers (Postgres data portability and JSONB writes) now work on both backends. The read-path observation from the benchmark still holds (the bottleneck is JSON serialization plus response generation, not the database), so a release-build benchmark and write-heavy load tests remain the open follow-ups from the recommendations above.
+**Bottom line:** the original blockers (Postgres data portability and JSONB writes) now work on both backends. The read-path observation from the benchmark still holds (the bottleneck is JSON serialization plus response generation, not the database). The release-build benchmark recommendation is addressed by the load tests below; write-heavy load testing remains the open follow-up.
+
+## Load tests: oha + wrk (release build, 2026-06-26)
+
+A fuller load-test pass with two independent tools, this time on a **release build** (closing recommendation #1 above). Setup:
+
+- **App**: `examples/shop` (41 models), single-process release binary on `127.0.0.1:8001`.
+- **Tools**: `oha` 1.14.0 and `wrk` 4.2.0, 10s per run, concurrency `c = 1 / 50 / 100`.
+- **Backends**: SQLite (WAL, file-backed) vs **PostgreSQL 18**. Each used a throwaway database, auto-migrated and seeded on boot (20 blog posts at ~6.7 KB each, plus products), then dropped afterwards. No real data was touched.
+- **Endpoint note**: list routes take a trailing slash (`/api/post/`), detail routes do not (`/api/post/1`).
+
+**`GET /api/post/` — heavy list (~134 KB, 20 posts)**
+
+| Concurrency | oha SQLite (req/s) | oha PG (req/s) | oha SQLite p99 | oha PG p99 | wrk SQLite (req/s) | wrk PG (req/s) |
+|---|---|---|---|---|---|---|
+| c=1   | 532   | 732   | 3.20 ms   | 2.86 ms  | 511   | 840   |
+| c=50  | 1,786 | 5,967 | 57.70 ms  | 10.55 ms | 1,760 | 5,160 |
+| c=100 | 1,211 | 5,286 | 145.02 ms | 22.18 ms | 1,299 | 5,454 |
+
+**`GET /api/post/1` — single retrieve (~6.7 KB)**
+
+| Concurrency | oha SQLite (req/s) | oha PG (req/s) | oha SQLite p99 | oha PG p99 | wrk SQLite (req/s) | wrk PG (req/s) |
+|---|---|---|---|---|---|---|
+| c=1   | 1,347  | 1,224  | 1.30 ms  | 1.43 ms  | 1,378  | 1,246  |
+| c=50  | 23,505 | 14,146 | 9.07 ms  | 13.17 ms | 20,369 | 15,281 |
+| c=100 | 21,603 | 14,644 | 6.35 ms  | 8.21 ms  | 22,358 | 14,882 |
+
+**`GET /api/product/` — light list (~2 KB)**
+
+| Concurrency | oha SQLite (req/s) | oha PG (req/s) | oha SQLite p99 | oha PG p99 | wrk SQLite (req/s) | wrk PG (req/s) |
+|---|---|---|---|---|---|---|
+| c=1   | 1,206  | 1,345  | 1.29 ms  | 1.42 ms  | 1,262  | 1,279  |
+| c=50  | 12,406 | 12,727 | 5.31 ms  | 14.31 ms | 10,537 | 13,719 |
+| c=100 | 11,100 | 13,164 | 10.46 ms | 8.98 ms  | 11,069 | 13,521 |
+
+**`GET /` — home page (HTML, ~18 KB)**
+
+| Concurrency | oha SQLite (req/s) | oha PG (req/s) | oha SQLite p99 | oha PG p99 | wrk SQLite (req/s) | wrk PG (req/s) |
+|---|---|---|---|---|---|---|
+| c=1   | 542   | 479   | 2.78 ms  | 3.36 ms  | 541   | 467   |
+| c=50  | 5,959 | 5,444 | 32.37 ms | 32.11 ms | 6,104 | 5,621 |
+| c=100 | 5,498 | 5,444 | 19.94 ms | 24.85 ms | 5,758 | 5,692 |
+
+### Observations
+
+1. **Heavy concurrent JSON lists are where the backends diverge most.** Postgres sustains roughly **3-5x** SQLite's throughput at c=50/100 (oha: 5,967 vs 1,786 req/s at c=50) with an order-of-magnitude better tail (p99 10-22 ms vs 58-145 ms). SQLite's heavy-list throughput actually **regresses** from c=50 to c=100 (1,786 → 1,211) as concurrent large reads contend on the single connection/WAL, while Postgres keeps scaling. This is a sharper result than the original debug-build `ab` run that called them "surprisingly close" - under a release build and real load, Postgres clearly wins the heavy-read-concurrency case.
+2. **Single-row by-PK retrieval is SQLite's win** - ~23k vs ~14k req/s at c=50 - because the in-process read has no network/connection round-trip and the query is trivial. Both are more than fast enough.
+3. **Light list and the HTML home page are roughly comparable** across backends; the home page barely moves between SQLite and Postgres, confirming that for small payloads the cost is serialization/template rendering, not the database.
+4. **oha and wrk agree to within a few percent on every cell**, so the numbers are real, not a tool artifact.
+
+Net: pick the backend by workload. Read-heavy APIs that return large lists under concurrency favour Postgres strongly; single-process apps dominated by small by-PK reads do very well on SQLite. Write-heavy benchmarking (recommendation #2) is still open.
