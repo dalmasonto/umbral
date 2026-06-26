@@ -4,7 +4,7 @@
 
 And from the above, we need to update the docs on how to reference User model, next we need to show the dev how to write custom user model. We only have email, username and password. What if the dev instead of extending by 1by1 using another model like Account, they decide to
 write their own model. In a batteries-included framework you declare the Custom User Model and say what the username field is for reference; we should have something of that sort. It should have been worked on, maybe its pending
-somewhere/home/dalmas/E/projects/umbral/plugins/umbral-permissions/src/models.rs
+somewhere./plugins/umbral-permissions/src/models.rs
 
 
  The right scoping:

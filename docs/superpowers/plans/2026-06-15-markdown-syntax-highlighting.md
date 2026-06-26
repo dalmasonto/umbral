@@ -124,7 +124,7 @@ Expected: PASS. (First run recompiles with syntect — may take a minute.)
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates
+cd ./crates
 cargo fmt
 git add umbral-core/Cargo.toml umbral-core/Cargo.lock umbral-core/src/templates.rs
 git commit -m "feat(templates): generate base16-ocean.dark highlight CSS via syntect"
@@ -347,7 +347,7 @@ Expected: PASS (no other markdown/template test broke).
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates
+cd ./crates
 cargo fmt
 cargo clippy -p umbral-core --all-targets
 git add umbral-core/src/templates.rs
@@ -450,7 +450,7 @@ Expected: PASS (facade compiles with the new re-export; all umbral-core tests gr
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates
+cd ./crates
 cargo fmt
 git add umbral-core/src/templates.rs umbral/src/lib.rs
 git commit -m "feat(templates): add highlight_styles() global + facade highlight_css"
@@ -500,7 +500,7 @@ Expected: one or more `class="hl-…"` token spans inside the rendered post. If 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add umbral_website/templates/base.html
 git commit -m "feat(website): inline syntect highlight stylesheet in base.html"
 ```
@@ -562,7 +562,7 @@ See the design rationale in `docs/superpowers/specs/2026-06-15-markdown-syntax-h
 - [ ] **Step 2: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add documentation/docs/v0.0.1/web/markdown-syntax-highlighting.mdx
 # include documentation/docs/v0.0.1/web/_category_.json if you created it
 git commit -m "docs(web): syntax highlighting page for the markdown filter"
@@ -667,7 +667,7 @@ Open a page whose markdown has a table and an image (a blog post is surest). Con
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add umbral_website/static/js/md-enhance.js umbral_website/static/css/md-enhance.css
 git commit -m "feat(website): rounded table frame + image radius for markdown"
 ```

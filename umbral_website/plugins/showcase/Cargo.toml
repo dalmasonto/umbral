@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umbral = { path = "/home/dalmas/E/projects/umbral/crates/umbral" }
-umbral-auth = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-auth" }
+umbral = { path = "../../../crates/umbral" }
+umbral-auth = { path = "../../../plugins/umbral-auth" }
 accounts = { path = "../accounts" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

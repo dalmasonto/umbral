@@ -88,7 +88,7 @@ Then update the TWO existing `create_note` calls to pass the new trailing `None`
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cd /home/dalmas/E/projects/umbral/umbral_website && cargo test -p plugin_directory --test render_pages create_note_threads_replies_under_a_visible_top_level_note`
+Run: `cd ./umbral_website && cargo test -p plugin_directory --test render_pages create_note_threads_replies_under_a_visible_top_level_note`
 Expected: FAIL — compile error (`create_note` takes 4 args, `NotePayload` has no `parent_id`).
 
 - [ ] **Step 3: Add `parent_id` to `NotePayload`**
@@ -190,7 +190,7 @@ Also update the ONE caller in `post_plugin_note` (it currently calls `create_not
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `cd /home/dalmas/E/projects/umbral/umbral_website && cargo test -p plugin_directory --test render_pages create_note_threads_replies_under_a_visible_top_level_note`
+Run: `cd ./umbral_website && cargo test -p plugin_directory --test render_pages create_note_threads_replies_under_a_visible_top_level_note`
 Expected: PASS.
 
 - [ ] **Step 6: Run the existing note test to confirm no regression**
@@ -201,7 +201,7 @@ Expected: PASS (the updated existing `create_note` calls compile + pass).
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 cargo fmt --manifest-path umbral_website/Cargo.toml
 git add umbral_website/plugins/plugin_directory/src/lib.rs umbral_website/plugins/plugin_directory/tests/render_pages.rs
 git commit -m "feat(notes): create_note accepts a validated parent (depth-1 replies)"
@@ -255,7 +255,7 @@ async fn detail_page_nests_replies_under_their_note() {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `cd /home/dalmas/E/projects/umbral/umbral_website && cargo test -p plugin_directory --test render_pages detail_page_nests_replies_under_their_note`
+Run: `cd ./umbral_website && cargo test -p plugin_directory --test render_pages detail_page_nests_replies_under_their_note`
 Expected: FAIL (no `data-reply` / `data-replies-for` in output; replies render flat).
 
 - [ ] **Step 3: Create the slim reply partial**
@@ -396,7 +396,7 @@ Leave `_comment.html` UNCHANGED (it stays a single note row so `render_comment_r
 
 - [ ] **Step 6: Run the test to verify it passes**
 
-Run: `cd /home/dalmas/E/projects/umbral/umbral_website && cargo test -p plugin_directory --test render_pages detail_page_nests_replies_under_their_note`
+Run: `cd ./umbral_website && cargo test -p plugin_directory --test render_pages detail_page_nests_replies_under_their_note`
 Expected: PASS.
 
 - [ ] **Step 7: Run the full render_pages suite (no regression)**
@@ -407,7 +407,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 cargo fmt --manifest-path umbral_website/Cargo.toml
 git add umbral_website/plugins/plugin_directory/src/lib.rs \
   umbral_website/plugins/plugin_directory/templates/plugin_directory/_reply.html \
@@ -593,7 +593,7 @@ Then post a reply through the route (reuse the CSRF flow from the earlier fix: f
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 cargo fmt --manifest-path umbral_website/Cargo.toml
 git add umbral_website/plugins/plugin_directory/src/lib.rs umbral_website/plugins/plugin_directory/templates/plugin_directory/plugin.html
 git commit -m "feat(notes): inline composer + reply forms + threaded live inserts"
@@ -631,7 +631,7 @@ In `plugin.html`'s `{% block extra_head %}` `<style>`, append:
 Reload `http://localhost:8100/plugins/umbral-admin#notes` and confirm the composer is compact, replies indent under their note with a rail, and the reply toggle reveals a tight form.
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add umbral_website/plugins/plugin_directory/templates/plugin_directory/plugin.html
 git commit -m "style(notes): compact chat layout for the notes thread"
 ```

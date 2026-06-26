@@ -183,7 +183,7 @@ Expected: PASS, 3 passed.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/orm/search.rs crates/umbral-core/src/orm/mod.rs crates/umbral-core/tests/search_helpers.rs
 git commit -m "feat(orm): Searchable trait + column-selection helpers"
 ```
@@ -333,7 +333,7 @@ Expected: PASS, 5 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/orm/search.rs crates/umbral-core/tests/search_helpers.rs
 git commit -m "feat(orm): SearchHit + per-backend normalized branch SQL"
 ```
@@ -556,7 +556,7 @@ Expected: all pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/orm/search.rs crates/umbral-core/src/orm/mod.rs crates/umbral-core/tests/search_across.rs
 git commit -m "feat(orm): Search::across over a Searchable tuple, UNION ALL ranked"
 ```
@@ -610,7 +610,7 @@ Expected: clean.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral/src/lib.rs crates/umbral-core/tests/search_helpers.rs
 git commit -m "feat(orm): re-export Search/Searchable/SearchHit from the facade"
 ```
@@ -683,7 +683,7 @@ Expected: PASS (the test early-returns when no Postgres URL is present; compiles
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add plugins/umbral-rest/tests/search_pg.rs
 git commit -m "test(orm): cfg-gated Postgres ts_rank ordering for Search::across"
 ```
@@ -705,7 +705,7 @@ git commit -m "test(orm): cfg-gated Postgres ts_rank ordering for Search::across
 
 Run:
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 sed -n '610,700p' umbral_website/plugins/plugin_directory/src/lib.rs
 grep -n "pub name\|pub crate_name\|pub short_description\|pub slug\|pub moderation\|deleted\|pub struct Plugin" umbral_website/plugins/plugin_directory/src/models.rs
 grep -n "pub title\|pub body\|pub status\|pub slug\|pub struct BlogPost\|published" umbral_website/plugins/site_content/src/models.rs
@@ -813,7 +813,7 @@ Expected: PASS. If the search-result HTML now differs (e.g. snippet text), updat
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add umbral_website/plugins/site_content/src/models.rs umbral_website/plugins/plugin_directory/src/models.rs umbral_website/plugins/plugin_directory/src/lib.rs umbral_website/plugins/plugin_directory/tests/render_pages.rs
 git commit -m "feat(website): header search via ORM Search::across (ranked)"
 ```
@@ -827,7 +827,7 @@ git commit -m "feat(website): header search via ORM Search::across (ranked)"
 
 - [ ] **Step 1: Read a sibling page for the frontmatter shape**
 
-Run: `cd /home/dalmas/E/projects/umbral && sed -n '1,12p' documentation/docs/v0.0.1/orm/aggregates.mdx`
+Run: `cd . && sed -n '1,12p' documentation/docs/v0.0.1/orm/aggregates.mdx`
 Expected: shows the `title/description/sidebar_position/icon` frontmatter convention + `_category_.json` ordering.
 
 - [ ] **Step 2: Write the page** (`documentation/docs/v0.0.1/orm/search.mdx`)
@@ -879,7 +879,7 @@ See the design rationale in `docs/superpowers/specs/2026-06-15-cross-model-searc
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add documentation/docs/v0.0.1/orm/search.mdx
 git commit -m "docs(orm): cross-model search page"
 ```
@@ -914,7 +914,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add planning/orm_fixes.md
 git commit -m "docs(orm): close orm_fixes #3 (cross-model search shipped)"
 ```

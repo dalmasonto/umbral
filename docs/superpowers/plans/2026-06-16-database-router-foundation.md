@@ -138,7 +138,7 @@ Expected: 2 tests pass. (Note: `route_context` is declared but its file doesn't 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/db/router.rs crates/umbral-core/src/db/route_context.rs crates/umbral-core/src/db.rs
 git commit -m "feat(db): Alias + validated Schema newtypes for routing"
 ```
@@ -280,7 +280,7 @@ Expected: 4 tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/db/route_context.rs crates/umbral-core/Cargo.toml
 git commit -m "feat(db): request-scoped RouteContext on a task-local with spawn-safe fallback"
 ```
@@ -407,7 +407,7 @@ Expected: PASS (the Task 1 newtype tests still pass; no new behavior to unit-tes
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/db/router.rs
 git commit -m "feat(db): DatabaseRouter trait + DefaultRouter + ambient router()"
 ```
@@ -485,7 +485,7 @@ Expected: clean build (facade + core compile).
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/db.rs crates/umbral-core/src/app.rs crates/umbral/src/lib.rs
 git commit -m "feat(app): App::builder().router(...) install + facade re-exports"
 ```
@@ -645,7 +645,7 @@ Expected: 935+ pass, 0 fail (DefaultRouter reproduces old behavior; `model_meta_
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/orm/queryset/mod.rs crates/umbral-core/src/migrate.rs crates/umbral-core/tests/router_read_write_split.rs
 git commit -m "feat(orm): route typed reads/writes through DatabaseRouter (folds in #23)"
 ```
@@ -737,7 +737,7 @@ Run: `cd crates && cargo test -p umbral-core --test route_context`
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/db/route_context.rs crates/umbral-core/src/middleware.rs crates/umbral-core/src/app.rs crates/umbral-core/tests/route_context.rs
 git commit -m "feat(app): RouteContextLayer middleware + App::builder().route_context()"
 ```
@@ -783,7 +783,7 @@ Run: `cd crates && cargo test -p umbral-core` → green.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/orm/dynamic.rs crates/umbral-core/tests/router_dynamic.rs
 git commit -m "fix(orm): route DynQuerySet through DatabaseRouter (admin/REST no longer pinned to default)"
 ```
@@ -810,7 +810,7 @@ git commit -m "fix(orm): route DynQuerySet through DatabaseRouter (admin/REST no
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/app.rs crates/umbral-core/tests/router_allow.rs
 git commit -m "refactor(app): cross-DB FK guard (#22) routes through DatabaseRouter::allow_relation"
 ```
@@ -849,7 +849,7 @@ Use the cached `model_meta_for_table` (or `model_meta_ref` keyed by table — ad
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/migrate.rs crates/umbral-core/tests/router_allow.rs
 git commit -m "feat(migrate): per-alias op walk routes through DatabaseRouter::allow_migrate"
 ```
@@ -908,7 +908,7 @@ Expected: PASS (skip if no DB; note in the commit that it's gated).
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/db/router.rs crates/umbral-core/src/orm/queryset/mod.rs crates/umbral-core/src/orm/dynamic.rs crates/umbral-core/tests/router_schema_qualified.rs crates/umbral-core/tests/router_schema_postgres.rs
 git commit -m "feat(orm): schema-qualified SQL consumes DatabaseRouter::schema_for (option C)"
 ```
@@ -977,7 +977,7 @@ Expected: clean fmt, no new clippy warnings on the changed files, green build, g
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add documentation/docs/v0.0.1/orm/database-router.mdx
 git commit -m "docs(orm): database-router page (gaps2 #69 foundation)"
 ```

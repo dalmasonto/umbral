@@ -242,7 +242,7 @@ Expected: existing template tests still pass; build clean. The eager `with_curre
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add crates/umbral-core/src/templates.rs crates/umbral/src/lib.rs crates/umbral-core/tests/lazy_user.rs
 git commit -m "feat(core): lazy current-user channel for templates
 
@@ -356,7 +356,7 @@ Expected: all existing auth tests pass (the eager → lazy change is behavior-pr
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/dalmas/E/projects/umbral
+cd .
 git add plugins/umbral-auth/src/session_user.rs plugins/umbral-auth/tests/user_context_lazy.rs
 git commit -m "perf(auth): make user_context_layer lazy
 
@@ -376,13 +376,13 @@ on first access (memoized). Closes the eager-on-JSON waste behind the shop's
 - [ ] **Step 1: Build the shop release**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/examples/shop && cargo build --release 2>&1 | tail -2
+cd ./examples/shop && cargo build --release 2>&1 | tail -2
 ```
 
 - [ ] **Step 2: Fresh bench DB, seed 40k rows, launch pinned**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/examples/shop
+cd ./examples/shop
 rm -f bench.db bench.db-wal bench.db-shm
 UMBRAL_DATABASE_URL="sqlite://bench.db?mode=rwc" ./target/release/shop migrate >/dev/null 2>&1
 taskset -c 0-9 env UMBRAL_DATABASE_URL="sqlite://bench.db?mode=rwc" UMBRAL_BIND_ADDR=127.0.0.1:8123 ./target/release/shop serve >/dev/null 2>&1 &

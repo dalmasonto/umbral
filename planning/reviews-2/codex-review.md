@@ -46,7 +46,7 @@ Recommended fix: switch `QuerySetTx::count()` to `Func::count(Expr::col(sea_quer
 
 ## Test Results
 
-Ran focused tests from `/home/dalmas/E/projects/umbral/crates`:
+Ran focused tests from `./crates`:
 
 - `cargo test -p umbral-core --test join_related --test join_related_m2m --test values_traversal --test dyn_string_pk_include --test pk_string_m2m --test pk_uuid_postgres --test transactions`
   - Passed: 38 tests.

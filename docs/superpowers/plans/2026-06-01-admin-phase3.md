@@ -378,7 +378,7 @@ pub type AdminConfig = AdminModel;
 - [ ] **Step 2: Verify config.rs compiles**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo build -p umbral-admin 2>&1 | head -60
+cd ./crates && cargo build -p umbral-admin 2>&1 | head -60
 ```
 
 Expected: may have errors from `lib.rs` still using the old `Action` field names (`name` instead of `key`, old handler signature). That's fine — we fix lib.rs next.
@@ -1059,7 +1059,7 @@ let action_names: Vec<serde_json::Value> = cfg
 - [ ] **Step 9: Verify build**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo build -p umbral-admin 2>&1 | head -80
+cd ./crates && cargo build -p umbral-admin 2>&1 | head -80
 ```
 
 Expected: clean build.
@@ -1263,7 +1263,7 @@ umbral.runBulkAction = function(btn) {
 - [ ] **Step 1: Read wrapper.html to find the right insertion point**
 
 ```bash
-grep -n "body\|</body>\|toast\|umbral\." /home/dalmas/E/projects/umbral/plugins/umbral-admin/templates/wrapper.html | head -30
+grep -n "body\|</body>\|toast\|umbral\." ./plugins/umbral-admin/templates/wrapper.html | head -30
 ```
 
 - [ ] **Step 2: Add toast container + JS before `</body>`**
@@ -1322,7 +1322,7 @@ Check that `base.html` (or `wrapper.html`) initialises `window.umbral = {}` befo
 - [ ] **Step 4: Verify wrapper.html still renders correctly**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo build -p umbral-admin 2>&1 | grep -E "error|warning" | head -20
+cd ./crates && cargo build -p umbral-admin 2>&1 | grep -E "error|warning" | head -20
 ```
 
 ---
@@ -1535,7 +1535,7 @@ if is_htmx(&headers) {
 - [ ] **Step 5: Build check**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo build -p umbral-admin 2>&1 | head -60
+cd ./crates && cargo build -p umbral-admin 2>&1 | head -60
 ```
 
 ---
@@ -1900,7 +1900,7 @@ async fn test_delete_selected_action_deletes_row() {
 - [ ] **Step 2: Run the tests to see them fail (expected until handler is in place)**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo test -p umbral-admin phase3_actions 2>&1 | tail -30
+cd ./crates && cargo test -p umbral-admin phase3_actions 2>&1 | tail -30
 ```
 
 Expected: compile errors or test failures because handler code isn't written yet.
@@ -2112,7 +2112,7 @@ async fn test_fk_options_no_staff_returns_403_or_redirect() {
 - [ ] **Step 2: Run to verify test compilation**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo test -p umbral-admin phase3_fk 2>&1 | tail -30
+cd ./crates && cargo test -p umbral-admin phase3_fk 2>&1 | tail -30
 ```
 
 ---
@@ -2306,7 +2306,7 @@ async fn test_cell_edit_post_nonexistent_row_returns_404() {
 - [ ] **Step 2: Run test compilation check**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo test -p umbral-admin phase3_inline 2>&1 | tail -30
+cd ./crates && cargo test -p umbral-admin phase3_inline 2>&1 | tail -30
 ```
 
 ---
@@ -2316,13 +2316,13 @@ cd /home/dalmas/E/projects/umbral/crates && cargo test -p umbral-admin phase3_in
 - [ ] **Step 1: Format**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo fmt
+cd ./crates && cargo fmt
 ```
 
 - [ ] **Step 2: Clippy**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo clippy --all-targets 2>&1 | grep -E "^error" | head -30
+cd ./crates && cargo clippy --all-targets 2>&1 | grep -E "^error" | head -30
 ```
 
 Fix any errors. Warnings are acceptable.
@@ -2330,7 +2330,7 @@ Fix any errors. Warnings are acceptable.
 - [ ] **Step 3: Build**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo build 2>&1 | tail -20
+cd ./crates && cargo build 2>&1 | tail -20
 ```
 
 Expected: `Finished` line.
@@ -2338,7 +2338,7 @@ Expected: `Finished` line.
 - [ ] **Step 4: Test**
 
 ```bash
-cd /home/dalmas/E/projects/umbral/crates && cargo test 2>&1 | tail -40
+cd ./crates && cargo test 2>&1 | tail -40
 ```
 
 Expected: all tests pass including the three new phase3_* suites. If a test fails due to the `OnceCell` being shared between tests in the same binary, debug with `-- --test-threads=1` for that test file.

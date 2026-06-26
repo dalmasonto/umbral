@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umbral = { path = "/home/dalmas/E/projects/umbral/crates/umbral" }
-umbral-auth = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-auth" }
+umbral = { path = "../../../crates/umbral" }
+umbral-auth = { path = "../../../plugins/umbral-auth" }
 # Live note feed: broadcast a posted note to the plugin's SSE watchers.
-umbral-realtime = { path = "/home/dalmas/E/projects/umbral/plugins/umbral-realtime" }
+umbral-realtime = { path = "../../../plugins/umbral-realtime" }
 # The global header search (/search) spans plugins + blog posts.
-site_content = { path = "/home/dalmas/E/projects/umbral/umbral_website/plugins/site_content" }
+site_content = { path = "../../../umbral_website/plugins/site_content" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio", "chrono", "uuid", "json"] }

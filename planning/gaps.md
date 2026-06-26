@@ -133,7 +133,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 69. [x] How do we do foreignkeys to self, some frameworks use a string rep of the model name to refer to … — archived
 70. [ ] Cache middleware improvements ie ability to control cache through redis, in memory or in other ways. Should be easy to use. Redis has sorted sets and can be used for caching with TTL. So for caching, we should fully explore redis options and have it as CachePlugin::Redis, or memcache as CachePlugin::Memcache etc
 71. [x] The current PLaygroundPlugin does not take in app name, meaning the playground is not properly … — archived
-72. [x] /home/dalmas/E/projects/umbral/plugins/umbral-rest/src/auth.rs ln 57 is wrong, I thought we improved … — archived
+72. [x] ./plugins/umbral-rest/src/auth.rs ln 57 is wrong, I thought we improved … — archived
 73. [x] Variables in the playground are not being stored. Also the variables are hidden using password … — archived
 74. [x] Bearer token also hides the token, should have an eye for toggle — archived
 75. [x] Global authorization header in settings should also be there. — archived
@@ -159,7 +159,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 93. [ ] Autodetector: M2M junction table rename not handled - renaming a model that has `M2M<T>` fields drops and recreates the junction table instead of renaming it. The code explicitly acknowledges this: "Renames of the parent model trip a Drop + Create on the junction, and the rename-tracking we'd need to do better is ambitious enough to defer."
 94. [ ] Autodetector: no migration squashing - a `squashmigrations` command would collapse N migrations into 1 for cleaner history. Umbral has no equivalent. For long-running projects, the `migrations/` directory grows unbounded.
 95. [ ] No interactive shell / REPL - an interactive shell command would be the primary exploration tool for the ORM: inspect live models, run ad-hoc queries, test filter predicates, prototype aggregates, and debug data issues without recompiling. Umbral has no equivalent. A Rust REPL is harder than a scripting language's because of the compile step, but `evcxr` (a Rust Jupyter kernel) proves it's possible. The right shape for Umbral: `cargo run -- shell` spawns an `evcxr`-like session with the app's `AppContext`, `DbPool`, and `Settings` pre-loaded into scope, so `Post::objects().filter(...).fetch().await` works interactively. Without this, every ORM exploration requires writing a test or a handler, compiling, and running - a 30-second loop instead of instant feedback.
-96. [x] `/home/dalmas/E/projects/umbral/bugs/db-testing.md` - Fix the bugs here and close them. — archived
+96. [x] `./bugs/db-testing.md` - Fix the bugs here and close them. — archived
 97. [x] Migrations: If you add a field which is not optional to an already existing model, the … — archived
 98. [x] Do we really have auto-detection for same tables and or models? — archived
 99. [x] Playground: Environment variables not saved - a bug — archived

@@ -119,9 +119,9 @@ This assumption is wrong: sqlx-pg does **not** automatically coerce a string `"{
 
 ## Raw Results Files
 
-- `/home/dalmas/E/projects/umbral/bugs/db-testing-results/sqlite_ab_results.txt`
-- `/home/dalmas/E/projects/umbral/bugs/db-testing-results/postgres_ab_results.txt`
-- `/home/dalmas/E/projects/umbral/bugs/db-testing-results/shop_dump.json` (2.4MB dump from SQLite)
+- `planning/db-testing-results/sqlite_ab_results.txt`
+- `planning/db-testing-results/postgres_ab_results.txt`
+- `planning/db-testing-results/shop_dump.json` (2.4MB dump from SQLite)
 
 ## Recommendations
 

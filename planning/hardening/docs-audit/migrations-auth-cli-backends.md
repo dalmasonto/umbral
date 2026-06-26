@@ -261,4 +261,4 @@ The doc (line 116) says the QuerySet's JSON-operator surface uses `json_extract(
 
 3. **Important — auth/user-in-templates.mdx: anonymous sentinel mismatch**: The `anonymous_user_value` inside `user_context_layer` (`session_user.rs:506`) emits only `{ is_authenticated: false }` (1 key), while the doc guarantees 3 keys. If the middleware is mounted and the session lookup errors, templates using `{% if user.is_staff %}` could throw "undefined variable" instead of evaluating to false. The core renderer's fallback (`templates.rs:983`) correctly emits all 3 keys and fires when the middleware is OFF, so the common path is safe — but the middleware's own error fallback is broken.
 
-**Report path:** `/home/dalmas/E/projects/umbral/planning/hardening/docs-audit/migrations-auth-cli-backends.md`
+**Report path:** `./planning/hardening/docs-audit/migrations-auth-cli-backends.md`
