@@ -127,3 +127,31 @@ This assumption is wrong: sqlx-pg does **not** automatically coerce a string `"{
 
 1. **Consider a release build benchmark** — debug builds skew absolute numbers; the *relative* SQLite vs Postgres comparison is still valid.
 2. **Test write-heavy endpoints** — all tests above were reads. Postgres write performance (especially with concurrent writers) will diverge more significantly from SQLite WAL.
+
+## Post-fix verification (2026-06-26)
+
+All four bugs above are fixed and now carry regression tests, so the data-portability and JSON-on-Postgres bottlenecks that blocked the original session are resolved. Verified against a clean build of the workspace.
+
+**SQLite** — the full workspace suite passes: **2238 tests green**, including the regression test added for each bug:
+
+| Bug | Fixed in | Regression test(s) |
+|-----|----------|--------------------|
+| BUG-1 (`.env` not loaded) | `1dd9e07` | settings env tests |
+| BUG-2 (Postgres dumpdata/loaddata) | `49efd0c` | `backup.rs`, `backup_postgres.rs` |
+| BUG-3 (JSON `bulk_create` on Postgres) | `fcc25f1` | `json_field.rs` |
+| BUG-4 (SQLite JSON dump shape) | `c8c57d9` | `backup_json.rs` |
+
+**Postgres** — the Postgres-specific regressions were run against a live PostgreSQL 18 instance (with `UMBRAL_TEST_POSTGRES_URL` pointed at a throwaway test database, not any real data):
+
+- `backup_postgres.rs` (BUG-2: dumpdata/loaddata round-trip on Postgres) — **pass**
+- `json_field.rs` (BUG-3: JSONB `bulk_create` and round-trips, 5 tests) — **pass**
+- `postgres_queryset.rs` (general ORM-on-Postgres sanity, 3 tests) — **pass**
+
+Reproduce the Postgres set with:
+
+```bash
+UMBRAL_TEST_POSTGRES_URL=postgres://USER:PASS@localhost/your_test_db \
+  cargo test -p umbral-core --test backup_postgres --test json_field --test postgres_queryset -- --include-ignored
+```
+
+**Bottom line:** the original blockers (Postgres data portability and JSONB writes) now work on both backends. The read-path observation from the benchmark still holds (the bottleneck is JSON serialization plus response generation, not the database), so a release-build benchmark and write-heavy load tests remain the open follow-ups from the recommendations above.
