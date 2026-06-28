@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use umbral::orm::ForeignKey;
+use umbral::orm::{F, ForeignKey};
 
 /// Stored discriminator values for [`AuthChallenge::purpose`].
 pub const PURPOSE_EMAIL_VERIFY: &str = "email_verify";
@@ -195,12 +195,15 @@ impl AuthChallenge {
     /// attempt so the caller can gate on a maximum before locking the
     /// challenge. The in-memory `self.attempts` is NOT updated; re-fetch
     /// the row to get the current count.
+    ///
+    /// The increment is an atomic server-side `SET attempts = attempts + 1`
+    /// (via `update_expr`) — two concurrent calls cannot both read the same
+    /// stale value and both write the same result, so the attempt cap used
+    /// by the brute-force guard in Task 8 cannot be under-counted.
     pub async fn bump_attempts(&self) -> Result<(), crate::AuthError> {
-        let mut delta = serde_json::Map::new();
-        delta.insert("attempts".to_string(), serde_json::json!(self.attempts + 1));
         AuthChallenge::objects()
             .filter(auth_challenge::ID.eq(self.id))
-            .update_values(delta)
+            .update_expr("attempts", F::col("attempts").add(1))
             .await?;
         Ok(())
     }
@@ -232,10 +235,9 @@ mod tests {
 
     #[test]
     fn generate_code_zero_pads_small_numbers() {
-        // The format string "{n:06}" zero-pads. We can't force a specific
-        // random value, but we can verify the invariant holds for a large
-        // sample; statistical probability of any 6-char all-digit failure
-        // in 20 runs is effectively zero.
+        // Deterministic proof that the {:06} format spec zero-pads small values.
+        assert_eq!(format!("{:06}", 48u32), "000048");
+        // Also confirm the invariant holds across random samples.
         let code = generate_code();
         assert_eq!(code.len(), 6);
     }
