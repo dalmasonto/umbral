@@ -390,21 +390,86 @@ impl RestPlugin {
         }
     }
 
+    /// HTTP method tokens currently mounted for `(table, kind)`, honoring
+    /// the `.views(...)` scope and (for the collection) the `.bulk()`
+    /// opt-in. OPTIONS is omitted — it's always available, so callers
+    /// prepend it. This is the single source of truth for both the
+    /// `OPTIONS` `Allow` header and the `Allow` header on a `405`.
+    ///
+    /// Note this reflects what's *mounted*, never the per-identity
+    /// permission class: `Allow` is a property of the resource, not of
+    /// who's asking. A resource that should advertise only `GET` says so
+    /// with `.views([List, Retrieve])`, not with a `ReadOnly` permission.
+    fn exposed_methods(&self, table: &str, kind: EndpointKind) -> Vec<&'static str> {
+        let mut v = Vec::new();
+        match kind {
+            EndpointKind::Collection => {
+                if self.view_exposed(table, &Action::List) {
+                    v.push("GET");
+                }
+                if self.view_exposed(table, &Action::Create) {
+                    v.push("POST");
+                }
+                // Collection PATCH/DELETE are the bulk update/delete
+                // endpoints — only mounted when the resource opted in.
+                if self.bulk.contains(table) {
+                    if self.view_exposed(table, &Action::Update) {
+                        v.push("PATCH");
+                    }
+                    if self.view_exposed(table, &Action::Delete) {
+                        v.push("DELETE");
+                    }
+                }
+            }
+            EndpointKind::Detail => {
+                if self.view_exposed(table, &Action::Retrieve) {
+                    v.push("GET");
+                }
+                if self.view_exposed(table, &Action::Update) {
+                    v.push("PUT");
+                    v.push("PATCH");
+                }
+                if self.view_exposed(table, &Action::Delete) {
+                    v.push("DELETE");
+                }
+            }
+        }
+        v
+    }
+
     /// Authenticate + permission-check for one (table, action). The
     /// caller passes the resolved identity (already pulled from the
-    /// auth backend at request entry). Returns the right `ApiError`
+    /// auth backend at request entry) and the `kind` of endpoint the
+    /// request hit (collection vs detail). Returns the right `ApiError`
     /// variant for the failure mode so the handler's `?` operator
-    /// surfaces 401 / 403 / 404 with the right shape.
+    /// surfaces 401 / 403 / 404 / 405 with the right shape.
+    ///
+    /// `.views(...)` scope filters built-in CRUD actions. When the
+    /// requested action is scoped out we distinguish two cases:
+    /// - the endpoint still serves *some* verb → `405 Method Not
+    ///   Allowed` with an `Allow` header (the URI exists, this method
+    ///   doesn't), matching RFC 7231;
+    /// - the endpoint serves *nothing* (e.g. `views([List])` makes the
+    ///   detail URI serve no method) → `404` (the URI isn't served).
     fn gate(
         &self,
         table: &str,
         action: &Action,
+        kind: EndpointKind,
         identity: Option<&Identity>,
     ) -> Result<(), ApiError> {
         if !self.view_exposed(table, action) {
-            return Err(ApiError::NotFound(format!(
-                "action `{action:?}` is not exposed on `/api/{table}/`"
-            )));
+            let methods = self.exposed_methods(table, kind);
+            if methods.is_empty() {
+                return Err(ApiError::NotFound(format!(
+                    "action `{action:?}` is not exposed on `/api/{table}/`"
+                )));
+            }
+            let allow = std::iter::once("OPTIONS")
+                .chain(methods)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ApiError::MethodNotAllowed { allow });
         }
         match self.permission_for(table).check(action, identity) {
             Ok(()) => Ok(()),
@@ -1360,6 +1425,23 @@ pub fn is_exposed(table: &str) -> bool {
     CONFIG.get().map(|cfg| cfg.allow(table)).unwrap_or(true)
 }
 
+/// Public read: is `action` mounted for `table`? Consults the same
+/// `.views(...)` scope the request-time gate uses, so spec consumers
+/// (umbral-openapi) advertise exactly the operations the API serves — a
+/// `views([List, Retrieve])` resource never emits `post`/`put`/`patch`/
+/// `delete` in the generated spec. Custom (`@action`) endpoints are
+/// always exposed (the scope filters only built-in CRUD).
+///
+/// Returns `true` when CONFIG isn't populated yet (spec-only smoke
+/// tests, no REST plugin booted) so the default shape exposes
+/// everything — same defaulting as [`is_exposed`].
+pub fn action_exposed(table: &str, action: &Action) -> bool {
+    CONFIG
+        .get()
+        .map(|cfg| cfg.view_exposed(table, action))
+        .unwrap_or(true)
+}
+
 /// Public read: would this REST plugin strip `field` from `table`'s
 /// response bodies? Returns the SAME answer `RestPlugin::apply_overrides`
 /// uses at request time (both consult `RestPlugin::is_field_hidden`), so
@@ -1787,6 +1869,18 @@ fn method_filter(m: &http::Method) -> axum::routing::MethodFilter {
 // body — fields, writable columns — is a deferred follow-up.
 // =========================================================================
 
+/// Which of the two REST URI shapes a request hit. Drives both the
+/// `OPTIONS` `Allow` header and the `Allow` header on a view-scoped
+/// `405`: collection PATCH/DELETE are the bulk endpoints, detail
+/// PUT/PATCH/DELETE act on a single row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointKind {
+    /// `/api/<table>/` — list, create, bulk update/delete.
+    Collection,
+    /// `/api/<table>/<id>` — retrieve, update, destroy.
+    Detail,
+}
+
 /// Build a `204 No Content` response carrying an `Allow` header.
 fn options_response(allow: &str) -> Response {
     let mut resp = StatusCode::NO_CONTENT.into_response();
@@ -1796,26 +1890,37 @@ fn options_response(allow: &str) -> Response {
     resp
 }
 
-/// `OPTIONS` on a collection endpoint (`/api/{table}` and `/api/{table}/`).
-/// `GET` (list) + `POST` (create) are always supported; collection
-/// `PATCH`/`DELETE` (bulk) only when the resource opted in via `.bulk()`.
-async fn collection_options(Path(table): Path<String>) -> Response {
-    let bulk = CONFIG
-        .get()
-        .map(|cfg| cfg.bulk.contains(&table))
-        .unwrap_or(false);
-    let allow = if bulk {
-        "OPTIONS, GET, POST, PATCH, DELETE"
-    } else {
-        "OPTIONS, GET, POST"
+/// `Allow` header value for `(table, kind)`: `OPTIONS` plus every verb
+/// the resource actually serves. Reflects `.views(...)` scope and (for
+/// the collection) the `.bulk()` opt-in. Defaults to the full verb set
+/// when CONFIG isn't populated (spec-only smoke tests, no plugin booted).
+fn options_allow(table: &str, kind: EndpointKind) -> String {
+    let methods = match CONFIG.get() {
+        Some(cfg) => cfg.exposed_methods(table, kind),
+        None => match kind {
+            EndpointKind::Collection => vec!["GET", "POST"],
+            EndpointKind::Detail => vec!["GET", "PUT", "PATCH", "DELETE"],
+        },
     };
-    options_response(allow)
+    std::iter::once("OPTIONS")
+        .chain(methods)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `OPTIONS` on a collection endpoint (`/api/{table}` and `/api/{table}/`).
+/// `GET` (list) + `POST` (create) when exposed; collection `PATCH`/`DELETE`
+/// (bulk) only when the resource opted in via `.bulk()`. The `Allow` list
+/// honors any `.views(...)` scope so a read-only resource advertises only
+/// the verbs it serves.
+async fn collection_options(Path(table): Path<String>) -> Response {
+    options_response(&options_allow(&table, EndpointKind::Collection))
 }
 
 /// `OPTIONS` on a detail endpoint (`/api/{table}/{id}`): retrieve / update /
-/// destroy are always registered.
-async fn detail_options() -> Response {
-    options_response("OPTIONS, GET, PUT, PATCH, DELETE")
+/// destroy, filtered by any `.views(...)` scope on the resource.
+async fn detail_options(Path((table, _id)): Path<(String, String)>) -> Response {
+    options_response(&options_allow(&table, EndpointKind::Detail))
 }
 
 // =========================================================================
@@ -1894,6 +1999,15 @@ enum ApiError {
     /// `{"detail":"Request was throttled.","retry_after":N}`.
     Throttled {
         retry_after: Option<std::time::Duration>,
+    },
+    /// 405 — the URI exists but doesn't serve the requested method.
+    /// Raised when a built-in CRUD action is scoped out by `.views(...)`
+    /// yet the endpoint still serves at least one other verb (e.g. a
+    /// `POST` to a `views([List, Retrieve])` collection). Carries the
+    /// `Allow` header value listing the verbs that *are* served, per
+    /// RFC 7231. (A fully unserved URI 404s instead — see `gate`.)
+    MethodNotAllowed {
+        allow: String,
     },
     /// 500 — a non-database internal error (e.g. CSV serialization
     /// failure). The message is logged server-side; the client sees
@@ -1988,7 +2102,11 @@ impl umbral::web::IntoResponse for ApiError {
             let secs = retry_after
                 .map(|d| {
                     let whole = d.as_secs();
-                    if d.subsec_nanos() > 0 { whole + 1 } else { whole }
+                    if d.subsec_nanos() > 0 {
+                        whole + 1
+                    } else {
+                        whole
+                    }
                 })
                 .unwrap_or(0);
             let body = serde_json::json!({
@@ -1998,6 +2116,25 @@ impl umbral::web::IntoResponse for ApiError {
             let mut resp = (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response();
             if let Ok(val) = http::HeaderValue::from_str(&secs.to_string()) {
                 resp.headers_mut().insert(http::header::RETRY_AFTER, val);
+            }
+            return resp;
+        }
+
+        // 405 carries an `Allow` header (the verbs this URI does serve),
+        // so it's built here rather than through the single-message
+        // envelope below.
+        if let ApiError::MethodNotAllowed { allow } = self {
+            let body = ApiErrorBody {
+                code: "method_not_allowed",
+                field_errors: BTreeMap::new(),
+                non_field_errors: Vec::new(),
+                error: "method not allowed".to_string(),
+                hint: None,
+                available: Vec::new(),
+            };
+            let mut resp = (StatusCode::METHOD_NOT_ALLOWED, Json(body)).into_response();
+            if let Ok(val) = http::HeaderValue::from_str(&allow) {
+                resp.headers_mut().insert(http::header::ALLOW, val);
             }
             return resp;
         }
@@ -2027,6 +2164,7 @@ impl umbral::web::IntoResponse for ApiError {
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "forbidden".to_string()),
             ApiError::NotAcceptable(m) => (StatusCode::NOT_ACCEPTABLE, "not_acceptable", m),
             ApiError::Throttled { .. } => unreachable!("handled above"),
+            ApiError::MethodNotAllowed { .. } => unreachable!("handled above"),
             ApiError::Internal(m) => {
                 tracing::error!(error = %m, "REST handler hit an internal error");
                 (
@@ -2207,7 +2345,12 @@ async fn list(
         version: cfg.resolve_version(uri.path(), &headers)?,
     };
     let model = allowed_model(&table)?;
-    cfg.gate(&table, &Action::List, identity.as_ref())?;
+    cfg.gate(
+        &table,
+        &Action::List,
+        EndpointKind::Collection,
+        identity.as_ref(),
+    )?;
     cfg.gate_throttle(
         &table,
         &Action::List,
@@ -2264,7 +2407,8 @@ async fn list(
             offset: 0,
             page: None,
         };
-        let mut rows = fetch_rows(&model, None, Some(csv_page), &filter, &include, &ordering).await?;
+        let mut rows =
+            fetch_rows(&model, None, Some(csv_page), &filter, &include, &ordering).await?;
         for row in &mut rows {
             if let Some(ref meta) = list_meta {
                 cfg.apply_overrides_with_meta(&table, meta, row);
@@ -2303,7 +2447,11 @@ async fn list(
 /// Returns `Err(ApiError::Internal(...))` if the CSV writer or UTF-8
 /// conversion fails, so the caller can return a 500 instead of a
 /// silently-truncated or empty 200.
-fn csv_response(table: &str, model: &ModelMeta, rows: &[Map<String, Value>]) -> Result<Response, ApiError> {
+fn csv_response(
+    table: &str,
+    model: &ModelMeta,
+    rows: &[Map<String, Value>],
+) -> Result<Response, ApiError> {
     let csv = rows_to_csv(model, rows).map_err(ApiError::Internal)?;
     Ok((
         StatusCode::OK,
@@ -2394,7 +2542,12 @@ async fn retrieve(
         version: cfg.resolve_version(uri.path(), &headers)?,
     };
     let model = allowed_model(&table)?;
-    cfg.gate(&table, &Action::Retrieve, identity.as_ref())?;
+    cfg.gate(
+        &table,
+        &Action::Retrieve,
+        EndpointKind::Detail,
+        identity.as_ref(),
+    )?;
     cfg.gate_throttle(
         &table,
         &Action::Retrieve,
@@ -2408,7 +2561,15 @@ async fn retrieve(
     // its `user` FK expanded to the full AuthUser object. Same
     // parser, same 400-on-bad-name semantics.
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
-    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &include, &[]).await?;
+    let mut rows = fetch_rows(
+        &model,
+        Some((&pk.name, &id)),
+        None,
+        &no_filter,
+        &include,
+        &[],
+    )
+    .await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -2435,7 +2596,12 @@ async fn create(
         version: cfg.resolve_version(uri.path(), &headers)?,
     };
     let model = allowed_model(&table)?;
-    cfg.gate(&table, &Action::Create, identity.as_ref())?;
+    cfg.gate(
+        &table,
+        &Action::Create,
+        EndpointKind::Collection,
+        identity.as_ref(),
+    )?;
     cfg.gate_throttle(
         &table,
         &Action::Create,
@@ -2567,7 +2733,12 @@ async fn bulk_update(
             "bulk update is not enabled on /api/{table}"
         )));
     }
-    cfg.gate(&table, &Action::Update, identity.as_ref())?;
+    cfg.gate(
+        &table,
+        &Action::Update,
+        EndpointKind::Collection,
+        identity.as_ref(),
+    )?;
     cfg.gate_throttle(
         &table,
         &Action::Update,
@@ -2648,7 +2819,12 @@ async fn bulk_delete(
             "bulk delete is not enabled on /api/{table}"
         )));
     }
-    cfg.gate(&table, &Action::Delete, identity.as_ref())?;
+    cfg.gate(
+        &table,
+        &Action::Delete,
+        EndpointKind::Collection,
+        identity.as_ref(),
+    )?;
     cfg.gate_throttle(
         &table,
         &Action::Delete,
@@ -2897,7 +3073,12 @@ async fn update(
         version: cfg.resolve_version(uri.path(), &headers)?,
     };
     let model = allowed_model(&table)?;
-    cfg.gate(&table, &Action::Update, identity.as_ref())?;
+    cfg.gate(
+        &table,
+        &Action::Update,
+        EndpointKind::Detail,
+        identity.as_ref(),
+    )?;
     cfg.gate_throttle(
         &table,
         &Action::Update,
@@ -2950,7 +3131,12 @@ async fn destroy(
         version: cfg.resolve_version(uri.path(), &headers)?,
     };
     let model = allowed_model(&table)?;
-    cfg.gate(&table, &Action::Delete, identity.as_ref())?;
+    cfg.gate(
+        &table,
+        &Action::Delete,
+        EndpointKind::Detail,
+        identity.as_ref(),
+    )?;
     cfg.gate_throttle(
         &table,
         &Action::Delete,
@@ -2993,7 +3179,7 @@ async fn custom_action_dispatch(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: umbral::web::HeaderMap,
-    body: Option<Json<Value>>,
+    body: axum::body::Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let version = cfg.resolve_version(uri.path(), &headers)?;
@@ -3013,7 +3199,14 @@ async fn custom_action_dispatch(
     // resource's permission can deny or allow per-action.
     let identity = cfg.authentication.authenticate(&headers).await;
     let custom = Action::Custom(name.clone());
-    cfg.gate(&table, &custom, identity.as_ref())?;
+    // Custom actions are never view-scoped out (`view_exposed` returns
+    // true for them), so `kind` only shapes a 405 that can't occur here;
+    // pass the kind matching the action's own collection/detail scope.
+    let action_kind = match def.scope {
+        ActionScope::Collection => EndpointKind::Collection,
+        ActionScope::Detail => EndpointKind::Detail,
+    };
+    cfg.gate(&table, &custom, action_kind, identity.as_ref())?;
     cfg.gate_throttle(
         &table,
         &custom,
@@ -3021,13 +3214,25 @@ async fn custom_action_dispatch(
         throttle_client_ip(&headers).as_deref(),
     )?;
 
+    // Parse the request body leniently. An empty body — including a GET that
+    // carries `Content-Type: application/json` with nothing after it, which
+    // is what browser-based API explorers (the playground, Swagger UI) send —
+    // means "no body", not invalid JSON. Only non-empty bytes are parsed, and
+    // a genuine parse failure is a clean 400 rather than the 500 the old
+    // `Option<Json<Value>>` extractor produced ("EOF while parsing a value").
+    let body = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice::<Value>(&body).map_err(ApiError::Json)?
+    };
+
     let query = parse_query_string(uri.query().unwrap_or(""));
     let ctx = ActionContext {
         table: table.clone(),
         name: name.clone(),
         pk,
         identity,
-        body: body.map(|Json(v)| v).unwrap_or(Value::Null),
+        body,
         query,
         version,
     };
@@ -3055,20 +3260,50 @@ async fn custom_action_dispatch(
     }
 }
 
-/// Decode a `key=value&key=value` query string into a HashMap.
-/// Percent-decoding the values is left to consumers — the v1 contract
-/// is that `ActionContext::query` carries raw URL-encoded bytes; if
-/// real-world consumers want it decoded by default we can swap later.
-fn parse_query_string(q: &str) -> std::collections::HashMap<String, String> {
-    let mut out = std::collections::HashMap::new();
-    for pair in q.split('&').filter(|p| !p.is_empty()) {
-        if let Some((k, v)) = pair.split_once('=') {
-            out.insert(k.to_string(), v.to_string());
-        } else {
-            out.insert(pair.to_string(), String::new());
-        }
+#[cfg(test)]
+mod parse_query_string_unit {
+    use super::parse_query_string;
+
+    #[test]
+    fn percent_decodes_values() {
+        // What the playground (correctly) sends for ?at=2026-06-26T19:03:00Z.
+        let q = parse_query_string("at=2026-06-26T19%3A03%3A00Z&symbol=btcusd_chainlink");
+        assert_eq!(
+            q.get("at").map(String::as_str),
+            Some("2026-06-26T19:03:00Z")
+        );
+        assert_eq!(
+            q.get("symbol").map(String::as_str),
+            Some("btcusd_chainlink")
+        );
     }
-    out
+
+    #[test]
+    fn decodes_plus_as_space_and_encoded_keys() {
+        let q = parse_query_string("full+name=ada+lovelace&a%3Ab=c");
+        assert_eq!(q.get("full name").map(String::as_str), Some("ada lovelace"));
+        assert_eq!(q.get("a:b").map(String::as_str), Some("c"));
+    }
+
+    #[test]
+    fn bare_key_and_empty_string_tolerated() {
+        let q = parse_query_string("flag&empty=");
+        assert_eq!(q.get("flag").map(String::as_str), Some(""));
+        assert_eq!(q.get("empty").map(String::as_str), Some(""));
+    }
+}
+
+/// Decode a `key=value&key=value` query string into a HashMap, with keys
+/// AND values percent-decoded (`%3A` → `:`, `+` → space). Query values
+/// arrive percent-encoded over the wire — a correct client encodes
+/// `at=2026-06-26T19:03:00Z` as `at=2026-06-26T19%3A03%3A00Z` — so a handler
+/// reading `ctx.query.get("at")` wants the decoded `2026-06-26T19:03:00Z`,
+/// not the raw bytes. `form_urlencoded::parse` is the standard query parser
+/// and handles the splitting + decoding in one pass.
+fn parse_query_string(q: &str) -> std::collections::HashMap<String, String> {
+    form_urlencoded::parse(q.as_bytes())
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect()
 }
 
 /// Parse `{base}/<table>/<name>` and `{base}/<table>/<id>/<name>` —
@@ -3606,12 +3841,14 @@ mod csv_writer_unit {
         // `name`, `ty`, `primary_key`, and `nullable`.
         let cols: Vec<serde_json::Value> = fields
             .iter()
-            .map(|(n, ty)| serde_json::json!({
-                "name": n,
-                "ty": ty,
-                "primary_key": false,
-                "nullable": false,
-            }))
+            .map(|(n, ty)| {
+                serde_json::json!({
+                    "name": n,
+                    "ty": ty,
+                    "primary_key": false,
+                    "nullable": false,
+                })
+            })
             .collect();
         let json = serde_json::json!({
             "name": "Test",
@@ -3622,7 +3859,10 @@ mod csv_writer_unit {
     }
 
     fn row(pairs: &[(&str, Value)]) -> Map<String, Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     /// Happy path: header follows model field order; a value containing a
@@ -3638,7 +3878,10 @@ mod csv_writer_unit {
         let mut lines = csv.lines();
         assert_eq!(lines.next(), Some("id,name"), "header row");
         let body: Vec<&str> = lines.collect();
-        assert!(body.iter().any(|l| l.contains("Anvil")), "first row present");
+        assert!(
+            body.iter().any(|l| l.contains("Anvil")),
+            "first row present"
+        );
         assert!(
             body.iter().any(|l| l.contains("\"Rope, sturdy\"")),
             "comma value is quoted: {body:?}",

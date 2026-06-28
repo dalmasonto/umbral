@@ -31,6 +31,10 @@ async-trait = "0.1"
 # Base64 decoding for the HTTP Basic Auth credential parsing in
 # `auth::parse_basic_credentials`.
 base64 = "0.22"
+# Percent-decoding for custom-action query strings (`parse_query_string`):
+# query values arrive percent-encoded (`%3A` for `:`, `+` for space), and
+# action handlers want the decoded value. The standard query-string parser.
+form_urlencoded = "1"
 # axum 0.8 for `Router` mounting and per-method routing. Already on
 # the prelude path through `umbral::web::*` but we name the crate
 # directly here for `axum::routing::on` / `MethodFilter` when wiring

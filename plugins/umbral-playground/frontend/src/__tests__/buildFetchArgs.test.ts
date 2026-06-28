@@ -133,6 +133,35 @@ describe("buildFetchArgs", () => {
     }
   });
 
+  it("strips Content-Type on a body-less GET (avoids empty-JSON 400)", () => {
+    const result = buildFetchArgs(
+      draft({
+        method: "GET",
+        url: "/api/crypto_price/get_price_at/",
+        headers: [
+          { key: "Content-Type", value: "application/json", enabled: true },
+        ],
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const headers = result.args.init.headers as Record<string, string>;
+      expect(headers["Content-Type"]).toBeUndefined();
+      expect(result.args.init.body).toBeUndefined();
+    }
+  });
+
+  it("keeps Content-Type when a POST actually has a body", () => {
+    const result = buildFetchArgs(
+      draft({ method: "POST", url: "/api/articles/", body: '{"title":"x"}' }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const headers = result.args.init.headers as Record<string, string>;
+      expect(headers["Content-Type"]).toBe("application/json");
+    }
+  });
+
   it("merges user headers", () => {
     const result = buildFetchArgs(
       draft({

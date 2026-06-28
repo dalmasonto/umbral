@@ -1,0 +1,38 @@
+---
+title: View scope
+description: Restrict a resource to a subset of CRUD actions with .views([...]) — a read-only API drops POST/PUT/PATCH/DELETE from the routes, the OPTIONS Allow header, and the OpenAPI spec.
+sidebar_position: 11
+icon: eye
+tags: [rest, api, security, views]
+---
+
+`ResourceConfig::views([...])` declares **which built-in CRUD actions a resource serves**. Pass the actions you want and everything else is dropped — from routing, from the `OPTIONS` `Allow` header, and from the generated OpenAPI spec. The canonical use is a read-only resource: expose `List` + `Retrieve`, and the frontend never sees a `POST`/`PUT`/`PATCH`/`DELETE` it isn't allowed to make.
+
+<Callout type="info">
+`views` controls **what's mounted**; [permissions](/docs/v0.0.1/rest/permissions) control **who may call a mounted action**. They're orthogonal. A scoped-out action returns `405` (the method isn't served) regardless of identity; a permitted-but-unauthorized action returns `401`/`403`. Reach for `views` to shrink the surface, permissions to guard it.
+</Callout>
+
+## One example
+
+```rust
+use umbral_rest::{Action, ResourceConfig, RestPlugin};
+
+RestPlugin::default()
+    // `product` is read-only: list + retrieve only.
+    .resource(ResourceConfig::new("product").views([Action::List, Action::Retrieve]));
+```
+
+With that scope in place:
+
+- `GET /api/product/` and `GET /api/product/{id}` work.
+- `POST /api/product/`, `PUT`/`PATCH`/`DELETE /api/product/{id}` return **`405 Method Not Allowed`** with an `Allow: OPTIONS, GET` header.
+- `OPTIONS /api/product/` answers `204` with `Allow: OPTIONS, GET` — so an OPTIONS probe or generated client discovers the resource is read-only.
+- The OpenAPI document omits the `post`/`put`/`patch`/`delete` operations entirely.
+
+## 405 vs 404
+
+A scoped-out method on a URI that still serves *something* is a `405` — the resource exists, this verb doesn't (per RFC 7231, with an `Allow` header). If `views([...])` leaves a URI serving **no** verb at all (e.g. `views([Action::List])` makes the detail URI `/api/product/{id}` serve nothing), a request there is a plain `404` — the URI genuinely isn't served, so there's no `Allow` header to advertise.
+
+Custom [`@action` endpoints](/docs/v0.0.1/rest/actions) are not affected by `views` — they're opt-in by being registered at all, and the scope filters only the five built-in CRUD actions.
+
+See `plugins/umbral-rest/src/lib.rs` (`view_exposed` / `exposed_methods`) and `arch.md` for the design rationale.

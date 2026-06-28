@@ -61,10 +61,12 @@ async fn boot() -> &'static axum::Router {
             .expect("App::build without versioning");
 
         let pool = umbral::db::pool();
-        sqlx::query("CREATE TABLE post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("create post");
+        sqlx::query(
+            "CREATE TABLE post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create post");
         sqlx::query("INSERT INTO post (title) VALUES ('hello')")
             .execute(&pool)
             .await
@@ -92,7 +94,11 @@ async fn get_json(uri: &str) -> (StatusCode, Value) {
 #[tokio::test]
 async fn unversioned_path_still_works() {
     let (status, body) = get_json("/api/post/").await;
-    assert_eq!(status, StatusCode::OK, "/api/post/ must still resolve: {body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "/api/post/ must still resolve: {body}"
+    );
     assert_eq!(body["results"][0]["title"], json!("hello"), "{body}");
 }
 

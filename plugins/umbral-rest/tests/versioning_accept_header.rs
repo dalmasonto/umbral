@@ -72,10 +72,12 @@ async fn boot() -> &'static axum::Router {
             .expect("App::build with accept-header versioning");
 
         let pool = umbral::db::pool();
-        sqlx::query("CREATE TABLE post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("create post");
+        sqlx::query(
+            "CREATE TABLE post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create post");
         sqlx::query("INSERT INTO post (title) VALUES ('hello')")
             .execute(&pool)
             .await
@@ -138,8 +140,7 @@ async fn absent_version_falls_back_to_default() {
 
 #[tokio::test]
 async fn unknown_version_is_406() {
-    let (status, _body) =
-        get_with_accept("/api/post/", Some("application/json; version=v9")).await;
+    let (status, _body) = get_with_accept("/api/post/", Some("application/json; version=v9")).await;
     assert_eq!(
         status,
         StatusCode::NOT_ACCEPTABLE,

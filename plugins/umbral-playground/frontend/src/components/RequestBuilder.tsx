@@ -200,6 +200,7 @@ export function RequestBuilder() {
   const setAuthScheme = usePlayground((s) => s.setAuthScheme);
   const setAuthToken = usePlayground((s) => s.setAuthToken);
   const resetCurrent = usePlayground((s) => s.resetCurrent);
+  const draftHydrating = usePlayground((s) => s.draftHydrating);
   const send = usePlayground((s) => s.send);
   const inFlight = usePlayground((s) => s.inFlight);
   const settings = usePlayground((s) => s.settings);
@@ -222,10 +223,10 @@ export function RequestBuilder() {
   // (in which case the saved draft will arrive and overwrite the
   // defaults we set here — same as the previous behaviour).
   useEffect(() => {
-    if (opMethod && opPath && current.url === "") {
+    if (opMethod && opPath && current.url === "" && !draftHydrating) {
       resetCurrent({ method: opMethod, url: opPath });
     }
-  }, [opMethod, opPath, current.url, resetCurrent]);
+  }, [opMethod, opPath, current.url, draftHydrating, resetCurrent]);
 
   const displayUrl = useMemo(
     () => buildDisplayUrl(current.url, current.params),
@@ -741,7 +742,13 @@ export function RequestBuilder() {
                         </span>
 
                         <div className="min-w-0 flex items-center gap-1">
-                          {isChecked ? (
+                          {/* Show the value input whenever the param is
+                              active OR carries a persisted value — a value
+                              the user typed (then unchecked, or that was
+                              restored from a saved draft) stays visible and
+                              editable instead of collapsing to a "—". The
+                              row's `opacity-60` already signals "inactive". */}
+                          {isChecked || (existing && existing.value !== "") ? (
                             <>
                               {/* gaps2 #17 — `?include=` and `?fields=`
                                   get checkbox pickers driven by the

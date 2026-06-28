@@ -183,6 +183,14 @@ export function buildFetchArgs(draft: RequestDraft, options: BuildFetchOptions =
     }
   }
 
+  // A request with no body must not advertise a Content-Type. A stray
+  // `Content-Type: application/json` on a body-less GET makes some servers
+  // try to parse an empty body as JSON and 400 ("EOF while parsing a value"),
+  // so drop it whenever there's nothing to send.
+  if (body === undefined) {
+    delete headers["Content-Type"];
+  }
+
   const init: RequestInit = { method, headers, body };
   if (options.includeCredentials) {
     init.credentials = "include";

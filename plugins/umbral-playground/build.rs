@@ -47,7 +47,13 @@ fn main() {
     println!("cargo:rerun-if-changed=src/placeholder.html");
     println!("cargo:rerun-if-changed=src/shell.html");
 
-    println!("cargo:rerun-if-changed=dist/assets");
+    // NOTE: we deliberately do NOT watch `dist/assets` here. In dev mode this
+    // build script WRITES into `dist/assets` (via vite), so watching it would
+    // self-trigger: each build rewrites the bundle, a file watcher that follows
+    // path dependencies (`cargo watch`) sees the change and re-runs, which
+    // rewrites the bundle again — an infinite rebuild/reload loop. The watch is
+    // only meaningful in the prebuilt/no-toolchain branch below, where `dist/`
+    // is a read-only input, so it's emitted there instead.
 
     // Two modes:
     //  - Dev (frontend/node_modules present): rebuild the bundle from source
@@ -69,6 +75,9 @@ fn main() {
             }
         }
     } else {
+        // Prebuilt / no Node toolchain: `dist/` is a read-only input, so it is
+        // safe (and useful) to rerun when a freshly committed bundle lands.
+        println!("cargo:rerun-if-changed=dist/assets");
         match read_prebuilt_assets(&crate_dist) {
             Some(pair) => pair,
             None => {

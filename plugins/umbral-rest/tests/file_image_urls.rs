@@ -86,7 +86,10 @@ impl Plugin for MediaPlugin {
     fn provides_storage(&self) -> bool {
         true
     }
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         set_storage(Arc::new(MediaUrlStorage));
         Ok(())
     }

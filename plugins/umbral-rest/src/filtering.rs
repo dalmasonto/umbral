@@ -126,10 +126,7 @@ impl FilterClause {
 /// Returns a `Vec<(column_name, descending)>` in declaration order.
 /// An empty `raw` string or a spec made entirely of unknown fields
 /// returns an empty vec (no ORDER BY applied).
-pub(crate) fn parse_ordering(
-    raw: &str,
-    columns: &[Column],
-) -> Vec<(String, bool)> {
+pub(crate) fn parse_ordering(raw: &str, columns: &[Column]) -> Vec<(String, bool)> {
     let mut out = Vec::new();
     for token in raw.split(',') {
         let token = token.trim();
@@ -282,7 +279,8 @@ pub(crate) fn parse_search(
             SqlType::Text => {
                 // Escape LIKE wildcards so `%`/`_` in the term match
                 // literally, not as wildcards (ORM-1).
-                let pattern = format!("%{}%", umbral::orm::escape_like_literal(term)).to_uppercase();
+                let pattern =
+                    format!("%{}%", umbral::orm::escape_like_literal(term)).to_uppercase();
                 Some(
                     Expr::expr(Func::upper(Expr::col(Alias::new(&col.name))))
                         .like(sea_query::LikeExpr::new(pattern).escape('\\')),

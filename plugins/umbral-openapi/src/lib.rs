@@ -291,10 +291,13 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
             if umbral_rest::filters_enabled_for(&model.table) {
                 list_params.extend(filter_parameters(&model));
             }
-            paths.insert(
-                format!("{}/{}/", rest_base, model.table),
-                collection_paths(&model.table, &schema_name, &list_params),
-            );
+            // Skip the collection path entirely when `.views(...)` scoped
+            // out both List and Create — an OpenAPI path item with no
+            // operations is meaningless (and clutters Swagger UI).
+            let collection = collection_paths(&model.table, &schema_name, &list_params);
+            if has_operations(&collection) {
+                paths.insert(format!("{}/{}/", rest_base, model.table), collection);
+            }
             // Retrieve respects both `?fields=` and `?include=` — same
             // shape as list. Build the params slice dynamically so the
             // FK-less models don't get a vestigial `?include=` entry.
@@ -302,10 +305,13 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
             if model.fields.iter().any(|c| c.fk_target.is_some()) {
                 item_params.push(include_parameter(&model));
             }
-            paths.insert(
-                format!("{}/{}/{{id}}", rest_base, model.table),
-                item_paths(&model.table, &schema_name, &item_params),
-            );
+            // Same guard for the detail path: `views([List])` leaves the
+            // item URL with no operations (only the `id` parameter), so
+            // it's omitted from the spec.
+            let item = item_paths(&model.table, &schema_name, &item_params);
+            if has_operations(&item) {
+                paths.insert(format!("{}/{}/{{id}}", rest_base, model.table), item);
+            }
         }
     }
 
@@ -994,160 +1000,206 @@ fn filter_parameter(col: &Column, lookup: &str, name: &str) -> Value {
 }
 
 fn collection_paths(table: &str, schema_name: &str, filter_params: &[Value]) -> Value {
-    // The list operation's `parameters` array is omitted entirely
-    // when there are no filters (matches the pre-fix spec shape and
-    // keeps Swagger UI from rendering an empty Parameters section).
-    let mut get_op = Map::new();
-    get_op.insert(
-        "operationId".into(),
-        Value::String(format!("list_{}", table)),
-    );
-    get_op.insert("tags".into(), json!([table]));
-    if !filter_params.is_empty() {
-        get_op.insert("parameters".into(), Value::Array(filter_params.to_vec()));
-    }
-    get_op.insert(
-        "responses".into(),
-        json!({
-            "200": {
-                "description": "List of rows",
-                "content": {
-                    "application/json": {
-                        "schema": list_envelope(schema_name)
-                    }
-                }
-            }
-        }),
-    );
+    use umbral_rest::Action;
+    let mut item = Map::new();
 
-    json!({
-        "get": Value::Object(get_op),
-        "post": {
-            "operationId": format!("create_{}", table),
-            "tags": [table],
-            "requestBody": {
-                "required": true,
-                "content": {
-                    "application/json": {
-                        "schema": schema_ref(schema_name)
+    // `get` (list) — only when the resource exposes List. The list
+    // operation's `parameters` array is omitted entirely when there are
+    // no filters (matches the pre-fix spec shape and keeps Swagger UI
+    // from rendering an empty Parameters section).
+    if umbral_rest::action_exposed(table, &Action::List) {
+        let mut get_op = Map::new();
+        get_op.insert(
+            "operationId".into(),
+            Value::String(format!("list_{}", table)),
+        );
+        get_op.insert("tags".into(), json!([table]));
+        if !filter_params.is_empty() {
+            get_op.insert("parameters".into(), Value::Array(filter_params.to_vec()));
+        }
+        get_op.insert(
+            "responses".into(),
+            json!({
+                "200": {
+                    "description": "List of rows",
+                    "content": {
+                        "application/json": {
+                            "schema": list_envelope(schema_name)
+                        }
                     }
                 }
-            },
-            "responses": {
-                "201": {
-                    "description": "Row created",
+            }),
+        );
+        item.insert("get".into(), Value::Object(get_op));
+    }
+
+    // `post` (create) — only when the resource exposes Create. A
+    // `views([List, Retrieve])` resource omits it entirely.
+    if umbral_rest::action_exposed(table, &Action::Create) {
+        item.insert(
+            "post".into(),
+            json!({
+                "operationId": format!("create_{}", table),
+                "tags": [table],
+                "requestBody": {
+                    "required": true,
                     "content": {
                         "application/json": {
                             "schema": schema_ref(schema_name)
                         }
                     }
                 },
-                "400": { "description": "Invalid input" }
-            }
-        }
-    })
+                "responses": {
+                    "201": {
+                        "description": "Row created",
+                        "content": {
+                            "application/json": {
+                                "schema": schema_ref(schema_name)
+                            }
+                        }
+                    },
+                    "400": { "description": "Invalid input" }
+                }
+            }),
+        );
+    }
+
+    Value::Object(item)
 }
 
 fn item_paths(table: &str, schema_name: &str, retrieve_query_params: &[Value]) -> Value {
+    use umbral_rest::Action;
     let id_param = json!({
         "name": "id",
         "in": "path",
         "required": true,
         "schema": { "type": "string" }
     });
-    // Build the GET op separately so its query params can be
-    // listed alongside the path-level `id_param`. Path-level
-    // `parameters` apply to every method on the item URL, so
-    // GET-only knobs (like `?fields=`) land on the operation
-    // itself instead.
-    let mut get_op = Map::new();
-    get_op.insert(
-        "operationId".into(),
-        Value::String(format!("retrieve_{}", table)),
-    );
-    get_op.insert("tags".into(), json!([table]));
-    if !retrieve_query_params.is_empty() {
+    let mut item = Map::new();
+    item.insert("parameters".into(), json!([id_param]));
+
+    // `get` (retrieve) — only when exposed. Build the GET op separately
+    // so its query params can be listed alongside the path-level
+    // `id_param`. Path-level `parameters` apply to every method on the
+    // item URL, so GET-only knobs (like `?fields=`) land on the
+    // operation itself instead.
+    if umbral_rest::action_exposed(table, &Action::Retrieve) {
+        let mut get_op = Map::new();
         get_op.insert(
-            "parameters".into(),
-            Value::Array(retrieve_query_params.to_vec()),
+            "operationId".into(),
+            Value::String(format!("retrieve_{}", table)),
+        );
+        get_op.insert("tags".into(), json!([table]));
+        if !retrieve_query_params.is_empty() {
+            get_op.insert(
+                "parameters".into(),
+                Value::Array(retrieve_query_params.to_vec()),
+            );
+        }
+        get_op.insert(
+            "responses".into(),
+            json!({
+                "200": {
+                    "description": "Row found",
+                    "content": {
+                        "application/json": {
+                            "schema": schema_ref(schema_name)
+                        }
+                    }
+                },
+                "404": { "description": "Not found" }
+            }),
+        );
+        item.insert("get".into(), Value::Object(get_op));
+    }
+
+    // `put` + `patch` (update) — gated together on the Update action.
+    if umbral_rest::action_exposed(table, &Action::Update) {
+        item.insert(
+            "put".into(),
+            json!({
+                "operationId": format!("update_{}", table),
+                "tags": [table],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": schema_ref(schema_name)
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Row updated",
+                        "content": {
+                            "application/json": {
+                                "schema": schema_ref(schema_name)
+                            }
+                        }
+                    },
+                    "404": { "description": "Not found" }
+                }
+            }),
+        );
+        item.insert(
+            "patch".into(),
+            json!({
+                "operationId": format!("partial_update_{}", table),
+                "tags": [table],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": schema_ref(schema_name)
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Row partially updated",
+                        "content": {
+                            "application/json": {
+                                "schema": schema_ref(schema_name)
+                            }
+                        }
+                    },
+                    "404": { "description": "Not found" }
+                }
+            }),
         );
     }
-    get_op.insert(
-        "responses".into(),
-        json!({
-            "200": {
-                "description": "Row found",
-                "content": {
-                    "application/json": {
-                        "schema": schema_ref(schema_name)
-                    }
+
+    // `delete` (destroy) — only when exposed.
+    if umbral_rest::action_exposed(table, &Action::Delete) {
+        item.insert(
+            "delete".into(),
+            json!({
+                "operationId": format!("destroy_{}", table),
+                "tags": [table],
+                "responses": {
+                    "204": { "description": "Row deleted" },
+                    "404": { "description": "Not found" }
                 }
-            },
-            "404": { "description": "Not found" }
-        }),
-    );
-    json!({
-        "parameters": [id_param],
-        "get": Value::Object(get_op),
-        "put": {
-            "operationId": format!("update_{}", table),
-            "tags": [table],
-            "requestBody": {
-                "required": true,
-                "content": {
-                    "application/json": {
-                        "schema": schema_ref(schema_name)
-                    }
-                }
-            },
-            "responses": {
-                "200": {
-                    "description": "Row updated",
-                    "content": {
-                        "application/json": {
-                            "schema": schema_ref(schema_name)
-                        }
-                    }
-                },
-                "404": { "description": "Not found" }
-            }
-        },
-        "patch": {
-            "operationId": format!("partial_update_{}", table),
-            "tags": [table],
-            "requestBody": {
-                "required": true,
-                "content": {
-                    "application/json": {
-                        "schema": schema_ref(schema_name)
-                    }
-                }
-            },
-            "responses": {
-                "200": {
-                    "description": "Row partially updated",
-                    "content": {
-                        "application/json": {
-                            "schema": schema_ref(schema_name)
-                        }
-                    }
-                },
-                "404": { "description": "Not found" }
-            }
-        },
-        "delete": {
-            "operationId": format!("destroy_{}", table),
-            "tags": [table],
-            "responses": {
-                "204": { "description": "Row deleted" },
-                "404": { "description": "Not found" }
-            }
-        }
-    })
+            }),
+        );
+    }
+
+    Value::Object(item)
 }
 
 fn schema_ref(name: &str) -> Value {
     json!({ "$ref": format!("#/components/schemas/{}", name) })
+}
+
+/// True when an OpenAPI Path Item carries at least one HTTP operation.
+/// A path item that only has `parameters` (no `get`/`post`/… keys) is
+/// dropped from the spec — that happens when `.views(...)` scopes out
+/// every verb the URI would otherwise serve.
+fn has_operations(path_item: &Value) -> bool {
+    const METHODS: [&str; 7] = ["get", "post", "put", "patch", "delete", "head", "options"];
+    path_item
+        .as_object()
+        .is_some_and(|m| METHODS.iter().any(|verb| m.contains_key(*verb)))
 }
 
 fn list_envelope(schema_name: &str) -> Value {
@@ -1636,7 +1688,10 @@ mod tests {
             schema["properties"]["created_at"]["x-umbral-auto-now-add"],
             true
         );
-        assert_eq!(schema["properties"]["updated_at"]["x-umbral-auto-now"], true);
+        assert_eq!(
+            schema["properties"]["updated_at"]["x-umbral-auto-now"],
+            true
+        );
 
         // NOT marked `readOnly` — the client can still send an
         // explicit timestamp if they want. `readOnly` is reserved

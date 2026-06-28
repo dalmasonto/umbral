@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
-use umbral_rest::{AllowAny, ResourceConfig, RestPlugin};
+use umbral_rest::{Action, AllowAny, ResourceConfig, RestPlugin};
 
 #[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 struct Gadget {
@@ -25,6 +25,12 @@ struct Widget {
     id: i64,
     name: String,
 } // `.bulk()`
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+struct Doc {
+    id: i64,
+    name: String,
+} // `.views([List, Retrieve])` — read-only
 
 static ROUTER: OnceCell<axum::Router> = OnceCell::const_new();
 async fn boot() -> axum::Router {
@@ -49,19 +55,21 @@ async fn build() -> axum::Router {
     let rest = RestPlugin::default()
         .default_permission(AllowAny)
         .resource(ResourceConfig::for_::<Gadget>())
-        .resource(ResourceConfig::for_::<Widget>().bulk());
+        .resource(ResourceConfig::for_::<Widget>().bulk())
+        .resource(ResourceConfig::for_::<Doc>().views([Action::List, Action::Retrieve]));
 
     let app = umbral::App::builder()
         .settings(settings)
         .database("default", pool)
         .model::<Gadget>()
         .model::<Widget>()
+        .model::<Doc>()
         .plugin(rest)
         .build()
         .expect("App::build");
 
     let pool = umbral::db::pool();
-    for t in ["gadget", "widget"] {
+    for t in ["gadget", "widget", "doc"] {
         sqlx::query(&format!(
             "CREATE TABLE {t} (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)"
         ))
@@ -93,7 +101,11 @@ async fn options(router: &axum::Router, uri: &str) -> (StatusCode, String) {
 async fn options_collection_non_bulk_is_204_with_get_post_only() {
     let router = boot().await;
     let (status, allow) = options(&router, "/api/gadget").await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "OPTIONS answers 204, not 405");
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "OPTIONS answers 204, not 405"
+    );
     assert!(
         allow.contains("OPTIONS") && allow.contains("GET") && allow.contains("POST"),
         "collection Allow lists OPTIONS/GET/POST: {allow}"
@@ -121,6 +133,41 @@ async fn options_detail_is_204_with_full_crud() {
     let (status, allow) = options(&router, "/api/gadget/1").await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     for m in ["OPTIONS", "GET", "PUT", "PATCH", "DELETE"] {
-        assert!(allow.contains(m), "detail Allow should include {m}: {allow}");
+        assert!(
+            allow.contains(m),
+            "detail Allow should include {m}: {allow}"
+        );
     }
+}
+
+#[tokio::test]
+async fn options_view_scoped_collection_advertises_only_get() {
+    let router = boot().await;
+    // `doc` is `views([List, Retrieve])` — the collection serves only GET.
+    let (status, allow) = options(&router, "/api/doc").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(
+        allow.contains("OPTIONS") && allow.contains("GET"),
+        "Allow lists OPTIONS/GET: {allow}"
+    );
+    assert!(
+        !allow.contains("POST") && !allow.contains("PUT") && !allow.contains("DELETE"),
+        "a read-only resource must not advertise write verbs: {allow}"
+    );
+}
+
+#[tokio::test]
+async fn options_view_scoped_detail_advertises_only_get() {
+    let router = boot().await;
+    // The detail URI serves only GET (Retrieve); update/destroy are scoped out.
+    let (status, allow) = options(&router, "/api/doc/1").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(
+        allow.contains("OPTIONS") && allow.contains("GET"),
+        "detail Allow lists OPTIONS/GET: {allow}"
+    );
+    assert!(
+        !allow.contains("PUT") && !allow.contains("PATCH") && !allow.contains("DELETE"),
+        "read-only detail must not advertise write verbs: {allow}"
+    );
 }

@@ -241,6 +241,11 @@ interface PlaygroundState {
   // selection
   selectedOperationId: string | null;
   selectEndpoint: (id: string | null) => void;
+  /** True while `selectEndpoint` is async-loading a persisted draft
+   *  from Dexie. RequestBuilder gates its spec-default seeding on this
+   *  being `false`, so the seed (which sets `current.url` and schedules
+   *  a save) can't race the load and clobber the saved draft. */
+  draftHydrating: boolean;
 
   // current request
   current: RequestDraft;
@@ -435,6 +440,7 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
   },
 
   selectedOperationId: loadSelectedOperationId(),
+  draftHydrating: false,
   selectEndpoint: (id) => {
     saveSelectedOperationId(id);
     // Flush the pending draft save for the OUTGOING op so the
@@ -449,28 +455,32 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     }
     // Reset to an empty draft synchronously so the request
     // builder doesn't briefly show the previous operation's
-    // values. The async draftStorage.loadDraft below either
-    // hydrates the saved draft for the new op or leaves the
-    // empty state in place (in which case RequestBuilder's
-    // effect fills in the operation defaults).
+    // values. `draftHydrating` stays true until the async load
+    // below settles; RequestBuilder won't seed spec defaults (and
+    // schedule the empty-params save that used to clobber the
+    // persisted draft) while it's set.
     set({
       selectedOperationId: id,
       lastResponse: null,
       current: { ...emptyDraft },
+      draftHydrating: !!id,
     });
     if (!id) return;
     // Fire-and-forget — the load can complete on the next tick
     // and `set` it then. Subscribers re-render naturally.
     void loadDraft(id).then((saved) => {
-      if (!saved) return;
-      // Only apply if the user hasn't already navigated away,
-      // and only if they haven't started typing into the empty
-      // draft we set synchronously above (i.e. their typed
-      // values would otherwise be clobbered).
       const cur = get();
+      // Navigated away while loading — a newer selectEndpoint now
+      // owns `draftHydrating`, so leave it alone.
       if (cur.selectedOperationId !== id) return;
-      if (cur.current.url !== "" || cur.current.body !== "") return;
-      set({ current: saved });
+      // Apply the saved draft only if the user hasn't started
+      // typing into the empty draft we set synchronously above.
+      const pristine = cur.current.url === "" && cur.current.body === "";
+      if (saved && pristine) {
+        set({ current: saved, draftHydrating: false });
+      } else {
+        set({ draftHydrating: false });
+      }
     });
   },
 

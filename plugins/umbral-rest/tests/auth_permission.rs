@@ -9,7 +9,10 @@
 //! - `ReadOnly` permission on the `note` resource — anyone reads,
 //!   nobody writes.
 //! - `views([List, Retrieve])` scope on the `archive` resource —
-//!   only mounts those two endpoints; everything else 404s.
+//!   exposes only those two actions. A scoped-out write still hits a
+//!   served URI (GET works), so it returns `405 Method Not Allowed`
+//!   with an `Allow` header listing the verbs that *are* served — not a
+//!   404, which would imply the URI doesn't exist.
 
 #![allow(dead_code, private_interfaces)]
 
@@ -42,6 +45,12 @@ struct Secret {
 struct Archive {
     id: i64,
     body: String,
+}
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+struct Catalog {
+    id: i64,
+    name: String,
 }
 
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
@@ -89,10 +98,14 @@ async fn boot() -> &'static axum::Router {
             .resource(ResourceConfig::new("note").permission(ReadOnly))
             // `secret` is staff-only across all actions.
             .resource(ResourceConfig::new("secret").permission(IsStaff))
-            // `archive` exposes only List + Retrieve. Other actions
-            // 404 (the endpoint isn't mounted at all from the
-            // user's POV; the handler short-circuits with NotFound).
-            .resource(ResourceConfig::new("archive").views([Action::List, Action::Retrieve]));
+            // `archive` exposes only List + Retrieve. A scoped-out write
+            // (POST/PUT/DELETE) hits a URI that still serves GET, so the
+            // gate short-circuits with 405 + an `Allow` header.
+            .resource(ResourceConfig::new("archive").views([Action::List, Action::Retrieve]))
+            // `catalog` exposes ONLY List. The detail URI (`/catalog/{id}`)
+            // serves no verb at all, so a request there 404s — the URI
+            // genuinely isn't served, unlike `archive`'s detail (GET works).
+            .resource(ResourceConfig::new("catalog").views([Action::List]));
 
         let app = umbral::App::builder()
             .settings(settings)
@@ -100,6 +113,7 @@ async fn boot() -> &'static axum::Router {
             .model::<Note>()
             .model::<Secret>()
             .model::<Archive>()
+            .model::<Catalog>()
             .plugin(rest)
             .build()
             .expect("App::build");
@@ -109,6 +123,7 @@ async fn boot() -> &'static axum::Router {
             "CREATE TABLE note (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
             "CREATE TABLE secret (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)",
             "CREATE TABLE archive (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)",
+            "CREATE TABLE catalog (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("ddl");
         }
@@ -153,6 +168,38 @@ async fn send(
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let parsed: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, parsed)
+}
+
+/// Like [`send`] but surfaces the `Allow` response header — needed by the
+/// view-scope 405 tests, which assert the header lists exactly the verbs
+/// the resource still serves.
+async fn send_allow(
+    router: axum::Router,
+    method: &str,
+    uri: &str,
+    user: Option<i64>,
+    body: Option<&str>,
+) -> (StatusCode, String) {
+    let mut req = Request::builder().method(method).uri(uri);
+    if let Some(u) = user {
+        req = req.header("x-user", u.to_string());
+    }
+    let req = if let Some(b) = body {
+        req.header("content-type", "application/json")
+            .body(Body::from(b.to_string()))
+    } else {
+        req.body(Body::empty())
+    }
+    .unwrap();
+    let resp = router.oneshot(req).await.expect("oneshot");
+    let status = resp.status();
+    let allow = resp
+        .headers()
+        .get(axum::http::header::ALLOW)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    (status, allow)
 }
 
 // =====================================================================
@@ -250,10 +297,12 @@ async fn opt_in_views_retrieve_exposed() {
 }
 
 #[tokio::test]
-async fn opt_in_views_create_returns_404() {
+async fn opt_in_views_create_returns_405_with_allow() {
     let _guard = test_lock().lock().await;
     let app = boot().await.clone();
-    let (status, body) = send(
+    // POST is scoped out, but the collection still serves GET (List), so
+    // the URI exists → 405, and `Allow` advertises only the served verbs.
+    let (status, allow) = send_allow(
         app,
         "POST",
         "/api/archive/",
@@ -261,31 +310,38 @@ async fn opt_in_views_create_returns_404() {
         Some(r#"{"body":"new"}"#),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    // The error message names the action, not just "not found".
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert!(
-        body["error"]
-            .as_str()
-            .unwrap_or("")
-            .to_lowercase()
-            .contains("not exposed"),
-        "got body: {body}"
+        allow.contains("OPTIONS") && allow.contains("GET"),
+        "Allow lists the served verbs: {allow}"
+    );
+    assert!(
+        !allow.contains("POST"),
+        "POST is scoped out — must not appear in Allow: {allow}"
     );
 }
 
 #[tokio::test]
-async fn opt_in_views_delete_returns_404() {
+async fn opt_in_views_delete_returns_405_with_allow() {
     let _guard = test_lock().lock().await;
     let app = boot().await.clone();
-    let (status, _) = send(app, "DELETE", "/api/archive/1", Some(99), None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, allow) = send_allow(app, "DELETE", "/api/archive/1", Some(99), None).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(
+        allow.contains("OPTIONS") && allow.contains("GET"),
+        "detail Allow lists the served verbs: {allow}"
+    );
+    assert!(
+        !allow.contains("DELETE") && !allow.contains("PUT"),
+        "scoped-out verbs must not appear in Allow: {allow}"
+    );
 }
 
 #[tokio::test]
-async fn opt_in_views_update_returns_404() {
+async fn opt_in_views_update_returns_405_with_allow() {
     let _guard = test_lock().lock().await;
     let app = boot().await.clone();
-    let (status, _) = send(
+    let (status, allow) = send_allow(
         app,
         "PUT",
         "/api/archive/1",
@@ -293,5 +349,41 @@ async fn opt_in_views_update_returns_404() {
         Some(r#"{"body":"x"}"#),
     )
     .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(
+        allow.contains("OPTIONS") && allow.contains("GET") && !allow.contains("PUT"),
+        "Allow lists served verbs only: {allow}"
+    );
+}
+
+#[tokio::test]
+async fn list_only_collection_post_returns_405() {
+    let _guard = test_lock().lock().await;
+    let app = boot().await.clone();
+    // `catalog` exposes only List, so the collection still serves GET →
+    // a POST there is 405, Allow advertises just GET.
+    let (status, allow) = send_allow(
+        app,
+        "POST",
+        "/api/catalog/",
+        Some(99),
+        Some(r#"{"name":"x"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(
+        allow.contains("GET") && !allow.contains("POST"),
+        "Allow: {allow}"
+    );
+}
+
+#[tokio::test]
+async fn list_only_detail_uri_serves_nothing_returns_404() {
+    let _guard = test_lock().lock().await;
+    let app = boot().await.clone();
+    // The detail URI serves NO verb (no Retrieve/Update/Delete), so it's
+    // genuinely unserved → 404, not 405. No `Allow` header to advertise.
+    let (status, allow) = send_allow(app, "GET", "/api/catalog/1", Some(99), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(allow.is_empty(), "a 404 carries no Allow header: {allow:?}");
 }

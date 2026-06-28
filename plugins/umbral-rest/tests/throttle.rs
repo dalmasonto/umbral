@@ -97,7 +97,11 @@ async fn throttle_returns_429_with_retry_after_after_limit() {
 
     // First two requests from this IP are under the 2/min limit.
     for n in 1..=2 {
-        let resp = router.clone().oneshot(list_from(ip)).await.expect("oneshot");
+        let resp = router
+            .clone()
+            .oneshot(list_from(ip))
+            .await
+            .expect("oneshot");
         assert_eq!(
             resp.status(),
             StatusCode::OK,
@@ -107,7 +111,11 @@ async fn throttle_returns_429_with_retry_after_after_limit() {
 
     // Third request is over the limit → 429 with a Retry-After header and
     // the standard body shape.
-    let resp = router.clone().oneshot(list_from(ip)).await.expect("oneshot");
+    let resp = router
+        .clone()
+        .oneshot(list_from(ip))
+        .await
+        .expect("oneshot");
     assert_eq!(
         resp.status(),
         StatusCode::TOO_MANY_REQUESTS,
@@ -139,14 +147,26 @@ async fn a_different_ip_has_its_own_bucket() {
     // Exhaust one IP entirely.
     let busy = "198.51.100.5";
     for _ in 0..3 {
-        let _ = router.clone().oneshot(list_from(busy)).await.expect("oneshot");
+        let _ = router
+            .clone()
+            .oneshot(list_from(busy))
+            .await
+            .expect("oneshot");
     }
-    let resp = router.clone().oneshot(list_from(busy)).await.expect("oneshot");
+    let resp = router
+        .clone()
+        .oneshot(list_from(busy))
+        .await
+        .expect("oneshot");
     assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
 
     // A fresh IP is unaffected — its own 2/min bucket.
     let fresh = "198.51.100.99";
-    let resp = router.clone().oneshot(list_from(fresh)).await.expect("oneshot");
+    let resp = router
+        .clone()
+        .oneshot(list_from(fresh))
+        .await
+        .expect("oneshot");
     assert_eq!(
         resp.status(),
         StatusCode::OK,

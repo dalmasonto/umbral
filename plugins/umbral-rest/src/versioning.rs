@@ -133,10 +133,7 @@ impl VersioningConfig {
 /// For a plain header name: returns its trimmed value.
 ///
 /// Returns `None` when the header / param is absent.
-pub fn version_from_headers(
-    headers: &umbral::web::HeaderMap,
-    header_name: &str,
-) -> Option<String> {
+pub fn version_from_headers(headers: &umbral::web::HeaderMap, header_name: &str) -> Option<String> {
     if header_name.eq_ignore_ascii_case("accept") {
         let raw = headers.get(http::header::ACCEPT)?.to_str().ok()?;
         // `application/json; version=v2; q=0.9` — find the `version=` param.

@@ -123,7 +123,12 @@ async fn build() -> axum::Router {
     app.into_router()
 }
 
-async fn send(router: &axum::Router, method: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+async fn send(
+    router: &axum::Router,
+    method: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
     let req = Request::builder()
         .method(method)
         .uri(uri)
@@ -148,7 +153,11 @@ async fn readonly_resource_rejects_bulk_writes() {
         json!([{ "title": "x" }, { "title": "y" }]),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "bulk create denied by ReadOnly");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "bulk create denied by ReadOnly"
+    );
 
     let (status, _b) = send(
         &router,
@@ -157,10 +166,24 @@ async fn readonly_resource_rejects_bulk_writes() {
         json!([{ "id": 1, "title": "z" }]),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "bulk update denied by ReadOnly");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "bulk update denied by ReadOnly"
+    );
 
-    let (status, _b) = send(&router, Method::DELETE, "/api/article/", json!({ "ids": [1] })).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "bulk delete denied by ReadOnly");
+    let (status, _b) = send(
+        &router,
+        Method::DELETE,
+        "/api/article/",
+        json!({ "ids": [1] }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "bulk delete denied by ReadOnly"
+    );
 
     assert_eq!(
         Article::objects().count().await.unwrap(),
@@ -182,7 +205,11 @@ async fn blocked_table_has_no_bulk_surface() {
         json!([{ "username": "x", "password_hash": "h" }]),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "no bulk create on a blocked table");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "no bulk create on a blocked table"
+    );
 
     let (status, _b) = send(
         &router,
@@ -191,10 +218,24 @@ async fn blocked_table_has_no_bulk_surface() {
         json!([{ "id": 1, "username": "y" }]),
     )
     .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "no bulk update on a blocked table");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "no bulk update on a blocked table"
+    );
 
-    let (status, _b) = send(&router, Method::DELETE, "/api/auth_user/", json!({ "ids": [1] })).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "no bulk delete on a blocked table");
+    let (status, _b) = send(
+        &router,
+        Method::DELETE,
+        "/api/auth_user/",
+        json!({ "ids": [1] }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "no bulk delete on a blocked table"
+    );
 }
 
 #[tokio::test]
@@ -214,7 +255,11 @@ async fn password_hash_stripped_and_not_writable_in_bulk() {
         ]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "bulk create on exposed account; {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "bulk create on exposed account; {body}"
+    );
     let arr = body.as_array().expect("array");
     for row in arr {
         assert!(

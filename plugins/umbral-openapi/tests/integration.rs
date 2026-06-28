@@ -58,6 +58,16 @@ struct OaArticle {
     related: umbral::orm::M2M<OaCat>,
 }
 
+// gaps3 #1: a resource scoped to `views([List, Retrieve])` must omit
+// `post`/`put`/`patch`/`delete` from the generated spec — the spec
+// describes exactly the operations the API serves.
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "oa_readonly")]
+struct OaReadonly {
+    id: i64,
+    name: String,
+}
+
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 
 async fn boot() -> &'static axum::Router {
@@ -83,8 +93,14 @@ async fn boot() -> &'static axum::Router {
             .model::<Secret>()
             .model::<OaCat>()
             .model::<OaArticle>()
+            .model::<OaReadonly>()
             .plugin(AuthPlugin::<AuthUser>::default())
-            .plugin(RestPlugin::default().hide("secret", "token"))
+            .plugin(
+                RestPlugin::default().hide("secret", "token").resource(
+                    umbral_rest::ResourceConfig::new("oa_readonly")
+                        .views([umbral_rest::Action::List, umbral_rest::Action::Retrieve]),
+                ),
+            )
             .plugin(OpenApiPlugin::default())
             .build()
             .expect("App::build with RestPlugin + OpenApiPlugin");
@@ -347,6 +363,46 @@ async fn every_rest_operation_appears_in_paths() {
         assert!(
             op["responses"]["404"].is_object(),
             "{verb} should advertise 404"
+        );
+    }
+}
+
+// =========================================================================
+// 4b. `views([List, Retrieve])` omits write operations from the spec (gaps3 #1).
+// =========================================================================
+
+#[tokio::test]
+async fn view_scoped_resource_omits_write_operations() {
+    let router = boot().await.clone();
+    let (_, body) = get_request(router, "/openapi/openapi.json").await;
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let paths = v["paths"].as_object().expect("paths");
+
+    // The collection keeps `get` (List) but drops `post` (Create).
+    let collection = paths
+        .get("/api/oa_readonly/")
+        .expect("read-only collection still present (it serves GET)");
+    assert!(
+        collection.get("get").is_some(),
+        "List is exposed → `get` present: {collection}"
+    );
+    assert!(
+        collection.get("post").is_none(),
+        "Create scoped out → `post` must be absent: {collection}"
+    );
+
+    // The detail URI keeps `get` (Retrieve) but drops put/patch/delete.
+    let item = paths
+        .get("/api/oa_readonly/{id}")
+        .expect("read-only detail still present (it serves GET)");
+    assert!(
+        item.get("get").is_some(),
+        "Retrieve exposed → `get` present"
+    );
+    for verb in ["put", "patch", "delete"] {
+        assert!(
+            item.get(verb).is_none(),
+            "{verb} scoped out → must be absent from the detail path item: {item}"
         );
     }
 }

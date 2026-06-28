@@ -102,7 +102,11 @@ describe("codegen request URL", () => {
 
 describe("codegen headers", () => {
   it("includes the workspace defaults in every language", () => {
-    const r = record();
+    // POST with a body: Content-Type legitimately applies here. (A
+    // body-less GET correctly omits Content-Type — buildFetchArgs strips
+    // it so the snippet matches what the playground actually sends — see
+    // the next test.)
+    const r = record({ method: "POST", body: '{"name":"widget"}' });
     const s = snapshotFromRecord(r, defaults())!;
     for (const snippet of [
       generate("js", s),
@@ -112,6 +116,23 @@ describe("codegen headers", () => {
     ]) {
       expect(snippet).toContain("Content-Type");
       expect(snippet).toContain("application/json");
+      expect(snippet).toContain("Accept");
+    }
+  });
+
+  it("omits Content-Type on a body-less GET but keeps Accept", () => {
+    // A GET sends no body, so advertising `Content-Type: application/json`
+    // would be misleading (and used to trip the REST action dispatcher).
+    // Accept is not body-related, so it stays.
+    const r = record(); // GET, empty body
+    const s = snapshotFromRecord(r, defaults())!;
+    for (const snippet of [
+      generate("js", s),
+      generate("curl", s),
+      generate("python", s),
+      generate("rust", s),
+    ]) {
+      expect(snippet).not.toContain("Content-Type");
       expect(snippet).toContain("Accept");
     }
   });

@@ -72,7 +72,12 @@ async fn build() -> axum::Router {
     app.into_router()
 }
 
-async fn send(router: &axum::Router, method: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+async fn send(
+    router: &axum::Router,
+    method: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
     let req = Request::builder()
         .method(method)
         .uri(uri)
@@ -113,11 +118,18 @@ async fn bulk_create_array_then_single_object_back_compat() {
         ]),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "bulk create returns 201; {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "bulk create returns 201; {body}"
+    );
     let arr = body.as_array().expect("array body");
     assert_eq!(arr.len(), 3, "three rows echoed back");
     assert_eq!(arr[0]["name"], "bc-a");
-    assert!(arr[0]["id"].as_i64().is_some(), "each row carries its new id");
+    assert!(
+        arr[0]["id"].as_i64().is_some(),
+        "each row carries its new id"
+    );
     assert_eq!(count_prefix("bc-").await, 3, "three rows landed in the DB");
 
     // Back-compat: a single JSON OBJECT still does an ordinary single
@@ -129,8 +141,15 @@ async fn bulk_create_array_then_single_object_back_compat() {
         json!({ "name": "bc-solo", "qty": 9 }),
     )
     .await;
-    assert_eq!(status, StatusCode::CREATED, "single create still 201; {body}");
-    assert!(body.is_object(), "single create returns an object, not an array");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "single create still 201; {body}"
+    );
+    assert!(
+        body.is_object(),
+        "single create returns an object, not an array"
+    );
     assert_eq!(body["name"], "bc-solo");
     assert_eq!(count_prefix("bc-").await, 4);
 }
@@ -151,7 +170,10 @@ async fn bulk_create_is_atomic() {
         ]),
     )
     .await;
-    assert!(status.is_client_error(), "an invalid item fails the batch (got {status})");
+    assert!(
+        status.is_client_error(),
+        "an invalid item fails the batch (got {status})"
+    );
     assert_eq!(
         count_prefix("atom-").await,
         0,
@@ -211,10 +233,19 @@ async fn bulk_update_array_then_atomic() {
         ]),
     )
     .await;
-    assert!(status.is_client_error(), "a bad PK fails the batch (got {status})");
+    assert!(
+        status.is_client_error(),
+        "a bad PK fails the batch (got {status})"
+    );
 
     // The good item in the failed batch was rolled back — z still 30.
-    let (_s, row) = send(&router, Method::GET, &format!("/api/widget/{}", ids[2]), Value::Null).await;
+    let (_s, row) = send(
+        &router,
+        Method::GET,
+        &format!("/api/widget/{}", ids[2]),
+        Value::Null,
+    )
+    .await;
     assert_eq!(row["qty"], 30, "the rolled-back update never took effect");
 }
 
@@ -252,7 +283,13 @@ async fn bulk_delete_ids() {
     assert_eq!(count_prefix("del-").await, 1, "the two named rows are gone");
 
     // The unnamed row survived.
-    let (status, _row) = send(&router, Method::GET, &format!("/api/widget/{}", ids[2]), Value::Null).await;
+    let (status, _row) = send(
+        &router,
+        Method::GET,
+        &format!("/api/widget/{}", ids[2]),
+        Value::Null,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "the un-named row was kept");
 }
 

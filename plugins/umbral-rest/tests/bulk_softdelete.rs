@@ -60,7 +60,12 @@ async fn boot() -> axum::Router {
     app.into_router()
 }
 
-async fn send(router: &axum::Router, method: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+async fn send(
+    router: &axum::Router,
+    method: Method,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
     let req = Request::builder()
         .method(method)
         .uri(uri)
@@ -113,7 +118,10 @@ async fn bulk_delete_soft_deletes() {
         .fetch_one(&umbral::db::pool())
         .await
         .unwrap();
-    assert_eq!(physical, 3, "rows are soft-deleted (deleted_at stamped), not removed");
+    assert_eq!(
+        physical, 3,
+        "rows are soft-deleted (deleted_at stamped), not removed"
+    );
 
     let dead: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM note WHERE deleted_at IS NOT NULL")
         .fetch_one(&umbral::db::pool())

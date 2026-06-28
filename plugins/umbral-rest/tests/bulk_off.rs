@@ -122,7 +122,13 @@ async fn collection_patch_delete_not_available_without_bulk() {
         "collection PATCH has no bulk surface without .bulk()"
     );
 
-    let delete = send(&router, Method::DELETE, "/api/gadget/", json!({ "ids": [1] })).await;
+    let delete = send(
+        &router,
+        Method::DELETE,
+        "/api/gadget/",
+        json!({ "ids": [1] }),
+    )
+    .await;
     assert_eq!(
         delete,
         StatusCode::NOT_FOUND,
@@ -130,6 +136,12 @@ async fn collection_patch_delete_not_available_without_bulk() {
     );
 
     // The single-object POST is still fine.
-    let single = send(&router, Method::POST, "/api/gadget/", json!({ "name": "ok" })).await;
+    let single = send(
+        &router,
+        Method::POST,
+        "/api/gadget/",
+        json!({ "name": "ok" }),
+    )
+    .await;
     assert_eq!(single, StatusCode::CREATED);
 }

@@ -90,10 +90,12 @@ async fn boot() -> &'static axum::Router {
             .expect("App::build with URL-path versioning");
 
         let pool = umbral::db::pool();
-        sqlx::query("CREATE TABLE post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("create post");
+        sqlx::query(
+            "CREATE TABLE post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create post");
         sqlx::query("INSERT INTO post (title) VALUES ('hello')")
             .execute(&pool)
             .await
