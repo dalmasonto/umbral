@@ -66,7 +66,8 @@ async fn disabled_validation_accepts_weak_password_at_register_route() {
             is_staff INTEGER NOT NULL,
             is_superuser INTEGER NOT NULL,
             date_joined TEXT NOT NULL,
-            last_login TEXT
+            last_login TEXT,
+            email_verified_at TEXT
         )",
     )
     .execute(&pool)
@@ -109,5 +110,8 @@ async fn disabled_validation_accepts_weak_password_at_register_route() {
         .fetch_one(&pool)
         .await
         .expect("count query");
-    assert_eq!(count, 1, "the weak-password registration must persist a row");
+    assert_eq!(
+        count, 1,
+        "the weak-password registration must persist a row"
+    );
 }

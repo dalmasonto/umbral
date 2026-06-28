@@ -64,6 +64,7 @@
 
 pub mod auth_routes;
 pub mod bearer_auth;
+pub mod challenge;
 pub mod extractors;
 pub mod login_required;
 pub mod password_validation;
@@ -77,10 +78,11 @@ pub use password_validation::{
 };
 
 pub use bearer_auth::{BearerAuthentication, parse_bearer_header};
+pub use challenge::AuthChallenge;
 pub use extractors::{CurrentIdentity, OptionalIdentity, resolve_identity};
 pub use login_required::{
-    LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id,
-    current_session_user_pk, login_required, login_required_html, resolve_user as current_user_as,
+    LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, current_session_user_pk,
+    login_required, login_required_html, resolve_user as current_user_as,
 };
 pub use session_user::{
     OptionalUser, SessionAuthentication, User, current_user, login, login_with_request, logout,
@@ -247,6 +249,10 @@ pub struct AuthUser {
     pub is_superuser: bool,
     pub date_joined: DateTime<Utc>,
     pub last_login: Option<DateTime<Utc>>,
+    /// When this user's email was verified, NULL until they complete the
+    /// verification flow. Tracked always; only enforced when the plugin is
+    /// built with `require_verified_email()`.
+    pub email_verified_at: Option<DateTime<Utc>>,
 }
 
 impl UserModel for AuthUser {
@@ -526,6 +532,7 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         let mut models = vec![umbral::migrate::ModelMeta::for_::<U>()];
         if std::any::TypeId::of::<U>() == std::any::TypeId::of::<AuthUser>() {
             models.push(umbral::migrate::ModelMeta::for_::<AuthToken>());
+            models.push(umbral::migrate::ModelMeta::for_::<AuthChallenge>());
         }
         models
     }
@@ -589,7 +596,10 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
     /// `disable_password_validation` is the only path that installs an
     /// empty policy. The install is idempotent (first boot wins), matching
     /// the ambient-pool contract.
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         let policy = self
             .password_policy
             .lock()
@@ -834,6 +844,7 @@ async fn insert_user(
             is_superuser,
             date_joined: now,
             last_login: None,
+            email_verified_at: None,
         })
         .await?;
     Ok(row)

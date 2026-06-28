@@ -98,6 +98,7 @@ async fn make_user(username: &str) -> AuthUser {
             is_superuser: u.is_superuser,
             date_joined: now,
             last_login: None,
+            email_verified_at: None,
         })
         .expect("create_user")
 }
