@@ -97,6 +97,13 @@ pub use throttle::{
 };
 pub use token::{AuthToken, PlaintextToken, TOKEN_PREFIX, digest_token};
 
+/// Test shim: thin wrapper over `auth_routes::openapi_paths` so test binaries
+/// (which can't reach into `pub(crate)`) can assert the full path list.
+#[doc(hidden)]
+pub fn auth_routes_openapi_for_test(prefix: &str) -> Vec<(String, serde_json::Value)> {
+    auth_routes::openapi_paths(prefix)
+}
+
 use std::marker::PhantomData;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};

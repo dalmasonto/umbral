@@ -231,14 +231,14 @@ pub(crate) fn declared_routes(prefix: &str) -> Vec<umbral::routes::RouteSpec> {
     ]
 }
 
-/// OpenAPI Path Item Objects for the four routes. The shapes are
-/// the bare minimum the spec needs to render in Swagger UI: an
-/// `operationId`, a `summary`, a `tags` entry to group them under
-/// "auth", and response codes. Request bodies are documented as
-/// JSON objects with the right `application/json` content type;
-/// the inline schemas describe the field shapes so Swagger UI's
-/// "Try it out" pane prefills sensible defaults. Closes BUG-20
-/// from `bugs/tests/testBugs.md`.
+/// OpenAPI Path Item Objects for the eight auth routes (register, login,
+/// logout, me, verify-email, resend-verification, password-forgot,
+/// password-reset). The shapes are the bare minimum the spec needs to render
+/// in Swagger UI: an `operationId`, a `summary`, a `tags` entry to group
+/// them under "auth", and response codes. Request bodies are documented as
+/// JSON objects with the right `application/json` content type; the inline
+/// schemas describe the field shapes so Swagger UI's "Try it out" pane
+/// prefills sensible defaults. Closes BUG-20 from `bugs/tests/testBugs.md`.
 pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
     use serde_json::json;
     let tag = "auth";
@@ -348,7 +348,107 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
                     "description": "Resolves via session cookie first, then bearer token. 401 if neither yields an active user.",
                     "responses": {
                         "200": {"description": "Authenticated user.", "content": {"application/json": {"schema": user_response}}},
-                        "401": {"description": "Not authenticated.", "content": {"application/json": {"schema": error_response}}}
+                        "401": {"description": "Not authenticated.", "content": {"application/json": {"schema": error_response.clone()}}}
+                    }
+                }
+            }),
+        ),
+        (
+            format!("{prefix}/verify-email"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_verify_email",
+                    "summary": "Verify an email address with a 6-digit code.",
+                    "description": "JSON `{email, code}` → 204 on success. 400 (generic) on any failure (unknown email, no active challenge, wrong code, attempt cap) — no enumeration.",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": json!({
+                            "type": "object",
+                            "required": ["email", "code"],
+                            "properties": {
+                                "email": {"type": "string", "format": "email"},
+                                "code":  {"type": "string", "example": "483920"}
+                            }
+                        })}}
+                    },
+                    "responses": {
+                        "204": {"description": "Email verified."},
+                        "400": {"description": "Invalid or expired code.", "content": {"application/json": {"schema": error_response.clone()}}}
+                    }
+                }
+            }),
+        ),
+        (
+            format!("{prefix}/resend-verification"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_resend_verification",
+                    "summary": "Re-issue an email-verification code.",
+                    "description": "JSON `{email}` → always 202. Unknown emails and already-verified users receive the same response as a pending user (no enumeration). The verification mail is sent best-effort.",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": json!({
+                            "type": "object",
+                            "required": ["email"],
+                            "properties": {
+                                "email": {"type": "string", "format": "email"}
+                            }
+                        })}}
+                    },
+                    "responses": {
+                        "202": {"description": "Request accepted (mail sent if the address is known and unverified)."}
+                    }
+                }
+            }),
+        ),
+        (
+            format!("{prefix}/password-forgot"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_password_forgot",
+                    "summary": "Issue a password-reset link.",
+                    "description": "JSON `{email}` → always 202. Unknown emails receive the same response as known ones (no enumeration). The reset link is sent best-effort.",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": json!({
+                            "type": "object",
+                            "required": ["email"],
+                            "properties": {
+                                "email": {"type": "string", "format": "email"}
+                            }
+                        })}}
+                    },
+                    "responses": {
+                        "202": {"description": "Request accepted (reset link sent if the address matches a known account)."}
+                    }
+                }
+            }),
+        ),
+        (
+            format!("{prefix}/password-reset"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_password_reset",
+                    "summary": "Consume a password-reset token.",
+                    "description": "JSON `{token, new_password}` → 204 on success. 400 (generic) on any failure (unknown / expired / already-used token, weak password).",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": json!({
+                            "type": "object",
+                            "required": ["token", "new_password"],
+                            "properties": {
+                                "token":        {"type": "string", "description": "Opaque reset token from the emailed link."},
+                                "new_password": {"type": "string", "format": "password"}
+                            }
+                        })}}
+                    },
+                    "responses": {
+                        "204": {"description": "Password updated."},
+                        "400": {"description": "Invalid, expired, or already-used token; or weak password.", "content": {"application/json": {"schema": error_response}}}
                     }
                 }
             }),
