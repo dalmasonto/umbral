@@ -187,8 +187,8 @@ async fn verify_email_unknown_email_returns_err() {
 
     let result = umbral_auth::verify_email("nobody@example.com", "123456").await;
     assert!(
-        result.is_err(),
-        "verify_email with an unknown email must return Err"
+        matches!(result, Err(umbral_auth::AuthError::InvalidChallenge)),
+        "unknown email must return InvalidChallenge (no account enumeration); got {result:?}"
     );
 }
 
@@ -203,7 +203,70 @@ async fn verify_email_no_active_challenge_returns_err() {
 
     let result = umbral_auth::verify_email("carol@example.com", "123456").await;
     assert!(
-        result.is_err(),
-        "verify_email without an active challenge must return Err"
+        matches!(result, Err(umbral_auth::AuthError::InvalidChallenge)),
+        "no active challenge must return InvalidChallenge (no account enumeration); got {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn verify_email_brute_force_burns_challenge() {
+    let rec = boot_with_recorder().await;
+
+    let user = umbral_auth::create_user("dave", "dave@example.com", "Sup3r$ecret!")
+        .await
+        .unwrap();
+    assert!(user.email_verified_at.is_none());
+
+    umbral_auth::start_email_verification(&user).await.unwrap();
+
+    // Extract the real code from the recorder.
+    let mail = rec
+        .last()
+        .expect("a verification email should have been sent to dave");
+    let code: String = mail.text.chars().filter(|c| c.is_ascii_digit()).collect();
+    assert_eq!(
+        code.len(),
+        6,
+        "email body must contain exactly 6 ASCII digits; body was: {}",
+        mail.text
+    );
+
+    // Pick a wrong code that is definitely not the real code.
+    let wrong_code = if code.as_str() != "000000" {
+        "000000"
+    } else {
+        "111111"
+    };
+
+    // Submit 5 wrong codes — this must exhaust the attempt cap (MAX_CODE_ATTEMPTS = 5).
+    for i in 0..5 {
+        let err = umbral_auth::verify_email("dave@example.com", wrong_code)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, umbral_auth::AuthError::InvalidChallenge),
+            "wrong-code attempt {i} must return InvalidChallenge; got {err:?}"
+        );
+    }
+
+    // Now submit the CORRECT code. The challenge was burned by the attempt cap,
+    // so verification must still fail — proving the brute-force guard works.
+    let result = umbral_auth::verify_email("dave@example.com", &code).await;
+    assert!(
+        matches!(result, Err(umbral_auth::AuthError::InvalidChallenge)),
+        "correct code after 5 failed attempts must still be InvalidChallenge \
+         (challenge burned by attempt cap); got {result:?}"
+    );
+
+    // The user must remain unverified — email_verified_at must not have been stamped.
+    let reloaded = umbral_auth::AuthUser::objects()
+        .filter(umbral_auth::auth_user::EMAIL.eq("dave@example.com".to_string()))
+        .first()
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        reloaded.email_verified_at.is_none(),
+        "email_verified_at must remain None after challenge was burned by brute-force guard"
     );
 }

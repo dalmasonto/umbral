@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use umbral::db::transaction;
 use umbral::orm::{F, ForeignKey};
 use umbral::templates::{context, render};
 
@@ -283,17 +284,39 @@ pub async fn verify_email(email: &str, code: &str) -> Result<(), crate::AuthErro
         return Err(crate::AuthError::InvalidChallenge);
     }
 
-    challenge.mark_used().await?;
+    // Consume the challenge and stamp email_verified_at in one atomic
+    // transaction. Without this, a crash between the two writes would
+    // leave either (a) a still-live, replayable challenge while the
+    // user is already verified, or (b) a consumed challenge while the
+    // user is still unverified. Both are security bugs; the transaction
+    // prevents both.
+    let challenge_id = challenge.id;
+    let user_id = user.id;
+    transaction(|tx| {
+        Box::pin(async move {
+            let mut mark_delta = serde_json::Map::new();
+            mark_delta.insert("used_at".to_string(), serde_json::json!(Utc::now()));
+            AuthChallenge::objects()
+                .filter(auth_challenge::ID.eq(challenge_id))
+                .on_tx(tx)
+                .update_values(mark_delta)
+                .await?;
 
-    let mut delta = serde_json::Map::new();
-    delta.insert(
-        "email_verified_at".to_string(),
-        serde_json::json!(Utc::now()),
-    );
-    AuthUser::objects()
-        .filter(crate::auth_user::ID.eq(user.id))
-        .update_values(delta)
-        .await?;
+            let mut verify_delta = serde_json::Map::new();
+            verify_delta.insert(
+                "email_verified_at".to_string(),
+                serde_json::json!(Utc::now()),
+            );
+            AuthUser::objects()
+                .filter(crate::auth_user::ID.eq(user_id))
+                .on_tx(tx)
+                .update_values(verify_delta)
+                .await?;
+
+            Ok::<_, crate::AuthError>(())
+        })
+    })
+    .await?;
 
     Ok(())
 }
