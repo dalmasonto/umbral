@@ -89,6 +89,24 @@ struct ErrorOut {
     detail: String,
 }
 
+// New DTOs for the verification + password-reset surface (Task 10).
+#[derive(Debug, Deserialize)]
+struct VerifyEmailIn {
+    email: String,
+    code: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmailOnlyIn {
+    email: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResetIn {
+    token: String,
+    new_password: String,
+}
+
 /// Resolve the client IP best-effort from reverse-proxy headers. ConnectInfo
 /// isn't wired in umbral's serve path, so the peer address isn't available; the
 /// proxy headers are the reliable source. Takes the first hop of
@@ -130,6 +148,31 @@ fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Re
 // Router construction
 // =========================================================================
 
+/// Build the request origin's reset URL base from reverse-proxy headers.
+///
+/// Prefers `X-Forwarded-Proto` (default `"https"`) + the `Host` header to
+/// build `{proto}://{host}/auth/reset`. The `/auth/reset` page is owned by
+/// the HTML auth surface (Task 14); the JSON password-forgot endpoint points
+/// the email there so the user clicks through to the confirmation form.
+///
+/// Falls back to the relative path `"/auth/reset"` when the `Host` header is
+/// absent (e.g. a test client that doesn't set it).
+pub(crate) fn reset_url_base(headers: &HeaderMap) -> String {
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim());
+    let Some(host) = host else {
+        return "/auth/reset".to_string();
+    };
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim())
+        .unwrap_or("https");
+    format!("{proto}://{host}/auth/reset")
+}
+
 /// Build the four-route Router under `prefix`. Called from
 /// `AuthPlugin::routes()` when `with_default_routes()` is on.
 pub(crate) fn build_router(prefix: &str) -> Router {
@@ -138,6 +181,16 @@ pub(crate) fn build_router(prefix: &str) -> Router {
         .route(&format!("{prefix}/login"), post(login))
         .route(&format!("{prefix}/logout"), post(logout))
         .route(&format!("{prefix}/me"), umbral::web::get(me))
+        .route(&format!("{prefix}/verify-email"), post(verify_email_h))
+        .route(
+            &format!("{prefix}/resend-verification"),
+            post(resend_verification_h),
+        )
+        .route(
+            &format!("{prefix}/password-forgot"),
+            post(password_forgot_h),
+        )
+        .route(&format!("{prefix}/password-reset"), post(password_reset_h))
 }
 
 /// Same as [`build_router`] but also returns the route specs the
@@ -150,6 +203,10 @@ pub(crate) fn declared_routes(prefix: &str) -> Vec<umbral::routes::RouteSpec> {
         ("POST", format!("{prefix}/login")).into(),
         ("POST", format!("{prefix}/logout")).into(),
         ("GET", format!("{prefix}/me")).into(),
+        ("POST", format!("{prefix}/verify-email")).into(),
+        ("POST", format!("{prefix}/resend-verification")).into(),
+        ("POST", format!("{prefix}/password-forgot")).into(),
+        ("POST", format!("{prefix}/password-reset")).into(),
     ]
 }
 
@@ -460,4 +517,71 @@ async fn me(OptionalIdentity(id): OptionalIdentity) -> Response {
         }
     };
     Json(UserOut::from(&user)).into_response()
+}
+
+// =========================================================================
+// Task 10: verify-email, resend-verification, password-forgot, password-reset
+// =========================================================================
+
+/// `POST {prefix}/verify-email` — consume a 6-digit email-verification code.
+///
+/// JSON `{email, code}` → 204 on success; 400 (generic, no enumeration) on
+/// any failure (unknown email, no active challenge, wrong code, attempt cap).
+async fn verify_email_h(Json(b): Json<VerifyEmailIn>) -> Response {
+    match crate::verify_email(&b.email, &b.code).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => err(
+            StatusCode::BAD_REQUEST,
+            "invalid_code",
+            "verification failed",
+        ),
+    }
+}
+
+/// `POST {prefix}/resend-verification` — re-issue an email-verification code.
+///
+/// JSON `{email}` → always 202 (no enumeration: unknown emails or already-
+/// verified users get the same response as an unverified user who gets the
+/// mail). Fires `start_email_verification` best-effort for unverified users.
+async fn resend_verification_h(Json(b): Json<EmailOnlyIn>) -> Response {
+    // Look up an UNVERIFIED user by email. `is_null()` matches SQL `IS NULL`
+    // on the nullable `email_verified_at` column. The filter intentionally
+    // excludes already-verified users so the mail is only sent when it
+    // matters. All error arms are silently swallowed — the response is always
+    // 202 regardless (no account enumeration through this endpoint).
+    if let Ok(Some(u)) = AuthUser::objects()
+        .filter(auth_user::EMAIL.eq(b.email.clone()) & auth_user::EMAIL_VERIFIED_AT.is_null())
+        .first()
+        .await
+    {
+        let _ = crate::start_email_verification(&u).await;
+    }
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// `POST {prefix}/password-forgot` — issue a password-reset link.
+///
+/// JSON `{email}` → always 202 (no enumeration: unknown emails get the same
+/// response as known ones). Fires `start_password_reset` best-effort; the
+/// reset URL base is built from the request's `Host` /
+/// `X-Forwarded-Proto` headers.
+async fn password_forgot_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -> Response {
+    let base = reset_url_base(&headers);
+    let _ = crate::start_password_reset(&b.email, &base).await;
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// `POST {prefix}/password-reset` — consume a password-reset token.
+///
+/// JSON `{token, new_password}` → 204 on success; 400 (generic) on any
+/// failure (unknown / expired / already-used token, weak password).
+async fn password_reset_h(Json(b): Json<ResetIn>) -> Response {
+    match crate::reset_password(&b.token, &b.new_password).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => err(
+            StatusCode::BAD_REQUEST,
+            "reset_failed",
+            "could not reset password",
+        ),
+    }
 }

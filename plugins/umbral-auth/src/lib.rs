@@ -522,6 +522,27 @@ impl<U: UserModel> AuthPlugin<U> {
         *self.mailer.0.lock().expect("mailer slot poisoned") = Some(std::sync::Arc::new(m));
         self
     }
+
+    /// Resolve the JSON route prefix.
+    ///
+    /// Returns `None` when `with_default_routes[_at]` was not called (no
+    /// routes mounted). When the stored value equals `JSON_PREFIX_SENTINEL`
+    /// (set by `with_default_routes()`), returns `{api_base()}/auth` —
+    /// resolved at call-time, after `App::build` has had a chance to set the
+    /// base. A literal prefix stored by `with_default_routes_at` is returned
+    /// as-is.
+    ///
+    /// Private: called from the `Plugin` trait impl (`routes`,
+    /// `route_paths`, `openapi_paths`). Not part of the public API.
+    fn json_prefix(&self) -> Option<String> {
+        self.default_routes_prefix.as_ref().map(|p| {
+            if p == JSON_PREFIX_SENTINEL {
+                format!("{}/auth", umbral::web::api_base())
+            } else {
+                p.clone()
+            }
+        })
+    }
 }
 
 // =========================================================================
@@ -532,15 +553,29 @@ impl<U: UserModel> AuthPlugin<U> {
 // `.with_default_routes()` on `AuthPlugin::<CustomUser>` is an error at
 // the call site, not a silent no-op at runtime.
 // =========================================================================
+
+/// Stored by `with_default_routes()` so the JSON prefix can be resolved at
+/// build time (when `api_base()` is already set by `App::build`) rather than
+/// when the builder method is called (before `App::build` has set the base).
+/// An internal null-byte sentinel that no real path can equal.
+const JSON_PREFIX_SENTINEL: &str = "\0auto-api-base\0";
+
 impl AuthPlugin<AuthUser> {
-    /// Mount the built-in `/api/auth/{register,login,logout,me}`
+    /// Mount the built-in `/api/auth/{register,login,logout,me,…}`
     /// surface. Same handlers that lived in the derive-demo example
     /// app, promoted to the framework so every app gets them with one
     /// line. JSON-only; UNIQUE-violation → 409; login returns both a
     /// Set-Cookie and a bearer token in one response so browsers and
     /// CLI clients share an endpoint.
+    ///
+    /// The prefix resolves at build time: `{api_base()}/auth`, so it
+    /// follows whatever base the REST plugin set (default `/api/auth`).
+    /// Use [`Self::with_default_routes_at`] to fix a literal prefix.
     pub fn with_default_routes(mut self) -> Self {
-        self.default_routes_prefix = Some("/api/auth".to_string());
+        // Store the sentinel; `json_prefix()` resolves it at call-time
+        // (which is during `App::build` → `Plugin::routes`), after the
+        // REST plugin has had a chance to call `set_api_base`.
+        self.default_routes_prefix = Some(JSON_PREFIX_SENTINEL.to_string());
         self
     }
 
@@ -591,22 +626,26 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         // So the prefix-guarded branch is dead code for any custom user
         // model — both at compile time (the builder method isn't
         // visible) and at runtime (the field stays None).
-        match &self.default_routes_prefix {
-            Some(prefix) => auth_routes::build_router(prefix),
+        //
+        // `json_prefix()` resolves the sentinel stored by `with_default_routes()`
+        // to `{api_base()}/auth` at build time, after `App::build` has
+        // had a chance to set the REST base path.
+        match self.json_prefix() {
+            Some(prefix) => auth_routes::build_router(&prefix),
             None => umbral::web::Router::new(),
         }
     }
 
     fn route_paths(&self) -> Vec<umbral::routes::RouteSpec> {
-        match &self.default_routes_prefix {
-            Some(prefix) => auth_routes::declared_routes(prefix),
+        match self.json_prefix() {
+            Some(prefix) => auth_routes::declared_routes(&prefix),
             None => Vec::new(),
         }
     }
 
     fn openapi_paths(&self) -> Vec<(String, serde_json::Value)> {
-        match &self.default_routes_prefix {
-            Some(prefix) => auth_routes::openapi_paths(prefix),
+        match self.json_prefix() {
+            Some(prefix) => auth_routes::openapi_paths(&prefix),
             None => Vec::new(),
         }
     }
