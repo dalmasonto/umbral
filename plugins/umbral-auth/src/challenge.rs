@@ -394,7 +394,8 @@ pub async fn start_password_reset(
 /// user are revoked ("log out everywhere"). A revocation failure does
 /// **not** roll back the password change — the password is already
 /// updated at that point, and failing the call would confuse the caller.
-/// Revocation errors are swallowed with `let _ = …`.
+/// Revocation failures are logged at ERROR level (via `tracing::error!`) so
+/// they are observable in prod without aborting the successful reset.
 ///
 /// # Errors
 ///
@@ -453,12 +454,18 @@ pub async fn reset_password(token: &str, new_password: &str) -> Result<(), crate
 
     // Post-commit best-effort revocations. A reset implies possible account
     // compromise; "log out everywhere" is the safe response. Failures here
-    // do NOT un-change the password.
-    let _ = crate::token::AuthToken::objects()
+    // do NOT un-change the password — the hash is already updated. Errors are
+    // logged so a failed revocation is observable in production.
+    if let Err(e) = crate::token::AuthToken::objects()
         .filter(crate::token::auth_token::USER_ID.eq(user_id))
         .delete()
-        .await;
-    let _ = umbral_sessions::revoke_user_sessions(&user_id.to_string()).await;
+        .await
+    {
+        tracing::error!(user_id, error = %e, "password reset: failed to revoke bearer tokens");
+    }
+    if let Err(e) = umbral_sessions::revoke_user_sessions(&user_id.to_string()).await {
+        tracing::error!(user_id, error = %e, "password reset: failed to revoke sessions");
+    }
 
     Ok(())
 }

@@ -322,12 +322,18 @@ async fn do_signup(
 /// Form fields: `email`, `code`. Optional `?redirect=<path>`.
 ///
 /// Consumes the 6-digit verification code. 303 with flash on success or failure.
+/// Throttled per IP+email (default 5 / hour) to stop online code-guessing.
 async fn do_verify_email(
     Query(q): Query<RedirectQ>,
     headers: HeaderMap,
     msgs: Messages,
     Form(f): Form<VerifyEmailForm>,
 ) -> Response {
+    let ip = crate::auth_routes::client_ip(&headers);
+    if !crate::email_action_throttle_check(&ip, &f.email) {
+        msgs.error("Too many requests; try again later.").await;
+        return Redirect::to(&error_target(&headers, q.redirect.as_deref())).into_response();
+    }
     match crate::verify_email(&f.email, &f.code).await {
         Ok(()) => {
             msgs.success("Email verified! You can now sign in.").await;
@@ -348,7 +354,13 @@ async fn do_verify_email(
 /// Re-issues a verification code. ALWAYS generic flash + 303 (no enumeration).
 /// Unknown addresses, already-verified users, and mail errors all produce
 /// the same response as a successful resend.
-async fn do_resend(msgs: Messages, Form(f): Form<ResendForm>) -> Response {
+/// Throttled per IP+email (default 5 / hour) to stop email-bombing.
+async fn do_resend(headers: HeaderMap, msgs: Messages, Form(f): Form<ResendForm>) -> Response {
+    let ip = crate::auth_routes::client_ip(&headers);
+    if !crate::email_action_throttle_check(&ip, &f.email) {
+        msgs.error("Too many requests; try again later.").await;
+        return Redirect::to("/").into_response();
+    }
     // Look up an UNVERIFIED user; fire best-effort. All errors are silently
     // swallowed — the response is always the same (no account enumeration).
     if let Ok(Some(u)) = crate::AuthUser::objects()
@@ -371,7 +383,13 @@ async fn do_resend(msgs: Messages, Form(f): Form<ResendForm>) -> Response {
 /// Form fields: `email`.
 ///
 /// Issues a password-reset link. ALWAYS generic flash + 303 (no enumeration).
+/// Throttled per IP+email (default 5 / hour) to stop email-bombing.
 async fn do_forgot(headers: HeaderMap, msgs: Messages, Form(f): Form<ForgotForm>) -> Response {
+    let ip = crate::auth_routes::client_ip(&headers);
+    if !crate::email_action_throttle_check(&ip, &f.email) {
+        msgs.error("Too many requests; try again later.").await;
+        return Redirect::to("/").into_response();
+    }
     let base = crate::auth_routes::reset_url_base(&headers);
     let _ = crate::start_password_reset(&f.email, &base).await;
     msgs.info("If that address is registered, a reset link has been sent.")

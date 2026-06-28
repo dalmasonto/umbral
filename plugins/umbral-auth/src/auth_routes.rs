@@ -671,7 +671,16 @@ async fn me(OptionalIdentity(id): OptionalIdentity) -> Response {
 ///
 /// JSON `{email, code}` → 204 on success; 400 (generic, no enumeration) on
 /// any failure (unknown email, no active challenge, wrong code, attempt cap).
-async fn verify_email_h(Json(b): Json<VerifyEmailIn>) -> Response {
+/// Throttled per IP+email (default 5 / hour) to stop online code-guessing.
+async fn verify_email_h(headers: HeaderMap, Json(b): Json<VerifyEmailIn>) -> Response {
+    let ip = client_ip(&headers);
+    if !crate::email_action_throttle_check(&ip, &b.email) {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests; try again later",
+        );
+    }
     match crate::verify_email(&b.email, &b.code).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => err(
@@ -687,7 +696,16 @@ async fn verify_email_h(Json(b): Json<VerifyEmailIn>) -> Response {
 /// JSON `{email}` → always 202 (no enumeration: unknown emails or already-
 /// verified users get the same response as an unverified user who gets the
 /// mail). Fires `start_email_verification` best-effort for unverified users.
-async fn resend_verification_h(Json(b): Json<EmailOnlyIn>) -> Response {
+/// Throttled per IP+email (default 5 / hour) to stop email-bombing.
+async fn resend_verification_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -> Response {
+    let ip = client_ip(&headers);
+    if !crate::email_action_throttle_check(&ip, &b.email) {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests; try again later",
+        );
+    }
     // Look up an UNVERIFIED user by email. `is_null()` matches SQL `IS NULL`
     // on the nullable `email_verified_at` column. The filter intentionally
     // excludes already-verified users so the mail is only sent when it
@@ -709,7 +727,16 @@ async fn resend_verification_h(Json(b): Json<EmailOnlyIn>) -> Response {
 /// response as known ones). Fires `start_password_reset` best-effort; the
 /// reset URL base is built from the request's `Host` /
 /// `X-Forwarded-Proto` headers.
+/// Throttled per IP+email (default 5 / hour) to stop email-bombing.
 async fn password_forgot_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -> Response {
+    let ip = client_ip(&headers);
+    if !crate::email_action_throttle_check(&ip, &b.email) {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests; try again later",
+        );
+    }
     let base = reset_url_base(&headers);
     let _ = crate::start_password_reset(&b.email, &base).await;
     StatusCode::ACCEPTED.into_response()

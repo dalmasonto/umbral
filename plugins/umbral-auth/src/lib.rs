@@ -94,7 +94,8 @@ pub use session_user::{
     user_context_layer,
 };
 pub use throttle::{
-    Throttle, ThrottleConfig, login_throttle_check, login_throttle_clear, register_throttle_check,
+    Throttle, ThrottleConfig, email_action_throttle_check, login_throttle_check,
+    login_throttle_clear, register_throttle_check,
 };
 pub use token::{AuthToken, PlaintextToken, TOKEN_PREFIX, digest_token};
 
@@ -520,11 +521,23 @@ impl<U: UserModel> AuthPlugin<U> {
         self
     }
 
-    /// Explicit opt-OUT: turn login + register throttling OFF entirely.
-    /// Secure-by-default means an app that genuinely wants no rate limit — a
-    /// load test, an internal tool behind its own gateway limiter — has to ask
-    /// for it by name. Don't reach for this to silence a throttled test; use a
-    /// distinct IP/username per attempt or a generous `login_throttle` instead.
+    /// Tune the email-action rate limit: `max` attempts per trailing `window`,
+    /// keyed per IP + email. Covers verify-email, resend-verification, and
+    /// password-forgot. The default is 5 / hour — enough for a user who needs
+    /// a couple of resends, but low enough to stop email-bombing / online
+    /// code-guessing scripts dead.
+    pub fn email_action_throttle(mut self, max: usize, window: std::time::Duration) -> Self {
+        self.throttle_config.email_action_max = max;
+        self.throttle_config.email_action_window = window;
+        self
+    }
+
+    /// Explicit opt-OUT: turn login, register, and email-action throttling OFF
+    /// entirely. Secure-by-default means an app that genuinely wants no rate
+    /// limit — a load test, an internal tool behind its own gateway limiter —
+    /// has to ask for it by name. Don't reach for this to silence a throttled
+    /// test; use a distinct IP/username per attempt or generous budget methods
+    /// instead.
     pub fn disable_throttle(mut self) -> Self {
         self.throttle_config.enabled = false;
         self
