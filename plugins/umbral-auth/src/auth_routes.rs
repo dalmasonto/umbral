@@ -503,7 +503,20 @@ async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response 
         return err(StatusCode::BAD_REQUEST, "weak_password", reasons.join(" "));
     }
     match crate::create_user(&body.username, &body.email, &body.password).await {
-        Ok(user) => (StatusCode::CREATED, Json(UserOut::from(&user))).into_response(),
+        Ok(user) => {
+            // Auto-send a verification code when the gate is active. Best-effort:
+            // a mail failure must NOT fail the registration — the user account is
+            // already created and the code can be re-issued via /resend-verification.
+            if crate::verified_email_required() {
+                if let Err(e) = crate::start_email_verification(&user).await {
+                    tracing::warn!(
+                        user_id = user.id,
+                        "umbral-auth: require_verified_email: auto-send on register failed: {e}"
+                    );
+                }
+            }
+            (StatusCode::CREATED, Json(UserOut::from(&user))).into_response()
+        }
         Err(e) => {
             let msg = format!("{e}");
             let status = if msg.to_lowercase().contains("unique") {
@@ -552,6 +565,16 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
     };
     // Authenticated: forgive the counter so prior typos don't accumulate.
     crate::login_throttle_clear(&ip, &body.username);
+    // Gate: if require_verified_email is on and the user hasn't verified yet,
+    // block login. The 403 (not 401) distinguishes "good credentials, missing
+    // step" from "bad credentials", so clients can surface actionable feedback.
+    if crate::verified_email_required() && user.email_verified_at.is_none() {
+        return err(
+            StatusCode::FORBIDDEN,
+            "email_not_verified",
+            "verify your email before logging in",
+        );
+    }
     let (_token_row, plaintext) = match AuthToken::create_for(&user, "login").await {
         Ok(t) => t,
         Err(e) => {

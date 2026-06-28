@@ -379,6 +379,13 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// in a `Mutex` (via `MailerSlot`) so `on_ready`'s `&self` can `.take()`
     /// the value. First boot wins; subsequent calls are no-ops.
     mailer: MailerSlot,
+    /// When `true`, the `register` route auto-sends a verification code and the
+    /// `login` route returns 403 until `email_verified_at` is stamped. Off by
+    /// default — the column is tracked and the endpoints exist regardless; only
+    /// the enforcement gate is toggled here. Set via
+    /// [`AuthPlugin::require_verified_email`] (available on
+    /// `AuthPlugin<AuthUser>` only, since it gates the built-in routes).
+    require_verified: bool,
     _u: PhantomData<U>,
 }
 
@@ -397,6 +404,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
             // is the only path that turns it off.
             throttle_config: throttle::ThrottleConfig::default(),
             mailer: MailerSlot(std::sync::Mutex::new(None)),
+            require_verified: false,
             _u: PhantomData,
         }
     }
@@ -561,6 +569,22 @@ impl<U: UserModel> AuthPlugin<U> {
 // the call site, not a silent no-op at runtime.
 // =========================================================================
 
+// =========================================================================
+// Ambient require_verified seal — mirrors the password policy / mailer pattern.
+// =========================================================================
+
+/// Process-global flag set once in `on_ready`. Handlers read it as a free
+/// function so they don't need a handle to `AuthPlugin<U>`.
+static REQUIRE_VERIFIED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Whether the `require_verified_email()` builder was called on the active
+/// `AuthPlugin`. `false` until `on_ready` seals it; `false` as the fallback
+/// if `on_ready` was somehow skipped (should never happen in a well-formed
+/// `App::build`, but safe-default matters here — off = permissive).
+pub(crate) fn verified_email_required() -> bool {
+    *REQUIRE_VERIFIED.get().unwrap_or(&false)
+}
+
 /// Stored by `with_default_routes()` so the JSON prefix can be resolved at
 /// build time (when `api_base()` is already set by `App::build`) rather than
 /// when the builder method is called (before `App::build` has set the base).
@@ -591,6 +615,39 @@ impl AuthPlugin<AuthUser> {
     /// surface or you want versioning (`/v1/auth`).
     pub fn with_default_routes_at(mut self, prefix: impl Into<String>) -> Self {
         self.default_routes_prefix = Some(prefix.into());
+        self
+    }
+
+    /// Block login until the user's `email_verified_at` column is stamped, and
+    /// auto-send a verification code immediately on `register`. Off by default
+    /// — the `email_verified_at` column is always tracked and the
+    /// `/verify-email` + `/resend-verification` endpoints are always mounted;
+    /// this flag only controls enforcement:
+    ///
+    /// - **register**: after a successful `create_user`, fires
+    ///   `start_email_verification` best-effort (a mail failure does NOT fail
+    ///   registration; it is logged at `warn` level). The `201` response is
+    ///   unchanged.
+    /// - **login**: after `authenticate` succeeds and before minting the
+    ///   bearer token / session, checks `email_verified_at IS NULL`; returns
+    ///   `403 {error: "email_not_verified"}` if so.
+    ///
+    /// Available only on `AuthPlugin<AuthUser>` because enforcement is
+    /// implemented inside the built-in handlers (which are `AuthUser`-only).
+    /// Custom user models bring their own routes and their own enforcement.
+    ///
+    /// Requires a working mailer in production — wire
+    /// [`AuthPlugin::mailer`] alongside this builder, or users won't receive
+    /// the verification code and will be permanently locked out:
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default()
+    ///     .with_default_routes()
+    ///     .mailer(my_smtp_mailer)
+    ///     .require_verified_email()
+    /// ```
+    pub fn require_verified_email(mut self) -> Self {
+        self.require_verified = true;
         self
     }
 }
@@ -709,6 +766,9 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
                 crate::mailer::install_mailer(m);
             }
         }
+        // Seal the verified-email enforcement flag. First boot wins (idempotent),
+        // matching the password-policy / mailer / ambient-pool contract.
+        let _ = REQUIRE_VERIFIED.set(self.require_verified);
         Ok(())
     }
 }
