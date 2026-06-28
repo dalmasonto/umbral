@@ -1,0 +1,5 @@
+Someone requested a password reset for your account.
+
+Reset your password: {{ reset_url }}
+
+This link expires in 1 hour. If you didn't request it, ignore this email.

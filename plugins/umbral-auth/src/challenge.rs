@@ -61,8 +61,7 @@ pub(crate) fn generate_code() -> String {
 ///
 /// # Called by
 ///
-/// Task 9 (password-reset flow). `pub(crate)` until then.
-#[allow(dead_code)] // called by Task 9 once that flow lands
+/// [`start_password_reset`] (password-reset flow).
 pub(crate) fn generate_reset_token() -> String {
     let mut buf = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut buf);
@@ -317,6 +316,149 @@ pub async fn verify_email(email: &str, code: &str) -> Result<(), crate::AuthErro
         })
     })
     .await?;
+
+    Ok(())
+}
+
+// =========================================================================
+// Password-reset flow helpers (Task 9)
+// =========================================================================
+
+/// How long a password-reset token stays valid after issue.
+const RESET_TTL: Duration = Duration::from_secs(60 * 60); // 1 hour
+
+/// Issue a password-reset token for the account that owns `email`,
+/// render `auth/email/reset_link.{html,txt}` with the full reset URL,
+/// and send via the ambient mailer.
+///
+/// If no account exists for `email`, returns `Ok(())` silently — the
+/// caller gets no information about whether an account was found. This
+/// prevents account enumeration through the password-reset surface: an
+/// attacker who submits an arbitrary email address sees the same outcome
+/// as a legitimate user.
+///
+/// The token is an opaque [`generate_reset_token`] value stored
+/// (hashed) in `auth_challenge`. It expires in 1 hour.
+pub async fn start_password_reset(
+    email: &str,
+    reset_url_base: &str,
+) -> Result<(), crate::AuthError> {
+    // Silent on unknown email — never reveal whether an account exists.
+    let Some(user) = crate::AuthUser::objects()
+        .filter(crate::auth_user::EMAIL.eq(email.to_string()))
+        .first()
+        .await?
+    else {
+        return Ok(());
+    };
+    let token = generate_reset_token();
+    AuthChallenge::issue(user.id, PURPOSE_PASSWORD_RESET, &token, RESET_TTL).await?;
+    let reset_url = format!("{reset_url_base}?token={token}");
+    let ctx = context! { reset_url => reset_url, username => user.username.clone() };
+    let html = render("auth/email/reset_link.html", &ctx)
+        .map_err(|e| crate::AuthError::Template(e.to_string()))?;
+    let text = render("auth/email/reset_link.txt", &ctx)
+        .map_err(|e| crate::AuthError::Template(e.to_string()))?;
+    active_mailer()
+        .send(OutgoingMail {
+            to: user.email.clone(),
+            subject: "Reset your password".into(),
+            html,
+            text,
+        })
+        .await
+        .map_err(|e| crate::AuthError::Mail(e.to_string()))?;
+    Ok(())
+}
+
+/// Consume a password-reset token and set the account's password to
+/// `new_password`.
+///
+/// # Validation
+///
+/// The candidate password must pass the ambient [`crate::PasswordPolicy`]
+/// (checked via [`crate::validate_password`]). On failure the error is
+/// [`crate::AuthError::WeakPassword`] with every rejection reason; the
+/// challenge is NOT consumed so the user can retry with a stronger password.
+///
+/// # Atomicity
+///
+/// The password-hash update and the challenge consume are written in a
+/// single transaction so a crash between the two cannot leave a window
+/// where the old password still works on an already-consumed token or,
+/// conversely, a live token against an already-updated password.
+///
+/// # Revocations (best-effort, post-commit)
+///
+/// After the transaction commits, all bearer tokens and sessions for the
+/// user are revoked ("log out everywhere"). A revocation failure does
+/// **not** roll back the password change — the password is already
+/// updated at that point, and failing the call would confuse the caller.
+/// Revocation errors are swallowed with `let _ = …`.
+///
+/// # Errors
+///
+/// Returns [`crate::AuthError::InvalidChallenge`] for ALL failure arms
+/// that involve the token (not found, expired, already used, no user) —
+/// the same opaque error prevents oracle attacks.
+pub async fn reset_password(token: &str, new_password: &str) -> Result<(), crate::AuthError> {
+    let Some(challenge) =
+        AuthChallenge::find_active_by_secret(token, PURPOSE_PASSWORD_RESET).await?
+    else {
+        return Err(crate::AuthError::InvalidChallenge);
+    };
+    // ForeignKey<AuthUser>::id() returns the i64 primary key.
+    let user_id: i64 = challenge.user_id.id();
+    let Some(user) = crate::AuthUser::objects()
+        .filter(crate::auth_user::ID.eq(user_id))
+        .first()
+        .await?
+    else {
+        // The user row was deleted after the challenge was issued.
+        return Err(crate::AuthError::InvalidChallenge);
+    };
+    // Enforce the strength policy before touching the DB.
+    crate::validate_password(
+        new_password,
+        &crate::PasswordContext::new(Some(&user.username), Some(&user.email)),
+    )
+    .map_err(crate::AuthError::WeakPassword)?;
+    let hash = crate::hash_password(new_password)?;
+
+    // Atomically: update the password hash AND consume the challenge.
+    let challenge_id = challenge.id;
+    transaction(|tx| {
+        let hash = hash.clone();
+        Box::pin(async move {
+            let mut pw_delta = serde_json::Map::new();
+            pw_delta.insert("password_hash".to_string(), serde_json::json!(hash));
+            crate::AuthUser::objects()
+                .filter(crate::auth_user::ID.eq(user_id))
+                .on_tx(tx)
+                .update_values(pw_delta)
+                .await?;
+
+            let mut mark_delta = serde_json::Map::new();
+            mark_delta.insert("used_at".to_string(), serde_json::json!(Utc::now()));
+            AuthChallenge::objects()
+                .filter(auth_challenge::ID.eq(challenge_id))
+                .on_tx(tx)
+                .update_values(mark_delta)
+                .await?;
+
+            Ok::<_, crate::AuthError>(())
+        })
+    })
+    .await?;
+
+    // Post-commit best-effort revocations. A reset implies possible account
+    // compromise; "log out everywhere" is the safe response. Failures here
+    // do NOT un-change the password.
+    let _ = crate::token::AuthToken::objects()
+        .filter(crate::token::auth_token::USER_ID.eq(user_id))
+        .delete()
+        .await;
+    let _ = umbral_sessions::revoke_user_sessions(&user_id.to_string()).await;
 
     Ok(())
 }

@@ -80,7 +80,9 @@ pub use password_validation::{
 };
 
 pub use bearer_auth::{BearerAuthentication, parse_bearer_header};
-pub use challenge::{AuthChallenge, start_email_verification, verify_email};
+pub use challenge::{
+    AuthChallenge, reset_password, start_email_verification, start_password_reset, verify_email,
+};
 pub use extractors::{CurrentIdentity, OptionalIdentity, resolve_identity};
 pub use login_required::{
     LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, current_session_user_pk,
