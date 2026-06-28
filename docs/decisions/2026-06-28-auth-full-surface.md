@@ -25,7 +25,7 @@ This document is the approved design. Implementation follows via the writing-pla
 ## Decisions (locked)
 
 1. **Token form — hybrid.** Email verification uses a 6-digit numeric code the user types; password reset uses a tokenized link the user clicks. Both hashed at rest, single-use, expiring (code 15 min, link 1 h).
-2. **Surface — two opt-in builders.** `with_default_routes()` (JSON, extended) and `with_template_pages()` (HTML/Jinja). Independent; both call the same core functions.
+2. **Surface — two opt-in builders.** `with_default_routes()` (JSON, extended) and `with_form_routes()` (form-action POST endpoints that redirect; the developer owns the pages — see the revised section below). Independent; both call the same core functions.
 3. **Enforcement — opt-in.** `email_verified_at` is always tracked and the verify endpoints always exist, but login is blocked only when the app calls `require_verified_email()`. Backward-compatible.
 4. **Logout — reusable function + route.** A single `umbral_auth::logout(req_headers, resp_headers)` used by both surfaces and callable from any handler.
 5. **Base path — auto-follow + override.** JSON routes mount under the REST plugin's base path when present (`{rest_base}/auth`), `/api/auth` otherwise, via a decoupled core ambient. `with_default_routes_at(prefix)` always wins.
@@ -108,20 +108,27 @@ Base path auto-follows the REST plugin (see below). Existing four routes plus:
 
 Each gets an `openapi_paths` entry under the `auth` tag, so the REST/OpenAPI plugins render them in Swagger UI exactly like the existing four.
 
-### HTML / Jinja (`with_template_pages()`)
+### Form-action endpoints (`with_form_routes()`) — REVISED 2026-06-29
 
-Default prefix `/auth` (configurable via `with_template_pages_at(prefix)`). GET renders a form; POST runs the core fn, sets a flash message, and redirects (PRG pattern).
+**Revision rationale.** The original design shipped full server-rendered login/signup/verify/reset *pages* (GET handlers + bundled Jinja templates). That was wrong: those pages carry the developer's brand and design, so the framework shipping opinionated pages is noise the developer has to fight. The framework's job is the **form-action endpoints** — the developer writes their own pages (in Jinja or anything else) whose forms POST to these. The bundled page templates were reverted; the email-body templates (which the framework *sends*, and which need a default) stay.
 
-| Route | GET | POST |
+POST-only. Default prefix `/auth` (configurable via `with_form_routes_at(prefix)`). Each handler: form-decode the body → run the same core logic the JSON handler runs (including throttle for login/signup) → set a session flash message → `303 See Other` redirect. No GET handlers, no template rendering, no shipped page templates.
+
+| Route | Form body | Behavior |
 |---|---|---|
-| `/auth/login` | login form | authenticate + session, redirect |
-| `/auth/signup` | signup form | create_user (+ auto-send code if verification on), redirect |
-| `/auth/logout` | — | `logout`, redirect |
-| `/auth/verify` | enter-code form (accepts `?email=` prefilled) | `verify_email`, flash, redirect |
-| `/auth/forgot` | enter-email form | `start_password_reset`, generic flash, redirect |
-| `/auth/reset` | set-new-password form (reads `?token=`) | `reset_password`, flash, redirect to login |
+| `POST /auth/login` | `username, password` | authenticate (+throttle); success → session + 303 to success-target; failure (bad creds / throttled / unverified-when-required) → flash error + 303 to error-target |
+| `POST /auth/logout` | — | `logout` + 303 to success-target |
+| `POST /auth/signup` | `username, email, password` | create_user (+register throttle, +auto-send code if `require_verified_email`); success → flash + 303; failure (weak pw / dup) → flash error + 303 to error-target |
+| `POST /auth/verify-email` | `email, code` | `verify_email`; flash + 303 |
+| `POST /auth/resend` | `email` | `start_email_verification` best-effort (generic flash, no enumeration) + 303 |
+| `POST /auth/password-forgot` | `email` | `start_password_reset` (generic flash, no enumeration) + 303 |
+| `POST /auth/password-reset` | `token, new_password` | `reset_password`; flash + 303 |
 
-Templates ship in `plugins/umbral-auth/templates/auth/*.html` and extend an overridable `auth/base.html`. They use `{{ csrf_input }}` (CSRF middleware already provides it) and render flash `messages`. Apps override any template by placing a same-named file in their own `templates/` dir (first-match-wins, already supported). `templates_dirs()` on the plugin returns the shipped dir.
+**Redirect targets (open-redirect-safe).** A target is *safe* only if it is a same-site relative path: starts with `/`, does not start with `//`, contains no scheme/backslash. Success → the `?redirect=<path>` query param if safe, else `/`. Error → the `Referer` header if safe (returns the user to the form page), else the `?redirect` value if safe, else `/`. Unsafe targets are silently replaced with `/`.
+
+**Errors → flash messages.** On any failure the handler sets a `umbral_sessions::messages` flash (error level) and redirects; the developer renders `{{ messages }}` in their own page. This is the only feedback channel — no error query params, no rendered error page.
+
+This surface is the redirect-style counterpart to the JSON surface (Task 10): same core fns, same throttle/enumeration protections, but form-encoded in and `303`-redirect out instead of JSON. The framework still ships and sends the **email** bodies (`templates/auth/email/*`), overridable by the app, since the framework is what sends those.
 
 ## Enforcement (opt-in)
 

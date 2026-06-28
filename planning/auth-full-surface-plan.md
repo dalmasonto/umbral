@@ -1398,6 +1398,8 @@ git commit -m "feat(auth): opt-in require_verified_email (auto-send on register,
 
 ### Task 13: Jinja templates
 
+> **SUPERSEDED 2026-06-29 (reverted in commit 4d0e0c9).** The framework no longer ships login/signup/verify/reset *pages* — those carry the developer's brand and are theirs to write. The page templates created here were reverted. Email-body templates (shipped in Tasks 8–9) stay. See the revised "Form-action endpoints" section in `docs/decisions/2026-06-28-auth-full-surface.md`. The original content below is retained for history only.
+
 **Files:**
 - Create: `plugins/umbral-auth/templates/auth/base.html`, `login.html`, `signup.html`, `verify.html`, `forgot.html`, `reset.html`.
 - (Email templates already exist from Tasks 8–9.)
@@ -1524,6 +1526,8 @@ git commit -m "feat(auth): ship overridable Jinja templates for the auth pages"
 ---
 
 ### Task 14: HTML surface — `template_routes` + `with_template_pages`
+
+> **SUPERSEDED 2026-06-29.** Redesigned as POST-only **form-action endpoints** (form in → 303 redirect out; flash errors; `?redirect=` + Referer-fallback, open-redirect-safe). No GET pages, no shipped page templates. The authoritative requirements are in `.superpowers/sdd/task-14-brief.md` and the revised "Form-action endpoints (`with_form_routes()`)" section of `docs/decisions/2026-06-28-auth-full-surface.md`. The original full-page content below is retained for history only — do NOT implement it.
 
 **Files:**
 - Create: `plugins/umbral-auth/src/template_routes.rs`
