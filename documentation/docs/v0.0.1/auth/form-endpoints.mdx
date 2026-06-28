@@ -61,7 +61,7 @@ Errors are stored as session flash messages and are available in templates as `{
 </form>
 ```
 
-<Callout type="info">Flash messages require an active session. On a brand-new visitor's very first failed submit — before any session cookie has been set — the flash is dropped (tracked as gaps3 #4); serving your login page behind CSRF middleware (which umbral does by default) ensures a session exists before the form is ever submitted.</Callout>
+<Callout type="info">Flash messages work because `SessionsPlugin`'s `session_layer` middleware establishes a session for every request — even cookieless first-visit ones. It injects a candidate session token into the request; when the handler calls `msgs.error(...)`, the session row is materialised and `Set-Cookie` is emitted on the response. Ensure `SessionsPlugin` is in your app alongside `AuthPlugin` for flash to work.</Callout>
 
 ## The `?redirect=` parameter
 

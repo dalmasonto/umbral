@@ -31,11 +31,11 @@ Both endpoints are mounted by `with_default_routes()` under the configured prefi
 { "email": "alice@example.com", "code": "482017" }
 ```
 
-Verifies the 6-digit code. On success, writes `email_verified_at = now()` on the user row and returns `200`. On failure:
+Verifies the 6-digit code. On success, writes `email_verified_at = now()` on the user row and returns `204 No Content`. On failure:
 
 | Situation | Response |
 |---|---|
-| Code correct, not expired, not used | `200 OK` |
+| Code correct, not expired, not used | `204 No Content` |
 | Code wrong | `400 Bad Request` |
 | Attempt cap reached (5 attempts) | `400 Bad Request` |
 | Code expired (15-minute TTL) | `400 Bad Request` |

@@ -1,9 +1,21 @@
 //! TDD: Form-action auth endpoints — POST-in, 303-redirect-out.
 //!
-//! Boots a real App with `AuthPlugin::default().with_form_routes()` and a
-//! recording mailer, then drives all 7 form endpoints via `tower::ServiceExt::oneshot`.
-//! Default prefix is `/auth` (form routes are HTML-surface routes, not under the
-//! JSON `/api/auth` prefix).
+//! Boots a real App with `AuthPlugin::default().with_form_routes()` AND
+//! `SessionsPlugin` (the normal app config for any HTML-facing app) and a
+//! recording mailer, then drives all 7 form endpoints via
+//! `tower::ServiceExt::oneshot`.
+//!
+//! ## Why SessionsPlugin is required
+//!
+//! `SessionsPlugin::wrap_router` mounts `session_layer`, which injects a
+//! candidate `SessionToken` extension into every request — including
+//! cookieless first-visit ones. `Messages::from_request_parts` prefers this
+//! extension over the raw cookie. When `msgs.error(...)` is called inside a
+//! form handler, it materialises the session row (lazy write), and
+//! `session_layer` emits `Set-Cookie` on the response. Without
+//! `SessionsPlugin`, `Messages` has no token to bind to and the flash is a
+//! silent no-op — a degenerate config, not a real app config (gaps3 #4,
+//! resolved).
 //!
 //! Pattern mirrors `json_surface.rs`: one shared tempfile DB via `OnceCell`,
 //! raw DDL for the four tables, the Router stashed in a static.
@@ -17,6 +29,7 @@ use tokio::sync::OnceCell;
 use tower::ServiceExt;
 use umbral_auth::mailer::{AuthMailError, AuthMailer, OutgoingMail};
 use umbral_auth::{AuthPlugin, AuthUser};
+use umbral_sessions::SessionsPlugin;
 
 // =========================================================================
 // Recording mailer
@@ -67,6 +80,12 @@ async fn boot() -> &'static Router {
         let app = umbral::App::builder()
             .settings(settings)
             .database("default", pool)
+            // SessionsPlugin is required for flash messages to work on
+            // anonymous first-visit form submissions (session_layer injects
+            // a candidate SessionToken into every request, including
+            // cookieless ones; Messages prefers this extension). This is the
+            // normal config for any HTML-facing app.
+            .plugin(SessionsPlugin::default())
             .plugin(
                 AuthPlugin::<AuthUser>::default()
                     .with_form_routes()
@@ -74,7 +93,7 @@ async fn boot() -> &'static Router {
                     .mailer(rec),
             )
             .build()
-            .expect("App::build should succeed with AuthPlugin + form routes");
+            .expect("App::build should succeed with AuthPlugin + SessionsPlugin + form routes");
 
         let router = app.into_router();
         ROUTER.set(router).ok();
@@ -165,9 +184,14 @@ async fn post_form(router: &Router, uri: &str, body: &str) -> axum::http::Respon
 // Tests
 // =========================================================================
 
-/// Bad creds → 303 redirect, no session Set-Cookie, Location: "/".
+/// Bad creds → 303 redirect with Location: "/", and session Set-Cookie is
+/// set because `msgs.error(...)` inside the handler materialises the session
+/// via `session_layer` (proving session_layer is active via SessionsPlugin).
+///
+/// This also verifies that anonymous flash works end-to-end: the error
+/// message is stored in the session row we can read back from the DB.
 #[tokio::test]
-async fn form_login_bad_creds_redirects_to_slash() {
+async fn form_login_bad_creds_redirects_and_sets_session_for_flash() {
     let router = boot().await;
     let resp = post_form(router, "/auth/login", "username=nobody&password=wrong").await;
     assert_eq!(
@@ -181,15 +205,57 @@ async fn form_login_bad_creds_redirects_to_slash() {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     assert_eq!(loc, "/", "bad-creds redirect must go to '/'");
-    // No session Set-Cookie should be set (login_with_request was not called).
+
+    // With SessionsPlugin, session_layer is active. msgs.error() inside
+    // do_login materialises the session row (lazy write), so Set-Cookie IS
+    // emitted — this proves session_layer is running and flash is stored.
     let set_cookie = resp
         .headers()
         .get(header::SET_COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     assert!(
-        !set_cookie.contains("umbral_session"),
-        "bad-creds login must not set a session cookie; got: {set_cookie}"
+        set_cookie.contains("umbral_session"),
+        "bad-creds login must set a session cookie via session_layer (for flash storage); got: {set_cookie}"
+    );
+
+    // Verify the error flash was actually persisted in the session row.
+    // The Set-Cookie value is the raw session token; DbStore hashes it with
+    // SHA-256 before storing, so we must hash before querying.
+    // Extract the raw token from "umbral_session=<token>; HttpOnly; ..."
+    let raw_token = set_cookie
+        .split(';')
+        .next()
+        .and_then(|kv| kv.strip_prefix("umbral_session="))
+        .map(|v| v.trim())
+        .expect("Set-Cookie must contain umbral_session=<token>");
+
+    // DbStore stores `hash_token(raw_token)` as the row ID.
+    let stored_id = umbral_sessions::store::hash_token_pub(raw_token);
+
+    let pool = umbral::db::pool();
+    let row: (String,) = sqlx::query_as("SELECT data FROM session WHERE id = ?")
+        .bind(&stored_id)
+        .fetch_one(&pool)
+        .await
+        .expect("session row must exist after flash write");
+
+    let data: serde_json::Value =
+        serde_json::from_str(&row.0).expect("session.data must be valid JSON");
+    let messages = data
+        .get("_umbral_messages")
+        .expect("session.data must contain _umbral_messages key after msgs.error()")
+        .as_array()
+        .expect("_umbral_messages must be a JSON array");
+    assert!(
+        !messages.is_empty(),
+        "flash queue must be non-empty after a bad-creds error"
+    );
+    let first = &messages[0];
+    assert_eq!(
+        first.get("level").and_then(|v| v.as_str()),
+        Some("error"),
+        "flash level must be 'error' for a bad-creds attempt"
     );
 }
 
