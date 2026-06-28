@@ -66,6 +66,7 @@ pub mod auth_routes;
 pub mod bearer_auth;
 pub mod challenge;
 pub mod extractors;
+pub mod form_routes;
 pub mod login_required;
 pub mod mailer;
 pub mod password_validation;
@@ -348,6 +349,12 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// settable on `AuthPlugin<AuthUser>` (the handlers FK into
     /// `AuthToken` → `AuthUser`); custom user models bring their own.
     pub default_routes_prefix: Option<String>,
+    /// When `Some`, mount the 7 POST form-action routes (login, logout,
+    /// signup, verify-email, resend, password-forgot, password-reset)
+    /// under this prefix. Default `None` — opt in via
+    /// [`AuthPlugin::with_form_routes`] / [`AuthPlugin::with_form_routes_at`].
+    /// Only settable on `AuthPlugin<AuthUser>`.
+    pub form_routes_prefix: Option<String>,
     /// When true, wrap the app router with [`user_context_layer`] so
     /// every template render has `user` in its global context:
     /// `{ is_authenticated, is_staff, username, ... }`. Opt-in because
@@ -394,6 +401,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
         Self {
             user_model_name: None,
             default_routes_prefix: None,
+            form_routes_prefix: None,
             user_in_templates: false,
             // SECURE BY DEFAULT: an unconfigured AuthPlugin enforces the
             // full validator set. `None` defers to PasswordPolicy::default()
@@ -650,6 +658,35 @@ impl AuthPlugin<AuthUser> {
         self.require_verified = true;
         self
     }
+
+    /// Mount the 7 POST form-action auth routes (login, logout, signup,
+    /// verify-email, resend, password-forgot, password-reset) under the
+    /// default `/auth` prefix.
+    ///
+    /// These are the form-action **endpoints** that developer-written HTML
+    /// forms POST to: `<form method="POST" action="/auth/login">`. The
+    /// framework never ships the pages themselves — the developer writes
+    /// those with their own brand and design.
+    ///
+    /// Each handler receives a form-encoded body, runs the same auth logic
+    /// as the JSON surface (including throttle and enumeration-safe guards),
+    /// sets a flash message via the session, then returns a 303 redirect.
+    ///
+    /// Use [`Self::with_form_routes_at`] to mount under a custom prefix.
+    pub fn with_form_routes(mut self) -> Self {
+        self.form_routes_prefix = Some("/auth".into());
+        self
+    }
+
+    /// Same as [`Self::with_form_routes`] but you choose the prefix.
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default().with_form_routes_at("/accounts")
+    /// ```
+    pub fn with_form_routes_at(mut self, prefix: impl Into<String>) -> Self {
+        self.form_routes_prefix = Some(prefix.into());
+        self
+    }
 }
 
 impl<U: UserModel> Plugin for AuthPlugin<U> {
@@ -694,17 +731,25 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         // `json_prefix()` resolves the sentinel stored by `with_default_routes()`
         // to `{api_base()}/auth` at build time, after `App::build` has
         // had a chance to set the REST base path.
-        match self.json_prefix() {
+        let mut r = match self.json_prefix() {
             Some(prefix) => auth_routes::build_router(&prefix),
             None => umbral::web::Router::new(),
+        };
+        if let Some(p) = &self.form_routes_prefix {
+            r = r.merge(form_routes::build_router(p));
         }
+        r
     }
 
     fn route_paths(&self) -> Vec<umbral::routes::RouteSpec> {
-        match self.json_prefix() {
+        let mut paths = match self.json_prefix() {
             Some(prefix) => auth_routes::declared_routes(&prefix),
             None => Vec::new(),
+        };
+        if let Some(p) = &self.form_routes_prefix {
+            paths.extend(form_routes::declared_routes(p));
         }
+        paths
     }
 
     fn openapi_paths(&self) -> Vec<(String, serde_json::Value)> {

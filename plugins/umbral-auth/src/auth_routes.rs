@@ -114,7 +114,7 @@ struct ResetIn {
 /// connection, no proxy), falls back to a fixed key so the throttle still
 /// counts — every un-proxied caller shares one bucket, which is the safe side:
 /// it limits, it never opens a hole. Mirrors `umbral_logs`'s `resolve_ip`.
-fn client_ip(headers: &HeaderMap) -> String {
+pub(crate) fn client_ip(headers: &HeaderMap) -> String {
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         if let Some(first) = xff.split(',').next() {
             let ip = first.trim();
