@@ -48,3 +48,17 @@ async fn recorder_mailer_captures_and_closure_impl_works() {
     .unwrap();
     assert_eq!(*hits.lock().unwrap(), 1);
 }
+
+#[tokio::test]
+async fn console_mailer_send_does_not_panic_without_settings() {
+    use umbral_auth::mailer::{AuthMailer, ConsoleMailer, OutgoingMail};
+    ConsoleMailer
+        .send(OutgoingMail {
+            to: "dev@test".into(),
+            subject: "x".into(),
+            html: String::new(),
+            text: String::new(),
+        })
+        .await
+        .unwrap();
+}
