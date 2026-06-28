@@ -67,11 +67,13 @@ pub mod bearer_auth;
 pub mod challenge;
 pub mod extractors;
 pub mod login_required;
+pub mod mailer;
 pub mod password_validation;
 pub mod session_user;
 pub mod throttle;
 pub mod token;
 
+pub use mailer::{AuthMailError, AuthMailer, ConsoleMailer, OutgoingMail};
 pub use password_validation::{
     CommonPasswordValidator, MinLengthValidator, NumericPasswordValidator, PasswordContext,
     PasswordPolicy, PasswordValidator, UserAttributeSimilarityValidator, validate_password,
@@ -295,6 +297,16 @@ impl UserModel for AuthUser {
 // AuthPlugin<U>
 // =========================================================================
 
+/// A `Mutex`-wrapped optional mailer slot that implements `Debug` manually so
+/// `#[derive(Debug)]` on `AuthPlugin` keeps working even though
+/// `Arc<dyn AuthMailer>` is not `Debug`.
+struct MailerSlot(std::sync::Mutex<Option<std::sync::Arc<dyn mailer::AuthMailer>>>);
+impl std::fmt::Debug for MailerSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MailerSlot(..)")
+    }
+}
+
 /// The built-in authentication plugin, generic over the user model.
 ///
 /// `U` defaults to [`AuthUser`] so `AuthPlugin::default()` continues to
@@ -354,6 +366,10 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// as an explicit opt-out. `Copy`, so no `Mutex`/`take` dance is needed —
     /// `on_ready` reads it directly.
     throttle_config: throttle::ThrottleConfig,
+    /// The mailer sealed into the ambient `OnceLock` on `on_ready`. Wrapped
+    /// in a `Mutex` (via `MailerSlot`) so `on_ready`'s `&self` can `.take()`
+    /// the value. First boot wins; subsequent calls are no-ops.
+    mailer: MailerSlot,
     _u: PhantomData<U>,
 }
 
@@ -371,6 +387,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
             // the credential-stuffing-resistant budgets above. `disable_throttle`
             // is the only path that turns it off.
             throttle_config: throttle::ThrottleConfig::default(),
+            mailer: MailerSlot(std::sync::Mutex::new(None)),
             _u: PhantomData,
         }
     }
@@ -485,6 +502,22 @@ impl<U: UserModel> AuthPlugin<U> {
     /// distinct IP/username per attempt or a generous `login_throttle` instead.
     pub fn disable_throttle(mut self) -> Self {
         self.throttle_config.enabled = false;
+        self
+    }
+
+    /// Wire the mailer used by the verification + password-reset flows.
+    /// Pass a type implementing [`AuthMailer`] or an async closure
+    /// `|mail| async { ... }`. Unset → [`ConsoleMailer`] (stderr in dev).
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default().mailer(|m: OutgoingMail| async move {
+    ///     umbral_email::send(&umbral_email::EmailMessage::new(m.subject, vec![m.to])
+    ///         .html_body(m.html).text_body(m.text)).await
+    ///         .map(|_| ()).map_err(|e| AuthMailError::Send(e.to_string()))
+    /// })
+    /// ```
+    pub fn mailer(self, m: impl mailer::AuthMailer + 'static) -> Self {
+        *self.mailer.0.lock().expect("mailer slot poisoned") = Some(std::sync::Arc::new(m));
         self
     }
 }
@@ -612,6 +645,13 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         // free helpers. First boot wins (idempotent set), matching the
         // password-policy / ambient-pool contract.
         throttle::install(throttle::AuthThrottle::from_config(self.throttle_config));
+        // Seal the mailer into the ambient OnceLock. If None (not configured
+        // by the builder), the active_mailer() fallback supplies ConsoleMailer.
+        if let Ok(mut guard) = self.mailer.0.lock() {
+            if let Some(m) = guard.take() {
+                crate::mailer::install_mailer(m);
+            }
+        }
         Ok(())
     }
 }
