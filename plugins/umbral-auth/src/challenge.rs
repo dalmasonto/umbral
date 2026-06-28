@@ -2,6 +2,7 @@
 //! and password-reset flows. One table, discriminated by `purpose`.
 
 use crate::AuthUser;
+use crate::mailer::{OutgoingMail, active_mailer};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
@@ -9,6 +10,7 @@ use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use umbral::orm::{F, ForeignKey};
+use umbral::templates::{context, render};
 
 /// Stored discriminator values for [`AuthChallenge::purpose`].
 pub const PURPOSE_EMAIL_VERIFY: &str = "email_verify";
@@ -43,8 +45,7 @@ pub struct AuthChallenge {
 ///
 /// # Called by
 ///
-/// Task 8 (email verification flow). `pub(crate)` until then.
-#[allow(dead_code)] // called by Task 8/9 once those flows land
+/// `start_email_verification` (email verification flow).
 pub(crate) fn generate_code() -> String {
     let n: u32 = rand::rngs::OsRng.gen_range(0..1_000_000);
     format!("{n:06}")
@@ -60,7 +61,7 @@ pub(crate) fn generate_code() -> String {
 /// # Called by
 ///
 /// Task 9 (password-reset flow). `pub(crate)` until then.
-#[allow(dead_code)] // called by Task 8/9 once those flows land
+#[allow(dead_code)] // called by Task 9 once that flow lands
 pub(crate) fn generate_reset_token() -> String {
     let mut buf = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut buf);
@@ -207,6 +208,94 @@ impl AuthChallenge {
             .await?;
         Ok(())
     }
+}
+
+// =========================================================================
+// Email-verification flow helpers (Task 8)
+// =========================================================================
+
+/// How long a verification code stays live after issue.
+const CODE_TTL: Duration = Duration::from_secs(15 * 60);
+
+/// Maximum failed attempts before the challenge is burned.
+const MAX_CODE_ATTEMPTS: i32 = 5;
+
+/// Issue a 6-digit verification code for `user`, render
+/// `auth/email/verify_code.{html,txt}`, and send via the ambient mailer.
+///
+/// On success the code is stored (hashed) in `auth_challenge` and the
+/// user receives an email with the plaintext code. The code expires in
+/// 15 minutes. Calling this multiple times issues fresh challenges
+/// (the old row stays in the table but `find_active_for_user` returns
+/// the most-recent one by `created_at DESC`).
+pub async fn start_email_verification(user: &AuthUser) -> Result<(), crate::AuthError> {
+    let code = generate_code();
+    AuthChallenge::issue(user.id, PURPOSE_EMAIL_VERIFY, &code, CODE_TTL).await?;
+    let ctx = context! { code => code.clone(), username => user.username.clone() };
+    let html = render("auth/email/verify_code.html", &ctx)
+        .map_err(|e| crate::AuthError::Template(e.to_string()))?;
+    let text = render("auth/email/verify_code.txt", &ctx)
+        .map_err(|e| crate::AuthError::Template(e.to_string()))?;
+    active_mailer()
+        .send(OutgoingMail {
+            to: user.email.clone(),
+            subject: "Verify your email".into(),
+            html,
+            text,
+        })
+        .await
+        .map_err(|e| crate::AuthError::Mail(e.to_string()))?;
+    Ok(())
+}
+
+/// Verify `email` against the submitted `code`.
+///
+/// Look up the user by email (None → `InvalidChallenge`); find their
+/// active `email_verify` challenge (None → `InvalidChallenge`); gate on
+/// the attempt cap (≥ 5 → burn + `InvalidChallenge`); compare hashes
+/// (mismatch → bump attempts + `InvalidChallenge`); on match: mark used
+/// and stamp `email_verified_at = now` on the user row.
+///
+/// All failure arms return the same opaque `InvalidChallenge` error —
+/// no account enumeration through the verification surface.
+pub async fn verify_email(email: &str, code: &str) -> Result<(), crate::AuthError> {
+    let Some(user) = AuthUser::objects()
+        .filter(crate::auth_user::EMAIL.eq(email.to_string()))
+        .first()
+        .await?
+    else {
+        return Err(crate::AuthError::InvalidChallenge);
+    };
+
+    let Some(challenge) =
+        AuthChallenge::find_active_for_user(user.id, PURPOSE_EMAIL_VERIFY).await?
+    else {
+        return Err(crate::AuthError::InvalidChallenge);
+    };
+
+    if challenge.attempts >= MAX_CODE_ATTEMPTS {
+        challenge.mark_used().await?; // burn the exhausted challenge
+        return Err(crate::AuthError::InvalidChallenge);
+    }
+
+    if hash_secret(code) != challenge.secret_hash {
+        challenge.bump_attempts().await?;
+        return Err(crate::AuthError::InvalidChallenge);
+    }
+
+    challenge.mark_used().await?;
+
+    let mut delta = serde_json::Map::new();
+    delta.insert(
+        "email_verified_at".to_string(),
+        serde_json::json!(Utc::now()),
+    );
+    AuthUser::objects()
+        .filter(crate::auth_user::ID.eq(user.id))
+        .update_values(delta)
+        .await?;
+
+    Ok(())
 }
 
 // =========================================================================

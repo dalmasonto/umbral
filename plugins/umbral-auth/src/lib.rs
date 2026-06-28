@@ -80,7 +80,7 @@ pub use password_validation::{
 };
 
 pub use bearer_auth::{BearerAuthentication, parse_bearer_header};
-pub use challenge::AuthChallenge;
+pub use challenge::{AuthChallenge, start_email_verification, verify_email};
 pub use extractors::{CurrentIdentity, OptionalIdentity, resolve_identity};
 pub use login_required::{
     LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, current_session_user_pk,
@@ -570,6 +570,15 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         models
     }
 
+    fn templates_dirs(&self) -> Vec<std::path::PathBuf> {
+        // The auth plugin ships its own templates (email bodies, future
+        // HTML auth forms). They live under `plugins/umbral-auth/templates/`
+        // in the repo, and `CARGO_MANIFEST_DIR` resolves to that crate root
+        // at compile time so the path stays correct regardless of where the
+        // binary is invoked from.
+        vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")]
+    }
+
     fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>> {
         vec![Box::new(CreateSuperuserCommand)]
     }
@@ -698,6 +707,17 @@ pub enum AuthError {
     /// callers match a single `AuthError` type without importing
     /// `umbral_sessions::SessionError`.
     Session(String),
+    /// Template rendering failed (e.g. a missing template file or a
+    /// syntax error). Carries the minijinja error message.
+    Template(String),
+    /// The ambient mailer failed to accept the message for delivery.
+    /// Carries the `AuthMailError` display string.
+    Mail(String),
+    /// A challenge lookup or verification failed. Returned for ALL failure
+    /// arms in the verification flows (no such user, no active challenge,
+    /// attempt cap reached, wrong code) so a caller can't distinguish
+    /// which arm fired — prevents account enumeration.
+    InvalidChallenge,
 }
 
 impl std::fmt::Display for AuthError {
@@ -712,6 +732,9 @@ impl std::fmt::Display for AuthError {
             }
             AuthError::Runtime(msg) => write!(f, "umbral-auth: blocking task failed: {msg}"),
             AuthError::Session(msg) => write!(f, "umbral-auth: session: {msg}"),
+            AuthError::Template(msg) => write!(f, "umbral-auth: template: {msg}"),
+            AuthError::Mail(msg) => write!(f, "umbral-auth: mail: {msg}"),
+            AuthError::InvalidChallenge => write!(f, "umbral-auth: invalid or expired challenge"),
         }
     }
 }

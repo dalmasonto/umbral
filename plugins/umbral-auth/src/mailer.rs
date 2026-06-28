@@ -81,9 +81,8 @@ impl AuthMailer for ConsoleMailer {
 static MAILER: OnceLock<Arc<dyn AuthMailer>> = OnceLock::new();
 
 /// The mailer the flow functions use. Falls back to [`ConsoleMailer`].
-/// Called by the verification + password-reset flow helpers (Tasks 8/9);
-/// `#[allow(dead_code)]` until that caller lands.
-#[allow(dead_code)]
+/// Called by the email-verification and password-reset flow helpers
+/// in `challenge.rs`.
 pub(crate) fn active_mailer() -> Arc<dyn AuthMailer> {
     MAILER
         .get()
