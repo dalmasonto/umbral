@@ -157,6 +157,27 @@ fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Re
 ///
 /// Falls back to the relative path `"/auth/reset"` when the `Host` header is
 /// absent (e.g. a test client that doesn't set it).
+///
+/// ## Security: why trusting `Host` is safe here
+///
+/// Reading the `Host` header to build an absolute URL is normally a
+/// *host-header injection* / *password-reset poisoning* risk (CWE-640): an
+/// attacker supplies a `Host: evil.com` header, the server echoes it into the
+/// reset link, and the victim's click goes to the attacker's server.
+///
+/// This risk is eliminated upstream, before this function is ever reached.
+/// In **production** mode the framework mounts a host-guard layer during
+/// `App::build` (Phase 5.95 in `crates/umbral-core/src/app.rs`): any request
+/// whose `Host` header is not listed in `settings.allowed_hosts` is rejected
+/// with HTTP 400 before any handler runs. By the time execution reaches
+/// `password_forgot_h` → `reset_url_base`, the `Host` value has already been
+/// validated against the operator-configured allowlist, so embedding it in the
+/// reset URL is safe.
+///
+/// In **non-production** (dev) mode, host validation is intentionally disabled
+/// so that `localhost` and `127.0.0.1` work without any extra configuration.
+/// The reset URL will reflect whatever `Host` the client sends — acceptable in
+/// a local dev environment where the only callers are the developer themselves.
 pub(crate) fn reset_url_base(headers: &HeaderMap) -> String {
     let host = headers
         .get("host")
