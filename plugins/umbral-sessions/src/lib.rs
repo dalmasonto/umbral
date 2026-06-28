@@ -47,16 +47,16 @@
 //!   command, lands when one or the other is real.
 
 pub mod cookie_store;
-pub mod request_session;
-pub mod store;
 #[cfg(feature = "redis")]
 pub mod redis_store;
+pub mod request_session;
+pub mod store;
 
-pub use request_session::{RequestSession, current, current_mut};
 pub use cookie_store::CookieStore;
-pub use store::{DbStore, SessionRecord, SessionStore, active_store, install_store};
 #[cfg(feature = "redis")]
 pub use redis_store::RedisStore;
+pub use request_session::{RequestSession, current, current_mut};
+pub use store::{DbStore, SessionRecord, SessionStore, active_store, install_store};
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -240,7 +240,10 @@ impl Plugin for SessionsPlugin {
         router
     }
 
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         // Seal the sliding-expiry flag into the ambient OnceLock so
         // session_layer can read it without carrying a reference to Self.
         // `set` is a no-op if another test already initialised the cell;
@@ -424,6 +427,24 @@ pub async fn read_session(token: &str) -> Result<Option<Session>, SessionError> 
     Ok(row)
 }
 
+/// Delete every session row owned by `user_id_str` — the "log out
+/// everywhere" primitive. Used after a password reset or change so
+/// stolen session cookies stop working immediately. Anonymous sessions
+/// (`user_id IS NULL`) are never matched because SQL's NULL semantics
+/// exclude them from `=` comparisons. Returns the number of rows
+/// removed.
+///
+/// `user_id_str` is the user PK serialised via `Display` — the same
+/// string that was passed to [`create_session`] at login time. For an
+/// `AuthUser` (i64 PK) call `revoke_user_sessions(&user.id.to_string())`.
+pub async fn revoke_user_sessions(user_id_str: &str) -> Result<u64, SessionError> {
+    let removed = Session::objects()
+        .filter(session::USER_ID.eq(user_id_str))
+        .delete()
+        .await?;
+    Ok(removed)
+}
+
 /// Delete a session row by its raw token. Used by logout. Idempotent:
 /// a non-existent token is treated as success. The token is hashed
 /// before the DELETE so the same hash-on-write/hash-on-read invariant
@@ -562,10 +583,7 @@ pub async fn current_session(headers: &HeaderMap) -> Result<Option<Session>, Ses
 /// fresh request that never wrote the session) so callers see the same
 /// "no session" answer they'd get from the DB. The `id` is the hashed
 /// token, matching how the row is keyed at rest.
-fn session_view_from_record(
-    token: &str,
-    record: Option<&SessionRecord>,
-) -> Option<Session> {
+fn session_view_from_record(token: &str, record: Option<&SessionRecord>) -> Option<Session> {
     record.map(|r| Session {
         id: hash_token(token),
         user_id: r.user_id.clone(),
@@ -1280,8 +1298,7 @@ pub async fn session_layer(
     // clobber the authenticated cookie with the anonymous one, breaking
     // every cookie-based login.
     if fresh && !response.headers().contains_key(header::SET_COOKIE) {
-        let row_exists =
-            rs.is_dirty() || matches!(read_session(&token).await, Ok(Some(_)));
+        let row_exists = rs.is_dirty() || matches!(read_session(&token).await, Ok(Some(_)));
         if row_exists {
             // Use the value `save` returned when it ran (the encrypted blob
             // for `CookieStore`); fall back to the raw token for the
