@@ -87,7 +87,7 @@ pub use login_required::{
     login_required, login_required_html, resolve_user as current_user_as,
 };
 pub use session_user::{
-    OptionalUser, SessionAuthentication, User, current_user, login, login_with_request, logout,
+    OptionalUser, SessionAuthentication, User, current_user, login, login_with_request,
     user_context_layer,
 };
 pub use throttle::{
@@ -693,6 +693,11 @@ pub enum AuthError {
     /// or was cancelled. Carries the `JoinError`'s message. A panic in the
     /// hash worker is a real error, surfaced rather than swallowed.
     Runtime(String),
+    /// A session-layer error surfaced through one of the auth helpers
+    /// (`logout`, etc.). Carries the session error's display string so
+    /// callers match a single `AuthError` type without importing
+    /// `umbral_sessions::SessionError`.
+    Session(String),
 }
 
 impl std::fmt::Display for AuthError {
@@ -706,6 +711,7 @@ impl std::fmt::Display for AuthError {
                 write!(f, "umbral-auth: password rejected: {}", reasons.join(" "))
             }
             AuthError::Runtime(msg) => write!(f, "umbral-auth: blocking task failed: {msg}"),
+            AuthError::Session(msg) => write!(f, "umbral-auth: session: {msg}"),
         }
     }
 }
@@ -728,6 +734,36 @@ impl From<umbral::orm::write::WriteError> for AuthError {
     fn from(e: umbral::orm::write::WriteError) -> Self {
         Self::Write(e)
     }
+}
+
+// =========================================================================
+// Logout helper — single reusable logout for both built-in surfaces and
+// any custom handler.
+// =========================================================================
+
+/// Log the current request's user out: destroy the session row and emit a
+/// clearing Set-Cookie on `resp`.
+///
+/// This is the single reusable logout — both built-in surfaces (the JSON
+/// `/auth/logout` route, the HTML auth forms) and any custom handler call
+/// this rather than reaching for `umbral_sessions::logout` directly.
+///
+/// Does NOT revoke bearer tokens (those are explicit-revoke; use
+/// [`crate::token::AuthToken::revoke`]).
+///
+/// # Errors
+///
+/// Returns [`AuthError::Session`] if the underlying session destruction
+/// fails (e.g. DB unreachable). The clearing Set-Cookie is still written
+/// to `resp` by `umbral_sessions::logout` before the error is returned, so
+/// the client-side cookie is cleared even on failure.
+pub async fn logout(
+    req: &umbral::web::HeaderMap,
+    resp: &mut umbral::web::HeaderMap,
+) -> Result<(), AuthError> {
+    umbral_sessions::logout(req, resp)
+        .await
+        .map_err(|e| AuthError::Session(e.to_string()))
 }
 
 // =========================================================================

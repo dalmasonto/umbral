@@ -401,9 +401,16 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
 
 /// `POST {prefix}/logout` — clear the session cookie + destroy
 /// the row. 204. Does NOT revoke bearer tokens.
+///
+/// Delegates to [`crate::logout`], the single reusable logout that both
+/// built-in surfaces and custom handlers share. On error the route still
+/// returns 204 (the client-side cookie is always cleared) and logs the
+/// session-layer failure at error level.
 async fn logout(headers: HeaderMap) -> Response {
     let mut response = StatusCode::NO_CONTENT.into_response();
-    let _ = umbral_sessions::logout(&headers, response.headers_mut()).await;
+    if let Err(e) = crate::logout(&headers, response.headers_mut()).await {
+        tracing::error!("umbral-auth: logout session error: {e}");
+    }
     response
 }
 
