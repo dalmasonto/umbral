@@ -31,3 +31,11 @@ The `.views([Action::List, Action::Retrieve])` scope already gated request-time 
 **Docs:** new `documentation/docs/v0.0.1/rest/views.mdx` — purpose, one example, the 405-vs-404 split, and the views-vs-permissions distinction.
 
 Behavior change to note: a write to a view-scoped resource now returns `405` (with `Allow`), not `404`, whenever the endpoint still serves another verb. The previous "always 404" was a weaker, less HTTP-correct signal.
+
+---
+
+4. [x] Flash messages no-op without a pre-existing session — resolved (works with SessionsPlugin; was a test-harness misconfig + doc error)
+
+The original framing (logged during the Task 14 review of the auth form-action surface) claimed flash feedback was silently dropped for an anonymous first-visit form failure because `Messages::add` requires a session token and umbral sets cookies explicitly. That was wrong. `session_layer` (mounted by `SessionsPlugin::wrap_router`, default-on) injects a candidate `SessionToken` into every request extension including cookieless ones (the `fresh = true` path). `Messages::from_request_parts` prefers this extension over the raw cookie, so on a brand-new anonymous visitor's first submit: `session_layer` provides the token → `Messages::add` materialises the session row (lazy side-channel write) → `session_layer` emits `Set-Cookie` on the response. Flash feedback for anonymous first-visit failures works end-to-end **when `SessionsPlugin` is mounted** (which any flash-using app has).
+
+The only configuration where it breaks is `AuthPlugin` booted ALONE without `SessionsPlugin` — a degenerate test-harness config, not a real app config. The `form_surface.rs` test used exactly that boot; the fix (commits 60082a7/4ba53f8 on feat/auth-full-surface) mounts `SessionsPlugin` in the test and asserts the session cookie is set on a failed login, and repoints the `form-endpoints.mdx` Callout from CSRF to SessionsPlugin as the session-establishing layer.
