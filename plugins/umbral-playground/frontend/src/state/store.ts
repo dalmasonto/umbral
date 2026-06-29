@@ -473,9 +473,17 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
       // Navigated away while loading — a newer selectEndpoint now
       // owns `draftHydrating`, so leave it alone.
       if (cur.selectedOperationId !== id) return;
-      // Apply the saved draft only if the user hasn't started
-      // typing into the empty draft we set synchronously above.
-      const pristine = cur.current.url === "" && cur.current.body === "";
+      // Apply the saved draft only if the user hasn't started editing the
+      // empty draft we set synchronously above. This must check params and
+      // headers too, not just url/body: during hydration the URL isn't seeded
+      // yet (url===""), so a user who adds a param/header while loadDraft is
+      // still in flight would otherwise look "pristine" and get clobbered by
+      // the resolving draft (the params-not-saved race).
+      const pristine =
+        cur.current.url === "" &&
+        cur.current.body === "" &&
+        cur.current.params.length === 0 &&
+        cur.current.headers.length === 0;
       if (saved && pristine) {
         set({ current: saved, draftHydrating: false });
       } else {

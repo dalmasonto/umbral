@@ -92,6 +92,28 @@ describe("playground draft persistence", () => {
     ]);
   });
 
+  it("keeps params typed during the hydration window (no clobber by the loaded draft)", async () => {
+    const use = await reload();
+    // Pre-save a draft for the op so a later reselect has something to load.
+    use.getState().selectEndpoint("list_product");
+    use.getState().setParams([{ key: "saved", value: "1", enabled: true }]);
+    await waitForDraftWrite("list_product");
+
+    // Reselect the op. selectEndpoint resets current synchronously and kicks
+    // off an async loadDraft. Simulate the user typing a param BEFORE that
+    // load resolves — the in-flight draft must not clobber the fresh input.
+    use.getState().selectEndpoint("other_op");
+    use.getState().selectEndpoint("list_product");
+    use.getState().setParams([{ key: "typed", value: "2", enabled: true }]);
+
+    // Let the async loadDraft settle.
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(use.getState().current.params).toEqual([
+      { key: "typed", value: "2", enabled: true },
+    ]);
+  });
+
   it("coalesces a typing burst into a single Dexie write", async () => {
     const use = await reload();
     use.getState().selectEndpoint("list_product");
