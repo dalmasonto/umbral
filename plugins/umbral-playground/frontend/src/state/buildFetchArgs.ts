@@ -10,6 +10,12 @@ export interface BuildFetchOptions {
   baseUrl?: string;
   variables?: KVItem[];
   includeCredentials?: boolean;
+  /** Workspace-wide default headers (`settings.defaultHeaders`). Applied
+   *  first; a per-request header with the same name (case-insensitive, since
+   *  HTTP header names are case-insensitive) overrides the default. This
+   *  mirrors codegen's `mergeDefaultHeaders` so the live request sends exactly
+   *  the same header set the generated snippet shows. */
+  defaultHeaders?: KVItem[];
   /** Workspace-wide Authorization fallback (gap #75). Applied only
    *  when `enabled`, `token` is non-empty, AND the per-request draft
    *  hasn't already set its own Authorization (per-request wins). */
@@ -83,10 +89,24 @@ export function buildFetchArgs(draft: RequestDraft, options: BuildFetchOptions =
   }
   url = joinBaseUrl(url, interpolate(options.baseUrl ?? "", variables));
 
-  // 3. Headers.
+  // 3. Headers — workspace defaults first, then per-request headers. A
+  //    per-request header overrides a same-named default (case-insensitive),
+  //    matching codegen so the live request and the generated code agree.
   const headers: Record<string, string> = {};
-  for (const h of draft.headers) {
+  for (const h of options.defaultHeaders ?? []) {
     if (h.enabled && h.key) headers[h.key] = interpolate(h.value, variables);
+  }
+  for (const h of draft.headers) {
+    if (!h.enabled || !h.key) continue;
+    // Drop any default whose name matches case-insensitively, so the
+    // per-request value wins without leaving a duplicate header.
+    const lower = h.key.toLowerCase();
+    for (const existing of Object.keys(headers)) {
+      if (existing !== h.key && existing.toLowerCase() === lower) {
+        delete headers[existing];
+      }
+    }
+    headers[h.key] = interpolate(h.value, variables);
   }
 
   // 4. Auth.
