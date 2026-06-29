@@ -239,6 +239,8 @@ pub async fn start_email_verification(user: &AuthUser) -> Result<(), crate::Auth
     active_mailer()
         .send(OutgoingMail {
             to: user.email.clone(),
+            username: user.username.clone(),
+            kind: crate::mailer::MailKind::EmailVerification { code },
             subject: "Verify your email".into(),
             html,
             text,
@@ -354,7 +356,7 @@ pub async fn start_password_reset(
     let token = generate_reset_token();
     AuthChallenge::issue(user.id, PURPOSE_PASSWORD_RESET, &token, RESET_TTL).await?;
     let reset_url = format!("{reset_url_base}?token={token}");
-    let ctx = context! { reset_url => reset_url, username => user.username.clone() };
+    let ctx = context! { reset_url => reset_url.clone(), username => user.username.clone() };
     let html = render("auth/email/reset_link.html", &ctx)
         .map_err(|e| crate::AuthError::Template(e.to_string()))?;
     let text = render("auth/email/reset_link.txt", &ctx)
@@ -362,6 +364,8 @@ pub async fn start_password_reset(
     active_mailer()
         .send(OutgoingMail {
             to: user.email.clone(),
+            username: user.username.clone(),
+            kind: crate::mailer::MailKind::PasswordReset { reset_url },
             subject: "Reset your password".into(),
             html,
             text,

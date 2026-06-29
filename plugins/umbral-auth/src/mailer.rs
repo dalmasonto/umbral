@@ -6,12 +6,49 @@ use async_trait::async_trait;
 use std::future::Future;
 use std::sync::{Arc, OnceLock};
 
-/// A rendered message ready to transmit.
+/// Which auth flow produced an [`OutgoingMail`], together with that flow's
+/// raw data. Match on this in a custom [`AuthMailer`] to build the message
+/// yourself — e.g. trigger your email provider's own template with the code
+/// or reset URL as a variable — instead of forwarding the framework-rendered
+/// bodies.
+///
+/// Marked `#[non_exhaustive]`: future auth flows (magic links, custom-action
+/// notifications, …) add variants, so always include a `_ => { … }` arm when
+/// you match on it.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum MailKind {
+    /// Email-address verification. `code` is the plaintext 6-digit one-time
+    /// code (it expires in 15 minutes; only its hash is stored server-side).
+    EmailVerification { code: String },
+    /// Password reset. `reset_url` is the tokenized link pointing at your
+    /// reset page (it expires in 1 hour, single-use).
+    PasswordReset { reset_url: String },
+}
+
+/// An auth email handed to the configured [`AuthMailer`].
+///
+/// It carries BOTH the framework-rendered bodies (`subject` / `html` / `text`,
+/// produced from the overridable `templates/auth/email/*` templates) AND the
+/// semantic [`MailKind`] plus recipient context. So a simple mailer can just
+/// forward the rendered bodies to a transport, while a mailer that wants full
+/// control can ignore them and build its own message from `kind`, `to`, and
+/// `username` (e.g. call a transactional-email provider with a template id and
+/// the verification code as a merge variable).
 #[derive(Debug, Clone)]
 pub struct OutgoingMail {
+    /// Recipient email address.
     pub to: String,
+    /// Recipient's username — handy for personalising a custom message.
+    pub username: String,
+    /// Which flow produced this email, plus its raw data (the verification
+    /// code / the reset URL). Match on it to fully customise per email type.
+    pub kind: MailKind,
+    /// Framework-rendered subject line (from the overridable templates).
     pub subject: String,
+    /// Framework-rendered HTML body (from the overridable templates).
     pub html: String,
+    /// Framework-rendered plain-text body (from the overridable templates).
     pub text: String,
 }
 

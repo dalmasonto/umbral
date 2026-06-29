@@ -148,6 +148,18 @@ async fn verify_email_happy_path_and_wrong_code() {
         "email body must contain exactly 6 ASCII digits (the verification code); body was: {}",
         mail.text
     );
+    // A custom mailer also receives the semantic kind + raw code, so it can
+    // build its own message instead of using the rendered body. The code in
+    // `kind` must match the one in the rendered text.
+    match &mail.kind {
+        umbral_auth::MailKind::EmailVerification { code: kind_code } => {
+            assert_eq!(
+                *kind_code, code,
+                "MailKind code must match the rendered code"
+            );
+        }
+        other => panic!("expected MailKind::EmailVerification, got {other:?}"),
+    }
 
     // Wrong code fails generically; correct code verifies.
     assert!(
