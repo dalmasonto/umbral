@@ -74,7 +74,7 @@ pub mod session_user;
 pub mod throttle;
 pub mod token;
 
-pub use mailer::{AuthMailError, AuthMailer, ConsoleMailer, OutgoingMail};
+pub use mailer::{AuthMailError, AuthMailer, ConsoleMailer, MailKind, OutgoingMail};
 pub use password_validation::{
     CommonPasswordValidator, MinLengthValidator, NumericPasswordValidator, PasswordContext,
     PasswordPolicy, PasswordValidator, UserAttributeSimilarityValidator, validate_password,

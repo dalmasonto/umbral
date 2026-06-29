@@ -207,6 +207,17 @@ async fn reset_flow_changes_password_and_revokes_tokens() {
         token.starts_with("umbral_"),
         "extracted token must have the umbral_ prefix; got {token:?}"
     );
+    // A custom mailer also receives the semantic kind + the full reset URL,
+    // so it can build its own message (e.g. a provider template) per type.
+    match &mail.kind {
+        umbral_auth::MailKind::PasswordReset { reset_url } => {
+            assert!(
+                reset_url.starts_with("https://app/reset?token=") && reset_url.contains(&token),
+                "MailKind reset_url must be the full tokenized link; got {reset_url:?}"
+            );
+        }
+        other => panic!("expected MailKind::PasswordReset, got {other:?}"),
+    }
 
     // Weak password is rejected.
     assert!(

@@ -21,6 +21,8 @@ AuthPlugin::<AuthUser>::default()
 
 Without `.require_verified_email()`, the two endpoints below are still mounted and functional; the login gate is simply not installed.
 
+<Callout type="info">Your mailer receives this email as `MailKind::EmailVerification { code }` — match on it to build a fully branded verification email with the raw code, or override `templates/auth/email/verify_code.{html,txt}` to change just the wording. See [Auth mailer](/docs/v0.0.1/auth/mailer).</Callout>
+
 ## Endpoints
 
 Both endpoints are mounted by `with_default_routes()` under the configured prefix (default `/api/auth`).
