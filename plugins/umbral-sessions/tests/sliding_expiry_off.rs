@@ -50,7 +50,8 @@ async fn boot() {
                 is_staff INTEGER NOT NULL,\
                 is_superuser INTEGER NOT NULL,\
                 date_joined TEXT NOT NULL,\
-                last_login TEXT\
+                last_login TEXT,\
+                email_verified_at TEXT\
              )",
         )
         .execute(&pool)

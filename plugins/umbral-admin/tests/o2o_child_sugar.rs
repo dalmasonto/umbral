@@ -59,7 +59,8 @@ async fn boot() {
                 is_staff BOOLEAN NOT NULL,
                 is_superuser BOOLEAN NOT NULL,
                 date_joined TEXT NOT NULL,
-                last_login TEXT NULL
+                last_login TEXT NULL,
+                email_verified_at TEXT
             )",
         )
         .execute(&pool)

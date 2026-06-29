@@ -71,7 +71,8 @@ async fn boot() -> &'static axum::Router {
                 is_staff INTEGER NOT NULL DEFAULT 0,\
                 is_superuser INTEGER NOT NULL DEFAULT 0,\
                 date_joined TEXT NOT NULL,\
-                last_login TEXT\
+                last_login TEXT,\
+                email_verified_at TEXT\
             )",
         )
         .execute(&pool)
@@ -126,7 +127,7 @@ async fn staff_cookie() -> String {
             // User already exists — look it up directly.
             let pool = umbral::db::pool();
             sqlx::query_as::<_, umbral_auth::AuthUser>(
-                "SELECT id, username, email, password_hash, is_active, is_staff, is_superuser, date_joined, last_login \
+                "SELECT id, username, email, password_hash, is_active, is_staff, is_superuser, date_joined, last_login, email_verified_at \
                  FROM auth_user WHERE username = 'audit_user'",
             )
             .fetch_one(&pool)
