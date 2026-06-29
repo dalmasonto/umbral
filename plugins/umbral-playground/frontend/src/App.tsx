@@ -416,6 +416,18 @@ export function App() {
     void usePlayground.getState().hydrateFromDexie();
   }, []);
 
+  // Hydrate the persisted operation's saved draft on first load. `loadDraft`
+  // only runs through `selectEndpoint`, and on mount the tab-restore below is
+  // otherwise the only trigger — so with no open-tab snapshot for the active
+  // operation its saved draft never loads. The URL-seed effect then re-seeds
+  // url + default headers from the spec but NOT params, which is why a refresh
+  // looked like it kept everything except the query params. Calling
+  // selectEndpoint here guarantees the full draft (params included) comes back.
+  useEffect(() => {
+    const opId = usePlayground.getState().selectedOperationId;
+    if (opId) usePlayground.getState().selectEndpoint(opId);
+  }, []);
+
   // Cmd/Ctrl+S — manual settings save. Bypasses the silent
   // auto-save path and fires a toast so the user gets explicit
   // confirmation. The browser's "Save Page As" dialog is
