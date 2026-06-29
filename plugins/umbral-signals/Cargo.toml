@@ -10,7 +10,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.1" }
+umbral = { path = "../../crates/umbral", version = "0.0.2" }
 tokio = { version = "1", features = ["sync", "rt", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

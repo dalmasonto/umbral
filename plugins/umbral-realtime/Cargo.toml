@@ -10,13 +10,13 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.1" }
+umbral = { path = "../../crates/umbral", version = "0.0.2" }
 # umbral-auth is OPTIONAL. The base crate resolves identity through an
 # injected `IdentityResolver` closure (always-None by default, so anonymous
 # push-only feeds compile with zero auth deps). Wire the session-cookie
 # resolver via `RealtimePlugin::with_auth_sessions()`, which requires the
 # `auth` feature (and therefore this dep).
-umbral-auth = { path = "../umbral-auth", version = "0.0.1", optional = true }
+umbral-auth = { path = "../umbral-auth", version = "0.0.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `time` carries tokio::time::sleep for the RedisBroker reconnect backoff;
