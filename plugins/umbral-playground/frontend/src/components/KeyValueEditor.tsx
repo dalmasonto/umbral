@@ -170,7 +170,20 @@ export function KeyValueEditor({
       ))}
 
       {editing ? (
-        <div className="flex items-center gap-1.5">
+        <div
+          className="flex items-center gap-1.5"
+          onBlur={(e) => {
+            // Commit the in-progress row when focus leaves the WHOLE draft
+            // row (clicking Send, switching tabs, editing another field) —
+            // not when tabbing between this row's own key/value inputs.
+            // Without this, a typed-but-not-Entered header/param was silently
+            // dropped, so it never applied to the request or got saved.
+            // commitDraft() discards a fully-empty row.
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              commitDraft();
+            }
+          }}
+        >
           <Checkbox
             checked={draft.enabled}
             onCheckedChange={(checked) =>
