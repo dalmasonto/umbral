@@ -223,6 +223,7 @@ async fn create_auth_user(provider_key: &str, identity: &Identity) -> Result<i64
             is_superuser: false,
             date_joined: Utc::now(),
             last_login: Some(Utc::now()),
+            email_verified_at: None,
         };
 
         match AuthUser::objects().create(user).await {
@@ -335,6 +336,7 @@ mod tests {
                 is_superuser: false,
                 date_joined: Utc::now(),
                 last_login: None,
+                email_verified_at: None,
             })
             .await
             .unwrap()
@@ -475,7 +477,11 @@ mod tests {
 
         // A new OAuth login whose base username resolves to "alice" (taken).
         // The retry loop must succeed with "alice1".
-        let id = identity("google-uid-retry-01", Some("alice@provider.example.com"), true);
+        let id = identity(
+            "google-uid-retry-01",
+            Some("alice@provider.example.com"),
+            true,
+        );
         let user_id = create_auth_user("google", &id).await.unwrap();
 
         let user = AuthUser::objects()

@@ -1,0 +1,74 @@
+---
+title: Auth mailer
+description: Wire email delivery for verification and password-reset flows via AuthPlugin::mailer. ConsoleMailer ships as the zero-config default.
+sidebar_position: 5
+icon: mail
+tags: [auth, email, mailer]
+---
+
+umbral-auth renders email bodies itself and hands them to whatever mailer you provide. With nothing wired it falls back to `ConsoleMailer`, which prints the message to stderr — the verification code and reset link show up in your terminal, so the flows work locally without any SMTP configuration.
+
+<Callout type="info">umbral-auth does not depend on umbral-email. Pass any sender you like — an async closure, a type that implements `AuthMailer`, or the umbral-email one-liner below.</Callout>
+
+## Wiring a mailer
+
+`AuthPlugin::mailer` accepts anything that implements `AuthMailer` (a single async `send` method), or an async closure with the same signature:
+
+```rust
+use umbral_auth::{AuthPlugin, AuthUser, OutgoingMail, AuthMailError};
+
+// One-liner: delegate to the umbral-email plugin if you already use it.
+AuthPlugin::<AuthUser>::default()
+    .with_default_routes()
+    .require_verified_email()
+    .mailer(|m: OutgoingMail| async move {
+        umbral_email::send(
+            umbral_email::EmailMessage::new(m.subject, vec![m.to])
+                .html_body(m.html)
+                .text_body(m.text),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| AuthMailError::Send(e.to_string()))
+    });
+```
+
+## What `OutgoingMail` carries
+
+| Field | Type | Content |
+|---|---|---|
+| `to` | `String` | Recipient email address |
+| `subject` | `String` | Pre-rendered subject line |
+| `html` | `String` | HTML body |
+| `text` | `String` | Plain-text body |
+
+`AuthMailer` is deliberately narrow — no CC, no attachments, no headers. The framework generates the content; you own the transport.
+
+## Implementing `AuthMailer` directly
+
+For non-closure wiring (e.g. a struct that holds an SMTP client):
+
+```rust
+use umbral_auth::{AuthMailer, AuthMailError, OutgoingMail};
+
+#[derive(Clone)]
+pub struct SmtpMailer { /* ... */ }
+
+impl AuthMailer for SmtpMailer {
+    async fn send(&self, mail: OutgoingMail) -> Result<(), AuthMailError> {
+        self.client.send(mail.to, mail.subject, mail.html).await
+            .map_err(|e| AuthMailError::Send(e.to_string()))
+    }
+}
+
+AuthPlugin::<AuthUser>::default()
+    .mailer(SmtpMailer { /* ... */ });
+```
+
+## Development default
+
+When no mailer is wired, `ConsoleMailer` is active. Every outgoing email is formatted and written to stderr with a clear `[umbral-auth mail]` prefix. This is intentional: email flows work out of the box without SMTP config, and the verification code or reset link is always visible in the terminal.
+
+<Callout type="warning">Replace `ConsoleMailer` before deploying. Messages printed to stderr are not delivered to users.</Callout>
+
+See the design note `docs/decisions/2026-06-28-auth-full-surface.md` for the rationale behind the pluggable mailer seam and why umbral-auth does not take a hard dep on umbral-email.

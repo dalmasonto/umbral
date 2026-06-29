@@ -1,4 +1,4 @@
-//! Login / register rate-limiting — credential-stuffing & brute-force defense.
+//! Login / register / email-action rate-limiting — credential-stuffing & brute-force defense.
 //!
 //! Today's login and register handlers have NO throttle, so a script can
 //! pound `<prefix>/login` with a leaked credential list or mass-create
@@ -30,6 +30,9 @@
 //!   one IP. (5 attempts / 5 min by default.)
 //! - **register** keys on `ip` alone — it defends mass account creation, and
 //!   there's no username yet. (10 / hour by default.)
+//! - **email_action** keys on `ip + "\0" + email` — covers verify-email,
+//!   resend-verification, and password-forgot. A common email can't be
+//!   bombed from one IP. (5 / hour by default.)
 //!
 //! ## Injectable clock
 //!
@@ -126,9 +129,10 @@ impl Throttle {
 /// The throttle configuration installed at boot.
 ///
 /// Secure defaults (see [`ThrottleConfig::default`]): login 5 attempts /
-/// 5 min keyed per IP+username, register 10 / hour keyed per IP. `enabled`
-/// defaults to `true` — throttling is ON unless an app opts out via
-/// [`crate::AuthPlugin::disable_throttle`].
+/// 5 min keyed per IP+username, register 10 / hour keyed per IP, email
+/// actions (verify-email, resend-verification, password-forgot) 5 / hour
+/// keyed per IP+email. `enabled` defaults to `true` — throttling is ON
+/// unless an app opts out via [`crate::AuthPlugin::disable_throttle`].
 #[derive(Debug, Clone, Copy)]
 pub struct ThrottleConfig {
     /// Max login attempts per IP+username inside `login_window`.
@@ -139,6 +143,11 @@ pub struct ThrottleConfig {
     pub register_max: usize,
     /// Sliding window for register attempts.
     pub register_window: Duration,
+    /// Max email-action attempts per IP+email inside `email_action_window`.
+    /// Covers verify-email, resend-verification, and password-forgot.
+    pub email_action_max: usize,
+    /// Sliding window for email-action attempts.
+    pub email_action_window: Duration,
     /// Master switch. `false` makes every `*_check` allow unconditionally.
     pub enabled: bool,
 }
@@ -150,17 +159,20 @@ impl Default for ThrottleConfig {
             login_window: Duration::from_secs(5 * 60),
             register_max: 10,
             register_window: Duration::from_secs(60 * 60),
+            email_action_max: 5,
+            email_action_window: Duration::from_secs(60 * 60),
             enabled: true,
         }
     }
 }
 
-/// The live limiter: the config plus the two backing stores.
+/// The live limiter: the config plus the three backing stores.
 #[derive(Debug)]
 pub struct AuthThrottle {
     config: ThrottleConfig,
     login: Throttle,
     register: Throttle,
+    email_action: Throttle,
 }
 
 impl AuthThrottle {
@@ -170,6 +182,7 @@ impl AuthThrottle {
         Self {
             login: Throttle::new(config.login_max, config.login_window),
             register: Throttle::new(config.register_max, config.register_window),
+            email_action: Throttle::new(config.email_action_max, config.email_action_window),
             config,
         }
     }
@@ -233,6 +246,24 @@ pub fn register_throttle_check(ip: &str) -> bool {
         return true;
     }
     t.register.check(ip)
+}
+
+/// Build the email-action key from IP + email. `\0` separator prevents a
+/// longer IP colliding with a shorter IP + email prefix.
+fn email_action_key(ip: &str, email: &str) -> String {
+    format!("{ip}\0{email}")
+}
+
+/// Record + check an email-action attempt for `(ip, email)`. Returns `true`
+/// if allowed, `false` once the IP+email pair has exhausted its budget (the
+/// handler returns 429). Covers verify-email, resend-verification, and
+/// password-forgot. A disabled config always allows.
+pub fn email_action_throttle_check(ip: &str, email: &str) -> bool {
+    let t = active();
+    if !t.config.enabled {
+        return true;
+    }
+    t.email_action.check(&email_action_key(ip, email))
 }
 
 // =========================================================================

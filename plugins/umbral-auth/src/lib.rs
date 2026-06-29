@@ -64,32 +64,47 @@
 
 pub mod auth_routes;
 pub mod bearer_auth;
+pub mod challenge;
 pub mod extractors;
+pub mod form_routes;
 pub mod login_required;
+pub mod mailer;
 pub mod password_validation;
 pub mod session_user;
 pub mod throttle;
 pub mod token;
 
+pub use mailer::{AuthMailError, AuthMailer, ConsoleMailer, OutgoingMail};
 pub use password_validation::{
     CommonPasswordValidator, MinLengthValidator, NumericPasswordValidator, PasswordContext,
     PasswordPolicy, PasswordValidator, UserAttributeSimilarityValidator, validate_password,
 };
 
 pub use bearer_auth::{BearerAuthentication, parse_bearer_header};
+pub use challenge::{
+    AuthChallenge, reset_password, start_email_verification, start_password_reset, verify_email,
+};
 pub use extractors::{CurrentIdentity, OptionalIdentity, resolve_identity};
 pub use login_required::{
-    LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id,
-    current_session_user_pk, login_required, login_required_html, resolve_user as current_user_as,
+    LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, current_session_user_pk,
+    login_required, login_required_html, resolve_user as current_user_as,
 };
 pub use session_user::{
-    OptionalUser, SessionAuthentication, User, current_user, login, login_with_request, logout,
+    OptionalUser, SessionAuthentication, User, current_user, login, login_with_request,
     user_context_layer,
 };
 pub use throttle::{
-    Throttle, ThrottleConfig, login_throttle_check, login_throttle_clear, register_throttle_check,
+    Throttle, ThrottleConfig, email_action_throttle_check, login_throttle_check,
+    login_throttle_clear, register_throttle_check,
 };
 pub use token::{AuthToken, PlaintextToken, TOKEN_PREFIX, digest_token};
+
+/// Test shim: thin wrapper over `auth_routes::openapi_paths` so test binaries
+/// (which can't reach into `pub(crate)`) can assert the full path list.
+#[doc(hidden)]
+pub fn auth_routes_openapi_for_test(prefix: &str) -> Vec<(String, serde_json::Value)> {
+    auth_routes::openapi_paths(prefix)
+}
 
 use std::marker::PhantomData;
 
@@ -247,6 +262,10 @@ pub struct AuthUser {
     pub is_superuser: bool,
     pub date_joined: DateTime<Utc>,
     pub last_login: Option<DateTime<Utc>>,
+    /// When this user's email was verified, NULL until they complete the
+    /// verification flow. Tracked always; only enforced when the plugin is
+    /// built with `require_verified_email()`.
+    pub email_verified_at: Option<DateTime<Utc>>,
 }
 
 impl UserModel for AuthUser {
@@ -289,6 +308,16 @@ impl UserModel for AuthUser {
 // AuthPlugin<U>
 // =========================================================================
 
+/// A `Mutex`-wrapped optional mailer slot that implements `Debug` manually so
+/// `#[derive(Debug)]` on `AuthPlugin` keeps working even though
+/// `Arc<dyn AuthMailer>` is not `Debug`.
+struct MailerSlot(std::sync::Mutex<Option<std::sync::Arc<dyn mailer::AuthMailer>>>);
+impl std::fmt::Debug for MailerSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MailerSlot(..)")
+    }
+}
+
 /// The built-in authentication plugin, generic over the user model.
 ///
 /// `U` defaults to [`AuthUser`] so `AuthPlugin::default()` continues to
@@ -321,6 +350,12 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// settable on `AuthPlugin<AuthUser>` (the handlers FK into
     /// `AuthToken` → `AuthUser`); custom user models bring their own.
     pub default_routes_prefix: Option<String>,
+    /// When `Some`, mount the 7 POST form-action routes (login, logout,
+    /// signup, verify-email, resend, password-forgot, password-reset)
+    /// under this prefix. Default `None` — opt in via
+    /// [`AuthPlugin::with_form_routes`] / [`AuthPlugin::with_form_routes_at`].
+    /// Only settable on `AuthPlugin<AuthUser>`.
+    pub form_routes_prefix: Option<String>,
     /// When true, wrap the app router with [`user_context_layer`] so
     /// every template render has `user` in its global context:
     /// `{ is_authenticated, is_staff, username, ... }`. Opt-in because
@@ -348,6 +383,17 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// as an explicit opt-out. `Copy`, so no `Mutex`/`take` dance is needed —
     /// `on_ready` reads it directly.
     throttle_config: throttle::ThrottleConfig,
+    /// The mailer sealed into the ambient `OnceLock` on `on_ready`. Wrapped
+    /// in a `Mutex` (via `MailerSlot`) so `on_ready`'s `&self` can `.take()`
+    /// the value. First boot wins; subsequent calls are no-ops.
+    mailer: MailerSlot,
+    /// When `true`, the `register` route auto-sends a verification code and the
+    /// `login` route returns 403 until `email_verified_at` is stamped. Off by
+    /// default — the column is tracked and the endpoints exist regardless; only
+    /// the enforcement gate is toggled here. Set via
+    /// [`AuthPlugin::require_verified_email`] (available on
+    /// `AuthPlugin<AuthUser>` only, since it gates the built-in routes).
+    require_verified: bool,
     _u: PhantomData<U>,
 }
 
@@ -356,6 +402,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
         Self {
             user_model_name: None,
             default_routes_prefix: None,
+            form_routes_prefix: None,
             user_in_templates: false,
             // SECURE BY DEFAULT: an unconfigured AuthPlugin enforces the
             // full validator set. `None` defers to PasswordPolicy::default()
@@ -365,6 +412,8 @@ impl<U: UserModel> Default for AuthPlugin<U> {
             // the credential-stuffing-resistant budgets above. `disable_throttle`
             // is the only path that turns it off.
             throttle_config: throttle::ThrottleConfig::default(),
+            mailer: MailerSlot(std::sync::Mutex::new(None)),
+            require_verified: false,
             _u: PhantomData,
         }
     }
@@ -472,14 +521,63 @@ impl<U: UserModel> AuthPlugin<U> {
         self
     }
 
-    /// Explicit opt-OUT: turn login + register throttling OFF entirely.
-    /// Secure-by-default means an app that genuinely wants no rate limit — a
-    /// load test, an internal tool behind its own gateway limiter — has to ask
-    /// for it by name. Don't reach for this to silence a throttled test; use a
-    /// distinct IP/username per attempt or a generous `login_throttle` instead.
+    /// Tune the email-action rate limit: `max` attempts per trailing `window`,
+    /// keyed per IP + email. Covers verify-email, resend-verification, and
+    /// password-forgot. The default is 5 / hour — enough for a user who needs
+    /// a couple of resends, but low enough to stop email-bombing / online
+    /// code-guessing scripts dead.
+    pub fn email_action_throttle(mut self, max: usize, window: std::time::Duration) -> Self {
+        self.throttle_config.email_action_max = max;
+        self.throttle_config.email_action_window = window;
+        self
+    }
+
+    /// Explicit opt-OUT: turn login, register, and email-action throttling OFF
+    /// entirely. Secure-by-default means an app that genuinely wants no rate
+    /// limit — a load test, an internal tool behind its own gateway limiter —
+    /// has to ask for it by name. Don't reach for this to silence a throttled
+    /// test; use a distinct IP/username per attempt or generous budget methods
+    /// instead.
     pub fn disable_throttle(mut self) -> Self {
         self.throttle_config.enabled = false;
         self
+    }
+
+    /// Wire the mailer used by the verification + password-reset flows.
+    /// Pass a type implementing [`AuthMailer`] or an async closure
+    /// `|mail| async { ... }`. Unset → [`ConsoleMailer`] (stderr in dev).
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default().mailer(|m: OutgoingMail| async move {
+    ///     umbral_email::send(&umbral_email::EmailMessage::new(m.subject, vec![m.to])
+    ///         .html_body(m.html).text_body(m.text)).await
+    ///         .map(|_| ()).map_err(|e| AuthMailError::Send(e.to_string()))
+    /// })
+    /// ```
+    pub fn mailer(self, m: impl mailer::AuthMailer + 'static) -> Self {
+        *self.mailer.0.lock().expect("mailer slot poisoned") = Some(std::sync::Arc::new(m));
+        self
+    }
+
+    /// Resolve the JSON route prefix.
+    ///
+    /// Returns `None` when `with_default_routes[_at]` was not called (no
+    /// routes mounted). When the stored value equals `JSON_PREFIX_SENTINEL`
+    /// (set by `with_default_routes()`), returns `{api_base()}/auth` —
+    /// resolved at call-time, after `App::build` has had a chance to set the
+    /// base. A literal prefix stored by `with_default_routes_at` is returned
+    /// as-is.
+    ///
+    /// Private: called from the `Plugin` trait impl (`routes`,
+    /// `route_paths`, `openapi_paths`). Not part of the public API.
+    fn json_prefix(&self) -> Option<String> {
+        self.default_routes_prefix.as_ref().map(|p| {
+            if p == JSON_PREFIX_SENTINEL {
+                format!("{}/auth", umbral::web::api_base())
+            } else {
+                p.clone()
+            }
+        })
     }
 }
 
@@ -491,15 +589,45 @@ impl<U: UserModel> AuthPlugin<U> {
 // `.with_default_routes()` on `AuthPlugin::<CustomUser>` is an error at
 // the call site, not a silent no-op at runtime.
 // =========================================================================
+
+// =========================================================================
+// Ambient require_verified seal — mirrors the password policy / mailer pattern.
+// =========================================================================
+
+/// Process-global flag set once in `on_ready`. Handlers read it as a free
+/// function so they don't need a handle to `AuthPlugin<U>`.
+static REQUIRE_VERIFIED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Whether the `require_verified_email()` builder was called on the active
+/// `AuthPlugin`. `false` until `on_ready` seals it; `false` as the fallback
+/// if `on_ready` was somehow skipped (should never happen in a well-formed
+/// `App::build`, but safe-default matters here — off = permissive).
+pub(crate) fn verified_email_required() -> bool {
+    *REQUIRE_VERIFIED.get().unwrap_or(&false)
+}
+
+/// Stored by `with_default_routes()` so the JSON prefix can be resolved at
+/// build time (when `api_base()` is already set by `App::build`) rather than
+/// when the builder method is called (before `App::build` has set the base).
+/// An internal null-byte sentinel that no real path can equal.
+const JSON_PREFIX_SENTINEL: &str = "\0auto-api-base\0";
+
 impl AuthPlugin<AuthUser> {
-    /// Mount the built-in `/api/auth/{register,login,logout,me}`
+    /// Mount the built-in `/api/auth/{register,login,logout,me,…}`
     /// surface. Same handlers that lived in the derive-demo example
     /// app, promoted to the framework so every app gets them with one
     /// line. JSON-only; UNIQUE-violation → 409; login returns both a
     /// Set-Cookie and a bearer token in one response so browsers and
     /// CLI clients share an endpoint.
+    ///
+    /// The prefix resolves at build time: `{api_base()}/auth`, so it
+    /// follows whatever base the REST plugin set (default `/api/auth`).
+    /// Use [`Self::with_default_routes_at`] to fix a literal prefix.
     pub fn with_default_routes(mut self) -> Self {
-        self.default_routes_prefix = Some("/api/auth".to_string());
+        // Store the sentinel; `json_prefix()` resolves it at call-time
+        // (which is during `App::build` → `Plugin::routes`), after the
+        // REST plugin has had a chance to call `set_api_base`.
+        self.default_routes_prefix = Some(JSON_PREFIX_SENTINEL.to_string());
         self
     }
 
@@ -508,6 +636,68 @@ impl AuthPlugin<AuthUser> {
     /// surface or you want versioning (`/v1/auth`).
     pub fn with_default_routes_at(mut self, prefix: impl Into<String>) -> Self {
         self.default_routes_prefix = Some(prefix.into());
+        self
+    }
+
+    /// Block login until the user's `email_verified_at` column is stamped, and
+    /// auto-send a verification code immediately on `register`. Off by default
+    /// — the `email_verified_at` column is always tracked and the
+    /// `/verify-email` + `/resend-verification` endpoints are always mounted;
+    /// this flag only controls enforcement:
+    ///
+    /// - **register**: after a successful `create_user`, fires
+    ///   `start_email_verification` best-effort (a mail failure does NOT fail
+    ///   registration; it is logged at `warn` level). The `201` response is
+    ///   unchanged.
+    /// - **login**: after `authenticate` succeeds and before minting the
+    ///   bearer token / session, checks `email_verified_at IS NULL`; returns
+    ///   `403 {error: "email_not_verified"}` if so.
+    ///
+    /// Available only on `AuthPlugin<AuthUser>` because enforcement is
+    /// implemented inside the built-in handlers (which are `AuthUser`-only).
+    /// Custom user models bring their own routes and their own enforcement.
+    ///
+    /// Requires a working mailer in production — wire
+    /// [`AuthPlugin::mailer`] alongside this builder, or users won't receive
+    /// the verification code and will be permanently locked out:
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default()
+    ///     .with_default_routes()
+    ///     .mailer(my_smtp_mailer)
+    ///     .require_verified_email()
+    /// ```
+    pub fn require_verified_email(mut self) -> Self {
+        self.require_verified = true;
+        self
+    }
+
+    /// Mount the 7 POST form-action auth routes (login, logout, signup,
+    /// verify-email, resend, password-forgot, password-reset) under the
+    /// default `/auth` prefix.
+    ///
+    /// These are the form-action **endpoints** that developer-written HTML
+    /// forms POST to: `<form method="POST" action="/auth/login">`. The
+    /// framework never ships the pages themselves — the developer writes
+    /// those with their own brand and design.
+    ///
+    /// Each handler receives a form-encoded body, runs the same auth logic
+    /// as the JSON surface (including throttle and enumeration-safe guards),
+    /// sets a flash message via the session, then returns a 303 redirect.
+    ///
+    /// Use [`Self::with_form_routes_at`] to mount under a custom prefix.
+    pub fn with_form_routes(mut self) -> Self {
+        self.form_routes_prefix = Some("/auth".into());
+        self
+    }
+
+    /// Same as [`Self::with_form_routes`] but you choose the prefix.
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default().with_form_routes_at("/accounts")
+    /// ```
+    pub fn with_form_routes_at(mut self, prefix: impl Into<String>) -> Self {
+        self.form_routes_prefix = Some(prefix.into());
         self
     }
 }
@@ -526,8 +716,18 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         let mut models = vec![umbral::migrate::ModelMeta::for_::<U>()];
         if std::any::TypeId::of::<U>() == std::any::TypeId::of::<AuthUser>() {
             models.push(umbral::migrate::ModelMeta::for_::<AuthToken>());
+            models.push(umbral::migrate::ModelMeta::for_::<AuthChallenge>());
         }
         models
+    }
+
+    fn templates_dirs(&self) -> Vec<std::path::PathBuf> {
+        // The auth plugin ships its own templates (email bodies, future
+        // HTML auth forms). They live under `plugins/umbral-auth/templates/`
+        // in the repo, and `CARGO_MANIFEST_DIR` resolves to that crate root
+        // at compile time so the path stays correct regardless of where the
+        // binary is invoked from.
+        vec![std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")]
     }
 
     fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>> {
@@ -540,22 +740,34 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         // So the prefix-guarded branch is dead code for any custom user
         // model — both at compile time (the builder method isn't
         // visible) and at runtime (the field stays None).
-        match &self.default_routes_prefix {
-            Some(prefix) => auth_routes::build_router(prefix),
+        //
+        // `json_prefix()` resolves the sentinel stored by `with_default_routes()`
+        // to `{api_base()}/auth` at build time, after `App::build` has
+        // had a chance to set the REST base path.
+        let mut r = match self.json_prefix() {
+            Some(prefix) => auth_routes::build_router(&prefix),
             None => umbral::web::Router::new(),
+        };
+        if let Some(p) = &self.form_routes_prefix {
+            r = r.merge(form_routes::build_router(p));
         }
+        r
     }
 
     fn route_paths(&self) -> Vec<umbral::routes::RouteSpec> {
-        match &self.default_routes_prefix {
-            Some(prefix) => auth_routes::declared_routes(prefix),
+        let mut paths = match self.json_prefix() {
+            Some(prefix) => auth_routes::declared_routes(&prefix),
             None => Vec::new(),
+        };
+        if let Some(p) = &self.form_routes_prefix {
+            paths.extend(form_routes::declared_routes(p));
         }
+        paths
     }
 
     fn openapi_paths(&self) -> Vec<(String, serde_json::Value)> {
-        match &self.default_routes_prefix {
-            Some(prefix) => auth_routes::openapi_paths(prefix),
+        match self.json_prefix() {
+            Some(prefix) => auth_routes::openapi_paths(&prefix),
             None => Vec::new(),
         }
     }
@@ -589,7 +801,10 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
     /// `disable_password_validation` is the only path that installs an
     /// empty policy. The install is idempotent (first boot wins), matching
     /// the ambient-pool contract.
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         let policy = self
             .password_policy
             .lock()
@@ -602,6 +817,16 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         // free helpers. First boot wins (idempotent set), matching the
         // password-policy / ambient-pool contract.
         throttle::install(throttle::AuthThrottle::from_config(self.throttle_config));
+        // Seal the mailer into the ambient OnceLock. If None (not configured
+        // by the builder), the active_mailer() fallback supplies ConsoleMailer.
+        if let Ok(mut guard) = self.mailer.0.lock() {
+            if let Some(m) = guard.take() {
+                crate::mailer::install_mailer(m);
+            }
+        }
+        // Seal the verified-email enforcement flag. First boot wins (idempotent),
+        // matching the password-policy / mailer / ambient-pool contract.
+        let _ = REQUIRE_VERIFIED.set(self.require_verified);
         Ok(())
     }
 }
@@ -643,6 +868,22 @@ pub enum AuthError {
     /// or was cancelled. Carries the `JoinError`'s message. A panic in the
     /// hash worker is a real error, surfaced rather than swallowed.
     Runtime(String),
+    /// A session-layer error surfaced through one of the auth helpers
+    /// (`logout`, etc.). Carries the session error's display string so
+    /// callers match a single `AuthError` type without importing
+    /// `umbral_sessions::SessionError`.
+    Session(String),
+    /// Template rendering failed (e.g. a missing template file or a
+    /// syntax error). Carries the minijinja error message.
+    Template(String),
+    /// The ambient mailer failed to accept the message for delivery.
+    /// Carries the `AuthMailError` display string.
+    Mail(String),
+    /// A challenge lookup or verification failed. Returned for ALL failure
+    /// arms in the verification flows (no such user, no active challenge,
+    /// attempt cap reached, wrong code) so a caller can't distinguish
+    /// which arm fired — prevents account enumeration.
+    InvalidChallenge,
 }
 
 impl std::fmt::Display for AuthError {
@@ -656,6 +897,10 @@ impl std::fmt::Display for AuthError {
                 write!(f, "umbral-auth: password rejected: {}", reasons.join(" "))
             }
             AuthError::Runtime(msg) => write!(f, "umbral-auth: blocking task failed: {msg}"),
+            AuthError::Session(msg) => write!(f, "umbral-auth: session: {msg}"),
+            AuthError::Template(msg) => write!(f, "umbral-auth: template: {msg}"),
+            AuthError::Mail(msg) => write!(f, "umbral-auth: mail: {msg}"),
+            AuthError::InvalidChallenge => write!(f, "umbral-auth: invalid or expired challenge"),
         }
     }
 }
@@ -678,6 +923,36 @@ impl From<umbral::orm::write::WriteError> for AuthError {
     fn from(e: umbral::orm::write::WriteError) -> Self {
         Self::Write(e)
     }
+}
+
+// =========================================================================
+// Logout helper — single reusable logout for both built-in surfaces and
+// any custom handler.
+// =========================================================================
+
+/// Log the current request's user out: destroy the session row and emit a
+/// clearing Set-Cookie on `resp`.
+///
+/// This is the single reusable logout — both built-in surfaces (the JSON
+/// `/auth/logout` route, the HTML auth forms) and any custom handler call
+/// this rather than reaching for `umbral_sessions::logout` directly.
+///
+/// Does NOT revoke bearer tokens (those are explicit-revoke; use
+/// [`crate::token::AuthToken::revoke`]).
+///
+/// # Errors
+///
+/// Returns [`AuthError::Session`] if the underlying session destruction
+/// fails (e.g. DB unreachable). The clearing Set-Cookie is still written
+/// to `resp` by `umbral_sessions::logout` before the error is returned, so
+/// the client-side cookie is cleared even on failure.
+pub async fn logout(
+    req: &umbral::web::HeaderMap,
+    resp: &mut umbral::web::HeaderMap,
+) -> Result<(), AuthError> {
+    umbral_sessions::logout(req, resp)
+        .await
+        .map_err(|e| AuthError::Session(e.to_string()))
 }
 
 // =========================================================================
@@ -834,6 +1109,7 @@ async fn insert_user(
             is_superuser,
             date_joined: now,
             last_login: None,
+            email_verified_at: None,
         })
         .await?;
     Ok(row)

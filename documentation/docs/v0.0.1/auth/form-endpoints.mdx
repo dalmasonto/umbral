@@ -1,0 +1,83 @@
+---
+title: Form endpoints
+description: with_form_routes() mounts seven POST-only form-action endpoints. Your pages POST to them; they run the auth logic and 303-redirect with flash messages.
+sidebar_position: 8
+icon: form-input
+tags: [auth, forms, html]
+---
+
+`AuthPlugin::with_form_routes()` is for server-rendered HTML apps. It mounts seven POST-only form-action endpoints that accept `application/x-www-form-urlencoded` bodies, run the auth logic, and `303 See Other` redirect — never returning a body. Errors surface via the session flash so your page can render them on the next GET. The framework does **not** ship the HTML pages themselves; you build those, pointing their `<form action="...">` at these endpoints.
+
+## Mounting
+
+```rust
+use umbral_auth::{AuthPlugin, AuthUser};
+
+AuthPlugin::<AuthUser>::default()
+    .with_default_routes()   // JSON surface (optional, independent)
+    .with_form_routes()      // POST-only form endpoints at /auth/*
+    // or: .with_form_routes_at("/my-auth")
+    .require_verified_email()
+    .mailer(/* see Auth mailer */);
+```
+
+`with_form_routes()` is independent of `with_default_routes()` — use one, the other, or both.
+
+## The seven endpoints
+
+All mount under the configured prefix (default `/auth`):
+
+| Endpoint | Form fields | Success redirect |
+|---|---|---|
+| `POST /auth/login` | `username`, `password` | `?redirect=` or `/` |
+| `POST /auth/logout` | _(none)_ | `/` |
+| `POST /auth/signup` | `username`, `email`, `password` | `?redirect=` or `/` |
+| `POST /auth/verify-email` | `email`, `code` | `?redirect=` or `/` |
+| `POST /auth/resend` | `email` | back to Referer or `?redirect=` or `/` |
+| `POST /auth/password-forgot` | `email` | back to Referer or `?redirect=` or `/` |
+| `POST /auth/password-reset` | `token`, `new_password` | `?redirect=` or `/` |
+
+## Redirect behaviour
+
+**On success:** redirects to the value of the `?redirect=` query parameter on the current URL if it is a safe relative path (no host, no `//` prefix), otherwise to `/`.
+
+**On error:** redirects back to `Referer` if present and safe, then falls back to `?redirect=`, then to `/`. The error reason is written to the session flash before the redirect.
+
+Open-redirect is not possible: any absolute URL or protocol-relative URL in `?redirect=` is silently replaced with `/`.
+
+## Reading flash messages
+
+Errors are stored as session flash messages and are available in templates as `{{ messages }}` on the next request:
+
+```html
+{% for msg in messages %}
+  <p class="error">{{ msg }}</p>
+{% endfor %}
+
+<form method="POST" action="/auth/login">
+  <input name="username" />
+  <input name="password" type="password" />
+  <button type="submit">Sign in</button>
+</form>
+```
+
+<Callout type="info">Flash messages work because `SessionsPlugin`'s `session_layer` middleware establishes a session for every request — even cookieless first-visit ones. It injects a candidate session token into the request; when the handler calls `msgs.error(...)`, the session row is materialised and `Set-Cookie` is emitted on the response. Ensure `SessionsPlugin` is in your app alongside `AuthPlugin` for flash to work.</Callout>
+
+## The `?redirect=` parameter
+
+Pass a safe relative path on the initial page load and carry it through the form:
+
+```html
+<!-- GET /login?redirect=/dashboard -->
+<form method="POST" action="/auth/login?redirect={{ redirect | urlencode }}">
+  ...
+</form>
+```
+
+The endpoint validates the value and falls back to `/` for anything that looks like an open redirect.
+
+## `logout` under the hood
+
+Both the form surface and the JSON surface share the same `umbral_auth::logout(req_headers, resp_headers)` function — it destroys the session row, clears the cookie, and revokes the bearer token if one is present. Calling the form `POST /auth/logout` from an anchor with `method="dialog"` or a minimal form is the recommended pattern for HTML apps.
+
+See the design note `docs/decisions/2026-06-28-auth-full-surface.md` for the redirect-safety model, flash-message design, and why the framework ships endpoints rather than pre-built pages.

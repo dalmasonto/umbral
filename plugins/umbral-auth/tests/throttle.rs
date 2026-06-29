@@ -22,7 +22,8 @@
 use std::time::{Duration, Instant};
 
 use umbral_auth::{
-    Throttle, login_throttle_check, login_throttle_clear, register_throttle_check,
+    Throttle, email_action_throttle_check, login_throttle_check, login_throttle_clear,
+    register_throttle_check,
 };
 
 // --------------------------------------------------------------------- //
@@ -35,7 +36,10 @@ fn over_budget_attempt_is_denied() {
     let now = Instant::now();
     assert!(t.check_at("k", now), "1st attempt allowed");
     assert!(t.check_at("k", now), "2nd attempt allowed");
-    assert!(!t.check_at("k", now), "3rd in-window attempt denied (max=2)");
+    assert!(
+        !t.check_at("k", now),
+        "3rd in-window attempt denied (max=2)"
+    );
 }
 
 #[test]
@@ -135,5 +139,43 @@ fn register_helper_denies_after_default_budget() {
     assert!(
         !register_throttle_check(ip),
         "the 11th rapid register from one IP must be denied (defends mass signup)"
+    );
+}
+
+#[test]
+fn email_action_helper_denies_after_default_budget() {
+    // Keyed per IP+email. Secure default is 5 / hour.
+    // Tests verify-email / resend-verification / password-forgot rate-gate.
+    let ip = "203.0.113.50";
+    let email = "throttle_email_action@example.com";
+    for i in 0..5 {
+        assert!(
+            email_action_throttle_check(ip, email),
+            "email-action attempt {i} within budget allowed"
+        );
+    }
+    assert!(
+        !email_action_throttle_check(ip, email),
+        "the 6th rapid email-action attempt must be denied (defends email-bombing / code-guessing)"
+    );
+}
+
+#[test]
+fn email_action_helper_keys_per_ip_and_email() {
+    let ip = "203.0.113.51";
+    let email_a = "throttle_ea_a@example.com";
+    let email_b = "throttle_ea_b@example.com";
+    // Exhaust budget for email_a.
+    for _ in 0..5 {
+        assert!(email_action_throttle_check(ip, email_a));
+    }
+    assert!(
+        !email_action_throttle_check(ip, email_a),
+        "email_a exhausted"
+    );
+    // email_b has its own independent budget from the same IP.
+    assert!(
+        email_action_throttle_check(ip, email_b),
+        "email_b keeps its own budget; one address lockout never bleeds onto another"
     );
 }

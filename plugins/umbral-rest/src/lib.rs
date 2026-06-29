@@ -1647,6 +1647,16 @@ impl Plugin for RestPlugin {
         "rest"
     }
 
+    fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
+        // Publish our base path before any plugin's routes() runs.
+        // models() is collected in an earlier build phase than router
+        // assembly, so umbral-auth can read umbral::web::api_base() in its
+        // own routes() call without a Cargo dependency on this crate.
+        // See umbral::web::set_api_base (first-call-wins OnceLock).
+        umbral::web::set_api_base(self.base_path());
+        Vec::new() // RestPlugin owns no models; it serves app-registered ones.
+    }
+
     fn routes(&self) -> Router {
         // The OnceLock-captured config is what the static handlers
         // read. `routes()` is called exactly once per App::build, so

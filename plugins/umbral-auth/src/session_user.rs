@@ -42,8 +42,8 @@ use async_trait::async_trait;
 use axum_core::extract::FromRequestParts;
 use http::StatusCode;
 use http::request::Parts;
-use umbral::web::HeaderMap;
 use umbral::auth::{Authentication, Identity};
+use umbral::web::HeaderMap;
 use umbral_sessions::SessionError;
 
 // =========================================================================
@@ -110,9 +110,12 @@ pub async fn login_with_request(
     response_headers: &mut HeaderMap,
     user: &AuthUser,
 ) -> Result<String, SessionError> {
-    let token =
-        umbral_sessions::login_user_id(request_headers, response_headers, Some(user.id.to_string()))
-            .await?;
+    let token = umbral_sessions::login_user_id(
+        request_headers,
+        response_headers,
+        Some(user.id.to_string()),
+    )
+    .await?;
 
     let mut patch = serde_json::Map::new();
     patch.insert(
@@ -521,14 +524,7 @@ fn anonymous_user_value() -> umbral::templates::Value {
     umbral::templates::Value::from_serialize(serde_json::Value::Object(json))
 }
 
-// =========================================================================
-// logout — pure re-export. Sessions still owns the call shape (no
-// user model involved), but we re-export from umbral-auth too so the
-// import surface stays uniform across login + logout.
-// =========================================================================
-
-/// Pure forwarding alias for [`umbral_sessions::logout`]. Re-exported
-/// so handlers that import `umbral_auth::login` also reach for
-/// `umbral_auth::logout` without flipping crates. Sessions still owns
-/// the implementation; it's user-agnostic.
-pub use umbral_sessions::logout;
+// logout is now a proper `pub async fn` in `crate` (lib.rs) that wraps
+// `umbral_sessions::logout` and maps the error to `AuthError::Session`.
+// It is the single reusable logout for all surfaces. The old forwarding
+// alias that returned `SessionError` has been removed.

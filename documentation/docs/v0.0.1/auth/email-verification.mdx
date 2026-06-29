@@ -1,0 +1,67 @@
+---
+title: Email verification
+description: The verify-email and resend-verification endpoints, the 6-digit code rules, and the require_verified_email opt-in that blocks login until the address is confirmed.
+sidebar_position: 6
+icon: mail-check
+tags: [auth, email, verification]
+---
+
+umbral-auth ships opt-in email verification. When enabled, a 6-digit code is sent to the user on registration and login is blocked with a `403` until the address is confirmed. When disabled (the default), the `email_verified_at` column is present on `auth_user` but no enforcement runs — useful for phased rollout.
+
+## Enabling enforcement
+
+```rust
+use umbral_auth::{AuthPlugin, AuthUser};
+
+AuthPlugin::<AuthUser>::default()
+    .with_default_routes()
+    .require_verified_email() // auto-sends code on register; 403 on login until confirmed
+    .mailer(/* see Auth mailer */);
+```
+
+Without `.require_verified_email()`, the two endpoints below are still mounted and functional; the login gate is simply not installed.
+
+## Endpoints
+
+Both endpoints are mounted by `with_default_routes()` under the configured prefix (default `/api/auth`).
+
+### `POST /api/auth/verify-email`
+
+```json
+{ "email": "alice@example.com", "code": "482017" }
+```
+
+Verifies the 6-digit code. On success, writes `email_verified_at = now()` on the user row and returns `204 No Content`. On failure:
+
+| Situation | Response |
+|---|---|
+| Code correct, not expired, not used | `204 No Content` |
+| Code wrong | `400 Bad Request` |
+| Attempt cap reached (5 attempts) | `400 Bad Request` |
+| Code expired (15-minute TTL) | `400 Bad Request` |
+| Code already used | `400 Bad Request` |
+
+The response body does not distinguish between wrong code, expired code, or used code — same JSON shape to prevent oracle attacks.
+
+### `POST /api/auth/resend-verification`
+
+```json
+{ "email": "alice@example.com" }
+```
+
+Issues a fresh code and emails it. Always returns `202 Accepted` regardless of whether the email belongs to a registered account (no enumeration). The previous active code for that user is invalidated.
+
+## Code rules
+
+<CardGrid cols={2}>
+  <Card icon="hash" title="6 digits" description="Numeric only. Generated with a CSPRNG — not Math.random." />
+  <Card icon="clock" title="15-minute TTL" description="Codes expire 15 minutes after issue. Resend to get a fresh one." />
+  <Card icon="shield-x" title="5-attempt cap" description="Five wrong guesses burn the code. The user must resend." />
+  <Card icon="check-circle" title="Single-use" description="A code is marked used immediately on first successful verify." />
+</CardGrid>
+
+## The `email_verified_at` column
+
+The column is added to `auth_user` by the auth plugin's own migration. Run `makemigrations` and `migrate` after adding `.require_verified_email()` to an existing app — the migration adds the nullable column and the framework handles existing unverified rows gracefully (they keep `email_verified_at = NULL` and are blocked from login until they verify).
+
+See the design note `docs/decisions/2026-06-28-auth-full-surface.md` for the challenge model, TTL choices, and how verification interacts with the password-reset flow.

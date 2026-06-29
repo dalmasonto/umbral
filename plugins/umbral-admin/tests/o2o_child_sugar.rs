@@ -59,7 +59,8 @@ async fn boot() {
                 is_staff BOOLEAN NOT NULL,
                 is_superuser BOOLEAN NOT NULL,
                 date_joined TEXT NOT NULL,
-                last_login TEXT NULL
+                last_login TEXT NULL,
+                email_verified_at TEXT
             )",
         )
         .execute(&pool)
@@ -98,6 +99,7 @@ async fn make_user(username: &str) -> AuthUser {
             is_superuser: u.is_superuser,
             date_joined: now,
             last_login: None,
+            email_verified_at: None,
         })
         .expect("create_user")
 }

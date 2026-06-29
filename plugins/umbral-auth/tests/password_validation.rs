@@ -189,7 +189,8 @@ async fn boot() {
                 is_staff INTEGER NOT NULL,
                 is_superuser INTEGER NOT NULL,
                 date_joined TEXT NOT NULL,
-                last_login TEXT
+                last_login TEXT,
+                email_verified_at TEXT
             )",
         )
         .execute(&pool)
@@ -238,10 +239,8 @@ async fn post_register(json: &str) -> (http::StatusCode, Vec<u8>) {
 async fn register_route_rejects_weak_password() {
     boot().await;
 
-    let (status, body) = post_register(
-        r#"{"username":"weakling","email":"weak@example.com","password":"a"}"#,
-    )
-    .await;
+    let (status, body) =
+        post_register(r#"{"username":"weakling","email":"weak@example.com","password":"a"}"#).await;
     assert_eq!(
         status,
         http::StatusCode::BAD_REQUEST,

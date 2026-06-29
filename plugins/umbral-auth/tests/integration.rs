@@ -83,7 +83,8 @@ async fn boot() {
                 is_staff INTEGER NOT NULL,
                 is_superuser INTEGER NOT NULL,
                 date_joined TEXT NOT NULL,
-                last_login TEXT
+                last_login TEXT,
+                email_verified_at TEXT
             )",
         )
         .execute(&pool)
@@ -324,17 +325,23 @@ async fn auth_plugin_registers_the_authuser_model() {
         tables.contains(&"auth_token"),
         "AuthPlugin must register auth_token alongside auth_user; got {tables:?}",
     );
+    assert!(
+        tables.contains(&"auth_challenge"),
+        "AuthPlugin must register auth_challenge alongside auth_user; got {tables:?}",
+    );
     assert_eq!(
         models.len(),
-        2,
-        "AuthPlugin contributes exactly two models (auth_user + auth_token); got {models:?}",
+        3,
+        "AuthPlugin contributes exactly three models (auth_user + auth_token + auth_challenge); got {models:?}",
     );
 
-    // Sanity guard: both types are exposed as Model so the assertion
+    // Sanity guard: all three types are exposed as Model so the assertion
     // above is hitting the same surface plugin authors see.
     let _from_user: umbral::migrate::ModelMeta = umbral::migrate::ModelMeta::for_::<AuthUser>();
     let _from_token: umbral::migrate::ModelMeta =
         umbral::migrate::ModelMeta::for_::<umbral_auth::AuthToken>();
+    let _from_challenge: umbral::migrate::ModelMeta =
+        umbral::migrate::ModelMeta::for_::<umbral_auth::AuthChallenge>();
 }
 
 /// End-to-end dispatch of `createsuperuser --noinput` through

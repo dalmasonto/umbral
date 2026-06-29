@@ -89,6 +89,24 @@ struct ErrorOut {
     detail: String,
 }
 
+// New DTOs for the verification + password-reset surface (Task 10).
+#[derive(Debug, Deserialize)]
+struct VerifyEmailIn {
+    email: String,
+    code: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EmailOnlyIn {
+    email: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResetIn {
+    token: String,
+    new_password: String,
+}
+
 /// Resolve the client IP best-effort from reverse-proxy headers. ConnectInfo
 /// isn't wired in umbral's serve path, so the peer address isn't available; the
 /// proxy headers are the reliable source. Takes the first hop of
@@ -96,7 +114,7 @@ struct ErrorOut {
 /// connection, no proxy), falls back to a fixed key so the throttle still
 /// counts — every un-proxied caller shares one bucket, which is the safe side:
 /// it limits, it never opens a hole. Mirrors `umbral_logs`'s `resolve_ip`.
-fn client_ip(headers: &HeaderMap) -> String {
+pub(crate) fn client_ip(headers: &HeaderMap) -> String {
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         if let Some(first) = xff.split(',').next() {
             let ip = first.trim();
@@ -130,6 +148,52 @@ fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Re
 // Router construction
 // =========================================================================
 
+/// Build the request origin's reset URL base from reverse-proxy headers.
+///
+/// Prefers `X-Forwarded-Proto` (default `"https"`) + the `Host` header to
+/// build `{proto}://{host}/auth/reset`. The `/auth/reset` page is owned by
+/// the HTML auth surface (Task 14); the JSON password-forgot endpoint points
+/// the email there so the user clicks through to the confirmation form.
+///
+/// Falls back to the relative path `"/auth/reset"` when the `Host` header is
+/// absent (e.g. a test client that doesn't set it).
+///
+/// ## Security: why trusting `Host` is safe here
+///
+/// Reading the `Host` header to build an absolute URL is normally a
+/// *host-header injection* / *password-reset poisoning* risk (CWE-640): an
+/// attacker supplies a `Host: evil.com` header, the server echoes it into the
+/// reset link, and the victim's click goes to the attacker's server.
+///
+/// This risk is eliminated upstream, before this function is ever reached.
+/// In **production** mode the framework mounts a host-guard layer during
+/// `App::build` (Phase 5.95 in `crates/umbral-core/src/app.rs`): any request
+/// whose `Host` header is not listed in `settings.allowed_hosts` is rejected
+/// with HTTP 400 before any handler runs. By the time execution reaches
+/// `password_forgot_h` → `reset_url_base`, the `Host` value has already been
+/// validated against the operator-configured allowlist, so embedding it in the
+/// reset URL is safe.
+///
+/// In **non-production** (dev) mode, host validation is intentionally disabled
+/// so that `localhost` and `127.0.0.1` work without any extra configuration.
+/// The reset URL will reflect whatever `Host` the client sends — acceptable in
+/// a local dev environment where the only callers are the developer themselves.
+pub(crate) fn reset_url_base(headers: &HeaderMap) -> String {
+    let host = headers
+        .get("host")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim());
+    let Some(host) = host else {
+        return "/auth/reset".to_string();
+    };
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim())
+        .unwrap_or("https");
+    format!("{proto}://{host}/auth/reset")
+}
+
 /// Build the four-route Router under `prefix`. Called from
 /// `AuthPlugin::routes()` when `with_default_routes()` is on.
 pub(crate) fn build_router(prefix: &str) -> Router {
@@ -138,6 +202,16 @@ pub(crate) fn build_router(prefix: &str) -> Router {
         .route(&format!("{prefix}/login"), post(login))
         .route(&format!("{prefix}/logout"), post(logout))
         .route(&format!("{prefix}/me"), umbral::web::get(me))
+        .route(&format!("{prefix}/verify-email"), post(verify_email_h))
+        .route(
+            &format!("{prefix}/resend-verification"),
+            post(resend_verification_h),
+        )
+        .route(
+            &format!("{prefix}/password-forgot"),
+            post(password_forgot_h),
+        )
+        .route(&format!("{prefix}/password-reset"), post(password_reset_h))
 }
 
 /// Same as [`build_router`] but also returns the route specs the
@@ -150,17 +224,21 @@ pub(crate) fn declared_routes(prefix: &str) -> Vec<umbral::routes::RouteSpec> {
         ("POST", format!("{prefix}/login")).into(),
         ("POST", format!("{prefix}/logout")).into(),
         ("GET", format!("{prefix}/me")).into(),
+        ("POST", format!("{prefix}/verify-email")).into(),
+        ("POST", format!("{prefix}/resend-verification")).into(),
+        ("POST", format!("{prefix}/password-forgot")).into(),
+        ("POST", format!("{prefix}/password-reset")).into(),
     ]
 }
 
-/// OpenAPI Path Item Objects for the four routes. The shapes are
-/// the bare minimum the spec needs to render in Swagger UI: an
-/// `operationId`, a `summary`, a `tags` entry to group them under
-/// "auth", and response codes. Request bodies are documented as
-/// JSON objects with the right `application/json` content type;
-/// the inline schemas describe the field shapes so Swagger UI's
-/// "Try it out" pane prefills sensible defaults. Closes BUG-20
-/// from `bugs/tests/testBugs.md`.
+/// OpenAPI Path Item Objects for the eight auth routes (register, login,
+/// logout, me, verify-email, resend-verification, password-forgot,
+/// password-reset). The shapes are the bare minimum the spec needs to render
+/// in Swagger UI: an `operationId`, a `summary`, a `tags` entry to group
+/// them under "auth", and response codes. Request bodies are documented as
+/// JSON objects with the right `application/json` content type; the inline
+/// schemas describe the field shapes so Swagger UI's "Try it out" pane
+/// prefills sensible defaults. Closes BUG-20 from `bugs/tests/testBugs.md`.
 pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
     use serde_json::json;
     let tag = "auth";
@@ -270,7 +348,107 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
                     "description": "Resolves via session cookie first, then bearer token. 401 if neither yields an active user.",
                     "responses": {
                         "200": {"description": "Authenticated user.", "content": {"application/json": {"schema": user_response}}},
-                        "401": {"description": "Not authenticated.", "content": {"application/json": {"schema": error_response}}}
+                        "401": {"description": "Not authenticated.", "content": {"application/json": {"schema": error_response.clone()}}}
+                    }
+                }
+            }),
+        ),
+        (
+            format!("{prefix}/verify-email"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_verify_email",
+                    "summary": "Verify an email address with a 6-digit code.",
+                    "description": "JSON `{email, code}` → 204 on success. 400 (generic) on any failure (unknown email, no active challenge, wrong code, attempt cap) — no enumeration.",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": json!({
+                            "type": "object",
+                            "required": ["email", "code"],
+                            "properties": {
+                                "email": {"type": "string", "format": "email"},
+                                "code":  {"type": "string", "example": "483920"}
+                            }
+                        })}}
+                    },
+                    "responses": {
+                        "204": {"description": "Email verified."},
+                        "400": {"description": "Invalid or expired code.", "content": {"application/json": {"schema": error_response.clone()}}}
+                    }
+                }
+            }),
+        ),
+        (
+            format!("{prefix}/resend-verification"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_resend_verification",
+                    "summary": "Re-issue an email-verification code.",
+                    "description": "JSON `{email}` → always 202. Unknown emails and already-verified users receive the same response as a pending user (no enumeration). The verification mail is sent best-effort.",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": json!({
+                            "type": "object",
+                            "required": ["email"],
+                            "properties": {
+                                "email": {"type": "string", "format": "email"}
+                            }
+                        })}}
+                    },
+                    "responses": {
+                        "202": {"description": "Request accepted (mail sent if the address is known and unverified)."}
+                    }
+                }
+            }),
+        ),
+        (
+            format!("{prefix}/password-forgot"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_password_forgot",
+                    "summary": "Issue a password-reset link.",
+                    "description": "JSON `{email}` → always 202. Unknown emails receive the same response as known ones (no enumeration). The reset link is sent best-effort.",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": json!({
+                            "type": "object",
+                            "required": ["email"],
+                            "properties": {
+                                "email": {"type": "string", "format": "email"}
+                            }
+                        })}}
+                    },
+                    "responses": {
+                        "202": {"description": "Request accepted (reset link sent if the address matches a known account)."}
+                    }
+                }
+            }),
+        ),
+        (
+            format!("{prefix}/password-reset"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_password_reset",
+                    "summary": "Consume a password-reset token.",
+                    "description": "JSON `{token, new_password}` → 204 on success. 400 (generic) on any failure (unknown / expired / already-used token, weak password).",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": json!({
+                            "type": "object",
+                            "required": ["token", "new_password"],
+                            "properties": {
+                                "token":        {"type": "string", "description": "Opaque reset token from the emailed link."},
+                                "new_password": {"type": "string", "format": "password"}
+                            }
+                        })}}
+                    },
+                    "responses": {
+                        "204": {"description": "Password updated."},
+                        "400": {"description": "Invalid, expired, or already-used token; or weak password.", "content": {"application/json": {"schema": error_response}}}
                     }
                 }
             }),
@@ -325,7 +503,20 @@ async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response 
         return err(StatusCode::BAD_REQUEST, "weak_password", reasons.join(" "));
     }
     match crate::create_user(&body.username, &body.email, &body.password).await {
-        Ok(user) => (StatusCode::CREATED, Json(UserOut::from(&user))).into_response(),
+        Ok(user) => {
+            // Auto-send a verification code when the gate is active. Best-effort:
+            // a mail failure must NOT fail the registration — the user account is
+            // already created and the code can be re-issued via /resend-verification.
+            if crate::verified_email_required() {
+                if let Err(e) = crate::start_email_verification(&user).await {
+                    tracing::warn!(
+                        user_id = user.id,
+                        "umbral-auth: require_verified_email: auto-send on register failed: {e}"
+                    );
+                }
+            }
+            (StatusCode::CREATED, Json(UserOut::from(&user))).into_response()
+        }
         Err(e) => {
             let msg = format!("{e}");
             let status = if msg.to_lowercase().contains("unique") {
@@ -374,6 +565,16 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
     };
     // Authenticated: forgive the counter so prior typos don't accumulate.
     crate::login_throttle_clear(&ip, &body.username);
+    // Gate: if require_verified_email is on and the user hasn't verified yet,
+    // block login. The 403 (not 401) distinguishes "good credentials, missing
+    // step" from "bad credentials", so clients can surface actionable feedback.
+    if crate::verified_email_required() && user.email_verified_at.is_none() {
+        return err(
+            StatusCode::FORBIDDEN,
+            "email_not_verified",
+            "verify your email before logging in",
+        );
+    }
     let (_token_row, plaintext) = match AuthToken::create_for(&user, "login").await {
         Ok(t) => t,
         Err(e) => {
@@ -401,9 +602,16 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
 
 /// `POST {prefix}/logout` — clear the session cookie + destroy
 /// the row. 204. Does NOT revoke bearer tokens.
+///
+/// Delegates to [`crate::logout`], the single reusable logout that both
+/// built-in surfaces and custom handlers share. On error the route still
+/// returns 204 (the client-side cookie is always cleared) and logs the
+/// session-layer failure at error level.
 async fn logout(headers: HeaderMap) -> Response {
     let mut response = StatusCode::NO_CONTENT.into_response();
-    let _ = umbral_sessions::logout(&headers, response.headers_mut()).await;
+    if let Err(e) = crate::logout(&headers, response.headers_mut()).await {
+        tracing::error!("umbral-auth: logout session error: {e}");
+    }
     response
 }
 
@@ -453,4 +661,98 @@ async fn me(OptionalIdentity(id): OptionalIdentity) -> Response {
         }
     };
     Json(UserOut::from(&user)).into_response()
+}
+
+// =========================================================================
+// Task 10: verify-email, resend-verification, password-forgot, password-reset
+// =========================================================================
+
+/// `POST {prefix}/verify-email` — consume a 6-digit email-verification code.
+///
+/// JSON `{email, code}` → 204 on success; 400 (generic, no enumeration) on
+/// any failure (unknown email, no active challenge, wrong code, attempt cap).
+/// Throttled per IP+email (default 5 / hour) to stop online code-guessing.
+async fn verify_email_h(headers: HeaderMap, Json(b): Json<VerifyEmailIn>) -> Response {
+    let ip = client_ip(&headers);
+    if !crate::email_action_throttle_check(&ip, &b.email) {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests; try again later",
+        );
+    }
+    match crate::verify_email(&b.email, &b.code).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => err(
+            StatusCode::BAD_REQUEST,
+            "invalid_code",
+            "verification failed",
+        ),
+    }
+}
+
+/// `POST {prefix}/resend-verification` — re-issue an email-verification code.
+///
+/// JSON `{email}` → always 202 (no enumeration: unknown emails or already-
+/// verified users get the same response as an unverified user who gets the
+/// mail). Fires `start_email_verification` best-effort for unverified users.
+/// Throttled per IP+email (default 5 / hour) to stop email-bombing.
+async fn resend_verification_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -> Response {
+    let ip = client_ip(&headers);
+    if !crate::email_action_throttle_check(&ip, &b.email) {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests; try again later",
+        );
+    }
+    // Look up an UNVERIFIED user by email. `is_null()` matches SQL `IS NULL`
+    // on the nullable `email_verified_at` column. The filter intentionally
+    // excludes already-verified users so the mail is only sent when it
+    // matters. All error arms are silently swallowed — the response is always
+    // 202 regardless (no account enumeration through this endpoint).
+    if let Ok(Some(u)) = AuthUser::objects()
+        .filter(auth_user::EMAIL.eq(b.email.clone()) & auth_user::EMAIL_VERIFIED_AT.is_null())
+        .first()
+        .await
+    {
+        let _ = crate::start_email_verification(&u).await;
+    }
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// `POST {prefix}/password-forgot` — issue a password-reset link.
+///
+/// JSON `{email}` → always 202 (no enumeration: unknown emails get the same
+/// response as known ones). Fires `start_password_reset` best-effort; the
+/// reset URL base is built from the request's `Host` /
+/// `X-Forwarded-Proto` headers.
+/// Throttled per IP+email (default 5 / hour) to stop email-bombing.
+async fn password_forgot_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -> Response {
+    let ip = client_ip(&headers);
+    if !crate::email_action_throttle_check(&ip, &b.email) {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests; try again later",
+        );
+    }
+    let base = reset_url_base(&headers);
+    let _ = crate::start_password_reset(&b.email, &base).await;
+    StatusCode::ACCEPTED.into_response()
+}
+
+/// `POST {prefix}/password-reset` — consume a password-reset token.
+///
+/// JSON `{token, new_password}` → 204 on success; 400 (generic) on any
+/// failure (unknown / expired / already-used token, weak password).
+async fn password_reset_h(Json(b): Json<ResetIn>) -> Response {
+    match crate::reset_password(&b.token, &b.new_password).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => err(
+            StatusCode::BAD_REQUEST,
+            "reset_failed",
+            "could not reset password",
+        ),
+    }
 }
