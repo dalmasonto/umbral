@@ -175,6 +175,45 @@ describe("buildFetchArgs", () => {
     }
   });
 
+  it("applies workspace defaultHeaders to the live request", () => {
+    const result = buildFetchArgs(draft(), {
+      defaultHeaders: [{ key: "X-Api-Key", value: "abc", enabled: true }],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const headers = result.args.init.headers as Record<string, string>;
+      expect(headers["X-Api-Key"]).toBe("abc");
+    }
+  });
+
+  it("lets a per-request header override a same-named default (case-insensitive)", () => {
+    const result = buildFetchArgs(
+      draft({ headers: [{ key: "x-api-key", value: "per-request", enabled: true }] }),
+      { defaultHeaders: [{ key: "X-Api-Key", value: "default", enabled: true }] },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const headers = result.args.init.headers as Record<string, string>;
+      // Exactly one X-Api-Key, with the per-request value.
+      const keys = Object.keys(headers).filter(
+        (k) => k.toLowerCase() === "x-api-key",
+      );
+      expect(keys).toEqual(["x-api-key"]);
+      expect(headers["x-api-key"]).toBe("per-request");
+    }
+  });
+
+  it("skips disabled defaultHeaders", () => {
+    const result = buildFetchArgs(draft(), {
+      defaultHeaders: [{ key: "X-Off", value: "no", enabled: false }],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const headers = result.args.init.headers as Record<string, string>;
+      expect(headers["X-Off"]).toBeUndefined();
+    }
+  });
+
   it("ignores disabled headers", () => {
     const result = buildFetchArgs(
       draft({

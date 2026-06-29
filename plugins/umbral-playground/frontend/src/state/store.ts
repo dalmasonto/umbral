@@ -568,6 +568,7 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
       variables: state.settings.variables,
       includeCredentials: state.settings.includeCredentials,
       globalAuth: state.settings.globalAuth,
+      defaultHeaders: state.settings.defaultHeaders,
     });
     if (!result.ok) {
       const message =

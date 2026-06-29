@@ -353,6 +353,12 @@ export function RequestBuilder() {
   const autoEnabledParamsForRef = useRef<string | null>(null);
   useEffect(() => {
     if (!opMethod || !opPath) return;
+    // Don't seed params while the persisted draft is still loading.
+    // Calling setParams here schedules a debounced save of the EMPTY
+    // pre-hydration draft; that save fires after loadDraft restores the
+    // saved draft and overwrites it — wiping the user's custom params AND
+    // headers. Wait for hydration, then this re-runs on the restored draft.
+    if (draftHydrating) return;
     const key = `${opMethod} ${opPath}`;
     if (autoEnabledParamsForRef.current === key) return;
     autoEnabledParamsForRef.current = key;
@@ -376,9 +382,10 @@ export function RequestBuilder() {
     }
     if (changed) setParams(next);
     // current.params intentionally NOT in deps — we only want this
-    // to fire on operation change, not on every keystroke.
+    // to fire on operation change (and once hydration finishes), not on
+    // every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opMethod, opPath, declaredParams, setParams]);
+  }, [opMethod, opPath, declaredParams, setParams, draftHydrating]);
 
   const responses = useMemo(
     () => responseSchemaEntries(op?.operation, spec),
