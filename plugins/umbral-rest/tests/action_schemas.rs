@@ -60,6 +60,17 @@ async fn boot() -> axum::Router {
             .action_output_schema(
                 "publish",
                 json!({ "type": "object", "properties": { "published": { "type": "boolean" } } }),
+            )
+            // A schemaless action — no input/output schema declared. It must
+            // STILL be exposed for OpenAPI (regression: schemaless actions
+            // like `get_price_at` used to be dropped from the spec).
+            .action(
+                "recent",
+                Method::GET,
+                ActionScope::Collection,
+                |_ctx: ActionContext| async move {
+                    Ok::<Value, ActionError>(json!({ "recent": [] }))
+                },
             );
 
     let app = umbral::App::builder()
@@ -149,4 +160,17 @@ async fn action_input_schema_validates_and_is_exposed() {
     assert!(publish.detail, "publish is detail-scope");
     assert!(publish.input_schema.is_some(), "input schema exposed");
     assert!(publish.output_schema.is_some(), "output schema exposed");
+
+    // A schemaless action is exposed too — path/method present, schemas None.
+    let recent = schemas
+        .iter()
+        .find(|a| a.name == "recent")
+        .expect("schemaless `recent` action must still be exposed for OpenAPI");
+    assert_eq!(recent.table, "doc");
+    assert_eq!(recent.method, "GET");
+    assert!(!recent.detail, "recent is collection-scope");
+    assert!(
+        recent.input_schema.is_none() && recent.output_schema.is_none(),
+        "schemaless action carries no declared body schemas"
+    );
 }

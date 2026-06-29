@@ -326,9 +326,10 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
         }
     }
 
-    // Feature #60: custom `@action` endpoints that declared an input or
-    // output schema get their own path item, with the request/response
-    // schemas inlined so the playground knows the shape.
+    // Every custom `@action` endpoint gets its own path item so it shows up
+    // in the spec + playground. Declared request/response schemas (feature
+    // #60) are inlined; a schemaless action (e.g. `get_price_at`) still
+    // appears, with a generic 200 response.
     for action in umbral_rest::registered_action_schemas() {
         let path = if action.detail {
             format!(

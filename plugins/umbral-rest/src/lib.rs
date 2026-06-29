@@ -1541,10 +1541,12 @@ pub struct ActionSchema {
     pub output_schema: Option<serde_json::Value>,
 }
 
-/// Public read: every custom `@action` that declared an input or output
-/// schema (`ResourceConfig::action_input_schema` / `action_output_schema`).
-/// Used by `umbral-openapi` at spec-build time. Empty when no REST plugin
-/// has booted.
+/// Public read: every custom `@action` registered on any resource. Used by
+/// `umbral-openapi` at spec-build time to emit each action's path + method.
+/// Request/response schemas are inlined when the action declared them via
+/// `ResourceConfig::action_input_schema` / `action_output_schema`; an action
+/// with no declared schema still appears (just without a typed body). Empty
+/// when no REST plugin has booted.
 pub fn registered_action_schemas() -> Vec<ActionSchema> {
     let Some(cfg) = CONFIG.get() else {
         return Vec::new();
@@ -1552,9 +1554,11 @@ pub fn registered_action_schemas() -> Vec<ActionSchema> {
     let mut out = Vec::new();
     for (table, defs) in &cfg.actions {
         for d in defs {
-            if d.input_schema.is_none() && d.output_schema.is_none() {
-                continue;
-            }
+            // Every registered action is surfaced — not only the ones that
+            // declared a request/response schema. A plain `.action(name,
+            // method, scope, handler)` (e.g. `get_price_at`) still has a
+            // path + method worth listing; umbral-openapi emits it with a
+            // generic 200 and inlines schemas only when present.
             out.push(ActionSchema {
                 table: table.clone(),
                 name: d.name.clone(),
