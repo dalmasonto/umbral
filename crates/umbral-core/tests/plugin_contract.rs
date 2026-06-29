@@ -455,9 +455,10 @@ async fn topological_order_governs_on_ready() {
 }
 
 /// M8 — `App::build()` publishes the topological plugin order through
-/// `migrate::plugin_order()`. The implicit `"app"` plugin lands first
-/// (it has no dependencies and is the home of `.model::<T>()`
-/// registrations), then every registered plugin in dependency order.
+/// `migrate::plugin_order()`. Registered plugins come first in dependency
+/// order, then the implicit `"app"` plugin (home of `.model::<T>()`
+/// registrations) lands LAST — its models hold ForeignKeys INTO
+/// plugin-owned tables, so those tables must be created before the app's.
 /// `parent_plugin` (no deps) precedes `child_plugin`
 /// (`dependencies() = ["parent_plugin"]`); the migration engine reads
 /// this exact slice when it walks per-plugin migration directories so
@@ -469,11 +470,11 @@ async fn plugin_order_reflects_the_topological_sort() {
     assert_eq!(
         order,
         vec![
-            APP_PLUGIN_NAME.to_string(),
             "parent_plugin".to_string(),
             "child_plugin".to_string(),
+            APP_PLUGIN_NAME.to_string(),
         ],
-        "plugin_order must list `app` first then dependencies before dependents; got {order:?}",
+        "plugin_order must list dependencies before dependents, with `app` last; got {order:?}",
     );
 }
 

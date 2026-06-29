@@ -842,13 +842,19 @@ impl AppBuilder {
         crate::migrate::init_plugins(per_plugin);
 
         // Publish the topological plugin order so the migration engine
-        // walks plugins in dependency order. The "app" plugin is the
-        // implicit owner of `.model::<T>()` registrations; it has no
-        // dependencies and lands first.
-        let mut order: Vec<String> = vec![crate::migrate::APP_PLUGIN_NAME.to_string()];
+        // walks plugins in dependency order. The implicit "app" plugin
+        // (owner of `.model::<T>()` registrations) lands LAST: app models
+        // typically hold ForeignKeys INTO plugin-owned tables (e.g.
+        // `Post.author -> auth_user`), so those tables must be created
+        // first. Postgres enforces FK targets at CREATE TABLE, so ordering
+        // "app" first made app-model migrations fail there with
+        // `relation "auth_user" does not exist` (SQLite silently allowed
+        // the dangling FK, hiding the bug in local dev).
+        let mut order: Vec<String> = Vec::with_capacity(sorted_plugins.len() + 1);
         for plugin in &sorted_plugins {
             order.push(plugin.name().to_string());
         }
+        order.push(crate::migrate::APP_PLUGIN_NAME.to_string());
         crate::migrate::init_plugin_order(order);
 
         // Collect every plugin's advertised API endpoints into a global

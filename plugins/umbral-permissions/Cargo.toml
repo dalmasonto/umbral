@@ -10,12 +10,12 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.3" }
+umbral = { path = "../../crates/umbral", version = "0.0.4" }
 # permission_required uses umbral-auth's session resolution. The arrow
 # direction (permissions → auth) is correct: permissions sit *above* auth
 # in the layering — you need to know who the user is before you can
 # check what they're allowed to do.
-umbral-auth = { path = "../umbral-auth", version = "0.0.3" }
+umbral-auth = { path = "../umbral-auth", version = "0.0.4" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
@@ -32,7 +32,7 @@ tower = "0.5"
 # let `umbral-rest`'s viewset permission gates check `umbral-permissions`
 # codenames. Off by default so REST-free apps don't pull in the
 # umbral-rest dep just by depending on permissions.
-umbral-rest = { path = "../umbral-rest", version = "0.0.3", optional = true }
+umbral-rest = { path = "../umbral-rest", version = "0.0.4", optional = true }
 async-trait = { version = "0.1", optional = true }
 
 [features]
