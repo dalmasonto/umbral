@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.2...umbral-rest-v0.0.3) - 2026-06-29
+
+### Added
+
+- *(rest)* publish base path into umbral::web::api_base at build
+- *(rest)* make views([...]) read-only everywhere (405/OPTIONS/OpenAPI)
+
+### Fixed
+
+- *(rest)* list custom @actions in OpenAPI even without a declared schema
+
+### Other
+
+- Merge remote-tracking branch 'origin/main'
+
 ## [0.0.2](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.1...umbral-rest-v0.0.2) - 2026-06-26
 
 ### Other
