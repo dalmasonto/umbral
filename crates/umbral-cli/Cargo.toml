@@ -23,12 +23,12 @@ path = "src/main.rs"
 
 [dependencies]
 # Shared casing helpers (pascal_case_from_ident for scaffold).
-umbral-casing = { path = "../umbral-casing", version = "0.0.2" }
-umbral = { path = "../umbral", version = "0.0.2" }
+umbral-casing = { path = "../umbral-casing", version = "0.0.3" }
+umbral = { path = "../umbral", version = "0.0.3" }
 # umbral-cli is internal — depending on umbral-core directly is fine. We
 # reach for `umbral_core::settings::get()` to read the bind_addr from
 # the live settings after `App::build` published them.
-umbral-core = { path = "../umbral-core", version = "0.0.2" }
+umbral-core = { path = "../umbral-core", version = "0.0.3" }
 # `macros` enables `#[tokio::main]`; `rt-multi-thread` is the runtime the
 # attribute expands to. No other tokio features are needed at M0.
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
