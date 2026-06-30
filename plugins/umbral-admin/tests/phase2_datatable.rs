@@ -586,3 +586,33 @@ async fn test_chip_strip_oob_swap_clears_when_filter_removed() {
          OOB strip — chip-removal regression. Strip window:\n{strip_window}"
     );
 }
+
+/// Task 4: The /rows HTMX swap must render the numbered/windowed pagination
+/// footer (the same long form as the first load), not the compact `page / total`
+/// form that was previously in rows_fragment.html.
+#[tokio::test]
+async fn test_rows_swap_keeps_numbered_pagination() {
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "dt_admin", "password123").await;
+
+    // page_size=10 over the 3 seeded posts — only 1 page, but the numbered
+    // nav always renders a page-1 button, so the assertion holds.
+    let req = Request::builder()
+        .uri("/admin/post/rows?page=1&page_size=10")
+        .header(header::COOKIE, format!("umbral_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(router, req).await;
+    assert_eq!(status, StatusCode::OK);
+    // Numbered nav present: the always-rendered page-1 button.
+    assert!(
+        body.contains(">1</button>"),
+        "numbered page button must render in the /rows swap: {body}"
+    );
+    // The compact `page / total_pages` span must be gone.
+    assert!(
+        !body.contains("/ {{ pagination.total_pages }}") && !body.contains("} / {"),
+        "compact 'page / total' footer must not appear in the swap: {body}"
+    );
+}

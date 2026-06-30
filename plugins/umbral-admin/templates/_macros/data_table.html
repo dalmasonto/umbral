@@ -36,6 +36,7 @@
 #}
 
 {% from "admin/_macros/filter_dialog.html" import filter_dialog %}
+{% from "admin/_macros/pagination.html" import pagination_footer %}
 
 {% macro data_table(model, rows, columns, pk, facets, active_filters, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[], column_widths=[], soft_delete=false, trash=false, trashed_count=0) %}
 
@@ -592,141 +593,8 @@
           </tr>
         {% endif %}
 
-        {# ---- Pagination footer (inside tbody swap for HTMX) ---- #}
-        <tr class="bg-surface border-t border-outline-variant">
-          <td colspan="{{ columns | length + 2 }}" class="px-lg py-md">
-            <div class="flex flex-wrap items-center justify-between gap-md">
-              {# Range text #}
-              <div class="flex items-center gap-lg">
-                <span class="font-body-sm text-body-sm text-on-surface-variant">
-                  Showing
-                  <span class="text-on-surface font-medium tabular-nums">
-                    {{ (pagination.page - 1) * pagination.page_size + 1 }}–{{ [pagination.page * pagination.page_size, pagination.total] | min }}
-                  </span>
-                  of
-                  <span class="text-on-surface font-medium tabular-nums">{{ pagination.total }}</span>
-                </span>
-
-                {# Page size select #}
-                <div class="flex items-center gap-sm">
-                  <span class="font-label-md text-label-md text-on-surface-variant">Rows per page:</span>
-                  <select
-                    id="dt-page-size"
-                    name="page_size"
-                    hx-get="{{ admin_base }}/{{ model.table }}/rows"
-                    hx-trigger="change"
-                    hx-target="#table-body"
-                    hx-swap="innerHTML"
-                    hx-include="#dt-search, #dt-active-filters input, #dt-sort-col, #dt-sort-order"
-                    hx-push-url="true"
-                    class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs pr-8 min-w-[5rem] font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
-                  >
-                    {% for sz in [10, 25, 50, 100] %}
-                    <option value="{{ sz }}" {% if sz == pagination.page_size %}selected{% endif %}>{{ sz }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-              </div>
-
-              {# Page navigation #}
-              <div class="flex items-center gap-xs">
-                {# First page #}
-                <button
-                  type="button"
-                  {% if pagination.page <= 1 %}disabled{% endif %}
-                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
-                  hx-target="#table-body"
-                  hx-swap="innerHTML"
-                  hx-push-url="true"
-                  class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                  title="First page"
-                >
-                  <i data-lucide="chevrons-left" class="w-4 h-4"></i>
-                </button>
-
-                {# Prev #}
-                <button
-                  type="button"
-                  {% if pagination.page <= 1 %}disabled{% endif %}
-                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page - 1 }}&page_size={{ pagination.page_size }}"
-                  hx-target="#table-body"
-                  hx-swap="innerHTML"
-                  hx-push-url="true"
-                  class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                  title="Previous page"
-                >
-                  <i data-lucide="chevron-left" class="w-4 h-4"></i>
-                </button>
-
-                {# Page numbers: first + ellipsis + window + ellipsis + last #}
-                <div class="flex items-center">
-                  {% set win_start = [pagination.page - 2, 2] | max %}
-                  {% set win_end   = [pagination.page + 2, pagination.total_pages - 1] | min %}
-
-                  {# Always show page 1 #}
-                  <button type="button"
-                    hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
-                    hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
-                    class="w-8 h-8 flex items-center justify-center {% if pagination.page == 1 %}bg-primary text-on-primary{% else %}text-on-surface-variant hover:bg-surface-container-high{% endif %} rounded-lg font-label-md text-label-md transition-colors tabular-nums"
-                  >1</button>
-
-                  {% if win_start > 2 %}
-                  <span class="px-xs text-on-surface-variant font-label-md">…</span>
-                  {% endif %}
-
-                  {% for p in range(win_start, win_end + 1) %}
-                  <button type="button"
-                    hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ p }}&page_size={{ pagination.page_size }}"
-                    hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
-                    class="w-8 h-8 flex items-center justify-center {% if pagination.page == p %}bg-primary text-on-primary{% else %}text-on-surface-variant hover:bg-surface-container-high{% endif %} rounded-lg font-label-md text-label-md transition-colors tabular-nums"
-                  >{{ p }}</button>
-                  {% endfor %}
-
-                  {% if win_end < pagination.total_pages - 1 %}
-                  <span class="px-xs text-on-surface-variant font-label-md">…</span>
-                  {% endif %}
-
-                  {# Always show last page if more than 1 #}
-                  {% if pagination.total_pages > 1 %}
-                  <button type="button"
-                    hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
-                    hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
-                    class="w-8 h-8 flex items-center justify-center {% if pagination.page == pagination.total_pages %}bg-primary text-on-primary{% else %}text-on-surface-variant hover:bg-surface-container-high{% endif %} rounded-lg font-label-md text-label-md transition-colors tabular-nums"
-                  >{{ pagination.total_pages }}</button>
-                  {% endif %}
-                </div>
-
-                {# Next #}
-                <button
-                  type="button"
-                  {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
-                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page + 1 }}&page_size={{ pagination.page_size }}"
-                  hx-target="#table-body"
-                  hx-swap="innerHTML"
-                  hx-push-url="true"
-                  class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                  title="Next page"
-                >
-                  <i data-lucide="chevron-right" class="w-4 h-4"></i>
-                </button>
-
-                {# Last page #}
-                <button
-                  type="button"
-                  {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
-                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
-                  hx-target="#table-body"
-                  hx-swap="innerHTML"
-                  hx-push-url="true"
-                  class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                  title="Last page"
-                >
-                  <i data-lucide="chevrons-right" class="w-4 h-4"></i>
-                </button>
-              </div>
-            </div>
-          </td>
-        </tr>
+        {# ---- Pagination footer (shared macro; long numbered form) ---- #}
+        {{ pagination_footer(admin_base, model.table, columns, search_val, filter_qs, sort_col, sort_order, pagination) }}
       </tbody>
     </table>
   </div>

@@ -10,6 +10,8 @@
     actions, inline_edit_fields
 #}
 
+{% from "admin/_macros/pagination.html" import pagination_footer %}
+
 {# `filter_qs` arrives from the handler precomputed as one
    `&filter_<field>=<comma-joined>` per UNIQUE field. See data_table.html
    for the rationale (HashMap-based extractor collapses repeated keys). #}
@@ -242,71 +244,5 @@
   </tr>
 {% endif %}
 
-{# Pagination footer row (always included in the swap) #}
-<tr class="bg-surface border-t border-outline-variant">
-  <td colspan="{{ columns | length + 2 }}" class="px-lg py-md">
-    <div class="flex flex-wrap items-center justify-between gap-md">
-      <div class="flex items-center gap-lg">
-        <span class="font-body-sm text-body-sm text-on-surface-variant">
-          Showing
-          <span class="text-on-surface font-medium tabular-nums">
-            {{ (pagination.page - 1) * pagination.page_size + 1 }}–{{ [pagination.page * pagination.page_size, pagination.total] | min }}
-          </span>
-          of
-          <span class="text-on-surface font-medium tabular-nums">{{ pagination.total }}</span>
-        </span>
-        <div class="flex items-center gap-sm">
-          <span class="font-label-md text-label-md text-on-surface-variant">Rows per page:</span>
-          <select id="dt-page-size" name="page_size"
-            hx-get="{{ admin_base }}/{{ table }}/rows"
-            hx-trigger="change"
-            hx-target="#table-body"
-            hx-swap="innerHTML"
-            hx-include="#dt-search, #dt-active-filters input, #dt-sort-col, #dt-sort-order"
-            hx-push-url="true"
-            class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs pr-8 min-w-[5rem] font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary">
-            {% for sz in [10, 25, 50, 100] %}
-            <option value="{{ sz }}" {% if sz == pagination.page_size %}selected{% endif %}>{{ sz }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-
-      <div class="flex items-center gap-xs">
-        <button type="button"
-          {% if pagination.page <= 1 %}disabled{% endif %}
-          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
-          hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
-          class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="First">
-          <i data-lucide="chevrons-left" class="w-4 h-4"></i>
-        </button>
-        <button type="button"
-          {% if pagination.page <= 1 %}disabled{% endif %}
-          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page - 1 }}&page_size={{ pagination.page_size }}"
-          hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
-          class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="Previous">
-          <i data-lucide="chevron-left" class="w-4 h-4"></i>
-        </button>
-
-        <span class="font-label-md text-label-md text-on-surface-variant tabular-nums px-sm">
-          {{ pagination.page }} / {{ pagination.total_pages }}
-        </span>
-
-        <button type="button"
-          {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
-          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page + 1 }}&page_size={{ pagination.page_size }}"
-          hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
-          class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="Next">
-          <i data-lucide="chevron-right" class="w-4 h-4"></i>
-        </button>
-        <button type="button"
-          {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
-          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
-          hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
-          class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="Last">
-          <i data-lucide="chevrons-right" class="w-4 h-4"></i>
-        </button>
-      </div>
-    </div>
-  </td>
-</tr>
+{# Pagination footer (shared macro; long numbered form, same as first load) #}
+{{ pagination_footer(admin_base, table, columns, search_val, filter_qs, sort_col, sort_order, pagination) }}
