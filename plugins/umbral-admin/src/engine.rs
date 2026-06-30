@@ -313,6 +313,15 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             "restore_last_path",
             minijinja::Value::from(branding.restore_last_path),
         );
+        // Single-source Tailwind theme. The dev CDN config in wrapper.html
+        // renders `theme: { extend: {{ admin_theme_json }} }` from this, the
+        // same JSON the compiled build reads via tailwind.config.js →
+        // require('./theme.json'). from_safe_string so the JSON's quotes and
+        // braces aren't HTML-entity-escaped inside the <script> tag.
+        env.add_global(
+            "admin_theme_json",
+            minijinja::Value::from_safe_string(include_str!("../css/theme.json").to_string()),
+        );
 
         // Unified static pipeline — register the `static()` global so
         // admin templates resolve assets through the same `static_url`

@@ -1,4 +1,9 @@
 /** @type {import('tailwindcss').Config} */
+// Single source of truth for the theme lives in ./theme.json — the same
+// object is injected into the dev CDN config in wrapper.html via the
+// `admin_theme_json` MiniJinja global. Keep all token edits in theme.json
+// so the compiled build and the CDN can never drift (that drift is what
+// made `text-label-sm` resolve to nothing in prod → huge sidebar labels).
 module.exports = {
   darkMode: 'class',
   content: [
@@ -6,55 +11,7 @@ module.exports = {
     '../src/**/*.rs',
   ],
   theme: {
-    extend: {
-      colors: {
-        'surface-container-lowest':   'var(--surface-container-lowest)',
-        'surface-container-low':      'var(--surface-container-low)',
-        'surface-container':          'var(--surface-container)',
-        'surface-container-high':     'var(--surface-container-high)',
-        'surface-container-highest':  'var(--surface-container-highest)',
-        'surface-bright':             'var(--surface-bright)',
-        'surface-dim':                'var(--surface-dim)',
-        'surface':                    'var(--surface)',
-        'surface-variant':            'var(--surface-variant)',
-        'surface-tint':               'var(--surface-tint)',
-        'on-surface':                 'var(--on-surface)',
-        'on-surface-variant':         'var(--on-surface-variant)',
-        'inverse-surface':            'var(--inverse-surface)',
-        'inverse-on-surface':         'var(--inverse-on-surface)',
-        'outline':                    'var(--outline)',
-        'outline-variant':            'var(--outline-variant)',
-        'background':                 'var(--background)',
-        'on-background':              'var(--on-background)',
-        'primary':                    'var(--primary)',
-        'on-primary':                 'var(--on-primary)',
-        'primary-container':          'var(--primary-container)',
-        'on-primary-container':       'var(--on-primary-container)',
-        'error':                      'var(--error)',
-        'on-error':                   'var(--on-error)',
-        'error-container':            'var(--error-container)',
-        'on-error-container':         'var(--on-error-container)',
-        // Pre-alpha'd divider tokens. Use `border-divider` /
-        // `divide-divider-soft` instead of `border-outline-variant/20`
-        // — Tailwind v3 silently drops opacity modifiers on raw
-        // CSS-variable colors, so soft dividers ship with their alpha
-        // already baked in.
-        'divider':                    'var(--divider)',
-        'divider-soft':               'var(--divider-soft)',
-      },
-      spacing: {
-        'sidebar-width':     '260px',
-        'sidebar-collapsed': '68px',
-        'topbar-height':     '56px',
-        'gutter':            '20px',
-        'base': '4px',
-        'xs':   '4px',
-        'sm':   '8px',
-        'md':   '16px',
-        'lg':   '24px',
-        'xl':   '32px',
-      },
-    },
+    extend: require('./theme.json'),
   },
   plugins: [],
 };
