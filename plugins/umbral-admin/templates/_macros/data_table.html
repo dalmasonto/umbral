@@ -97,15 +97,15 @@
 {# ================================================================
    Header bar: model name + count + Add button
    ================================================================ #}
-<div class="flex items-end justify-between mb-md">
-  <div>
-    <div class="flex items-center gap-sm">
-      <h1 class="font-h1 text-h1 text-on-surface">{{ model.name }}{% if trash %} <span class="text-on-surface-variant font-body-md text-body-md">— Trash</span>{% endif %}</h1>
-      <span class="bg-surface-container-high px-sm py-xs rounded-full font-data-mono text-label-sm text-on-surface-variant tabular-nums">{{ pagination.total }}</span>
+<div class="flex flex-col gap-md sm:flex-row sm:items-end sm:justify-between mb-md">
+  <div class="min-w-0">
+    <div class="flex items-center gap-sm min-w-0">
+      <h1 class="font-h1 text-h1 text-on-surface truncate min-w-0">{{ model.name }}{% if trash %} <span class="text-on-surface-variant font-body-md text-body-md">— Trash</span>{% endif %}</h1>
+      <span class="flex-shrink-0 bg-surface-container-high px-sm py-xs rounded-full font-data-mono text-label-sm text-on-surface-variant tabular-nums">{{ pagination.total }}</span>
     </div>
     <p class="text-on-surface-variant font-body-sm text-body-sm mt-xs">{% if trash %}Soft-deleted {{ model.name | lower }} records. Restore them or delete permanently.{% else %}Manage all {{ model.name | lower }} records.{% endif %}</p>
   </div>
-  <div class="flex items-center gap-sm">
+  <div class="flex items-center gap-sm flex-shrink-0 flex-wrap">
   {# gaps2 #35 — Trash / Active toggle. Only rendered for soft-delete
      models. In the live view it links into the trash (with the trashed-
      row count); in the trash view it links back to the active list. #}
@@ -145,10 +145,10 @@
     hx-target="#umbral-sheet-slot"
     hx-swap="innerHTML"
     hx-push-url="false"
-    class="bg-primary text-on-primary px-lg py-sm rounded-xl font-h3 text-h3 flex items-center gap-sm hover:opacity-90 transition-opacity active:scale-95 duration-150 focus:outline-none focus:ring-2 focus:ring-primary/40"
+    class="bg-primary text-on-primary px-md py-sm rounded-xl font-label-md text-label-md flex items-center gap-sm flex-shrink-0 whitespace-nowrap hover:opacity-90 transition-opacity active:scale-95 duration-150 focus:outline-none focus:ring-2 focus:ring-primary/40"
   >
     <i data-lucide="plus" class="w-4 h-4"></i>
-    Add {{ model.name }}
+    Add <span class="hidden sm:inline">{{ model.name }}</span>
   </button>
   {% endif %}
   </div>
