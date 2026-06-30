@@ -138,6 +138,11 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         )
         .expect("admin/_macros/pagination.html parses");
         env.add_template(
+            "admin/_macros/widget_grid.html",
+            include_str!("../templates/_macros/widget_grid.html"),
+        )
+        .expect("admin/_macros/widget_grid.html parses");
+        env.add_template(
             "admin/_macros/sheet.html",
             include_str!("../templates/_macros/sheet.html"),
         )

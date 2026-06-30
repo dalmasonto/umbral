@@ -608,3 +608,30 @@ fn wrapper_themes_the_editors() {
         "editor theme must use admin design tokens, not hardcoded colors"
     );
 }
+
+/// Task 3 (widget-grid macro): the dashboard widget grid is now rendered
+/// via the shared `_macros/widget_grid.html` macro. Regression guard:
+/// the dashboard still renders widget cells with HTMX self-load after
+/// the inline block was moved into the macro.
+#[tokio::test]
+async fn test_dashboard_widget_grid_renders_via_macro() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    let req = Request::builder()
+        .uri("/admin/")
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&body);
+    // A widget cell still self-loads from the data endpoint after the macro extraction.
+    assert!(
+        html.contains("/api/dashboard/widgets/") && html.contains("hx-trigger=\"load\""),
+        "dashboard still renders widget cells via the shared grid macro"
+    );
+}
