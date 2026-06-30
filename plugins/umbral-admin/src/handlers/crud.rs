@@ -22,8 +22,9 @@ use crate::engine::render;
 use crate::error::AdminError;
 use crate::handlers::sheet::edit_sheet_handler;
 use crate::rows::{fetch_rows_filtered, insert_row_in_tx, update_row_in_tx};
-use crate::util::{apply_write_error_to_fields, is_htmx, parse_unique_violation_column,
-    sanitise_form_error};
+use crate::util::{
+    apply_write_error_to_fields, is_htmx, parse_unique_violation_column, sanitise_form_error,
+};
 use crate::view::{
     form_fields_for, form_m2m_fields_for, model_for_template, sidebar_apps, validate_form,
 };
@@ -692,7 +693,26 @@ pub(crate) async fn update(
 
             if is_htmx(&headers) {
                 if form.contains_key("_save_continue") {
-                    return edit_sheet_handler(State(state), headers, Path((table, id))).await;
+                    // Re-render the sheet (stays open) AND refresh the
+                    // underlying changelist so the saved change shows in the
+                    // list behind the sheet. No `closeSheet` — symmetric with
+                    // the plain-save path but without dismissing the panel.
+                    // The admin.js `refreshTable` listener re-fetches /rows
+                    // using window.location.search, preserving the active
+                    // search/sort/page/filter kwargs.
+                    let mut resp =
+                        edit_sheet_handler(State(state), headers, Path((table, id))).await;
+                    let trigger = serde_json::json!({
+                        "refreshTable": {},
+                        "showToast": {
+                            "message": format!("{} saved", model.name),
+                            "level": "success"
+                        },
+                    });
+                    if let Ok(hv) = trigger.to_string().parse() {
+                        resp.headers_mut().insert("HX-Trigger", hv);
+                    }
+                    return resp;
                 }
                 // gaps2 #13: success toast alongside closeSheet +
                 // refreshTable. Symmetric with `sheet::sheet_create`.
@@ -756,8 +776,7 @@ pub(crate) async fn update(
             // in the open panel — rather than a full page. Mirrors the
             // `_save_continue` → `edit_sheet_handler` success precedent.
             if is_htmx(&headers) {
-                let password_field =
-                    cfg.and_then(|c| c.password_field.as_deref()).unwrap_or("");
+                let password_field = cfg.and_then(|c| c.password_field.as_deref()).unwrap_or("");
                 return match render(
                     "admin/sheet_edit.html",
                     context!(

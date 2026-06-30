@@ -826,3 +826,48 @@ async fn test_sheet_edit_renders_per_field_error_inline_htmx() {
         "re-renders the SHEET fragment (stays in drawer): {html}"
     );
 }
+
+// =========================================================================
+// Task 6 — save-and-continue refreshes the changelist
+//
+// When the user clicks "Save and continue" the sheet stays open (no
+// closeSheet) but the changelist behind it must re-fetch its rows
+// (refreshTable) so the saved change is visible.
+// =========================================================================
+
+#[tokio::test]
+async fn test_save_and_continue_refreshes_table_but_keeps_sheet_open() {
+    let _g = NOTE_LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+
+    // _save_continue=1 → re-render the sheet AND refresh the underlying table.
+    let body = "title=SaveContinueNote&body=Stay&published=true&_save_continue=1";
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/note/1/edit")
+        .header(header::COOKIE, format!("umbral_session={session}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("hx-request", "true")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, headers, resp_body) = send(router, req).await;
+    assert_eq!(status, StatusCode::OK, "save-and-continue returns 200");
+    let trigger = headers
+        .get("hx-trigger")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        trigger.contains("refreshTable"),
+        "save-and-continue must refresh the underlying table: {trigger}"
+    );
+    assert!(
+        !trigger.contains("closeSheet"),
+        "save-and-continue must NOT close the sheet: {trigger}"
+    );
+    // The sheet fragment is re-rendered in the body (not an empty 200).
+    assert!(
+        !resp_body.trim().is_empty(),
+        "save-and-continue re-renders the sheet body"
+    );
+}
