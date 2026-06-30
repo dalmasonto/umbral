@@ -228,6 +228,26 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
             </div>
         </div>
         {%- endfor %}
+
+        <!-- Custom view groups -->
+        {%- for vg in view_groups | default(value=[]) %}
+        <div class="sidebar-plugin-group" id="sidebar-group-view-{{ loop.index }}">
+            <p class="sidebar-section-label px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider">{{ vg.label }}</p>
+            <div class="space-y-1 px-md">
+                {%- for v in vg.views %}
+                <a
+                    href="{{ v.href | safe }}"
+                    class="sidebar-link sidebar-model-link flex items-center gap-2 px-sm py-1.5 rounded-xl border border-transparent {% if active_view is defined and active_view == v.slug %}bg-primary-container text-on-primary-container{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+                    data-sidebar-tooltip="{{ v.label }}"
+                    aria-label="{{ v.label }}"
+                >
+                    <i data-lucide="{{ v.icon }}" class="w-[18px] h-[18px] flex-shrink-0"></i>
+                    <span class="sidebar-text flex-1 truncate">{{ v.label }}</span>
+                </a>
+                {%- endfor %}
+            </div>
+        </div>
+        {%- endfor %}
     </nav>
 
     <!-- Sidebar footer -->

@@ -100,6 +100,48 @@ pub(crate) async fn sidebar_apps(
         .collect()
 }
 
+/// Build the sidebar's custom-view groups: non-hidden views the user may
+/// see (codename-filtered), clustered by `.group()` (default "Pages"),
+/// preserving registration order within a group and first-seen group order.
+pub(crate) async fn view_groups(
+    state: &AdminState,
+    user: &umbral_auth::AuthUser,
+) -> Vec<serde_json::Value> {
+    let base = crate::branding::current().base_path;
+    // Preserve first-seen group order with an explicit order vec +
+    // HashMap so insertion order is stable without BTreeMap's sort.
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        std::collections::HashMap::new();
+    for v in state.custom_views.iter() {
+        if v.hidden() {
+            continue;
+        }
+        if let Some(code) = v.permission() {
+            if !crate::permcheck::has_codename(user, code).await {
+                continue;
+            }
+        }
+        let group = v.group().unwrap_or("Pages").to_string();
+        if !groups.contains_key(&group) {
+            order.push(group.clone());
+        }
+        groups.entry(group).or_default().push(serde_json::json!({
+            "href":  format!("{}/{}", base, v.path()),
+            "label": v.title(),
+            "icon":  v.icon().unwrap_or("file-text"),
+            "slug":  v.slug(),
+        }));
+    }
+    order
+        .into_iter()
+        .map(|name| {
+            let views = groups.remove(&name).unwrap_or_default();
+            serde_json::json!({ "label": name, "views": views })
+        })
+        .collect()
+}
+
 // =========================================================================
 // Form fields
 // =========================================================================

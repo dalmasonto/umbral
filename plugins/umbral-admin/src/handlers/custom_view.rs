@@ -10,7 +10,7 @@ use crate::AdminState;
 use crate::auth::require_staff;
 use crate::engine::render;
 use crate::permcheck;
-use crate::view::sidebar_apps;
+use crate::view::{sidebar_apps, view_groups};
 
 pub(crate) async fn custom_view(
     State(state): State<AdminState>,
@@ -35,6 +35,7 @@ pub(crate) async fn custom_view(
     }
 
     let apps = sidebar_apps(&state, &user).await;
+    let view_groups = view_groups(&state, &user).await;
 
     // Same widget-section JSON shape the dashboard handler emits
     // (`handlers/list.rs::index`), so `widget_grid` renders identically.
@@ -74,7 +75,7 @@ pub(crate) async fn custom_view(
             page_subtitle => view.subtitle(),
             widget_sections => widget_sections,
             apps => apps,
-            view_groups => Vec::<serde_json::Value>::new(), // populated in Task 6
+            view_groups => view_groups,
             active_view => slug,
             active_table => "",
             breadcrumbs => breadcrumbs,

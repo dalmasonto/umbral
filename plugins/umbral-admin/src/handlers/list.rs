@@ -20,7 +20,9 @@ use crate::handlers;
 use crate::pagination::{Pagination, build_order_clause_phase2, parse_list_params};
 use crate::rows::{count_rows_filtered, fetch_rows_paged};
 use crate::util::is_htmx;
-use crate::view::{model_for_template, model_for_template_cols, sidebar_apps, sql_type_name};
+use crate::view::{
+    model_for_template, model_for_template_cols, sidebar_apps, sql_type_name, view_groups,
+};
 
 /// Resolve a foreign-key id to the related model's display label
 /// (first non-PK text column, same shape the FK picker uses). Returns
@@ -264,6 +266,7 @@ pub(crate) async fn index(
         }
     }
     let apps = sidebar_apps(&state, &user).await;
+    let view_groups = view_groups(&state, &user).await;
 
     // Sectioned widget list — each entry carries its own title +
     // optional subtitle + widget array. The template renders one
@@ -388,6 +391,7 @@ pub(crate) async fn index(
             dashboard_models_title    => state.dashboard_models_title.clone(),
             dashboard_models_subtitle => state.dashboard_models_subtitle.clone(),
             apps                      => apps,
+            view_groups               => view_groups,
             total_rows                => total_rows,
             model_count               => model_count,
             plugin_count              => plugin_count,
@@ -547,12 +551,18 @@ pub(crate) async fn list(
 
     let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
 
-    let total =
-        match count_rows_filtered(&model, search_term.as_deref(), cfg, &active_filters, trash).await
-        {
-            Ok(t) => t,
-            Err(e) => return e.into_response(),
-        };
+    let total = match count_rows_filtered(
+        &model,
+        search_term.as_deref(),
+        cfg,
+        &active_filters,
+        trash,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
     let pagination = Pagination::new(total, page, page_size);
 
     let rows = match fetch_rows_paged(
@@ -607,6 +617,7 @@ pub(crate) async fn list(
     let filter_qs = build_filter_qs(&active_filters);
     let filter_groups = build_filter_groups(&active_filters);
     let apps = sidebar_apps(&state, &user).await;
+    let view_groups = view_groups(&state, &user).await;
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
     ];
@@ -652,6 +663,7 @@ pub(crate) async fn list(
             flash              => flash,
             open_row           => open_row,
             apps               => apps,
+            view_groups        => view_groups,
             active_table       => table,
             breadcrumbs        => breadcrumbs,
             column_widths      => column_widths_json,
@@ -751,12 +763,18 @@ pub(crate) async fn rows_fragment(
 
     let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
 
-    let total =
-        match count_rows_filtered(&model, search_term.as_deref(), cfg, &active_filters, trash).await
-        {
-            Ok(t) => t,
-            Err(e) => return e.into_response(),
-        };
+    let total = match count_rows_filtered(
+        &model,
+        search_term.as_deref(),
+        cfg,
+        &active_filters,
+        trash,
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
     let pagination = Pagination::new(total, page, page_size);
 
     let rows = match fetch_rows_paged(
