@@ -257,8 +257,8 @@ pub mod migrate {
         MigrateError, MigrationEntry, MigrationFile, MigrationRef, MigrationStatus, ModelMeta,
         OpSafety, Operation, Snapshot, check_pending_safety, check_pending_safety_in,
         classify_operation, detect_all_drift, detect_drift, diff, fake_apply, fake_apply_in,
-        fake_initial, fake_initial_in, fk_effective_type, make, make_empty, make_empty_in, make_in,
-        migrate_apps_into_pool, migrate_apps_into_pool_in, model_alias,
+        fake_initial, fake_initial_in, fk_effective_type, is_initialised, make, make_empty,
+        make_empty_in, make_in, migrate_apps_into_pool, migrate_apps_into_pool_in, model_alias,
         model_meta_for_table, models_for_plugin, pk_meta_for_table, plugin_order, record_applied,
         registered_api_endpoints, registered_models, registered_plugins, render_operation_for, run,
         run_checked, run_checked_in, run_for_schema, run_for_schema_in, run_in, run_shared,
@@ -291,8 +291,7 @@ pub mod plugin {
     //! prelude so `use umbral::prelude::*;` brings it in.
 
     pub use umbral_core::plugin::{
-        ApiEndpoint, AppContext, Plugin, PluginError, StaticDir, StaticFile,
-        block_on_ready,
+        ApiEndpoint, AppContext, Plugin, PluginError, StaticDir, StaticFile, block_on_ready,
     };
 }
 

@@ -52,7 +52,14 @@ fn codename(plugin: &str, table: &str, action: Action) -> String {
 /// Returns `true` when the permissions plugin is registered with the
 /// framework. Read once per request from the in-memory plugin list, so
 /// the cost is a single Vec scan with no I/O.
+///
+/// Returns `false` (not installed → allow) when the model registry
+/// hasn't been initialised yet, which happens in unit tests that never
+/// call `App::build()`.
 pub(crate) fn permissions_installed() -> bool {
+    if !umbral::migrate::is_initialised() {
+        return false;
+    }
     umbral::migrate::registered_plugins()
         .iter()
         .any(|p| p == "permissions")
@@ -95,6 +102,39 @@ pub(crate) async fn require(
     action: Action,
 ) -> Result<(), Response> {
     if check(user, plugin, table, action).await {
+        Ok(())
+    } else {
+        Err((StatusCode::FORBIDDEN, "umbral-admin: permission denied").into_response())
+    }
+}
+
+/// Check an arbitrary permission codename directly (not the
+/// `(plugin, table, action)` triple) — used by custom admin views, which
+/// aren't model-bound. Returns `true` when permissions aren't installed
+/// (staff-only baseline), the user is a superuser, or the user holds the
+/// codename directly / via a group.
+pub(crate) async fn has_codename(user: &AuthUser, codename: &str) -> bool {
+    if !permissions_installed() {
+        return true;
+    }
+    let user_id = user.id.to_string();
+    umbral_permissions::has_perm_for_superuser(&user_id, user.is_superuser, codename)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                user_id = user_id.as_str(),
+                perm = codename,
+                error = %err,
+                "codename permission check failed; denying by default"
+            );
+            false
+        })
+}
+
+/// Handler-side guard for a raw codename. `Ok(())` when allowed, else a
+/// 403 [`Response`]. Mirrors [`require`] for the model-bound path.
+pub(crate) async fn require_codename(user: &AuthUser, codename: &str) -> Result<(), Response> {
+    if has_codename(user, codename).await {
         Ok(())
     } else {
         Err((StatusCode::FORBIDDEN, "umbral-admin: permission denied").into_response())
@@ -200,13 +240,21 @@ mod tests {
     /// and the other three flags false. Confirms per-flag granularity.
     #[test]
     fn from_codenames_view_only() {
-        let codenames: HashSet<String> =
-            ["blog.view_post".to_string()].into_iter().collect();
+        let codenames: HashSet<String> = ["blog.view_post".to_string()].into_iter().collect();
         let perms = AdminPerms::from_codenames(&codenames, "blog", "post");
-        assert!(perms.can_view, "expected can_view=true with view_post codename");
+        assert!(
+            perms.can_view,
+            "expected can_view=true with view_post codename"
+        );
         assert!(!perms.can_add, "expected can_add=false without add_post");
-        assert!(!perms.can_change, "expected can_change=false without change_post");
-        assert!(!perms.can_delete, "expected can_delete=false without delete_post");
+        assert!(
+            !perms.can_change,
+            "expected can_change=false without change_post"
+        );
+        assert!(
+            !perms.can_delete,
+            "expected can_delete=false without delete_post"
+        );
     }
 
     /// A user with change + delete but NOT view or add gets exactly those two.
@@ -221,8 +269,14 @@ mod tests {
         let perms = AdminPerms::from_codenames(&codenames, "shop", "product");
         assert!(!perms.can_view, "no view_product → can_view must be false");
         assert!(!perms.can_add, "no add_product → can_add must be false");
-        assert!(perms.can_change, "change_product present → can_change must be true");
-        assert!(perms.can_delete, "delete_product present → can_delete must be true");
+        assert!(
+            perms.can_change,
+            "change_product present → can_change must be true"
+        );
+        assert!(
+            perms.can_delete,
+            "delete_product present → can_delete must be true"
+        );
     }
 
     /// A user with ALL four codenames gets all four flags true.
@@ -268,10 +322,22 @@ mod tests {
         .into_iter()
         .collect();
         let perms = AdminPerms::from_codenames(&codenames, "blog", "comment");
-        assert!(!perms.can_view, "post perm must not bleed into comment.can_view");
-        assert!(!perms.can_add, "post perm must not bleed into comment.can_add");
-        assert!(!perms.can_change, "post perm must not bleed into comment.can_change");
-        assert!(!perms.can_delete, "post perm must not bleed into comment.can_delete");
+        assert!(
+            !perms.can_view,
+            "post perm must not bleed into comment.can_view"
+        );
+        assert!(
+            !perms.can_add,
+            "post perm must not bleed into comment.can_add"
+        );
+        assert!(
+            !perms.can_change,
+            "post perm must not bleed into comment.can_change"
+        );
+        assert!(
+            !perms.can_delete,
+            "post perm must not bleed into comment.can_delete"
+        );
     }
 
     /// Codenames from a different plugin don't grant access for the target plugin.
@@ -284,7 +350,42 @@ mod tests {
         .into_iter()
         .collect();
         let perms = AdminPerms::from_codenames(&codenames, "blog", "post");
-        assert!(!perms.can_view, "other plugin's perm must not grant blog.view_post");
-        assert!(!perms.can_add, "other plugin's perm must not grant blog.add_post");
+        assert!(
+            !perms.can_view,
+            "other plugin's perm must not grant blog.view_post"
+        );
+        assert!(
+            !perms.can_add,
+            "other plugin's perm must not grant blog.add_post"
+        );
+    }
+
+    // has_codename / require_codename: when the permissions plugin is NOT
+    // installed (the unit-test process), both must allow (staff-only baseline).
+    #[tokio::test]
+    async fn codename_checks_allow_when_permissions_absent() {
+        use chrono::Utc;
+        let user = umbral_auth::AuthUser {
+            id: 1,
+            username: "staff".to_string(),
+            email: "staff@example.com".to_string(),
+            password_hash: "!".to_string(),
+            is_active: true,
+            is_staff: true,
+            is_superuser: false,
+            date_joined: Utc::now(),
+            last_login: None,
+            email_verified_at: None,
+        };
+        assert!(
+            super::has_codename(&user, "reports.view_sales").await,
+            "absent permissions plugin → allow"
+        );
+        assert!(
+            super::require_codename(&user, "reports.view_sales")
+                .await
+                .is_ok(),
+            "require_codename Ok when allowed"
+        );
     }
 }
