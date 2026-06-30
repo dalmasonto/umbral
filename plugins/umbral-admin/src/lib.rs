@@ -52,15 +52,16 @@
 pub mod config;
 pub mod models;
 pub mod registry;
+mod views;
 pub mod widgets;
 
 mod auth;
 mod branding;
 mod discovery;
 mod engine;
-mod inlines;
 mod error;
 mod handlers;
+mod inlines;
 mod pagination;
 mod permcheck;
 mod rows;
@@ -88,6 +89,7 @@ pub use registry::{AdminRegistration, AdminRegistry, App as AdminApp};
 // `.with_span(cols, rows)`. See `AdminPlugin::register_widget`
 // for the wiring shape.
 pub use handlers::dashboard::{builtin_recent_users_widget, builtin_total_models_widget};
+pub use views::AdminView;
 pub use widgets::{
     BarPayload, CardPayload, CatalogEntry, ChartPoint, DonutPayload, DonutSlice, FeedItem,
     FeedPayload, HeatmapCell, HeatmapPayload, HeatmapRow, KpiPayload, LinePayload, ProgressItem,
@@ -836,7 +838,10 @@ impl Plugin for AdminPlugin {
         ]
     }
 
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         // Tables are produced by the migration engine off
         // `Self::models()` — same path as every other plugin's models.
         // No bootstrap DDL here.
