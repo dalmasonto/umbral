@@ -6,6 +6,7 @@
 
 pub(crate) mod actions;
 pub(crate) mod crud;
+pub(crate) mod custom_view;
 pub(crate) mod dashboard;
 pub(crate) mod fk_picker;
 pub(crate) mod history;

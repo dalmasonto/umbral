@@ -1,0 +1,12 @@
+{% extends "admin/base.html" %}
+{% from "admin/_macros/widget_grid.html" import widget_grid %}
+{% block title %}{{ page_title }} — {{ site_title }}{% endblock %}
+{% block content %}
+<div class="mb-xl">
+  <h1 class="font-h1 text-h1 text-on-surface leading-tight">{{ page_title }}</h1>
+  {% if page_subtitle %}
+  <p class="text-body-sm text-on-surface-variant mt-xs">{{ page_subtitle }}</p>
+  {% endif %}
+</div>
+{{ widget_grid(widget_sections, admin_base) }}
+{% endblock %}

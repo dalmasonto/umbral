@@ -190,6 +190,11 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         )
         .expect("admin/dashboard.html parses");
         env.add_template(
+            "admin/custom_view.html",
+            include_str!("../templates/custom_view.html"),
+        )
+        .expect("admin/custom_view.html parses");
+        env.add_template(
             "admin/widget_data.html",
             include_str!("../templates/widget_data.html"),
         )

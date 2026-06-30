@@ -190,6 +190,8 @@ pub struct AdminPlugin {
     /// When `false`: `/admin/` always renders the dashboard; the
     /// changelist handler skips the `last_path` write (no dead data).
     restore_last_path: bool,
+    /// Developer-registered custom views (widget pages at arbitrary paths).
+    custom_views: Vec<AdminView>,
 }
 
 impl Default for AdminPlugin {
@@ -204,6 +206,7 @@ impl Default for AdminPlugin {
             dashboard_models_title: "Models".to_string(),
             dashboard_models_subtitle: None,
             restore_last_path: true,
+            custom_views: Vec::new(),
         }
     }
 }
@@ -476,6 +479,27 @@ impl AdminPlugin {
         self.restore_last_path = enabled;
         self
     }
+
+    /// Register a custom admin view — a widget page mounted at
+    /// `{admin_base}/{view.path}`. Chainable.
+    ///
+    /// ```ignore
+    /// AdminPlugin::default().view(
+    ///     AdminView::new("reports/sales", "Sales report")
+    ///         .with_icon("bar-chart")
+    ///         .section(WidgetSection::new("This month").widget(revenue_kpi())),
+    /// )
+    /// ```
+    pub fn view(mut self, view: AdminView) -> Self {
+        self.custom_views.push(view);
+        self
+    }
+
+    /// Batch form of [`view`](Self::view).
+    pub fn views(mut self, views: impl IntoIterator<Item = AdminView>) -> Self {
+        self.custom_views.extend(views);
+        self
+    }
 }
 
 /// Shared state injected into every route via [`axum::extract::State`].
@@ -502,6 +526,8 @@ struct AdminState {
     /// handler reads this to decide whether to redirect; the list handler
     /// reads it to decide whether to write `last_path`.
     restore_last_path: bool,
+    /// Developer-registered custom views, for the page handler + sidebar.
+    custom_views: Arc<Vec<AdminView>>,
 }
 
 impl AdminState {
@@ -597,10 +623,28 @@ impl Plugin for AdminPlugin {
         // Flat catalog — feeds the per-widget data API. Built by
         // flattening every section so a single lookup-by-key
         // works regardless of which section a widget lives in.
-        let catalog: Vec<Widget> = sections
+        let mut catalog: Vec<Widget> = sections
             .iter()
             .flat_map(|s| s.widgets.iter().cloned())
             .collect();
+
+        // Custom-view widgets join the same flat catalog so the per-key
+        // data endpoint resolves them unchanged. Keys are global → warn on dups.
+        let mut seen_keys: std::collections::HashSet<&str> =
+            catalog.iter().map(|w| w.key).collect();
+        for v in &self.custom_views {
+            for w in v.sections().iter().flat_map(|s| s.widgets.iter()) {
+                if !seen_keys.insert(w.key) {
+                    tracing::warn!(
+                        widget_key = w.key,
+                        view = v.path(),
+                        "duplicate widget key across dashboard/custom views; \
+                         the data endpoint resolves the first match"
+                    );
+                }
+                catalog.push(w.clone());
+            }
+        }
 
         let state = AdminState {
             registry: Arc::new(self.registry.clone()),
@@ -610,8 +654,9 @@ impl Plugin for AdminPlugin {
             dashboard_models_title: self.dashboard_models_title.clone(),
             dashboard_models_subtitle: self.dashboard_models_subtitle.clone(),
             restore_last_path: self.restore_last_path,
+            custom_views: Arc::new(self.custom_views.clone()),
         };
-        Router::new()
+        let mut router = Router::new()
             // Login / logout (no auth required)
             .route(
                 &route("/login", &self.base_path),
@@ -771,7 +816,29 @@ impl Plugin for AdminPlugin {
             )
             // Static admin.css is mounted by the framework via
             // `static_files()` — no manual route needed here.
-            .with_state(state)
+            ;
+        // Mount one GET route per registered custom view at
+        // `{base}/{view.path}`. The per-invocation `slug` clone keeps the
+        // handler `Clone` (axum requires the handler future factory to be
+        // cloneable across concurrent requests).
+        for v in &self.custom_views {
+            let slug = v.path().to_string();
+            let full = route(&format!("/{}", v.path()), &self.base_path);
+            router = router.route(
+                &full,
+                axum::routing::get({
+                    let slug = slug.clone();
+                    move |state: axum::extract::State<AdminState>,
+                          headers: axum::http::HeaderMap| {
+                        let slug = slug.clone();
+                        async move {
+                            crate::handlers::custom_view::custom_view(state, headers, slug).await
+                        }
+                    }
+                }),
+            );
+        }
+        router.with_state(state)
     }
 
     fn route_paths(&self) -> Vec<umbral::routes::RouteSpec> {
@@ -788,7 +855,7 @@ impl Plugin for AdminPlugin {
         let gp = || vec!["GET", "POST"];
         let gpd = || vec!["GET", "POST", "DELETE"];
         let gput = || vec!["GET", "PUT"];
-        vec![
+        let mut specs = vec![
             RouteSpec::new(&route("", &self.base_path), g()),
             RouteSpec::new(&route("/", &self.base_path), g()),
             RouteSpec::new(&route("/login", &self.base_path), gp()),
@@ -835,7 +902,16 @@ impl Plugin for AdminPlugin {
                 &route("/api/dashboard/widgets/{key}/data", &self.base_path),
                 g(),
             ),
-        ]
+        ];
+        // Companion entries for the developer-registered custom views,
+        // mounted in `routes()` as `GET {base}/{view.path}`.
+        for v in &self.custom_views {
+            specs.push(RouteSpec::new(
+                &format!("{}/{}", self.base_path, v.path()),
+                g(),
+            ));
+        }
+        specs
     }
 
     fn on_ready(
@@ -919,6 +995,60 @@ mod tests {
             dir.source_dir.join("admin.js").is_file(),
             "{} should contain admin.js",
             dir.source_dir.display()
+        );
+    }
+}
+
+#[cfg(test)]
+mod custom_view_wiring_tests {
+    use super::*;
+    use crate::views::AdminView;
+    use crate::widgets::{
+        KpiPayload, Widget, WidgetDataFn, WidgetKind, WidgetPayload, WidgetSection,
+    };
+
+    fn tiny_kpi(key: &'static str) -> Widget {
+        Widget {
+            key,
+            title: "T".into(),
+            kind: WidgetKind::Kpi,
+            default_span: Default::default(),
+            permission: None,
+            data: WidgetDataFn::new(|_user| async {
+                WidgetPayload::Kpi(KpiPayload {
+                    value: "0".into(),
+                    unit: None,
+                    delta: None,
+                    sparkline: None,
+                })
+            }),
+            default_period: None,
+        }
+    }
+
+    #[test]
+    fn view_registers_and_flattens_widgets_into_catalog() {
+        let plugin = AdminPlugin::default().view(
+            AdminView::new("reports/sales", "Sales")
+                .section(WidgetSection::new("S").widget(tiny_kpi("rpt_sales_total"))),
+        );
+        // The view is stored on the plugin.
+        assert_eq!(plugin.custom_views.len(), 1);
+        assert_eq!(plugin.custom_views[0].path(), "reports/sales");
+
+        // The same flatten the `routes()` builder performs: a registered
+        // view's widgets become reachable in the global key catalog so the
+        // per-key data endpoint resolves them unchanged.
+        let catalog_keys: Vec<&str> = plugin
+            .custom_views
+            .iter()
+            .flat_map(|v| v.sections().iter())
+            .flat_map(|s| s.widgets.iter())
+            .map(|w| w.key)
+            .collect();
+        assert!(
+            catalog_keys.contains(&"rpt_sales_total"),
+            "the view's widget key should be flattenable into the catalog, got {catalog_keys:?}"
         );
     }
 }
