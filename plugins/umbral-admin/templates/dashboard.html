@@ -46,20 +46,20 @@
    ================================================================ #}
 {% if model_cards %}
 <div class="flex gap-sm mb-lg overflow-x-auto pb-sm scrollbar-none snap-x">
-  <div class="flex-shrink-0 bg-surface-container border border-outline-variant rounded-xl px-md py-md min-w-[136px] snap-start">
+  <div class="flex-shrink-0 bg-surface border border-outline-variant rounded-xl shadow-card px-md py-md min-w-[136px] snap-start">
     <p class="text-label-sm text-outline uppercase tracking-wider mb-xs">Total Entries</p>
     <p class="font-display text-2xl text-on-surface tabular-nums leading-none">{{ total_rows }}</p>
   </div>
-  <div class="flex-shrink-0 bg-surface-container border border-outline-variant rounded-xl px-md py-md min-w-[136px] snap-start">
+  <div class="flex-shrink-0 bg-surface border border-outline-variant rounded-xl shadow-card px-md py-md min-w-[136px] snap-start">
     <p class="text-label-sm text-outline uppercase tracking-wider mb-xs">Models</p>
     <p class="font-display text-2xl text-on-surface tabular-nums leading-none">{{ model_count }}</p>
   </div>
-  <div class="flex-shrink-0 bg-surface-container border border-outline-variant rounded-xl px-md py-md min-w-[136px] snap-start">
+  <div class="flex-shrink-0 bg-surface border border-outline-variant rounded-xl shadow-card px-md py-md min-w-[136px] snap-start">
     <p class="text-label-sm text-outline uppercase tracking-wider mb-xs">Plugins</p>
     <p class="font-display text-2xl text-on-surface tabular-nums leading-none">{{ plugin_count }}</p>
   </div>
   {% for card in model_cards[:4] %}
-  <a href="{{ card.url }}" class="flex-shrink-0 bg-surface-container border border-outline-variant rounded-xl px-md py-md min-w-[136px] snap-start hover:bg-surface-container-high transition-all cursor-pointer no-underline group">
+  <a href="{{ card.url }}" class="flex-shrink-0 bg-surface border border-outline-variant rounded-xl shadow-card px-md py-md min-w-[136px] snap-start hover:bg-surface-container-high transition-all cursor-pointer no-underline group">
     <p class="text-label-sm text-outline uppercase tracking-wider mb-xs group-hover:text-primary transition-colors">{{ card.label }}</p>
     <div class="flex items-baseline gap-xs">
       <p class="font-display text-2xl text-on-surface tabular-nums leading-none">{{ card.count }}</p>
@@ -103,7 +103,7 @@
        never made it into admin.css and every widget collapsed to one
        column. Inline grid styles are purge-proof and need no rebuild. #}
     <div
-      class="bg-surface-container border border-outline-variant rounded-xl overflow-hidden"
+      class="bg-surface border border-outline-variant rounded-xl shadow-card overflow-hidden"
       style="grid-column: span {{ col_span }} / span {{ col_span }}; grid-row: span {{ row_span }} / span {{ row_span }};"
       data-widget-kind="{{ w.kind }}"
       id="widget-{{ w.key }}"
@@ -248,7 +248,7 @@
     {% for card in model_cards %}
     <a
       href="{{ card.url }}"
-      class="group relative flex min-h-[104px] flex-col justify-between gap-md p-md bg-surface-container border border-outline-variant rounded-xl hover:bg-surface-container-high transition-all duration-200 cursor-pointer no-underline overflow-hidden"
+      class="group relative flex min-h-[104px] flex-col justify-between gap-md p-md bg-surface border border-outline-variant rounded-xl shadow-card hover:bg-surface-container-high transition-all duration-200 cursor-pointer no-underline overflow-hidden"
     >
       <div class="relative flex items-start justify-between gap-sm">
         <p class="text-label-sm text-outline uppercase tracking-wider truncate leading-snug group-hover:text-on-surface-variant transition-colors">{{ card.label }}</p>

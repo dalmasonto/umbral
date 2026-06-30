@@ -568,6 +568,30 @@ fn admin_js_mounts_widget_editors() {
     );
 }
 
+/// Task 3 (visual refresh): every card surface on the dashboard uses the
+/// shared card recipe (bg-surface + hairline border + rounded-xl + shadow-card).
+/// This pins the elevation token so dashboards reads as one card system.
+#[tokio::test]
+async fn test_dashboard_cards_use_shared_card_recipe() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    let req = Request::builder()
+        .uri("/admin/")
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&body);
+    assert!(
+        html.contains("shadow-card"),
+        "dashboard cards must use the shared shadow-card recipe"
+    );
+}
+
 /// The editor libraries ship light themes; the wrapper re-skins them
 /// with the admin design tokens so they track the dark/light toggle.
 #[test]
