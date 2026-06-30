@@ -729,7 +729,11 @@ async fn test_sheet_create_renders_per_field_error_for_empty_required() {
         .body(Body::from(body))
         .unwrap();
     let (status, _h, html) = send(router, req).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "empty required field is a 400: {html}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "empty required field is a 400: {html}"
+    );
     assert!(
         html.contains("This field is required."),
         "the per-field required message must render: {html}"
@@ -743,6 +747,41 @@ async fn test_sheet_create_renders_per_field_error_for_empty_required() {
     assert!(
         !html.contains("bg-error-container/10 border border-error/20"),
         "a field error renders inline, NOT in the top banner: {html}"
+    );
+}
+
+// =========================================================================
+// Task 5 — Responsive sheet: viewport clamp + small-screen drawer
+//
+// The panel must use `width: min(var(--sheet-width, 640px), 100vw - 1rem)`
+// so a saved desktop width never overflows a phone, and it must carry
+// `left-2 right-2` (or `inset-x-2`) so it becomes a full-width drawer
+// below the sm breakpoint.
+// =========================================================================
+
+#[tokio::test]
+async fn test_sheet_panel_is_viewport_clamped() {
+    let _g = NOTE_LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let req = Request::builder()
+        .uri("/admin/note/new-sheet")
+        .header(header::COOKIE, format!("umbral_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _h, body) = send(router, req).await;
+    assert_eq!(status, StatusCode::OK);
+    // Width must be clamped to the viewport so a 640px panel can't overflow
+    // a phone.
+    assert!(
+        body.contains("min(var(--sheet-width, 640px), 100vw - 1rem)"),
+        "sheet width must be viewport-clamped: {body}"
+    );
+    // Small-screen drawer: pinned to both edges below the sm breakpoint.
+    assert!(
+        body.contains("left-2 right-2") || body.contains("inset-x-2"),
+        "sheet must become a full-width drawer on small screens"
     );
 }
 
@@ -765,12 +804,25 @@ async fn test_sheet_edit_renders_per_field_error_inline_htmx() {
         .body(Body::from(body))
         .unwrap();
     let (status, _h, html) = send(router, req).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "empty required on edit is a 400: {html}");
-    assert!(html.contains("This field is required."), "per-field message renders: {html}");
-    assert!(html.contains("text-error mt-0.5"), "inline per-field span renders: {html}");
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "empty required on edit is a 400: {html}"
+    );
+    assert!(
+        html.contains("This field is required."),
+        "per-field message renders: {html}"
+    );
+    assert!(
+        html.contains("text-error mt-0.5"),
+        "inline per-field span renders: {html}"
+    );
     assert!(
         !html.contains("bg-error-container/10 border border-error/20"),
         "field errors render inline, not in the top banner: {html}"
     );
-    assert!(html.contains("sheet-form"), "re-renders the SHEET fragment (stays in drawer): {html}");
+    assert!(
+        html.contains("sheet-form"),
+        "re-renders the SHEET fragment (stays in drawer): {html}"
+    );
 }
