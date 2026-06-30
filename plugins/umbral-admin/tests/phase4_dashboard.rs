@@ -570,7 +570,7 @@ fn admin_js_mounts_widget_editors() {
 
 /// Task 3 (visual refresh): every card surface on the dashboard uses the
 /// shared card recipe (bg-surface + hairline border + rounded-xl + shadow-card).
-/// This pins the elevation token so dashboards reads as one card system.
+/// This pins the elevation token so the dashboard reads as one card system.
 #[tokio::test]
 async fn test_dashboard_cards_use_shared_card_recipe() {
     let _guard = LOCK.lock().await;
