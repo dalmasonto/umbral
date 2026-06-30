@@ -545,7 +545,7 @@ In `impl AdminPlugin` (near the other builders), add:
     /// ```ignore
     /// AdminPlugin::default().view(
     ///     AdminView::new("reports/sales", "Sales report")
-    ///         .icon("bar-chart")
+    ///         .with_icon("bar-chart")
     ///         .section(WidgetSection::new("This month").widget(revenue_kpi())),
     /// )
     /// ```
@@ -949,7 +949,7 @@ Expected: PASS (all).
 
 - [ ] **Step 3: Write the doc page**
 
-Create `documentation/docs/v0.0.1/admin/custom-views.mdx` with frontmatter (`title`, `description`, `sidebar_position`) and: one paragraph on purpose; the smallest example (register a view with one widget section); a note that views appear in the sidebar (grouped, with icon) and gate via `.permission(codename)`; and a link to the design spec. Keep it minimal (ship-a-feature-ship-a-doc), MDX with Specra components, no component imports.
+Create `documentation/docs/v0.0.1/admin/custom-views.mdx` with frontmatter (`title`, `description`, `sidebar_position`) and: one paragraph on purpose; the smallest example (register a view with one widget section); a note that views appear in the sidebar (grouped, with icon) and gate via `.with_permission(codename)`; and a link to the design spec. Keep it minimal (ship-a-feature-ship-a-doc), MDX with Specra components, no component imports.
 
 - [ ] **Step 4: Rebuild CSS only if new utilities were introduced**
 
