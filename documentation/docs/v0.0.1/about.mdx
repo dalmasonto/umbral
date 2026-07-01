@@ -10,7 +10,7 @@ icon: info
 The name is the adjective 'of the shadow' (from Latin *umbra*, shadow).
 
 <Callout type="info">
-Umbral is pre-alpha. The architecture and specs are settled and the milestones are landing in code. Pages get added here as features ship. Today there's enough to declare a model, run managed migrations, port an existing database via `inspectdb`, wire the built-in plugins (auth, sessions, admin, REST, OpenAPI, tasks, permissions, security, static), render HTML through the templates substrate, and drive the whole thing through the project's `cargo run -- <command>` CLI (plus the global `umbral` scaffolding binary from `cargo install umbral-cli`). Start at [Your first app](/docs/v0.0.1/getting-started/your-first-app).
+Umbral is early/alpha and **published on crates.io** — start from the [`umbral`](https://crates.io/crates/umbral) facade. It's usable today: declare a model, run managed migrations, port an existing database via `inspectdb`, and wire the built-in plugins — auth, sessions, permissions, the auto admin (with dashboard widgets + custom views), REST + OpenAPI, background tasks, realtime (SSE + WebSockets), OAuth, caching, email, storage/media, multitenancy, health checks, request logs, analytics, and more. Render HTML through the templates substrate and drive it all through the project's `cargo run -- <command>` CLI (plus the global `umbral` scaffolding binary from `cargo install umbral-cli`). It's `0.0.x`, so APIs still move before 1.0. Start at [Your first app](/docs/v0.0.1/getting-started/your-first-app).
 </Callout>
 
 ## Why Umbral exists
@@ -79,35 +79,15 @@ No `State<DbPool>` in the handler signature. No `axum::` types. The ORM is ambie
 
 ## Status
 
-Umbral is **pre-alpha**. There's no published crate yet. The architecture, the PRD, and the per-subsystem specs come first, and implementation follows milestone by milestone. As features land, each gets a doc page here.
+Umbral is **early/alpha** and **published on crates.io** — every crate ships under the `umbral-*` namespace; start with the [`umbral`](https://crates.io/crates/umbral) facade. It's at `0.0.x`: usable, but pre-1.0, so APIs will still move before things stabilize. Development happens in the open, and each feature gets a doc page here as it lands.
 
-For the long version, read the design specs in the repository root: `arch.md` (architecture), `umbral-PRD.md` (product requirements), and `docs/specs/` (per-subsystem deep specs).
+For the long version, read the design specs in the repository: `arch.md` (architecture), `umbral-PRD.md` (product requirements), and `docs/specs/` (per-subsystem deep specs).
 
 ## Roadmap
 
-Notable items on the backlog. Pages land here as each one ships. See `planning/features.md` in the repository for the full punch-list.
+Much of the original backlog has already shipped — request logs (`umbral-logs`), realtime SSE **and** WebSockets (`umbral-realtime`), RTE/Markdown admin field widgets, and the admin dashboard widget system + custom views all landed. A few notable items are still ahead:
 
 <CardGrid cols={2}>
-  <Card
-    icon="activity"
-    title="Logs plugin"
-    description="Auto-logging of every DB action. Registers a logs table, surfaces 'Recent activity' in the admin."
-  />
-  <Card
-    icon="bell"
-    title="Notifications plugin (SSE)"
-    description="Server-sent events the user can subscribe to per model / per action. Composes with TasksPlugin so a logged error type can fan out to email."
-  />
-  <Card
-    icon="edit-3"
-    title="Rich admin field widgets"
-    description="RTE and Markdown editors (with preview) declared per-column: AdminModel::field('body', Markdown::new())."
-  />
-  <Card
-    icon="layout-grid"
-    title="Admin widget tooling"
-    description="Helper for building dashboard widgets with built-in filters (date, search, range, choice) - plus per-user widget reordering."
-  />
   <Card
     icon="git-merge"
     title="GraphQL plugin"
@@ -116,6 +96,18 @@ Notable items on the backlog. Pages land here as each one ships. See `planning/f
   <Card
     icon="radio"
     title="WebSocket playground"
-    description="Opt-in playground tab that connects to declared WS endpoints with the same UI shape as the REST playground."
+    description="An opt-in playground tab that connects to declared realtime endpoints with the same UI shape as the REST playground."
+  />
+  <Card
+    icon="bell"
+    title="Push notifications"
+    description="Web-push / device notifications layered on the realtime + tasks plugins."
+  />
+  <Card
+    icon="search"
+    title="Auto-SEO helpers"
+    description="Fill in missing titles and image alt text automatically at render time."
   />
 </CardGrid>
+
+For everything available today, browse the sidebar; the full punch-list lives in `planning/features.md` in the repository.
