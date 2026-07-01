@@ -7,7 +7,39 @@ icon: rocket
 
 The minimal umbral app boots through one builder, registers a database pool, and serves a hand-written route. From there you grow into models, migrations, and plugins.
 
+## Install & scaffold
+
+The fastest way to start is the `umbral` command-line tool: install it once, scaffold a project, and run it.
+
+<Steps>
+  <Step title="Install the CLI">
+    ```bash
+    cargo install umbral-cli
+    ```
+    This puts the global `umbral` binary on your `PATH` — the scaffolding tool for creating projects and plugins.
+  </Step>
+  <Step title="Create a project">
+    ```bash
+    umbral startproject my_project
+    ```
+    Scaffolds a ready-to-run project in `./my_project` — a `src/` tree, a `Cargo.toml` wired to the published `umbral-*` crates, and starter config. (Add plugins later from inside the project with `umbral startapp <name>`.)
+  </Step>
+  <Step title="Run it">
+    ```bash
+    cd my_project
+    cargo run -- dev
+    ```
+    `dev` is the development loop: it watches `src/` and your templates and re-runs on change (templates hot-reload without a restart). The console prints the address it's serving on (e.g. `http://127.0.0.1:8000`).
+  </Step>
+</Steps>
+
+<Callout type="note">
+`cargo run -- dev` needs [`cargo-watch`](https://crates.io/crates/cargo-watch) — install it with `cargo install cargo-watch`. Without it, run the server directly with `cargo run` and restart after code edits; templates still hot-reload in dev mode either way. Other management commands run the same way: `cargo run -- migrate`, `cargo run -- makemigrations`, `cargo run -- serve`.
+</Callout>
+
 ## The shape
+
+The section below is the minimal app written by hand — the same builder the scaffold sets up for you.
 
 ```rust
 use umbral::prelude::*;
