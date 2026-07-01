@@ -40,8 +40,8 @@ plugins/umbral-playground/frontend/dist/
 # Media storage (local FS + S3).
 media/
 
-# Local planning drafts
-/planning/github-sponsors-profile.md
+# Local planning drafts (social / marketing copy — local-only, never committed)
+/planning/social/
 
 shadow-security.md
 
