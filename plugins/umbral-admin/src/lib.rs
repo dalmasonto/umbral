@@ -500,6 +500,43 @@ impl AdminPlugin {
         self.custom_views.extend(views);
         self
     }
+
+    /// gaps3 #7 — custom views whose path is safe to mount, with the rest
+    /// dropped (and logged). A view whose path is empty, whose first
+    /// segment shadows a built-in admin route, or that duplicates another
+    /// view's path would make axum's router `panic!` on a route conflict at
+    /// boot. Rejecting them here turns a cryptic boot panic into a clear
+    /// `tracing::error!` and keeps the rest of the admin serving; the
+    /// rejected view is absent from the router AND the sidebar (both read
+    /// the resolved list). Multi-segment paths like `reports/sales` coexist
+    /// with the `{table}/` changelist route via axum's static-over-param
+    /// precedence, so only the built-in *static* first segments are reserved.
+    fn resolved_custom_views(&self) -> Vec<AdminView> {
+        const RESERVED_FIRST: &[&str] = &["login", "logout", "upload-image", "api"];
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut out = Vec::with_capacity(self.custom_views.len());
+        for v in &self.custom_views {
+            let path = v.path();
+            if path.is_empty() {
+                tracing::error!(title = v.title(), "admin custom view rejected: empty path");
+                continue;
+            }
+            let first = path.split('/').next().unwrap_or("");
+            if RESERVED_FIRST.contains(&first) {
+                tracing::error!(
+                    path,
+                    "admin custom view rejected: first path segment collides with a built-in admin route"
+                );
+                continue;
+            }
+            if !seen.insert(path) {
+                tracing::error!(path, "admin custom view rejected: duplicate path");
+                continue;
+            }
+            out.push(v.clone());
+        }
+        out
+    }
 }
 
 /// Shared state injected into every route via [`axum::extract::State`].
@@ -646,11 +683,15 @@ impl Plugin for AdminPlugin {
         // permission-gated view (`.with_permission(codename)`), record
         // `widget_key → codename` so `dashboard_widget_data` can enforce the
         // same codename check on the API call, not just on the page load.
+        // gaps3 #7: validate custom-view paths ONCE, up front. Everything
+        // downstream (widget flatten, gate map, sidebar state, route mount)
+        // reads this resolved list so a rejected view is absent everywhere.
+        let resolved_views = self.resolved_custom_views();
         let mut seen_keys: std::collections::HashSet<&str> =
             catalog.iter().map(|w| w.key).collect();
         let mut widget_gates: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        for v in &self.custom_views {
+        for v in &resolved_views {
             for w in v.sections().iter().flat_map(|s| s.widgets.iter()) {
                 if !seen_keys.insert(w.key) {
                     tracing::warn!(
@@ -676,7 +717,7 @@ impl Plugin for AdminPlugin {
             dashboard_models_title: self.dashboard_models_title.clone(),
             dashboard_models_subtitle: self.dashboard_models_subtitle.clone(),
             restore_last_path: self.restore_last_path,
-            custom_views: Arc::new(self.custom_views.clone()),
+            custom_views: Arc::new(resolved_views.clone()),
             widget_gates: Arc::new(widget_gates),
         };
         let mut router = Router::new()
@@ -844,7 +885,7 @@ impl Plugin for AdminPlugin {
         // `{base}/{view.path}`. The per-invocation `slug` clone keeps the
         // handler `Clone` (axum requires the handler future factory to be
         // cloneable across concurrent requests).
-        for v in &self.custom_views {
+        for v in &resolved_views {
             let slug = v.path().to_string();
             let full = route(&format!("/{}", v.path()), &self.base_path);
             router = router.route(
@@ -928,7 +969,7 @@ impl Plugin for AdminPlugin {
         ];
         // Companion entries for the developer-registered custom views,
         // mounted in `routes()` as `GET {base}/{view.path}`.
-        for v in &self.custom_views {
+        for v in &self.resolved_custom_views() {
             specs.push(RouteSpec::new(
                 &format!("{}/{}", self.base_path, v.path()),
                 g(),
@@ -1047,6 +1088,31 @@ mod custom_view_wiring_tests {
             }),
             default_period: None,
         }
+    }
+
+    // gaps3 #7 — invalid view paths are dropped (logged), not panicked.
+    // Before the fix, mounting a duplicate or reserved-colliding path made
+    // axum's router panic at boot inside `routes()`.
+    #[test]
+    fn resolved_custom_views_drops_reserved_and_duplicate_paths() {
+        let plugin = AdminPlugin::default()
+            .view(AdminView::new("reports/sales", "A"))
+            .view(AdminView::new("reports/sales", "dup B")) // duplicate → dropped
+            .view(AdminView::new("login", "reserved")) // collides with /admin/login
+            .view(AdminView::new("api/x", "reserved api")) // reserved first segment
+            .view(AdminView::new("reports/ok", "C")); // valid, distinct
+
+        let resolved = plugin.resolved_custom_views();
+        let paths: Vec<&str> = resolved.iter().map(|v| v.path()).collect();
+        assert_eq!(
+            paths,
+            vec!["reports/sales", "reports/ok"],
+            "duplicate + reserved-colliding paths dropped; first wins on a duplicate"
+        );
+
+        // The real regression: routes() must not panic on the conflicting
+        // registrations now that the resolver drops them first.
+        let _router = plugin.routes();
     }
 
     #[test]
