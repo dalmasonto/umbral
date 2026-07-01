@@ -269,37 +269,13 @@ pub(crate) async fn index(
     let view_groups = view_groups(&state, &user).await;
 
     // Sectioned widget list — each entry carries its own title +
-    // optional subtitle + widget array. The template renders one
-    // <section> per entry, so a dashboard with 20 widgets across
-    // 4 sections reads as themed clusters rather than one
-    // mega-grid. Falls back to a single un-named section when the
-    // developer only uses the legacy `register_widget(...)` API.
-    let widget_sections: Vec<serde_json::Value> = state
-        .dashboard_sections
-        .iter()
-        .map(|section| {
-            let widgets_json: Vec<serde_json::Value> = section
-                .widgets
-                .iter()
-                .map(|w| {
-                    serde_json::json!({
-                        "key":   w.key,
-                        "title": w.title,
-                        "kind":  w.kind.as_str(),
-                        "span":  {
-                            "cols": w.default_span.cols,
-                            "rows": w.default_span.rows,
-                        },
-                    })
-                })
-                .collect();
-            serde_json::json!({
-                "title":    section.title,
-                "subtitle": section.subtitle,
-                "widgets":  widgets_json,
-            })
-        })
-        .collect();
+    // optional subtitle + widget array, filtered to widgets the viewing
+    // user may see (via Widget::permission). The template renders one
+    // <section> per entry; sections whose every widget is filtered are
+    // rendered with an empty widgets array and skipped by the template.
+    // Falls back to showing all widgets when PermissionsPlugin is absent.
+    let widget_sections =
+        crate::view::accessible_widget_sections_json(&state.dashboard_sections, &user).await;
 
     // Per-model row count for the dashboard cards. Fires every
     // COUNT concurrently so a project with 30 registered models

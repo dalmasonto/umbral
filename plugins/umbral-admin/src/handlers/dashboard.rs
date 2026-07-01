@@ -150,7 +150,7 @@ pub fn builtin_recent_users_widget() -> Widget {
 // =========================================================================
 
 /// `GET /admin/api/dashboard/catalog` — list widgets the user may add to
-/// the dashboard. Filtered by per-widget permission once those land.
+/// the dashboard.
 pub(crate) async fn dashboard_catalog(
     State(state): State<AdminState>,
     headers: HeaderMap,
@@ -244,6 +244,16 @@ pub(crate) async fn dashboard_widget_data(
     // page handler enforces. Without this, a staff user blocked from the page
     // could bypass `.with_permission(...)` by calling the data endpoint directly.
     if let Some(code) = state.widget_gates.get(key.as_str()) {
+        if let Err(r) = crate::permcheck::require_codename(&user, code).await {
+            return r;
+        }
+    }
+
+    // Per-widget permission gate (independent of any view-level gate above).
+    // A widget with `permission: Some(codename)` may only be fetched by a
+    // user holding that codename, regardless of which page the widget lives on.
+    // Graceful no-op: `require_codename` allows all when PermissionsPlugin is absent.
+    if let Some(code) = widget.permission {
         if let Err(r) = crate::permcheck::require_codename(&user, code).await {
             return r;
         }

@@ -142,6 +142,46 @@ pub(crate) async fn view_groups(
         .collect()
 }
 
+/// Build the widget-section JSON for a page, omitting any widget whose
+/// `permission` codename the user lacks. Returns the same JSON shape the
+/// dashboard and custom-view templates consume:
+/// `[{ title, subtitle, widgets: [{ key, title, kind, span:{cols,rows} }] }]`.
+///
+/// A section whose every widget is filtered out still appears with an empty
+/// `widgets` array; the template's `{% if section.widgets | length > 0 %}`
+/// guard skips the heading + grid in that case.
+///
+/// Graceful no-op: `has_codename` returns `true` when `PermissionsPlugin`
+/// is absent, so uninstalled projects see all widgets (staff-only baseline).
+pub(crate) async fn accessible_widget_sections_json(
+    sections: &[crate::widgets::WidgetSection],
+    user: &umbral_auth::AuthUser,
+) -> Vec<serde_json::Value> {
+    let mut out = Vec::with_capacity(sections.len());
+    for section in sections {
+        let mut widgets_json = Vec::new();
+        for w in section.widgets.iter() {
+            if let Some(code) = w.permission {
+                if !crate::permcheck::has_codename(user, code).await {
+                    continue;
+                }
+            }
+            widgets_json.push(serde_json::json!({
+                "key":   w.key,
+                "title": w.title,
+                "kind":  w.kind.as_str(),
+                "span":  { "cols": w.default_span.cols, "rows": w.default_span.rows },
+            }));
+        }
+        out.push(serde_json::json!({
+            "title":    section.title,
+            "subtitle": section.subtitle,
+            "widgets":  widgets_json,
+        }));
+    }
+    out
+}
+
 // =========================================================================
 // Form fields
 // =========================================================================

@@ -34,9 +34,11 @@ static LOCK: Mutex<()> = Mutex::const_new(());
 const SECRET_CODENAME: &str = "reports.view_secret";
 /// Widget key inside the gated view — used by the widget-data gate tests.
 const SECRET_WIDGET_KEY: &str = "rpt_secret";
+/// Dashboard widget with a per-widget permission — used by the widget-permission tests.
+const DASH_WIDGET_KEY: &str = "dash_gated";
 
 // =========================================================================
-// Tiny widget helper
+// Tiny widget helpers
 // =========================================================================
 
 fn tiny_kpi(key: &'static str) -> Widget {
@@ -51,6 +53,25 @@ fn tiny_kpi(key: &'static str) -> Widget {
             WidgetPayload::Kpi(KpiPayload {
                 value: "42".to_string(),
                 unit: Some("units".to_string()),
+                delta: None,
+                sparkline: None,
+            })
+        }),
+    }
+}
+
+fn tiny_kpi_permissioned(key: &'static str, perm: &'static str) -> Widget {
+    Widget {
+        key,
+        title: format!("KPI {key}"),
+        kind: WidgetKind::Kpi,
+        default_span: Span { cols: 3, rows: 1 },
+        permission: Some(perm),
+        default_period: None,
+        data: WidgetDataFn::new(|_user| async move {
+            WidgetPayload::Kpi(KpiPayload {
+                value: "99".to_string(),
+                unit: None,
                 delta: None,
                 sparkline: None,
             })
@@ -106,6 +127,12 @@ async fn boot() -> &'static axum::Router {
                                 WidgetSection::new("Secret data")
                                     .widget(tiny_kpi(SECRET_WIDGET_KEY)),
                             ),
+                    )
+                    // Dashboard section with a per-widget permissioned widget —
+                    // covers render-filter + data-endpoint per-widget gate tests.
+                    .dashboard_section(
+                        WidgetSection::new("Gated section")
+                            .widget(tiny_kpi_permissioned(DASH_WIDGET_KEY, SECRET_CODENAME)),
                     ),
             )
             .build()
@@ -369,5 +396,108 @@ async fn test_custom_view_widget_data_gated_200_with_codename() {
         resp.status(),
         StatusCode::OK,
         "staff user holding the view codename must be served widget data (200)"
+    );
+}
+
+// =========================================================================
+// Per-widget permission tests (Widget::permission enforcement)
+// =========================================================================
+
+/// A dashboard widget with `permission: Some(codename)` must be OMITTED from
+/// the rendered dashboard page for a staff user who lacks that codename.
+///
+/// Mutation-check: without the render filter in `accessible_widget_sections_json`
+/// the widget renders for every staff user and the "absent" assertion below fails.
+#[tokio::test]
+async fn test_widget_permission_filters_dashboard_render() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+
+    // cv_staff has NO codenames → the permissioned widget must be absent.
+    let cookie_no_perm = cookie_for("cv_staff").await;
+    let req = Request::builder()
+        // ?dashboard=1 bypasses the restore_last_path redirect so we
+        // actually get the dashboard HTML, not a redirect.
+        .uri("/admin/?dashboard=1")
+        .header(header::COOKIE, cookie_no_perm)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "dashboard must load for cv_staff"
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&body);
+    assert!(
+        !html.contains(&format!("id=\"widget-{DASH_WIDGET_KEY}\"")),
+        "dashboard must NOT render the permissioned widget for a user lacking the codename; \
+         found id=\"widget-{DASH_WIDGET_KEY}\" in body"
+    );
+
+    // cv_priv HOLDS SECRET_CODENAME → the widget must appear.
+    let cookie_with_perm = cookie_for("cv_priv").await;
+    let req2 = Request::builder()
+        .uri("/admin/?dashboard=1")
+        .header(header::COOKIE, cookie_with_perm)
+        .body(Body::empty())
+        .unwrap();
+    let resp2 = router.clone().oneshot(req2).await.unwrap();
+    assert_eq!(
+        resp2.status(),
+        StatusCode::OK,
+        "dashboard must load for cv_priv"
+    );
+    let body2 = resp2.into_body().collect().await.unwrap().to_bytes();
+    let html2 = String::from_utf8_lossy(&body2);
+    assert!(
+        html2.contains(&format!("id=\"widget-{DASH_WIDGET_KEY}\"")),
+        "dashboard MUST render the permissioned widget for a user who holds the codename; \
+         id=\"widget-{DASH_WIDGET_KEY}\" not found in body"
+    );
+}
+
+/// The widget-data endpoint must return 403 for a staff user who lacks the
+/// per-widget codename, and 200 for one who holds it.
+///
+/// Mutation-check: without the `widget.permission` check in
+/// `dashboard_widget_data` the endpoint returns 200 for every staff user
+/// and the 403 assertion below fails.
+#[tokio::test]
+async fn test_widget_permission_gates_data_endpoint() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+
+    // cv_staff (no codename) → must be denied with 403.
+    let cookie_no_perm = cookie_for("cv_staff").await;
+    let req = Request::builder()
+        .uri(&format!(
+            "/admin/api/dashboard/widgets/{DASH_WIDGET_KEY}/data"
+        ))
+        .header(header::COOKIE, cookie_no_perm)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "staff user lacking the widget's codename must get 403 from the data endpoint"
+    );
+
+    // cv_priv (holds SECRET_CODENAME) → must be served with 200.
+    let cookie_with_perm = cookie_for("cv_priv").await;
+    let req2 = Request::builder()
+        .uri(&format!(
+            "/admin/api/dashboard/widgets/{DASH_WIDGET_KEY}/data"
+        ))
+        .header(header::COOKIE, cookie_with_perm)
+        .body(Body::empty())
+        .unwrap();
+    let resp2 = router.clone().oneshot(req2).await.unwrap();
+    assert_eq!(
+        resp2.status(),
+        StatusCode::OK,
+        "staff user holding the widget's codename must be served widget data (200)"
     );
 }

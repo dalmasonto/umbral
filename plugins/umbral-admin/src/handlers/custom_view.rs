@@ -37,31 +37,12 @@ pub(crate) async fn custom_view(
     let apps = sidebar_apps(&state, &user).await;
     let view_groups = view_groups(&state, &user).await;
 
-    // Same widget-section JSON shape the dashboard handler emits
-    // (`handlers/list.rs::index`), so `widget_grid` renders identically.
-    let widget_sections: Vec<serde_json::Value> = view
-        .sections()
-        .iter()
-        .map(|section| {
-            let widgets_json: Vec<serde_json::Value> = section
-                .widgets
-                .iter()
-                .map(|w| {
-                    serde_json::json!({
-                        "key":   w.key,
-                        "title": w.title,
-                        "kind":  w.kind.as_str(),
-                        "span":  { "cols": w.default_span.cols, "rows": w.default_span.rows },
-                    })
-                })
-                .collect();
-            serde_json::json!({
-                "title":    section.title,
-                "subtitle": section.subtitle,
-                "widgets":  widgets_json,
-            })
-        })
-        .collect();
+    // Permission-filtered widget-section JSON — same shape the dashboard
+    // handler emits so `widget_grid` renders identically. Widgets whose
+    // Widget::permission codename the viewing user lacks are omitted.
+    // Falls back to all widgets when PermissionsPlugin is absent.
+    let widget_sections =
+        crate::view::accessible_widget_sections_json(view.sections(), &user).await;
 
     let breadcrumbs = vec![serde_json::json!({ "label": view.title(), "url": "" })];
 
