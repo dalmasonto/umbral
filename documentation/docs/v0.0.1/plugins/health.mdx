@@ -9,11 +9,11 @@ tags: [health, liveness, readiness, probes, kubernetes, plugin]
 
 `umbral-health` mounts two probe endpoints so an orchestrator (Kubernetes, a load balancer, an uptime monitor) can tell whether your app is alive and whether it is ready to serve traffic:
 
-- **`GET /healthz`** — *liveness*. Always returns `200` as long as the process is answering. Use it to decide whether to **restart** the container. It never touches a dependency, so a slow database can't trigger a restart loop.
-- **`GET /ready`** — *readiness*. Runs every registered check and returns `200` with a JSON body when they all pass, or `503` (with the failing check's reason in the body) when one fails. Use it to decide whether to **route traffic** to this instance.
+- **`GET /healthz`** - *liveness*. Always returns `200` as long as the process is answering. Use it to decide whether to **restart** the container. It never touches a dependency, so a slow database can't trigger a restart loop.
+- **`GET /ready`** - *readiness*. Runs every registered check and returns `200` with a JSON body when they all pass, or `503` (with the failing check's reason in the body) when one fails. Use it to decide whether to **route traffic** to this instance.
 
 <Callout type="info">
-Liveness and readiness are split on purpose: a failed dependency (DB down) should pull the instance **out of rotation** (readiness `503`), not **kill the process** (liveness stays `200`) — restarting won't fix a downstream outage.
+Liveness and readiness are split on purpose: a failed dependency (DB down) should pull the instance **out of rotation** (readiness `503`), not **kill the process** (liveness stays `200`) - restarting won't fix a downstream outage.
 </Callout>
 
 ## Wiring
@@ -27,7 +27,7 @@ App::builder()
     .build()?;
 ```
 
-With no checks registered, `/ready` just confirms the app is up — the same signal as `/healthz`, but on the endpoint your orchestrator polls for routing decisions.
+With no checks registered, `/ready` just confirms the app is up - the same signal as `/healthz`, but on the endpoint your orchestrator polls for routing decisions.
 
 ## Readiness checks
 
@@ -69,5 +69,5 @@ Each check's `name` is surfaced in the `/ready` JSON body, so a `503` tells oper
 
 ## See also
 
-- [The Plugin trait](./the-plugin-trait) — how a plugin contributes routes like these.
-- [Logging and tracing](../observability/index) — the other half of operating an umbral app.
+- [The Plugin trait](./the-plugin-trait) - how a plugin contributes routes like these.
+- [Logging and tracing](../observability/index) - the other half of operating an umbral app.

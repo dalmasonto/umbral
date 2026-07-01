@@ -7,7 +7,7 @@ tags: [oauth, social-login, google, github, auth, plugin]
 
 # OAuth / social login
 
-`umbral-oauth` adds **social login** ("Sign in with Google") and **account connection** ("Connect GitHub") on top of [`umbral-auth`](./auth). A social identity is a `SocialAccount` row linked to an `AuthUser` by foreign key — an extension of the user, never a replacement for the username — and provider tokens are stored in [`Masked`](../orm/masked) columns, encrypted at rest.
+`umbral-oauth` adds **social login** ("Sign in with Google") and **account connection** ("Connect GitHub") on top of [`umbral-auth`](./auth). A social identity is a `SocialAccount` row linked to an `AuthUser` by foreign key - an extension of the user, never a replacement for the username - and provider tokens are stored in [`Masked`](../orm/masked) columns, encrypted at rest.
 
 ```rust
 use umbral::prelude::*;
@@ -22,11 +22,11 @@ App::builder().plugin(oauth).build()?;
 ```
 
 <Callout type="info">
-This page is the plugin overview. For the full flow — provider environment variables, the login / connect / callback routes, linking several accounts to one user, and the templates — see the complete guide: **[OAuth / social login](../auth/oauth)**.
+This page is the plugin overview. For the full flow - provider environment variables, the login / connect / callback routes, linking several accounts to one user, and the templates - see the complete guide: **[OAuth / social login](../auth/oauth)**.
 </Callout>
 
 ## See also
 
-- [OAuth / social login — full guide](../auth/oauth)
+- [OAuth / social login - full guide](../auth/oauth)
 - [Users and passwords](../auth/users-and-passwords)
-- [Masked columns](../orm/masked) — how provider tokens are encrypted at rest.
+- [Masked columns](../orm/masked) - how provider tokens are encrypted at rest.

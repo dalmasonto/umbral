@@ -6,19 +6,19 @@ icon: mail
 tags: [auth, email, mailer]
 ---
 
-umbral-auth never talks to an SMTP server or a mail API directly. When a flow needs to send an email — a verification code, a password-reset link — it hands the message to **the function you provide** via `AuthPlugin::mailer(...)`. You decide how it's delivered (SMTP, a provider API, a queue, a log), and you can decide what it *says* per email type. With nothing wired, a `ConsoleMailer` prints to stderr so the flows work locally with zero config.
+umbral-auth never talks to an SMTP server or a mail API directly. When a flow needs to send an email - a verification code, a password-reset link - it hands the message to **the function you provide** via `AuthPlugin::mailer(...)`. You decide how it's delivered (SMTP, a provider API, a queue, a log), and you can decide what it *says* per email type. With nothing wired, a `ConsoleMailer` prints to stderr so the flows work locally with zero config.
 
-<Callout type="info">umbral-auth does not depend on umbral-email or any mail crate. Pass any sender you like — an async closure, a type that implements `AuthMailer`, or the umbral-email one-liner below.</Callout>
+<Callout type="info">umbral-auth does not depend on umbral-email or any mail crate. Pass any sender you like - an async closure, a type that implements `AuthMailer`, or the umbral-email one-liner below.</Callout>
 
 ## What your mailer receives
 
-Your sender is called with one [`OutgoingMail`] per email. It carries **both** a framework-rendered body *and* the semantic kind plus its raw data — so you can either forward the rendered body as-is, or ignore it and build the message yourself.
+Your sender is called with one [`OutgoingMail`] per email. It carries **both** a framework-rendered body *and* the semantic kind plus its raw data - so you can either forward the rendered body as-is, or ignore it and build the message yourself.
 
 | Field | Type | Content |
 |---|---|---|
 | `to` | `String` | Recipient email address |
 | `username` | `String` | Recipient's username (for personalization) |
-| `kind` | `MailKind` | **Which flow + its raw data** — match on this to customize per email type |
+| `kind` | `MailKind` | **Which flow + its raw data** - match on this to customize per email type |
 | `subject` | `String` | Framework-rendered subject (from the overridable templates) |
 | `html` | `String` | Framework-rendered HTML body |
 | `text` | `String` | Framework-rendered plain-text body |
@@ -32,7 +32,7 @@ pub enum MailKind {
 }
 ```
 
-<Callout type="info">`MailKind` is `#[non_exhaustive]` — future auth flows (magic links, custom-action notifications) will add variants, so always include a `_ => { ... }` arm when you match on it.</Callout>
+<Callout type="info">`MailKind` is `#[non_exhaustive]` - future auth flows (magic links, custom-action notifications) will add variants, so always include a `_ => { ... }` arm when you match on it.</Callout>
 
 ## The simplest wiring: forward the rendered body
 
@@ -60,7 +60,7 @@ AuthPlugin::<AuthUser>::default()
 
 ## Full control: build each email yourself
 
-This is the point of `kind`. When you want to own the content — your branding, your copy, a transactional-email provider's own templates — match on `MailKind` and build the message from the raw code / reset URL. The framework-rendered `html`/`text` are still there as a fallback, but you don't have to use them.
+This is the point of `kind`. When you want to own the content - your branding, your copy, a transactional-email provider's own templates - match on `MailKind` and build the message from the raw code / reset URL. The framework-rendered `html`/`text` are still there as a fallback, but you don't have to use them.
 
 ```rust
 use umbral_auth::{AuthPlugin, AuthUser, OutgoingMail, AuthMailError, MailKind};
@@ -96,11 +96,11 @@ AuthPlugin::<AuthUser>::default()
     });
 ```
 
-This is the safe way to customize the emails: the framework owns *when* and *to whom* mail is sent (and keeps the security properties — the code is single-use, the link expires), while you own *what the message looks like* for each type.
+This is the safe way to customize the emails: the framework owns *when* and *to whom* mail is sent (and keeps the security properties - the code is single-use, the link expires), while you own *what the message looks like* for each type.
 
 ## Customizing only the wording (template override)
 
-If you want the default delivery path but different copy, you don't need a custom mailer at all — override the shipped email templates. umbral-auth ships these under its `templates/auth/email/` directory; drop a same-named file in **your** app's templates dir and it wins (first-match-wins):
+If you want the default delivery path but different copy, you don't need a custom mailer at all - override the shipped email templates. umbral-auth ships these under its `templates/auth/email/` directory; drop a same-named file in **your** app's templates dir and it wins (first-match-wins):
 
 ```
 templates/auth/email/verify_code.html   # {{ code }}, {{ username }}
@@ -137,8 +137,8 @@ AuthPlugin::<AuthUser>::default().mailer(SmtpMailer { /* ... */ });
 
 ## Development default
 
-When no mailer is wired, `ConsoleMailer` is active: every email is written to stderr (recipient, subject, and the plain-text body — so the verification code or reset link is visible in your terminal). Email flows work out of the box with no SMTP config. If `ConsoleMailer` is ever the active mailer outside `Dev`/`Test`, it logs a loud warning, because nothing is actually delivered.
+When no mailer is wired, `ConsoleMailer` is active: every email is written to stderr (recipient, subject, and the plain-text body - so the verification code or reset link is visible in your terminal). Email flows work out of the box with no SMTP config. If `ConsoleMailer` is ever the active mailer outside `Dev`/`Test`, it logs a loud warning, because nothing is actually delivered.
 
-<Callout type="warning">Wire a real `AuthPlugin::mailer(...)` before deploying — `ConsoleMailer` only prints; it does not deliver.</Callout>
+<Callout type="warning">Wire a real `AuthPlugin::mailer(...)` before deploying - `ConsoleMailer` only prints; it does not deliver.</Callout>
 
 See the design note `docs/decisions/2026-06-28-auth-full-surface.md` for the rationale behind the pluggable mailer seam and why umbral-auth does not take a hard dependency on umbral-email.

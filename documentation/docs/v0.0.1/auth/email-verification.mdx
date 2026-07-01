@@ -6,7 +6,7 @@ icon: mail-check
 tags: [auth, email, verification]
 ---
 
-umbral-auth ships opt-in email verification. When enabled, a 6-digit code is sent to the user on registration and login is blocked with a `403` until the address is confirmed. When disabled (the default), the `email_verified_at` column is present on `auth_user` but no enforcement runs — useful for phased rollout.
+umbral-auth ships opt-in email verification. When enabled, a 6-digit code is sent to the user on registration and login is blocked with a `403` until the address is confirmed. When disabled (the default), the `email_verified_at` column is present on `auth_user` but no enforcement runs - useful for phased rollout.
 
 ## Enabling enforcement
 
@@ -21,7 +21,7 @@ AuthPlugin::<AuthUser>::default()
 
 Without `.require_verified_email()`, the two endpoints below are still mounted and functional; the login gate is simply not installed.
 
-<Callout type="info">Your mailer receives this email as `MailKind::EmailVerification { code }` — match on it to build a fully branded verification email with the raw code, or override `templates/auth/email/verify_code.{html,txt}` to change just the wording. See [Auth mailer](/docs/v0.0.1/auth/mailer).</Callout>
+<Callout type="info">Your mailer receives this email as `MailKind::EmailVerification { code }` - match on it to build a fully branded verification email with the raw code, or override `templates/auth/email/verify_code.{html,txt}` to change just the wording. See [Auth mailer](/docs/v0.0.1/auth/mailer).</Callout>
 
 ## Endpoints
 
@@ -43,7 +43,7 @@ Verifies the 6-digit code. On success, writes `email_verified_at = now()` on the
 | Code expired (15-minute TTL) | `400 Bad Request` |
 | Code already used | `400 Bad Request` |
 
-The response body does not distinguish between wrong code, expired code, or used code — same JSON shape to prevent oracle attacks.
+The response body does not distinguish between wrong code, expired code, or used code - same JSON shape to prevent oracle attacks.
 
 ### `POST /api/auth/resend-verification`
 
@@ -56,7 +56,7 @@ Issues a fresh code and emails it. Always returns `202 Accepted` regardless of w
 ## Code rules
 
 <CardGrid cols={2}>
-  <Card icon="hash" title="6 digits" description="Numeric only. Generated with a CSPRNG — not Math.random." />
+  <Card icon="hash" title="6 digits" description="Numeric only. Generated with a CSPRNG - not Math.random." />
   <Card icon="clock" title="15-minute TTL" description="Codes expire 15 minutes after issue. Resend to get a fresh one." />
   <Card icon="shield-x" title="5-attempt cap" description="Five wrong guesses burn the code. The user must resend." />
   <Card icon="check-circle" title="Single-use" description="A code is marked used immediately on first successful verify." />
@@ -64,6 +64,6 @@ Issues a fresh code and emails it. Always returns `202 Accepted` regardless of w
 
 ## The `email_verified_at` column
 
-The column is added to `auth_user` by the auth plugin's own migration. Run `makemigrations` and `migrate` after adding `.require_verified_email()` to an existing app — the migration adds the nullable column and the framework handles existing unverified rows gracefully (they keep `email_verified_at = NULL` and are blocked from login until they verify).
+The column is added to `auth_user` by the auth plugin's own migration. Run `makemigrations` and `migrate` after adding `.require_verified_email()` to an existing app - the migration adds the nullable column and the framework handles existing unverified rows gracefully (they keep `email_verified_at = NULL` and are blocked from login until they verify).
 
 See the design note `docs/decisions/2026-06-28-auth-full-surface.md` for the challenge model, TTL choices, and how verification interacts with the password-reset flow.

@@ -1,10 +1,10 @@
 ---
 title: Custom admin views
-description: Register widget pages under the admin at any path — KPIs, charts, and tables outside the model-CRUD flow, with optional permission gating.
+description: Register widget pages under the admin at any path - KPIs, charts, and tables outside the model-CRUD flow, with optional permission gating.
 sidebar_position: 10
 ---
 
-Custom views let you mount an arbitrary page inside the admin chrome — not tied to any model — under the admin's dedicated `custom-views/` namespace (e.g. a view whose path is `reports/sales` is served at `/admin/custom-views/reports/sales/`). Each view renders the same widget kinds the dashboard uses (KPI cards, charts, tables, feed), grouped into named sections, inside the full admin layout with the sidebar and breadcrumbs. The `custom-views/` prefix is hyphenated — it can never be a model table name — so a view can't collide with a changelist or a built-in admin route.
+Custom views let you mount an arbitrary page inside the admin chrome - not tied to any model - under the admin's dedicated `custom-views/` namespace (e.g. a view whose path is `reports/sales` is served at `/admin/custom-views/reports/sales/`). Each view renders the same widget kinds the dashboard uses (KPI cards, charts, tables, feed), grouped into named sections, inside the full admin layout with the sidebar and breadcrumbs. The `custom-views/` prefix is hyphenated - it can never be a model table name - so a view can't collide with a changelist or a built-in admin route.
 
 ## Register a custom view
 
@@ -61,7 +61,7 @@ AdminView::new("reports/secret", "Secret report")
     .with_permission("reports.view_secret")
 ```
 
-When `PermissionsPlugin` is installed, staff users without the codename receive **403** on the page, the view is filtered from their sidebar, and the widget-data API endpoints for every widget in that view (`GET /admin/api/dashboard/widgets/{key}/data`) also return **403**. The gate applies at all three levels — page, sidebar, and data API — so a user blocked from the page cannot scrape the underlying data by calling the API directly. Without `PermissionsPlugin`, the gate is a no-op — any staff user can reach the page and its widgets (consistent with the rest of the admin's pre-permissions baseline).
+When `PermissionsPlugin` is installed, staff users without the codename receive **403** on the page, the view is filtered from their sidebar, and the widget-data API endpoints for every widget in that view (`GET /admin/api/dashboard/widgets/{key}/data`) also return **403**. The gate applies at all three levels - page, sidebar, and data API - so a user blocked from the page cannot scrape the underlying data by calling the API directly. Without `PermissionsPlugin`, the gate is a no-op - any staff user can reach the page and its widgets (consistent with the rest of the admin's pre-permissions baseline).
 
 ## Design spec
 

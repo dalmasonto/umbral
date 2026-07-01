@@ -6,7 +6,7 @@ icon: form-input
 tags: [auth, forms, html]
 ---
 
-`AuthPlugin::with_form_routes()` is for server-rendered HTML apps. It mounts seven POST-only form-action endpoints that accept `application/x-www-form-urlencoded` bodies, run the auth logic, and `303 See Other` redirect — never returning a body. Errors surface via the session flash so your page can render them on the next GET. The framework does **not** ship the HTML pages themselves; you build those, pointing their `<form action="...">` at these endpoints.
+`AuthPlugin::with_form_routes()` is for server-rendered HTML apps. It mounts seven POST-only form-action endpoints that accept `application/x-www-form-urlencoded` bodies, run the auth logic, and `303 See Other` redirect - never returning a body. Errors surface via the session flash so your page can render them on the next GET. The framework does **not** ship the HTML pages themselves; you build those, pointing their `<form action="...">` at these endpoints.
 
 ## Mounting
 
@@ -21,7 +21,7 @@ AuthPlugin::<AuthUser>::default()
     .mailer(/* see Auth mailer */);
 ```
 
-`with_form_routes()` is independent of `with_default_routes()` — use one, the other, or both.
+`with_form_routes()` is independent of `with_default_routes()` - use one, the other, or both.
 
 ## The seven endpoints
 
@@ -61,7 +61,7 @@ Errors are stored as session flash messages and are available in templates as `{
 </form>
 ```
 
-<Callout type="info">Flash messages work because `SessionsPlugin`'s `session_layer` middleware establishes a session for every request — even cookieless first-visit ones. It injects a candidate session token into the request; when the handler calls `msgs.error(...)`, the session row is materialised and `Set-Cookie` is emitted on the response. Ensure `SessionsPlugin` is in your app alongside `AuthPlugin` for flash to work.</Callout>
+<Callout type="info">Flash messages work because `SessionsPlugin`'s `session_layer` middleware establishes a session for every request - even cookieless first-visit ones. It injects a candidate session token into the request; when the handler calls `msgs.error(...)`, the session row is materialised and `Set-Cookie` is emitted on the response. Ensure `SessionsPlugin` is in your app alongside `AuthPlugin` for flash to work.</Callout>
 
 ## The `?redirect=` parameter
 
@@ -78,6 +78,6 @@ The endpoint validates the value and falls back to `/` for anything that looks l
 
 ## `logout` under the hood
 
-Both the form surface and the JSON surface share the same `umbral_auth::logout(req_headers, resp_headers)` function — it destroys the session row, clears the cookie, and revokes the bearer token if one is present. Calling the form `POST /auth/logout` from an anchor with `method="dialog"` or a minimal form is the recommended pattern for HTML apps.
+Both the form surface and the JSON surface share the same `umbral_auth::logout(req_headers, resp_headers)` function - it destroys the session row, clears the cookie, and revokes the bearer token if one is present. Calling the form `POST /auth/logout` from an anchor with `method="dialog"` or a minimal form is the recommended pattern for HTML apps.
 
 See the design note `docs/decisions/2026-06-28-auth-full-surface.md` for the redirect-safety model, flash-message design, and why the framework ships endpoints rather than pre-built pages.

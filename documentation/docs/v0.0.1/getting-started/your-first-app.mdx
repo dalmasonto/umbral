@@ -13,16 +13,21 @@ The fastest way to start is the `umbral` command-line tool: install it once, sca
 
 <Steps>
   <Step title="Install the CLI">
+
+    Install the `umbral` CLI with `cargo`.
+
     ```bash
     cargo install umbral-cli
     ```
-    This puts the global `umbral` binary on your `PATH` — the scaffolding tool for creating projects and plugins.
+    
+    This puts the global `umbral` binary on your `PATH` - the scaffolding tool for creating projects and plugins.
+    
   </Step>
   <Step title="Create a project">
     ```bash
     umbral startproject my_project
     ```
-    Scaffolds a ready-to-run project in `./my_project` — a `src/` tree, a `Cargo.toml` wired to the published `umbral-*` crates, and starter config. (Add plugins later from inside the project with `umbral startapp <name>`.)
+    Scaffolds a ready-to-run project in `./my_project` - a `src/` tree, a `Cargo.toml` wired to the published `umbral-*` crates, and starter config. (Add plugins later from inside the project with `umbral startapp APP_NAME`.)
   </Step>
   <Step title="Run it">
     ```bash
@@ -34,14 +39,14 @@ The fastest way to start is the `umbral` command-line tool: install it once, sca
 </Steps>
 
 <Callout type="note">
-`cargo run -- dev` needs [`cargo-watch`](https://crates.io/crates/cargo-watch) — install it with `cargo install cargo-watch`. Without it, run the server directly with `cargo run` and restart after code edits; templates still hot-reload in dev mode either way. Other management commands run the same way: `cargo run -- migrate`, `cargo run -- makemigrations`, `cargo run -- serve`.
+`cargo run -- dev` needs [`cargo-watch`](https://crates.io/crates/cargo-watch) - install it with `cargo install cargo-watch`. Without it, run the server directly with `cargo run` and restart after code edits; templates still hot-reload in dev mode either way. Other management commands run the same way: `cargo run -- migrate`, `cargo run -- makemigrations`, `cargo run -- serve`.
 
-Since you've got `umbral-cli` installed, `umbral <command>` is a shorthand for `cargo run -- <command>` when run inside a project — so `umbral dev`, `umbral migrate`, etc. work too. The explicit `cargo run -- <command>` form always works, install or not.
+Since you've got `umbral-cli` installed, `umbral <command>` is a shorthand for `cargo run -- <command>` when run inside a project - so `umbral dev`, `umbral migrate`, etc. work too. The explicit `cargo run -- <command>` form always works, install or not.
 </Callout>
 
 ## The shape
 
-The section below is the minimal app written by hand — the same builder the scaffold sets up for you.
+The section below is the minimal app written by hand - the same builder the scaffold sets up for you.
 
 ```rust
 use umbral::prelude::*;

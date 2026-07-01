@@ -10,7 +10,7 @@ icon: info
 The name is the adjective 'of the shadow' (from Latin *umbra*, shadow).
 
 <Callout type="info">
-Umbral is early/alpha and **published on crates.io** — start from the [`umbral`](https://crates.io/crates/umbral) facade. It's usable today: declare a model, run managed migrations, port an existing database via `inspectdb`, and wire the built-in plugins — auth, sessions, permissions, the auto admin (with dashboard widgets + custom views), REST + OpenAPI, background tasks, realtime (SSE + WebSockets), OAuth, caching, email, storage/media, multitenancy, health checks, request logs, analytics, and more. Render HTML through the templates substrate and drive it all through the project's `cargo run -- <command>` CLI (plus the global `umbral` scaffolding binary from `cargo install umbral-cli`). It's `0.0.x`, so APIs still move before 1.0. Start at [Your first app](/docs/v0.0.1/getting-started/your-first-app).
+Umbral is early/alpha and **published on crates.io** - start from the [`umbral`](https://crates.io/crates/umbral) facade. It's usable today: declare a model, run managed migrations, port an existing database via `inspectdb`, and wire the built-in plugins - auth, sessions, permissions, the auto admin (with dashboard widgets + custom views), REST + OpenAPI, background tasks, realtime (SSE + WebSockets), OAuth, caching, email, storage/media, multitenancy, health checks, request logs, analytics, and more. Render HTML through the templates substrate and drive it all through the project's `cargo run -- <command>` CLI (plus the global `umbral` scaffolding binary from `cargo install umbral-cli`). It's `0.0.x`, so APIs still move before 1.0. Start at [Your first app](/docs/v0.0.1/getting-started/your-first-app).
 </Callout>
 
 ## Why Umbral exists
@@ -79,13 +79,13 @@ No `State<DbPool>` in the handler signature. No `axum::` types. The ORM is ambie
 
 ## Status
 
-Umbral is **early/alpha** and **published on crates.io** — every crate ships under the `umbral-*` namespace; start with the [`umbral`](https://crates.io/crates/umbral) facade. It's at `0.0.x`: usable, but pre-1.0, so APIs will still move before things stabilize. Development happens in the open, and each feature gets a doc page here as it lands.
+Umbral is **early/alpha** and **published on crates.io** - every crate ships under the `umbral-*` namespace; start with the [`umbral`](https://crates.io/crates/umbral) facade. It's at `0.0.x`: usable, but pre-1.0, so APIs will still move before things stabilize. Development happens in the open, and each feature gets a doc page here as it lands.
 
 For the long version, read the design specs in the repository: `arch.md` (architecture), `umbral-PRD.md` (product requirements), and `docs/specs/` (per-subsystem deep specs).
 
 ## Roadmap
 
-Much of the original backlog has already shipped — request logs (`umbral-logs`), realtime SSE **and** WebSockets (`umbral-realtime`), RTE/Markdown admin field widgets, and the admin dashboard widget system + custom views all landed. A few notable items are still ahead:
+Much of the original backlog has already shipped - request logs (`umbral-logs`), realtime SSE **and** WebSockets (`umbral-realtime`), RTE/Markdown admin field widgets, and the admin dashboard widget system + custom views all landed. A few notable items are still ahead:
 
 <CardGrid cols={2}>
   <Card
