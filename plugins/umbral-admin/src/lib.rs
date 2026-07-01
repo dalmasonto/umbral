@@ -528,6 +528,18 @@ struct AdminState {
     restore_last_path: bool,
     /// Developer-registered custom views, for the page handler + sidebar.
     custom_views: Arc<Vec<AdminView>>,
+    /// Gate map: widget key → view permission codename, for every widget
+    /// that belongs to a `.with_permission()`-gated custom view.
+    ///
+    /// Built at `routes()` time from the custom-view registration list and
+    /// checked by `dashboard_widget_data` after `require_staff` — if the
+    /// widget's key is present, the requesting user must also hold the mapped
+    /// codename, or the endpoint returns 403.
+    ///
+    /// Dashboard widgets and widgets in ungated views are NOT in this map,
+    /// so the gate only applies to views that explicitly opt in via
+    /// `.with_permission(...)`.
+    widget_gates: Arc<std::collections::HashMap<String, String>>,
 }
 
 impl AdminState {
@@ -630,8 +642,14 @@ impl Plugin for AdminPlugin {
 
         // Custom-view widgets join the same flat catalog so the per-key
         // data endpoint resolves them unchanged. Keys are global → warn on dups.
+        // The gate map is built alongside the catalog: for every widget in a
+        // permission-gated view (`.with_permission(codename)`), record
+        // `widget_key → codename` so `dashboard_widget_data` can enforce the
+        // same codename check on the API call, not just on the page load.
         let mut seen_keys: std::collections::HashSet<&str> =
             catalog.iter().map(|w| w.key).collect();
+        let mut widget_gates: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         for v in &self.custom_views {
             for w in v.sections().iter().flat_map(|s| s.widgets.iter()) {
                 if !seen_keys.insert(w.key) {
@@ -643,6 +661,10 @@ impl Plugin for AdminPlugin {
                     );
                 }
                 catalog.push(w.clone());
+                // Only gated views contribute to the gate map.
+                if let Some(perm) = v.permission() {
+                    widget_gates.insert(w.key.to_string(), perm.to_string());
+                }
             }
         }
 
@@ -655,6 +677,7 @@ impl Plugin for AdminPlugin {
             dashboard_models_subtitle: self.dashboard_models_subtitle.clone(),
             restore_last_path: self.restore_last_path,
             custom_views: Arc::new(self.custom_views.clone()),
+            widget_gates: Arc::new(widget_gates),
         };
         let mut router = Router::new()
             // Login / logout (no auth required)

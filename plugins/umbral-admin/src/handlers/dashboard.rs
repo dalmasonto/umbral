@@ -239,6 +239,16 @@ pub(crate) async fn dashboard_widget_data(
         return AdminError::NotFound(format!("no widget `{key}`")).into_response();
     };
 
+    // Security gate: if this widget belongs to a permission-gated custom view,
+    // the requesting user must hold the view's codename — the same check the
+    // page handler enforces. Without this, a staff user blocked from the page
+    // could bypass `.with_permission(...)` by calling the data endpoint directly.
+    if let Some(code) = state.widget_gates.get(key.as_str()) {
+        if let Err(r) = crate::permcheck::require_codename(&user, code).await {
+            return r;
+        }
+    }
+
     // Per-request parameters parsed from the query string.
     // Closures registered via `WidgetDataFn::with_params` read
     // these to vary the response (`?period=7d`, etc.); closures

@@ -32,6 +32,8 @@ static LOCK: Mutex<()> = Mutex::const_new(());
 
 /// The codename the permission-gated view requires.
 const SECRET_CODENAME: &str = "reports.view_secret";
+/// Widget key inside the gated view — used by the widget-data gate tests.
+const SECRET_WIDGET_KEY: &str = "rpt_secret";
 
 // =========================================================================
 // Tiny widget helper
@@ -95,10 +97,15 @@ async fn boot() -> &'static axum::Router {
                                 WidgetSection::new("This month").widget(tiny_kpi("rpt_total")),
                             ),
                     )
-                    // Permission-gated view — covers the 403/200 handler gate.
+                    // Permission-gated view — covers the 403/200 handler gate
+                    // AND the widget-data endpoint gate (the security fix).
                     .view(
                         AdminView::new("reports/secret", "Secret report")
-                            .with_permission(SECRET_CODENAME),
+                            .with_permission(SECRET_CODENAME)
+                            .section(
+                                WidgetSection::new("Secret data")
+                                    .widget(tiny_kpi(SECRET_WIDGET_KEY)),
+                            ),
                     ),
             )
             .build()
@@ -307,5 +314,60 @@ async fn test_custom_view_page_permission_gate_200_with_codename() {
         resp.status(),
         StatusCode::OK,
         "staff user holding the codename must reach the gated view (200)"
+    );
+}
+
+/// Security gate on the widget-data API: a staff user WITHOUT the view's
+/// permission codename must receive 403 when fetching the widget-data
+/// endpoint for a widget that lives inside a `.with_permission()`-gated view.
+///
+/// `.with_permission(codename)` guards the page and the sidebar. This test
+/// proves it ALSO guards `GET /admin/api/dashboard/widgets/{key}/data` for
+/// every widget registered in that view — closing the leak where a user who
+/// can't see the page could still scrape the data by hitting the API directly.
+#[tokio::test]
+async fn test_custom_view_widget_data_gated_403() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    // cv_staff holds NO custom codename → widget data must be denied.
+    let cookie = cookie_for("cv_staff").await;
+
+    let req = Request::builder()
+        .uri(&format!(
+            "/admin/api/dashboard/widgets/{SECRET_WIDGET_KEY}/data"
+        ))
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "staff user without the view codename must get 403 fetching the gated view's widget data"
+    );
+}
+
+/// Counterpart to the widget-data 403 test: a staff user WHO HOLDS the
+/// view's codename may fetch the widget-data endpoint (200). Proves the
+/// gate passes valid holders, not a constant-deny.
+#[tokio::test]
+async fn test_custom_view_widget_data_gated_200_with_codename() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    // cv_priv holds SECRET_CODENAME → widget data must be served.
+    let cookie = cookie_for("cv_priv").await;
+
+    let req = Request::builder()
+        .uri(&format!(
+            "/admin/api/dashboard/widgets/{SECRET_WIDGET_KEY}/data"
+        ))
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "staff user holding the view codename must be served widget data (200)"
     );
 }
