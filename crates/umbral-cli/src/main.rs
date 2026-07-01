@@ -12,12 +12,13 @@
 //!   richer template (example Model with field-type attributes,
 //!   example handler, README) aimed at distributable plugins.
 //!
-//! For every **management** command (`serve`, `migrate`,
-//! `makemigrations`, `inspectdb`, etc.), users run them inside their
-//! project via `cargo run -- <command>` — the project's own binary
-//! hosts those via [`umbral_cli::dispatch`]. This binary points users
-//! at that pattern instead of trying to manage their database
-//! without their model registry.
+//! Every other (**management**) command — `serve`, `dev`, `migrate`,
+//! `makemigrations`, `inspectdb`, `worker`, … — is **forwarded** to the
+//! current project's binary as `cargo run -- <command>` (those commands
+//! are hosted by [`umbral_cli::dispatch`] inside the project, where the
+//! model registry lives). So `umbral dev` is shorthand for
+//! `cargo run -- dev`. Run these from inside a project directory; the
+//! equivalent `cargo run -- <command>` form always works too.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -27,7 +28,9 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "umbral",
-    about = "umbral project scaffolding. `cargo install umbral-cli` puts this on your PATH.",
+    about = "umbral CLI. Scaffolds projects (startproject/startapp/startplugin); \
+             any other command (dev, migrate, serve, …) is forwarded to \
+             `cargo run -- <command>` in the current project.",
     disable_help_subcommand = true
 )]
 struct Cli {
@@ -91,10 +94,56 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         local: Option<PathBuf>,
     },
+
+    /// Any non-scaffolding command (`dev`, `migrate`, `makemigrations`,
+    /// `serve`, `worker`, …) is captured here and forwarded to the current
+    /// project's binary via `cargo run -- <args>`. So `umbral dev` runs
+    /// `cargo run -- dev`.
+    #[command(external_subcommand)]
+    Forward(Vec<String>),
+}
+
+/// Forward `umbral <cmd> [args...]` to the current project via
+/// `cargo run -- <cmd> [args...]`, inheriting stdio and propagating the
+/// child's exit code. Requires a Cargo project in (or above) the working
+/// directory; otherwise prints a clear error rather than cargo's.
+fn forward_to_project(args: &[String]) -> ExitCode {
+    let cwd = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("error: cannot read the current directory: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !umbral_cli::in_cargo_project(&cwd) {
+        let cmd = args.first().map(String::as_str).unwrap_or("<command>");
+        eprintln!(
+            "error: `umbral {cmd}` must run inside an umbral project — no Cargo.toml in {} \
+             (or any parent).\n  cd into your project directory, or create one with \
+             `umbral startproject <name>`.",
+            cwd.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    let cargo_args = umbral_cli::cargo_run_forward_args(args);
+    match std::process::Command::new("cargo")
+        .args(&cargo_args)
+        .status()
+    {
+        Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
+        Err(e) => {
+            eprintln!("error: failed to run `cargo {}`: {e}", cargo_args.join(" "));
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Non-scaffolding commands forward to the project's `cargo run -- <cmd>`.
+    if let Command::Forward(args) = &cli.command {
+        return forward_to_project(args);
+    }
     let result = match cli.command {
         Command::Startproject { name, path, local } => {
             umbral_cli::scaffold::scaffold_project(&name, &path, local.as_deref()).map(|r| {
@@ -120,9 +169,9 @@ fn main() -> ExitCode {
                     Some(true) => println!(
                         "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
                     ),
-                    Some(false) => println!(
-                        "Cargo.toml already lists `{name}` — no duplicate added."
-                    ),
+                    Some(false) => {
+                        println!("Cargo.toml already lists `{name}` — no duplicate added.")
+                    }
                     None => println!(
                         "Note: could not find a Cargo.toml to update. \
                          Add `{name} = {{ path = \"plugins/{name}\" }}` manually."
@@ -146,9 +195,9 @@ fn main() -> ExitCode {
                     Some(true) => println!(
                         "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
                     ),
-                    Some(false) => println!(
-                        "Cargo.toml already lists `{name}` — no duplicate added."
-                    ),
+                    Some(false) => {
+                        println!("Cargo.toml already lists `{name}` — no duplicate added.")
+                    }
                     None => println!(
                         "Note: could not find a Cargo.toml to update. \
                          Add `{name} = {{ path = \"plugins/{name}\" }}` manually."
@@ -161,6 +210,8 @@ fn main() -> ExitCode {
                 }
             })
         }
+        // Handled by the early return above; kept for match exhaustiveness.
+        Command::Forward(_) => unreachable!("Forward is dispatched before this match"),
     };
 
     match result {

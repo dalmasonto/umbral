@@ -55,6 +55,28 @@ use umbral::migrate::MigrateError;
 
 pub mod scaffold;
 
+/// Build the `cargo` argv for forwarding a `umbral <cmd> [args...]`
+/// invocation to the current project's binary (`cargo run -- <cmd> [args...]`).
+///
+/// The global `umbral` scaffolding binary forwards every non-scaffolding
+/// subcommand here so `umbral dev` behaves as `cargo run -- dev`. The
+/// caller runs `cargo` with these args.
+pub fn cargo_run_forward_args(forwarded: &[String]) -> Vec<String> {
+    let mut argv = vec!["run".to_string(), "--".to_string()];
+    argv.extend(forwarded.iter().cloned());
+    argv
+}
+
+/// Whether `start` (or any ancestor) contains a `Cargo.toml` — i.e. we're
+/// inside a Cargo project `cargo run` could build. Mirrors how `cargo`
+/// itself finds the manifest by walking up from the working directory, so
+/// `umbral <cmd>` works from a subdirectory just like `cargo run` does.
+pub fn in_cargo_project(start: &std::path::Path) -> bool {
+    start
+        .ancestors()
+        .any(|dir| dir.join("Cargo.toml").is_file())
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "umbral",
@@ -427,7 +449,9 @@ async fn dev(
     cmd.arg("-x").arg(&cargo_cmd);
 
     eprintln!("umbral dev: watching for changes, running `cargo {cargo_cmd}` on each save");
-    eprintln!("umbral dev: templates also hot-reload in-process; no restart needed for .html edits");
+    eprintln!(
+        "umbral dev: templates also hot-reload in-process; no restart needed for .html edits"
+    );
     eprintln!("umbral dev: Ctrl-C to stop");
     eprintln!();
 
@@ -773,6 +797,38 @@ mod tests {
     use umbral::Settings;
     use umbral_core::cli::{CliError, PluginCommand};
     use umbral_core::plugin::Plugin;
+
+    #[test]
+    fn forward_args_prefix_cargo_run_dashdash() {
+        // `umbral dev` → `cargo run -- dev`
+        assert_eq!(
+            cargo_run_forward_args(&["dev".to_string()]),
+            vec!["run", "--", "dev"]
+        );
+        // Flags and extra args ride along verbatim.
+        assert_eq!(
+            cargo_run_forward_args(&[
+                "migrate".to_string(),
+                "--fake".to_string(),
+                "accounts/0001_auto".to_string(),
+            ]),
+            vec!["run", "--", "migrate", "--fake", "accounts/0001_auto"]
+        );
+    }
+
+    #[test]
+    fn in_cargo_project_detects_manifest_upward() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        // No Cargo.toml anywhere yet.
+        assert!(!in_cargo_project(root));
+        // A manifest at the root is found from a nested subdir (like cargo).
+        std::fs::write(root.join("Cargo.toml"), b"[package]\nname='x'\n").unwrap();
+        let nested = root.join("src").join("widgets");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert!(in_cargo_project(&nested), "walks up to find the manifest");
+        assert!(in_cargo_project(root));
+    }
 
     struct WorkerCmd;
 

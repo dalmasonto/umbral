@@ -35,6 +35,8 @@ The fastest way to start is the `umbral` command-line tool: install it once, sca
 
 <Callout type="note">
 `cargo run -- dev` needs [`cargo-watch`](https://crates.io/crates/cargo-watch) — install it with `cargo install cargo-watch`. Without it, run the server directly with `cargo run` and restart after code edits; templates still hot-reload in dev mode either way. Other management commands run the same way: `cargo run -- migrate`, `cargo run -- makemigrations`, `cargo run -- serve`.
+
+Since you've got `umbral-cli` installed, `umbral <command>` is a shorthand for `cargo run -- <command>` when run inside a project — so `umbral dev`, `umbral migrate`, etc. work too. The explicit `cargo run -- <command>` form always works, install or not.
 </Callout>
 
 ## The shape
