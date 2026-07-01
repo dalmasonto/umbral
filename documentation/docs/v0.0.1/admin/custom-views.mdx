@@ -1,0 +1,68 @@
+---
+title: Custom admin views
+description: Register widget pages under the admin at any path — KPIs, charts, and tables outside the model-CRUD flow, with optional permission gating.
+sidebar_position: 10
+---
+
+Custom views let you mount an arbitrary page inside the admin chrome — not tied to any model — at any path under the admin base (e.g. `/admin/reports/sales`). Each view renders the same widget kinds the dashboard uses (KPI cards, charts, tables, feed), grouped into named sections, inside the full admin layout with the sidebar and breadcrumbs.
+
+## Register a custom view
+
+```rust
+use umbral_admin::{
+    AdminPlugin, AdminView, KpiPayload, Span, Widget,
+    WidgetDataFn, WidgetKind, WidgetPayload, WidgetSection,
+};
+
+fn revenue_widget() -> Widget {
+    Widget {
+        key: "reports_revenue",
+        title: "Total revenue".to_string(),
+        kind: WidgetKind::Kpi,
+        default_span: Span { cols: 3, rows: 1 },
+        permission: None,
+        default_period: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let total = Order::objects().aggregate_sum("total").await.unwrap_or(0.0);
+            WidgetPayload::Kpi(KpiPayload {
+                value: format!("${:.0}", total),
+                unit: None,
+                delta: None,
+                sparkline: None,
+            })
+        }),
+    }
+}
+
+AdminPlugin::default()
+    .view(
+        AdminView::new("reports/sales", "Sales report")
+            .with_icon("bar-chart")
+            .with_subtitle("Revenue overview")
+            .section(
+                WidgetSection::new("This month")
+                    .widget(revenue_widget()),
+            ),
+    )
+```
+
+This mounts `GET /admin/reports/sales`, renders the admin chrome around the widget grid, and makes the widget's data endpoint reachable at `/admin/api/dashboard/widgets/reports_revenue/data`.
+
+## Sidebar appearance
+
+The view link appears in the admin sidebar under a group heading. The default group is **"Pages"**; override it with `.with_group("Reports")`. Multiple views under the same group name cluster into one collapsible section.
+
+To keep a view routable but out of the sidebar (for deep-linked pages you navigate to programmatically), call `.hide()`.
+
+## Permission gating
+
+```rust
+AdminView::new("reports/secret", "Secret report")
+    .with_permission("reports.view_secret")
+```
+
+When `PermissionsPlugin` is installed, staff users without the codename receive **403** on the page and the view is filtered from their sidebar. Without `PermissionsPlugin`, the gate is a no-op — any staff user can reach the page (consistent with the rest of the admin's pre-permissions baseline).
+
+## Design spec
+
+For the full rationale and extension points, see `docs/superpowers/specs/2026-07-01-admin-custom-views-design.md`.
