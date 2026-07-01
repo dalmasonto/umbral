@@ -242,7 +242,7 @@ async fn test_custom_view_page_renders() {
     let cookie = cookie_for("cv_staff").await;
 
     let req = Request::builder()
-        .uri("/admin/reports/sales")
+        .uri("/admin/custom-views/reports/sales/")
         .header(header::COOKIE, cookie)
         .body(Body::empty())
         .unwrap();
@@ -310,7 +310,7 @@ async fn test_custom_view_page_permission_gate_403() {
     let cookie = cookie_for("cv_staff").await;
 
     let req = Request::builder()
-        .uri("/admin/reports/secret")
+        .uri("/admin/custom-views/reports/secret/")
         .header(header::COOKIE, cookie)
         .body(Body::empty())
         .unwrap();
@@ -332,7 +332,7 @@ async fn test_custom_view_page_permission_gate_200_with_codename() {
     let cookie = cookie_for("cv_priv").await;
 
     let req = Request::builder()
-        .uri("/admin/reports/secret")
+        .uri("/admin/custom-views/reports/secret/")
         .header(header::COOKIE, cookie)
         .body(Body::empty())
         .unwrap();

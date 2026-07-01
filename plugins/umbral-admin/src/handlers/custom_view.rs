@@ -17,7 +17,11 @@ pub(crate) async fn custom_view(
     headers: HeaderMap,
     slug: String,
 ) -> Response {
-    let current_path = format!("{}/{}", crate::branding::current().base_path, slug);
+    let current_path = format!(
+        "{}/custom-views/{}/",
+        crate::branding::current().base_path,
+        slug
+    );
     let user = match require_staff(&headers, &current_path).await {
         Ok(u) => u,
         Err(r) => return r,

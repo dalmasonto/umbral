@@ -4,7 +4,7 @@ description: Register widget pages under the admin at any path — KPIs, charts,
 sidebar_position: 10
 ---
 
-Custom views let you mount an arbitrary page inside the admin chrome — not tied to any model — at any path under the admin base (e.g. `/admin/reports/sales`). Each view renders the same widget kinds the dashboard uses (KPI cards, charts, tables, feed), grouped into named sections, inside the full admin layout with the sidebar and breadcrumbs.
+Custom views let you mount an arbitrary page inside the admin chrome — not tied to any model — under the admin's dedicated `custom-views/` namespace (e.g. a view whose path is `reports/sales` is served at `/admin/custom-views/reports/sales/`). Each view renders the same widget kinds the dashboard uses (KPI cards, charts, tables, feed), grouped into named sections, inside the full admin layout with the sidebar and breadcrumbs. The `custom-views/` prefix is hyphenated — it can never be a model table name — so a view can't collide with a changelist or a built-in admin route.
 
 ## Register a custom view
 
@@ -46,7 +46,7 @@ AdminPlugin::default()
     )
 ```
 
-This mounts `GET /admin/reports/sales`, renders the admin chrome around the widget grid, and makes the widget's data endpoint reachable at `/admin/api/dashboard/widgets/reports_revenue/data`.
+This mounts `GET /admin/custom-views/reports/sales/`, renders the admin chrome around the widget grid, and makes the widget's data endpoint reachable at `/admin/api/dashboard/widgets/reports_revenue/data`.
 
 ## Sidebar appearance
 

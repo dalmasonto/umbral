@@ -193,7 +193,7 @@ async fn visible_view_appears_in_sidebar() {
     let html = dashboard_html(router, cookie_for("sidebar_staff").await).await;
 
     assert!(
-        html.contains("href=\"/admin/reports/sales\""),
+        html.contains("href=\"/admin/custom-views/reports/sales/\""),
         "sidebar must contain href for visible view"
     );
     assert!(
@@ -214,7 +214,7 @@ async fn hidden_view_absent_from_sidebar() {
     let html = dashboard_html(router, cookie_for("sidebar_staff").await).await;
 
     assert!(
-        !html.contains("href=\"/admin/internal/debug\""),
+        !html.contains("href=\"/admin/custom-views/internal/debug/\""),
         "hidden view must not appear in the sidebar"
     );
 }
@@ -233,12 +233,12 @@ async fn gated_view_hidden_for_user_without_codename() {
     let html = dashboard_html(router, cookie_for("sidebar_staff").await).await;
 
     assert!(
-        !html.contains("href=\"/admin/reports/secret\""),
+        !html.contains("href=\"/admin/custom-views/reports/secret/\""),
         "permission-gated view must be filtered out for a staff user without the codename"
     );
     // Selective, not blanket: the non-gated view is still present.
     assert!(
-        html.contains("href=\"/admin/reports/sales\""),
+        html.contains("href=\"/admin/custom-views/reports/sales/\""),
         "non-gated view must remain visible in the same response (filter is selective)"
     );
 }
@@ -254,7 +254,7 @@ async fn gated_view_shown_for_user_with_codename() {
     let html = dashboard_html(router, cookie_for("sidebar_priv").await).await;
 
     assert!(
-        html.contains("href=\"/admin/reports/secret\""),
+        html.contains("href=\"/admin/custom-views/reports/secret/\""),
         "staff user holding the codename must see the gated view"
     );
 }

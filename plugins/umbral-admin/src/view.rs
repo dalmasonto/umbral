@@ -127,7 +127,7 @@ pub(crate) async fn view_groups(
             order.push(group.clone());
         }
         groups.entry(group).or_default().push(serde_json::json!({
-            "href":  format!("{}/{}", base, v.path()),
+            "href":  format!("{}/custom-views/{}/", base, v.path()),
             "label": v.title(),
             "icon":  v.icon().unwrap_or("file-text"),
             "slug":  v.slug(),

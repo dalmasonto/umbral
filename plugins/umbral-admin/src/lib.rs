@@ -502,31 +502,24 @@ impl AdminPlugin {
     }
 
     /// gaps3 #7 — custom views whose path is safe to mount, with the rest
-    /// dropped (and logged). A view whose path is empty, whose first
-    /// segment shadows a built-in admin route, or that duplicates another
-    /// view's path would make axum's router `panic!` on a route conflict at
-    /// boot. Rejecting them here turns a cryptic boot panic into a clear
-    /// `tracing::error!` and keeps the rest of the admin serving; the
-    /// rejected view is absent from the router AND the sidebar (both read
-    /// the resolved list). Multi-segment paths like `reports/sales` coexist
-    /// with the `{table}/` changelist route via axum's static-over-param
-    /// precedence, so only the built-in *static* first segments are reserved.
+    /// dropped (and logged). Two views registered at the same path would
+    /// make axum's router `panic!` on a route conflict at boot; rejecting
+    /// the duplicate here turns that into a clear `tracing::error!` and
+    /// keeps the rest of the admin serving (the rejected view is absent
+    /// from the router AND the sidebar, both of which read this list).
+    ///
+    /// Views mount under the dedicated `/custom-views/` URL namespace (see
+    /// `Plugin::routes`), which is hyphenated and therefore can never be a
+    /// model table name (tables are snake_case) — so a view can NOT collide
+    /// with a built-in admin route or shadow a changelist. That's why the
+    /// only checks here are empty-path and duplicate-path.
     fn resolved_custom_views(&self) -> Vec<AdminView> {
-        const RESERVED_FIRST: &[&str] = &["login", "logout", "upload-image", "api"];
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         let mut out = Vec::with_capacity(self.custom_views.len());
         for v in &self.custom_views {
             let path = v.path();
             if path.is_empty() {
                 tracing::error!(title = v.title(), "admin custom view rejected: empty path");
-                continue;
-            }
-            let first = path.split('/').next().unwrap_or("");
-            if RESERVED_FIRST.contains(&first) {
-                tracing::error!(
-                    path,
-                    "admin custom view rejected: first path segment collides with a built-in admin route"
-                );
                 continue;
             }
             if !seen.insert(path) {
@@ -887,7 +880,7 @@ impl Plugin for AdminPlugin {
         // cloneable across concurrent requests).
         for v in &resolved_views {
             let slug = v.path().to_string();
-            let full = route(&format!("/{}", v.path()), &self.base_path);
+            let full = route(&format!("/custom-views/{}/", v.path()), &self.base_path);
             router = router.route(
                 &full,
                 axum::routing::get({
@@ -971,7 +964,7 @@ impl Plugin for AdminPlugin {
         // mounted in `routes()` as `GET {base}/{view.path}`.
         for v in &self.resolved_custom_views() {
             specs.push(RouteSpec::new(
-                &format!("{}/{}", self.base_path, v.path()),
+                &format!("{}/custom-views/{}/", self.base_path, v.path()),
                 g(),
             ));
         }
@@ -1090,28 +1083,28 @@ mod custom_view_wiring_tests {
         }
     }
 
-    // gaps3 #7 — invalid view paths are dropped (logged), not panicked.
-    // Before the fix, mounting a duplicate or reserved-colliding path made
-    // axum's router panic at boot inside `routes()`.
+    // gaps3 #7 — a DUPLICATE view path is dropped (logged), not panicked.
+    // Views mount under the /custom-views/ namespace, so a path that looks
+    // like a built-in route ("login") or a table can't collide — only an
+    // exact duplicate path would make axum's router panic at boot.
     #[test]
-    fn resolved_custom_views_drops_reserved_and_duplicate_paths() {
+    fn resolved_custom_views_drops_duplicate_paths() {
         let plugin = AdminPlugin::default()
             .view(AdminView::new("reports/sales", "A"))
             .view(AdminView::new("reports/sales", "dup B")) // duplicate → dropped
-            .view(AdminView::new("login", "reserved")) // collides with /admin/login
-            .view(AdminView::new("api/x", "reserved api")) // reserved first segment
+            .view(AdminView::new("login", "safe under the namespace")) // /custom-views/login/ — no collision
             .view(AdminView::new("reports/ok", "C")); // valid, distinct
 
         let resolved = plugin.resolved_custom_views();
         let paths: Vec<&str> = resolved.iter().map(|v| v.path()).collect();
         assert_eq!(
             paths,
-            vec!["reports/sales", "reports/ok"],
-            "duplicate + reserved-colliding paths dropped; first wins on a duplicate"
+            vec!["reports/sales", "login", "reports/ok"],
+            "only the exact duplicate is dropped (first wins); a 'login' path is fine under /custom-views/"
         );
 
-        // The real regression: routes() must not panic on the conflicting
-        // registrations now that the resolver drops them first.
+        // The real regression: routes() must not panic on the duplicate
+        // registration now that the resolver drops it first.
         let _router = plugin.routes();
     }
 
