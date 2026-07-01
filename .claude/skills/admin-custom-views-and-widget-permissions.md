@@ -31,7 +31,7 @@ The final review of #76 caught that gating the PAGE while leaving the widget-DAT
 - Editing `dashboard.html`'s grid inline instead of the `widget_grid` macro — the macro is shared; edit it once.
 - Forgetting to register a new template in `engine.rs` → `{% from %}`/`{% extends %}` panics at first render (`.expect(...)`).
 - `cargo fmt -p umbral-admin` reformats the WHOLE crate (the committed code isn't rustfmt-canonical); `git restore` unrelated churn before committing. Never bare `cargo fmt`.
-- Known open follow-ups: gaps3 #6 (catalog endpoint unfiltered), #7 (no reserved/dup path validation), #8 (sequential per-widget permission checks).
+- gaps3 #6-8 are now SHIPPED: the catalog endpoint filters by `widget.permission`; `AdminPlugin::resolved_custom_views()` drops reserved/duplicate view paths (was a boot panic); the render filter batches permission checks via `join_all`. One soft caveat remains (not enforced): a single-segment view path equal to a model's table name shadows that changelist (axum static-over-param, no panic) — don't name a view the same as a table.
 
 ## See also
 - `docs/superpowers/specs/2026-07-01-admin-custom-views-design.md`
