@@ -155,19 +155,28 @@ pub(crate) async fn dashboard_catalog(
     State(state): State<AdminState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(r) = require_staff(&headers, "/admin/api/dashboard/catalog").await {
-        return r;
-    }
-    let entries: Vec<CatalogEntry> = state
-        .widget_catalog
-        .iter()
-        .map(|w| CatalogEntry {
+    let user = match require_staff(&headers, "/admin/api/dashboard/catalog").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    // gaps3 #6: omit widgets the user can't load. Otherwise a user without a
+    // widget's codename sees it in the "add widget" catalog, adds it, then
+    // gets a 403 on the data fetch (the data endpoint IS gated). Same
+    // per-widget `permission` check `dashboard_widget_data` enforces.
+    let mut entries: Vec<CatalogEntry> = Vec::with_capacity(state.widget_catalog.len());
+    for w in state.widget_catalog.iter() {
+        if let Some(code) = w.permission {
+            if !crate::permcheck::has_codename(&user, code).await {
+                continue;
+            }
+        }
+        entries.push(CatalogEntry {
             key: w.key,
             title: w.title.clone(),
             kind: w.kind.as_str().to_string(),
             default_span: w.default_span.clone(),
-        })
-        .collect();
+        });
+    }
     Json(entries).into_response()
 }
 

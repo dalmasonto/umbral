@@ -501,3 +501,48 @@ async fn test_widget_permission_gates_data_endpoint() {
         "staff user holding the widget's codename must be served widget data (200)"
     );
 }
+
+/// gaps3 #6 — the "add widget" catalog (`GET /admin/api/dashboard/catalog`)
+/// must omit widgets the user can't load, so a user never sees a widget in
+/// the picker that then 403s on the data fetch.
+///
+/// Mutation-check: without the `has_codename` filter in `dashboard_catalog`
+/// the catalog lists every widget and the "absent" assertion below fails.
+#[tokio::test]
+async fn test_catalog_filters_by_widget_permission() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+
+    // cv_staff lacks SECRET_CODENAME → the gated widget must NOT be listed.
+    let cookie_no_perm = cookie_for("cv_staff").await;
+    let req = Request::builder()
+        .uri("/admin/api/dashboard/catalog")
+        .header(header::COOKIE, cookie_no_perm)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "catalog must load for staff");
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let json = String::from_utf8_lossy(&body);
+    assert!(
+        !json.contains(DASH_WIDGET_KEY),
+        "catalog must OMIT a permissioned widget for a user without the codename; \
+         found {DASH_WIDGET_KEY} in {json}"
+    );
+
+    // cv_priv holds SECRET_CODENAME → the gated widget must be listed.
+    let cookie_with_perm = cookie_for("cv_priv").await;
+    let req2 = Request::builder()
+        .uri("/admin/api/dashboard/catalog")
+        .header(header::COOKIE, cookie_with_perm)
+        .body(Body::empty())
+        .unwrap();
+    let resp2 = router.clone().oneshot(req2).await.unwrap();
+    assert_eq!(resp2.status(), StatusCode::OK);
+    let body2 = resp2.into_body().collect().await.unwrap().to_bytes();
+    let json2 = String::from_utf8_lossy(&body2);
+    assert!(
+        json2.contains(DASH_WIDGET_KEY),
+        "catalog MUST list the permissioned widget for a user who holds the codename"
+    );
+}
