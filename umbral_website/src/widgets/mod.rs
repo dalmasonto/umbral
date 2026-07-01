@@ -21,9 +21,11 @@ pub mod aggregates;
 pub mod cards;
 pub mod charts;
 pub mod gauges;
+pub mod reports;
 pub mod tables;
 
 pub use cards::*;
 pub use charts::*;
 pub use gauges::*;
+pub use reports::reports_view;
 pub use tables::*;

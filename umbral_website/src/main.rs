@@ -254,7 +254,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .subtitle("The latest plugins listed in the directory")
                         .widget(widgets::recent_plugins_table())
                         .widget(widgets::recent_activity_feed()),
-                ),
+                )
+                // Custom admin view: a dedicated analytics page at
+                // /admin/custom-views/reports/ reusing the dashboard's
+                // Composition/Trends/Gauges widgets (re-keyed rpt_*).
+                .view(widgets::reports_view()),
         )
         // --- Templates ------------------------------------------------------
         .templates_dir("templates")
