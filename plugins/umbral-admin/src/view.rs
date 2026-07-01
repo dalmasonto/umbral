@@ -157,29 +157,52 @@ pub(crate) async fn accessible_widget_sections_json(
     sections: &[crate::widgets::WidgetSection],
     user: &umbral_auth::AuthUser,
 ) -> Vec<serde_json::Value> {
-    let mut out = Vec::with_capacity(sections.len());
-    for section in sections {
-        let mut widgets_json = Vec::new();
-        for w in section.widgets.iter() {
-            if let Some(code) = w.permission {
-                if !crate::permcheck::has_codename(user, code).await {
-                    continue;
-                }
-            }
-            widgets_json.push(serde_json::json!({
-                "key":   w.key,
-                "title": w.title,
-                "kind":  w.kind.as_str(),
-                "span":  { "cols": w.default_span.cols, "rows": w.default_span.rows },
-            }));
-        }
-        out.push(serde_json::json!({
-            "title":    section.title,
-            "subtitle": section.subtitle,
-            "widgets":  widgets_json,
-        }));
-    }
-    out
+    // gaps3 #8: resolve every DISTINCT permission codename ONCE and
+    // CONCURRENTLY, rather than one sequential `has_codename` await per
+    // widget. Many widgets share a codename, so the dedup shrinks the work
+    // and `join_all` runs the remaining checks in parallel — the render
+    // stays a single round of concurrent lookups regardless of widget count.
+    let codes: std::collections::HashSet<&'static str> = sections
+        .iter()
+        .flat_map(|s| s.widgets.iter())
+        .filter_map(|w| w.permission)
+        .collect();
+    let results = futures_util::future::join_all(
+        codes
+            .into_iter()
+            .map(|code| async move { (code, crate::permcheck::has_codename(user, code).await) }),
+    )
+    .await;
+    let allowed: std::collections::HashMap<&'static str, bool> = results.into_iter().collect();
+
+    sections
+        .iter()
+        .map(|section| {
+            let widgets_json: Vec<serde_json::Value> = section
+                .widgets
+                .iter()
+                // A widget with no permission is always shown; otherwise it
+                // must be in `allowed` (every widget permission is in `codes`).
+                .filter(|w| {
+                    w.permission
+                        .map_or(true, |code| allowed.get(code).copied().unwrap_or(false))
+                })
+                .map(|w| {
+                    serde_json::json!({
+                        "key":   w.key,
+                        "title": w.title,
+                        "kind":  w.kind.as_str(),
+                        "span":  { "cols": w.default_span.cols, "rows": w.default_span.rows },
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "title":    section.title,
+                "subtitle": section.subtitle,
+                "widgets":  widgets_json,
+            })
+        })
+        .collect()
 }
 
 // =========================================================================
