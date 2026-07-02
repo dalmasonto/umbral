@@ -2666,7 +2666,7 @@ async fn create(
         return Ok((StatusCode::CREATED, Json(Value::Object(row))));
     }
 
-    let (status, Json(row)) = create_nested(cfg, model, &mut body).await?;
+    let (status, Json(row)) = create_nested(cfg, model, &mut body, identity.as_ref()).await?;
     Ok((status, Json(Value::Object(row))))
 }
 
@@ -2938,6 +2938,46 @@ async fn fetch_one_in_tx(
 /// returns a 400 rather than blowing the stack.
 const MAX_NEST_DEPTH: usize = 16;
 
+/// Total child rows a single nested write may create/update across the whole
+/// tree. Mirrors the bulk ceiling ([`MAX_BULK_ITEMS`]) so a nested payload can
+/// never expand to an unbounded number of statements on one transaction
+/// (audit_2 plugin-rest H3). Depth is bounded separately by [`MAX_NEST_DEPTH`].
+const MAX_NEST_NODES: usize = MAX_BULK_ITEMS;
+
+/// Cross-cutting state threaded through the nested-write recursion: the plugin
+/// config, the request identity (so each child row is checked against its own
+/// resource's permission class), and a running count of child rows written
+/// (bounded by [`MAX_NEST_NODES`]).
+struct NestCtx<'a> {
+    cfg: &'a RestPlugin,
+    identity: Option<&'a Identity>,
+    nodes: usize,
+}
+
+impl NestCtx<'_> {
+    /// Count one child row about to be written; reject past the cap (H3).
+    fn charge_node(&mut self) -> Result<(), ApiError> {
+        self.nodes += 1;
+        if self.nodes > MAX_NEST_NODES {
+            return Err(ApiError::BadInput(format!(
+                "nested write exceeds the maximum of {MAX_NEST_NODES} child rows"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Enforce a nested child's OWN resource permission for `action` (H2).
+    /// Mirrors [`RestPlugin::gate`]'s permission-error translation, but without
+    /// the exposure check — a nested child need not be a routed resource.
+    fn check_child_perm(&self, table: &str, action: &Action) -> Result<(), ApiError> {
+        match self.cfg.permission_for(table).check(action, self.identity) {
+            Ok(()) => Ok(()),
+            Err(PermissionError::Unauthenticated) => Err(ApiError::Unauthenticated),
+            Err(PermissionError::Forbidden) => Err(ApiError::Forbidden),
+        }
+    }
+}
+
 /// Writable nested create (feature #58, recursive since gaps3 #10): insert the
 /// parent and every declared nested subtree — to arbitrary depth — returning
 /// the full nested object.
@@ -2952,11 +2992,17 @@ async fn create_nested(
     cfg: &RestPlugin,
     model: ModelMeta,
     body: &mut Map<String, Value>,
+    identity: Option<&Identity>,
 ) -> Result<(StatusCode, Json<Map<String, Value>>), ApiError> {
     // One transaction for the whole tree. Dropping `tx` without committing
     // rolls every insert back — the safety net for any error in the recursion.
     let mut tx = umbral::db::begin().await?;
-    let row = insert_nested_tree(cfg, &model, body, &mut tx, 0).await?;
+    let mut ctx = NestCtx {
+        cfg,
+        identity,
+        nodes: 0,
+    };
+    let row = insert_nested_tree(&mut ctx, &model, body, &mut tx, 0).await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(row)))
 }
@@ -2970,7 +3016,7 @@ async fn create_nested(
 /// filled from the parent's just-inserted (still-uncommitted) primary key, so
 /// clients never repeat the parent id down the tree.
 async fn insert_nested_tree(
-    cfg: &RestPlugin,
+    ctx: &mut NestCtx<'_>,
     meta: &ModelMeta,
     body: &mut Map<String, Value>,
     tx: &mut umbral::db::Transaction,
@@ -2984,7 +3030,7 @@ async fn insert_nested_tree(
 
     // Split THIS table's declared nested arrays out of the body BEFORE the
     // insert, so they're never handed to the row insert as unknown columns.
-    let specs = cfg.nested.get(&meta.table).cloned().unwrap_or_default();
+    let specs = ctx.cfg.nested.get(&meta.table).cloned().unwrap_or_default();
     let mut pending: Vec<(String, ModelMeta, String, Vec<Value>)> = Vec::new();
     for (field, child_table) in &specs {
         let items = match body.remove(field) {
@@ -3017,7 +3063,7 @@ async fn insert_nested_tree(
         .get(&pk_name)
         .cloned()
         .ok_or_else(|| ApiError::BadInput("nested: row has no primary key after insert".into()))?;
-    cfg.apply_overrides(&meta.table, &mut row);
+    ctx.cfg.apply_overrides(&meta.table, &mut row);
 
     // Recurse into each declared child array.
     for (field, child, fk, items) in pending {
@@ -3028,10 +3074,19 @@ async fn insert_nested_tree(
                     "items in nested `{field}` must be objects"
                 )));
             };
+            // Per-child security (audit_2 H2/H3): count against the tree cap,
+            // strip the child's hidden/denied fields (so a parent-writer can't
+            // set `is_superuser`/`password_hash` on a nested child), and enforce
+            // the child resource's OWN create permission. Strip runs BEFORE the
+            // FK is injected so the FK survives.
+            ctx.charge_node()?;
+            ctx.cfg
+                .strip_hidden_for_write(&child.table, &mut child_body);
+            ctx.check_child_perm(&child.table, &Action::Create)?;
             child_body.insert(fk.clone(), pk_value.clone());
             // `Box::pin` breaks the otherwise-infinitely-sized async recursion.
             let crow = Box::pin(insert_nested_tree(
-                cfg,
+                ctx,
                 &child,
                 &mut child_body,
                 tx,
@@ -3136,6 +3191,7 @@ async fn update_nested(
     pk_name: &str,
     id: &str,
     body: &mut Map<String, Value>,
+    identity: Option<&Identity>,
 ) -> Result<Map<String, Value>, ApiError> {
     // Split the parent's declared nested arrays out of the body.
     let specs = cfg.nested.get(table).cloned().unwrap_or_default();
@@ -3182,7 +3238,14 @@ async fn update_nested(
             .ok_or_else(|| ApiError::BadInput("nested: parent row has no primary key".into()))?
     };
 
-    // Upsert each child subtree on the same tx.
+    // Upsert each child subtree on the same tx. The parent itself was already
+    // gated + hidden-stripped by the `update` handler; `ctx` carries the
+    // identity + node budget so each CHILD is checked and counted (H2/H3).
+    let mut ctx = NestCtx {
+        cfg,
+        identity,
+        nodes: 0,
+    };
     let mut results: Vec<(String, Vec<Value>)> = Vec::new();
     for (field, child, fk, items) in pending {
         let mut upserted = Vec::with_capacity(items.len());
@@ -3193,7 +3256,7 @@ async fn update_nested(
                 )));
             };
             let crow = upsert_nested_child(
-                cfg,
+                &mut ctx,
                 &child,
                 child_body,
                 &NestAnchor {
@@ -3248,7 +3311,7 @@ struct NestAnchor<'a> {
 /// declared nested arrays (upserting grandchildren). An item WITHOUT a pk
 /// CREATEs the whole subtree via [`insert_nested_tree`].
 async fn upsert_nested_child(
-    cfg: &RestPlugin,
+    ctx: &mut NestCtx<'_>,
     meta: &ModelMeta,
     mut body: Map<String, Value>,
     parent: &NestAnchor<'_>,
@@ -3260,20 +3323,26 @@ async fn upsert_nested_child(
             "nested write exceeds the maximum depth of {MAX_NEST_DEPTH}"
         )));
     }
+    // Count this child row against the whole-tree cap (H3).
+    ctx.charge_node()?;
 
     let pk_col = pk_column(meta)?.name.clone();
     let supplied_pk = body.get(&pk_col).filter(|v| !v.is_null()).cloned();
 
     let Some(pk_json) = supplied_pk else {
-        // CREATE — FK to the parent, then insert the whole subtree.
+        // CREATE — enforce this child's own hidden-field denylist + create
+        // permission (H2), set the FK, then insert the whole subtree.
+        ctx.cfg.strip_hidden_for_write(&meta.table, &mut body);
+        ctx.check_child_perm(&meta.table, &Action::Create)?;
         body.insert(parent.fk_col.to_string(), parent.pk_value.clone());
-        return Box::pin(insert_nested_tree(cfg, meta, &mut body, tx, depth)).await;
+        return Box::pin(insert_nested_tree(ctx, meta, &mut body, tx, depth)).await;
     };
 
-    // UPDATE.
+    // UPDATE — enforce this child's own update permission (H2) before any read.
     let pk_str = json_pk_to_string(&pk_json).ok_or_else(|| {
         ApiError::BadInput(format!("nested `{}`: invalid primary key", meta.table))
     })?;
+    ctx.check_child_perm(&meta.table, &Action::Update)?;
 
     // Ownership gate: the row must exist AND belong to THIS parent. Checked
     // explicitly because `update_json_in_tx`'s return is
@@ -3292,7 +3361,7 @@ async fn upsert_nested_child(
     }
 
     // Split this row's own nested arrays out before the scalar update.
-    let specs = cfg.nested.get(&meta.table).cloned().unwrap_or_default();
+    let specs = ctx.cfg.nested.get(&meta.table).cloned().unwrap_or_default();
     let mut pending: Vec<(String, ModelMeta, String, Vec<Value>)> = Vec::new();
     for (field, gc_table) in &specs {
         let items = match body.remove(field) {
@@ -3313,9 +3382,11 @@ async fn upsert_nested_child(
     }
 
     // The pk is the WHERE key; the FK anchors ownership — never let the
-    // payload rewrite either via the SET clause.
+    // payload rewrite either via the SET clause. Then strip the child's
+    // hidden/denied fields so a nested UPDATE can't set them either (H2).
     body.remove(&pk_col);
     body.remove(parent.fk_col);
+    ctx.cfg.strip_hidden_for_write(&meta.table, &mut body);
     // Anything array-shaped still here is an undeclared nested relation.
     reject_undeclared_nested(meta, &body)?;
     umbral::orm::DynQuerySet::for_meta(meta)
@@ -3327,7 +3398,7 @@ async fn upsert_nested_child(
         .get(&pk_col)
         .cloned()
         .ok_or_else(|| ApiError::BadInput("nested: row has no primary key".into()))?;
-    cfg.apply_overrides(&meta.table, &mut row);
+    ctx.cfg.apply_overrides(&meta.table, &mut row);
 
     // Recurse into grandchildren (upsert), scoped to this row.
     for (field, gc, gc_fk, items) in pending {
@@ -3339,7 +3410,7 @@ async fn upsert_nested_child(
                 )));
             };
             let grow = Box::pin(upsert_nested_child(
-                cfg,
+                ctx,
                 &gc,
                 gc_body,
                 &NestAnchor {
@@ -3406,7 +3477,16 @@ async fn update(
     // (no implicit deletes; see the reconciliation policy in `update_nested`).
     let nested_specs = cfg.nested.get(&table).cloned().unwrap_or_default();
     if !nested_specs.is_empty() {
-        let row = update_nested(cfg, &table, model, &pk_name, &id, &mut body).await?;
+        let row = update_nested(
+            cfg,
+            &table,
+            model,
+            &pk_name,
+            &id,
+            &mut body,
+            identity.as_ref(),
+        )
+        .await?;
         return Ok(Json(row));
     }
 
