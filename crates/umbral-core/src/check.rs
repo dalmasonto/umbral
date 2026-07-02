@@ -26,6 +26,36 @@ use crate::settings::{Environment, Settings};
 /// allocating.
 const INSECURE_DEV_SECRET_KEY: &str = "umbral-insecure-dev-key-change-me";
 
+/// Minimum acceptable `secret_key` length in `Environment::Prod`. A short key
+/// forges sessions / CSRF tokens / signed values just as the dev default does
+/// (audit_2 core-app-config #2 / H15). 32 chars ~= 192 bits at base64ish density.
+const MIN_SECRET_KEY_LEN: usize = 32;
+
+/// The hard-error message when `secret_key` is unacceptable for `Environment::Prod`
+/// — the insecure dev default OR too short to be a real signing key — else `None`.
+/// Pure + testable (the `settings_required` check just renders this into a finding).
+fn prod_secret_key_error(env: &Environment, secret_key: &str) -> Option<String> {
+    if !matches!(env, Environment::Prod) {
+        return None;
+    }
+    if secret_key == INSECURE_DEV_SECRET_KEY {
+        return Some(
+            "Settings.secret_key is still set to the insecure dev default in \
+             Environment::Prod. This is a hard production risk."
+                .to_string(),
+        );
+    }
+    let len = secret_key.trim().len();
+    if len < MIN_SECRET_KEY_LEN {
+        return Some(format!(
+            "Settings.secret_key is too short ({len} chars) in Environment::Prod; use at least \
+             {MIN_SECRET_KEY_LEN} random characters. A weak key lets an attacker forge sessions, \
+             CSRF tokens, and signed values just like the dev default does."
+        ));
+    }
+    None
+}
+
 /// The default `allowed_hosts` list emitted by
 /// `crate::settings::default_allowed_hosts()`. Mirrored here so the
 /// `settings.allowed_hosts` check can detect "still the dev default"
@@ -199,13 +229,14 @@ pub fn framework_checks() -> Vec<SystemCheck> {
 fn settings_required(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
     let mut findings = Vec::new();
     let insecure = ctx.settings.secret_key == INSECURE_DEV_SECRET_KEY;
-    if matches!(ctx.settings.environment, Environment::Prod) && insecure {
+    if let Some(message) = prod_secret_key_error(&ctx.settings.environment, &ctx.settings.secret_key)
+    {
         findings.push(SystemCheckFinding {
             check_id: "settings.required",
             severity: Severity::Error,
             location: CheckLocation::Settings,
-            message: "Settings.secret_key is still set to the insecure dev default in Environment::Prod. This is a hard production risk.".to_string(),
-            hint: Some("set UMBRAL_SECRET_KEY in your production env, or change `secret_key` in umbral.toml.".to_string()),
+            message,
+            hint: Some("set a long, random UMBRAL_SECRET_KEY (>= 32 chars) in your production env, or change `secret_key` in umbral.toml.".to_string()),
         });
         return findings;
     }
@@ -712,8 +743,25 @@ pub fn run_all(ctx: &CheckContext<'_>, checks: &[SystemCheck]) -> Vec<SystemChec
 
 #[cfg(test)]
 mod tests {
-    use super::{host_validation_unenforced, is_loopback_bind};
+    use super::{host_validation_unenforced, is_loopback_bind, prod_secret_key_error};
     use crate::settings::Environment;
+
+    #[test]
+    fn prod_rejects_weak_and_default_secret_keys() {
+        // The insecure dev default is rejected in Prod (existing behaviour).
+        assert!(prod_secret_key_error(&Environment::Prod, "umbral-insecure-dev-key-change-me").is_some());
+        // A short non-default key is ALSO rejected in Prod (audit_2 H15).
+        assert!(
+            prod_secret_key_error(&Environment::Prod, "x").is_some(),
+            "a trivially short secret_key must be rejected in Prod"
+        );
+        // A long random key passes.
+        assert!(
+            prod_secret_key_error(&Environment::Prod, "0123456789abcdef0123456789abcdef0123").is_none()
+        );
+        // Outside Prod, nothing is enforced here (dev convenience).
+        assert!(prod_secret_key_error(&Environment::Dev, "x").is_none());
+    }
 
     #[test]
     fn loopback_binds_are_recognised() {

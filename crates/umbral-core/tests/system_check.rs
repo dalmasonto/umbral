@@ -122,7 +122,11 @@ fn settings_required_passes_when_dev_environment() {
 /// at Severity::Error.
 #[test]
 fn settings_required_passes_when_secret_key_overridden_in_prod() {
-    let settings = make_settings(Environment::Prod, "real-secret-not-the-default");
+    // A realistic strong key: not the dev default AND >= 32 chars (audit_2 H15).
+    let settings = make_settings(
+        Environment::Prod,
+        "real-secret-not-the-default-0123456789abcdef",
+    );
     let ctx = CheckContext {
         backend: &SqliteBackend,
         settings: &settings,
