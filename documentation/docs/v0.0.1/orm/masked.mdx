@@ -37,7 +37,11 @@ This is the most important table on the page. Masked data behaves differently de
 | the database column | base64 ciphertext (`TEXT`) |
 
 <Callout type="warning">
-serde output is **ciphertext, not the `••••••` marker**. This is load-bearing: the ORM write path binds INSERT values via `serde_json::to_value(instance)`, so whatever serde emits is what lands in the column: it *must* be the encrypted value. The plaintext therefore never leaves the process through serde. For a clean REST response, hide the field with the serializer's `.hide([...])`; `Debug` and `Display` stay redacted regardless, so logs and templates are safe by default.
+serde output is **ciphertext, not the `••••••` marker**. This is load-bearing on the **typed** write path: `Model::objects().create(instance)` binds INSERT values via `serde_json::to_value(instance)`, so whatever serde emits (the encrypted value) is what lands in the column. For a clean REST response, hide the field with the serializer's `.hide([...])`; `Debug` and `Display` stay redacted regardless, so logs and templates are safe by default.
+</Callout>
+
+<Callout type="danger">
+**The encrypt-on-serialize guarantee only holds on the typed `create`/`bulk_create` path.** The *dynamic* JSON write path — `DynQuerySet::insert_json` / `update_json`, which is what the **REST plugin's create/update endpoints and the admin auto-CRUD form submit use** — binds a masked column as a plain `TEXT` value taken straight from the request body. That JSON never passes through `Masked`'s serde `Serialize`, so **it is stored as plaintext, not ciphertext.** Until this is fixed in the write path, do **not** expose a masked field on a writable REST `ModelViewSet` or admin form: hide it from writes (`.hide([...])`) and set the value server-side with `Masked::new(...)` on the typed path. See the ORM audit finding `core-orm #1`.
 </Callout>
 
 ## Set up keys

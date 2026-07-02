@@ -97,14 +97,28 @@ struct Chat;
 #[umbral_realtime::async_trait]
 impl MessageHandler for Chat {
     async fn on_message(&self, ctx: &MessageContext, text: String) {
-        // ctx.conn_id / ctx.user_id let you authorize and route.
-        let msg: ChatMsg = serde_json::from_str(&text).unwrap();
+        // Never trust a client-supplied room. Parse defensively (no unwrap on
+        // attacker input) and authorize the publish before fanning it out.
+        let msg: ChatMsg = match serde_json::from_str(&text) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        // The sender may only publish to a room its own identity could join.
+        if !Realtime::policy().can_join(ctx.user_id.as_deref(), &msg.room) {
+            return; // drop unauthorized publish
+        }
         Realtime::to_group(&msg.room).send("message", &msg).await;
     }
 }
 
 RealtimePlugin::new().message_handler(Chat);
 ```
+
+<Callout type="warning">
+**Inbound frames carry no automatic send-authorization.** The `GroupPolicy` gate runs at the *handshake* and decides which groups a connection may *join*. It does **not** run on inbound messages. `Realtime::to_group(room)` delivers to whoever is in `room` regardless of who sent the frame — so a client that joined only `public:lobby` can still `send({"room":"chat:secret"})` and inject into a room it never joined.
+
+Always re-check authorization inside `on_message` before publishing to any client-supplied room (as above: `Realtime::policy().can_join(ctx.user_id, &room)`, or your own membership lookup). Treat `text` as untrusted: parse without `unwrap`, and validate every field you route on.
+</Callout>
 
 ```js
 const ws = new WebSocket("ws://localhost:8000/realtime/ws?groups=public:lobby");

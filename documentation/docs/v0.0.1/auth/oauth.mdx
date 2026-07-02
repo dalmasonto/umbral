@@ -181,7 +181,7 @@ umbral-rest's bearer authentication resolves it: the token is a real `AuthToken`
 </Steps>
 
 <Callout type="warning">
-A `?next=` that doesn't match an `allow_return` prefix is rejected with **400**, so an attacker can't point the flow at their own origin to harvest a freshly minted token. With **no** `allow_return` configured, `?next=` is ignored entirely and the flow keeps its server-rendered session behavior (safe by default). Token mode is login-only: a connect flow never mints a token (the user already holds one).
+A `?next=` that doesn't match an `allow_return` prefix is rejected with **400**, so an attacker can't point the flow at their own origin to harvest a freshly minted token. With **no** `allow_return` configured the allowlist is empty, so **any** present `?next=` matches nothing and is likewise rejected with **400** — token mode is off by default, and a plain login (no `?next=`) keeps its server-rendered session behavior (safe by default). Token mode is login-only: a connect flow never mints a token (the user already holds one).
 </Callout>
 
 ## Endpoint discovery

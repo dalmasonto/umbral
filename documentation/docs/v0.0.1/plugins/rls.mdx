@@ -67,6 +67,30 @@ error. Policy names and table names are double-quote escaped; the `USING` and
 `WITH CHECK` expressions are passed through verbatim - they are SQL you wrote
 and are responsible for.
 
+<Callout type="danger">
+**The plugin does not emit `FORCE ROW LEVEL SECURITY`, and this is the single
+biggest footgun.** Plain `ENABLE ROW LEVEL SECURITY` (all this plugin runs)
+**does not apply to the role that owns the table**, nor to `BYPASSRLS` /
+superuser roles. In the default umbral setup there is one `DATABASE_URL` and one
+connection pool: `cargo run -- migrate` creates and therefore *owns* the tables,
+and your app connects at runtime with the **same role**. That role is the table
+owner, so **every policy on this page is silently bypassed and your app sees all
+rows regardless of `app.user_id`** - RLS is effectively off while `pg_policies`
+still shows the policies, which is exactly the state that passes a superficial
+check.
+
+To actually enforce RLS you must both:
+
+1. Run the app under a **dedicated, non-owner, non-superuser role** without
+   `BYPASSRLS` (grant it only `SELECT/INSERT/UPDATE/DELETE` on the tables), and
+2. Consider `ALTER TABLE <t> FORCE ROW LEVEL SECURITY;` so the owner is subject
+   to policies too (needed if migrations and runtime share a role).
+
+Neither is done for you today - the plugin runs `ENABLE` only. Verify isolation
+with a two-tenant test (insert rows as user 1 and user 2, set `app.user_id`, and
+assert each session sees only its own rows) before trusting RLS in production.
+</Callout>
+
 ## Setting user context per request
 
 Policies referencing `current_setting('app.user_id')` only work when the GUC
@@ -99,10 +123,29 @@ the current transaction; `false` scopes it to the session. For most pooled
 setups you want `true` so the value doesn't bleed across requests that reuse
 the same connection.
 
+<Callout type="danger">
+**Connection pinning is not automatic and the naive middleware above is
+unsound.** `umbral-rls` provides *no* runtime plumbing to set, scope, or reset
+`app.user_id` - it only emits the policy DDL at boot. The snippet above runs
+`set_config(..., true)` on **one connection checked out of the pool**, but your
+subsequent ORM query (`Post::objects()...`) checks out a **potentially different
+connection** where the GUC was never set. With `is_local = true` (transaction
+scope) the value is gone the moment that first connection returns to the pool;
+with `is_local = false` (session scope) it is *worse* - it persists on the
+pooled connection and **leaks to the next unrelated request's user**, a
+cross-tenant data-exposure bug.
+
+The only correct shape is to pin one connection/transaction for the whole
+request and run both the `set_config` and every ORM query on it. umbral does not
+expose per-request connection pinning through the ambient pool today, so a
+correct RLS deployment needs application-level transaction management around
+each request. Do not ship the middleware above as written.
+</Callout>
+
 <Callout type="info">
 The auth integration is your responsibility today. `umbral-rls` sets up the
-policy DDL; wiring your auth layer to the GUC is application code, not
-framework code.
+policy DDL; wiring your auth layer to the GUC (correctly, per the warning above)
+is application code, not framework code.
 </Callout>
 
 ## SQLite story

@@ -116,6 +116,21 @@ Any template whose name ends in `.html` or `.htm` renders with autoescape on. A 
 Opting out of autoescape for one value is a deliberate keystroke: pipe through the `safe` filter (`{{ value|safe }}`). There's no global escape hatch. If you find yourself reaching for `safe` often, you're probably one helper function away from a cleaner data shape.
 </Callout>
 
+<Callout type="danger" title="Autoescape only covers HTML context - never inline a variable into JavaScript">
+The escape guarantee applies to HTML text and quoted-attribute contexts (`<p>{{ x }}</p>`, `title="{{ x }}"`). It does **not** make a value safe inside a JavaScript string, an `href="javascript:..."`, an inline `on*` event handler, or a `<style>` block. HTML-escaping turns `'` into `&#x27;`, but the browser decodes that entity back to `'` before the JS parser runs, so a value like `x');alert(1)//` still breaks out of a JS string and executes.
+
+```html
+{/* WRONG - {{ path }} runs as JavaScript, autoescape does not stop it */}
+<button onclick="navigator.clipboard.writeText('{{ path }}')">Copy</button>
+
+{/* RIGHT - keep the value in an HTML text node and read it from the DOM */}
+<code id="p">{{ path }}</code>
+<button onclick="navigator.clipboard.writeText(document.getElementById('p').textContent)">Copy</button>
+```
+
+If you must pass a value to JavaScript, emit it as JSON in a `<script type="application/json">` block and parse it, or use a `data-` attribute - never concatenate it into JS source.
+</Callout>
+
 ## Cross-plugin templates
 
 Plugins can contribute their own `templates/` directories by overriding `Plugin::templates_dirs()`. The template engine searches all registered directories in order and the first directory that contains a given template name wins.

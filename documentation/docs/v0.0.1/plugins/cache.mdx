@@ -94,7 +94,7 @@ let public = Router::new()
     .layer(cache_page(Duration::from_secs(60)));
 ```
 
-Cache key: `cache:page:<METHOD>:<URI>` including query string, so `/blog?page=1` and `/blog?page=2` are stored separately.
+Cache key: `cache:page:<METHOD>:<host>:<URI>` including the `Host` header and the full query string, so `/blog?page=1` and `/blog?page=2` (and the same path on different virtual hosts) are stored separately.
 
 What gets cached: only `GET` and `HEAD` responses with status 200. The following bypass caching:
 
@@ -102,8 +102,21 @@ What gets cached: only `GET` and `HEAD` responses with status 200. The following
 - Status other than 200
 - Response carries `Cache-Control: no-store`
 - Response carries a `Set-Cookie` header (personalised responses)
+- Request carries an `umbral_session` cookie (logged-in / personalised requests are never served from, nor written to, the page cache)
 
 If the ambient cache was not initialised, misses and stores are silently skipped - the handler fires normally.
+
+<Callout type="warning">
+**`cache_page` is safe only for genuinely anonymous, non-personalised pages.** Its personalisation gate recognises exactly one signal: the `umbral_session` cookie. It does **not** inspect `Authorization` headers, HTTP Basic auth, or any other cookie name, and on the response side it honours only `Cache-Control: no-store` — **not** `private`, `no-cache`, or `max-age=0`. The cache key has no user dimension.
+
+Consequences you must design around:
+
+- If you authenticate with a **bearer token / `Authorization` header** (JWT, API key) rather than the `umbral_session` cookie, a per-user `200` response wrapped in `cache_page` will be stored and served to other users. Do not wrap authenticated routes.
+- Marking a response `Cache-Control: private` does **not** keep it out of this store. Use `Cache-Control: no-store` (or a `Set-Cookie`) to force a bypass.
+- `cache_page` is not `Vary`-aware. A response whose body depends on `Accept-Language`, `Authorization`, or any other request header will be served across those variants.
+
+Wrap only routes whose output is identical for every visitor.
+</Callout>
 
 ## Opt-in compression and HTTP cache headers
 

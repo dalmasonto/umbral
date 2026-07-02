@@ -58,6 +58,10 @@ pub struct Settings {
 | `static_url` | `UMBRAL_STATIC_URL` | `static_url` | `"/static/"` |
 | `static_root` | `UMBRAL_STATIC_ROOT` | `static_root` | `"staticfiles/"` |
 
+<Callout type="warning">
+**The `db_*` pool knobs don't reach a pool opened before `App::build()`.** `umbral::db::connect` reads them from the ambient settings, and the ambient settings are only published *during* `build()`. In the canonical boot order (`Settings::from_env()` → `connect(&settings.database_url)` → `.database("default", pool)` → `.build()`) the default pool is opened before that point, so it always gets the built-in defaults (`max_connections = 10`, `acquire_timeout = 30s`, `min_connections = 0`, `idle_timeout = 600s`, `max_lifetime = 1800s`, `test_before_acquire = true`) - setting `UMBRAL_DB_MAX_CONNECTIONS` etc. has no effect on it. Pools opened after `build()` (runtime tenant pools) do honour these settings. To size the default pool, build it directly with `sqlx::postgres::PgPoolOptions` / `sqlx::sqlite::SqlitePoolOptions` using the values from your loaded `Settings`, and pass that pool to `.database("default", pool)`. Check the `umbral: opening database pool` boot-log line for the effective values.
+</Callout>
+
 ## umbral.toml
 
 The project's committed configuration file. Lives at the project root next to `Cargo.toml`:
@@ -71,12 +75,30 @@ environment = "Prod"
 log_level = "info"
 allowed_hosts = ["example.com", "www.example.com"]
 
-# Named secondary pools, routed per-model via `#[umbral(database = "alias")]`
-# or per-plugin via `Plugin::database()`
+# Named secondary database URLs. NOTE: the framework does NOT open pools
+# from this map - each alias must be connected and registered on the
+# builder yourself (see below). Models route to an alias via
+# `#[umbral(database = "alias")]` or per-plugin via `Plugin::database()`.
 [databases]
 analytics = "postgres://analytics:pw@db-host/analytics"
 cache = "sqlite://cache.db?mode=rwc"
 ```
+
+<Callout type="warning">
+`settings.databases` is configuration data only - `App::build()` does not read it to open or register pools. A model routed to an alias that was never registered with `.database(alias, pool)` panics at its first query with `no database registered under alias '…'`. Register every alias explicitly:
+
+```rust
+let settings = Settings::from_env()?;
+let default_pool = umbral::db::connect(&settings.database_url).await?;
+let mut builder = App::builder()
+    .settings(settings.clone())
+    .database("default", default_pool);
+for (alias, url) in &settings.databases {
+    builder = builder.database(alias, umbral::db::connect(url).await?);
+}
+let app = builder.build()?;
+```
+</Callout>
 
 Commit `umbral.toml` to git for everything that isn't a secret. Keep secrets (`secret_key`, real `database_url` with passwords) out of the committed copy and supply them via env vars instead.
 

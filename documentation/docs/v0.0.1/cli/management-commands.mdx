@@ -330,6 +330,10 @@ cargo run -- maskkeygen
 
 No flags. Set both lines in your environment (or `.env`) before booting an app that has `Masked<T>` fields.
 
+<Callout type="warning">
+`UMBRAL_MASK_PRIVATE_KEY` is the key that **decrypts every masked column** — treat it like a database password. Because `maskkeygen` prints it to stdout, capture it straight into your secret store (Vault, AWS/GCP secret manager, a sealed CI variable) and keep it out of shell history, terminal scrollback, screen shares, and any committed `.env`. If you must redirect it to a file, redirect to one you never commit and delete it once the secret is stored. Losing the private key crypto-shreds the data; leaking it exposes every masked value.
+</Callout>
+
 ## createsuperuser - `umbral-auth`
 
 Interactive prompt for username / email / password; creates a row in `auth_user` with `is_staff = is_superuser = true` and the password argon2id-hashed.

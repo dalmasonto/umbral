@@ -152,7 +152,15 @@ let admin = Router::new()
 
 ### Superuser bypass
 
-When the layer fires, it first checks whether the row in `auth_user` has `is_superuser = 1` - superusers pass every `permission_required` check without consulting the perm tables. This is best-effort and silent: custom user models that don't carry an `is_superuser` column simply never trigger the bypass. If you want explicit superuser-only gates instead, use a separate `is_superuser_required()` middleware (not shipped at v1; the convention is to add a `LoggedIn<U>` extractor inside the handler that returns 403 when `!user.is_superuser()`).
+When the layer fires, it checks the `auth_user` row for **`is_superuser = 1` AND `is_active = 1`** - an active superuser passes every `permission_required` check without consulting the perm tables; a deactivated superuser does not. This is best-effort and silent: custom user models that don't carry an `is_superuser` column simply never trigger the bypass. If you want explicit superuser-only gates instead, use a separate `is_superuser_required()` middleware (not shipped at v1; the convention is to add a `LoggedIn<U>` extractor inside the handler that returns 403 when `!user.is_superuser()`).
+
+<Callout type="warning">
+**The `is_active` check applies only to the superuser bypass, not to the ordinary permission path.** For a non-superuser, the layer resolves the session, then calls `has_perm(user_id, perm)` directly - it does **not** re-check `is_active`. A user who was deactivated but still holds a valid, unexpired session cookie keeps passing `permission_required` for every permission they were granted until that session is invalidated. If deactivation must revoke access immediately, invalidate the user's sessions on the deactivation path (session validity is `umbral-auth`'s responsibility, not this layer's).
+</Callout>
+
+<Callout type="warning">
+**The `permission_required` / `permission_required_html` tower layers only support `i64` user primary keys.** They resolve the caller through `umbral_auth::current_session_user_id`, which returns `Option<i64>`. The `has_perm` free function is PK-agnostic (it takes `&str`), but the *layer* is not - an app whose user model uses a `Uuid` or `String` PK cannot gate routes with these layers and must call `has_perm(&user.id().to_string(), ...)` inside the handler instead.
+</Callout>
 
 ### Composition with `login_required`
 

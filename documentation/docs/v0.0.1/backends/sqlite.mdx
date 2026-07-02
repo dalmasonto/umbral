@@ -83,7 +83,11 @@ Per-statement logging is also turned **off** (sqlx's default INFO-level logger r
 
 ## Pooling
 
-The SQLite pool honours the same `UMBRAL_DB_*` settings as Postgres - `max_connections`, `min_connections`, `acquire_timeout`, `idle_timeout`, `max_lifetime`, and `test_before_acquire`. SQLite is effectively single-writer (WAL serialises writers behind one lock), so a large `max_connections` mainly buys concurrent **readers**, but the knobs are honoured uniformly rather than hardcoding a divergent SQLite path. See [Connection pooling](../orm/connection-pooling) for the full list and defaults.
+The SQLite pool applies the same pool knobs as Postgres - `max_connections`, `min_connections`, `acquire_timeout`, `idle_timeout`, `max_lifetime`, and `test_before_acquire`. SQLite is effectively single-writer (WAL serialises writers behind one lock), so a large `max_connections` mainly buys concurrent **readers**, but the knobs are handled uniformly rather than hardcoding a divergent SQLite path. See [Connection pooling](../orm/connection-pooling) for the full list and defaults.
+
+<Callout type="warning">
+The `UMBRAL_DB_*` knobs are read from the ambient settings, which `App::build()` publishes - so a pool opened **before** `build()` (including the default pool in the canonical `connect(...)` → `.database("default", pool)` → `.build()` sequence) uses the built-in defaults (`max_connections = 10`, `acquire_timeout = 30s`, …) regardless of `UMBRAL_DB_*`. To apply custom values to the default pool, build it with `sqlx::sqlite::SqlitePoolOptions` from your loaded `Settings` and pass the `SqlitePool` to `.database("default", pool)`. The `umbral: opening database pool` boot-log line shows the effective values.
+</Callout>
 
 ## Migrations
 

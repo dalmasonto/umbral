@@ -34,7 +34,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `App::build()` cross-checks `settings.database_url` against the pool's runtime backend. A mismatch (URL says `postgres://` but the pool is `DbPool::Sqlite`, or vice versa) is a hard `BuildError::DatabaseBackendMismatch` at boot, not a silent failure on the first query.
 
 <Callout type="info">
-**Pooling.** `connect` returns a sqlx `PgPool` wrapped in the `DbPool` enum, with umbral's pool configuration already applied - `max_connections`, `min_connections`, a bounded `acquire_timeout` (so a saturated pool fails fast instead of blocking forever), `idle_timeout`, `max_lifetime`, and `test_before_acquire`. Tune all of them from settings (`UMBRAL_DB_*` env vars or `umbral.toml`) - see [Connection pooling](../orm/connection-pooling) for the full knob list and defaults. The pool is process-wide, shared between every handler, and emits one boot-log line with its effective configuration.
+**Pooling.** `connect` returns a sqlx `PgPool` wrapped in the `DbPool` enum, with umbral's pool configuration already applied - `max_connections`, `min_connections`, a bounded `acquire_timeout` (so a saturated pool fails fast instead of blocking forever), `idle_timeout`, `max_lifetime`, and `test_before_acquire`. The pool is process-wide, shared between every handler, and emits one boot-log line with its effective configuration.
+</Callout>
+
+<Callout type="warning">
+**When the `UMBRAL_DB_*` knobs actually apply.** `connect` reads the pool knobs from the *ambient* settings, which are only published by `App::build()`. In the canonical boot sequence the default pool is opened **before** `build()` (`connect(&settings.database_url)` → `.database("default", pool)` → `.build()`), so at that point no ambient settings exist and the pool uses the built-in defaults (`max_connections = 10`, `acquire_timeout = 30s`, `min_connections = 0`, `idle_timeout = 600s`, `max_lifetime = 1800s`, `test_before_acquire = true`) - `UMBRAL_DB_*` values are **not** applied to it. Pools opened after `build()` (e.g. runtime tenant pools) do honour the settings. To size the default pool today, build it with sqlx's own options from your loaded `Settings` and hand it to the builder - `.database()` accepts a plain `PgPool`:
+
+```rust
+let settings = Settings::from_env()?;
+let pool = sqlx::postgres::PgPoolOptions::new()
+    .max_connections(settings.db_max_connections)
+    .min_connections(settings.db_min_connections)
+    .acquire_timeout(std::time::Duration::from_secs(settings.db_acquire_timeout_secs))
+    .connect(&settings.database_url)
+    .await?;
+let app = App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .build()?;
+```
+
+Verify the effective values in the `umbral: opening database pool` boot-log line. See [Connection pooling](../orm/connection-pooling) for the full knob list.
 </Callout>
 
 ## Migrations
