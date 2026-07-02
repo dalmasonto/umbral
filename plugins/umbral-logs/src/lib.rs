@@ -217,6 +217,12 @@ impl LogsPlugin {
 
     /// Only log responses with status >= `status`. Default `0` (log all).
     /// Set to `400` for errors-only logging, `500` for server-errors-only.
+    ///
+    /// **Security-visibility caveat (audit_2 plugin-observability #11):** a
+    /// floor above `403` (e.g. `500`) silently drops `401`/`403` responses, so
+    /// authentication failures and permission denials disappear from this log.
+    /// If you rely on request logs for security monitoring, keep the floor at
+    /// or below `400`, or capture auth-denial events on a dedicated channel.
     pub fn min_status(mut self, status: i32) -> Self {
         self.min_status = status;
         self
@@ -345,17 +351,25 @@ fn resolve_ip(headers: &axum::http::HeaderMap) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Resolve the authenticated user id best-effort. The session/identity
-/// surface lives in optional sibling plugins this crate doesn't depend on, so
-/// v1 reads an `X-Umbral-User-Id` extension/header only when present and parses
-/// it as an i64; otherwise `None`. Wiring the real identity resolver is a
-/// deliberate later step (it would pull umbral-auth/umbral-sessions into the
-/// dep graph), kept out so a logs-only app stays slim.
-fn resolve_user_id(headers: &axum::http::HeaderMap) -> Option<i64> {
-    headers
-        .get("x-umbral-user-id")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.trim().parse::<i64>().ok())
+/// Trusted authenticated user id for request logging. Your auth/session
+/// middleware — which resolves the user **server-side** — inserts this into the
+/// request extensions so `RequestLog.user_id` is attributed correctly.
+///
+/// The logger reads ONLY this extension, never a client header: a raw
+/// `X-Umbral-User-Id` header is attacker-controlled, so trusting it let any
+/// client attribute their requests to another user (audit_2
+/// plugin-observability #7). Keeping the id in an extension set by trusted
+/// middleware keeps umbral-logs free of an auth-plugin dependency while making
+/// attribution unforgeable.
+#[derive(Clone, Copy, Debug)]
+pub struct LoggedUserId(pub i64);
+
+/// Resolve the authenticated user id from the trusted [`LoggedUserId`] request
+/// extension only — never from a client-supplied header. `None` (unattributed)
+/// when no trusted middleware set it, which is safe: better no attribution than
+/// a forged one.
+fn resolve_user_id(extensions: &axum::http::Extensions) -> Option<i64> {
+    extensions.get::<LoggedUserId>().map(|u| u.0)
 }
 
 /// axum `from_fn` middleware that records each request to [`RequestLog`].
@@ -387,7 +401,7 @@ pub async fn capture_layer(
         .get(axum::http::header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    let user_id = resolve_user_id(req.headers());
+    let user_id = resolve_user_id(req.extensions());
 
     let started = Instant::now();
     let response = next.run(req).await;
@@ -479,6 +493,17 @@ pub fn admin_model() -> AdminModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_id_comes_from_trusted_extension_not_a_client_header() {
+        // No trusted extension → unattributed (a forged header cannot set it,
+        // because the resolver no longer reads headers at all).
+        let mut ext = axum::http::Extensions::new();
+        assert_eq!(resolve_user_id(&ext), None);
+        // The trusted extension set by auth middleware IS honoured.
+        ext.insert(LoggedUserId(42));
+        assert_eq!(resolve_user_id(&ext), Some(42));
+    }
 
     #[tokio::test]
     async fn track_handle_reaps_finished_tasks_and_stays_bounded() {
