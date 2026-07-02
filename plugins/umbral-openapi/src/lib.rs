@@ -44,6 +44,12 @@ pub struct OpenApiPlugin {
     version: String,
     description: Option<String>,
     extra_exclude: Vec<String>,
+    /// Whether to mount the spec + Swagger UI under `Environment::Prod`.
+    /// Default `false` (audit_2 plugin-observability #1): the schema exposes
+    /// the entire API surface (every model, field, filter, FK graph) to
+    /// unauthenticated callers — recon for attacking the live API. Opt in with
+    /// [`Self::allow_in_prod`].
+    allow_in_prod: bool,
 }
 
 impl Default for OpenApiPlugin {
@@ -60,7 +66,16 @@ impl OpenApiPlugin {
             version: "0.0.1".to_string(),
             description: None,
             extra_exclude: Vec::new(),
+            allow_in_prod: false,
         }
+    }
+
+    /// Mount the OpenAPI spec + Swagger UI even in `Environment::Prod`. Off by
+    /// default — the spec is a full unauthenticated map of your API. Only opt
+    /// in if `/openapi/*` is firewalled or auth-proxied to internal callers.
+    pub fn allow_in_prod(mut self) -> Self {
+        self.allow_in_prod = true;
+        self
     }
 
     /// Mount the JSON + UI under a different base. Trailing slashes
@@ -168,6 +183,20 @@ impl Plugin for OpenApiPlugin {
     }
 
     fn routes(&self) -> Router {
+        // audit_2 #1: don't expose the full API schema in production unless the
+        // operator explicitly opted in. `get_opt` never panics pre-settings.
+        let is_prod = matches!(
+            umbral::settings::get_opt().map(|s| &s.environment),
+            Some(umbral::Environment::Prod)
+        );
+        if is_prod && !self.allow_in_prod {
+            tracing::warn!(
+                "umbral-openapi: not mounting in Environment::Prod (the OpenAPI spec maps your \
+                 entire API surface for unauthenticated callers). Call \
+                 OpenApiPlugin::new().allow_in_prod() to override, ideally behind a firewall.",
+            );
+            return Router::new();
+        }
         let _ = CONFIG.set(self.clone());
         // Publish the spec URL to the core registry so cross-plugin
         // consumers (umbral-playground's SPA fetches it from the

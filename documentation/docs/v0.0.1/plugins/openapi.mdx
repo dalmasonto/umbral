@@ -164,6 +164,20 @@ See [Trailing-slash redirect policy](../web/trailing-slash) for details.
 
 When the configured `RestPlugin` auth chain contributes a `securitySchemes` entry (for example `BearerAuthentication`), the plugin emits a `components.securitySchemes` block plus a global `security` array referencing each scheme. The global security is an OR: any one scheme satisfies the request, matching how `ChainAuthentication([Session, Bearer])` actually behaves at runtime. If the wired auth class contributes no scheme (the default `NoAuthentication`), the spec carries no `securitySchemes` block.
 
+## Production
+
+<Callout type="warning">
+The OpenAPI spec is a complete, unauthenticated map of your API — every model, field, filter, and foreign-key relationship. To avoid handing that to attackers, `OpenApiPlugin` **does not mount under `Environment::Prod`** by default; in prod it logs a warning and registers no routes.
+
+If you want the docs available in production (behind a firewall, VPN, or auth proxy), opt in explicitly:
+
+```rust
+OpenApiPlugin::new().allow_in_prod()
+```
+
+The Swagger UI assets are also loaded from the `unpkg.com` CDN (unpinned, no SRI), so a prod mount needs outbound network and a CSP that allows it — another reason to keep `/openapi/*` internal.
+</Callout>
+
 ## What's not in v1
 
 <Callout type="info">
