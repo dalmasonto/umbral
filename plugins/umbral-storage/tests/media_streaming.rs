@@ -126,7 +126,11 @@ async fn store_stream_neutralises_active_content() {
     let fs = FsStorage::new("/media", dir.path());
 
     let stored = fs
-        .store_stream("evil.html", "text/html", stream_of(vec![b"<script>".to_vec()]))
+        .store_stream(
+            "evil.html",
+            "text/html",
+            stream_of(vec![b"<script>".to_vec()]),
+        )
         .await
         .expect("store_stream");
 
@@ -144,7 +148,11 @@ async fn store_stream_sanitises_path_separators() {
     let fs = FsStorage::new("/media", dir.path());
 
     let stored = fs
-        .store_stream("../../etc/passwd", "text/plain", stream_of(vec![b"x".to_vec()]))
+        .store_stream(
+            "../../etc/passwd",
+            "text/plain",
+            stream_of(vec![b"x".to_vec()]),
+        )
         .await
         .expect("store_stream");
 
@@ -301,7 +309,10 @@ async fn save_stream_records_accurate_size() {
         outcome.file.size, total as i64,
         "MediaFile.size must equal the real streamed byte count"
     );
-    assert!(outcome.file.id > 0, "saved row must have a real primary key");
+    assert!(
+        outcome.file.id > 0,
+        "saved row must have a real primary key"
+    );
 
     let rows_for_key = MediaFile::objects()
         .filter(umbral_storage::media_file::KEY.eq(&outcome.file.key))

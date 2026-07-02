@@ -22,7 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
-use umbral::orm::{write::WriteError, DynQuerySet, FkAction, SqlType};
+use umbral::orm::{DynQuerySet, FkAction, SqlType, write::WriteError};
 use umbral_core::db;
 use umbral_core::migrate::{Column, ModelMeta};
 
@@ -200,9 +200,7 @@ async fn double_below_min_rejected_on_insert_json() {
                 "error must mention the bound; got: {message}"
             );
         }
-        other => panic!(
-            "expected WriteError::Validator for below-min Double, got: {other:?}"
-        ),
+        other => panic!("expected WriteError::Validator for below-min Double, got: {other:?}"),
     }
 }
 
@@ -229,9 +227,7 @@ async fn double_above_max_rejected_on_insert_json() {
                 "error must mention the bound; got: {message}"
             );
         }
-        other => panic!(
-            "expected WriteError::Validator for above-max Double, got: {other:?}"
-        ),
+        other => panic!("expected WriteError::Validator for above-max Double, got: {other:?}"),
     }
 }
 
@@ -254,9 +250,7 @@ async fn real_below_min_rejected_on_insert_json() {
         WriteError::Validator { field, .. } => {
             assert_eq!(field, "rating");
         }
-        other => panic!(
-            "expected WriteError::Validator for below-min Real, got: {other:?}"
-        ),
+        other => panic!("expected WriteError::Validator for below-min Real, got: {other:?}"),
     }
 }
 
@@ -279,9 +273,7 @@ async fn real_above_max_rejected_on_insert_json() {
         WriteError::Validator { field, .. } => {
             assert_eq!(field, "rating");
         }
-        other => panic!(
-            "expected WriteError::Validator for above-max Real, got: {other:?}"
-        ),
+        other => panic!("expected WriteError::Validator for above-max Real, got: {other:?}"),
     }
 }
 
@@ -358,8 +350,6 @@ async fn double_above_max_rejected_on_update_json() {
         WriteError::Validator { field, .. } => {
             assert_eq!(field, "score");
         }
-        other => panic!(
-            "expected WriteError::Validator for above-max update, got: {other:?}"
-        ),
+        other => panic!("expected WriteError::Validator for above-max update, got: {other:?}"),
     }
 }

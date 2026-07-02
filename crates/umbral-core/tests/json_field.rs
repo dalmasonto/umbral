@@ -49,10 +49,11 @@ async fn fresh_pool() -> SqlitePool {
 fn derive_classifies_serde_json_value_as_json_sqltype() {
     use umbral::orm::{Model, SqlType};
 
-    let by_name: std::collections::HashMap<&str, &umbral::orm::FieldSpec> = <Event as Model>::FIELDS
-        .iter()
-        .map(|f| (f.name, f))
-        .collect();
+    let by_name: std::collections::HashMap<&str, &umbral::orm::FieldSpec> =
+        <Event as Model>::FIELDS
+            .iter()
+            .map(|f| (f.name, f))
+            .collect();
 
     let payload = by_name.get("payload").expect("payload field");
     assert_eq!(payload.ty, SqlType::Json);

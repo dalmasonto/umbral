@@ -74,10 +74,8 @@ async fn cross_origin_ws_upgrade_is_rejected_in_prod() {
     let mut req = format!("ws://{addr}/rt/ws?groups=public:lobby")
         .into_client_request()
         .expect("request");
-    req.headers_mut().insert(
-        "origin",
-        format!("http://{addr}").parse().unwrap(),
-    );
+    req.headers_mut()
+        .insert("origin", format!("http://{addr}").parse().unwrap());
     let (_ws, resp) = tokio_tungstenite::connect_async(req)
         .await
         .expect("same-origin WS upgrade should connect");

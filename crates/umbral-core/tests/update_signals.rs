@@ -162,20 +162,14 @@ async fn pre_update_fires_before_update() {
 async fn has_subscribers_flips_false_to_true_around_subscribe() {
     let _guard = SERIALISE.lock().await;
     clear_for_tests();
-    assert!(
-        !has_subscribers("post_update:hs_demo"),
-        "no subscriber yet"
-    );
+    assert!(!has_subscribers("post_update:hs_demo"), "no subscriber yet");
     subscribe("post_update:hs_demo", |_| {});
     assert!(
         has_subscribers("post_update:hs_demo"),
         "subscriber registered"
     );
     clear_for_tests();
-    assert!(
-        !has_subscribers("post_update:hs_demo"),
-        "cleared again"
-    );
+    assert!(!has_subscribers("post_update:hs_demo"), "cleared again");
 }
 
 #[tokio::test]

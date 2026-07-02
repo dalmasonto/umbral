@@ -30,10 +30,7 @@ async fn all_fields_opts_into_the_full_row() {
         .settings(settings)
         .database("default", pool)
         // Explicit, conspicuous: the dev knowingly broadcasts the whole row.
-        .plugin(
-            RealtimePlugin::new()
-                .expose::<Post>(Expose::to_group("public:all").all_fields()),
-        )
+        .plugin(RealtimePlugin::new().expose::<Post>(Expose::to_group("public:all").all_fields()))
         .build()
         .expect("App::build");
 

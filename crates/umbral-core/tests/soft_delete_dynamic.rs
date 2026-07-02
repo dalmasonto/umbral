@@ -49,7 +49,10 @@ async fn boot() {
         let settings = umbral::Settings::from_env().expect("figment defaults always load");
         // File-backed DB so all tokio runtimes share one connection pool.
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("umbral_soft_delete_dynamic_{}.db", std::process::id()));
+        let path = dir.join(format!(
+            "umbral_soft_delete_dynamic_{}.db",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&path);
         let url = format!("sqlite://{}?mode=rwc", path.display());
         let pool = db::connect_sqlite(&url).await.expect("file-backed sqlite");
@@ -167,7 +170,10 @@ async fn dyn_default_scope_excludes_trashed_rows() {
         .count()
         .await
         .expect("count dead");
-    assert_eq!(dead_count, 0, "count of trashed row must be 0 in default scope");
+    assert_eq!(
+        dead_count, 0,
+        "count of trashed row must be 0 in default scope"
+    );
 }
 
 // ── (b) DynQuerySet::delete() soft-deletes — row stays in DB ──────────────
@@ -239,7 +245,10 @@ async fn dyn_with_deleted_includes_trashed_rows() {
         .filter_map(|r| r.get("title").and_then(|v| v.as_str()))
         .collect();
     assert!(titles.contains(&live.as_str()), "live row present");
-    assert!(titles.contains(&dead.as_str()), "trashed row present with with_deleted()");
+    assert!(
+        titles.contains(&dead.as_str()),
+        "trashed row present with with_deleted()"
+    );
 }
 
 // ── (d) only_deleted() restricts to trashed rows only ─────────────────────
@@ -325,7 +334,10 @@ async fn dyn_non_soft_model_hard_deletes() {
     insert_hard(&title).await;
 
     let meta = hard_meta();
-    assert!(!meta.soft_delete, "hard model must not have soft_delete flag");
+    assert!(
+        !meta.soft_delete,
+        "hard model must not have soft_delete flag"
+    );
 
     let affected = DynQuerySet::for_meta(&meta)
         .filter_eq_string("title", &title)
@@ -339,5 +351,8 @@ async fn dyn_non_soft_model_hard_deletes() {
         .count()
         .await
         .expect("count after hard delete");
-    assert_eq!(count, 0, "row must be gone after hard delete on non-soft model");
+    assert_eq!(
+        count, 0,
+        "row must be gone after hard delete on non-soft model"
+    );
 }

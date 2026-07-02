@@ -160,7 +160,11 @@ async fn send_full(
         .await
         .expect("collect")
         .to_bytes();
-    (status, headers, String::from_utf8_lossy(&bytes).into_owned())
+    (
+        status,
+        headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
 }
 
 fn extract_csrf_token(html: &str) -> Option<String> {
@@ -244,8 +248,8 @@ async fn unique_violation_on_create_renders_error_under_slug_field() {
     let auth_cookie = format!("umbral_session={cookie}");
 
     // Submit a row whose slug already exists in the seeded DB.
-    let body_str = serde_urlencoded::to_string([("slug", "hello"), ("title", "Duplicate")])
-        .unwrap();
+    let body_str =
+        serde_urlencoded::to_string([("slug", "hello"), ("title", "Duplicate")]).unwrap();
     let (status, html) = send(
         router.clone(),
         Request::builder()
@@ -313,8 +317,7 @@ async fn unique_violation_on_update_renders_error_under_slug_field() {
     let auth_cookie = format!("umbral_session={cookie}");
 
     // First create a second row with slug "world".
-    let create_body = serde_urlencoded::to_string([("slug", "world"), ("title", "World")])
-        .unwrap();
+    let create_body = serde_urlencoded::to_string([("slug", "world"), ("title", "World")]).unwrap();
     let resp = router
         .clone()
         .oneshot(
@@ -336,8 +339,8 @@ async fn unique_violation_on_update_renders_error_under_slug_field() {
 
     // Now try to edit the "world" row to use the slug "hello" (already taken).
     // The seeded row id=1 has slug="hello"; the newly created row has id=2.
-    let edit_body = serde_urlencoded::to_string([("slug", "hello"), ("title", "World renamed")])
-        .unwrap();
+    let edit_body =
+        serde_urlencoded::to_string([("slug", "hello"), ("title", "World renamed")]).unwrap();
     let (status, html) = send(
         router.clone(),
         Request::builder()

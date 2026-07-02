@@ -348,7 +348,9 @@ impl Registry {
         // Sync snapshot per newly-entered group: the deduped present user ids,
         // computed AFTER this conn is indexed so the joining user is included.
         for (g, _uid) in &transitions.joined {
-            transitions.sync.push((g.clone(), present_user_ids(&inner, g)));
+            transitions
+                .sync
+                .push((g.clone(), present_user_ids(&inner, g)));
         }
 
         Some((id, rx, transitions))
@@ -1214,7 +1216,9 @@ pub async fn dispatch_presence(transitions: PresenceTransitions) {
         }
         let projected: Vec<serde_json::Value> =
             members.iter().map(|uid| spec.project(uid)).collect();
-        Realtime::to_group(group).send(PRESENCE_SYNC, &projected).await;
+        Realtime::to_group(group)
+            .send(PRESENCE_SYNC, &projected)
+            .await;
     }
     // Last-leave broadcasts.
     for (group, user_id) in transitions.left {
@@ -1222,7 +1226,9 @@ pub async fn dispatch_presence(transitions: PresenceTransitions) {
             continue;
         }
         let member = spec.project(&user_id);
-        Realtime::to_group(group).send(PRESENCE_LEAVE, &member).await;
+        Realtime::to_group(group)
+            .send(PRESENCE_LEAVE, &member)
+            .await;
     }
 }
 
@@ -1720,7 +1726,9 @@ impl RealtimePlugin {
                 let group = spec.route.group_for(&ev);
                 let projected = spec.project(&ev.instance);
                 let action_name = ev.action_name();
-                Realtime::to_group(group).send(action_name, &projected).await;
+                Realtime::to_group(group)
+                    .send(action_name, &projected)
+                    .await;
             }
         })
     }
@@ -1836,7 +1844,10 @@ mod tests {
             .unwrap();
 
         let n = reg
-            .dispatch(&TargetKind::User("7".into()), reg_event("ping", serde_json::json!({"x": 1})))
+            .dispatch(
+                &TargetKind::User("7".into()),
+                reg_event("ping", serde_json::json!({"x": 1})),
+            )
             .await;
 
         assert_eq!(n, 2, "both of user 7's connections received it");
@@ -1881,22 +1892,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(reg.connection_count().await, 2);
-        let n = reg
-            .dispatch(&TargetKind::Broadcast, evt())
-            .await;
+        let n = reg.dispatch(&TargetKind::Broadcast, evt()).await;
         assert_eq!(n, 2, "broadcast hit both");
 
         reg.deregister(a).await;
         assert_eq!(reg.connection_count().await, 1);
         // User index for the gone connection is cleaned: to_user(1) → 0.
-        let n = reg
-            .dispatch(&TargetKind::User("1".into()), evt())
-            .await;
+        let n = reg.dispatch(&TargetKind::User("1".into()), evt()).await;
         assert_eq!(n, 0, "deregister removed user 1 from the index");
         // The group still has the anonymous connection.
-        let n = reg
-            .dispatch(&TargetKind::Group("g".into()), evt())
-            .await;
+        let n = reg.dispatch(&TargetKind::Group("g".into()), evt()).await;
         assert_eq!(n, 1);
     }
 
@@ -1905,12 +1910,24 @@ mod tests {
         // Snapshot-then-send must still reach every registered connection:
         // register 3, broadcast once, and read the event off each receiver.
         let reg = Registry::default();
-        let (_a, mut rx_a) = reg.register(u(1), groups(&[]), DEFAULT_BUFFER).await.unwrap();
-        let (_b, mut rx_b) = reg.register(u(2), groups(&[]), DEFAULT_BUFFER).await.unwrap();
-        let (_c, mut rx_c) = reg.register(None, groups(&["g"]), DEFAULT_BUFFER).await.unwrap();
+        let (_a, mut rx_a) = reg
+            .register(u(1), groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        let (_b, mut rx_b) = reg
+            .register(u(2), groups(&[]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
+        let (_c, mut rx_c) = reg
+            .register(None, groups(&["g"]), DEFAULT_BUFFER)
+            .await
+            .unwrap();
 
         let n = reg
-            .dispatch(&TargetKind::Broadcast, reg_event("hi", serde_json::json!({"x": 1})))
+            .dispatch(
+                &TargetKind::Broadcast,
+                reg_event("hi", serde_json::json!({"x": 1})),
+            )
             .await;
         assert_eq!(n, 3, "broadcast queued to all three");
         assert!(recv(&mut rx_a).await.is_some(), "conn a received");
@@ -1985,16 +2002,22 @@ mod tests {
             .register(u(7), groups(&[]), DEFAULT_BUFFER)
             .await
             .unwrap();
-        reg.dispatch(&TargetKind::User("7".into()), reg_event("ping", serde_json::json!({})))
-            .await;
+        reg.dispatch(
+            &TargetKind::User("7".into()),
+            reg_event("ping", serde_json::json!({})),
+        )
+        .await;
         assert_eq!(recv(&mut rx_u).await.unwrap().channel, "@user:7");
 
         let (_b, mut rx_b) = reg
             .register(None, groups(&[]), DEFAULT_BUFFER)
             .await
             .unwrap();
-        reg.dispatch(&TargetKind::Broadcast, reg_event("all", serde_json::json!({})))
-            .await;
+        reg.dispatch(
+            &TargetKind::Broadcast,
+            reg_event("all", serde_json::json!({})),
+        )
+        .await;
         // Drain other receivers' broadcast copies are irrelevant; check b.
         assert_eq!(recv(&mut rx_b).await.unwrap().channel, "@broadcast");
     }
@@ -2027,14 +2050,23 @@ mod tests {
         // user route through the very same closure with no i64 assumption: each
         // owns its own `user:<pk>` room, keyed on whatever its PK renders to.
         let uuid = "550e8400-e29b-41d4-a716-446655440000";
-        let p = FnGroupPolicy(|user_id: Option<&str>, group: &str| {
-            matches!(user_id, Some(uid) if group == format!("user:{uid}"))
-        });
+        let p = FnGroupPolicy(
+            |user_id: Option<&str>, group: &str| matches!(user_id, Some(uid) if group == format!("user:{uid}")),
+        );
         // Numeric string PK.
-        assert!(p.can_join(Some("42"), "user:42"), "numeric pk owns its room");
-        assert!(!p.can_join(Some("42"), &format!("user:{uuid}")), "not the uuid's room");
+        assert!(
+            p.can_join(Some("42"), "user:42"),
+            "numeric pk owns its room"
+        );
+        assert!(
+            !p.can_join(Some("42"), &format!("user:{uuid}")),
+            "not the uuid's room"
+        );
         // UUID string PK.
-        assert!(p.can_join(Some(uuid), &format!("user:{uuid}")), "uuid pk owns its room");
+        assert!(
+            p.can_join(Some(uuid), &format!("user:{uuid}")),
+            "uuid pk owns its room"
+        );
         assert!(!p.can_join(Some(uuid), "user:42"), "uuid is not user 42");
     }
 
@@ -2065,12 +2097,18 @@ mod tests {
         assert!(recv(&mut rx_b).await.is_none(), "numeric conn did NOT");
         // A different string (the same digits, but not the uuid) reaches nobody.
         let n = reg
-            .dispatch(&TargetKind::User("999".into()), reg_event("ping", serde_json::json!({})))
+            .dispatch(
+                &TargetKind::User("999".into()),
+                reg_event("ping", serde_json::json!({})),
+            )
             .await;
         assert_eq!(n, 0, "an unknown identity string reaches no one");
 
         // The channel stamp carries the opaque string verbatim.
-        assert_eq!(TargetKind::User(uuid).channel(), "@user:550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(
+            TargetKind::User(uuid).channel(),
+            "@user:550e8400-e29b-41d4-a716-446655440000"
+        );
     }
 
     #[tokio::test]
@@ -2095,10 +2133,16 @@ mod tests {
             .register_with_presence(Some(uuid.clone()), groups(&["room:1"]), DEFAULT_BUFFER)
             .await
             .unwrap();
-        assert!(t2.joined.is_empty(), "second conn of same user does not re-join");
+        assert!(
+            t2.joined.is_empty(),
+            "second conn of same user does not re-join"
+        );
 
         // Default projection renders the id as a STRING, not a number.
-        assert_eq!(default_presence_projection(&uuid), serde_json::json!({ "id": "abc-123" }));
+        assert_eq!(
+            default_presence_projection(&uuid),
+            serde_json::json!({ "id": "abc-123" })
+        );
 
         // Dropping the second conn is NOT a last-leave (the first still holds).
         let t3 = reg.deregister_with_presence(b).await;

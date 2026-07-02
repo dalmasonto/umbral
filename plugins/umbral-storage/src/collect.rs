@@ -131,13 +131,12 @@ impl umbral::cli::PluginCommand for CollectStaticCommand {
             })
             .unwrap_or_else(|| "local".to_string());
 
-        let published = umbral::static_files::published_static().ok_or_else(
-            || -> umbral::cli::CliError {
+        let published =
+            umbral::static_files::published_static().ok_or_else(|| -> umbral::cli::CliError {
                 "collectstatic requires a built App; ensure App::build() ran before dispatching \
                  the command (umbral-cli::dispatch is called with the built App)."
                     .into()
-            },
-        )?;
+            })?;
 
         // The unified "staticfiles" storage instance is the write target.
         // Resolve the backend the StoragePlugin registered for static
@@ -150,10 +149,8 @@ impl umbral::cli::PluginCommand for CollectStaticCommand {
                 if !(clear && std::path::Path::new(&static_root).exists()) {
                     std::fs::create_dir_all(&static_root).map_err(
                         |e| -> umbral::cli::CliError {
-                            format!(
-                                "collectstatic: cannot create static_root `{static_root}`: {e}"
-                            )
-                            .into()
+                            format!("collectstatic: cannot create static_root `{static_root}`: {e}")
+                                .into()
                         },
                     )?;
                 }
@@ -171,18 +168,19 @@ impl umbral::cli::PluginCommand for CollectStaticCommand {
             "s3" => {
                 #[cfg(feature = "s3")]
                 {
-                    let s3 = crate::s3::S3Storage::from_env().map_err(
-                        |e| -> umbral::cli::CliError {
+                    let s3 =
+                        crate::s3::S3Storage::from_env().map_err(|e| -> umbral::cli::CliError {
                             format!("collectstatic --storage s3: {e}").into()
-                        },
-                    )?;
+                        })?;
                     Arc::new(s3) as Arc<dyn Storage>
                 }
                 #[cfg(not(feature = "s3"))]
                 {
-                    return Err("collectstatic --storage s3 requires the umbral-storage `s3` \
+                    return Err(
+                        "collectstatic --storage s3 requires the umbral-storage `s3` \
                                 cargo feature (build with --features s3)."
-                        .into());
+                            .into(),
+                    );
                 }
             }
             other => {

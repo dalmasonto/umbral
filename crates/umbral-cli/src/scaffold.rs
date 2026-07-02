@@ -703,7 +703,12 @@ pub async fn test_credentials() -> Result<(), Box<dyn std::error::Error + Send +
     Ok(())
 }
 "#;
-    write_file(&root, "src/seed/credentials.rs", seed_credentials_rs, &mut files)?;
+    write_file(
+        &root,
+        "src/seed/credentials.rs",
+        seed_credentials_rs,
+        &mut files,
+    )?;
 
     // ------------------------------------------------------------------ //
     // src/widgets/mod.rs — per-kind re-export layer                       //
@@ -1562,10 +1567,7 @@ fn write_file(
 /// and formatting of existing deps are preserved. `toml_edit` is not yet
 /// a dep of umbral-cli; if it's added later this function is the right
 /// place to switch to it.
-pub fn register_dep_in_cargo_toml(
-    cargo_toml_path: &Path,
-    name: &str,
-) -> io::Result<bool> {
+pub fn register_dep_in_cargo_toml(cargo_toml_path: &Path, name: &str) -> io::Result<bool> {
     let text = fs::read_to_string(cargo_toml_path)?;
 
     // The dep line we want present. Match on `name =` to catch both
@@ -1895,7 +1897,10 @@ mod tests {
         let main = fs::read_to_string(tmp.path().join("blog/src/main.rs")).unwrap();
 
         // The table-of-contents module declarations.
-        assert!(main.contains("mod views;"), "main.rs must declare mod views");
+        assert!(
+            main.contains("mod views;"),
+            "main.rs must declare mod views"
+        );
         assert!(main.contains("mod seed;"), "main.rs must declare mod seed");
         assert!(
             main.contains("mod widgets;"),
@@ -1924,8 +1929,7 @@ mod tests {
     fn scaffold_project_creates_empty_plugins_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         scaffold_project("blog", tmp.path(), None).expect("scaffold ok");
-        let readme =
-            fs::read_to_string(tmp.path().join("blog/plugins/README.md")).unwrap();
+        let readme = fs::read_to_string(tmp.path().join("blog/plugins/README.md")).unwrap();
         assert!(
             readme.contains("umbral startapp"),
             "plugins/README.md should point at `umbral startapp`",
@@ -1966,7 +1970,10 @@ mod tests {
         let root = tmp.path().join("plugins/posts");
 
         let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
-        assert!(lib.contains("pub mod models;"), "lib.rs must publish models");
+        assert!(
+            lib.contains("pub mod models;"),
+            "lib.rs must publish models"
+        );
         assert!(lib.contains("pub mod views;"), "lib.rs must publish views");
         assert!(lib.contains("pub mod urls;"), "lib.rs must publish urls");
         assert!(

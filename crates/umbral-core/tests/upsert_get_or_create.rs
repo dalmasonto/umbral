@@ -236,8 +236,14 @@ async fn get_or_create_converges_under_concurrent_insert() {
             .await
     });
 
-    let r1 = t1.await.expect("task1 panicked").expect("task1 get_or_create");
-    let r2 = t2.await.expect("task2 panicked").expect("task2 get_or_create");
+    let r1 = t1
+        .await
+        .expect("task1 panicked")
+        .expect("task1 get_or_create");
+    let r2 = t2
+        .await
+        .expect("task2 panicked")
+        .expect("task2 get_or_create");
 
     let (w1, c1) = r1;
     let (w2, c2) = r2;
@@ -255,5 +261,8 @@ async fn get_or_create_converges_under_concurrent_insert() {
 
     // Only one row was inserted despite the race.
     let count = Widget::objects().count().await.expect("count");
-    assert_eq!(count, 1, "only one row must exist after concurrent get_or_create");
+    assert_eq!(
+        count, 1,
+        "only one row must exist after concurrent get_or_create"
+    );
 }

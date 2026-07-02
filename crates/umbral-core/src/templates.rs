@@ -676,8 +676,7 @@ fn fence_lang_is_safe(lang: &str) -> bool {
     !lang.is_empty()
         && lang.len() <= 64
         && lang.chars().all(|c| {
-            c.is_ascii_alphanumeric()
-                || matches!(c, '+' | '-' | '_' | '.' | '#' | '/' | '@')
+            c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '_' | '.' | '#' | '/' | '@')
         })
 }
 

@@ -125,12 +125,10 @@ async fn boot() {
             .expect("App::build");
 
         // String-PK child table + junction.
-        sqlx::query(
-            "CREATE TABLE fmc_label (code TEXT PRIMARY KEY, name TEXT NOT NULL)",
-        )
-        .execute(&pool)
-        .await
-        .expect("create fmc_label");
+        sqlx::query("CREATE TABLE fmc_label (code TEXT PRIMARY KEY, name TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create fmc_label");
         sqlx::query(
             "CREATE TABLE fmc_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
         )
@@ -158,12 +156,10 @@ async fn boot() {
         }
 
         // Uuid-PK child table + junction.
-        sqlx::query(
-            "CREATE TABLE fmc_badge (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
-        )
-        .execute(&pool)
-        .await
-        .expect("create fmc_badge");
+        sqlx::query("CREATE TABLE fmc_badge (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create fmc_badge");
         sqlx::query(
             "CREATE TABLE fmc_entry (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
         )
@@ -236,10 +232,7 @@ async fn m2m_form_string_pk_child_writes_junction_rows() {
     let post = Post::validate(&data_multi_str("String-PK Test", &["rust", "go"]))
         .await
         .expect("form validated — rust and go exist");
-    let created = Post::objects()
-        .create(post)
-        .await
-        .expect("create post");
+    let created = Post::objects().create(post).await.expect("create post");
     let ids = junction_string_child_ids(created.id).await;
     assert_eq!(
         ids,
@@ -253,9 +246,12 @@ async fn m2m_form_string_pk_child_writes_junction_rows() {
 #[tokio::test]
 async fn m2m_form_string_pk_child_bad_id_fails_validation() {
     boot().await;
-    let err = Post::validate(&data_multi_str("String-PK-Bad", &["rust", "nonexistent-label"]))
-        .await
-        .expect_err("nonexistent label must fail validation");
+    let err = Post::validate(&data_multi_str(
+        "String-PK-Bad",
+        &["rust", "nonexistent-label"],
+    ))
+    .await
+    .expect_err("nonexistent label must fail validation");
     assert!(
         err.fields.contains_key("labels"),
         "validation error keyed to the labels field: {:?}",
@@ -284,10 +280,7 @@ async fn m2m_form_uuid_pk_child_writes_junction_rows() {
     let entry = Entry::validate(&data_multi_uuid("Uuid-PK Test", &[badge_a, badge_b]))
         .await
         .expect("form validated — both badges exist");
-    let created = Entry::objects()
-        .create(entry)
-        .await
-        .expect("create entry");
+    let created = Entry::objects().create(entry).await.expect("create entry");
     let ids = junction_uuid_child_ids(created.id).await;
     let mut expected = vec![badge_a.to_string(), badge_b.to_string()];
     expected.sort();
@@ -319,4 +312,3 @@ async fn m2m_form_uuid_pk_child_bad_id_fails_validation() {
         .expect("count");
     assert_eq!(count, 0, "no parent row on a failed m2m validation");
 }
-

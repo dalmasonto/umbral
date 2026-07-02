@@ -1201,7 +1201,10 @@ pub enum MigrateError {
     /// `makemigrations --empty <plugin>` named a plugin that isn't
     /// registered. Carries the requested name and the registered set so
     /// the CLI can list the valid choices.
-    UnknownPlugin { requested: String, known: Vec<String> },
+    UnknownPlugin {
+        requested: String,
+        known: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -1503,7 +1506,9 @@ pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
 /// schema-per-tenant app: `run_shared` (shared → public) then `migrate_schemas`
 /// (tenant apps → each schema). On a non-multitenant app the two are equivalent
 /// only if every app is shared; otherwise prefer plain [`run`].
-pub async fn run_shared(shared_apps: &std::collections::HashSet<String>) -> Result<u64, MigrateError> {
+pub async fn run_shared(
+    shared_apps: &std::collections::HashSet<String>,
+) -> Result<u64, MigrateError> {
     run_shared_in(Path::new(MIGRATIONS_DIR), shared_apps).await
 }
 
@@ -1980,9 +1985,7 @@ async fn migrate_tenant_apps_into_sqlite_pool(
 /// `ensure_tracking_table_postgres` against an explicit connection (so the
 /// caller can pin `search_path` first and have the table created in the tenant
 /// schema rather than `public`).
-async fn ensure_tracking_table_pg_conn(
-    conn: &mut sqlx::PgConnection,
-) -> Result<(), MigrateError> {
+async fn ensure_tracking_table_pg_conn(conn: &mut sqlx::PgConnection) -> Result<(), MigrateError> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS umbral_migrations (
             plugin TEXT NOT NULL,
@@ -3037,7 +3040,8 @@ fn build_create_m2m_op(spec: &M2MPair, current: &Snapshot) -> Result<Operation, 
     let pk_col_and_ty = |m: &ModelMeta| -> (String, crate::orm::SqlType) {
         let pk = m.fields.iter().find(|c| c.primary_key);
         (
-            pk.map(|c| c.name.clone()).unwrap_or_else(|| "id".to_string()),
+            pk.map(|c| c.name.clone())
+                .unwrap_or_else(|| "id".to_string()),
             pk.map(|c| c.ty).unwrap_or(crate::orm::SqlType::BigInt),
         )
     };

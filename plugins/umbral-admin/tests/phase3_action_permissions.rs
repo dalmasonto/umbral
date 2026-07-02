@@ -82,17 +82,12 @@ async fn boot() -> &'static axum::Router {
         .permission(ARCHIVE_PERM);
 
         // A second action with NO permission requirement.
-        let tag_action = Action::new(
-            "tag",
-            "Tag",
-            "tag",
-            |inv: ActionInvocation| async move {
-                Ok(ActionResult::Toast {
-                    message: format!("Tagged {} note(s).", inv.ids.len()),
-                    level: ToastLevel::Success,
-                })
-            },
-        );
+        let tag_action = Action::new("tag", "Tag", "tag", |inv: ActionInvocation| async move {
+            Ok(ActionResult::Toast {
+                message: format!("Tagged {} note(s).", inv.ids.len()),
+                level: ToastLevel::Success,
+            })
+        });
 
         let note_config = AdminModel::new("note")
             .list_display(&["body", "archived"])
@@ -167,13 +162,12 @@ async fn boot() -> &'static axum::Router {
         .execute(&pool)
         .await
         .expect("insert contenttype");
-        let ct_id: i64 =
-            sqlx::query_scalar(
-                "SELECT id FROM permissions_contenttype WHERE app_label = 'myapp' AND model = 'note'",
-            )
-            .fetch_one(&pool)
-            .await
-            .expect("fetch contenttype id");
+        let ct_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM permissions_contenttype WHERE app_label = 'myapp' AND model = 'note'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("fetch contenttype id");
 
         // Insert the custom permission row with a valid content_type_id.
         sqlx::query(
@@ -252,7 +246,11 @@ async fn send(
         .await
         .expect("collect")
         .to_bytes();
-    (status, headers, String::from_utf8_lossy(&bytes).into_owned())
+    (
+        status,
+        headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
 }
 
 fn extract_csrf(html: &str) -> String {

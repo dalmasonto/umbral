@@ -40,10 +40,7 @@ fn safe_settings() -> Settings {
     }
 }
 
-fn make_ctx<'a>(
-    settings: &'a Settings,
-    names: &'a [&'a str],
-) -> CheckContext<'a> {
+fn make_ctx<'a>(settings: &'a Settings, names: &'a [&'a str]) -> CheckContext<'a> {
     CheckContext {
         backend: &SqliteBackend,
         settings,
@@ -61,9 +58,9 @@ fn warns_when_auth_mounted_without_security() {
     let settings = safe_settings();
     let ctx = make_ctx(&settings, &["auth"]);
     let findings = run_all(&ctx, &framework_checks());
-    let hit = findings.iter().find(|f| {
-        f.check_id == "plugin.security_missing" && f.severity == Severity::Warning
-    });
+    let hit = findings
+        .iter()
+        .find(|f| f.check_id == "plugin.security_missing" && f.severity == Severity::Warning);
     assert!(
         hit.is_some(),
         "auth without security should produce a plugin.security_missing Warning; got {findings:#?}",
@@ -79,9 +76,9 @@ fn warns_when_sessions_mounted_without_security() {
     let settings = safe_settings();
     let ctx = make_ctx(&settings, &["sessions"]);
     let findings = run_all(&ctx, &framework_checks());
-    let hit = findings.iter().find(|f| {
-        f.check_id == "plugin.security_missing" && f.severity == Severity::Warning
-    });
+    let hit = findings
+        .iter()
+        .find(|f| f.check_id == "plugin.security_missing" && f.severity == Severity::Warning);
     assert!(
         hit.is_some(),
         "sessions without security should produce a plugin.security_missing Warning; got {findings:#?}",
@@ -108,7 +105,8 @@ fn warns_when_auth_and_sessions_mounted_without_security() {
     assert_eq!(
         hits.len(),
         1,
-        "should produce exactly one plugin.security_missing Warning, not {}", hits.len(),
+        "should produce exactly one plugin.security_missing Warning, not {}",
+        hits.len(),
     );
 }
 

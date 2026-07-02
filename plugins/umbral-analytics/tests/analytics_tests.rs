@@ -19,9 +19,15 @@ fn capture_payload_has_required_fields() {
         json!({ "plan": "pro", "amount_cents": 999 }),
     );
 
-    assert_eq!(payload["api_key"], "phc_test_key", "api_key must be present");
+    assert_eq!(
+        payload["api_key"], "phc_test_key",
+        "api_key must be present"
+    );
     assert_eq!(payload["event"], "signup", "event must be present");
-    assert_eq!(payload["distinct_id"], "user_42", "distinct_id must be present");
+    assert_eq!(
+        payload["distinct_id"], "user_42",
+        "distinct_id must be present"
+    );
     assert!(
         payload["properties"].is_object(),
         "properties must be a JSON object"
@@ -33,8 +39,14 @@ fn capture_payload_has_required_fields() {
 
     // Verify timestamp is non-empty and looks like ISO 8601.
     let ts = payload["timestamp"].as_str().unwrap();
-    assert!(ts.contains('T'), "timestamp should be in RFC 3339 / ISO 8601 form: {ts}");
-    assert!(ts.ends_with('Z') || ts.contains('+'), "timestamp should carry UTC offset: {ts}");
+    assert!(
+        ts.contains('T'),
+        "timestamp should be in RFC 3339 / ISO 8601 form: {ts}"
+    );
+    assert!(
+        ts.ends_with('Z') || ts.contains('+'),
+        "timestamp should carry UTC offset: {ts}"
+    );
 
     // Verify custom properties are preserved inside the payload.
     assert_eq!(payload["properties"]["plan"], "pro");
@@ -124,8 +136,8 @@ fn http_client_is_shared_onclock() {
 async fn live_posthog_capture_round_trip() {
     let api_key = std::env::var("UMBRAL_POSTHOG_API_KEY")
         .expect("UMBRAL_POSTHOG_API_KEY must be set to run this test");
-    let host = std::env::var("UMBRAL_POSTHOG_HOST")
-        .unwrap_or_else(|_| DEFAULT_POSTHOG_HOST.to_string());
+    let host =
+        std::env::var("UMBRAL_POSTHOG_HOST").unwrap_or_else(|_| DEFAULT_POSTHOG_HOST.to_string());
 
     let client = AnalyticsClient::new(api_key, host.clone());
     let payload = client.build_payload(

@@ -54,7 +54,10 @@
 
 use chrono::Utc;
 
-use crate::{SessionError, store::{SessionRecord, SessionStore, hash_token}};
+use crate::{
+    SessionError,
+    store::{SessionRecord, SessionStore, hash_token},
+};
 
 /// Key prefix for all session keys in Redis. Namespaces umbral sessions
 /// away from other data in the same Redis database.
@@ -105,8 +108,7 @@ impl RedisStore {
     /// automatically on dropped connections, so the handle is safe to clone
     /// and reuse for the lifetime of the process.
     pub async fn connect(url: &str) -> Result<Self, SessionError> {
-        let client = redis::Client::open(url)
-            .map_err(|e| SessionError::Redis(e.to_string()))?;
+        let client = redis::Client::open(url).map_err(|e| SessionError::Redis(e.to_string()))?;
         let manager = redis::aio::ConnectionManager::new(client)
             .await
             .map_err(|e| SessionError::Redis(e.to_string()))?;
@@ -120,9 +122,7 @@ impl RedisStore {
     /// connection fails.
     pub async fn from_env() -> Result<Self, SessionError> {
         let url = std::env::var("UMBRAL_REDIS_URL").map_err(|_| {
-            SessionError::Redis(
-                "UMBRAL_REDIS_URL environment variable not set".to_string(),
-            )
+            SessionError::Redis("UMBRAL_REDIS_URL environment variable not set".to_string())
         })?;
         Self::connect(&url).await
     }
@@ -155,8 +155,7 @@ impl SessionStore for RedisStore {
             None => return Ok(None),
             Some(s) => s,
         };
-        let record: SessionRecord =
-            serde_json::from_str(&json).map_err(SessionError::Json)?;
+        let record: SessionRecord = serde_json::from_str(&json).map_err(SessionError::Json)?;
         // Double-check: Redis TTL may not have fired yet (clock skew).
         if record.expires_at < Utc::now() {
             let _: () = conn
@@ -182,9 +181,7 @@ impl SessionStore for RedisStore {
         use redis::AsyncCommands;
         let key = Self::key(token);
         let json = serde_json::to_string(record).map_err(SessionError::Json)?;
-        let ttl_secs = (record.expires_at - Utc::now())
-            .num_seconds()
-            .max(1) as u64; // at least 1s so Redis accepts the EXPIRE
+        let ttl_secs = (record.expires_at - Utc::now()).num_seconds().max(1) as u64; // at least 1s so Redis accepts the EXPIRE
         let mut conn = self.client.clone();
         conn.set_ex::<_, _, ()>(&key, json, ttl_secs)
             .await

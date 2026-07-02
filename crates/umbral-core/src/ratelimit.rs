@@ -246,10 +246,7 @@ mod tests {
 
     #[test]
     fn parse_each_period() {
-        assert_eq!(
-            Rate::parse("1/sec").unwrap().period,
-            Duration::from_secs(1)
-        );
+        assert_eq!(Rate::parse("1/sec").unwrap().period, Duration::from_secs(1));
         assert_eq!(Rate::parse("1/s").unwrap().period, Duration::from_secs(1));
         assert_eq!(
             Rate::parse("1/second").unwrap().period,

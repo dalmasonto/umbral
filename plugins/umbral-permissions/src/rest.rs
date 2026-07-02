@@ -108,10 +108,9 @@ impl<A: Authentication> Authentication for WithPermissions<A> {
         };
         // Store both flags so `HasPermission::check` can read them
         // without touching the database — it is intentionally sync.
-        identity.extras.insert(
-            "is_active".to_string(),
-            serde_json::Value::Bool(is_active),
-        );
+        identity
+            .extras
+            .insert("is_active".to_string(), serde_json::Value::Bool(is_active));
         identity.extras.insert(
             "is_superuser".to_string(),
             serde_json::Value::Bool(is_superuser),
@@ -226,10 +225,8 @@ mod tests {
 
     fn make_identity(perms: &[&str], is_super: bool, is_active: bool) -> Identity {
         let mut id = Identity::user(7);
-        id.extras.insert(
-            "is_active".to_string(),
-            serde_json::Value::Bool(is_active),
-        );
+        id.extras
+            .insert("is_active".to_string(), serde_json::Value::Bool(is_active));
         id.extras.insert(
             "is_superuser".to_string(),
             serde_json::Value::Bool(is_super),
@@ -322,14 +319,10 @@ mod tests {
         // `is_superuser = true`.
         let perm = HasPermission::new("blog.publish_post");
         let mut id = Identity::user(7);
-        id.extras.insert(
-            "is_active".to_string(),
-            serde_json::Value::Bool(false),
-        );
-        id.extras.insert(
-            "is_superuser".to_string(),
-            serde_json::Value::Bool(true),
-        );
+        id.extras
+            .insert("is_active".to_string(), serde_json::Value::Bool(false));
+        id.extras
+            .insert("is_superuser".to_string(), serde_json::Value::Bool(true));
         assert!(
             matches!(
                 perm.check(&Action::Delete, Some(&id)),

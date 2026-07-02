@@ -754,8 +754,7 @@ impl<'a> DynQuerySet<'a> {
         // actually trashed — restoring a live row is a no-op but
         // narrowing here keeps the affected-count honest.
         let mut where_clauses = self.where_clauses.clone();
-        where_clauses
-            .push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_not_null()));
+        where_clauses.push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_not_null()));
 
         let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
             Some(pk_col) => collect_parent_pks(self.meta, pk_col, &where_clauses)
@@ -1747,9 +1746,7 @@ impl<'a> DynQuerySet<'a> {
         // read them on the same tx so the bulk update sees its own
         // uncommitted siblings.
         let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
-            Some(pk_col) => {
-                collect_parent_pks_in_tx(self.meta, pk_col, &where_clauses, tx).await?
-            }
+            Some(pk_col) => collect_parent_pks_in_tx(self.meta, pk_col, &where_clauses, tx).await?,
             None => Vec::new(),
         };
 

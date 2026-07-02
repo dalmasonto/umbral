@@ -57,8 +57,8 @@ async fn published_static_round_trips_through_app_build() {
         .build()
         .expect("App builds with the static fixture plugin");
 
-    let published =
-        umbral::static_files::published_static().expect("App::build publishes static contributions");
+    let published = umbral::static_files::published_static()
+        .expect("App::build publishes static contributions");
 
     // The namespaced contribution round-trips: namespace, source dir, and
     // the contributing plugin's name.

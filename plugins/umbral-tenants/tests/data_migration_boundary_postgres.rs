@@ -156,8 +156,10 @@ async fn data_migration_reads_shared_public_writes_tenant_rows() {
         .await
         .expect("make migrations");
 
-    let shared_for_schema: HashSet<String> =
-        ["tenants", "catalog"].iter().map(|s| s.to_string()).collect();
+    let shared_for_schema: HashSet<String> = ["tenants", "catalog"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
 
     // 1) Migrate the PUBLIC apps: `tenant` registry + the shared `plan`.
     umbral::migrate::run_in(Path::new(&tmp))

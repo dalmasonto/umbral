@@ -106,7 +106,10 @@ impl Plugin for MemMediaPlugin {
     fn provides_storage(&self) -> bool {
         true
     }
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         let backend = BACKEND
             .get()
             .cloned()

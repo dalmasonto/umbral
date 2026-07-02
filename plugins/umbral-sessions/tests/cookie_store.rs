@@ -41,7 +41,10 @@ async fn save_then_load_round_trips_the_record() {
     let rec = record(Some("user-7"), r#"{"cart":[1,2,3]}"#);
 
     let cookie = store.save("ignored-token", &rec).await.expect("save");
-    assert!(!cookie.is_empty(), "save must produce a non-empty cookie value");
+    assert!(
+        !cookie.is_empty(),
+        "save must produce a non-empty cookie value"
+    );
 
     let loaded = store
         .load(&cookie)
@@ -63,11 +66,7 @@ async fn load_ignores_the_token_argument() {
         .await
         .expect("save");
 
-    let loaded = store
-        .load(&cookie)
-        .await
-        .expect("load")
-        .expect("present");
+    let loaded = store.load(&cookie).await.expect("load").expect("present");
     assert_eq!(loaded.data, r#"{"k":1}"#);
 }
 
@@ -117,7 +116,10 @@ async fn garbage_cookie_loads_as_none() {
     let store = CookieStore::with_secret(TEST_SECRET);
     assert!(store.load("!!!not base64!!!").await.unwrap().is_none());
     assert!(store.load("").await.unwrap().is_none());
-    assert!(store.load("AAAA").await.unwrap().is_none(), "too short to hold a nonce");
+    assert!(
+        store.load("AAAA").await.unwrap().is_none(),
+        "too short to hold a nonce"
+    );
 }
 
 // (c) Expired record: a successfully-decrypted but past-due record -> None.

@@ -1102,7 +1102,12 @@ mod tests {
             .from("noreply@acme.test")
             .html_body("<p>hi</p>")
             .text_body("hi");
-        let req = build_api_request(EmailApiProvider::Resend, "re_test_key", &msg, "fallback@x.test");
+        let req = build_api_request(
+            EmailApiProvider::Resend,
+            "re_test_key",
+            &msg,
+            "fallback@x.test",
+        );
 
         assert_eq!(req.url, "https://api.resend.com/emails");
         assert_eq!(req.bearer, "re_test_key");
@@ -1148,8 +1153,12 @@ mod tests {
             .from("noreply@acme.test")
             .html_body("<p>hi</p>")
             .text_body("hi");
-        let req =
-            build_api_request(EmailApiProvider::SendGrid, "SG.test_key", &msg, "fallback@x.test");
+        let req = build_api_request(
+            EmailApiProvider::SendGrid,
+            "SG.test_key",
+            &msg,
+            "fallback@x.test",
+        );
 
         assert_eq!(req.url, "https://api.sendgrid.com/v3/mail/send");
         assert_eq!(req.bearer, "SG.test_key");

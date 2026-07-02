@@ -37,12 +37,9 @@ async fn console_backend_fails_closed_when_environment_is_unknown() {
         std::env::remove_var("UMBRAL_EMAIL_DEFAULT_FROM");
     }
 
-    let msg = EmailMessage::new(
-        "Reset your password",
-        vec!["alice@example.com".into()],
-    )
-    .from("noreply@example.com")
-    .text_body("Your reset token is: SECRET-TOKEN-abc123");
+    let msg = EmailMessage::new("Reset your password", vec!["alice@example.com".into()])
+        .from("noreply@example.com")
+        .text_body("Your reset token is: SECRET-TOKEN-abc123");
 
     let err = send(&msg)
         .await
@@ -90,8 +87,7 @@ async fn missing_from_checked_before_backend_guard() {
         std::env::remove_var("UMBRAL_EMAIL_SMTP_HOST");
     }
 
-    let msg = EmailMessage::new("Subject", vec!["bob@example.com".into()])
-        .text_body("Hi");
+    let msg = EmailMessage::new("Subject", vec!["bob@example.com".into()]).text_body("Hi");
     // No `.from(...)` and no UMBRAL_EMAIL_DEFAULT_FROM → MissingFrom,
     // not ConsoleBackendInProduction.
     let err = send(&msg).await.expect_err("missing From should error");

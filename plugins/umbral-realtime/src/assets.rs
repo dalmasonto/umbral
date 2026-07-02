@@ -352,7 +352,9 @@ mod tests {
             "a single EventSource creation site for the whole browser"
         );
         assert!(
-            REALTIME_WORKER_JS.contains("new EventSource(\"__UMBRAL_RT_BASE__/sse?groups=\" + encodeURIComponent(union))"),
+            REALTIME_WORKER_JS.contains(
+                "new EventSource(\"__UMBRAL_RT_BASE__/sse?groups=\" + encodeURIComponent(union))"
+            ),
             "the one EventSource is parameterized by the union, not a per-tab key"
         );
         assert!(
@@ -375,7 +377,10 @@ mod tests {
 
     #[test]
     fn worker_has_onconnect_and_sorts_the_union() {
-        assert!(REALTIME_WORKER_JS.contains("self.onconnect"), "SharedWorker entry point");
+        assert!(
+            REALTIME_WORKER_JS.contains("self.onconnect"),
+            "SharedWorker entry point"
+        );
         assert!(
             REALTIME_WORKER_JS.contains(".sort()"),
             "normalizes the union key by sorting so a,b == b,a"
@@ -393,8 +398,14 @@ mod tests {
             "parses the {{c,e,d}} envelope"
         );
         // Routing handles @broadcast and @user: same-session channels.
-        assert!(REALTIME_WORKER_JS.contains("\"@broadcast\""), "routes @broadcast to every tab");
-        assert!(REALTIME_WORKER_JS.contains("\"@user:\""), "routes @user: to every same-session tab");
+        assert!(
+            REALTIME_WORKER_JS.contains("\"@broadcast\""),
+            "routes @broadcast to every tab"
+        );
+        assert!(
+            REALTIME_WORKER_JS.contains("\"@user:\""),
+            "routes @user: to every same-session tab"
+        );
         assert!(
             REALTIME_WORKER_JS.contains("p.groups.has(c)"),
             "routes a group channel only to ports subscribed to it"
@@ -423,7 +434,10 @@ mod tests {
             REALTIME_CLIENT_JS.contains("subscribe:"),
             "defines umbral.realtime.subscribe"
         );
-        assert!(REALTIME_CLIENT_JS.contains("SharedWorker"), "prefers a SharedWorker");
+        assert!(
+            REALTIME_CLIENT_JS.contains("SharedWorker"),
+            "prefers a SharedWorker"
+        );
         assert!(
             REALTIME_CLIENT_JS.contains("new EventSource"),
             "has a per-tab EventSource fallback"
@@ -477,16 +491,31 @@ mod tests {
             REALTIME_CLIENT_JS.contains("function interested"),
             "routes by channel match"
         );
-        assert!(REALTIME_CLIENT_JS.contains("\"@broadcast\""), "delivers @broadcast");
-        assert!(REALTIME_CLIENT_JS.contains("@user:"), "delivers @user: same-session events");
+        assert!(
+            REALTIME_CLIENT_JS.contains("\"@broadcast\""),
+            "delivers @broadcast"
+        );
+        assert!(
+            REALTIME_CLIENT_JS.contains("@user:"),
+            "delivers @user: same-session events"
+        );
         // Fallback listens for the single `u` event and unwraps {c,e,d}.
         assert!(
             REALTIME_CLIENT_JS.contains("addEventListener(\"u\""),
             "fallback listens for the single `u` event"
         );
-        assert!(REALTIME_CLIENT_JS.contains("env.c"), "fallback unwraps the channel `c`");
-        assert!(REALTIME_CLIENT_JS.contains("env.e"), "fallback unwraps the event name `e`");
-        assert!(REALTIME_CLIENT_JS.contains("env.d"), "fallback unwraps the data `d`");
+        assert!(
+            REALTIME_CLIENT_JS.contains("env.c"),
+            "fallback unwraps the channel `c`"
+        );
+        assert!(
+            REALTIME_CLIENT_JS.contains("env.e"),
+            "fallback unwraps the event name `e`"
+        );
+        assert!(
+            REALTIME_CLIENT_JS.contains("env.d"),
+            "fallback unwraps the data `d`"
+        );
     }
 
     #[test]
@@ -504,9 +533,18 @@ mod tests {
         }
         // The sugar reads sync/join/leave handlers and delegates to subscribe()
         // (no transport of its own).
-        assert!(REALTIME_CLIENT_JS.contains("handlers.sync"), "reads the sync handler");
-        assert!(REALTIME_CLIENT_JS.contains("handlers.join"), "reads the join handler");
-        assert!(REALTIME_CLIENT_JS.contains("handlers.leave"), "reads the leave handler");
+        assert!(
+            REALTIME_CLIENT_JS.contains("handlers.sync"),
+            "reads the sync handler"
+        );
+        assert!(
+            REALTIME_CLIENT_JS.contains("handlers.join"),
+            "reads the join handler"
+        );
+        assert!(
+            REALTIME_CLIENT_JS.contains("handlers.leave"),
+            "reads the leave handler"
+        );
         let subscribe_at = REALTIME_CLIENT_JS.find("subscribe: function").unwrap();
         let presence_at = REALTIME_CLIENT_JS.find("presence: function").unwrap();
         assert!(

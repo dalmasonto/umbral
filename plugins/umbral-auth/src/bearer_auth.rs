@@ -46,8 +46,8 @@
 
 use crate::{AuthUser, auth_user, token::AuthToken};
 use async_trait::async_trait;
-use umbral::web::{HeaderMap, header};
 use umbral::auth::{Authentication, Identity};
+use umbral::web::{HeaderMap, header};
 
 /// The bearer-token authenticator. Stateless — every request reads
 /// the header, looks up the token row, hydrates the user. The

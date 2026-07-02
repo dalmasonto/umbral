@@ -115,7 +115,9 @@ async fn database_per_tenant_isolation() {
 
     // Connect all three. If a tenant DB can't be reached (doesn't exist), skip
     // cleanly — the framework does not CREATE DATABASE.
-    let registry = sqlx::PgPool::connect(&base).await.expect("connect registry pg");
+    let registry = sqlx::PgPool::connect(&base)
+        .await
+        .expect("connect registry pg");
     let Ok(pool_a) = sqlx::PgPool::connect(&url_a).await else {
         eprintln!(
             "skipping database_per_tenant_isolation: tenant DB A ({url_a}) is unreachable; create it \
@@ -184,8 +186,16 @@ async fn database_per_tenant_isolation() {
     //    doesn't touch cwd.
     let shared = std::collections::HashSet::from(["tenants".to_string()]);
     for (alias, domain, pool) in [
-        ("acme_db", "acme.localhost", DbPool::Postgres(pool_a.clone())),
-        ("globex_db", "globex.localhost", DbPool::Postgres(pool_b.clone())),
+        (
+            "acme_db",
+            "acme.localhost",
+            DbPool::Postgres(pool_a.clone()),
+        ),
+        (
+            "globex_db",
+            "globex.localhost",
+            DbPool::Postgres(pool_b.clone()),
+        ),
     ] {
         // Registry row in the default DB (no tenant ctx → routes to default).
         Tenant::objects()
@@ -200,13 +210,10 @@ async fn database_per_tenant_isolation() {
             .await
             .expect("create tenant row");
         umbral::db::register_tenant_pool(alias, pool);
-        let n = umbral::migrate::migrate_apps_into_pool_in(
-            std::path::Path::new(&tmp),
-            alias,
-            &shared,
-        )
-        .await
-        .expect("migrate tenant DB");
+        let n =
+            umbral::migrate::migrate_apps_into_pool_in(std::path::Path::new(&tmp), alias, &shared)
+                .await
+                .expect("migrate tenant DB");
         assert!(n >= 1, "tenant {alias} should have applied >=1 migration");
     }
 
@@ -215,7 +222,10 @@ async fn database_per_tenant_isolation() {
     let ctx_a = RouteContext::new().with_tenant(TenantKey::new("acme_db"));
     umbral::db::route_context_scope(ctx_a, async {
         TPost::objects()
-            .create(TPost { id: 0, title: "A's post".into() })
+            .create(TPost {
+                id: 0,
+                title: "A's post".into(),
+            })
             .await
             .expect("create A post");
     })
@@ -224,7 +234,10 @@ async fn database_per_tenant_isolation() {
     let ctx_b = RouteContext::new().with_tenant(TenantKey::new("globex_db"));
     umbral::db::route_context_scope(ctx_b, async {
         TPost::objects()
-            .create(TPost { id: 0, title: "B's post".into() })
+            .create(TPost {
+                id: 0,
+                title: "B's post".into(),
+            })
             .await
             .expect("create B post");
     })
@@ -249,27 +262,32 @@ async fn database_per_tenant_isolation() {
 
     // 4b) Cross-DATABASE check via direct SQL: each tenant's row is in its OWN
     //     database only, and invisible from the other tenant's DB.
-    let titles_a: Vec<String> =
-        sqlx::query_scalar("SELECT title FROM public.tpost ORDER BY id")
-            .fetch_all(&pool_a)
-            .await
-            .expect("direct select A");
-    let titles_b: Vec<String> =
-        sqlx::query_scalar("SELECT title FROM public.tpost ORDER BY id")
-            .fetch_all(&pool_b)
-            .await
-            .expect("direct select B");
-    assert_eq!(titles_a, vec!["A's post".to_string()], "DB A holds only A's row");
-    assert_eq!(titles_b, vec!["B's post".to_string()], "DB B holds only B's row");
+    let titles_a: Vec<String> = sqlx::query_scalar("SELECT title FROM public.tpost ORDER BY id")
+        .fetch_all(&pool_a)
+        .await
+        .expect("direct select A");
+    let titles_b: Vec<String> = sqlx::query_scalar("SELECT title FROM public.tpost ORDER BY id")
+        .fetch_all(&pool_b)
+        .await
+        .expect("direct select B");
+    assert_eq!(
+        titles_a,
+        vec!["A's post".to_string()],
+        "DB A holds only A's row"
+    );
+    assert_eq!(
+        titles_b,
+        vec!["B's post".to_string()],
+        "DB B holds only B's row"
+    );
 
     // The registry DB has NO tpost rows of its own (the tenant app was never
     // migrated/written there — it's a tenant app). The table may not even exist
     // in the registry DB; either "no table" or "zero rows" proves isolation.
-    let registry_tpost: Option<i64> =
-        sqlx::query_scalar("SELECT count(*) FROM public.tpost")
-            .fetch_one(&registry)
-            .await
-            .ok();
+    let registry_tpost: Option<i64> = sqlx::query_scalar("SELECT count(*) FROM public.tpost")
+        .fetch_one(&registry)
+        .await
+        .ok();
     if let Some(c) = registry_tpost {
         assert_eq!(c, 0, "registry DB must hold no tenant rows");
     }

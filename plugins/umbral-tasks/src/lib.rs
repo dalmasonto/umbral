@@ -184,14 +184,15 @@ impl Plugin for TasksPlugin {
         vec![Box::new(WorkerCommand), Box::new(BeatCommand)]
     }
 
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         // Install the builder-collected periodic specs into the ambient
         // registry so `run_beat` can sync them to `PeriodicTask` rows on
         // startup. `on_ready` is sync, so the async DB upsert happens in
         // the beat loop; here we only publish the in-memory specs.
-        if !self.periodic.is_empty()
-            && REGISTERED_PERIODIC.set(self.periodic.clone()).is_err()
-        {
+        if !self.periodic.is_empty() && REGISTERED_PERIODIC.set(self.periodic.clone()).is_err() {
             tracing::warn!(
                 "umbral-tasks: periodic specs already installed by another \
                  TasksPlugin; ignoring this registration"
@@ -746,8 +747,7 @@ pub async fn reclaim_orphaned_tasks_with(
     policy: RetryPolicy,
 ) -> Result<u64, TaskError> {
     let cutoff = Utc::now()
-        - chrono::Duration::from_std(visibility_timeout)
-            .unwrap_or(chrono::Duration::seconds(300));
+        - chrono::Duration::from_std(visibility_timeout).unwrap_or(chrono::Duration::seconds(300));
 
     // Fetch all stuck-running rows whose lease has expired.
     let orphans: Vec<TaskRow> = TaskRow::objects()
@@ -1289,7 +1289,9 @@ impl Schedule {
         if let Some(expr) = s.strip_prefix("cron:") {
             Some(Schedule::Cron(expr.to_string()))
         } else if let Some(secs) = s.strip_prefix("every:") {
-            secs.parse::<u64>().ok().map(|n| Schedule::Every(Duration::from_secs(n)))
+            secs.parse::<u64>()
+                .ok()
+                .map(|n| Schedule::Every(Duration::from_secs(n)))
         } else {
             None
         }
@@ -1554,9 +1556,7 @@ pub async fn fire_due_periodic() -> Result<u64, TaskError> {
                 // row from THIS exact `next_run`. `affected == 1` means we
                 // won and may enqueue; `0` means another instance beat us.
                 let affected = PeriodicTask::objects()
-                    .filter(
-                        periodic_task::ID.eq(row.id) & periodic_task::NEXT_RUN.eq(row.next_run),
-                    )
+                    .filter(periodic_task::ID.eq(row.id) & periodic_task::NEXT_RUN.eq(row.next_run))
                     .update_values(patch)
                     .await?;
                 if affected == 1 {

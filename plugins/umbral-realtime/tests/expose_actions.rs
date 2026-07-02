@@ -26,11 +26,13 @@ async fn action_filter_only_dispatches_listed_actions() {
     umbral::App::builder()
         .settings(settings)
         .database("default", pool)
-        .plugin(RealtimePlugin::new().expose::<Post>(
-            Expose::to_group("public:act")
-                .fields(&["id", "title"])
-                .actions(&[ModelAction::Created]),
-        ))
+        .plugin(
+            RealtimePlugin::new().expose::<Post>(
+                Expose::to_group("public:act")
+                    .fields(&["id", "title"])
+                    .actions(&[ModelAction::Created]),
+            ),
+        )
         .build()
         .expect("App::build");
 

@@ -238,11 +238,10 @@ async fn test_delete_selected_string_pk_deletes_rows_and_reports_correct_count()
     let pool = umbral::db::pool();
 
     // Rows must exist before the action runs.
-    let before: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM tag WHERE id IN ('rust', 'python')")
-            .fetch_one(&pool)
-            .await
-            .expect("count before");
+    let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tag WHERE id IN ('rust', 'python')")
+        .fetch_one(&pool)
+        .await
+        .expect("count before");
     assert_eq!(before, 2, "rows must exist before delete");
 
     // Fire delete_selected with two String PKs.
@@ -275,11 +274,10 @@ async fn test_delete_selected_string_pk_deletes_rows_and_reports_correct_count()
     );
 
     // Both selected rows must be gone.
-    let after: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM tag WHERE id IN ('rust', 'python')")
-            .fetch_one(&pool)
-            .await
-            .expect("count after");
+    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tag WHERE id IN ('rust', 'python')")
+        .fetch_one(&pool)
+        .await
+        .expect("count after");
     assert_eq!(after, 0, "both selected rows should be deleted");
 
     // The unselected row must survive.

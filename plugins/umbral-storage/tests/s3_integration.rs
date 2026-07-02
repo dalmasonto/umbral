@@ -81,7 +81,10 @@ async fn s3_store_retrieve_exists_url_delete_round_trip() {
     );
     let got = s.retrieve(&stored.key).await.expect("retrieve");
     assert_eq!(&got[..], body, "retrieved bytes round-trip exactly");
-    assert!(!s.url(&stored.key).is_empty(), "url() returns a non-empty URL");
+    assert!(
+        !s.url(&stored.key).is_empty(),
+        "url() returns a non-empty URL"
+    );
 
     s.delete(&stored.key).await.expect("delete");
     assert!(
@@ -112,8 +115,7 @@ async fn s3_put_exact_key_round_trip() {
 async fn s3_exists_false_for_missing_key() {
     let s = storage_or_skip!();
     assert!(
-        !s
-            .exists("umbral-s3-test/definitely/missing.bin")
+        !s.exists("umbral-s3-test/definitely/missing.bin")
             .await
             .expect("exists check on a missing key"),
         "a never-written key does not exist"
@@ -154,7 +156,9 @@ async fn s3_presigned_url_round_trip() {
 
     let key = "umbral-s3-test/presign/hello.txt";
     let body = b"presigned hello";
-    s.put(key, "text/plain", body).await.expect("put for presign");
+    s.put(key, "text/plain", body)
+        .await
+        .expect("put for presign");
 
     let url = s.url(key);
     assert!(

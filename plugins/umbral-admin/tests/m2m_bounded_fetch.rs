@@ -177,12 +177,10 @@ async fn boot() -> &'static axum::Router {
             .expect("seed group");
 
         // Link group #1 → item #210 (the last item, beyond the cap window).
-        sqlx::query(
-            "INSERT INTO m2mb_group_items (parent_id, child_id) VALUES (1, 210)",
-        )
-        .execute(&pool)
-        .await
-        .expect("seed junction");
+        sqlx::query("INSERT INTO m2mb_group_items (parent_id, child_id) VALUES (1, 210)")
+            .execute(&pool)
+            .await
+            .expect("seed junction");
 
         // Staff user.
         let staff = create_user("m2m_admin", "m2m@example.com", "pass123")
@@ -322,9 +320,7 @@ async fn test_m2m_option_fetch_is_bounded() {
 
     // Count checkbox inputs inside the M2M section.  The form renders
     // one <input type="checkbox" per candidate.
-    let checkbox_count = body
-        .matches(r#"name="m2m_items""#)
-        .count();
+    let checkbox_count = body.matches(r#"name="m2m_items""#).count();
 
     // With 210 target rows and cap=200, we expect at most 201 checkboxes:
     // 200 from the bounded fetch + 1 extra (item-0210, the selected one

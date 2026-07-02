@@ -105,7 +105,11 @@ fn child_form_fields(
 /// parent table. Returns the resolved FK [`Column`] on success, or `None`
 /// (with a `tracing::warn!`) when the declaration is bogus — the caller
 /// skips that inline rather than 500-ing.
-fn validate_inline<'c>(parent: &ModelMeta, child: &'c ModelMeta, inline: &InlineModel) -> Option<&'c Column> {
+fn validate_inline<'c>(
+    parent: &ModelMeta,
+    child: &'c ModelMeta,
+    inline: &InlineModel,
+) -> Option<&'c Column> {
     let fk = child.fields.iter().find(|c| c.name == inline.fk_field);
     let Some(fk) = fk else {
         tracing::warn!(
@@ -315,7 +319,10 @@ pub(crate) fn parse_inline_rows(
     for i in 0..total {
         let id_key = format!("inline-{inline_name}-{i}-id");
         let delete_key = format!("inline-{inline_name}-{i}-DELETE");
-        let id = by_key.get(id_key.as_str()).map(|s| s.to_string()).unwrap_or_default();
+        let id = by_key
+            .get(id_key.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let delete = by_key
             .get(delete_key.as_str())
             .map(|v| matches!(*v, "on" | "true" | "1"))

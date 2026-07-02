@@ -140,8 +140,14 @@ async fn presence_gating_default_off_projection_dedup_anonymous() {
 
         let c1 = connect(&registry, Some("9"), "room:dedup").await;
         let after_first = drain(&mut sub);
-        let joins = after_first.iter().filter(|(n, _)| n == "presence:join").count();
-        assert_eq!(joins, 1, "first connection of a user fires exactly one join");
+        let joins = after_first
+            .iter()
+            .filter(|(n, _)| n == "presence:join")
+            .count();
+        assert_eq!(
+            joins, 1,
+            "first connection of a user fires exactly one join"
+        );
 
         // 2nd tab, SAME user → NO second join.
         let c2 = connect(&registry, Some("9"), "room:dedup").await;
@@ -162,8 +168,14 @@ async fn presence_gating_default_off_projection_dedup_anonymous() {
         // Close the last → fully left → exactly one leave naming the user.
         disconnect(&registry, c2).await;
         let after_last_close = drain(&mut sub);
-        let leaves = after_last_close.iter().filter(|(n, _)| n == "presence:leave").count();
-        assert_eq!(leaves, 1, "closing the LAST connection fires exactly one leave");
+        let leaves = after_last_close
+            .iter()
+            .filter(|(n, _)| n == "presence:leave")
+            .count();
+        assert_eq!(
+            leaves, 1,
+            "closing the LAST connection fires exactly one leave"
+        );
         assert_eq!(
             after_last_close
                 .iter()

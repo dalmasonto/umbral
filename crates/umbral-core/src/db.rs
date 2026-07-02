@@ -306,12 +306,8 @@ pub fn pool_alias_registered(alias: &str) -> bool {
 /// [`pool_dispatched`]).
 pub async fn ping() -> Result<(), sqlx::Error> {
     match pool_dispatched() {
-        DbPool::Sqlite(p) => {
-            sqlx::query("SELECT 1").execute(p).await.map(|_| ())
-        }
-        DbPool::Postgres(p) => {
-            sqlx::query("SELECT 1").execute(p).await.map(|_| ())
-        }
+        DbPool::Sqlite(p) => sqlx::query("SELECT 1").execute(p).await.map(|_| ()),
+        DbPool::Postgres(p) => sqlx::query("SELECT 1").execute(p).await.map(|_| ()),
     }
 }
 
@@ -700,7 +696,6 @@ pub async fn begin_pg(pool: &sqlx::PgPool) -> Result<Transaction, sqlx::Error> {
         inner: TransactionInner::Postgres(tx),
     })
 }
-
 
 /// Pinned, boxed `Future` with a lifetime parameter.
 ///

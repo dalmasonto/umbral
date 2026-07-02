@@ -42,8 +42,8 @@ use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 
-use crate::store::{SessionRecord, SessionStore};
 use crate::SessionError;
+use crate::store::{SessionRecord, SessionStore};
 
 /// Max encoded cookie size. Browsers cap a single cookie around 4 KB
 /// (name + value + attributes); we budget the VALUE at 4096 bytes so the
@@ -90,7 +90,14 @@ impl std::fmt::Debug for CookieStore {
         // Deliberately opaque: never render the key.
         f.debug_struct("CookieStore")
             .field("key", &"<redacted 32-byte AEAD key>")
-            .field("source", &if self.explicit_key.is_some() { "explicit" } else { "ambient" })
+            .field(
+                "source",
+                &if self.explicit_key.is_some() {
+                    "explicit"
+                } else {
+                    "ambient"
+                },
+            )
             .finish()
     }
 }
@@ -168,7 +175,9 @@ impl CookieStore {
 
     /// The cipher instance for this store's key (explicit or lazily-ambient).
     fn cipher(&self) -> XChaCha20Poly1305 {
-        let key = self.explicit_key.unwrap_or_else(|| self.resolve_ambient_key());
+        let key = self
+            .explicit_key
+            .unwrap_or_else(|| self.resolve_ambient_key());
         XChaCha20Poly1305::new((&key).into())
     }
 }

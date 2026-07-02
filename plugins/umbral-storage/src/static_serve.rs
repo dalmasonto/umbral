@@ -236,7 +236,10 @@ impl Service<Request<Body>> for EmbeddedDirService {
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
             if if_none_match == "*"
-                || if_none_match.split(',').map(|t| t.trim()).any(|t| t == etag)
+                || if_none_match
+                    .split(',')
+                    .map(|t| t.trim())
+                    .any(|t| t == etag)
             {
                 return Ok(Response::builder()
                     .status(StatusCode::NOT_MODIFIED)

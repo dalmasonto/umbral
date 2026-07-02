@@ -22,8 +22,8 @@
 #![cfg(feature = "redis")]
 
 use chrono::{Duration, Utc};
-use umbral_sessions::store::{SessionRecord, SessionStore, hash_token_pub};
 use umbral_sessions::RedisStore;
+use umbral_sessions::store::{SessionRecord, SessionStore, hash_token_pub};
 
 // =========================================================================
 // Unit tests — no Redis server needed
@@ -94,7 +94,10 @@ fn anonymous_session_record_serde_round_trip() {
     let json = serde_json::to_string(&record).expect("serialize");
     let decoded: SessionRecord = serde_json::from_str(&json).expect("deserialize");
 
-    assert!(decoded.user_id.is_none(), "anonymous session keeps user_id = None");
+    assert!(
+        decoded.user_id.is_none(),
+        "anonymous session keeps user_id = None"
+    );
     assert_eq!(decoded.data, "{}");
 }
 
@@ -141,5 +144,8 @@ async fn live_round_trip() {
     assert!(after_destroy.is_none(), "session gone after destroy");
 
     // destroy is idempotent — second call must not error.
-    store.destroy(&token).await.expect("second destroy is no-op");
+    store
+        .destroy(&token)
+        .await
+        .expect("second destroy is no-op");
 }

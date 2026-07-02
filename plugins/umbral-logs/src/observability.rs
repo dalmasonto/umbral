@@ -68,7 +68,9 @@ impl ObservabilityConfig {
         Self {
             service_name: env::var("OTEL_SERVICE_NAME").ok().filter(|s| !s.is_empty()),
             json,
-            otlp_endpoint: env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok().filter(|s| !s.is_empty()),
+            otlp_endpoint: env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .ok()
+                .filter(|s| !s.is_empty()),
         }
     }
 
@@ -95,14 +97,18 @@ impl ObservabilityConfig {
     /// the `otel` feature (dead code otherwise).
     #[cfg(feature = "otel")]
     fn effective_service_name(&self) -> String {
-        self.service_name.clone().unwrap_or_else(|| "umbral".to_string())
+        self.service_name
+            .clone()
+            .unwrap_or_else(|| "umbral".to_string())
     }
 
     /// The effective OTLP endpoint: explicit value, else the
     /// `OTEL_EXPORTER_OTLP_ENDPOINT` default `http://localhost:4317`.
     #[cfg(feature = "otel")]
     fn effective_endpoint(&self) -> String {
-        self.otlp_endpoint.clone().unwrap_or_else(|| "http://localhost:4317".to_string())
+        self.otlp_endpoint
+            .clone()
+            .unwrap_or_else(|| "http://localhost:4317".to_string())
     }
 }
 
@@ -154,7 +160,9 @@ pub fn init(config: ObservabilityConfig) -> ObservabilityGuard {
     if INITIALISED.set(()).is_err() {
         // A subscriber is already installed. `tracing::warn!` here is a no-op
         // if no subscriber is set, but in practice the first init set one.
-        tracing::warn!("observability: init() called more than once; ignoring (subscriber already installed)");
+        tracing::warn!(
+            "observability: init() called more than once; ignoring (subscriber already installed)"
+        );
         return noop_guard();
     }
 
@@ -166,8 +174,7 @@ fn init_inner(config: ObservabilityConfig) -> ObservabilityGuard {
     use tracing_subscriber::util::SubscriberInitExt;
     use tracing_subscriber::{EnvFilter, Layer};
 
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // fmt layer: JSON when requested, human-readable otherwise. Boxed so both
     // arms have the same type. The JSON arm includes the current span
@@ -182,7 +189,9 @@ fn init_inner(config: ObservabilityConfig) -> ObservabilityGuard {
         tracing_subscriber::fmt::layer().boxed()
     };
 
-    let registry = tracing_subscriber::registry().with(env_filter).with(fmt_layer);
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt_layer);
 
     // Under the `otel` feature, try to build the OTLP exporter and add its
     // layer. A failure (only a malformed endpoint fails at build time — the
@@ -194,7 +203,9 @@ fn init_inner(config: ObservabilityConfig) -> ObservabilityGuard {
         match build_otel(&config) {
             Ok((layer, provider)) => {
                 registry.with(layer).init();
-                ObservabilityGuard { provider: Some(provider) }
+                ObservabilityGuard {
+                    provider: Some(provider),
+                }
             }
             Err(e) => {
                 eprintln!(
@@ -269,9 +280,9 @@ fn noop_guard() -> ObservabilityGuard {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+    use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::Layer;
 
     /// A `MakeWriter` that captures everything written into a shared buffer so
     /// the JSON-logging test can read back the emitted line.
@@ -318,8 +329,7 @@ mod tests {
 
         let raw = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
         let line = raw.lines().next().expect("a log line was emitted");
-        let parsed: serde_json::Value =
-            serde_json::from_str(line).expect("log line is valid JSON");
+        let parsed: serde_json::Value = serde_json::from_str(line).expect("log line is valid JSON");
 
         assert_eq!(parsed["level"], "INFO");
         assert_eq!(parsed["target"], "umbral_logs::observability::tests");
@@ -346,7 +356,8 @@ mod tests {
         let subscriber = tracing_subscriber::registry().with(otel_layer);
 
         tracing::subscriber::with_default(subscriber, || {
-            let span = tracing::info_span!("http.request", http.method = "GET", http.route = "/widgets");
+            let span =
+                tracing::info_span!("http.request", http.method = "GET", http.route = "/widgets");
             let _e = span.enter();
         });
 

@@ -43,7 +43,10 @@ fn is_dev() -> bool {
 /// unchanged when it carries no `://` (already bare). Lowercased for a
 /// case-insensitive host compare.
 fn origin_authority(origin: &str) -> String {
-    let after_scheme = origin.split_once("://").map(|(_, rest)| rest).unwrap_or(origin);
+    let after_scheme = origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(origin);
     // Drop anything from the first `/`, `?` or `#` — keep only the authority.
     let authority = after_scheme
         .split(['/', '?', '#'])
@@ -126,7 +129,9 @@ pub(crate) async fn ws_handler(
     // unless it's on the `allowed_origins` allowlist. (SSE is left alone — the
     // browser's CORS already protects a cross-origin `EventSource`.)
     let origin = headers.get("origin").and_then(|v| v.to_str().ok());
-    let host = headers.get(http::header::HOST).and_then(|v| v.to_str().ok());
+    let host = headers
+        .get(http::header::HOST)
+        .and_then(|v| v.to_str().ok());
     if !ws_origin_allowed(origin, host, &Realtime::allowed_origins(), is_dev()) {
         return (StatusCode::FORBIDDEN, "cross-origin WebSocket rejected").into_response();
     }
@@ -176,9 +181,7 @@ pub(crate) async fn ws_handler(
     // (gated by the spec; anonymous conns yield nothing).
     tokio::spawn(crate::dispatch_presence(presence));
 
-    ws.on_upgrade(move |socket| {
-        handle_socket(socket, conn_id, rx, user_id, registry, handler)
-    })
+    ws.on_upgrade(move |socket| handle_socket(socket, conn_id, rx, user_id, registry, handler))
 }
 
 /// Drive one live socket for an already-registered connection: run the
@@ -346,7 +349,10 @@ mod tests {
 
     #[test]
     fn origin_authority_strips_scheme_path_and_lowercases() {
-        assert_eq!(origin_authority("https://App.Example.com"), "app.example.com");
+        assert_eq!(
+            origin_authority("https://App.Example.com"),
+            "app.example.com"
+        );
         assert_eq!(origin_authority("http://x.com:8000/foo?q=1"), "x.com:8000");
         assert_eq!(origin_authority("x.com"), "x.com");
     }

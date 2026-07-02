@@ -116,15 +116,16 @@ async fn clearsessions_deletes_expired_leaves_live() {
     }
 
     // Verify the two expired rows exist before we call clearsessions.
-    let count_before: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM session WHERE id IN (?, ?)",
-    )
-    .bind(id_exp1)
-    .bind(id_exp2)
-    .fetch_one(&pool)
-    .await
-    .expect("count before");
-    assert_eq!(count_before.0, 2, "both expired rows should exist before clearsessions");
+    let count_before: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM session WHERE id IN (?, ?)")
+        .bind(id_exp1)
+        .bind(id_exp2)
+        .fetch_one(&pool)
+        .await
+        .expect("count before");
+    assert_eq!(
+        count_before.0, 2,
+        "both expired rows should exist before clearsessions"
+    );
 
     // Execute the same ORM call the `clearsessions` command runs.
     let now = Utc::now();
@@ -141,12 +142,11 @@ async fn clearsessions_deletes_expired_leaves_live() {
 
     // Expired rows are gone.
     for id in [id_exp1, id_exp2] {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT id FROM session WHERE id = ?")
-                .bind(id)
-                .fetch_optional(&pool)
-                .await
-                .expect("check expired row");
+        let row: Option<(String,)> = sqlx::query_as("SELECT id FROM session WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&pool)
+            .await
+            .expect("check expired row");
         assert!(
             row.is_none(),
             "clearsessions must have deleted expired row {id}"
@@ -154,12 +154,11 @@ async fn clearsessions_deletes_expired_leaves_live() {
     }
 
     // Live row is untouched.
-    let live_row: Option<(String,)> =
-        sqlx::query_as("SELECT id FROM session WHERE id = ?")
-            .bind(id_live)
-            .fetch_optional(&pool)
-            .await
-            .expect("check live row");
+    let live_row: Option<(String,)> = sqlx::query_as("SELECT id FROM session WHERE id = ?")
+        .bind(id_live)
+        .fetch_optional(&pool)
+        .await
+        .expect("check live row");
     assert!(
         live_row.is_some(),
         "clearsessions must not delete live session row {id_live}"

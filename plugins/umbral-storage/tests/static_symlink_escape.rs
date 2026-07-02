@@ -111,5 +111,9 @@ async fn symlink_loop_returns_404_not_hang() {
         .body(Body::empty())
         .unwrap();
     let (status, _) = body_string(router.oneshot(req).await.unwrap()).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "symlink loop must return 404");
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "symlink loop must return 404"
+    );
 }

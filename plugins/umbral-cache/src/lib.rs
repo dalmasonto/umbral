@@ -60,7 +60,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use http::header::{HeaderValue, CACHE_CONTROL, VARY};
+use http::header::{CACHE_CONTROL, HeaderValue, VARY};
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
@@ -327,12 +327,13 @@ impl SqliteBackend {
     /// already skip expired rows so a call is never required for
     /// correctness, only for keeping the table small.
     pub async fn sweep(&self) -> Result<u64, CacheError> {
-        let result =
-            sqlx::query("DELETE FROM umbral_cache WHERE expires_at IS NOT NULL AND expires_at <= ?")
-                .bind(Utc::now())
-                .execute(&self.pool)
-                .await
-                .map_err(CacheError::Sqlx)?;
+        let result = sqlx::query(
+            "DELETE FROM umbral_cache WHERE expires_at IS NOT NULL AND expires_at <= ?",
+        )
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await
+        .map_err(CacheError::Sqlx)?;
         Ok(result.rows_affected())
     }
 }
@@ -644,7 +645,10 @@ impl Plugin for CachePlugin {
         router
     }
 
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         // BROKEN-9: registering the plugin must actually wire the cache,
         // otherwise `cache_page` silently no-ops on every request. If a
         // cache was supplied via `new`, install it as the ambient handle.

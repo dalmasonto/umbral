@@ -41,7 +41,13 @@ fn make_get_with_accept_encoding(uri: &str, encoding: &str) -> Request<Body> {
 
 async fn collect_body(resp: axum::response::Response) -> (StatusCode, Vec<u8>) {
     let status = resp.status();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
     (status, bytes)
 }
 
@@ -141,8 +147,8 @@ async fn default_no_compression_header() {
 /// response carries the configured `Cache-Control` value.
 #[tokio::test]
 async fn cache_control_header_is_set() {
-    use http::header::CACHE_CONTROL;
     use http::HeaderValue;
+    use http::header::CACHE_CONTROL;
 
     let cc_value = "public, max-age=60";
     let router = base_router().layer(SetResponseHeaderLayer::overriding(
@@ -186,8 +192,8 @@ async fn default_no_cache_control_header() {
 /// carries the configured `Vary` value.
 #[tokio::test]
 async fn vary_header_is_set() {
-    use http::header::VARY;
     use http::HeaderValue;
+    use http::header::VARY;
 
     let router = base_router().layer(SetResponseHeaderLayer::overriding(
         VARY,
@@ -197,10 +203,7 @@ async fn vary_header_is_set() {
     let resp = router.oneshot(make_get("/hello")).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
-    let actual = resp
-        .headers()
-        .get("vary")
-        .and_then(|v| v.to_str().ok());
+    let actual = resp.headers().get("vary").and_then(|v| v.to_str().ok());
     assert_eq!(
         actual,
         Some("Accept-Encoding"),
@@ -260,9 +263,7 @@ async fn cacheplugin_builder_compression_and_cache_control() {
         "cache_control() must produce Cache-Control header"
     );
     assert_eq!(
-        resp.headers()
-            .get("vary")
-            .and_then(|v| v.to_str().ok()),
+        resp.headers().get("vary").and_then(|v| v.to_str().ok()),
         Some("Accept-Encoding"),
         "vary() must produce Vary header"
     );

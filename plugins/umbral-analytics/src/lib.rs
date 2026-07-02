@@ -130,12 +130,7 @@ impl AnalyticsClient {
     ///
     /// Shape: `{ "api_key", "event", "distinct_id", "properties", "timestamp" }`.
     /// The timestamp is RFC 3339 (ISO 8601) UTC.
-    pub fn build_payload(
-        &self,
-        distinct_id: &str,
-        event: &str,
-        properties: Value,
-    ) -> Value {
+    pub fn build_payload(&self, distinct_id: &str, event: &str, properties: Value) -> Value {
         json!({
             "api_key": self.api_key,
             "event": event,
@@ -197,11 +192,7 @@ impl AnalyticsClient {
 /// ```ignore
 /// capture("user_42", "purchase", serde_json::json!({ "amount_cents": 999 })).await;
 /// ```
-pub async fn capture(
-    distinct_id: impl Into<String>,
-    event: impl Into<String>,
-    properties: Value,
-) {
+pub async fn capture(distinct_id: impl Into<String>, event: impl Into<String>, properties: Value) {
     if let Some(client) = ambient_client() {
         client.capture_fire_and_forget(distinct_id, event, properties);
     } else {

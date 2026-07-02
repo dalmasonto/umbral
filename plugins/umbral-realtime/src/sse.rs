@@ -114,7 +114,9 @@ pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -
     tokio::spawn(crate::dispatch_presence(presence));
 
     let backlog: VecDeque<Event> = match last_event_id {
-        Some(id) => registry.replay_since(id, user_id.as_deref(), &groups).into(),
+        Some(id) => registry
+            .replay_since(id, user_id.as_deref(), &groups)
+            .into(),
         None => VecDeque::new(),
     };
 
@@ -197,8 +199,15 @@ mod tests {
         let json = envelope_json("chat:1", "message", &serde_json::json!({ "x": 1 }));
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["c"], "chat:1", "envelope carries the channel under `c`");
-        assert_eq!(v["e"], "message", "envelope carries the event name under `e`");
-        assert_eq!(v["d"], serde_json::json!({ "x": 1 }), "envelope carries the data under `d`");
+        assert_eq!(
+            v["e"], "message",
+            "envelope carries the event name under `e`"
+        );
+        assert_eq!(
+            v["d"],
+            serde_json::json!({ "x": 1 }),
+            "envelope carries the data under `d`"
+        );
         // Exactly the three envelope keys — nothing leaks.
         assert_eq!(v.as_object().unwrap().len(), 3);
     }
@@ -206,10 +215,12 @@ mod tests {
     #[test]
     fn envelope_channels_for_user_and_broadcast() {
         let u: serde_json::Value =
-            serde_json::from_str(&envelope_json("@user:42", "ping", &serde_json::json!({}))).unwrap();
+            serde_json::from_str(&envelope_json("@user:42", "ping", &serde_json::json!({})))
+                .unwrap();
         assert_eq!(u["c"], "@user:42");
         let b: serde_json::Value =
-            serde_json::from_str(&envelope_json("@broadcast", "all", &serde_json::json!({}))).unwrap();
+            serde_json::from_str(&envelope_json("@broadcast", "all", &serde_json::json!({})))
+                .unwrap();
         assert_eq!(b["c"], "@broadcast");
     }
 

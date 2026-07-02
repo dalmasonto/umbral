@@ -22,7 +22,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 
 use umbral_tasks::{
-    EnqueueOptions, TaskState, TasksPlugin, _clear_handlers_for_tests, await_result, enqueue,
+    _clear_handlers_for_tests, EnqueueOptions, TaskState, TasksPlugin, await_result, enqueue,
     register_handler, run_worker_once, task_status,
 };
 
@@ -109,9 +109,13 @@ async fn value_returning_handler_records_result() {
         Ok::<i64, String>(42)
     });
 
-    let id = enqueue("returns_int", serde_json::json!({}), EnqueueOptions::default())
-        .await
-        .expect("enqueue");
+    let id = enqueue(
+        "returns_int",
+        serde_json::json!({}),
+        EnqueueOptions::default(),
+    )
+    .await
+    .expect("enqueue");
 
     let ran = run_worker_once().await.expect("worker once");
     assert!(ran, "worker should have processed the task");
@@ -245,9 +249,13 @@ async fn freshly_enqueued_task_is_pending() {
     drain_queue().await;
     _clear_handlers_for_tests();
 
-    let id = enqueue("never_run", serde_json::json!({}), EnqueueOptions::default())
-        .await
-        .expect("enqueue");
+    let id = enqueue(
+        "never_run",
+        serde_json::json!({}),
+        EnqueueOptions::default(),
+    )
+    .await
+    .expect("enqueue");
 
     let status = task_status(id).await.expect("status").expect("row");
     assert_eq!(status.state, TaskState::Pending);

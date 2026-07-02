@@ -618,7 +618,9 @@ pub fn resolve_tenant_key(
 /// Read the `Host` header as a string (forwarded `X-Forwarded-Host` is left to
 /// a reverse proxy / the host-guard layer; here we read the literal `Host`).
 fn host_header(headers: &http::HeaderMap) -> Option<&str> {
-    headers.get(http::header::HOST).and_then(|v| v.to_str().ok())
+    headers
+        .get(http::header::HOST)
+        .and_then(|v| v.to_str().ok())
 }
 
 impl Plugin for TenantsPlugin {
@@ -652,7 +654,10 @@ impl Plugin for TenantsPlugin {
         ))
     }
 
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         // Fail FAST on a non-Postgres database. Schema-per-tenant isolates
         // tenants with Postgres schemas — without them there is no isolation, so
         // refuse to boot rather than silently misbehave later inside a migrate

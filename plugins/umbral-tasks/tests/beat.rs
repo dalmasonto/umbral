@@ -180,7 +180,10 @@ async fn schedule_next_after_cron_and_interval() {
     let cron = Schedule::cron("* * * * *");
     let now = Utc::now();
     let next = cron.next_after(now).expect("cron yields a next time");
-    assert!(next > now, "cron next must be after `after`: {next} > {now}");
+    assert!(
+        next > now,
+        "cron next must be after `after`: {next} > {now}"
+    );
     // Within the next minute (the next minute boundary at most ~60s out).
     assert!(
         (next - now).num_seconds() <= 61,

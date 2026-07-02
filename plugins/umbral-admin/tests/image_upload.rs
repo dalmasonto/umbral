@@ -102,7 +102,10 @@ impl Plugin for MemMediaPlugin {
     fn provides_storage(&self) -> bool {
         true
     }
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         let backend = BACKEND
             .get()
             .cloned()
@@ -377,7 +380,11 @@ async fn staff_png_upload_stores_and_returns_url() {
     let body = multipart_body(&[("image", Some("paste.png"), Some("image/png"), png)]);
 
     let (status, _h, body) = send(router.clone(), upload_request(Some(&session), body)).await;
-    assert_eq!(status, StatusCode::OK, "staff upload should be 200; body={body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "staff upload should be 200; body={body}"
+    );
 
     let json: serde_json::Value = serde_json::from_str(&body).expect("JSON response");
     let url = json["url"].as_str().expect("response carries a url");
@@ -470,12 +477,10 @@ async fn non_image_content_type_is_rejected() {
         b"MZ\x90\x00",
     )]);
 
-    let (status, _h, body) =
-        send(router.clone(), upload_request(Some(&session), body)).await;
+    let (status, _h, body) = send(router.clone(), upload_request(Some(&session), body)).await;
     assert_eq!(
         status,
         StatusCode::UNSUPPORTED_MEDIA_TYPE,
         "non-image upload must be 415; body={body}"
     );
 }
-

@@ -26,8 +26,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, Notify, OnceCell};
 
 use umbral_tasks::{
-    STATUS_FAILED, STATUS_RUNNING, STATUS_SUCCEEDED, TaskRow, TasksPlugin,
-    _clear_handlers_for_tests, enqueue, register_handler, run_worker_once,
+    _clear_handlers_for_tests, STATUS_FAILED, STATUS_RUNNING, STATUS_SUCCEEDED, TaskRow,
+    TasksPlugin, enqueue, register_handler, run_worker_once,
 };
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
@@ -133,12 +133,8 @@ async fn two_workers_racing_one_task_claim_it_exactly_once() {
     static STARTED: OnceLock<Arc<Notify>> = OnceLock::new();
     static RELEASE: OnceLock<Arc<Notify>> = OnceLock::new();
     static RUNS: OnceLock<AtomicUsize> = OnceLock::new();
-    let started = STARTED
-        .get_or_init(|| Arc::new(Notify::new()))
-        .clone();
-    let release = RELEASE
-        .get_or_init(|| Arc::new(Notify::new()))
-        .clone();
+    let started = STARTED.get_or_init(|| Arc::new(Notify::new())).clone();
+    let release = RELEASE.get_or_init(|| Arc::new(Notify::new())).clone();
     RUNS.get_or_init(|| AtomicUsize::new(0))
         .store(0, Ordering::SeqCst);
 
@@ -234,7 +230,9 @@ async fn panicking_handler_is_caught_worker_survives_task_recorded_failed() {
     .expect("enqueue boom");
 
     // The worker step must RETURN (not unwind) despite the handler panic.
-    let processed = run_worker_once().await.expect("worker survives handler panic");
+    let processed = run_worker_once()
+        .await
+        .expect("worker survives handler panic");
     assert!(processed, "a panicking task still counts as processed");
 
     let row = fetch(boom_id).await;
@@ -263,8 +261,13 @@ async fn panicking_handler_is_caught_worker_survives_task_recorded_failed() {
     let ok_id = enqueue("after_boom", serde_json::json!({}), Default::default())
         .await
         .expect("enqueue after_boom");
-    let processed = run_worker_once().await.expect("worker still works after panic");
-    assert!(processed, "the worker processes the next task after a panic");
+    let processed = run_worker_once()
+        .await
+        .expect("worker still works after panic");
+    assert!(
+        processed,
+        "the worker processes the next task after a panic"
+    );
     assert!(
         OK_RAN.get().unwrap().load(Ordering::SeqCst),
         "the post-panic handler ran"

@@ -21,7 +21,10 @@ use umbral::auth::Identity;
 #[test]
 fn identity_user_default_is_superuser_false() {
     let id = Identity::user(1u64);
-    assert!(!id.is_superuser, "newly-built Identity must have is_superuser = false");
+    assert!(
+        !id.is_superuser,
+        "newly-built Identity must have is_superuser = false"
+    );
 }
 
 // ── 2. with_superuser(true) sets the flag ────────────────────────────────────

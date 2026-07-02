@@ -176,7 +176,9 @@ fn column_const_module_has_text_pg_types() {
 /// emits a plain `String` field).
 #[test]
 fn inspect_renders_text_pg_types_as_string() {
-    use umbral::inspect::{IntrospectedColumn, IntrospectedSchema, IntrospectedTable, render_models};
+    use umbral::inspect::{
+        IntrospectedColumn, IntrospectedSchema, IntrospectedTable, render_models,
+    };
     let schema = IntrospectedSchema {
         tables: vec![IntrospectedTable {
             table: "umbral_gaps2_70_doc".to_string(),

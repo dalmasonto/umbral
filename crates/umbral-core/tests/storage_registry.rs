@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use umbral_core::storage::{
-    set_storage, set_storage_named, storage, storage_opt, storage_opt_named, try_storage_named,
-    Storage, StorageError, StoredFile, DEFAULT, STATICFILES,
+    DEFAULT, STATICFILES, Storage, StorageError, StoredFile, set_storage, set_storage_named,
+    storage, storage_opt, storage_opt_named, try_storage_named,
 };
 
 /// A trivial backend that tags every URL/key with a label, so a test can
@@ -65,7 +65,10 @@ async fn named_registry_resolves_independently_and_is_set_once() {
     assert!(set_storage(Arc::new(Labelled { label: "media" })));
 
     // Each name resolves to its OWN backend, independently.
-    assert_eq!(storage_opt_named(STATICFILES).unwrap().url("x"), "/static/x");
+    assert_eq!(
+        storage_opt_named(STATICFILES).unwrap().url("x"),
+        "/static/x"
+    );
     assert_eq!(storage_opt_named(DEFAULT).unwrap().url("x"), "/media/x");
 
     // Back-compat: `storage()` == the "default" instance.
@@ -82,7 +85,10 @@ async fn named_registry_resolves_independently_and_is_set_once() {
         STATICFILES,
         Arc::new(Labelled { label: "other" })
     ));
-    assert_eq!(storage_opt_named(STATICFILES).unwrap().url("x"), "/static/x");
+    assert_eq!(
+        storage_opt_named(STATICFILES).unwrap().url("x"),
+        "/static/x"
+    );
 }
 
 #[tokio::test]

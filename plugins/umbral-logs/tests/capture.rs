@@ -84,7 +84,10 @@ fn app() -> Router {
     let plugin = LogsPlugin::default();
     let router = Router::new()
         .route("/hello", get(|| async { "hi" }))
-        .route("/boom", get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "boom") }))
+        .route(
+            "/boom",
+            get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
+        )
         .route("/health", get(|| async { "ok" }));
     plugin.wrap_router(router)
 }
@@ -166,10 +169,19 @@ async fn excluded_prefix_is_not_logged() {
 fn min_status_drops_low_status() {
     let cfg = LogsPlugin::default().min_status(500).resolved_config();
     // sample_rate defaults to 1.0, so sampling never interferes here.
-    assert!(!cfg.should_capture("/ok", 200, 0), "200 below floor=500 dropped");
-    assert!(!cfg.should_capture("/redir", 302, 1), "302 below floor=500 dropped");
+    assert!(
+        !cfg.should_capture("/ok", 200, 0),
+        "200 below floor=500 dropped"
+    );
+    assert!(
+        !cfg.should_capture("/redir", 302, 1),
+        "302 below floor=500 dropped"
+    );
     assert!(cfg.should_capture("/err", 500, 2), "500 at floor=500 kept");
-    assert!(cfg.should_capture("/err", 503, 3), "503 above floor=500 kept");
+    assert!(
+        cfg.should_capture("/err", 503, 3),
+        "503 above floor=500 kept"
+    );
 }
 
 /// (c2) The deterministic sampler keeps exactly the expected cadence through
@@ -180,16 +192,28 @@ fn sample_rate_is_deterministic() {
     let cfg = LogsPlugin::default().sample_rate(0.25).resolved_config();
     // Status 200 with min_status default 0 and a non-excluded path, so the
     // only gate is sampling: keep 1-in-4 on a fixed cadence (0, 4, 8, …).
-    let kept: Vec<u64> = (0..12).filter(|&seq| cfg.should_capture("/x", 200, seq)).collect();
-    assert_eq!(kept, vec![0, 4, 8], "rate 0.25 keeps 1-in-4 deterministically");
+    let kept: Vec<u64> = (0..12)
+        .filter(|&seq| cfg.should_capture("/x", 200, seq))
+        .collect();
+    assert_eq!(
+        kept,
+        vec![0, 4, 8],
+        "rate 0.25 keeps 1-in-4 deterministically"
+    );
 
     // Over-range clamps to 1.0 — everything logged.
     let full = LogsPlugin::default().sample_rate(2.0).resolved_config();
-    assert!((0..8).all(|seq| full.should_capture("/x", 200, seq)), "clamped rate 1.0 keeps all");
+    assert!(
+        (0..8).all(|seq| full.should_capture("/x", 200, seq)),
+        "clamped rate 1.0 keeps all"
+    );
 
     // Negative clamps to 0.0 — nothing logged.
     let none = LogsPlugin::default().sample_rate(-1.0).resolved_config();
-    assert!((0..8).all(|seq| !none.should_capture("/x", 200, seq)), "clamped rate 0.0 drops all");
+    assert!(
+        (0..8).all(|seq| !none.should_capture("/x", 200, seq)),
+        "clamped rate 0.0 drops all"
+    );
 }
 
 /// The default exclusions are honoured by `should_capture` too (the /health
@@ -201,7 +225,10 @@ fn default_exclusions_drop_static_and_health() {
     assert!(!cfg.should_capture("/static/app.css", 200, 1));
     assert!(!cfg.should_capture("/admin/static/x.js", 200, 2));
     assert!(!cfg.should_capture("/favicon.ico", 200, 3));
-    assert!(cfg.should_capture("/api/things", 200, 4), "non-excluded path kept");
+    assert!(
+        cfg.should_capture("/api/things", 200, 4),
+        "non-excluded path kept"
+    );
 }
 
 /// (d) `RequestLog` round-trips through the ORM: create then read back.

@@ -881,7 +881,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // `"app"`, the registry's default key. umbral-permissions reads this off
     // `Model::APP_LABEL` to build collision-free permission codenames rather
     // than splitting the table name at the first `_`.
-    let app_label_lit = struct_attr.plugin.clone().unwrap_or_else(|| "app".to_string());
+    let app_label_lit = struct_attr
+        .plugin
+        .clone()
+        .unwrap_or_else(|| "app".to_string());
     let table_name = if let Some(explicit) = struct_attr.table {
         // Explicit table always wins over the plugin prefix.
         explicit
@@ -4423,8 +4426,9 @@ fn expand_choices(input: DeriveInput) -> syn::Result<TokenStream2> {
                 };
                 Ok(())
             } else {
-                Err(meta
-                    .error("umbral::Choices accepts only struct-level `rename_all = \"...\"` today"))
+                Err(meta.error(
+                    "umbral::Choices accepts only struct-level `rename_all = \"...\"` today",
+                ))
             }
         })?;
     }

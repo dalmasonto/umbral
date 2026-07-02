@@ -105,11 +105,12 @@ async fn rls_on_ready_skip_path_does_not_panic_under_tokio_test() {
     let result = App::builder()
         .settings(settings)
         .database("default", pool)
-        .plugin(
-            RlsPlugin::new()
-                .enable_on("some_table")
-                .policy("some_table", "owner_read", Action::Select, "user_id = 1"),
-        )
+        .plugin(RlsPlugin::new().enable_on("some_table").policy(
+            "some_table",
+            "owner_read",
+            Action::Select,
+            "user_id = 1",
+        ))
         .build();
 
     assert!(

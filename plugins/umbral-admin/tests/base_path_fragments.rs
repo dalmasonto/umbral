@@ -138,10 +138,12 @@ async fn boot() -> &'static axum::Router {
         .await
         .expect("bp_note");
 
-        sqlx::query("CREATE TABLE bp_tag (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("bp_tag");
+        sqlx::query(
+            "CREATE TABLE bp_tag (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("bp_tag");
 
         sqlx::query(
             "CREATE TABLE bp_post (\
@@ -202,7 +204,11 @@ async fn send(
         .await
         .expect("collect")
         .to_bytes();
-    (status, headers, String::from_utf8_lossy(&bytes).into_owned())
+    (
+        status,
+        headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
 }
 
 fn extract_csrf(html: &str) -> String {

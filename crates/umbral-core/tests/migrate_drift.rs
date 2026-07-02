@@ -403,11 +403,12 @@ async fn run_checked_in_proceeds_with_allow_drift() {
 
     // The pending migration is tracked.
     let pool = umbral::db::pool();
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT plugin, name FROM umbral_migrations WHERE name = '0002_pending_rad'")
-            .fetch_all(&pool)
-            .await
-            .expect("select");
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT plugin, name FROM umbral_migrations WHERE name = '0002_pending_rad'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("select");
     assert_eq!(
         rows.len(),
         1,

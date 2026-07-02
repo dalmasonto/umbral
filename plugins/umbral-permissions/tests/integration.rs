@@ -177,7 +177,10 @@ async fn distinct_models_get_distinct_app_labels() {
     .fetch_one(&pool)
     .await
     .expect("memo count query");
-    assert_eq!(memo_count, 4, "expected 4 standard perms for memo under the 'app' label");
+    assert_eq!(
+        memo_count, 4,
+        "expected 4 standard perms for memo under the 'app' label"
+    );
 
     // The Memo model must NOT have been seeded under the 'blog' label, and
     // BlogPost must NOT appear under the 'app' label — the app_labels are
@@ -639,10 +642,14 @@ async fn set_user_groups_rolls_back_on_insert_failure() {
         .map(|g| g.id)
         .collect();
     assert_eq!(
-        after, vec![g_a.id],
+        after,
+        vec![g_a.id],
         "transaction rolled back: prior membership (g_a) must be preserved"
     );
-    assert!(!after.contains(&g_b.id), "g_b must NOT appear after rollback");
+    assert!(
+        !after.contains(&g_b.id),
+        "g_b must NOT appear after rollback"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -798,7 +798,14 @@ pub fn collect_into(
         })?;
     }
 
-    collect_into_with(contributions, root_dirs, &static_root, &storage, clear, false)
+    collect_into_with(
+        contributions,
+        root_dirs,
+        &static_root,
+        &storage,
+        clear,
+        false,
+    )
 }
 
 /// The storage-backed core collect routine. Writes every collected file
@@ -878,13 +885,7 @@ pub fn collect_into_with(
             continue;
         }
 
-        let files = copy_tree(
-            source_dir,
-            namespace,
-            storage,
-            hashed,
-            &mut manifest,
-        )?;
+        let files = copy_tree(source_dir, namespace, storage, hashed, &mut manifest)?;
 
         summary.collected.push(CollectedNamespace {
             namespace,
@@ -1496,17 +1497,11 @@ mod tests {
 
     #[test]
     fn hashed_name_inserts_hash_before_extension() {
-        assert_eq!(
-            hashed_name("css/app.css", "abc123"),
-            "css/app.abc123.css"
-        );
+        assert_eq!(hashed_name("css/app.css", "abc123"), "css/app.abc123.css");
         // No extension: hash appended.
         assert_eq!(hashed_name("js/bundle", "deadbe"), "js/bundle.deadbe");
         // Only the LAST dot is the extension.
-        assert_eq!(
-            hashed_name("a/b.min.css", "0f0f0f"),
-            "a/b.min.0f0f0f.css"
-        );
+        assert_eq!(hashed_name("a/b.min.css", "0f0f0f"), "a/b.min.0f0f0f.css");
         // Top-level file, no directory.
         assert_eq!(hashed_name("favicon.ico", "112233"), "favicon.112233.ico");
     }
@@ -1601,8 +1596,15 @@ mod tests {
             plugin: "p",
         }];
         let storage = LocalStorage::new(static_root.path());
-        collect_into_with(&contributions, &[], static_root.path(), &storage, false, false)
-            .expect("plain collect");
+        collect_into_with(
+            &contributions,
+            &[],
+            static_root.path(),
+            &storage,
+            false,
+            false,
+        )
+        .expect("plain collect");
 
         assert_eq!(read_at(static_root.path(), "ns/x.css"), b"X");
         // No manifest, no hashed copy.

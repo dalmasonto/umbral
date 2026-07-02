@@ -200,8 +200,14 @@ async fn echo_before(req: Request) -> Response {
 #[tokio::test]
 async fn order_sorts_chain_independent_of_insertion() {
     let mut stack = umbral::middleware::MiddlewareStack::new();
-    stack.push(Arc::new(OrderedTagger { tag: "Z", order: 10 }));
-    stack.push(Arc::new(OrderedTagger { tag: "A", order: -5 }));
+    stack.push(Arc::new(OrderedTagger {
+        tag: "Z",
+        order: 10,
+    }));
+    stack.push(Arc::new(OrderedTagger {
+        tag: "A",
+        order: -5,
+    }));
     stack.push(Arc::new(OrderedTagger { tag: "M", order: 0 }));
 
     let router = stack.apply(Router::new().route("/ok", get(echo_before)));

@@ -93,9 +93,11 @@ async fn run_sql_data_migration_applies_and_is_idempotent() {
     // The prior snapshot (after 0001) — its `snapshot_after` is what the
     // data migration carries forward unchanged.
     let prior = {
-        let f =
-            std::fs::read_to_string(dir.join("app").join("0001_create_widget.json")).expect("read 0001");
-        serde_json::from_str::<MigrationFile>(&f).expect("parse 0001").snapshot_after
+        let f = std::fs::read_to_string(dir.join("app").join("0001_create_widget.json"))
+            .expect("read 0001");
+        serde_json::from_str::<MigrationFile>(&f)
+            .expect("parse 0001")
+            .snapshot_after
     };
 
     // 2) Hand-author the RunSql data migration and apply it.
@@ -117,11 +119,12 @@ async fn run_sql_data_migration_applies_and_is_idempotent() {
     assert!(active, "the second RunSql op flipped active to true");
 
     // 3) Recorded once.
-    let tracked: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM umbral_migrations WHERE plugin = 'app' AND name = '0002_run_sql'")
-            .fetch_one(pool)
-            .await
-            .expect("count tracking rows");
+    let tracked: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM umbral_migrations WHERE plugin = 'app' AND name = '0002_run_sql'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("count tracking rows");
     assert_eq!(tracked, 1, "data migration recorded exactly once");
 
     // 4) Re-run is a no-op: the tracking table guards re-application, so
@@ -152,7 +155,10 @@ async fn run_sql_op_round_trips_through_migration_file() {
     match &parsed.operations[0] {
         Operation::RunSql { sql, reverse_sql } => {
             assert!(sql.starts_with("INSERT INTO widget"));
-            assert_eq!(reverse_sql.as_deref(), Some("DELETE FROM widget WHERE id = 1"));
+            assert_eq!(
+                reverse_sql.as_deref(),
+                Some("DELETE FROM widget WHERE id = 1")
+            );
         }
         other => panic!("expected RunSql, got {other:?}"),
     }

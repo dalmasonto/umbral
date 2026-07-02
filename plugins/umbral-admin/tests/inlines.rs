@@ -121,10 +121,12 @@ async fn boot() -> &'static axum::Router {
         .await
         .expect("session");
 
-        sqlx::query("CREATE TABLE post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("post");
+        sqlx::query(
+            "CREATE TABLE post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("post");
         sqlx::query(
             "CREATE TABLE comment (\
                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
@@ -136,10 +138,12 @@ async fn boot() -> &'static axum::Router {
         .execute(&pool)
         .await
         .expect("comment");
-        sqlx::query("CREATE TABLE plain (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("plain");
+        sqlx::query(
+            "CREATE TABLE plain (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("plain");
 
         let staff = create_user("alice", "alice@example.com", "hunter2")
             .await
@@ -589,8 +593,12 @@ async fn edit_sheet_renders_inline_section_with_existing_and_blank_rows() {
     let post_id = seed_post("SheetRenderable").await;
     seed_comment(post_id, "sheet child", 5).await;
 
-    let (status, html) =
-        get_htmx(&router, &session, &format!("/admin/post/{post_id}/edit-sheet")).await;
+    let (status, html) = get_htmx(
+        &router,
+        &session,
+        &format!("/admin/post/{post_id}/edit-sheet"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "edit-sheet should 200:\n{html}");
 
     // Same inline assertions as the full-page render test, against the

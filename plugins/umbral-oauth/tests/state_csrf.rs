@@ -116,11 +116,7 @@ async fn start_flow() -> (axum::Router, String, String) {
         .uri("/oauth/google/login")
         .body(Body::empty())
         .unwrap();
-    let resp = router
-        .clone()
-        .oneshot(req)
-        .await
-        .expect("oneshot login");
+    let resp = router.clone().oneshot(req).await.expect("oneshot login");
     assert!(
         resp.status().is_redirection(),
         "login must redirect to the provider, got {}",

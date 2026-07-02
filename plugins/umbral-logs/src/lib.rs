@@ -43,7 +43,7 @@
 //!   assert the row exists right after the request.
 
 pub mod observability;
-pub use observability::{init as init_observability, ObservabilityConfig, ObservabilityGuard};
+pub use observability::{ObservabilityConfig, ObservabilityGuard, init as init_observability};
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -221,8 +221,10 @@ impl LogsPlugin {
 
     /// Build the runtime config the [`capture_layer`] reads ambiently.
     fn config(&self) -> LogsConfig {
-        let mut prefixes: Vec<String> =
-            DEFAULT_EXCLUDE_PREFIXES.iter().map(|s| s.to_string()).collect();
+        let mut prefixes: Vec<String> = DEFAULT_EXCLUDE_PREFIXES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         prefixes.extend(self.exclude_prefixes.iter().cloned());
         LogsConfig {
             exclude_prefixes: prefixes,
@@ -253,7 +255,11 @@ impl LogsConfig {
     /// sampling rules are unit-testable with explicit configs (the runtime
     /// config is process-global and sealed once at boot).
     pub fn should_capture(&self, path: &str, status: i32, seq: u64) -> bool {
-        if self.exclude_prefixes.iter().any(|p| path.starts_with(p.as_str())) {
+        if self
+            .exclude_prefixes
+            .iter()
+            .any(|p| path.starts_with(p.as_str()))
+        {
             return false;
         }
         if status < self.min_status {
@@ -272,7 +278,10 @@ fn config() -> &'static LogsConfig {
     static FALLBACK: OnceLock<LogsConfig> = OnceLock::new();
     CONFIG.get().unwrap_or_else(|| {
         FALLBACK.get_or_init(|| LogsConfig {
-            exclude_prefixes: DEFAULT_EXCLUDE_PREFIXES.iter().map(|s| s.to_string()).collect(),
+            exclude_prefixes: DEFAULT_EXCLUDE_PREFIXES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             sample_rate: 1.0,
             min_status: 0,
         })
@@ -354,7 +363,10 @@ pub async fn capture_layer(
 
     // Exclusion check up front: skip the handler-side bookkeeping entirely
     // for excluded paths.
-    let excluded = cfg.exclude_prefixes.iter().any(|p| path.starts_with(p.as_str()));
+    let excluded = cfg
+        .exclude_prefixes
+        .iter()
+        .any(|p| path.starts_with(p.as_str()));
 
     let method = req.method().to_string();
     let ip = resolve_ip(req.headers());
@@ -428,7 +440,14 @@ pub async fn capture_layer(
 pub fn admin_model() -> AdminModel {
     AdminModel::new("logs_requestlog")
         .label("Request logs")
-        .list_display(&["created_at", "method", "path", "status", "duration_ms", "user_id"])
+        .list_display(&[
+            "created_at",
+            "method",
+            "path",
+            "status",
+            "duration_ms",
+            "user_id",
+        ])
         .list_filter(&["method", "status"])
         .search_fields(&["path"])
         .ordering(&["-created_at"])
@@ -468,6 +487,10 @@ mod tests {
     #[test]
     fn sampler_quarter_rate_keeps_every_fourth() {
         let kept: Vec<u64> = (0..12).filter(|&s| sampled(s, 0.25)).collect();
-        assert_eq!(kept, vec![0, 4, 8], "rate 0.25 keeps 1-in-4 on a fixed cadence");
+        assert_eq!(
+            kept,
+            vec![0, 4, 8],
+            "rate 0.25 keeps 1-in-4 on a fixed cadence"
+        );
     }
 }

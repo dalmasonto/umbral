@@ -90,9 +90,8 @@ impl S3Storage {
     /// error string when the bucket name is missing or the bucket handle can't
     /// be built.
     pub fn from_env() -> Result<Self, String> {
-        let bucket_name = env_s3("UMBRAL_S3_BUCKET", "UMBRAL_STATIC_BUCKET").ok_or_else(|| {
-            "UMBRAL_S3_BUCKET is required for the s3 storage backend".to_string()
-        })?;
+        let bucket_name = env_s3("UMBRAL_S3_BUCKET", "UMBRAL_STATIC_BUCKET")
+            .ok_or_else(|| "UMBRAL_S3_BUCKET is required for the s3 storage backend".to_string())?;
 
         let endpoint = env_s3("UMBRAL_S3_ENDPOINT", "UMBRAL_STATIC_ENDPOINT");
         let region_var = env_s3("UMBRAL_S3_REGION", "UMBRAL_STATIC_REGION");
@@ -113,11 +112,17 @@ impl S3Storage {
         // Explicit creds let a user point storage at one provider's keys
         // WITHOUT colliding with `AWS_*` used elsewhere; else the AWS chain.
         let credentials = match (
-            std::env::var("UMBRAL_S3_ACCESS_KEY").ok().filter(|s| !s.is_empty()),
-            std::env::var("UMBRAL_S3_SECRET_KEY").ok().filter(|s| !s.is_empty()),
+            std::env::var("UMBRAL_S3_ACCESS_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            std::env::var("UMBRAL_S3_SECRET_KEY")
+                .ok()
+                .filter(|s| !s.is_empty()),
         ) {
             (Some(access), Some(secret)) => {
-                let token = std::env::var("UMBRAL_S3_SESSION_TOKEN").ok().filter(|s| !s.is_empty());
+                let token = std::env::var("UMBRAL_S3_SESSION_TOKEN")
+                    .ok()
+                    .filter(|s| !s.is_empty());
                 Credentials::new(Some(&access), Some(&secret), token.as_deref(), None, None)
                     .map_err(|e| format!("invalid UMBRAL_S3_ACCESS_KEY/SECRET_KEY: {e}"))?
             }
@@ -183,7 +188,9 @@ impl S3Storage {
             bucket
                 .put_object_with_content_type_blocking(&object_key, &bytes, &content_type)
                 .map(|_| ())
-                .map_err(|e| StorageError::Backend(format!("put_object `{object_key}` failed: {e}")))
+                .map_err(|e| {
+                    StorageError::Backend(format!("put_object `{object_key}` failed: {e}"))
+                })
         })
         .await
         .map_err(|e| StorageError::Backend(format!("s3 put join error: {e}")))?
@@ -492,18 +499,18 @@ impl Storage for S3Storage {
             // we drive the async `presign_get` with `futures_executor::block_on`
             // — it polls the already-ready future to completion without
             // spinning up a tokio runtime, so it's safe in any context.
-            Some(ttl) => match futures_executor::block_on(
-                self.bucket.presign_get(&object_key, ttl, None),
-            ) {
-                Ok(url) => url,
-                Err(e) => {
-                    eprintln!(
-                        "umbral-storage: presign failed for `{object_key}`: {e} — falling back to \
+            Some(ttl) => {
+                match futures_executor::block_on(self.bucket.presign_get(&object_key, ttl, None)) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        eprintln!(
+                            "umbral-storage: presign failed for `{object_key}`: {e} — falling back to \
                          public URL"
-                    );
-                    public()
+                        );
+                        public()
+                    }
                 }
-            },
+            }
             None => public(),
         }
     }
@@ -634,10 +641,7 @@ mod tests {
             .public_base("https://cdn.example.com")
             .build()
             .expect("builder should build");
-        assert_eq!(
-            s3.url("css/app.css"),
-            "https://cdn.example.com/css/app.css"
-        );
+        assert_eq!(s3.url("css/app.css"), "https://cdn.example.com/css/app.css");
     }
 
     #[test]

@@ -83,7 +83,10 @@ async fn save_writes_bytes_and_inserts_row() {
     assert_eq!(outcome.file.filename, "report.txt");
     assert_eq!(outcome.file.content_type, "text/plain");
     assert_eq!(outcome.file.size, bytes.len() as i64);
-    assert!(outcome.file.id > 0, "saved row must have a real primary key");
+    assert!(
+        outcome.file.id > 0,
+        "saved row must have a real primary key"
+    );
 
     assert_eq!(outcome.url, fs.url(&outcome.file.key));
     assert!(outcome.url.starts_with("/media/"));
@@ -139,7 +142,9 @@ async fn save_enforces_max_size() {
     boot().await;
     let media_dir = tempfile::tempdir().expect("media dir");
 
-    let plugin = StoragePlugin::new().media("/media", media_dir.path()).max_size(4);
+    let plugin = StoragePlugin::new()
+        .media("/media", media_dir.path())
+        .max_size(4);
 
     let err = plugin
         .save("big.bin", "application/octet-stream", b"too many bytes")

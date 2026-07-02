@@ -24,8 +24,8 @@ use std::cell::RefCell;
 
 use chrono::{Duration, Utc};
 
-use crate::store::SessionRecord;
 use crate::DEFAULT_TTL_SECONDS;
+use crate::store::SessionRecord;
 
 tokio::task_local! {
     /// The session for the in-flight request. `session_layer` scopes this
@@ -154,7 +154,9 @@ impl RequestSession {
         self.fresh = true;
         self.record = Some(SessionRecord {
             user_id,
-            data: carried.filter(|d| d != "{}").unwrap_or_else(|| "{}".to_string()),
+            data: carried
+                .filter(|d| d != "{}")
+                .unwrap_or_else(|| "{}".to_string()),
             created_at: now,
             expires_at: now + Duration::seconds(DEFAULT_TTL_SECONDS),
         });
@@ -181,9 +183,7 @@ impl RequestSession {
 /// when called inside a request scope and `None` otherwise (e.g. a
 /// background task with no session).
 pub fn current<R>(f: impl FnOnce(&RequestSession) -> R) -> Option<R> {
-    CURRENT_SESSION
-        .try_with(|cell| f(&cell.borrow()))
-        .ok()
+    CURRENT_SESSION.try_with(|cell| f(&cell.borrow())).ok()
 }
 
 /// Run `f` against a mutable view of the current request's session.

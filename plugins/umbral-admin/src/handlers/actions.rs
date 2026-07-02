@@ -78,13 +78,9 @@ pub(crate) async fn run_action(
     // it needs the stronger `delete_<model>` permission — the broad
     // Change gate above isn't enough for an irreversible removal.
     if action.key() == "delete_permanently" {
-        if let Err(r) = crate::permcheck::require(
-            &who,
-            &plugin_name,
-            &table,
-            crate::permcheck::Action::Delete,
-        )
-        .await
+        if let Err(r) =
+            crate::permcheck::require(&who, &plugin_name, &table, crate::permcheck::Action::Delete)
+                .await
         {
             return r;
         }
@@ -206,8 +202,7 @@ pub(crate) async fn dispatch_action(
             Err(e) => return AdminError::BadInput(format!("bad JSON: {e}")).into_response(),
         }
     } else {
-        let pairs: Vec<(String, String)> =
-            serde_urlencoded::from_str(&body).unwrap_or_default();
+        let pairs: Vec<(String, String)> = serde_urlencoded::from_str(&body).unwrap_or_default();
         pairs
             .into_iter()
             .filter(|(k, _)| k.as_str() == "ids" || k.as_str() == "selected")
@@ -233,13 +228,9 @@ pub(crate) async fn dispatch_action(
     // gaps2 #35: the built-in "Delete permanently" hard-deletes, so it
     // needs `delete_<model>` — stronger than the broad Change gate above.
     if action.key() == "delete_permanently" {
-        if let Err(r) = crate::permcheck::require(
-            &who,
-            &plugin_name,
-            &table,
-            crate::permcheck::Action::Delete,
-        )
-        .await
+        if let Err(r) =
+            crate::permcheck::require(&who, &plugin_name, &table, crate::permcheck::Action::Delete)
+                .await
         {
             return r;
         }
@@ -376,21 +367,18 @@ pub(crate) async fn check_action_perm(
         return Ok(());
     }
     let user_id = who.id.to_string();
-    let allowed = umbral_permissions::has_perm_for_superuser(
-        &user_id,
-        who.is_superuser,
-        required_perm,
-    )
-    .await
-    .unwrap_or_else(|err| {
-        tracing::warn!(
-            user_id = user_id.as_str(),
-            perm = required_perm,
-            error = %err,
-            "action permission check failed; denying by default"
-        );
-        false
-    });
+    let allowed =
+        umbral_permissions::has_perm_for_superuser(&user_id, who.is_superuser, required_perm)
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!(
+                    user_id = user_id.as_str(),
+                    perm = required_perm,
+                    error = %err,
+                    "action permission check failed; denying by default"
+                );
+                false
+            });
     if allowed {
         Ok(())
     } else {

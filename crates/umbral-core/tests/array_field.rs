@@ -30,10 +30,11 @@ pub struct Event {
 /// right Array variants. The element kind comes through unchanged.
 #[test]
 fn derive_classifies_vec_as_array_sqltype() {
-    let by_name: std::collections::HashMap<&str, &umbral::orm::FieldSpec> = <Event as Model>::FIELDS
-        .iter()
-        .map(|f| (f.name, f))
-        .collect();
+    let by_name: std::collections::HashMap<&str, &umbral::orm::FieldSpec> =
+        <Event as Model>::FIELDS
+            .iter()
+            .map(|f| (f.name, f))
+            .collect();
 
     let tags = by_name.get("tags").expect("tags field");
     assert_eq!(tags.ty, SqlType::Array(ArrayElement::Text));

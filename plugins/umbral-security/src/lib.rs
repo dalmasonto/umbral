@@ -356,7 +356,10 @@ impl Plugin for SecurityPlugin {
         router
     }
 
-    fn on_ready(&self, _ctx: &umbral::plugin::AppContext) -> Result<(), umbral::plugin::PluginError> {
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
         let settings = umbral::settings::get_opt();
 
         // Boot nudge: HSTS and CSP are opt-in (safe defaults for dev), but

@@ -324,7 +324,10 @@ impl std::fmt::Display for WriteError {
                     repr_json_value(v),
                 ),
                 (Some(f_), None) => {
-                    write!(f, "umbral::orm::write: unique constraint on `{f_}` violated")
+                    write!(
+                        f,
+                        "umbral::orm::write: unique constraint on `{f_}` violated"
+                    )
                 }
                 _ => write!(f, "umbral::orm::write: unique constraint violated"),
             },
@@ -344,7 +347,11 @@ impl std::fmt::Display for WriteError {
                 None => write!(f, "umbral::orm::write: foreign-key constraint violated"),
             },
             WriteError::Multiple { errors } => {
-                write!(f, "umbral::orm::write: {} validation error(s)", errors.len())
+                write!(
+                    f,
+                    "umbral::orm::write: {} validation error(s)",
+                    errors.len()
+                )
             }
             WriteError::TypeMismatch {
                 field,

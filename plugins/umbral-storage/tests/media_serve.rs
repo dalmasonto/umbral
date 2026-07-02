@@ -31,7 +31,9 @@ async fn serves_an_uploaded_file_at_mount_slash_key() {
         StatusCode::OK,
         "an uploaded file must serve at /media/<key>"
     );
-    let body = axum::body::to_bytes(res.into_body(), 1 << 16).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), 1 << 16)
+        .await
+        .unwrap();
     assert_eq!(&body[..], b"PNGDATA");
 
     let res = app

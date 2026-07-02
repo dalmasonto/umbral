@@ -40,8 +40,9 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// Boxed so the registry can hold a heterogeneous list. The future is
 /// `Send + 'static` so it runs in a detached [`tokio::spawn`]; the error is
 /// boxed so any `E: Error` works.
-pub type Processor =
-    Arc<dyn Fn(MediaFile) -> Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>> + Send + Sync>;
+pub type Processor = Arc<
+    dyn Fn(MediaFile) -> Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>> + Send + Sync,
+>;
 
 /// The ambient processor list, installed at `on_ready` (mirrors the ambient
 /// storage seam's `OnceLock<Mutex<…>>`). ANY save path — `StoragePlugin::save`,
@@ -125,16 +126,25 @@ async fn persist_status(id: i64, status: &str) {
             row
         }
         Ok(None) => {
-            tracing::warn!(media_id = id, "umbral-storage: media_file #{id} vanished before status update");
+            tracing::warn!(
+                media_id = id,
+                "umbral-storage: media_file #{id} vanished before status update"
+            );
             return;
         }
         Err(e) => {
-            tracing::warn!(media_id = id, "umbral-storage: could not load media_file #{id} for status update: {e}");
+            tracing::warn!(
+                media_id = id,
+                "umbral-storage: could not load media_file #{id} for status update: {e}"
+            );
             return;
         }
     };
     if let Err(e) = MediaFile::objects().save(row).await {
-        tracing::warn!(media_id = id, "umbral-storage: failed to persist media_file #{id} status={status}: {e}");
+        tracing::warn!(
+            media_id = id,
+            "umbral-storage: failed to persist media_file #{id} status={status}: {e}"
+        );
     }
 }
 
@@ -565,7 +575,11 @@ impl Storage for SizeLimitedStorage {
         body: ByteStream,
     ) -> Result<StoredFile, StorageError> {
         let capped = cap_stream(body, self.max_size);
-        match self.inner.store_stream(filename, content_type, capped).await {
+        match self
+            .inner
+            .store_stream(filename, content_type, capped)
+            .await
+        {
             Ok(stored) => Ok(stored),
             Err(StorageError::Io(e)) if is_cap_exceeded(&e) => Err(StorageError::TooLarge {
                 limit: self.max_size,
@@ -624,7 +638,10 @@ impl Storage for MediaTracking {
         content_type: &str,
         body: ByteStream,
     ) -> Result<StoredFile, StorageError> {
-        let stored = self.inner.store_stream(filename, content_type, body).await?;
+        let stored = self
+            .inner
+            .store_stream(filename, content_type, body)
+            .await?;
         record_tracking_row(filename, content_type, &stored).await;
         Ok(stored)
     }
@@ -915,10 +932,7 @@ pub(crate) async fn save_deferred_through(
         .await;
     });
 
-    Ok(MediaSaveOutcome {
-        file: saved,
-        url,
-    })
+    Ok(MediaSaveOutcome { file: saved, url })
 }
 
 /// Streaming counterpart of [`save_through`]: persist an upload from a

@@ -7,7 +7,9 @@
 
 use std::collections::HashSet;
 
-use umbral_realtime::{DEFAULT_BUFFER, Event, PresenceSpec, Realtime, RealtimePlugin, dispatch_presence};
+use umbral_realtime::{
+    DEFAULT_BUFFER, Event, PresenceSpec, Realtime, RealtimePlugin, dispatch_presence,
+};
 
 async fn boot(plugin: RealtimePlugin) {
     umbral::signals::clear_for_tests();
@@ -35,11 +37,12 @@ async fn custom_resolver_projects_exactly_what_it_returns() {
     // The dev's resolver maps a user id to {id, name} — and ONLY that. A real
     // app would look the name up; here we synthesize it to prove the wire
     // carries exactly the resolver's output, no more.
-    boot(RealtimePlugin::new().with_presence(
-        PresenceSpec::prefixes(["room:"]).resolver(|uid| {
-            serde_json::json!({ "id": uid, "name": format!("user-{uid}") })
-        }),
-    ))
+    boot(
+        RealtimePlugin::new().with_presence(
+            PresenceSpec::prefixes(["room:"])
+                .resolver(|uid| serde_json::json!({ "id": uid, "name": format!("user-{uid}") })),
+        ),
+    )
     .await;
     let registry = Realtime::registry();
 
@@ -67,5 +70,8 @@ async fn custom_resolver_projects_exactly_what_it_returns() {
     assert_eq!(obj.get("id").and_then(|v| v.as_str()), Some("5"));
     assert_eq!(obj.get("name").and_then(|v| v.as_str()), Some("user-5"));
     // No key the resolver didn't return.
-    assert!(!obj.contains_key("email"), "nothing the resolver didn't return leaks");
+    assert!(
+        !obj.contains_key("email"),
+        "nothing the resolver didn't return leaks"
+    );
 }

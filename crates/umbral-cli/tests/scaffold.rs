@@ -8,7 +8,9 @@
 use std::fs;
 
 use tempfile::TempDir;
-use umbral_cli::scaffold::{ScaffoldError, register_dep_in_cargo_toml, scaffold_app, scaffold_project, scaffold_plugin};
+use umbral_cli::scaffold::{
+    ScaffoldError, register_dep_in_cargo_toml, scaffold_app, scaffold_plugin, scaffold_project,
+};
 
 #[test]
 fn scaffold_project_writes_expected_files() {
@@ -433,7 +435,10 @@ fn register_dep_idempotent_no_duplicate() {
     assert!(added_first, "first call should return true (dep was added)");
 
     let added_second = register_dep_in_cargo_toml(&cargo_path, "posts").unwrap();
-    assert!(!added_second, "second call should return false (already present)");
+    assert!(
+        !added_second,
+        "second call should return false (already present)"
+    );
 
     let cargo = fs::read_to_string(&cargo_path).unwrap();
     // Count only non-comment lines that declare the dep (the project
@@ -457,8 +462,7 @@ fn scaffold_app_succeeds_without_project_cargo_toml() {
     let report = scaffold_app("widgets", tmp.path(), None).unwrap();
 
     assert_eq!(
-        report.cargo_toml_registered,
-        None,
+        report.cargo_toml_registered, None,
         "should be None when no project Cargo.toml is present"
     );
 
@@ -516,7 +520,10 @@ fn scaffold_app_next_steps_no_longer_mention_manual_cargo_toml_edit() {
         );
     }
     // But the builder wiring step must still be present.
-    let has_builder_step = report.next_steps.iter().any(|s| s.contains("App::builder") || s.contains(".plugin("));
+    let has_builder_step = report
+        .next_steps
+        .iter()
+        .any(|s| s.contains("App::builder") || s.contains(".plugin("));
     assert!(
         has_builder_step,
         "next_steps must still tell the user to wire .plugin(...) in main.rs"

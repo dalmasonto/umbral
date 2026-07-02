@@ -351,7 +351,9 @@ impl Action {
         )
         .danger()
         .scope(ActionScope::Bulk)
-        .confirm("This will PERMANENTLY delete the selected rows. They cannot be restored. Continue?")
+        .confirm(
+            "This will PERMANENTLY delete the selected rows. They cannot be restored. Continue?",
+        )
     }
 
     /// The action key (URL-safe identifier).

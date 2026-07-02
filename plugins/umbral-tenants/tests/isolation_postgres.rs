@@ -111,13 +111,9 @@ async fn schema_per_tenant_isolation() {
     for name in ["tenant_a", "tenant_b"] {
         let schema = Schema::new(name).unwrap();
         // CREATE SCHEMA + migrate tenant apps into it.
-        umbral::migrate::run_for_schema_in(
-            std::path::Path::new(&tmp),
-            &schema,
-            &shared_for_schema,
-        )
-        .await
-        .expect("schema migrate");
+        umbral::migrate::run_for_schema_in(std::path::Path::new(&tmp), &schema, &shared_for_schema)
+            .await
+            .expect("schema migrate");
         // Register the tenant row in public (the resolution key).
         Tenant::objects()
             .create(Tenant {
@@ -202,18 +198,32 @@ async fn schema_per_tenant_isolation() {
     //    tenants' contexts — shared data is NOT isolated.
     let ctx_a = RouteContext::new().with_tenant(TenantKey::new("tenant_a"));
     let seen_a = umbral::db::route_context_scope(ctx_a, async {
-        Tenant::objects().count().await.expect("count tenants under A")
+        Tenant::objects()
+            .count()
+            .await
+            .expect("count tenants under A")
     })
     .await;
     let ctx_b = RouteContext::new().with_tenant(TenantKey::new("tenant_b"));
     let seen_b = umbral::db::route_context_scope(ctx_b, async {
-        Tenant::objects().count().await.expect("count tenants under B")
+        Tenant::objects()
+            .count()
+            .await
+            .expect("count tenants under B")
     })
     .await;
-    assert_eq!(seen_a, 2, "both tenant rows visible under A (shared registry)");
-    assert_eq!(seen_b, 2, "both tenant rows visible under B (shared registry)");
+    assert_eq!(
+        seen_a, 2,
+        "both tenant rows visible under A (shared registry)"
+    );
+    assert_eq!(
+        seen_b, 2,
+        "both tenant rows visible under B (shared registry)"
+    );
 
-    eprintln!("schema_per_tenant_isolation: PASS (2 schemas, isolated tenant rows, shared registry)");
+    eprintln!(
+        "schema_per_tenant_isolation: PASS (2 schemas, isolated tenant rows, shared registry)"
+    );
 }
 
 /// A throwaway migrations dir under the OS temp dir, unique per run.

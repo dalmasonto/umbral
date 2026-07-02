@@ -8,16 +8,16 @@
 //! `priority INTEGER` column mirrors the additive nullable migration the
 //! real app's `makemigrations`/`migrate` would emit.
 
-use std::sync::OnceLock;
 use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 
 use umbral_tasks::{
-    EnqueueOptions, TaskRow, TasksPlugin, _clear_handlers_for_tests, enqueue, register_handler,
-    run_worker_once, STATUS_PENDING, STATUS_SUCCEEDED,
+    _clear_handlers_for_tests, EnqueueOptions, STATUS_PENDING, STATUS_SUCCEEDED, TaskRow,
+    TasksPlugin, enqueue, register_handler, run_worker_once,
 };
 
 static BOOT: OnceCell<()> = OnceCell::const_new();

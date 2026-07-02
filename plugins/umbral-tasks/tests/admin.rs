@@ -14,8 +14,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 
 use umbral_tasks::{
-    STATUS_FAILED, STATUS_PENDING, STATUS_SUCCEEDED, TaskRow, TasksPlugin,
-    _clear_handlers_for_tests, enqueue, register_handler, retry_task, run_worker_once,
+    _clear_handlers_for_tests, STATUS_FAILED, STATUS_PENDING, STATUS_SUCCEEDED, TaskRow,
+    TasksPlugin, enqueue, register_handler, retry_task, run_worker_once,
 };
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
@@ -202,7 +202,10 @@ async fn retry_is_a_noop_on_non_failed_or_absent() {
     drain_queue().await;
     _clear_handlers_for_tests();
 
-    register_handler("ok_task", |_payload: &str| async move { Ok::<(), String>(()) });
+    register_handler(
+        "ok_task",
+        |_payload: &str| async move { Ok::<(), String>(()) },
+    );
 
     // Absent id.
     assert!(

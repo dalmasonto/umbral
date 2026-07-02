@@ -50,8 +50,9 @@ pub use async_trait::async_trait as async_trait_reexport;
 /// `Arc<dyn Storage>` dispatch) and `Send` so it can cross an `.await` on a
 /// multi-threaded runtime. Each item is a `bytes::Bytes` chunk or an
 /// [`std::io::Error`]; an error item aborts the stream.
-pub type ByteStream =
-    std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send>>;
+pub type ByteStream = std::pin::Pin<
+    Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send>,
+>;
 
 /// The `ErrorKind` a [`cap_stream`] over-limit error carries, so a wrapper
 /// (e.g. `SizeLimitedStorage`) can recognise "the cap tripped" versus a
@@ -601,10 +602,7 @@ mod tests {
     #[tokio::test]
     async fn put_override_writes_at_exact_key() {
         let s = MemWithPut::new();
-        let stored = s
-            .put("css/app.css", "text/css", b"body{}")
-            .await
-            .unwrap();
+        let stored = s.put("css/app.css", "text/css", b"body{}").await.unwrap();
         // The key is EXACTLY what we asked for — no generation.
         assert_eq!(stored.key, "css/app.css");
         assert_eq!(stored.size, 6);
@@ -626,7 +624,10 @@ mod tests {
         let body: ByteStream = Box::pin(futures_util::stream::once(async {
             Ok(bytes::Bytes::from_static(b"streamed"))
         }));
-        let stored = s.put_stream("js/app.js", "text/javascript", body).await.unwrap();
+        let stored = s
+            .put_stream("js/app.js", "text/javascript", body)
+            .await
+            .unwrap();
         assert_eq!(stored.key, "js/app.js");
         assert_eq!(s.retrieve("js/app.js").await.unwrap(), b"streamed");
     }

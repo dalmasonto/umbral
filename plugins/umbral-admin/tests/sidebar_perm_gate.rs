@@ -370,12 +370,6 @@ async fn sidebar_shows_all_models_for_superuser() {
     let session = login(router.clone(), "sb_super").await;
     let (_status, html) = send_get(router, "/admin/", &session).await;
 
-    assert!(
-        html.contains("sbsecret"),
-        "superuser must see sbsecret"
-    );
-    assert!(
-        html.contains("sbpublic"),
-        "superuser must see sbpublic"
-    );
+    assert!(html.contains("sbsecret"), "superuser must see sbsecret");
+    assert!(html.contains("sbpublic"), "superuser must see sbpublic");
 }

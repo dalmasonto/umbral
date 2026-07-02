@@ -55,12 +55,12 @@ mod media;
 mod s3;
 mod static_serve;
 
+#[doc(hidden)]
+pub use media::clear_processors_for_test;
 pub use media::{
     BoxError, FsStorage, MediaError, MediaFile, MediaSaveOutcome, MediaTracking, Processor,
     STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
 };
-#[doc(hidden)]
-pub use media::clear_processors_for_test;
 #[cfg(feature = "s3")]
 pub use s3::{S3Storage, S3StorageBuilder};
 // Re-export the core Storage trait through this crate for ergonomic
@@ -229,7 +229,11 @@ impl StoragePlugin {
     /// old `MediaPlugin::with_storage`). The GET-serving `ServeDir` still
     /// reads `mount` as a dir; a non-filesystem backend serves its own
     /// URLs, so the route is a no-op for keys that never hit local disk.
-    pub fn media_with_storage(mut self, mount: impl Into<String>, storage: Arc<dyn Storage>) -> Self {
+    pub fn media_with_storage(
+        mut self,
+        mount: impl Into<String>,
+        storage: Arc<dyn Storage>,
+    ) -> Self {
         let mount = mount.into();
         self.media = Some(MediaSide {
             dir: PathBuf::from(&mount),
@@ -378,7 +382,14 @@ impl StoragePlugin {
             .media
             .as_ref()
             .expect("save() requires a media side; add .media(..) / .media_with_storage(..)");
-        save_through(&media.storage, media.max_size, filename, content_type, bytes).await
+        save_through(
+            &media.storage,
+            media.max_size,
+            filename,
+            content_type,
+            bytes,
+        )
+        .await
     }
 
     /// Streaming counterpart of [`save`](StoragePlugin::save): persist an
@@ -390,10 +401,9 @@ impl StoragePlugin {
         content_type: &str,
         body: ByteStream,
     ) -> Result<MediaSaveOutcome, MediaError> {
-        let media = self
-            .media
-            .as_ref()
-            .expect("save_stream() requires a media side; add .media(..) / .media_with_storage(..)");
+        let media = self.media.as_ref().expect(
+            "save_stream() requires a media side; add .media(..) / .media_with_storage(..)",
+        );
         save_stream_through(&media.storage, media.max_size, filename, content_type, body).await
     }
 
@@ -420,7 +430,14 @@ impl StoragePlugin {
         let media = self.media.as_ref().expect(
             "save_deferred() requires a media side; add .media(..) / .media_with_storage(..)",
         );
-        save_deferred_through(&media.storage, media.max_size, filename, content_type, bytes).await
+        save_deferred_through(
+            &media.storage,
+            media.max_size,
+            filename,
+            content_type,
+            bytes,
+        )
+        .await
     }
 }
 
@@ -502,7 +519,9 @@ impl Plugin for StoragePlugin {
         // media_file row) and, when a cap is set, SizeLimitedStorage.
         if let Some(media) = &self.media {
             let storage: Arc<dyn Storage> = match media.max_size {
-                Some(max_size) => Arc::new(SizeLimitedStorage::new(media.storage.clone(), max_size)),
+                Some(max_size) => {
+                    Arc::new(SizeLimitedStorage::new(media.storage.clone(), max_size))
+                }
                 None => media.storage.clone(),
             };
             umbral::storage::set_storage_named(DEFAULT, Arc::new(MediaTracking::new(storage)));

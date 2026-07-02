@@ -407,7 +407,11 @@ async fn test_cell_edit_post_valid_bool_saves_and_returns_200() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK, "valid bool save must be 200: {body}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "valid bool save must be 200: {body}"
+    );
 
     let stored: i64 = sqlx::query_scalar("SELECT published FROM cell_note WHERE id = 1")
         .fetch_one(&pool)

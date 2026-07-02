@@ -17,8 +17,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 
 use umbral::web::header;
-use umbral_sessions::{COOKIE_NAME, SessionsPlugin};
 use umbral_sessions::store::{DbStore, SessionRecord, active_store};
+use umbral_sessions::{COOKIE_NAME, SessionsPlugin};
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
 
@@ -187,7 +187,10 @@ async fn active_store_direct_io_out_of_request() {
     assert_eq!(loaded.data, "{}");
     assert!(loaded.expires_at > chrono::Utc::now());
 
-    store.destroy("direct-io-tok").await.expect("direct destroy");
+    store
+        .destroy("direct-io-tok")
+        .await
+        .expect("direct destroy");
     let gone = store
         .load("direct-io-tok")
         .await

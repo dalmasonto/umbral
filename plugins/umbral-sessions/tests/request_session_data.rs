@@ -130,7 +130,11 @@ async fn set_data_in_request_reads_back_and_persists_once() {
             .expect("current_session ok")
             .expect("in-request session view");
         let v: Option<i64> = umbral_sessions::get_data(&s, "k").expect("get_data");
-        assert_eq!(v, Some(42), "same-request read-back sees the in-memory write");
+        assert_eq!(
+            v,
+            Some(42),
+            "same-request read-back sees the in-memory write"
+        );
         "wrote"
     }
 

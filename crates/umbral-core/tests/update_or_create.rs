@@ -220,8 +220,14 @@ async fn update_or_create_converges_under_concurrent_insert() {
             .await
     });
 
-    let r1 = t1.await.expect("task1 panicked").expect("task1 update_or_create");
-    let r2 = t2.await.expect("task2 panicked").expect("task2 update_or_create");
+    let r1 = t1
+        .await
+        .expect("task1 panicked")
+        .expect("task1 update_or_create");
+    let r2 = t2
+        .await
+        .expect("task2 panicked")
+        .expect("task2 update_or_create");
 
     let (p1, c1) = r1;
     let (p2, c2) = r2;
@@ -240,5 +246,8 @@ async fn update_or_create_converges_under_concurrent_insert() {
 
     // Only one row was inserted.
     let count = Post::objects().count().await.expect("count");
-    assert_eq!(count, 1, "only one row must exist after concurrent update_or_create");
+    assert_eq!(
+        count, 1,
+        "only one row must exist after concurrent update_or_create"
+    );
 }

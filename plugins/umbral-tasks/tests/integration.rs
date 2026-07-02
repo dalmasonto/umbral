@@ -13,10 +13,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 
 use umbral_tasks::{
-    DEFAULT_VISIBILITY_TIMEOUT, EnqueueOptions, RetryPolicy, STATUS_FAILED, STATUS_PENDING,
-    STATUS_RUNNING, STATUS_SUCCEEDED, TaskRow, TasksPlugin, _clear_handlers_for_tests, enqueue,
-    reclaim_orphaned_tasks, reclaim_orphaned_tasks_with, register_handler, run_worker_once,
-    run_worker_once_with, DEFAULT_MAX_ATTEMPTS,
+    _clear_handlers_for_tests, DEFAULT_MAX_ATTEMPTS, DEFAULT_VISIBILITY_TIMEOUT, EnqueueOptions,
+    RetryPolicy, STATUS_FAILED, STATUS_PENDING, STATUS_RUNNING, STATUS_SUCCEEDED, TaskRow,
+    TasksPlugin, enqueue, reclaim_orphaned_tasks, reclaim_orphaned_tasks_with, register_handler,
+    run_worker_once, run_worker_once_with,
 };
 
 /// A backoff-free policy for tests that drive several retries back-to-back
@@ -536,7 +536,11 @@ async fn stuck_running_task_stays_stuck_without_reclaim() {
             .await
             .expect("fetch running rows")
     };
-    assert_eq!(rows.len(), 1, "stuck row should still be RUNNING without reclaim");
+    assert_eq!(
+        rows.len(),
+        1,
+        "stuck row should still be RUNNING without reclaim"
+    );
 }
 
 /// A task left in RUNNING with an expired started_at (crashed worker) is
@@ -586,7 +590,10 @@ async fn orphaned_running_task_is_reclaimed_and_completes() {
     let reclaimed = reclaim_orphaned_tasks_with(Duration::from_millis(1), no_backoff())
         .await
         .expect("reclaim");
-    assert_eq!(reclaimed, 1, "exactly one orphaned task should be reclaimed");
+    assert_eq!(
+        reclaimed, 1,
+        "exactly one orphaned task should be reclaimed"
+    );
 
     // The row should now be PENDING again.
     let rows: Vec<TaskRow> = sqlx::query_as::<_, TaskRow>("SELECT * FROM task_row")
@@ -663,7 +670,10 @@ async fn fresh_running_task_is_not_reclaimed() {
         .fetch_all(&pool)
         .await
         .expect("fetch all");
-    assert_eq!(rows[0].status, STATUS_RUNNING, "row should still be RUNNING");
+    assert_eq!(
+        rows[0].status, STATUS_RUNNING,
+        "row should still be RUNNING"
+    );
 }
 
 /// An orphaned RUNNING task that has already consumed all max_attempts must
@@ -721,7 +731,9 @@ async fn orphaned_task_at_max_attempts_is_failed_not_retried() {
     );
 
     // Queue should now be empty — no pending rows for the worker.
-    let processed = run_worker_once().await.expect("worker step after exhausted reclaim");
+    let processed = run_worker_once()
+        .await
+        .expect("worker step after exhausted reclaim");
     assert!(
         !processed,
         "no runnable tasks should remain after exhausted-orphan reclaim"

@@ -121,8 +121,7 @@ async fn writing_handler_materialises_row_and_sets_cookie() {
     let _guard = SERIAL.lock().await;
 
     async fn writer() -> impl IntoResponse {
-        umbral_sessions::current_mut(|s| s.set_raw("k", json!(1)))
-            .expect("inside a request scope");
+        umbral_sessions::current_mut(|s| s.set_raw("k", json!(1))).expect("inside a request scope");
         "wrote"
     }
 

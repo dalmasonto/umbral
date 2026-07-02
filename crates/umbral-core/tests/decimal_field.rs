@@ -98,7 +98,10 @@ fn nullable_decimal_classifies_as_nullable_decimal_sqltype() {
 
     let required_total = by_name.get("required_total").expect("required_total field");
     assert_eq!(required_total.ty, SqlType::Decimal);
-    assert!(!required_total.nullable, "non-nullable Decimal must not be nullable");
+    assert!(
+        !required_total.nullable,
+        "non-nullable Decimal must not be nullable"
+    );
 
     let discount = by_name.get("discount").expect("discount field");
     assert_eq!(

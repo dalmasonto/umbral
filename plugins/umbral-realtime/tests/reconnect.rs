@@ -93,8 +93,10 @@ async fn replay_resumes_after_last_event_id() {
 async fn replay_is_target_filtered() {
     let reg = Registry::default();
 
-    reg.dispatch(&TargetKind::User("1".into()), evt("for-a")).await; // A only
-    reg.dispatch(&TargetKind::User("2".into()), evt("for-b")).await; // B only
+    reg.dispatch(&TargetKind::User("1".into()), evt("for-a"))
+        .await; // A only
+    reg.dispatch(&TargetKind::User("2".into()), evt("for-b"))
+        .await; // B only
     reg.dispatch(&TargetKind::Broadcast, evt("for-all")).await; // both
     reg.dispatch(&TargetKind::Group("room:1".into()), evt("for-room"))
         .await; // group members
@@ -141,7 +143,10 @@ async fn connection_cap_refuses_then_readmits() {
     let (id1, _rx1) = first.expect("first connection admitted");
 
     let second = reg.register(None, groups(&[]), DEFAULT_BUFFER).await;
-    assert!(second.is_none(), "2nd refused at the cap → handler sends 503");
+    assert!(
+        second.is_none(),
+        "2nd refused at the cap → handler sends 503"
+    );
     assert_eq!(reg.connection_count().await, 1);
 
     // Free the slot; the next registration succeeds.

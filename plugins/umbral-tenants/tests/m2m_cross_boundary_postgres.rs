@@ -212,7 +212,10 @@ async fn m2m_cross_boundary_tenant_parent_shared_child() {
     .fetch_one(&pool)
     .await
     .expect("xtag-in-public query");
-    assert!(xtag_in_public, "the shared child `xtag` must live in public");
+    assert!(
+        xtag_in_public,
+        "the shared child `xtag` must live in public"
+    );
     for s in ["tenant_a", "tenant_b"] {
         let xtag_in_tenant: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM information_schema.tables \

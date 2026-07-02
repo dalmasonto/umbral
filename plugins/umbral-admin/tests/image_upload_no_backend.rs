@@ -85,10 +85,12 @@ async fn boot() -> &'static axum::Router {
         .execute(&pool)
         .await
         .expect("session");
-        sqlx::query("CREATE TABLE note (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("note");
+        sqlx::query(
+            "CREATE TABLE note (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("note");
 
         let staff = create_user("nb_admin", "nb@example.com", "pass123")
             .await

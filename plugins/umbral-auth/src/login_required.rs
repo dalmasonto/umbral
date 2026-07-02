@@ -319,7 +319,9 @@ where
     let raw_token = cookie_from_headers(headers)?;
     let stored_id = hash_token(&raw_token);
     let row: Option<SessionRow> = umbral::orm::Manager::<SessionRow>::default()
-        .filter(umbral::orm::Predicate::<SessionRow>::col_eq("id", stored_id))
+        .filter(umbral::orm::Predicate::<SessionRow>::col_eq(
+            "id", stored_id,
+        ))
         .first()
         .await
         .ok()

@@ -104,7 +104,13 @@ async fn m2m_relation_isolated_per_tenant_schema() {
             .await
             .expect("drop tenant schema");
     }
-    for t in ["tarticle_tags", "tarticle", "ttag", "tenant", "umbral_migrations"] {
+    for t in [
+        "tarticle_tags",
+        "tarticle",
+        "ttag",
+        "tenant",
+        "umbral_migrations",
+    ] {
         sqlx::query(&format!("DROP TABLE IF EXISTS public.{t} CASCADE"))
             .execute(&pool)
             .await
@@ -147,13 +153,9 @@ async fn m2m_relation_isolated_per_tenant_schema() {
     //    junction) into each.
     for name in ["tenant_a", "tenant_b"] {
         let schema = Schema::new(name).unwrap();
-        umbral::migrate::run_for_schema_in(
-            std::path::Path::new(&tmp),
-            &schema,
-            &shared_for_schema,
-        )
-        .await
-        .expect("schema migrate");
+        umbral::migrate::run_for_schema_in(std::path::Path::new(&tmp), &schema, &shared_for_schema)
+            .await
+            .expect("schema migrate");
         Tenant::objects()
             .create(Tenant {
                 id: 0,

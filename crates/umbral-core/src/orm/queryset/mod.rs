@@ -264,7 +264,10 @@ impl<T> std::fmt::Debug for QuerySet<T> {
         // opaque expressions.
         f.debug_struct("QuerySet")
             .field("query", &self.query)
-            .field("predicates", &format_args!("[{} predicate(s)]", self.predicates.len()))
+            .field(
+                "predicates",
+                &format_args!("[{} predicate(s)]", self.predicates.len()),
+            )
             .field("explicit_pool", &self.explicit_pool)
             .field("select_related", &self.select_related)
             .field("prefetch_related", &self.prefetch_related)
@@ -4104,9 +4107,8 @@ impl<T: Model> Manager<T> {
                     pk_name,
                     None,
                 )?;
-                let pk_pred: Predicate<T> = Predicate::new(
-                    sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea),
-                );
+                let pk_pred: Predicate<T> =
+                    Predicate::new(sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea));
 
                 // Run the UPDATE.
                 self.filter(pk_pred).update_values(update_map).await?;

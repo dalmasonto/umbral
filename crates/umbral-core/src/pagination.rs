@@ -548,10 +548,7 @@ mod tests {
     fn elided_range_windows_middle_with_both_ellipses() {
         // 20 pages, page 6, on_each_side=2, on_ends=1 -> 1 … 4 5 6 7 8 … 20
         let r = elided_range(6, 20, 2, 1);
-        assert_eq!(
-            nums(&r),
-            vec!["1", "…", "4", "5", "6", "7", "8", "…", "20"]
-        );
+        assert_eq!(nums(&r), vec!["1", "…", "4", "5", "6", "7", "8", "…", "20"]);
         assert!(r.contains(&PageItem::Ellipsis));
     }
 
@@ -576,7 +573,10 @@ mod tests {
             "page=3&sort=name"
         );
         // Inserted when absent.
-        assert_eq!(querystring_with("sort=name", "page", "2"), "sort=name&page=2");
+        assert_eq!(
+            querystring_with("sort=name", "page", "2"),
+            "sort=name&page=2"
+        );
         // Empty current query -> just the pair.
         assert_eq!(querystring_with("", "page", "5"), "page=5");
         // Leading `?` tolerated.

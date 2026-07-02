@@ -77,7 +77,10 @@ async fn read_write_split_against_real_streaming_replica() {
         .fetch_one(&replica)
         .await
         .expect("recovery check");
-    assert!(in_recovery, "UMBRAL_REPLICA_URL must be a read-only standby");
+    assert!(
+        in_recovery,
+        "UMBRAL_REPLICA_URL must be a read-only standby"
+    );
 
     // Make sure replay is running, then (re)create the table on the PRIMARY
     // and wait for it to stream to the standby.

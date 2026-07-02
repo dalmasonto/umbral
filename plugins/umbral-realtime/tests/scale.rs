@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use umbral_realtime::{ConnId, Event, Registry, TargetKind, DEFAULT_BUFFER};
+use umbral_realtime::{ConnId, DEFAULT_BUFFER, Event, Registry, TargetKind};
 
 /// Total connections to register. Half are broadcast-only (no group), half
 /// are spread across `GROUPS` distinct groups so group-targeted dispatch is
@@ -83,7 +83,10 @@ async fn registry_stays_fast_and_non_starving_at_10k() {
     // so every try_send succeeds → delivered == N.
     let t0 = Instant::now();
     let delivered = reg
-        .dispatch(&TargetKind::Broadcast, reg_event("ping", serde_json::json!({"n": 1})))
+        .dispatch(
+            &TargetKind::Broadcast,
+            reg_event("ping", serde_json::json!({"n": 1})),
+        )
         .await;
     let broadcast_elapsed = t0.elapsed();
     assert_eq!(delivered, N, "broadcast queued to all {N} connections");
@@ -91,7 +94,9 @@ async fn registry_stays_fast_and_non_starving_at_10k() {
         broadcast_elapsed < Duration::from_millis(250),
         "10k broadcast must not starve: took {broadcast_elapsed:?} (bound 250ms)"
     );
-    eprintln!("[scale] {N}-connection broadcast dispatch: {broadcast_elapsed:?} (delivered {delivered})");
+    eprintln!(
+        "[scale] {N}-connection broadcast dispatch: {broadcast_elapsed:?} (delivered {delivered})"
+    );
 
     // (4) Group dispatch at scale: only the target group's connections.
     let t1 = Instant::now();
@@ -129,8 +134,11 @@ async fn registry_stays_fast_and_non_starving_at_10k() {
         tokio::spawn(async move {
             let mut rounds = 0u64;
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                reg.dispatch(&TargetKind::Broadcast, reg_event("load", serde_json::json!({})))
-                    .await;
+                reg.dispatch(
+                    &TargetKind::Broadcast,
+                    reg_event("load", serde_json::json!({})),
+                )
+                .await;
                 rounds += 1;
                 // Yield so the drain task and ops task get scheduled; without
                 // this a busy broadcast loop could monopolize a worker.
@@ -211,7 +219,10 @@ async fn registry_stays_fast_and_non_starving_at_10k() {
         while rx.try_recv().is_ok() {}
     }
     let final_delivered = reg
-        .dispatch(&TargetKind::Broadcast, reg_event("final", serde_json::json!({"check": true})))
+        .dispatch(
+            &TargetKind::Broadcast,
+            reg_event("final", serde_json::json!({"check": true})),
+        )
         .await;
     assert_eq!(final_delivered, N, "final broadcast queued to all {N}");
 
@@ -223,6 +234,9 @@ async fn registry_stays_fast_and_non_starving_at_10k() {
             got += 1;
         }
     }
-    assert_eq!(got, sample, "every sampled receiver ({sample}) received the broadcast");
+    assert_eq!(
+        got, sample,
+        "every sampled receiver ({sample}) received the broadcast"
+    );
     eprintln!("[scale] delivery sample: {got}/{sample} receivers got the final broadcast");
 }

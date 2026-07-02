@@ -34,8 +34,8 @@ fn test_ctx() -> AppContext {
 }
 use umbral::storage::Storage;
 use umbral_storage::{
-    FsStorage, MediaFile, MediaTracking, StoragePlugin, STATUS_FAILED, STATUS_PROCESSING,
-    STATUS_READY,
+    FsStorage, MediaFile, MediaTracking, STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
+    StoragePlugin,
 };
 
 static BOOT: OnceCell<()> = OnceCell::const_new();

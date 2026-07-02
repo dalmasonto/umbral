@@ -210,8 +210,7 @@ async fn restore_on_dashboard_escape_via_query_param() {
 async fn restore_on_no_redirect_when_no_last_path() {
     let _guard = LOCK.lock().await;
     let router = boot().await;
-    let (uid, cookie) =
-        staff_cookie("rlp_on_nolast", "rlp_on_nolast@example.com").await;
+    let (uid, cookie) = staff_cookie("rlp_on_nolast", "rlp_on_nolast@example.com").await;
 
     // Wipe any prefs so last_path is absent.
     let pool = umbral::db::pool();
@@ -241,8 +240,7 @@ async fn restore_on_no_redirect_when_no_last_path() {
 async fn sidebar_home_link_carries_dashboard_escape_when_flag_on() {
     let _guard = LOCK.lock().await;
     let router = boot().await;
-    let (_uid, cookie) =
-        staff_cookie("rlp_on_sidebar", "rlp_on_sidebar@example.com").await;
+    let (_uid, cookie) = staff_cookie("rlp_on_sidebar", "rlp_on_sidebar@example.com").await;
 
     // Force the dashboard via ?dashboard=1 to get HTML back rather than a redirect.
     let req = Request::builder()

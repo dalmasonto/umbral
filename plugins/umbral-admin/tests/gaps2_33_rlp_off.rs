@@ -177,8 +177,7 @@ async fn restore_off_always_renders_dashboard_even_with_stored_last_path() {
 async fn restore_off_changelist_does_not_write_last_path() {
     let _guard = LOCK.lock().await;
     let router = boot().await;
-    let (uid, cookie) =
-        staff_cookie("rlp_off_writer", "rlp_off_writer@example.com").await;
+    let (uid, cookie) = staff_cookie("rlp_off_writer", "rlp_off_writer@example.com").await;
 
     // Wipe prefs so we start with no last_path.
     let pool = umbral::db::pool();
@@ -217,8 +216,7 @@ async fn restore_off_changelist_does_not_write_last_path() {
 async fn sidebar_home_link_plain_when_flag_off() {
     let _guard = LOCK.lock().await;
     let router = boot().await;
-    let (_uid, cookie) =
-        staff_cookie("rlp_off_sidebar", "rlp_off_sidebar@example.com").await;
+    let (_uid, cookie) = staff_cookie("rlp_off_sidebar", "rlp_off_sidebar@example.com").await;
 
     let req = Request::builder()
         .uri("/admin/")

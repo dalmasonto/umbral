@@ -199,11 +199,19 @@ async fn update_values_default_scope_skips_trashed_rows() {
 
     // Seed one live row and one to-be-trashed row.
     SoftPost::objects()
-        .create(SoftPost { id: 0, title: live_title.clone(), deleted_at: None })
+        .create(SoftPost {
+            id: 0,
+            title: live_title.clone(),
+            deleted_at: None,
+        })
         .await
         .expect("create live row");
     SoftPost::objects()
-        .create(SoftPost { id: 0, title: dead_title.clone(), deleted_at: None })
+        .create(SoftPost {
+            id: 0,
+            title: dead_title.clone(),
+            deleted_at: None,
+        })
         .await
         .expect("create dead row");
 
@@ -255,15 +263,23 @@ async fn update_values_default_scope_skips_trashed_rows() {
 async fn update_values_only_deleted_restores_trashed_row() {
     boot().await;
     let pid = std::process::id();
-    let live_title  = format!("rst-live-{pid}");
+    let live_title = format!("rst-live-{pid}");
     let trash_title = format!("rst-trash-{pid}");
 
     SoftPost::objects()
-        .create(SoftPost { id: 0, title: live_title.clone(), deleted_at: None })
+        .create(SoftPost {
+            id: 0,
+            title: live_title.clone(),
+            deleted_at: None,
+        })
         .await
         .expect("create live row");
     SoftPost::objects()
-        .create(SoftPost { id: 0, title: trash_title.clone(), deleted_at: None })
+        .create(SoftPost {
+            id: 0,
+            title: trash_title.clone(),
+            deleted_at: None,
+        })
         .await
         .expect("create trash row");
 
@@ -291,8 +307,15 @@ async fn update_values_only_deleted_restores_trashed_row() {
         .fetch()
         .await
         .expect("fetch restored row");
-    assert_eq!(visible.len(), 1, "restored row must appear in default queryset");
-    assert!(visible[0].deleted_at.is_none(), "deleted_at must be NULL after restore");
+    assert_eq!(
+        visible.len(),
+        1,
+        "restored row must appear in default queryset"
+    );
+    assert!(
+        visible[0].deleted_at.is_none(),
+        "deleted_at must be NULL after restore"
+    );
 
     // The live row must be unchanged.
     let live: Vec<SoftPost> = SoftPost::objects()
@@ -300,7 +323,11 @@ async fn update_values_only_deleted_restores_trashed_row() {
         .fetch()
         .await
         .expect("fetch live row after restore");
-    assert_eq!(live.len(), 1, "live row must still be visible and untouched");
+    assert_eq!(
+        live.len(),
+        1,
+        "live row must still be visible and untouched"
+    );
 }
 
 /// (c) `.with_deleted().update_values(...)` updates both live AND trashed rows.
@@ -308,16 +335,24 @@ async fn update_values_only_deleted_restores_trashed_row() {
 async fn update_values_with_deleted_covers_all_rows() {
     boot().await;
     let pid = std::process::id();
-    let live_title  = format!("wd-live-{pid}");
+    let live_title = format!("wd-live-{pid}");
     let trash_title = format!("wd-trash-{pid}");
-    let new_suffix  = format!("wd-renamed-{pid}");
+    let new_suffix = format!("wd-renamed-{pid}");
 
     SoftPost::objects()
-        .create(SoftPost { id: 0, title: live_title.clone(), deleted_at: None })
+        .create(SoftPost {
+            id: 0,
+            title: live_title.clone(),
+            deleted_at: None,
+        })
         .await
         .expect("create live row");
     SoftPost::objects()
-        .create(SoftPost { id: 0, title: trash_title.clone(), deleted_at: None })
+        .create(SoftPost {
+            id: 0,
+            title: trash_title.clone(),
+            deleted_at: None,
+        })
         .await
         .expect("create trash row");
 
@@ -331,7 +366,10 @@ async fn update_values_with_deleted_covers_all_rows() {
     // with_deleted() + update_values changes both rows (we match them by a
     // shared prefix; use two separate targeted updates to assert each).
     let mut patch_live = serde_json::Map::new();
-    patch_live.insert("title".into(), serde_json::Value::String(format!("{new_suffix}-a")));
+    patch_live.insert(
+        "title".into(),
+        serde_json::Value::String(format!("{new_suffix}-a")),
+    );
     let n_live = SoftPost::objects()
         .with_deleted()
         .filter(soft_post::TITLE.eq(live_title.as_str()))
@@ -341,14 +379,20 @@ async fn update_values_with_deleted_covers_all_rows() {
     assert_eq!(n_live, 1);
 
     let mut patch_trash = serde_json::Map::new();
-    patch_trash.insert("title".into(), serde_json::Value::String(format!("{new_suffix}-b")));
+    patch_trash.insert(
+        "title".into(),
+        serde_json::Value::String(format!("{new_suffix}-b")),
+    );
     let n_trash = SoftPost::objects()
         .with_deleted()
         .filter(soft_post::TITLE.eq(trash_title.as_str()))
         .update_values(patch_trash)
         .await
         .expect("update trashed row via with_deleted");
-    assert_eq!(n_trash, 1, "with_deleted() must allow updating trashed rows");
+    assert_eq!(
+        n_trash, 1,
+        "with_deleted() must allow updating trashed rows"
+    );
 
     // Both rows visible via with_deleted().
     let all: Vec<SoftPost> = SoftPost::objects()

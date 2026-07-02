@@ -18,8 +18,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 
 use umbral_tasks::{
-    EnqueueOptions, RetryPolicy, STATUS_FAILED, STATUS_PENDING, TaskRow, TasksPlugin,
-    _clear_handlers_for_tests, enqueue, register_handler, run_worker_once, run_worker_once_with,
+    _clear_handlers_for_tests, EnqueueOptions, RetryPolicy, STATUS_FAILED, STATUS_PENDING, TaskRow,
+    TasksPlugin, enqueue, register_handler, run_worker_once, run_worker_once_with,
 };
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
@@ -254,7 +254,10 @@ async fn retry_backs_off_then_abandons() {
     let before = Utc::now();
     assert!(run_worker_once_with(policy).await.expect("step 1"));
     let row = fetch(id).await;
-    assert_eq!(row.status, STATUS_PENDING, "retriable failure stays pending");
+    assert_eq!(
+        row.status, STATUS_PENDING,
+        "retriable failure stays pending"
+    );
     assert_eq!(row.attempts, 1);
     let run_at_1 = row.run_at.expect("run_at set after retry");
     assert!(

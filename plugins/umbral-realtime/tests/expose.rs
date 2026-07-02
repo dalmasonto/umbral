@@ -137,8 +137,14 @@ async fn whitelist_strips_secrets_and_default_is_id_only() {
     );
     // And belt-and-suspenders: the raw serialized frame carries no secret text.
     let raw = ev.data.to_string();
-    assert!(!raw.contains("treasure"), "secret value leaked into the frame");
-    assert!(!raw.contains("argon2"), "password_hash value leaked into the frame");
+    assert!(
+        !raw.contains("treasure"),
+        "secret value leaked into the frame"
+    );
+    assert!(
+        !raw.contains("argon2"),
+        "password_hash value leaked into the frame"
+    );
 
     // --- Default projection (no .fields) is id-only. ---
     let mut priv_rx = watch("public:private").await;

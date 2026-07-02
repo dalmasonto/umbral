@@ -98,7 +98,10 @@ fn valid_key_seals_and_opens() {
     let kr = MaskKeyring::from_base64(&pub_b64, Some(&sec_b64))
         .expect("valid keypair must not return an error");
     let sealed = kr.seal(b"sensitive-data");
-    assert_ne!(sealed, "sensitive-data", "sealed form must not be plaintext");
+    assert_ne!(
+        sealed, "sensitive-data",
+        "sealed form must not be plaintext"
+    );
     assert_eq!(kr.open(&sealed).unwrap(), "sensitive-data");
 }
 

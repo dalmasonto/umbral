@@ -28,7 +28,10 @@ fn parse_handles_every_period_token() {
         assert_eq!(r.num, 1, "num for {s}");
     }
     // Case-insensitive period token.
-    assert_eq!(Rate::parse("5/HOUR").unwrap().period, Duration::from_secs(3600));
+    assert_eq!(
+        Rate::parse("5/HOUR").unwrap().period,
+        Duration::from_secs(3600)
+    );
     // Bare number → per-second shorthand.
     assert_eq!(Rate::parse("9").unwrap().period, Duration::from_secs(1));
     assert_eq!(Rate::parse("9").unwrap().num, 9);
@@ -36,7 +39,16 @@ fn parse_handles_every_period_token() {
 
 #[test]
 fn parse_rejects_bad_strings() {
-    for bad in ["", "   ", "oops", "10/fortnight", "0/sec", "abc/min", "/min", "12/"] {
+    for bad in [
+        "",
+        "   ",
+        "oops",
+        "10/fortnight",
+        "0/sec",
+        "abc/min",
+        "/min",
+        "12/",
+    ] {
         assert!(Rate::parse(bad).is_err(), "{bad:?} should be a parse error");
     }
 }

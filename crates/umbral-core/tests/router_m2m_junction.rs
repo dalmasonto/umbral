@@ -94,11 +94,12 @@ async fn junction_write_routes_to_write_pool_and_read_routes_to_read_pool() {
     );
 
     // The row must be in "default".
-    let n: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM jn_parent_tags WHERE parent_id = 1 AND child_id = 42")
-            .fetch_one(&default_pool)
-            .await
-            .unwrap();
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM jn_parent_tags WHERE parent_id = 1 AND child_id = 42",
+    )
+    .fetch_one(&default_pool)
+    .await
+    .unwrap();
     assert_eq!(n, 1, "row written to the default (write) pool");
 
     // --- read: should route to "replica" (empty) ---

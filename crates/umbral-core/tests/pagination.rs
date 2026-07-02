@@ -23,12 +23,10 @@ async fn pool_with(n: i64) -> SqlitePool {
     let pool = db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory SQLite should always connect");
-    sqlx::query(
-        "CREATE TABLE pg_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
-    )
-    .execute(&pool)
-    .await
-    .expect("CREATE TABLE pg_post");
+    sqlx::query("CREATE TABLE pg_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)")
+        .execute(&pool)
+        .await
+        .expect("CREATE TABLE pg_post");
     for i in 1..=n {
         sqlx::query("INSERT INTO pg_post (title) VALUES (?)")
             .bind(format!("post-{i}"))
