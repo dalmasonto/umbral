@@ -1,6 +1,6 @@
 ---
 title: Nested writes
-description: Create a parent and its children in one POST with writable nested serializers.
+description: Create, update, and upsert a parent and its children — to any depth — in one request with writable nested serializers.
 sidebar_position: 5
 tags: [rest, nested, serializers, relations]
 ---
@@ -59,9 +59,66 @@ POST /api/order/ { "customer": "Grace", "items": [ {"product":"ok","qty":1}, {"q
 This is a **real database transaction**: `create_nested` opens one `umbral::db::Transaction`, inserts the parent + every child on it (`DynQuerySet::insert_json_in_tx`), and `commit()`s only after they all succeed. Any failure - a bad child, a constraint clash, or even a process crash *between* inserts - leaves **zero rows**, because the transaction is never committed and the database rolls it back. (This replaced an earlier compensating delete-on-failure handler; see `planning/orm_fixes.md` #2.)
 </Callout>
 
+## Nested updates
+
+The same `.nested(...)` declaration also powers `PATCH`/`PUT`. A nested array on an update **upserts** its children in one transaction alongside the parent's own columns:
+
+```http
+PATCH /api/order/7
+Content-Type: application/json
+
+{
+  "customer": "Ada Lovelace",
+  "items": [
+    { "id": 1, "qty": 99 },
+    { "product": "Sprocket", "qty": 4 }
+  ]
+}
+```
+
+Each item is matched by whether it carries the child's primary key:
+
+- **With a pk** (`{ "id": 1, ... }`) → that child is **updated** in place. The update is scoped to *this* parent via the foreign key, so one parent's payload can never touch another parent's child (a pk that belongs to a different parent returns `404` and the whole PATCH rolls back).
+- **Without a pk** (`{ "product": "Sprocket", ... }`) → a **new child is created**, its FK set to the parent automatically (just like nested create).
+
+<Callout type="warning">
+**No implicit deletes.** Children you don't mention in the array are left untouched — a forgotten item never silently deletes a row. In the example above, order 7's other existing items survive; only item 1 is updated and one new item is added. Full "replace the whole set" (delete-the-missing) semantics are intentionally not the default; if you need to remove a child, delete it through its own resource.
+</Callout>
+
+Like nested create, the entire update — parent columns plus every child upsert — runs on **one `umbral::db::Transaction`** and commits only if all writes succeed. Any failure (a bad child, a cross-parent pk, a constraint clash) rolls everything back, including the parent's column changes.
+
+## Going deeper — multi-level nesting
+
+Nesting recurses. Declare `.nested(...)` on **each level** and a single request writes the whole tree — `order → items → components`:
+
+```rust
+RestPlugin::default()
+    .resource(ResourceConfig::for_::<Order>().nested("items", "order_item"))
+    .resource(ResourceConfig::for_::<OrderItem>().nested("components", "component"))
+```
+
+```http
+POST /api/order/
+{
+  "customer": "Ada",
+  "items": [
+    { "product": "Widget", "qty": 2,
+      "components": [ { "name": "Screw", "grams": 5 } ] }
+  ]
+}
+```
+
+The order, its item, and the item's components are all inserted on one transaction, each FK auto-wired to its parent. `PATCH` upserts the same way at every level (update-by-pk, create-without-pk, ownership-scoped so a grandchild pk from another parent is a `404`).
+
+The rule is simple: **a level is written only if its parent's table also declared `.nested(...)`.** One declaration per level, no magic — and no silent drops. (If a table has no `.nested()` for an array key you send, that key is rejected rather than quietly ignored.) Depth is bounded at 16 to stop a cyclic declaration from recursing forever.
+
+<Callout type="info">
+Declaring `.nested()` on a mid-level table (like `OrderItem` above) currently also exposes it as its own `/api/order_item/` resource. If you don't want that, gate it with [permissions](./authentication) for now; a declare-nesting-without-exposing option is on the roadmap.
+</Callout>
+
 ## Scope
 
-One level of nesting (a parent and its direct children). Declare multiple nested arrays by calling `.nested(...)` more than once. The flat create path is unchanged and carries zero overhead when no nested resources are declared.
+Arbitrary depth, one `.nested(...)` declaration per level. Declare multiple sibling arrays on the same table by calling `.nested(...)` more than once. The flat create/update paths are unchanged and carry zero overhead when no nested resources are declared.
 
 ## See also
 
