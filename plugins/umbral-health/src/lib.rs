@@ -220,11 +220,14 @@ async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
             checks.insert("database".to_string(), serde_json::json!({"status": "ok"}));
         }
         Ok(Err(e)) => {
+            // Log the real error server-side, but never put the raw DB error
+            // (which can carry the DSN / host / user) into the unauthenticated
+            // /ready body — a generic reason only (audit_2 plugin-observability #3).
             tracing::warn!(error = %e, "health: database probe failed");
             all_ok = false;
             checks.insert(
                 "database".to_string(),
-                serde_json::json!({"status": "fail", "reason": e.to_string()}),
+                serde_json::json!({"status": "fail", "reason": "unavailable"}),
             );
         }
         Err(_elapsed) => {
