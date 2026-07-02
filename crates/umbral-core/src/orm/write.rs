@@ -412,6 +412,35 @@ impl From<serde_json::Error> for WriteError {
 /// of type text`). Callers resolve the target PK type and pass it here
 /// (`Some(Text)` / `Some(Uuid)` bind as-is; numeric-PK or unresolved
 /// targets coerce the string → BigInt). `None` for every non-FK column.
+/// True when a column stores encrypt-at-rest `Masked<T>` data. The derive
+/// marks such columns with the (forced, non-overridable) `"masked"` widget on a
+/// `Text` column, so this is a reliable signal on the dynamic write path where
+/// the typed `Masked<T>` sealing (serde `Serialize` / sqlx `Encode`) never runs.
+pub fn is_masked_col(col: &crate::migrate::Column) -> bool {
+    col.ty == SqlType::Text && col.widget.as_deref() == Some("masked")
+}
+
+/// Seal a masked column's plaintext before it is bound, so the dynamic REST /
+/// admin write paths (`insert_json`/`update_json`/form-submit) encrypt at rest
+/// — not just the typed `Masked<T>` path (audit_2 core-orm C1). Returns
+/// `Some(ciphertext-json)` to bind when `col` is masked and `value` is a
+/// non-null string; `None` when no sealing applies (bind `value` as-is). A
+/// missing/broken keyring fails the write closed rather than storing plaintext.
+pub fn seal_masked_json(
+    col: &crate::migrate::Column,
+    value: &JsonValue,
+) -> Result<Option<JsonValue>, WriteError> {
+    if !is_masked_col(col) || value.is_null() {
+        return Ok(None);
+    }
+    let plain = coerce_string(value, &col.name)?;
+    let sealed = crate::orm::masked::ambient_seal(&plain).map_err(|e| WriteError::Validator {
+        field: col.name.clone(),
+        message: format!("could not seal masked field: {e}"),
+    })?;
+    Ok(Some(JsonValue::String(sealed)))
+}
+
 pub fn json_to_sea_value(
     sql_type: SqlType,
     value: &JsonValue,

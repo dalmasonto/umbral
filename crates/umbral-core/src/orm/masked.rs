@@ -235,8 +235,10 @@ fn keyring() -> Result<Option<&'static MaskKeyring>, &'static MaskError> {
         .map_err(|e| e)
 }
 
-/// Seal plaintext with the ambient keyring.
-fn ambient_seal(plaintext: &str) -> Result<String, MaskError> {
+/// Seal plaintext with the ambient keyring. `pub(crate)` so the write path
+/// (`orm::write`) can seal a masked column supplied as a raw JSON/form string
+/// on the dynamic REST/admin write paths, not just the typed `Serialize` path.
+pub(crate) fn ambient_seal(plaintext: &str) -> Result<String, MaskError> {
     match keyring() {
         Ok(Some(k)) => Ok(k.seal(plaintext.as_bytes())),
         Ok(None) => Err(MaskError::NoKeyring),

@@ -1719,9 +1719,12 @@ impl<'a> DynQuerySet<'a> {
                     });
                 }
             }
+            // Masked columns: seal the plaintext before binding so the dynamic
+            // write path encrypts at rest too (audit_2 core-orm C1).
+            let sealed = crate::orm::write::seal_masked_json(col, json)?;
             let sea_value = crate::orm::write::json_to_sea_value(
                 col.ty,
-                json,
+                sealed.as_ref().unwrap_or(json),
                 col.nullable,
                 &col.name,
                 fk_target_pk_sql_type(col),
@@ -1922,9 +1925,12 @@ impl<'a> DynQuerySet<'a> {
                     });
                 }
             }
+            // Masked columns: seal the plaintext before binding so the dynamic
+            // write path encrypts at rest too (audit_2 core-orm C1).
+            let sealed = crate::orm::write::seal_masked_json(col, json)?;
             let sea_value = crate::orm::write::json_to_sea_value(
                 col.ty,
-                json,
+                sealed.as_ref().unwrap_or(json),
                 col.nullable,
                 &col.name,
                 fk_target_pk_sql_type(col),
@@ -2596,6 +2602,11 @@ fn form_str_to_sea_value(col: &Column, raw: &str) -> Result<SeaValue, WriteError
         };
     }
     let json = serde_json::Value::String(raw.to_string());
+    // Masked columns: seal the plaintext form value before binding, so the
+    // admin form-submit path encrypts at rest too (audit_2 core-orm C1).
+    if let Some(sealed) = crate::orm::write::seal_masked_json(col, &json)? {
+        return json_to_sea_value(col.ty, &sealed, col.nullable, &col.name, None);
+    }
     json_to_sea_value(col.ty, &json, col.nullable, &col.name, None)
 }
 
@@ -3319,9 +3330,11 @@ fn build_insert_plan(
                 });
             }
         }
+        // Masked columns: seal the plaintext before binding (audit_2 core-orm C1).
+        let sealed = crate::orm::write::seal_masked_json(col, json)?;
         let sea_value = crate::orm::write::json_to_sea_value(
             col.ty,
-            json,
+            sealed.as_ref().unwrap_or(json),
             col.nullable,
             &col.name,
             fk_target_pk_sql_type(col),

@@ -1329,10 +1329,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             FieldKind::Masked | FieldKind::NullableMasked => Some("masked"),
             _ => None,
         };
-        let widget_tokens = match (&field_attr.widget, default_widget) {
-            (Some(s), _) => quote! { ::core::option::Option::Some(#s) },
-            (None, Some(d)) => quote! { ::core::option::Option::Some(#d) },
-            (None, None) => quote! { ::core::option::Option::None },
+        // A `Masked<T>` field ALWAYS carries the `"masked"` widget — it is the
+        // encrypt-at-rest signal the dynamic write path keys off of (audit_2
+        // core-orm C1), so an explicit `#[umbral(widget = ...)]` override must
+        // NOT be able to silently disable sealing. For every other kind the
+        // author's override wins over the type-derived default.
+        let is_masked_kind = matches!(kind, FieldKind::Masked | FieldKind::NullableMasked);
+        let widget_tokens = if is_masked_kind {
+            quote! { ::core::option::Option::Some("masked") }
+        } else {
+            match (&field_attr.widget, default_widget) {
+                (Some(s), _) => quote! { ::core::option::Option::Some(#s) },
+                (None, Some(d)) => quote! { ::core::option::Option::Some(#d) },
+                (None, None) => quote! { ::core::option::Option::None },
+            }
         };
         let backends_tokens = if field_attr.backends.is_empty() {
             quote! { &[] }

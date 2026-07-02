@@ -143,3 +143,41 @@ async fn nullable_masked_column_keeps_none_as_null() {
         .expect("row exists");
     assert!(loaded.recovery_code.is_none());
 }
+
+#[tokio::test]
+async fn dynamic_insert_json_seals_masked_column() {
+    boot().await;
+
+    // The DYNAMIC write path — exactly what REST create and admin form-submit
+    // use — must SEAL a masked column too. A plaintext JSON string handed to
+    // `insert_json` must land as ciphertext, not plaintext (audit_2 core-orm C1).
+    let meta = umbral::migrate::model_meta_for_table("masked_secret").expect("meta");
+    let body = serde_json::json!({ "label": "dyn", "api_key": "plaintext-via-json" });
+    umbral::orm::DynQuerySet::for_meta(&meta)
+        .insert_json(body.as_object().unwrap())
+        .await
+        .expect("insert_json");
+
+    let pool = umbral::db::pool();
+    let raw: String = sqlx::query_scalar("SELECT api_key FROM masked_secret WHERE label = 'dyn'")
+        .fetch_one(&pool)
+        .await
+        .expect("raw select");
+    assert_ne!(
+        raw, "plaintext-via-json",
+        "dynamic insert_json must seal a masked column, not store plaintext"
+    );
+    assert!(
+        !raw.contains("plaintext-via-json"),
+        "plaintext must not appear anywhere in the stored ciphertext"
+    );
+
+    // ...and it is valid ciphertext: the typed load reveals the original.
+    let loaded = Secret::objects()
+        .filter(secret::LABEL.eq("dyn"))
+        .first()
+        .await
+        .expect("query")
+        .expect("row exists");
+    assert_eq!(loaded.api_key.reveal().unwrap(), "plaintext-via-json");
+}
