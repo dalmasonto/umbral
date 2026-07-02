@@ -149,7 +149,7 @@ where
             // We match the literal cookie name "umbral_session" (the canonical
             // name from umbral-sessions::COOKIE_NAME) without importing that crate
             // to avoid a plugin-to-plugin dependency.
-            if request_has_session_cookie(&req) {
+            if request_is_personalised(&req) {
                 return inner.call(req).await;
             }
 
@@ -242,6 +242,14 @@ where
 /// The cookie name `umbral_session` matches `umbral_sessions::COOKIE_NAME`.  We
 /// match the literal string to avoid a crate dependency from umbral-cache on
 /// umbral-sessions.
+/// Return `true` when the request is personalised and must bypass the shared
+/// page cache: it carries a session cookie OR an `Authorization` header (token /
+/// bearer auth). Caching a token-authenticated response and serving it to the
+/// next anonymous/other caller leaks one user's data (audit_2 cache #1 / H26).
+fn request_is_personalised<B>(req: &Request<B>) -> bool {
+    request_has_session_cookie(req) || req.headers().contains_key(header::AUTHORIZATION)
+}
+
 fn request_has_session_cookie<B>(req: &Request<B>) -> bool {
     // Cookie header value is a semicolon-separated list of "name=value" pairs.
     req.headers()
@@ -261,14 +269,15 @@ fn request_has_session_cookie<B>(req: &Request<B>) -> bool {
 fn response_bypasses_cache<B>(resp: &Response<B>) -> bool {
     let headers = resp.headers();
 
-    // Cache-Control: no-store
+    // Cache-Control: no-store / private / no-cache all forbid a SHARED cache
+    // from storing + replaying the response to other users (audit_2 H26).
     if let Some(cc) = headers.get(header::CACHE_CONTROL) {
-        if cc
-            .to_str()
-            .unwrap_or("")
-            .split(',')
-            .any(|d| d.trim().eq_ignore_ascii_case("no-store"))
-        {
+        if cc.to_str().unwrap_or("").split(',').any(|d| {
+            let d = d.trim();
+            d.eq_ignore_ascii_case("no-store")
+                || d.eq_ignore_ascii_case("private")
+                || d.eq_ignore_ascii_case("no-cache")
+        }) {
             return true;
         }
     }
@@ -351,4 +360,45 @@ fn deserialise_cached_response(data: Vec<u8>) -> Result<Response<Body>, ()> {
 
     let body_bytes = Bytes::copy_from_slice(&data[pos..]);
     builder.body(Body::from(body_bytes)).map_err(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authorization_header_makes_request_personalised() {
+        // Token/bearer-authenticated requests carry no session cookie but are
+        // still per-user — they must bypass the shared cache (audit_2 H26).
+        let req = Request::builder()
+            .header(header::AUTHORIZATION, "Bearer abc.def.ghi")
+            .body(Body::empty())
+            .unwrap();
+        assert!(
+            request_is_personalised(&req),
+            "an Authorization-bearing request must bypass the shared page cache"
+        );
+    }
+
+    #[test]
+    fn private_and_no_cache_responses_bypass_cache() {
+        for directive in ["private", "no-cache", "no-store"] {
+            let resp = Response::builder()
+                .header(header::CACHE_CONTROL, directive)
+                .body(Body::empty())
+                .unwrap();
+            assert!(
+                response_bypasses_cache(&resp),
+                "`Cache-Control: {directive}` must not be stored in the shared cache"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_get_is_cacheable() {
+        let req = Request::builder().body(Body::empty()).unwrap();
+        assert!(!request_is_personalised(&req));
+        let resp = Response::builder().body(Body::empty()).unwrap();
+        assert!(!response_bypasses_cache(&resp));
+    }
 }

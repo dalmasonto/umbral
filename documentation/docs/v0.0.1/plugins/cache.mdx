@@ -100,20 +100,19 @@ What gets cached: only `GET` and `HEAD` responses with status 200. The following
 
 - Any method other than GET or HEAD
 - Status other than 200
-- Response carries `Cache-Control: no-store`
+- Response carries `Cache-Control: no-store`, `private`, or `no-cache`
 - Response carries a `Set-Cookie` header (personalised responses)
-- Request carries an `umbral_session` cookie (logged-in / personalised requests are never served from, nor written to, the page cache)
+- Request carries an `umbral_session` cookie **or** an `Authorization` header (logged-in / token-authenticated requests are never served from, nor written to, the page cache)
 
 If the ambient cache was not initialised, misses and stores are silently skipped - the handler fires normally.
 
 <Callout type="warning">
-**`cache_page` is safe only for genuinely anonymous, non-personalised pages.** Its personalisation gate recognises exactly one signal: the `umbral_session` cookie. It does **not** inspect `Authorization` headers, HTTP Basic auth, or any other cookie name, and on the response side it honours only `Cache-Control: no-store` — **not** `private`, `no-cache`, or `max-age=0`. The cache key has no user dimension.
+**`cache_page` is for genuinely anonymous, non-personalised pages.** The personalisation gate bypasses the shared cache when the request carries the `umbral_session` cookie **or** an `Authorization` header, and the response side honours `Cache-Control: no-store`, `private`, and `no-cache`. It does **not** yet recognise HTTP Basic auth, differently-named session cookies, or `max-age=0`, and the cache key has no user dimension.
 
-Consequences you must design around:
+Consequences you must still design around:
 
-- If you authenticate with a **bearer token / `Authorization` header** (JWT, API key) rather than the `umbral_session` cookie, a per-user `200` response wrapped in `cache_page` will be stored and served to other users. Do not wrap authenticated routes.
-- Marking a response `Cache-Control: private` does **not** keep it out of this store. Use `Cache-Control: no-store` (or a `Set-Cookie`) to force a bypass.
-- `cache_page` is not `Vary`-aware. A response whose body depends on `Accept-Language`, `Authorization`, or any other request header will be served across those variants.
+- If you authenticate with something other than the `umbral_session` cookie or a standard `Authorization` header (e.g. a **custom cookie name** or HTTP Basic), a per-user `200` response wrapped in `cache_page` can still be stored and served to other users. Mark such responses `Cache-Control: private`/`no-store` or don't wrap the route.
+- `cache_page` is not `Vary`-aware. A response whose body depends on `Accept-Language` or any other request header will be served across those variants.
 
 Wrap only routes whose output is identical for every visitor.
 </Callout>
