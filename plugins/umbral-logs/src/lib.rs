@@ -110,6 +110,18 @@ fn pending() -> &'static std::sync::Mutex<Vec<JoinHandle<()>>> {
     PENDING.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 
+/// Track a fire-and-forget capture task so the test [`flush`] hook can await
+/// it, WITHOUT leaking memory in production. Production never calls `flush`, so
+/// naively pushing would grow the list one entry per request forever (an OOM
+/// at scale — audit_2 plugin-observability #2). Reap already-finished handles
+/// on each insert so the list stays bounded by in-flight concurrency.
+fn track_handle(handle: JoinHandle<()>) {
+    if let Ok(mut guard) = pending().lock() {
+        guard.retain(|h| !h.is_finished());
+        guard.push(handle);
+    }
+}
+
 /// Test hook: await every capture task spawned so far, so a test can assert
 /// the `RequestLog` row exists immediately after the request. Drains the
 /// in-flight handle list.
@@ -414,11 +426,9 @@ pub async fn capture_layer(
             warn!(error = ?e, "logs: failed to record request (swallowed)");
         }
     });
-    // Track the handle so the test `flush()` hook can await it. Cheap in
-    // production (one push per logged request); `flush` is never called there.
-    if let Ok(mut guard) = pending().lock() {
-        guard.push(handle);
-    }
+    // Track the handle so the test `flush()` hook can await it — reaping
+    // finished tasks so the list can't grow unbounded in production.
+    track_handle(handle);
 
     response
 }
@@ -469,6 +479,26 @@ pub fn admin_model() -> AdminModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn track_handle_reaps_finished_tasks_and_stays_bounded() {
+        // Regression for the unbounded-`PENDING` OOM (audit_2 obs #2): tracking
+        // many already-finished capture tasks must NOT accumulate — each insert
+        // reaps completed handles, so the list is bounded by in-flight work.
+        pending().lock().unwrap().clear();
+        for _ in 0..50 {
+            let h = tokio::spawn(async {});
+            while !h.is_finished() {
+                tokio::task::yield_now().await;
+            }
+            track_handle(h);
+        }
+        let len = pending().lock().unwrap().len();
+        assert!(
+            len <= 2,
+            "PENDING must stay bounded as finished tasks are reaped, got {len}"
+        );
+    }
 
     #[test]
     fn sampler_full_rate_keeps_all() {
