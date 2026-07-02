@@ -37,11 +37,13 @@
 //! snapshot only when an `*_update` subscriber exists, so they cost
 //! nothing when nobody listens.
 //!
-//! **Bulk methods do NOT fire signals.** `Manager::create`,
+//! **Bulk methods fire BULK signals, not per-row signals.**
 //! `Manager::bulk_create`, `QuerySet::update_values`, and
-//! `QuerySet::delete` are signal-free for performance reasons.
-//! See the doc callout in the
-//! user-facing docs at `documentation/docs/v0.0.1/plugins/signals.mdx`.
+//! `QuerySet::delete` emit `bulk_post_save:<table>` / `bulk_post_delete:<table>`
+//! (payload carries the affected `ids`), NOT the per-row `post_save`/
+//! `post_delete`. M2M relation changes emit `m2m_changed:<junction_table>`.
+//! Subscribe to those names if you need bulk/M2M visibility. See the doc
+//! callout in `documentation/docs/v0.0.1/plugins/signals.mdx`.
 //!
 //! ## Signal name format
 //!
