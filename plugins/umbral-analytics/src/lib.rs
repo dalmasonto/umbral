@@ -115,6 +115,11 @@ pub fn http_client() -> reqwest::Client {
 pub struct AnalyticsClient {
     api_key: String,
     host: String,
+    /// Request-path prefixes NOT to auto-capture as `$pageview` (audit_2
+    /// plugin-observability #4). Paths under these prefixes carry secrets/PII
+    /// (`/reset-password/<token>`, `/users/<email>/…`) that must not leave the
+    /// trust boundary for a third-party analytics host.
+    exclude_prefixes: Vec<String>,
 }
 
 impl AnalyticsClient {
@@ -123,7 +128,21 @@ impl AnalyticsClient {
         Self {
             api_key: api_key.into(),
             host: host.into(),
+            exclude_prefixes: Vec::new(),
         }
+    }
+
+    /// Set the pageview-exclusion prefixes (see [`Self::exclude_prefixes`]).
+    pub fn with_exclude_prefixes(mut self, prefixes: Vec<String>) -> Self {
+        self.exclude_prefixes = prefixes;
+        self
+    }
+
+    /// Whether an auto-`$pageview` should be captured for `path`. `false` when
+    /// the path starts with any configured exclusion prefix, so sensitive
+    /// routes never ship their path to the analytics host.
+    pub fn should_capture_path(&self, path: &str) -> bool {
+        !self.exclude_prefixes.iter().any(|p| path.starts_with(p.as_str()))
     }
 
     /// Build the PostHog `/capture/` JSON payload.
@@ -243,13 +262,17 @@ async fn pageview_middleware(
     // code is available, but spawn the HTTP call so we never block the
     // response stream returning to the client.
     if let Some(client) = ambient_client() {
-        let props = json!({
-            "path": path,
-            "method": method,
-            "status": status,
-            "$current_url": path,
-        });
-        client.capture_fire_and_forget("anonymous", "$pageview", props);
+        // Don't ship the path of a sensitive route (reset tokens, per-user
+        // paths) to the third-party analytics host (audit_2 #4).
+        if client.should_capture_path(&path) {
+            let props = json!({
+                "path": path,
+                "method": method,
+                "status": status,
+                "$current_url": path,
+            });
+            client.capture_fire_and_forget("anonymous", "$pageview", props);
+        }
     }
 
     response
@@ -290,6 +313,8 @@ pub struct AnalyticsPlugin {
     host: String,
     /// When true, mount the [`pageview_middleware`] in `wrap_router`.
     auto_capture_requests: bool,
+    /// Request-path prefixes excluded from auto pageview capture (#4).
+    exclude_prefixes: Vec<String>,
 }
 
 impl AnalyticsPlugin {
@@ -303,6 +328,7 @@ impl AnalyticsPlugin {
             api_key: Some(api_key.into()),
             host: DEFAULT_POSTHOG_HOST.to_string(),
             auto_capture_requests: false,
+            exclude_prefixes: Vec::new(),
         }
     }
 
@@ -327,6 +353,16 @@ impl AnalyticsPlugin {
     /// changes. Default OFF.
     pub fn capture_requests(mut self) -> Self {
         self.auto_capture_requests = true;
+        self
+    }
+
+    /// Exclude a request-path prefix from auto `$pageview` capture so its path
+    /// never ships to the analytics host (audit_2 plugin-observability #4).
+    /// Add every route whose path can carry a secret or PII — password-reset
+    /// and email-verification links, per-user resource paths, signed URLs, etc.
+    /// Call more than once to exclude several prefixes.
+    pub fn exclude_path_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.exclude_prefixes.push(prefix.into());
         self
     }
 
@@ -396,6 +432,7 @@ impl Default for AnalyticsPlugin {
             api_key: None,
             host: DEFAULT_POSTHOG_HOST.to_string(),
             auto_capture_requests: false,
+            exclude_prefixes: Vec::new(),
         }
     }
 }
@@ -409,7 +446,8 @@ impl Plugin for AnalyticsPlugin {
         match self.resolve_api_key() {
             Some(key) => {
                 let host = self.resolve_host();
-                let client = AnalyticsClient::new(key, host.clone());
+                let client = AnalyticsClient::new(key, host.clone())
+                    .with_exclude_prefixes(self.exclude_prefixes.clone());
                 if AMBIENT_CLIENT.set(client).is_err() {
                     warn!(
                         "AnalyticsPlugin: an ambient analytics client was already installed; \
@@ -436,5 +474,27 @@ impl Plugin for AnalyticsPlugin {
         } else {
             router
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AnalyticsClient;
+
+    #[test]
+    fn excluded_prefixes_are_not_captured() {
+        let client = AnalyticsClient::new("k", "https://h").with_exclude_prefixes(vec![
+            "/reset-password".to_string(),
+            "/verify".to_string(),
+        ]);
+        // Sensitive paths (incl. a token segment) are excluded.
+        assert!(!client.should_capture_path("/reset-password/abc123token"));
+        assert!(!client.should_capture_path("/verify/xyz"));
+        // Ordinary paths are still captured.
+        assert!(client.should_capture_path("/"));
+        assert!(client.should_capture_path("/pricing"));
+        // With no exclusions everything is captured.
+        let open = AnalyticsClient::new("k", "https://h");
+        assert!(open.should_capture_path("/reset-password/abc"));
     }
 }
