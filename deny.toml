@@ -1,0 +1,57 @@
+# cargo-deny configuration — the supply-chain gate (audit_2 supply-chain SC-2).
+#
+# Run locally / in CI:
+#   cargo install cargo-deny        # one-time
+#   cargo deny check                # advisories + bans + licenses + sources
+#   cargo deny check --features s3 advisories   # gate the S3/rustls path (SC-1)
+#
+# This is a STARTING policy — tune `advisories.ignore` and `licenses.allow`
+# as the tree evolves. The security-relevant gates are [advisories] (RUSTSEC)
+# and [bans] (duplicate-version / wildcard awareness).
+
+[advisories]
+# Use the current RUSTSEC advisory DB. Unmaintained + vulnerable crates fail
+# by default in cargo-deny v2; yanked crates are denied here explicitly.
+version = 2
+yanked = "deny"
+# Add triaged RUSTSEC IDs here (with a comment + link) once reviewed. Empty =
+# every open advisory is release-blocking, which is the intent.
+ignore = []
+
+[bans]
+# SC-4: several major versions are duplicated in the tree today (bitflags 1+2,
+# mio 0.8+1, rand 0.8+0.9, getrandom 0.2+0.3+0.4, ...), mostly dragged in by
+# `notify 6` (SC-5) and `rust-s3` (SC-1). Warn (not deny) until those land, so
+# the gate is adoptable now; flip to "deny" once the duplicates are collapsed.
+multiple-versions = "warn"
+wildcards = "warn"
+# Nudge toward the maintained TLS stack: `rustls 0.21` is EOL (SC-1). Uncomment
+# to make the EOL line release-blocking once the S3 backend is migrated.
+# deny = [{ name = "rustls", version = "=0.21" }]
+
+[licenses]
+version = 2
+# Permissive OSI licenses that cover essentially the entire Rust ecosystem the
+# workspace pulls in. Extend this list if `cargo deny check licenses` flags a
+# crate under a license you accept.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "OpenSSL",
+]
+confidence-threshold = 0.8
+
+[sources]
+# Only crates.io and no ad-hoc git dependencies (the workspace uses neither).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
