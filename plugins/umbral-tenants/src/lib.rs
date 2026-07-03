@@ -168,6 +168,13 @@ pub enum MissingTenant {
 /// context), plus the usual cross-tenant built-ins.
 const DEFAULT_SHARED_APPS: &[&str] = &["app", "tenants", "auth", "sessions", "permissions"];
 
+/// Alias-prefix returned in database-per-tenant mode when a tenant's pool is
+/// **not** registered. It is deliberately never a real alias, so the query
+/// terminal aborts (fails closed) instead of silently borrowing the *default*
+/// database and commingling un-onboarded tenants there (TEN-2). The tenant key
+/// is appended so the panic/error names the offending tenant for the operator.
+const UNROUTED_TENANT_PREFIX: &str = "__umbral_unrouted_tenant__";
+
 /// Resolve the SHARED app-label set from the plugin's config. When `tenant_apps`
 /// is set (the recommended safe-by-default mode), the shared set is **every
 /// registered plugin EXCEPT the tenant apps** — so built-ins and external
@@ -216,6 +223,13 @@ pub struct TenantsPlugin {
     subdomain_base: Option<String>,
     /// If set, this request header (case-insensitive) carries an explicit
     /// tenant key. An explicit header **wins** over the subdomain.
+    ///
+    /// **Off by default** (opt-in via [`Self::tenant_header`]). A client-set
+    /// header is untrusted input: with shared auth/sessions there is no
+    /// binding between the caller's principal and the tenant it names, so an
+    /// enabled header lets any authenticated user select any tenant (TEN-1).
+    /// Enable it only behind a trusted proxy that strips/sets it, never on a
+    /// subdomain-isolated deployment.
     tenant_header: Option<String>,
     /// What to do when no active tenant matches. Default:
     /// [`MissingTenant::FallThroughToPublic`].
@@ -232,15 +246,20 @@ impl Default for TenantsPlugin {
 }
 
 impl TenantsPlugin {
-    /// A new plugin with sensible defaults: the [`DEFAULT_SHARED_APPS`] set, the
-    /// `X-Tenant` header as the explicit resolution key, no subdomain base, and
-    /// [`MissingTenant::FallThroughToPublic`].
+    /// A new plugin with safe defaults: the [`DEFAULT_SHARED_APPS`] set, **no**
+    /// header-based tenant resolution (opt in with [`Self::tenant_header`]), no
+    /// subdomain base, and [`MissingTenant::FallThroughToPublic`].
+    ///
+    /// Header resolution is off by default on purpose (TEN-1): a client-supplied
+    /// `X-Tenant` is untrusted and, with shared sessions, lets any authenticated
+    /// user read/write any tenant. Turn it on only behind a trusted proxy that
+    /// controls the header; prefer [`Self::subdomain_base`] otherwise.
     pub fn new() -> Self {
         Self {
             shared_apps: DEFAULT_SHARED_APPS.iter().map(|s| s.to_string()).collect(),
             tenant_apps: None,
             subdomain_base: None,
-            tenant_header: Some("X-Tenant".to_string()),
+            tenant_header: None,
             on_missing: MissingTenant::default(),
             strategy: TenantStrategy::default(),
         }
@@ -322,10 +341,22 @@ impl TenantsPlugin {
         self
     }
 
-    /// Use `header` as the explicit tenant-key request header (wins over the
-    /// subdomain). Defaults to `X-Tenant`.
+    /// Opt into an explicit tenant-key request header (wins over the subdomain).
+    /// **Off by default** — a client-set header is untrusted (see TEN-1 / the
+    /// [`tenant_header`](Self#structfield.tenant_header) note). Enable it ONLY
+    /// when a trusted reverse proxy sets/strips this header; on a
+    /// subdomain-isolated deployment leave it off so a caller can't override the
+    /// proxy-pinned subdomain by sending the header.
     pub fn tenant_header(mut self, header: impl Into<String>) -> Self {
         self.tenant_header = Some(header.into());
+        self
+    }
+
+    /// Explicitly disable header-based tenant resolution (the default). Use it
+    /// to turn the header back off after an earlier [`Self::tenant_header`] call,
+    /// or to document intent at the call site on a subdomain-only deployment.
+    pub fn no_tenant_header(mut self) -> Self {
+        self.tenant_header = None;
         self
     }
 
@@ -488,8 +519,8 @@ impl TenantsPlugin {
 /// - a tenant-owned table under a tenant ctx whose **alias is registered** →
 ///   the tenant's pool alias (its `schema_name`),
 /// - a tenant-owned table under a tenant ctx whose alias is **not yet
-///   onboarded** → the default alias (the not-yet-registered fallback — avoids
-///   a panic resolving an unknown pool).
+///   onboarded** → an unroutable sentinel alias, so the query FAILS CLOSED
+///   rather than silently borrowing the default database (TEN-2).
 ///   `schema_for_table` returns `None` (separate databases need no schema
 ///   qualification).
 #[derive(Debug, Clone)]
@@ -565,12 +596,20 @@ impl TenantRouter {
         }
         match ctx.tenant() {
             // Route to the tenant's pool — but only once its database has been
-            // onboarded (register_tenant_database). An un-onboarded tenant
-            // falls back to default rather than panicking on an unknown alias.
+            // onboarded (register_tenant_database).
             Some(key) if umbral::db::pool_alias_registered(key.as_str()) => {
                 Alias::new(key.as_str())
             }
-            _ => default(),
+            // A tenant IS active in the registry (so the middleware scoped a ctx
+            // for it) but its pool was never registered — a provisioning gap or a
+            // restart that lost the runtime pool registry. FAIL CLOSED: route to
+            // an unroutable sentinel so the query aborts, never to `default()`,
+            // which would silently commingle this tenant's rows in the shared DB
+            // (TEN-2). Returning `default()` here trades a loud failure for a
+            // silent isolation break — exactly backwards.
+            Some(key) => Alias::new(format!("{UNROUTED_TENANT_PREFIX}:{}", key.as_str())),
+            // No tenant context at all (bare-domain / background work) → default.
+            None => default(),
         }
     }
 }
@@ -710,7 +749,9 @@ async fn tenant_resolution_middleware(
     );
 
     let Some(key) = key else {
-        // No key in the request at all → public path (or 404 by policy).
+        // No tenant key in the request at all — this is the genuine bare-domain
+        // / marketing path, so it honors the missing-tenant policy (public by
+        // default). A *present* key is handled below and fails closed.
         return apply_missing(cfg.on_missing, next, req).await;
     };
 
@@ -725,13 +766,32 @@ async fn tenant_resolution_middleware(
             let ctx = RouteContext::new().with_tenant(TenantKey::new(t.schema_name));
             umbral::db::route_context_scope(ctx, next.run(req)).await
         }
-        // Not found / inactive → missing-tenant policy.
-        Ok(None) => apply_missing(cfg.on_missing, next, req).await,
+        // A tenant key WAS supplied but matches no active tenant. FAIL CLOSED
+        // with 404 regardless of `on_missing` (TEN-3): a present-but-bogus key
+        // signals tenant intent, so serving it under `public` would silently run
+        // one tenant's request against the shared/public context. `on_missing`
+        // still governs only the no-key bare-domain path above.
+        Ok(None) => reject_unknown_tenant(),
+        // Lookup error → fail closed too (never fall through to public on an
+        // error), with a generic body so no DB detail leaks. Detail is logged.
         Err(e) => {
             tracing::error!(key = %key, "umbral-tenants: tenant lookup failed: {e}");
-            apply_missing(cfg.on_missing, next, req).await
+            use axum::response::IntoResponse;
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "tenant resolution failed",
+            )
+                .into_response()
         }
     }
+}
+
+/// Fail-closed response for a request that named a tenant which doesn't resolve
+/// to an active one (TEN-3). A present tenant key is never served under the
+/// `public` context.
+fn reject_unknown_tenant() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (axum::http::StatusCode::NOT_FOUND, "tenant not found").into_response()
 }
 
 async fn apply_missing(
@@ -962,6 +1022,47 @@ mod tests {
         assert!(plugin.shared_app_set().contains("tenants"));
     }
 
+    #[test]
+    fn new_disables_tenant_header_by_default() {
+        // TEN-1 partial: header-based tenant selection is untrusted, so it is
+        // OFF by default. A default deployment must not honor `X-Tenant`.
+        assert!(
+            TenantsPlugin::new().tenant_header.is_none(),
+            "the X-Tenant header must be opt-in, not on by default"
+        );
+    }
+
+    #[test]
+    fn tenant_header_opts_in_and_no_tenant_header_disables() {
+        let on = TenantsPlugin::new().tenant_header("X-Tenant");
+        assert_eq!(on.tenant_header.as_deref(), Some("X-Tenant"));
+        let off = on.no_tenant_header();
+        assert!(off.tenant_header.is_none());
+    }
+
+    #[test]
+    fn header_is_ignored_when_resolution_is_disabled() {
+        // With header resolution off (None), a client-set X-Tenant is ignored
+        // and only the subdomain (if configured) can select a tenant.
+        let mut h = HeaderMap::new();
+        h.insert("x-tenant", "victim".parse().unwrap());
+        h.insert(http::header::HOST, "acme.example.com".parse().unwrap());
+        // No header configured → the header is NOT trusted; subdomain wins.
+        assert_eq!(
+            resolve_tenant_key(&h, None, Some("example.com")).as_deref(),
+            Some("acme"),
+        );
+        // No header AND no subdomain base → no tenant at all.
+        assert!(resolve_tenant_key(&h, None, None).is_none());
+    }
+
+    #[test]
+    fn reject_unknown_tenant_is_404() {
+        // TEN-3: a present-but-unresolved tenant key fails closed with 404.
+        let resp = reject_unknown_tenant();
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
     // -- Database-mode (TenantStrategy::Database) router tests ----------------
 
     fn meta_for_table(table: &str) -> ModelMeta {
@@ -1005,13 +1106,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn db_mode_falls_back_to_default_when_alias_not_registered() {
+    async fn db_mode_fails_closed_when_alias_not_registered() {
+        // TEN-2: a tenant ctx whose pool was never registered must NOT fall back
+        // to the default database (which would commingle un-onboarded tenants).
+        // It routes to an unroutable sentinel so the terminal aborts.
         let router = TenantRouter::with_strategy(shared_set(&["tenant"]), TenantStrategy::Database);
-        // Alias that was never registered → not-yet-onboarded fallback.
         let ctx = RouteContext::new().with_tenant(TenantKey::new("never_onboarded_xyz"));
         let post = meta_for_table("post");
-        assert_eq!(router.db_for_write(&post, &ctx).as_str(), "default");
-        assert_eq!(router.db_for_read(&post, &ctx).as_str(), "default");
+        for alias in [
+            router.db_for_write(&post, &ctx),
+            router.db_for_read(&post, &ctx),
+        ] {
+            assert_ne!(
+                alias.as_str(),
+                "default",
+                "un-onboarded tenant must never fall back to the default DB"
+            );
+            assert!(
+                alias.as_str().starts_with(UNROUTED_TENANT_PREFIX),
+                "expected an unroutable sentinel alias, got {}",
+                alias.as_str()
+            );
+            // The sentinel names the tenant for the operator, and is never a
+            // registered pool (so the terminal fails closed).
+            assert!(alias.as_str().contains("never_onboarded_xyz"));
+            assert!(!umbral::db::pool_alias_registered(alias.as_str()));
+        }
     }
 
     #[tokio::test]

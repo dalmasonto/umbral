@@ -209,12 +209,12 @@ On the callback, the resolved identity is matched in order:
 <Steps>
 <Step title="Already linked">If a `SocialAccount` exists for `(provider, provider_uid)`, refresh its tokens and log in as its user. (In connect mode, this is refused if the identity belongs to a *different* user.)</Step>
 <Step title="Connect mode">If a logged-in user started a connect flow, attach the identity to them.</Step>
-<Step title="Verified-email link">If the provider asserts a **verified** email matching an existing user, link to that user. Only when verified; an unverified address can't capture an account.</Step>
+<Step title="Verified-email link">If a **trusted** provider asserts a **verified** email matching an existing user, link to that user. Two gates: the email must be verified *and* the provider must be trusted to assert verification. An unverified address — or a verified one from an untrusted provider — can't capture an account.</Step>
 <Step title="Auto-create">Otherwise mint a new `AuthUser` (unique username; the password is unusable until they set one).</Step>
 </Steps>
 
 <Callout type="warning">
-Email-based auto-linking happens **only** for provider-verified emails. This prevents account takeover: an attacker can't pre-register an unverified address to capture a future real signup.
+Email-based auto-linking happens **only** for a provider-verified email from a provider you trust. This prevents account takeover: an attacker can't pre-register an unverified address to capture a future real signup, and a custom provider that lies about `email_verified` can't seize a matching account. Built-in **Google** and **GitHub** are trusted (they verify email ownership). A custom provider is **untrusted by default** — its logins auto-create a separate account instead of linking. Opt in by overriding `fn trusts_verified_email(&self) -> bool { true }` only when you trust the provider to assert ownership honestly.
 </Callout>
 
 ## The `SocialAccount` model
@@ -266,7 +266,7 @@ impl OAuthProvider for GitLabProvider {
 }
 ```
 
-`Identity { uid, email, email_verified, display_name }` is what the policy consumes; set `email_verified` honestly, since it gates auto-linking.
+`Identity { uid, email, email_verified, display_name }` is what the policy consumes; set `email_verified` honestly, since it gates auto-linking. A custom provider is **untrusted for verified-email linking by default** (safe by default): even a `email_verified: true` identity won't link to an existing account until you opt in with a fourth method, `fn trusts_verified_email(&self) -> bool { true }`. Add it only when your provider genuinely verifies email ownership.
 
 ## How the flow is hardened
 

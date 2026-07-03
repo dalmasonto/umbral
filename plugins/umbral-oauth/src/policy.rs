@@ -9,10 +9,14 @@
 //!    would let a logged-in attacker hijack someone's identity row).
 //! 2. **Connect mode** — a logged-in user is attaching this provider:
 //!    link the new identity to them.
-//! 3. **Verified-email link** — the provider asserts a *verified* email
-//!    matching an existing `AuthUser`: link to that user. Only when
-//!    verified, so an attacker can't pre-register an unverified address
-//!    to capture a future real signup.
+//! 3. **Verified-email link** — a *trusted* provider asserts a *verified*
+//!    email matching an existing `AuthUser`: link to that user. Two gates:
+//!    the email must be verified (so an attacker can't pre-register an
+//!    unverified address to capture a future real signup) AND the provider
+//!    must be trusted to assert verification
+//!    ([`OAuthProvider::trusts_verified_email`](crate::provider::OAuthProvider::trusts_verified_email)) —
+//!    a custom/third-party provider is untrusted by default, so its verified
+//!    claim can't take over an existing account (OAU-2).
 //! 4. **Auto-create** — otherwise mint a fresh `AuthUser` (unique
 //!    username; a verified email becomes the user's email, an unverified
 //!    one is kept only on the social account behind a no-reply
@@ -35,12 +39,24 @@ fn db_err(e: impl std::fmt::Display) -> OAuthError {
 /// as, persisting / refreshing the `SocialAccount`. `connect_user` is
 /// `Some(id)` when a logged-in user is connecting a provider (vs. a
 /// social login). Returns the resolved `AuthUser` id.
+///
+/// `provider_trusts_verified_email` is the provider's
+/// [`OAuthProvider::trusts_verified_email`](crate::provider::OAuthProvider::trusts_verified_email)
+/// verdict: only when it is `true` does a provider-asserted verified email
+/// participate in rule 3's auto-link (and become the new account's email in rule
+/// 4). An untrusted provider's `email_verified` claim is ignored — its logins
+/// always auto-create a fresh, isolated user (OAU-2).
 pub async fn resolve_user(
     provider_key: &str,
     identity: &Identity,
     tokens: &TokenSet,
     connect_user: Option<i64>,
+    provider_trusts_verified_email: bool,
 ) -> Result<i64, OAuthError> {
+    // A verified email is only trustworthy if the provider itself is trusted to
+    // assert it. An untrusted provider's `email_verified` is treated as false
+    // throughout the policy, so it can neither link to nor seed an account.
+    let trusted_verified_email = provider_trusts_verified_email && identity.email_verified;
     // 1. Already linked?
     let existing = SocialAccount::objects()
         .filter(social_account::PROVIDER.eq(provider_key))
@@ -68,10 +84,9 @@ pub async fn resolve_user(
         return Ok(cu);
     }
 
-    // 3. Verified-email link to an existing user.
-    if identity.email_verified
-        && let Some(email) = identity.email.as_deref()
-    {
+    // 3. Verified-email link to an existing user — only when the provider is
+    //    trusted to assert verification (OAU-2).
+    if trusted_verified_email && let Some(email) = identity.email.as_deref() {
         let matched = AuthUser::objects()
             .filter(auth_user::EMAIL.eq(email))
             .first()
@@ -83,8 +98,9 @@ pub async fn resolve_user(
         }
     }
 
-    // 4. Auto-create a new user.
-    let user_id = create_auth_user(provider_key, identity).await?;
+    // 4. Auto-create a new user. Only a trusted-verified email seeds the new
+    //    account's email; otherwise it gets a no-reply placeholder (OAU-2).
+    let user_id = create_auth_user(provider_key, identity, trusted_verified_email).await?;
     create_social_account(user_id, provider_key, identity, tokens).await?;
     Ok(user_id)
 }
@@ -176,14 +192,18 @@ fn sanitize_username(raw: &str) -> String {
 /// attempt the INSERT and catch `WriteError::UniqueViolation` on the
 /// `username` column, then retry with the next numeric suffix. Up to
 /// `MAX_USERNAME_RETRIES` attempts are made before giving up.
-async fn create_auth_user(provider_key: &str, identity: &Identity) -> Result<i64, OAuthError> {
-    // A verified email is safe to use as the account's unique email (rule
-    // 3 already proved no existing user holds it). An unverified or
-    // missing email gets a unique no-reply placeholder so it can neither
-    // collide nor be trusted; the raw value still lives on the social
+async fn create_auth_user(
+    provider_key: &str,
+    identity: &Identity,
+    trusted_verified_email: bool,
+) -> Result<i64, OAuthError> {
+    // A trusted-verified email is safe to use as the account's unique email
+    // (rule 3 already proved no existing user holds it). An unverified, missing,
+    // or untrusted-provider email gets a unique no-reply placeholder so it can
+    // neither collide nor be trusted; the raw value still lives on the social
     // account's `provider_email`.
     let placeholder = format!("{provider_key}_{}@users.noreply.umbral", identity.uid);
-    let email = if identity.email_verified {
+    let email = if trusted_verified_email {
         identity.email.clone().unwrap_or(placeholder)
     } else {
         placeholder
@@ -193,7 +213,7 @@ async fn create_auth_user(provider_key: &str, identity: &Identity) -> Result<i64
         &identity
             .email
             .as_deref()
-            .filter(|_| identity.email_verified)
+            .filter(|_| trusted_verified_email)
             .and_then(|e| e.split('@').next())
             .map(str::to_string)
             .or_else(|| identity.display_name.clone())
@@ -295,7 +315,8 @@ mod tests {
                     is_staff BOOLEAN NOT NULL DEFAULT 0,
                     is_superuser BOOLEAN NOT NULL DEFAULT 0,
                     date_joined TEXT NOT NULL,
-                    last_login TEXT
+                    last_login TEXT,
+                    email_verified_at TEXT
                 )",
             )
             .execute(&pool)
@@ -349,7 +370,10 @@ mod tests {
     async fn social_login_auto_creates_user_and_links_account() {
         boot().await;
         let id = identity("google-uid-A", Some("newperson@example.com"), true);
-        let user_id = resolve_user("google", &id, &tokens(), None).await.unwrap();
+        // Google is a trusted provider (trusts_verified_email = true).
+        let user_id = resolve_user("google", &id, &tokens(), None, true)
+            .await
+            .unwrap();
 
         let user = AuthUser::objects()
             .filter(auth_user::ID.eq(user_id))
@@ -382,7 +406,9 @@ mod tests {
         boot().await;
         let existing = seed_user("ada", "ada@verified.com").await;
         let id = identity("github-uid-B", Some("ada@verified.com"), true);
-        let resolved = resolve_user("github", &id, &tokens(), None).await.unwrap();
+        let resolved = resolve_user("github", &id, &tokens(), None, true)
+            .await
+            .unwrap();
         assert_eq!(
             resolved, existing,
             "linked to the existing user, not a new one"
@@ -396,11 +422,43 @@ mod tests {
         boot().await;
         let existing = seed_user("grace", "grace@verified.com").await;
         let id = identity("github-uid-C", Some("grace@verified.com"), false);
-        let resolved = resolve_user("github", &id, &tokens(), None).await.unwrap();
+        // Trusted provider, but the identity's email is UNVERIFIED → no link.
+        let resolved = resolve_user("github", &id, &tokens(), None, true)
+            .await
+            .unwrap();
         assert_ne!(
             resolved, existing,
             "unverified email must not hijack the account"
         );
+    }
+
+    // OAU-2: an UNTRUSTED provider (trusts_verified_email = false) asserting a
+    // verified email that matches an existing user must NOT link to that user,
+    // even though the email is "verified" — it auto-creates a separate, isolated
+    // account instead, and does not seize the existing user's email.
+    #[tokio::test]
+    async fn untrusted_provider_verified_email_does_not_link() {
+        boot().await;
+        let victim = seed_user("victim", "victim@corp.example.com").await;
+        let id = identity("custom-uid-Z", Some("victim@corp.example.com"), true);
+        // provider_trusts_verified_email = false → the verified claim is ignored.
+        let resolved = resolve_user("customidp", &id, &tokens(), None, false)
+            .await
+            .unwrap();
+        assert_ne!(
+            resolved, victim,
+            "an untrusted provider's verified email must not take over the account"
+        );
+        // The auto-created account did NOT claim the victim's email — it got a
+        // no-reply placeholder, so it can't be trusted or collide.
+        let created = AuthUser::objects()
+            .filter(auth_user::ID.eq(resolved))
+            .first()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(created.email, "victim@corp.example.com");
+        assert!(created.email.ends_with("@users.noreply.umbral"));
     }
 
     // Rule 2: connect mode attaches the provider to the logged-in user.
@@ -409,7 +467,7 @@ mod tests {
         boot().await;
         let me = seed_user("connector", "connector@example.com").await;
         let id = identity("google-uid-D", Some("other@example.com"), true);
-        let resolved = resolve_user("google", &id, &tokens(), Some(me))
+        let resolved = resolve_user("google", &id, &tokens(), Some(me), true)
             .await
             .unwrap();
         assert_eq!(resolved, me);
@@ -432,6 +490,7 @@ mod tests {
             &identity("google-uid-E", Some("repeat@example.com"), true),
             &tokens(),
             None,
+            true,
         )
         .await
         .unwrap();
@@ -443,6 +502,7 @@ mod tests {
             &identity("google-uid-E", Some("repeat@example.com"), true),
             &newer,
             None,
+            true,
         )
         .await
         .unwrap();
@@ -482,7 +542,7 @@ mod tests {
             Some("alice@provider.example.com"),
             true,
         );
-        let user_id = create_auth_user("google", &id).await.unwrap();
+        let user_id = create_auth_user("google", &id, true).await.unwrap();
 
         let user = AuthUser::objects()
             .filter(auth_user::ID.eq(user_id))
@@ -497,7 +557,7 @@ mod tests {
 
         // A third signup with the same base also resolves cleanly (alice1 taken → alice2).
         let id2 = identity("google-uid-retry-02", Some("alice@other.example.com"), true);
-        let user_id2 = create_auth_user("google", &id2).await.unwrap();
+        let user_id2 = create_auth_user("google", &id2, true).await.unwrap();
 
         let user2 = AuthUser::objects()
             .filter(auth_user::ID.eq(user_id2))
@@ -521,6 +581,7 @@ mod tests {
             &identity("github-uid-F", Some("owner@example.com"), true),
             &tokens(),
             None,
+            true,
         )
         .await
         .unwrap();
@@ -531,6 +592,7 @@ mod tests {
             &identity("github-uid-F", Some("owner@example.com"), true),
             &tokens(),
             Some(attacker),
+            true,
         )
         .await;
         assert!(result.is_err(), "cannot connect someone else's identity");

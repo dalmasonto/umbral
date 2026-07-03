@@ -24,6 +24,7 @@ use umbral_sessions::{
 use crate::OAuthPlugin;
 use crate::models::{SocialAccount, social_account};
 use crate::policy::resolve_user;
+use crate::provider::OAuthError;
 
 const FLOW_KEY: &str = "oauth_flow";
 
@@ -126,6 +127,32 @@ fn validate_next(
         Some(_) => Err(Box::new(
             (StatusCode::BAD_REQUEST, "next is not an allowed return URL").into_response(),
         )),
+    }
+}
+
+/// Map a `resolve_user` failure to a **client-safe** `(status, message)`.
+///
+/// The message is always a fixed string — it NEVER includes the error's own
+/// text. An `OAuthError::Database` renders the raw DB error (table / column /
+/// constraint names) via `Display`; echoing that into the response body leaks
+/// internal schema detail to any client that can trigger the failure (OAU-1).
+/// So a database (or otherwise internal) failure returns a generic 500, and the
+/// only client-facing case is the genuine link conflict, which already carries a
+/// fixed, non-sensitive message. The caller logs the full detail server-side.
+fn resolve_user_client_error(e: &OAuthError) -> (StatusCode, &'static str) {
+    match e {
+        // A genuine account-link conflict (e.g. the identity is already linked
+        // to a different user). The message is a fixed, safe string.
+        OAuthError::Provider(_) => (
+            StatusCode::CONFLICT,
+            "this account is already linked to a different user",
+        ),
+        // Anything else — notably `Database` — is an internal fault. Return a
+        // generic server error; the detail stays in the logs.
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Something went wrong completing sign-in. Please try again later.",
+        ),
     }
 }
 
@@ -263,11 +290,21 @@ async fn oauth_callback(
     };
 
     // Apply the create-or-link policy.
-    let user_id = match resolve_user(&provider, &identity, &tokens, flow.connect_user).await {
+    let user_id = match resolve_user(
+        &provider,
+        &identity,
+        &tokens,
+        flow.connect_user,
+        p.trusts_verified_email(),
+    )
+    .await
+    {
         Ok(id) => id,
         Err(e) => {
+            // Log the full detail server-side; never echo it to the client.
             tracing::warn!("oauth: resolve_user failed for `{provider}`: {e}");
-            return (StatusCode::CONFLICT, e.to_string()).into_response();
+            let (status, msg) = resolve_user_client_error(&e);
+            return (status, msg).into_response();
         }
     };
 
@@ -362,7 +399,32 @@ fn ct_eq(a: &str, b: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::ct_eq;
+    use super::{OAuthError, StatusCode, ct_eq, resolve_user_client_error};
+
+    #[test]
+    fn database_error_never_leaks_detail_to_client() {
+        // OAU-1: a DB error's raw text (constraint / table / column detail) must
+        // NOT reach the response body. It maps to a generic 500 whose message is
+        // fixed and contains none of the error's own string.
+        let secret = "duplicate key value violates unique constraint \"social_account_secret_idx\"";
+        let err = OAuthError::Database(secret.to_string());
+        let (status, msg) = resolve_user_client_error(&err);
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            !msg.contains("constraint") && !msg.contains("social_account") && !msg.contains(secret),
+            "client message must not echo internal DB detail: {msg}"
+        );
+    }
+
+    #[test]
+    fn link_conflict_is_a_fixed_safe_message() {
+        // A genuine link conflict is the one client-facing case — CONFLICT with a
+        // fixed, non-sensitive message (still no raw error text).
+        let err = OAuthError::Provider("this account is already linked to a different user".into());
+        let (status, msg) = resolve_user_client_error(&err);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(msg, "this account is already linked to a different user");
+    }
 
     #[test]
     fn ct_eq_matches_only_identical_strings() {

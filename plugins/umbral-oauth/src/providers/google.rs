@@ -107,6 +107,12 @@ impl OAuthProvider for GoogleProvider {
         "Google"
     }
 
+    /// Google (OIDC) verifies email ownership before asserting
+    /// `email_verified`, so it is trusted for verified-email auto-linking.
+    fn trusts_verified_email(&self) -> bool {
+        true
+    }
+
     fn authorize_url(&self, state: &str, redirect_uri: &str, code_challenge: &str) -> String {
         let mut url = url::Url::parse(AUTH_URL).expect("AUTH_URL is a valid URL");
         url.query_pairs_mut()

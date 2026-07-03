@@ -92,6 +92,23 @@ pub trait OAuthProvider: Send + Sync {
     /// A human label for buttons / admin, e.g. `"Google"`.
     fn label(&self) -> &'static str;
 
+    /// Whether this provider's `email_verified` assertion may be trusted to
+    /// **auto-link** a social login to an existing local `AuthUser` by email
+    /// (create-or-link policy rule 3).
+    ///
+    /// Defaults to `false` — **safe by default** (OAU-2). Account linking by
+    /// verified email is an account-takeover surface: a provider that reports
+    /// `email_verified=true` for an address it doesn't actually own could seize
+    /// the matching umbral account (including a local password account with that
+    /// email). Built-in Google and GitHub genuinely verify email ownership, so
+    /// they override this to `true`. A custom / third-party provider stays
+    /// untrusted unless it explicitly opts in: its logins auto-create a separate
+    /// user instead of linking. Override to `true` only for a provider you trust
+    /// to assert email ownership honestly.
+    fn trusts_verified_email(&self) -> bool {
+        false
+    }
+
     /// Build the URL to redirect the user to, carrying the CSRF `state`,
     /// the callback `redirect_uri`, and the PKCE `code_challenge` (always
     /// sent alongside `code_challenge_method=S256`).
