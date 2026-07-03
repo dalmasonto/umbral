@@ -261,7 +261,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
       {% elif is_edit %}
       {% if password_field and mode == "edit" %}
       <button type="button"
-        onclick="umbral._openChangePasswordDialog('{{ table }}', '{{ instance_id }}')"
+        onclick="umbral._openChangePasswordDialog('{{ table | escapejs }}', '{{ instance_id | escapejs }}')"
         class="px-md py-sm border border-outline-variant rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all flex items-center gap-xs">
         <i data-lucide="key" class="w-4 h-4"></i>
         Change password

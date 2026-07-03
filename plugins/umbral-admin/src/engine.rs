@@ -25,6 +25,17 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         env.add_filter("urlencode", |s: String| -> String {
             crate::util::urlencoding_simple(&s)
         });
+        // Encode a value for safe interpolation inside an inline event-handler
+        // JS string, e.g. `onclick="fn('{{ v | escapejs }}')"`. HTML
+        // autoescaping is the wrong encoding there: `&#x27;` decodes back to a
+        // real `'` in the attribute before the JS runs, letting a value break
+        // out of the string. `escapejs` maps every dangerous char to its
+        // `\uXXXX` JS escape, which survives the HTML-attribute decode and is
+        // read by the JS engine as a literal string char. Returned as a
+        // `from_safe_string` so autoescape doesn't then re-encode the output.
+        env.add_filter("escapejs", |s: String| -> minijinja::Value {
+            minijinja::Value::from_safe_string(crate::util::escape_js(&s))
+        });
         // Serialise a value to JSON for safe embedding in an inline
         // <script> block. Minijinja stable doesn't ship `tojson` by
         // default; we route through serde_json so every kind a
@@ -413,5 +424,35 @@ mod tojson_xss_tests {
         // It must still be valid JSON that round-trips to the same string.
         let parsed: String = serde_json::from_str(&out).expect("valid JSON");
         assert_eq!(parsed, "</script><script>alert(1)</script>");
+    }
+
+    /// The `escapejs` filter neutralises an inline-handler breakout payload:
+    /// `onclick="fn('{{ v | escapejs }}')"` with `v = "');alert(1);('"` must
+    /// render with no raw `'` that could close the JS string, and no HTML
+    /// entity that would decode back into one.
+    #[test]
+    fn escapejs_filter_neutralises_inline_handler_breakout() {
+        let env = super::engine();
+        let out = env
+            .render_str(
+                "onclick=\"fn('{{ v | escapejs }}')\"",
+                minijinja::context! { v => "');alert(document.cookie);('" },
+            )
+            .expect("render escapejs");
+        // The literal payload quotes must not survive as raw quotes.
+        assert!(
+            !out.contains("');alert"),
+            "raw `');alert` breakout must not survive escapejs: {out}"
+        );
+        assert!(
+            out.contains("\\u0027"),
+            "the payload's single quotes should become \\u0027: {out}"
+        );
+        // Only the two structural quotes we wrote by hand remain.
+        assert_eq!(
+            out.matches('\'').count(),
+            2,
+            "only the two hand-written wrapping quotes should remain: {out}"
+        );
     }
 }

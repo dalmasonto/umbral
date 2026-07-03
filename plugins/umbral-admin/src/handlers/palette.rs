@@ -73,9 +73,10 @@ pub(crate) async fn palette_search(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    if let Err(r) = require_staff(&headers, "/admin/api/palette/search").await {
-        return r;
-    }
+    let user = match require_staff(&headers, "/admin/api/palette/search").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     let query_term = params.get("q").map(|s| s.as_str()).unwrap_or("").trim();
     if query_term.len() < 2 {
         return axum::response::Response::builder()
@@ -89,9 +90,24 @@ pub(crate) async fn palette_search(
     let mut total_found = 0usize;
     const MAX_RESULTS: usize = 10;
 
-    for (_, model) in discover_models() {
+    for (plugin_name, model) in discover_models() {
         if total_found >= MAX_RESULTS {
             break;
+        }
+        // WEB-7: the palette searches rows across every registered model.
+        // Without a per-model gate any staff user could read row labels + PKs
+        // (usernames, emails, …) for models they have no `view_<model>` right
+        // to. Skip models the viewer can't view — mirrors the FK-picker /
+        // sidebar gate (a no-permissions install still passes for every model).
+        if !crate::permcheck::check(
+            &user,
+            &plugin_name,
+            &model.table,
+            crate::permcheck::Action::View,
+        )
+        .await
+        {
+            continue;
         }
         let cfg = state.config_for(&model.table);
         // Explicit `search_fields` config wins; otherwise empty here

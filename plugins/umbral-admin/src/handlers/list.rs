@@ -840,12 +840,22 @@ pub(crate) async fn filter_dialog_handler(
         "{}/{table}/filter-dialog",
         crate::branding::current().base_path
     );
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
-    let Some((_, model)) = find_model(&table) else {
+    let user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
+    // WEB-7: the filter dialog builds facets from distinct column values
+    // (statuses, categories, distinct emails). Without a per-model gate a
+    // staff user barred from the model could read those facet values. Require
+    // View, mirroring the list/CRUD handlers (no-permissions install passes).
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::View).await
+    {
+        return r;
+    }
     let cfg = state.config_for(&table);
 
     let mut facets: Vec<FilterFacet> = Vec::new();

@@ -27,9 +27,18 @@ pub(crate) async fn history_handler(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
+    // WEB-7: the audit timeline exposes an object's change history ("updated
+    // Product #5", "changed password on …"). Gate it on the same per-model
+    // View permission the rest of the admin enforces, so a staff user without
+    // `view_<model>` can't read the trail across the permission boundary.
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::View).await
+    {
+        return r;
+    }
     let object_id: i64 = match id.parse() {
         Ok(v) => v,
         Err(_) => return AdminError::BadInput(format!("invalid id: {id}")).into_response(),

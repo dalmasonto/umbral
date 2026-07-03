@@ -81,13 +81,24 @@ pub(crate) async fn cell_edit_get(
     let input_type = input_kind(col);
     let base = crate::branding::current().base_path;
 
+    // The read-only value renders in two different contexts below and needs
+    // two different encodings:
+    //   * `value="…"` / the `<span>` text  → plain HTML escaping.
+    //   * the `onkeydown` handler           → the value is placed inside a JS
+    //     string that is then assigned to `innerHTML`, so it must be
+    //     HTML-escaped (for the innerHTML layer) AND JS-escaped (so it can't
+    //     break out of the string or the attribute). HTML escaping alone is
+    //     unsafe here: `&#x27;` decodes to a real `'` in the attribute before
+    //     the JS runs. See `util::escape_js`.
+    let escaped_value = html_escape(&value);
+    let js_escaped_value = crate::util::escape_js(&escaped_value);
     let html = format!(
         r#"<form
             hx-post="{base}/{table}/{id}/cell/{field}"
             hx-target="closest td"
             hx-swap="innerHTML"
             class="flex items-center gap-xs"
-            onkeydown="if(event.key==='Escape'){{this.parentElement && (this.parentElement.innerHTML = '<span class=&quot;text-on-surface text-body-md tabular-nums&quot;>{escaped_value}</span>')}}"
+            onkeydown="if(event.key==='Escape'){{this.parentElement && (this.parentElement.innerHTML = '<span class=&quot;text-on-surface text-body-md tabular-nums&quot;>{js_escaped_value}</span>')}}"
           >
           <input type="{input_type}" name="{field}" value="{escaped_value}"
             class="flex-1 bg-surface-container-low border border-primary rounded-lg px-sm py-xs text-on-surface text-body-md focus:outline-none focus:ring-1 focus:ring-primary"
@@ -103,7 +114,6 @@ pub(crate) async fn cell_edit_get(
         id = id,
         field = field,
         input_type = input_type,
-        escaped_value = html_escape(&value),
     );
     axum::response::Response::builder()
         .status(StatusCode::OK)

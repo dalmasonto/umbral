@@ -190,7 +190,7 @@
           hx-swap="none"
           title="{{ action.label }}"
           class="p-sm transition-colors rounded-lg hover:bg-surface-container-high {% if action.variant == 'danger' %}text-error hover:text-error{% else %}text-on-surface-variant hover:text-primary{% endif %}"
-          {% if action.confirm %}onclick="if(!confirm('{{ action.confirm }}'))return false;"{% endif %}
+          {% if action.confirm %}onclick="if(!confirm('{{ action.confirm | escapejs }}'))return false;"{% endif %}
         >
           <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
         </button>
@@ -209,7 +209,7 @@
               hx-post="{{ admin_base }}/{{ table }}/actions/{{ action.key }}"
               hx-vals='{"ids": [{{ row[pk] }}]}'
               hx-swap="none"
-              {% if action.confirm %}onclick="if(!confirm('{{ action.confirm }}'))return false;"{% endif %}
+              {% if action.confirm %}onclick="if(!confirm('{{ action.confirm | escapejs }}'))return false;"{% endif %}
               class="w-full flex items-center gap-sm px-md py-sm text-left hover:bg-surface-container-high font-label-md text-label-md {% if action.variant == 'danger' %}text-error{% else %}text-on-surface{% endif %} transition-colors">
               <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
               {{ action.label }}

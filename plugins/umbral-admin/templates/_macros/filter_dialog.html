@@ -135,7 +135,7 @@
                   data-filter-field="{{ facet.field }}"
                   placeholder="Search {{ facet.related_table | replace('_', ' ') }}..."
                   class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-sm py-xs text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
-                  oninput="umbral._filterFkSearch('{{ facet.field }}', '{{ model.table }}', this.value)"
+                  oninput="umbral._filterFkSearch('{{ facet.field | escapejs }}', '{{ model.table | escapejs }}', this.value)"
                 />
               </div>
               <div
@@ -183,7 +183,7 @@
     <div class="flex items-center justify-between gap-md px-lg py-md border-t border-outline-variant">
       <button
         type="button"
-        onclick="umbral._filterClear('{{ model.table }}', '{{ search_val }}', '{{ sort_col }}', '{{ sort_order }}')"
+        onclick="umbral._filterClear('{{ model.table | escapejs }}', '{{ search_val | escapejs }}', '{{ sort_col | escapejs }}', '{{ sort_order | escapejs }}')"
         class="px-lg py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all"
       >Clear</button>
       <div class="flex gap-sm">
@@ -195,7 +195,7 @@
         <button
           type="button"
           id="filter-apply-btn"
-          onclick="umbral._filterApply('{{ model.table }}', '{{ search_val }}', '{{ sort_col }}', '{{ sort_order }}')"
+          onclick="umbral._filterApply('{{ model.table | escapejs }}', '{{ search_val | escapejs }}', '{{ sort_col | escapejs }}', '{{ sort_order | escapejs }}')"
           class="px-lg py-sm rounded-xl bg-primary text-on-primary hover:opacity-90 font-label-md text-label-md transition-all"
         >Apply</button>
       </div>

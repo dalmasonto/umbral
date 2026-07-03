@@ -27,6 +27,39 @@ pub(crate) fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Escape a string for safe embedding inside a JavaScript string literal
+/// that itself sits inside an HTML attribute — e.g. an inline
+/// `onclick="fn('{{ value }}')"` handler.
+///
+/// HTML-entity escaping ([`html_escape`]) is the WRONG encoding here: the
+/// HTML parser decodes `&#x27;` back to `'` *before* the JS engine sees the
+/// handler source, so an HTML-escaped quote still breaks out of the JS
+/// string. We instead map every character that is dangerous in either the
+/// HTML-attribute layer or the JS-string layer to its `\uXXXX` JS
+/// unicode-escape. `\uXXXX` contains no HTML metacharacter, so it survives
+/// the HTML-attribute decode untouched, and the JS engine turns it back into
+/// the literal character *inside* the string — never a delimiter.
+///
+/// Note this alone does NOT make a value safe for `innerHTML` (the escaped
+/// `<` becomes a real `<` once the JS string is decoded). For a value that
+/// flows into `innerHTML`, HTML-escape first and then run this over the
+/// result (see `cell_edit_get`).
+pub(crate) fn escape_js(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '\\' | '\'' | '"' | '`' | '<' | '>' | '&' | '/' | '\n' | '\r' | '\t' => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Percent-encode the unreserved set per RFC 3986. Used for flash-message
 /// query params on post-action redirects. The full `percent-encoding`
 /// crate would be one more dep; this is 10 lines and exact.
@@ -294,7 +327,85 @@ fn is_unique_violation(msg: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_unique_violation, parse_unique_violation_column};
+    use super::{escape_js, html_escape, is_unique_violation, parse_unique_violation_column};
+
+    // --------------------------------------------------------------------
+    // escape_js — the JS-string / inline-event-handler encoder (XSS fix).
+    // --------------------------------------------------------------------
+
+    /// The classic reflected/stored breakout payload for an inline handler
+    /// `onclick="fn('{{ v }}')"`: a bare `'` must NOT survive as a raw quote
+    /// (which would close the JS string), and the HTML parser must not be
+    /// able to reconstitute one either (so no `&#x27;` / `&apos;` forms).
+    #[test]
+    fn escape_js_neutralises_single_quote_breakout() {
+        let payload = "');alert(document.cookie);('";
+        let out = escape_js(payload);
+        assert!(
+            !out.contains('\''),
+            "raw single quote must not survive escape_js: {out}"
+        );
+        // The quote is emitted as its JS unicode escape, which the JS engine
+        // decodes to a string char, never a delimiter.
+        assert!(
+            out.contains("\\u0027"),
+            "single quote should become \\u0027: {out}"
+        );
+        // And no HTML-entity form that could decode back to a quote.
+        assert!(!out.contains("&#x27;") && !out.contains("&apos;"));
+    }
+
+    /// Double quote (the HTML attribute delimiter) and backslash are escaped
+    /// so the value can't break out of `onclick="…"` or the JS string.
+    #[test]
+    fn escape_js_escapes_attr_delimiter_and_backslash() {
+        let out = escape_js(r#"a"b\c"#);
+        assert!(
+            !out.contains('"'),
+            "raw double quote must be escaped: {out}"
+        );
+        // The only backslashes left are the ones introducing \uXXXX escapes.
+        assert!(out.contains("\\u0022"), "\" → \\u0022: {out}");
+        assert!(out.contains("\\u005c"), "\\ → \\u005c: {out}");
+    }
+
+    /// Angle brackets / ampersand are escaped so a value can't form a
+    /// `</script>` breakout or an HTML entity inside the handler source.
+    #[test]
+    fn escape_js_escapes_markup_chars() {
+        let out = escape_js("</script><img>&");
+        assert!(!out.contains('<') && !out.contains('>') && !out.contains('&'));
+        assert!(out.contains("\\u003c") && out.contains("\\u003e"));
+    }
+
+    /// Ordinary text passes through unchanged — the encoder is a no-op for
+    /// safe input, so it doesn't corrupt legitimate labels.
+    #[test]
+    fn escape_js_passes_safe_text_through() {
+        assert_eq!(escape_js("Hello world 42"), "Hello world 42");
+    }
+
+    /// The `cell_edit_get` sink is doubly nested: the value lands in a JS
+    /// string that is then assigned to `innerHTML`. The correct encoding is
+    /// `escape_js(html_escape(v))`. Verify a `<img onerror>` payload can
+    /// neither break the JS string NOR reach innerHTML as live markup: after
+    /// the JS engine decodes the string, the content is still HTML-escaped
+    /// (`&lt;img …`), so innerHTML renders it as inert text.
+    #[test]
+    fn escape_js_of_html_escape_is_safe_for_innerhtml_sink() {
+        let payload = r#"<img src=x onerror=alert(1)>'"#;
+        let encoded = escape_js(&html_escape(payload));
+        // No raw quote → can't close the JS string literal.
+        assert!(!encoded.contains('\''), "no raw quote: {encoded}");
+        // No raw `<` → after JS-string decode the innerHTML content is the
+        // HTML-escaped `&lt;img …`, i.e. inert text, not a live element.
+        assert!(!encoded.contains('<'), "no raw `<`: {encoded}");
+        // The angle bracket is carried as the escaped HTML entity's `&`.
+        assert!(
+            encoded.contains("\\u0026lt;"),
+            "html-escaped `<` (&lt;) should be JS-escaped as \\u0026lt;: {encoded}"
+        );
+    }
 
     #[test]
     fn sqlite_unique_violation_extracts_column_after_dot() {
