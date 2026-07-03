@@ -263,8 +263,16 @@ pub async fn emit_pre_save<M>(instance: &M, created: bool)
 where
     M: crate::orm::Model + serde::Serialize,
 {
-    let Ok(instance_json) = serde_json::to_value(instance) else {
-        return;
+    let instance_json = match serde_json::to_value(instance) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                table = M::TABLE,
+                error = %e,
+                "umbral::signals: failed to serialize instance for pre_save; signal dropped",
+            );
+            return;
+        }
     };
     emit_pre_save_by_table(M::TABLE, instance_json, created).await;
 }
@@ -280,8 +288,16 @@ pub async fn emit_post_save<M>(instance: &M, created: bool)
 where
     M: crate::orm::Model + serde::Serialize,
 {
-    let Ok(instance_json) = serde_json::to_value(instance) else {
-        return;
+    let instance_json = match serde_json::to_value(instance) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                table = M::TABLE,
+                error = %e,
+                "umbral::signals: failed to serialize instance for post_save; signal dropped",
+            );
+            return;
+        }
     };
     emit_post_save_by_table(M::TABLE, instance_json, created).await;
 }
@@ -297,8 +313,16 @@ pub async fn emit_pre_delete<M>(instance: &M)
 where
     M: crate::orm::Model + serde::Serialize,
 {
-    let Ok(instance_json) = serde_json::to_value(instance) else {
-        return;
+    let instance_json = match serde_json::to_value(instance) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                table = M::TABLE,
+                error = %e,
+                "umbral::signals: failed to serialize instance for pre_delete; signal dropped",
+            );
+            return;
+        }
     };
     emit_pre_delete_by_table(M::TABLE, instance_json).await;
 }
@@ -314,8 +338,16 @@ pub async fn emit_post_delete<M>(instance: &M)
 where
     M: crate::orm::Model + serde::Serialize,
 {
-    let Ok(instance_json) = serde_json::to_value(instance) else {
-        return;
+    let instance_json = match serde_json::to_value(instance) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                table = M::TABLE,
+                error = %e,
+                "umbral::signals: failed to serialize instance for post_delete; signal dropped",
+            );
+            return;
+        }
     };
     emit_post_delete_by_table(M::TABLE, instance_json).await;
 }
@@ -508,11 +540,27 @@ pub async fn emit_pre_update<M>(previous: &M, instance: &M)
 where
     M: crate::orm::Model + serde::Serialize,
 {
-    let (Ok(prev_json), Ok(inst_json)) = (
-        serde_json::to_value(previous),
-        serde_json::to_value(instance),
-    ) else {
-        return;
+    let prev_json = match serde_json::to_value(previous) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                table = M::TABLE,
+                error = %e,
+                "umbral::signals: failed to serialize previous row for pre_update; signal dropped",
+            );
+            return;
+        }
+    };
+    let inst_json = match serde_json::to_value(instance) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                table = M::TABLE,
+                error = %e,
+                "umbral::signals: failed to serialize instance for pre_update; signal dropped",
+            );
+            return;
+        }
     };
     emit_pre_update_by_table(M::TABLE, prev_json, inst_json).await;
 }
@@ -527,11 +575,27 @@ pub async fn emit_post_update<M>(previous: &M, instance: &M)
 where
     M: crate::orm::Model + serde::Serialize,
 {
-    let (Ok(prev_json), Ok(inst_json)) = (
-        serde_json::to_value(previous),
-        serde_json::to_value(instance),
-    ) else {
-        return;
+    let prev_json = match serde_json::to_value(previous) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                table = M::TABLE,
+                error = %e,
+                "umbral::signals: failed to serialize previous row for post_update; signal dropped",
+            );
+            return;
+        }
+    };
+    let inst_json = match serde_json::to_value(instance) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(
+                table = M::TABLE,
+                error = %e,
+                "umbral::signals: failed to serialize instance for post_update; signal dropped",
+            );
+            return;
+        }
     };
     emit_post_update_by_table(M::TABLE, prev_json, inst_json).await;
 }
