@@ -180,6 +180,14 @@ pub fn framework_checks() -> Vec<SystemCheck> {
             run: settings_allowed_hosts,
         },
         SystemCheck {
+            id: "settings.allowed_hosts_wildcard",
+            run: settings_allowed_hosts_wildcard,
+        },
+        SystemCheck {
+            id: "settings.sqlite_in_prod",
+            run: settings_sqlite_in_prod,
+        },
+        SystemCheck {
             id: "settings.host_validation",
             run: settings_host_validation,
         },
@@ -229,7 +237,8 @@ pub fn framework_checks() -> Vec<SystemCheck> {
 fn settings_required(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
     let mut findings = Vec::new();
     let insecure = ctx.settings.secret_key == INSECURE_DEV_SECRET_KEY;
-    if let Some(message) = prod_secret_key_error(&ctx.settings.environment, &ctx.settings.secret_key)
+    if let Some(message) =
+        prod_secret_key_error(&ctx.settings.environment, &ctx.settings.secret_key)
     {
         findings.push(SystemCheckFinding {
             check_id: "settings.required",
@@ -338,6 +347,96 @@ fn settings_allowed_hosts(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
         });
     }
     findings
+}
+
+/// Warn when `allowed_hosts` contains the `"*"` wildcard in
+/// `Environment::Prod` (audit_2 core-app-config #13). A wildcard makes the
+/// Prod-only Host-header guard accept *any* Host, silently defeating the very
+/// control it enforces — the cache-poisoning / poisoned-reset-link vector the
+/// guard exists to close. It's a Warning (some apps front the app with a proxy
+/// that already pins Host), but an explicit, deliberate downgrade should be
+/// visible in the boot log.
+fn settings_allowed_hosts_wildcard(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    if !allowed_hosts_has_wildcard(&ctx.settings.environment, &ctx.settings.allowed_hosts) {
+        return Vec::new();
+    }
+    vec![SystemCheckFinding {
+        check_id: "settings.allowed_hosts_wildcard",
+        severity: Severity::Warning,
+        location: CheckLocation::Settings,
+        message: "Settings.allowed_hosts contains the \"*\" wildcard in Environment::Prod — the \
+             Host-header guard accepts ANY Host, defeating host validation (cache-poisoning / \
+             poisoned-reset-link risk)."
+            .to_string(),
+        hint: Some(
+            "list the exact hostnames this app serves in UMBRAL_ALLOWED_HOSTS instead of \"*\"."
+                .to_string(),
+        ),
+    }]
+}
+
+/// Pure predicate behind [`settings_allowed_hosts_wildcard`]: a `"*"` entry
+/// while in Prod. Split out so it's testable without a live backend.
+fn allowed_hosts_has_wildcard(environment: &Environment, allowed_hosts: &[String]) -> bool {
+    matches!(environment, Environment::Prod) && allowed_hosts.iter().any(|h| h.trim() == "*")
+}
+
+/// Warn when the app runs on SQLite in `Environment::Prod` (audit_2
+/// core-app-config #13). SQLite is the framework's test/local-dev backend
+/// (Postgres-first per the design principles); a production deployment on
+/// SQLite gets a single-writer lock, no network concurrency, and no
+/// replica/pooling story. It's a Warning, not an error — small single-node
+/// apps legitimately ship on SQLite — but it should be a conscious choice, not
+/// a forgotten `sqlite::memory:` default.
+fn settings_sqlite_in_prod(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    if !is_sqlite_in_prod(&ctx.settings.environment, &ctx.settings.database_url) {
+        return Vec::new();
+    }
+    vec![SystemCheckFinding {
+        check_id: "settings.sqlite_in_prod",
+        severity: Severity::Warning,
+        location: CheckLocation::Settings,
+        message: format!(
+            "database_url `{}` is SQLite in Environment::Prod. SQLite is the dev/test backend \
+             (single writer, no network concurrency); production traffic wants Postgres.",
+            redact_url_userinfo(&ctx.settings.database_url),
+        ),
+        hint: Some(
+            "set UMBRAL_DATABASE_URL to a `postgres://...` URL for production, or keep SQLite \
+             deliberately for a small single-node deployment."
+                .to_string(),
+        ),
+    }]
+}
+
+/// Pure predicate behind [`settings_sqlite_in_prod`]: a `sqlite`-scheme URL
+/// (including the `sqlite::memory:` default) while in Prod. Split out so it's
+/// testable without a live backend.
+fn is_sqlite_in_prod(environment: &Environment, database_url: &str) -> bool {
+    matches!(environment, Environment::Prod)
+        && database_url
+            .split_once(':')
+            .map(|(scheme, _)| scheme.eq_ignore_ascii_case("sqlite"))
+            .unwrap_or(false)
+}
+
+/// Mask the userinfo of a connection URL for a boot-check message so a
+/// password embedded in `database_url` never lands in the log. Mirrors
+/// `crate::settings`'s own redaction; kept local so `check.rs` needn't reach
+/// into a sibling's private helper.
+fn redact_url_userinfo(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let after = scheme_end + 3;
+    let authority_end = url[after..]
+        .find(['/', '?', '#'])
+        .map(|i| after + i)
+        .unwrap_or(url.len());
+    match url[after..authority_end].find('@') {
+        Some(at) => format!("{}***{}", &url[..after], &url[after + at..]),
+        None => url.to_string(),
+    }
 }
 
 /// Warn when `log_level` is `debug` or `trace` in `Environment::Prod`.
@@ -743,13 +842,19 @@ pub fn run_all(ctx: &CheckContext<'_>, checks: &[SystemCheck]) -> Vec<SystemChec
 
 #[cfg(test)]
 mod tests {
-    use super::{host_validation_unenforced, is_loopback_bind, prod_secret_key_error};
+    use super::{
+        allowed_hosts_has_wildcard, host_validation_unenforced, is_loopback_bind,
+        is_sqlite_in_prod, prod_secret_key_error, redact_url_userinfo,
+    };
     use crate::settings::Environment;
 
     #[test]
     fn prod_rejects_weak_and_default_secret_keys() {
         // The insecure dev default is rejected in Prod (existing behaviour).
-        assert!(prod_secret_key_error(&Environment::Prod, "umbral-insecure-dev-key-change-me").is_some());
+        assert!(
+            prod_secret_key_error(&Environment::Prod, "umbral-insecure-dev-key-change-me")
+                .is_some()
+        );
         // A short non-default key is ALSO rejected in Prod (audit_2 H15).
         assert!(
             prod_secret_key_error(&Environment::Prod, "x").is_some(),
@@ -757,7 +862,8 @@ mod tests {
         );
         // A long random key passes.
         assert!(
-            prod_secret_key_error(&Environment::Prod, "0123456789abcdef0123456789abcdef0123").is_none()
+            prod_secret_key_error(&Environment::Prod, "0123456789abcdef0123456789abcdef0123")
+                .is_none()
         );
         // Outside Prod, nothing is enforced here (dev convenience).
         assert!(prod_secret_key_error(&Environment::Dev, "x").is_none());
@@ -790,5 +896,44 @@ mod tests {
             &Environment::Dev,
             "127.0.0.1:8000"
         ));
+    }
+
+    #[test]
+    fn wildcard_allowed_hosts_flagged_only_in_prod() {
+        let with_star = vec!["example.com".to_string(), "*".to_string()];
+        let no_star = vec!["example.com".to_string()];
+        // Prod + "*" → flagged.
+        assert!(allowed_hosts_has_wildcard(&Environment::Prod, &with_star));
+        // A padded wildcard still trips it.
+        assert!(allowed_hosts_has_wildcard(
+            &Environment::Prod,
+            &[" * ".to_string()]
+        ));
+        // No wildcard → clean.
+        assert!(!allowed_hosts_has_wildcard(&Environment::Prod, &no_star));
+        // Outside Prod the guard isn't enforced anyway → no warning.
+        assert!(!allowed_hosts_has_wildcard(&Environment::Dev, &with_star));
+    }
+
+    #[test]
+    fn sqlite_in_prod_flagged() {
+        assert!(is_sqlite_in_prod(&Environment::Prod, "sqlite::memory:"));
+        assert!(is_sqlite_in_prod(&Environment::Prod, "sqlite://app.db"));
+        // Postgres in Prod is the happy path.
+        assert!(!is_sqlite_in_prod(
+            &Environment::Prod,
+            "postgres://host/app"
+        ));
+        // SQLite outside Prod is expected (tests / local dev).
+        assert!(!is_sqlite_in_prod(&Environment::Dev, "sqlite::memory:"));
+    }
+
+    #[test]
+    fn redact_url_userinfo_masks_password() {
+        assert_eq!(
+            redact_url_userinfo("postgres://u:p@host/db"),
+            "postgres://***@host/db"
+        );
+        assert_eq!(redact_url_userinfo("sqlite::memory:"), "sqlite::memory:");
     }
 }
