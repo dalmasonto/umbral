@@ -334,6 +334,11 @@ fn maskkeygen() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "#   Keep the PRIVATE key secret. Destroying it crypto-shreds every masked column\n\
          #   (a fast bulk \"right to be forgotten\")."
     );
+    println!(
+        "#   WARNING: the private key is printed below to STDOUT. Capture it straight into a\n\
+         #   secret store (Vault, cloud secret manager, a sealed CI variable) and keep it out\n\
+         #   of shell history, terminal scrollback, CI job logs, and any committed .env."
+    );
     println!("UMBRAL_MASK_PUBLIC_KEY={public}");
     println!("UMBRAL_MASK_PRIVATE_KEY={secret}");
     Ok(())
