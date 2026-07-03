@@ -123,6 +123,15 @@ Auto-exposure means a business model (`customer`, `payment`, `invoice`) is **rea
 
 `resources` lists every model that passes the exposure rules above, each with its collection + detail path. `endpoints` aggregates what *other* plugins advertise via the framework's `Plugin::api_endpoints()` seam (OAuth's login/connect links, for instance), each with an absolute `url` joined from the incoming request's origin. REST lists them without depending on those plugins' crates. (When REST is mounted at the bare root, the index is skipped so it doesn't shadow your app's home route.)
 
+## Boot warnings for anonymous exposure
+
+When the plugin has no authentication backend configured (every request is anonymous), it logs a `warn!` at boot for tables an anonymous caller can reach:
+
+- **Anonymous read AND write** — a table whose permission is `AllowAny`: anonymous clients can `GET` *and* `POST/PUT/PATCH/DELETE`. The loudest footgun.
+- **Anonymous reads** — a table served under the safe-by-default `ReadOnly` permission: every row is world-readable via `GET`. This is intended for public-read APIs, but the warning makes sure it's a deliberate choice rather than an accident.
+
+Silence either by setting `RestPlugin::authenticate(...)`, a per-resource `.permission(IsAuthenticated / IsStaff)`, or `.exclude(...)`ing the table.
+
 ## See also
 
 - [Permissions](/docs/v0.0.1/rest/permissions): gate *who* can perform each action once a table is exposed.

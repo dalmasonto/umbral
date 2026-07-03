@@ -92,6 +92,10 @@ impl Throttle for AllowList {
 
 Wrap a `umbral::ratelimit::RateLimiter` to reuse the sliding-window counting the built-ins use.
 
+## Boot warning: writes with no throttle
+
+Throttling is entirely opt-in, so the framework does **not** impose a default limit (that would be a surprise behaviour change for an existing API). Instead, if any exposed resource accepts writes (`Create` / `Update` / `Delete` are reachable under its permission) and **no** throttle is configured anywhere — neither `RestPlugin::default_throttle(...)` nor a per-resource `.throttle(...)` — the plugin logs a `warn!` at boot listing the writable tables. Add a throttle to silence it and to cap abuse on create / bulk / nested / CSV / search endpoints.
+
 ## See also
 
 - Design rationale: the `umbral-rest` throttle module (`plugins/umbral-rest/src/throttle.rs`) and the core primitive (`crates/umbral-core/src/ratelimit.rs`).

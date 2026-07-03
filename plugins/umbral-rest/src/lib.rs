@@ -337,6 +337,47 @@ impl RestPlugin {
             .unwrap_or_else(|| self.default_permission.clone())
     }
 
+    /// M-4 boot check: would an *anonymous* caller get read access to
+    /// `table`? True when the table is served (`allow`) and its effective
+    /// permission lets an anonymous caller `List` or `Retrieve`. Pure over
+    /// the config (no DB, no request), so the boot-time security warning is
+    /// unit-testable. Note the default `ReadOnly` returns `true` here — that
+    /// is exactly the exposure M-4 wants surfaced.
+    fn allows_anonymous_read(&self, table: &str) -> bool {
+        if !self.allow(table) {
+            return false;
+        }
+        let perm = self.permission_for(table);
+        perm.check(&Action::List, None).is_ok() || perm.check(&Action::Retrieve, None).is_ok()
+    }
+
+    /// M-5 boot check: is a throttle configured *anywhere*? False only when
+    /// neither a plugin-wide `default_throttle` nor any per-resource
+    /// `.throttle(...)` is set. The write-without-throttle warning fires
+    /// only in that state; any throttle at all suppresses it.
+    fn has_no_throttle(&self) -> bool {
+        self.default_throttles.is_empty() && self.throttles.values().all(|v| v.is_empty())
+    }
+
+    /// M-5 boot check: does `table` accept writes from *some* caller? A
+    /// resource whose effective permission denies Create/Update/Delete to
+    /// everyone (e.g. `ReadOnly`) is read-only and needs no write throttle;
+    /// anything that lets an anonymous or staff caller write counts as a
+    /// write endpoint. Pure over the config so the warning is testable.
+    fn permits_writes(&self, table: &str) -> bool {
+        if !self.allow(table) {
+            return false;
+        }
+        let perm = self.permission_for(table);
+        let staff = Identity::user("boot-check").staff();
+        for action in [Action::Create, Action::Update, Action::Delete] {
+            if perm.check(&action, None).is_ok() || perm.check(&action, Some(&staff)).is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Set the blanket fallback permission for every table that has no
     /// explicit `ResourceConfig::permission(...)`.
     ///
@@ -1674,10 +1715,15 @@ impl Plugin for RestPlugin {
         // contract from under existing apps, but a developer who didn't
         // mean it sees exactly which tables are wide open at boot.
         if self.authentication.is_anonymous() {
-            let open: Vec<String> = umbral::migrate::registered_models()
+            let tables: Vec<String> = umbral::migrate::registered_models()
                 .iter()
                 .map(|m| m.table.clone())
+                .collect();
+
+            let open: Vec<String> = tables
+                .iter()
                 .filter(|t| self.allow(t) && self.permission_for(t).is_open())
+                .cloned()
                 .collect();
             if !open.is_empty() {
                 tracing::warn!(
@@ -1688,6 +1734,52 @@ impl Plugin for RestPlugin {
                      per-resource .permission(...) (ReadOnly / IsAuthenticated / IsStaff), \
                      or .exclude(...) the table if it shouldn't be served at all.",
                     open.len(),
+                );
+            }
+
+            // M-4: the `open` warning above only fires for AllowAny (read
+            // AND write). The DEFAULT `ReadOnly` serves anonymous *reads* of
+            // every non-blocked business model with no startup signal at
+            // all. Surface those too — quieter than full CRUD, but the
+            // operator should still know these rows are world-readable.
+            // Exclude the `open` tables already reported above.
+            let read_open: Vec<String> = tables
+                .iter()
+                .filter(|t| self.allows_anonymous_read(t) && !self.permission_for(t).is_open())
+                .cloned()
+                .collect();
+            if !read_open.is_empty() {
+                tracing::warn!(
+                    tables = %read_open.join(", "),
+                    "umbral-rest: {} resource(s) serve anonymous READS with NO authentication \
+                     (GET list/detail) — every row is world-readable. This is the safe-by-default \
+                     ReadOnly permission; if that's not intended, set RestPlugin::authenticate(...), \
+                     a per-resource .permission(IsAuthenticated / IsStaff), or .exclude(...) the \
+                     table.",
+                    read_open.len(),
+                );
+            }
+        }
+
+        // M-5: throttling is entirely opt-in. If writes are enabled on any
+        // resource yet NO throttle is configured anywhere, the write / bulk /
+        // nested / CSV / search endpoints carry no rate limit. We do not
+        // impose a default throttle (that would be a silent behaviour change);
+        // we warn so the operator can add one deliberately.
+        if self.has_no_throttle() {
+            let writable: Vec<String> = umbral::migrate::registered_models()
+                .iter()
+                .map(|m| m.table.clone())
+                .filter(|t| self.permits_writes(t))
+                .collect();
+            if !writable.is_empty() {
+                tracing::warn!(
+                    tables = %writable.join(", "),
+                    "umbral-rest: {} writable resource(s) have NO throttle configured — create / \
+                     update / delete / bulk / nested writes are unbounded by rate. Add \
+                     RestPlugin::default_throttle(...) (e.g. AnonRateThrottle / UserRateThrottle) \
+                     or a per-resource .throttle(...) to cap abuse.",
+                    writable.len(),
                 );
             }
         }
@@ -2035,7 +2127,13 @@ impl From<sqlx::Error> for ApiError {
         // paths (filter / count / delete). Writes go through
         // `WriteError`, which has its own translator below.
         if matches!(e, sqlx::Error::Protocol(_)) {
-            return Self::BadInput(e.to_string());
+            // WEB-5 (L-8): a Protocol error is a driver/wire-level fault
+            // whose text ("unexpected message from server", column
+            // metadata, etc.) is framework/DB internals. It maps to a 400
+            // (the request shape drove it) but the client gets a generic
+            // message; the detail stays in the server log only.
+            tracing::warn!(error = %e, "REST: sqlx protocol error mapped to a generic 400");
+            return Self::BadInput("malformed request".to_string());
         }
         Self::Sqlx(e)
     }
@@ -2169,7 +2267,17 @@ impl umbral::web::IntoResponse for ApiError {
                     "internal server error".to_string(),
                 )
             }
-            ApiError::Json(e) => (StatusCode::BAD_REQUEST, "invalid_json", e.to_string()),
+            ApiError::Json(e) => {
+                // WEB-5 (L-8): serde error text can echo internal type
+                // names / struct shapes back to the client. Log the parse
+                // detail server-side; hand the caller a generic message.
+                tracing::warn!(error = %e, "REST: request-body JSON parse error");
+                (
+                    StatusCode::BAD_REQUEST,
+                    "invalid_json",
+                    "request body is not valid JSON".to_string(),
+                )
+            }
             ApiError::Unauthenticated => (
                 StatusCode::UNAUTHORIZED,
                 "unauthenticated",
@@ -3104,6 +3212,18 @@ async fn insert_nested_tree(
 /// children are declared by the developer, not exposed as a top-level
 /// resource).
 fn meta_for_table(table: &str) -> Result<ModelMeta, ApiError> {
+    // L-6: a nested child must clear the same block-list its own
+    // `/api/<table>/` endpoint would. Without this, a `.nested(...)`
+    // pointing at a DEFAULT_BLOCKED_TABLES entry (auth_user, session, …)
+    // or an `.exclude(...)`d table becomes writable through the parent's
+    // nested payload even though its direct endpoint 404s. `allow`
+    // honours `expose`, so an explicitly exposed table still resolves.
+    let config = CONFIG.get().expect("RestPlugin::routes was called");
+    if !config.allow(table) {
+        return Err(ApiError::BadInput(format!(
+            "nested: child table `{table}` is not exposed over REST"
+        )));
+    }
     for plugin in umbral::migrate::registered_plugins() {
         for m in umbral::migrate::models_for_plugin(&plugin) {
             if m.table == table {
@@ -3579,6 +3699,12 @@ async fn custom_action_dispatch(
     let version = cfg.resolve_version(uri.path(), &headers)?;
     let (table, name, pk) = parse_action_route(uri.path(), &cfg.base_path, version.as_deref())?;
 
+    // L-7: re-check the block-list at dispatch, exactly as every CRUD
+    // handler does via `allowed_model`. An `@action` registered on a
+    // table that is blocked (DEFAULT_BLOCKED_TABLES / `.exclude(...)`)
+    // must 404 like its CRUD siblings instead of staying reachable.
+    let _ = allowed_model(&table)?;
+
     // Locate the registered action by (table, name, method). The
     // request's HTTP method has to match the one the user passed at
     // registration time; a method mismatch falls through axum to a
@@ -4005,6 +4131,126 @@ mod allow_block_unit {
         // a spec built before the REST plugin's `routes()` runs
         // describes the "nothing hidden" shape rather than panicking.
         assert!(!crate::is_hidden("anything", "any_field"));
+    }
+
+    // ---- M-4: anonymous-read boot-warning decision helper ----
+
+    #[test]
+    fn allows_anonymous_read_true_under_default_readonly() {
+        // The default (safe) permission is ReadOnly — it serves anonymous
+        // reads of every non-blocked business table. That IS the exposure
+        // M-4 wants the boot warning to surface.
+        let p = RestPlugin::new();
+        assert!(p.allows_anonymous_read("article"));
+        assert!(p.allows_anonymous_read("customer"));
+    }
+
+    #[test]
+    fn allows_anonymous_read_false_for_blocked_tables() {
+        // A blocked table isn't served at all, so it isn't an anonymous
+        // read exposure regardless of the permission.
+        let p = RestPlugin::new();
+        assert!(!p.allows_anonymous_read("auth_user"));
+        assert!(!p.allows_anonymous_read("session"));
+    }
+
+    #[test]
+    fn allows_anonymous_read_false_when_default_requires_auth() {
+        // Behind IsAuthenticated the anonymous caller is denied even reads,
+        // so there is nothing to warn about.
+        let p = RestPlugin::new().default_permission(crate::IsAuthenticated);
+        assert!(!p.allows_anonymous_read("article"));
+    }
+
+    #[test]
+    fn allows_anonymous_read_true_under_allow_any_too() {
+        // AllowAny also allows anonymous reads (the open-CRUD warning is a
+        // superset; the boot code partitions on `is_open` so these aren't
+        // double-counted).
+        let p = RestPlugin::new().default_permission(crate::AllowAny);
+        assert!(p.allows_anonymous_read("article"));
+    }
+
+    // ---- M-5: write-without-throttle boot-warning decision helpers ----
+
+    #[test]
+    fn has_no_throttle_true_by_default_false_once_set() {
+        assert!(RestPlugin::new().has_no_throttle());
+        let p = RestPlugin::new().default_throttle(crate::AnonRateThrottle::new("100/hour"));
+        assert!(!p.has_no_throttle());
+    }
+
+    #[test]
+    fn permits_writes_false_under_default_readonly() {
+        // ReadOnly denies Create/Update/Delete to everyone, including a
+        // staff identity — a read-only resource needs no write throttle.
+        let p = RestPlugin::new();
+        assert!(!p.permits_writes("article"));
+    }
+
+    #[test]
+    fn permits_writes_true_when_writes_are_allowed() {
+        // AllowAny and IsAuthenticated both let some caller write, so they
+        // count as write endpoints for the throttle warning.
+        assert!(
+            RestPlugin::new()
+                .default_permission(crate::AllowAny)
+                .permits_writes("article")
+        );
+        assert!(
+            RestPlugin::new()
+                .default_permission(crate::IsAuthenticated)
+                .permits_writes("article")
+        );
+    }
+
+    #[test]
+    fn permits_writes_false_for_blocked_tables() {
+        // Even with an open default, a blocked table isn't a write surface.
+        let p = RestPlugin::new().default_permission(crate::AllowAny);
+        assert!(!p.permits_writes("auth_user"));
+    }
+
+    // ---- L-8: internal error strings are not echoed to the client ----
+
+    #[test]
+    fn protocol_sqlx_error_maps_to_generic_400_without_leaking_detail() {
+        // A driver/wire-level Protocol error must become a generic 400 —
+        // its text (which can carry column metadata / internal wire detail)
+        // stays server-side.
+        let leaked = "unexpected server column metadata secret-table.secret_col";
+        let err: ApiError = sqlx::Error::Protocol(leaked.into()).into();
+        match err {
+            ApiError::BadInput(msg) => {
+                assert_eq!(msg, "malformed request");
+                assert!(!msg.contains("secret"), "must not echo the protocol detail");
+            }
+            other => panic!("expected BadInput, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn json_parse_error_body_is_generic() {
+        use http_body_util::BodyExt;
+        use umbral::web::IntoResponse;
+
+        // A serde parse error carries text that can echo internal type
+        // names; the response body must be a fixed generic message.
+        let parse_err = serde_json::from_str::<Value>("{ not json").unwrap_err();
+        let detail = parse_err.to_string();
+        let resp = ApiError::Json(parse_err).into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        let rendered = body.to_string();
+        assert!(
+            rendered.contains("request body is not valid JSON"),
+            "body should carry the generic message, got {rendered}"
+        );
+        assert!(
+            !rendered.contains(&detail),
+            "body must not echo the raw serde parse detail"
+        );
     }
 }
 
