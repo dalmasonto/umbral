@@ -930,7 +930,13 @@ fn create_multi_index_stmt(table: &str, columns: &[String]) -> String {
     if columns.is_empty() {
         return String::new();
     }
-    let t = table.replace('"', "");
+    // The index NAME uses a quote-stripped table/column (a bare
+    // identifier, not a quoted one); the ON-clause table reference is a
+    // *quoted* identifier and must escape inner quotes by doubling them
+    // — matching `create_index_stmt`. Previously the ON clause reused
+    // the quote-stripped name, silently dropping a `"` from the table.
+    let t_name = table.replace('"', "");
+    let t_esc = table.replace('"', "\"\"");
     let name_suffix = columns
         .iter()
         .map(|c| c.replace('"', ""))
@@ -941,10 +947,7 @@ fn create_multi_index_stmt(table: &str, columns: &[String]) -> String {
         .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(", ");
-    format!(
-        "CREATE INDEX IF NOT EXISTS \"idx_{t}_{name_suffix}\" ON \"{t}\" ({col_list})",
-        t = t.replace('"', "\"\""),
-    )
+    format!("CREATE INDEX IF NOT EXISTS \"idx_{t_name}_{name_suffix}\" ON \"{t_esc}\" ({col_list})")
 }
 
 /// Lower an M2M junction column's PK type into the SQLite column
@@ -3708,11 +3711,11 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
     "child_id" {cty} NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE,
     PRIMARY KEY ("parent_id", "child_id")
 )"#,
-                jt = junction_table,
-                pt = parent_table,
-                pc = parent_col,
-                ct = child_table,
-                cc = child_col,
+                jt = junction_table.replace('"', "\"\""),
+                pt = parent_table.replace('"', "\"\""),
+                pc = parent_col.replace('"', "\"\""),
+                ct = child_table.replace('"', "\"\""),
+                cc = child_col.replace('"', "\"\""),
                 pty = m2m_pk_sql_type_sqlite(*parent_ty),
                 cty = m2m_pk_sql_type_sqlite(*child_ty),
             )]
@@ -3842,11 +3845,11 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
     "child_id" {cty} NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE,
     PRIMARY KEY ("parent_id", "child_id")
 )"#,
-                jt = junction_table,
-                pt = parent_table,
-                pc = parent_col,
-                ct = child_table,
-                cc = child_col,
+                jt = junction_table.replace('"', "\"\""),
+                pt = parent_table.replace('"', "\"\""),
+                pc = parent_col.replace('"', "\"\""),
+                ct = child_table.replace('"', "\"\""),
+                cc = child_col.replace('"', "\"\""),
                 pty = m2m_pk_sql_type_postgres(*parent_ty),
                 cty = m2m_pk_sql_type_postgres(*child_ty),
             )]
@@ -4065,6 +4068,15 @@ fn render_alter_column_postgres(
                 && new.db_constraint
             {
                 let q_target = quote_pg_ident(target);
+                // Resolve the referenced PK column from the target model's
+                // registered meta instead of hardcoding `"id"`. String/Uuid
+                // PKs (e.g. `Permission.codename`) are first-class post-lift;
+                // the CreateTable path already resolves via `fk_target_pk`
+                // (build_column_def_postgres), so the re-add must match or it
+                // aborts the migration ("column id does not exist") / attaches
+                // the constraint to the wrong column.
+                let (pk_col, _pk_ty) = fk_target_pk(&target.replace('"', "\"\""));
+                let q_pk = quote_pg_ident(&pk_col);
                 let on_delete_clause = new
                     .on_delete
                     .sql_keyword()
@@ -4077,7 +4089,7 @@ fn render_alter_column_postgres(
                     .unwrap_or_default();
                 stmts.push(format!(
                     "ALTER TABLE {q_table} ADD CONSTRAINT \"{cname}\" \
-                     FOREIGN KEY ({q_column}) REFERENCES {q_target}(\"id\")\
+                     FOREIGN KEY ({q_column}) REFERENCES {q_target}({q_pk})\
                      {on_delete_clause}{on_update_clause}"
                 ));
             }
@@ -5300,6 +5312,55 @@ mod tests {
                 p.to_uppercase().contains("NOT NULL"),
                 "{label} Postgres: keeps NOT NULL (Postgres allows non-constant defaults), got: {p}",
             );
+        }
+    }
+
+    /// Audit core-migrate #14 — raw DDL that interpolates
+    /// developer-supplied identifiers must escape inner double quotes by
+    /// doubling them (the quoting idiom used everywhere else), not strip
+    /// or pass them through verbatim. A `"` in a table name previously
+    /// produced malformed DDL in the multi-column index helper (ON-clause
+    /// table was quote-stripped) and the M2M junction DDL (five raw
+    /// interpolations).
+    #[test]
+    fn raw_ddl_escapes_quoted_identifiers() {
+        // Multi-column index: the ON-clause table reference must carry
+        // the doubled quote, not a stripped one.
+        let idx = create_multi_index_stmt("we\"ird", &["a\"b".to_string(), "c".to_string()]);
+        assert!(
+            idx.contains("ON \"we\"\"ird\""),
+            "multi-index ON clause must escape the quote (doubled); got: {idx}",
+        );
+        assert!(
+            idx.contains("\"a\"\"b\""),
+            "multi-index column list must escape the quote; got: {idx}",
+        );
+
+        // M2M junction DDL: every interpolated identifier escapes its
+        // inner quote. Check both backends.
+        let op = Operation::CreateM2MTable {
+            junction_table: "j\"t".to_string(),
+            parent_table: "p\"t".to_string(),
+            parent_col: "p\"c".to_string(),
+            child_table: "c\"t".to_string(),
+            child_col: "c\"c".to_string(),
+            parent_ty: SqlType::BigInt,
+            child_ty: SqlType::Text,
+        };
+        for backend in ["sqlite", "postgres"] {
+            let sql = render_operation_for(&op, backend).join("\n");
+            for (raw, escaped) in [
+                ("j\"t", "\"j\"\"t\""),
+                ("p\"t", "\"p\"\"t\""),
+                ("p\"c", "\"p\"\"c\""),
+                ("c\"t", "\"c\"\"t\""),
+                ("c\"c", "\"c\"\"c\""),
+            ] {
+                assert!(
+                    sql.contains(escaped),
+                    "{backend}: identifier `{raw}` must render escaped as {escaped}; got: {sql}",
+                );
+            }
         }
     }
 }
