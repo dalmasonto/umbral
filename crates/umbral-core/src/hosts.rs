@@ -80,15 +80,30 @@ pub(crate) async fn host_guard(
     if !policy.enforce {
         return next.run(req).await;
     }
-    let host = req
-        .headers()
-        .get(HOST)
-        .and_then(|h| h.to_str().ok())
-        .map(|h| hostname_of(h).to_string());
+    let host = request_authority(&req);
     match host {
         Some(h) if policy.is_allowed(&h) => next.run(req).await,
         other => disallowed_host_page(other.as_deref()),
     }
+}
+
+/// Resolve the request's authority (host), port-stripped, from the `Host`
+/// header first and falling back to the URI authority.
+///
+/// HTTP/1.1 carries the host in the `Host` header. HTTP/2 (and HTTP/3) carry
+/// it in the `:authority` pseudo-header, which hyper surfaces on the request
+/// URI rather than re-synthesising a `Host` header; a direct-terminated h2
+/// request can therefore arrive with NO `Host` header at all. Reading only
+/// `Host` would 400 such legitimate traffic in prod (audit_2 core-web #5), so
+/// we fall back to `req.uri().authority()` before treating the host as absent.
+/// Returns `None` only when neither source carries a host.
+fn request_authority(req: &Request) -> Option<String> {
+    req.headers()
+        .get(HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| req.uri().authority().map(|a| a.as_str().to_owned()))
+        .map(|h| hostname_of(&h).to_string())
 }
 
 /// HTML-escape a string for safe interpolation into element text / attributes.
@@ -275,6 +290,50 @@ mod tests {
         assert!(
             body.contains("UMBRAL_ALLOWED_HOSTS=evil.com"),
             "shows the fix"
+        );
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_uri_authority_when_host_header_absent() {
+        // An HTTP/2 request terminated directly at the app can carry its host
+        // only in `:authority` (surfaced on the URI), with NO `Host` header.
+        // Such a request must be validated against the allowlist, not 400'd as
+        // "missing Host" (audit_2 core-web #5).
+        use axum::Router;
+        use axum::routing::get;
+        use tower::ServiceExt;
+
+        let app = Router::new().route("/", get(|| async { "ok" })).layer(
+            axum::middleware::from_fn_with_state(policy(&["example.com"]), host_guard),
+        );
+
+        // Allowed authority (no Host header) → handler runs.
+        let res = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("http://example.com:8080/")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "authority host allowed");
+
+        // Forged authority (no Host header) → 400.
+        let res = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("http://evil.com/")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "forged authority rejected"
         );
     }
 
