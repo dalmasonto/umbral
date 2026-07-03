@@ -58,6 +58,26 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+/// How many `check` calls trigger one automatic global sweep of the key map.
+///
+/// The per-key pruning in [`RateLimiter::check_at`] only reclaims a key the
+/// moment it is checked again; a key that fires once and is never seen again
+/// keeps its stale timestamps forever, so an adversary rotating keys/IPs grows
+/// the map without bound (audit_2 core-web #4). Every `SWEEP_EVERY` checks the
+/// limiter runs [`RateLimiter::sweep_at`] over the WHOLE map, dropping every
+/// out-of-window timestamp and removing keys left empty. This bounds the map
+/// to roughly `active_keys + SWEEP_EVERY` entries regardless of key churn.
+const SWEEP_EVERY: usize = 1000;
+
+/// The mutex-guarded interior of a [`RateLimiter`]: the per-key timestamp
+/// deques plus the op counter that drives the periodic global sweep.
+#[derive(Debug, Default)]
+struct Buckets {
+    map: HashMap<String, VecDeque<Instant>>,
+    /// Checks since the last automatic sweep; reset to 0 when a sweep runs.
+    ops_since_sweep: usize,
+}
+
 /// A rate: `num` events per `period`. Build by hand or parse the
 /// `"<num>/<period>"` string with [`Rate::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,7 +170,7 @@ pub struct RateDecision {
 #[derive(Debug)]
 pub struct RateLimiter {
     rate: Rate,
-    buckets: Mutex<HashMap<String, VecDeque<Instant>>>,
+    buckets: Mutex<Buckets>,
 }
 
 impl RateLimiter {
@@ -158,7 +178,7 @@ impl RateLimiter {
     pub fn new(rate: Rate) -> Self {
         Self {
             rate,
-            buckets: Mutex::new(HashMap::new()),
+            buckets: Mutex::new(Buckets::default()),
         }
     }
 
@@ -183,7 +203,17 @@ impl RateLimiter {
     pub fn check_at(&self, key: &str, now: Instant) -> RateDecision {
         let window = self.rate.period;
         let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
-        let entries = buckets.entry(key.to_string()).or_default();
+
+        // Periodic global sweep: bound the key map against key-churn memory
+        // growth (audit_2 core-web #4). Runs BEFORE this check so the current
+        // key is re-inserted fresh below even if the sweep just dropped it.
+        buckets.ops_since_sweep += 1;
+        if buckets.ops_since_sweep >= SWEEP_EVERY {
+            buckets.ops_since_sweep = 0;
+            sweep_map(&mut buckets.map, now, window);
+        }
+
+        let entries = buckets.map.entry(key.to_string()).or_default();
 
         // Prune everything older than the window — the "sliding" step.
         // `now.checked_duration_since` guards against a clock that didn't
@@ -236,8 +266,56 @@ impl RateLimiter {
     /// key's history. A no-op if the key was never seen.
     pub fn clear(&self, key: &str) {
         let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
-        buckets.remove(key);
+        buckets.map.remove(key);
     }
+
+    /// Reclaim memory: prune every recorded timestamp older than the window
+    /// and drop keys left with no in-window entries. Uses the real clock; see
+    /// [`Self::sweep_at`] for the deterministic, clock-injectable variant.
+    ///
+    /// Runs automatically once every [`SWEEP_EVERY`] checks, so most callers
+    /// never need it; exposed for a caller that wants to force a reclaim (e.g.
+    /// a periodic background task on a bursty, high-cardinality key space).
+    pub fn sweep(&self) {
+        self.sweep_at(Instant::now());
+    }
+
+    /// Clock-injectable core of [`Self::sweep`]: prune out-of-window
+    /// timestamps and remove now-empty keys, using the caller-supplied `now`.
+    pub fn sweep_at(&self, now: Instant) {
+        let window = self.rate.period;
+        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        buckets.ops_since_sweep = 0;
+        sweep_map(&mut buckets.map, now, window);
+    }
+
+    /// Number of keys currently tracked in the map. A diagnostic accessor
+    /// (also what the memory-bounding tests assert against); production code
+    /// rarely needs it.
+    pub fn tracked_keys(&self) -> usize {
+        self.buckets
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map
+            .len()
+    }
+}
+
+/// Prune every timestamp older than `window` from each key and drop any key
+/// left with an empty deque. Shared by the automatic (in-`check_at`) sweep and
+/// the explicit [`RateLimiter::sweep_at`] entry point.
+fn sweep_map(map: &mut HashMap<String, VecDeque<Instant>>, now: Instant, window: Duration) {
+    map.retain(|_key, entries| {
+        while let Some(front) = entries.front() {
+            match now.checked_duration_since(*front) {
+                Some(age) if age >= window => {
+                    entries.pop_front();
+                }
+                _ => break,
+            }
+        }
+        !entries.is_empty()
+    });
 }
 
 #[cfg(test)]
@@ -311,6 +389,53 @@ mod tests {
         assert!(!limiter.check_at("a", t0 + Duration::from_secs(30)).allowed);
         // 61s later the original hit has aged out of the 60s window.
         assert!(limiter.check_at("a", t0 + Duration::from_secs(61)).allowed);
+    }
+
+    #[test]
+    fn sweep_reclaims_stale_keys() {
+        let limiter = RateLimiter::new(Rate::parse("1/min").unwrap());
+        let t0 = Instant::now();
+        for i in 0..50 {
+            limiter.check_at(&format!("k{i}"), t0);
+        }
+        assert_eq!(limiter.tracked_keys(), 50);
+        // Two minutes on, every recorded hit is outside the 60s window, so a
+        // sweep drops all of them and reclaims the keys.
+        limiter.sweep_at(t0 + Duration::from_secs(120));
+        assert_eq!(limiter.tracked_keys(), 0, "stale keys reclaimed");
+    }
+
+    #[test]
+    fn sweep_keeps_in_window_keys() {
+        let limiter = RateLimiter::new(Rate::parse("5/min").unwrap());
+        let t0 = Instant::now();
+        limiter.check_at("live", t0);
+        // Sweep 1s later — still inside the 60s window, so the key survives.
+        limiter.sweep_at(t0 + Duration::from_secs(1));
+        assert_eq!(limiter.tracked_keys(), 1, "in-window key kept");
+    }
+
+    #[test]
+    fn automatic_sweep_bounds_the_map() {
+        // An adversary rotating keys can't grow the map without bound: the
+        // periodic auto-sweep reclaims keys whose only hits have aged out.
+        let limiter = RateLimiter::new(Rate::parse("1/min").unwrap());
+        let t0 = Instant::now();
+        for i in 0..SWEEP_EVERY {
+            limiter.check_at(&format!("k{i}"), t0);
+        }
+        // A second wave two minutes later: once the op counter crosses
+        // SWEEP_EVERY again the auto-sweep runs with the newer clock and
+        // drops the now-stale first wave.
+        let later = t0 + Duration::from_secs(120);
+        for i in 0..SWEEP_EVERY {
+            limiter.check_at(&format!("l{i}"), later);
+        }
+        assert!(
+            limiter.tracked_keys() <= SWEEP_EVERY + 1,
+            "auto-sweep must bound the map; got {}",
+            limiter.tracked_keys()
+        );
     }
 
     #[test]
