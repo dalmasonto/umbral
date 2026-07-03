@@ -24,6 +24,25 @@
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+
+/// Record `name` as an unknown-tz we've warned about; returns `true` the
+/// first time a given name is seen and `false` on every subsequent call.
+///
+/// `tz_or_utc` runs on the per-value datetime marshalling path, so a typo'd
+/// `UMBRAL_TIME_ZONE` would otherwise emit one `warn!` per row. Deduping by
+/// name keeps the log to a single line per distinct bad value (matching the
+/// "one-shot warning" the module doc promises) while still surfacing a second
+/// *different* typo. Pure + testable: first call `true`, repeats `false`.
+fn should_warn_unknown_tz(name: &str) -> bool {
+    static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let mut seen = WARNED
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    seen.insert(name.to_string())
+}
 
 /// Resolve the configured `Settings::time_zone` to a `chrono_tz::Tz`.
 /// Returns `Tz::UTC` when settings are unset, when the value is
@@ -45,10 +64,12 @@ pub fn tz_or_utc(name: &str) -> Tz {
     match name.parse::<Tz>() {
         Ok(tz) => tz,
         Err(_) => {
-            tracing::warn!(
-                tz = name,
-                "umbral::timezone: unknown IANA tz `{name}` — falling back to UTC"
-            );
+            if should_warn_unknown_tz(name) {
+                tracing::warn!(
+                    tz = name,
+                    "umbral::timezone: unknown IANA tz `{name}` — falling back to UTC"
+                );
+            }
             Tz::UTC
         }
     }
@@ -96,6 +117,20 @@ mod tests {
     fn unknown_tz_falls_back_to_utc() {
         let tz = tz_or_utc("Not/A/Real/Zone");
         assert_eq!(tz, Tz::UTC);
+    }
+
+    #[test]
+    fn unknown_tz_warns_once_per_distinct_name() {
+        // First sighting of a distinct bad name warns; repeats are
+        // suppressed so the per-value marshalling path can't flood logs.
+        let name = "Bogus/Zone/For/Dedup/Test";
+        assert!(should_warn_unknown_tz(name), "first sighting should warn");
+        assert!(
+            !should_warn_unknown_tz(name),
+            "repeat sighting of the same name must not warn again"
+        );
+        // A different bad name is still surfaced.
+        assert!(should_warn_unknown_tz("Another/Bogus/Zone"));
     }
 
     #[test]
