@@ -150,6 +150,17 @@ pub struct AppBuilder {
     /// and double-compressing behind one is wasteful. Enable via
     /// [`AppBuilder::compression`].
     compress: bool,
+    /// Framework-wide request-body size cap (bytes). `build()` installs a
+    /// `tower-http` `RequestBodyLimitLayer` so any body over the cap is
+    /// rejected with `413` before a handler buffers it (audit_2 core-web H11).
+    /// Defaults to 32 MiB; `None` disables the global limit. Set via
+    /// [`AppBuilder::max_request_body`].
+    max_request_body_bytes: Option<usize>,
+    /// Per-request timeout. `build()` installs a `tower-http` `TimeoutLayer`
+    /// so a hung/slowloris request is aborted with `408` instead of pinning a
+    /// task forever (audit_2 core-web H11/#3). Defaults to 30s; `None`
+    /// disables. Set via [`AppBuilder::request_timeout`].
+    request_timeout: Option<std::time::Duration>,
     /// App-level framework middleware (feature #68), prepended to the
     /// plugins' contributions in the final stack. Added via
     /// [`AppBuilder::middleware`].
@@ -189,6 +200,10 @@ impl Default for AppBuilder {
             cors_scoped: Vec::new(),
             atomic_transactions: None,
             compress: false,
+            // Safe-by-default request hardening (audit_2 core-web H11): a 32
+            // MiB body ceiling and a 30s timeout, both opt-out-able.
+            max_request_body_bytes: Some(32 * 1024 * 1024),
+            request_timeout: Some(std::time::Duration::from_secs(30)),
             middleware: Vec::new(),
             db_router: None,
             route_context_resolver: None,
@@ -557,6 +572,50 @@ impl AppBuilder {
     /// when you serve directly (a single binary with no proxy in front).
     pub fn compression(mut self) -> Self {
         self.compress = true;
+        self
+    }
+
+    /// Set (or disable) the framework-wide request-body size cap.
+    ///
+    /// `build()` installs a `tower-http` `RequestBodyLimitLayer` with this
+    /// ceiling, so any request whose body exceeds it is rejected with `413
+    /// Payload Too Large` before a handler (or the multipart parser) buffers
+    /// it — the memory-exhaustion backstop axum's per-extractor default does
+    /// NOT give streaming/multipart consumers (audit_2 core-web H11).
+    ///
+    /// Defaults to **32 MiB**. Pass `Some(bytes)` to raise/lower it, or `None`
+    /// to remove the global limit entirely (appropriate when a reverse proxy
+    /// already caps body size).
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .max_request_body(Some(8 * 1024 * 1024)) // 8 MiB
+    ///     .build().await?;
+    /// ```
+    pub fn max_request_body(mut self, limit: Option<usize>) -> Self {
+        self.max_request_body_bytes = limit;
+        self
+    }
+
+    /// Set (or disable) the default per-request timeout.
+    ///
+    /// `build()` installs a `tower-http` `TimeoutLayer` so a request that runs
+    /// longer than this is aborted with `408 Request Timeout`, freeing the
+    /// task/connection instead of letting a hung handler or slowloris client
+    /// pin it indefinitely (audit_2 core-web H11/#3).
+    ///
+    /// Defaults to **30 seconds**. Pass `Some(duration)` to change it, or
+    /// `None` to disable — do that for legitimately long-lived streaming/SSE
+    /// routes, or when a proxy owns request timeouts.
+    ///
+    /// ```ignore
+    /// use std::time::Duration;
+    /// App::builder()
+    ///     .request_timeout(Some(Duration::from_secs(10)))
+    ///     .build().await?;
+    /// ```
+    pub fn request_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
+        self.request_timeout = timeout;
         self
     }
 
@@ -1247,6 +1306,24 @@ impl AppBuilder {
             host_policy,
             crate::hosts::host_guard,
         ));
+
+        // Request hardening (audit_2 core-web H11) — a framework-wide body-size
+        // cap and a per-request timeout, both safe-by-default and opt-out-able
+        // via `AppBuilder::max_request_body` / `request_timeout`. Layered
+        // outermost (just under the trace span) so they bound EVERY request —
+        // including host-guard rejections — before an inner extractor or the
+        // multipart parser can buffer an oversized body or a hung handler can
+        // pin a task. `RequestBodyLimitLayer` returns 413; `TimeoutLayer`
+        // returns 408.
+        if let Some(limit) = self.max_request_body_bytes {
+            router = router.layer(tower_http::limit::RequestBodyLimitLayer::new(limit));
+        }
+        if let Some(timeout) = self.request_timeout {
+            router = router.layer(tower_http::timeout::TimeoutLayer::with_status_code(
+                axum::http::StatusCode::REQUEST_TIMEOUT,
+                timeout,
+            ));
+        }
 
         // Phase 5.99 — request tracing span. Applied outermost so every request
         // (including host-guard rejections) runs inside a span. The span

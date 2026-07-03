@@ -31,6 +31,14 @@ use std::convert::Infallible;
 
 use crate::storage::StorageError;
 
+/// Default in-memory cap [`parse_multipart`] enforces on a multipart body, in
+/// bytes (**32 MiB**). Matches the framework-wide request-body limit
+/// `App::build` installs, so the multipart parser is a defence-in-depth
+/// backstop: even a caller that reads the raw body itself (the admin's upload
+/// handlers) and hands it here can't buffer an unbounded body. Call
+/// [`parse_multipart_capped`] to pick a different ceiling.
+pub const DEFAULT_MAX_MULTIPART_BYTES: usize = 32 * 1024 * 1024;
+
 /// One uploaded file part of a `multipart/form-data` body.
 ///
 /// A multipart part is treated as a *file* iff multer reports a
@@ -95,11 +103,11 @@ pub enum MultipartError {
     /// The underlying multipart parser rejected the body (malformed part
     /// headers, truncated body, etc.). Carries multer's message.
     Parse(String),
-    /// A part (or the whole body) exceeded a configured size cap.
+    /// A part (or the whole body) exceeded the configured size cap.
     ///
-    /// Not produced by [`parse_multipart`] today (no cap is imposed at this
-    /// layer yet); reserved so a future size-limited entry point can report
-    /// it without a breaking API change.
+    /// Produced by [`parse_multipart`] (using [`DEFAULT_MAX_MULTIPART_BYTES`])
+    /// and [`parse_multipart_capped`] (using the caller's ceiling) when the
+    /// body up front, or the running total of decoded parts, exceeds the cap.
     TooLarge {
         /// The configured limit, in bytes.
         limit: usize,
@@ -214,16 +222,52 @@ pub async fn parse_multipart(
     content_type_header: &str,
     body: impl Into<bytes::Bytes>,
 ) -> Result<MultipartForm, MultipartError> {
+    parse_multipart_capped(content_type_header, body, DEFAULT_MAX_MULTIPART_BYTES).await
+}
+
+/// Like [`parse_multipart`], but with a caller-chosen in-memory size cap
+/// (`max_bytes`) instead of the [`DEFAULT_MAX_MULTIPART_BYTES`] default.
+///
+/// The cap is enforced two ways (audit_2 core-web H11 — wiring the previously
+/// dead [`MultipartError::TooLarge`]): the whole body is rejected up front if
+/// it already exceeds `max_bytes`, and the running total of decoded part bytes
+/// is checked as each part is read, so parsing stops the instant the sum
+/// crosses the ceiling instead of buffering an unbounded body. Pass
+/// `usize::MAX` to opt out of the cap.
+///
+/// # Errors
+///
+/// - [`MultipartError::MissingBoundary`] if the header has no boundary.
+/// - [`MultipartError::TooLarge`] if the body / accumulated parts exceed
+///   `max_bytes`.
+/// - [`MultipartError::Parse`] on a malformed body.
+pub async fn parse_multipart_capped(
+    content_type_header: &str,
+    body: impl Into<bytes::Bytes>,
+    max_bytes: usize,
+) -> Result<MultipartForm, MultipartError> {
     let boundary =
         multer::parse_boundary(content_type_header).map_err(|_| MultipartError::MissingBoundary)?;
 
     let body: bytes::Bytes = body.into();
+    // Fast reject: the raw body is already in memory, and its length is an
+    // upper bound on the sum of all part payloads, so a body over the cap can
+    // never yield in-cap parts. Bail before spinning up the parser.
+    if body.len() > max_bytes {
+        return Err(MultipartError::TooLarge {
+            limit: max_bytes,
+            actual: body.len(),
+        });
+    }
     // multer's constructor wants a Bytes stream; the whole body is already
     // in memory, so a single-chunk, never-erroring stream is enough.
     let stream = futures_util::stream::once(async move { Ok::<_, Infallible>(body) });
     let mut multipart = multer::Multipart::new(stream, boundary);
 
     let mut form = MultipartForm::default();
+    // Running total of decoded part payload bytes, checked against the cap as
+    // each part lands so buffering stops the moment the sum crosses it.
+    let mut accumulated: usize = 0;
 
     while let Some(field) = multipart
         .next_field()
@@ -243,6 +287,13 @@ pub async fn parse_multipart(
                 .bytes()
                 .await
                 .map_err(|e| MultipartError::Parse(e.to_string()))?;
+            accumulated = accumulated.saturating_add(bytes.len());
+            if accumulated > max_bytes {
+                return Err(MultipartError::TooLarge {
+                    limit: max_bytes,
+                    actual: accumulated,
+                });
+            }
             form.files.push(FilePart {
                 field_name,
                 filename,
@@ -255,6 +306,13 @@ pub async fn parse_multipart(
                 .text()
                 .await
                 .map_err(|e| MultipartError::Parse(e.to_string()))?;
+            accumulated = accumulated.saturating_add(value.len());
+            if accumulated > max_bytes {
+                return Err(MultipartError::TooLarge {
+                    limit: max_bytes,
+                    actual: accumulated,
+                });
+            }
             form.fields.push((field_name, value));
         }
     }
@@ -458,6 +516,57 @@ mod tests {
 
         assert_eq!(form.files.len(), 1);
         assert_eq!(form.files[0].bytes, raw, "raw bytes must round-trip");
+    }
+
+    #[tokio::test]
+    async fn capped_rejects_body_over_the_limit() {
+        // A body whose parts sum past the cap must error with TooLarge instead
+        // of buffering unbounded (audit_2 core-web H11).
+        let big = vec![b'x'; 4096];
+        let body = build_body(&[(
+            "blob",
+            Some("big.bin"),
+            Some("application/octet-stream"),
+            &big,
+        )]);
+        let err = parse_multipart_capped(&ct_header(), body, 1024)
+            .await
+            .unwrap_err();
+        match err {
+            MultipartError::TooLarge { limit, actual } => {
+                assert_eq!(limit, 1024);
+                assert!(actual > 1024, "reports the offending size, got {actual}");
+            }
+            other => panic!("expected TooLarge, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn capped_allows_body_under_the_limit() {
+        let small = b"hello";
+        let body = build_body(&[(
+            "blob",
+            Some("s.bin"),
+            Some("application/octet-stream"),
+            small,
+        )]);
+        let form = parse_multipart_capped(&ct_header(), body, 1024)
+            .await
+            .unwrap();
+        assert_eq!(form.files.len(), 1);
+        assert_eq!(form.files[0].bytes, small);
+    }
+
+    #[tokio::test]
+    async fn capped_counts_text_field_bytes_too() {
+        // The cap covers text parts, not just files, so a flood of oversized
+        // text fields is bounded as well.
+        let big = vec![b'a'; 4096];
+        let body = build_body(&[("notes", None, None, &big)]);
+        let err = parse_multipart_capped(&ct_header(), body, 512)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MultipartError::TooLarge { .. }));
     }
 
     #[tokio::test]

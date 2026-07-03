@@ -28,7 +28,7 @@ tower = { version = "0.5", default-features = false }
 # `umbral::static_files::serve_file`) rather than hand-rolling MIME /
 # range / conditional requests. Plugins that serve a single file can
 # reuse it too.
-tower-http = { version = "0.6", default-features = false, features = ["catch-panic", "cors", "fs", "compression-gzip", "compression-br", "trace"] }
+tower-http = { version = "0.6", default-features = false, features = ["catch-panic", "cors", "fs", "compression-gzip", "compression-br", "trace", "limit", "timeout"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 # Markdown rendering for the `| markdown` template filter (features.md

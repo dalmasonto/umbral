@@ -1,0 +1,58 @@
+---
+title: Request limits
+description: Framework-wide request body-size cap and per-request timeout, on by default and opt-out-able.
+sidebar_position: 13
+tags: [web, security, dos, body-limit, timeout]
+---
+
+# Request limits
+
+Every umbral app ships two request-hardening layers by default, so a bare app is protected against the two classic resource-exhaustion vectors without any configuration:
+
+- **A request body-size cap** — a `tower-http` `RequestBodyLimitLayer` rejects any request whose body exceeds the cap with **413 Payload Too Large**, before a handler (or the multipart parser) buffers it in memory. Default **32 MiB**.
+- **A per-request timeout** — a `tower-http` `TimeoutLayer` aborts a request that runs longer than the limit with **408 Request Timeout**, freeing the task/connection instead of letting a hung handler or a slowloris client pin it. Default **30 seconds**.
+
+Both are installed in `App::build()`; you don't wire anything to get them.
+
+<Callout type="info">
+These defaults exist because axum's built-in per-extractor 2 MiB limit does **not** protect streaming/multipart consumers (file uploads), and nothing otherwise bounds a slow handler. The body cap is the memory-exhaustion backstop; the timeout is the slow-request backstop.
+</Callout>
+
+## Tuning or disabling
+
+Both are configurable on the builder. Pass `Some(...)` to change the value, or `None` to remove the layer entirely.
+
+```rust
+use std::time::Duration;
+
+App::builder()
+    // Raise/lower the body ceiling (bytes). None removes the global limit.
+    .max_request_body(Some(8 * 1024 * 1024)) // 8 MiB
+    // Change the timeout. None disables it.
+    .request_timeout(Some(Duration::from_secs(10)))
+    .build()?
+```
+
+Disable a limit when something upstream already owns it, or when a route legitimately needs no ceiling:
+
+```rust
+App::builder()
+    // A reverse proxy already caps body size.
+    .max_request_body(None)
+    // Long-lived streaming / SSE endpoints must not be timed out.
+    .request_timeout(None)
+    .build()?
+```
+
+<Callout type="warning">
+Disabling the timeout globally affects every route. If only a few routes are long-lived (SSE, large downloads), prefer keeping the global timeout and handling those routes with streaming responses rather than turning the timeout off app-wide.
+</Callout>
+
+## Multipart uploads
+
+The multipart parser enforces the same 32 MiB ceiling in memory as a defence-in-depth backstop, so even code that reads the raw body itself can't buffer an unbounded upload. An oversized multipart body surfaces as a `MultipartError::TooLarge`.
+
+## See also
+
+- [Response compression](./compression) — the other opt-in `tower-http` layer.
+- Design rationale: `arch.md` (Secure by default) and `planning/audit_2/findings/core-web.md` (finding H11).
