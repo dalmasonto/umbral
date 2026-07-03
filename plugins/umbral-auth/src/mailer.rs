@@ -89,6 +89,32 @@ where
 /// log a loud warning if it's the active mailer outside Dev/Test.
 pub struct ConsoleMailer;
 
+/// Build the stderr block the [`ConsoleMailer`] prints for `mail`.
+///
+/// In Dev/Test (`prod == false`) the full rendered body is shown so a developer
+/// can read the verification code / reset link straight from the console.
+///
+/// Outside Dev/Test (`prod == true`) the secret-bearing body is **suppressed** —
+/// only the recipient and subject are printed. Without this, a deployment that
+/// forgot to wire a real `AuthPlugin::mailer(...)` would emit live, single-use
+/// reset tokens and verification codes into stdout/stderr log aggregation, where
+/// anyone with log access could replay them (audit plugin-auth #7).
+pub fn console_output(mail: &OutgoingMail, prod: bool) -> String {
+    if prod {
+        format!(
+            "\n--- umbral-auth email (BODY SUPPRESSED: non-Dev/Test) ---\nTo: {}\nSubject: {}\n\n\
+             [body withheld — the verification code / reset link is NOT printed outside Dev/Test; \
+             wire AuthPlugin::mailer(...) to deliver it]\n-------------------------\n",
+            mail.to, mail.subject
+        )
+    } else {
+        format!(
+            "\n--- umbral-auth email ---\nTo: {}\nSubject: {}\n\n{}\n-------------------------\n",
+            mail.to, mail.subject, mail.text
+        )
+    }
+}
+
 #[async_trait]
 impl AuthMailer for ConsoleMailer {
     async fn send(&self, mail: OutgoingMail) -> Result<(), AuthMailError> {
@@ -104,13 +130,11 @@ impl AuthMailer for ConsoleMailer {
             tracing::warn!(
                 to = %mail.to,
                 "umbral-auth ConsoleMailer is active in a non-Dev environment — auth emails are \
-                 only printed, not delivered. Wire AuthPlugin::mailer(...) for production."
+                 only printed (bodies suppressed), not delivered. Wire AuthPlugin::mailer(...) for \
+                 production."
             );
         }
-        eprintln!(
-            "\n--- umbral-auth email ---\nTo: {}\nSubject: {}\n\n{}\n-------------------------\n",
-            mail.to, mail.subject, mail.text
-        );
+        eprint!("{}", console_output(&mail, prod));
         Ok(())
     }
 }

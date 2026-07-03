@@ -1021,6 +1021,30 @@ fn password_hasher() -> Argon2<'static> {
     )
 }
 
+/// A fixed, valid Argon2id hash used purely to spend the same CPU on the
+/// user-lookup-miss / inactive-user paths of [`authenticate`] as a real
+/// verify would. Without this, a login for an existing active username costs
+/// one ~30-50 ms Argon2 verify while a login for a non-existent (or inactive)
+/// username returns right after the DB SELECT — a measurable timing side
+/// channel that enumerates valid usernames. Computed once, lazily.
+///
+/// The plaintext hashed here is irrelevant; it is never compared against a
+/// real password. What matters is that the string is a well-formed PHC hash
+/// so `verify_password` runs the full Argon2 KDF against it.
+fn dummy_password_hash() -> &'static str {
+    static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DUMMY.get_or_init(|| {
+        hash_password("umbral-timing-dummy-*").expect("hard-coded dummy hash is valid")
+    })
+}
+
+/// Spend one Argon2 verify against [`dummy_password_hash`] so a lookup-miss
+/// path costs the same wall-clock time as a real credential check. The result
+/// is intentionally discarded; only the CPU cost matters.
+async fn burn_password_verify() {
+    let _ = verify_password_async("umbral-timing-burn", dummy_password_hash()).await;
+}
+
 // =========================================================================
 // AuthUser-specific creation helpers.
 //
@@ -1149,6 +1173,10 @@ where
         .await?;
 
     let Some(user) = user else {
+        // Constant-work miss path: run one Argon2 verify against a dummy hash so
+        // an unknown username costs the same wall-clock time as a real one. Skips
+        // the username-enumeration timing oracle (audit plugin-auth #2).
+        burn_password_verify().await;
         return Err(AuthError::InvalidCredentials);
     };
 
@@ -1156,6 +1184,9 @@ where
     // that compute is_active dynamically (e.g. checking a TTL field)
     // are still respected even if the SQL filter passed.
     if !user.is_active() {
+        // Same constant-work reasoning as the lookup-miss branch above: an
+        // inactive account must not be distinguishable by response latency.
+        burn_password_verify().await;
         return Err(AuthError::InvalidCredentials);
     }
 
@@ -1334,4 +1365,26 @@ fn resolve_password(noinput: bool) -> Result<String, umbral::cli::CliError> {
         return Err("umbral createsuperuser: passwords do not match".into());
     }
     Ok(first)
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+
+    /// The constant-work miss path (audit plugin-auth #2) is only real if the
+    /// dummy hash is a well-formed Argon2id PHC string — otherwise
+    /// `verify_password` errors out early instead of spending the KDF cost,
+    /// re-opening the timing oracle. Assert the dummy is a valid hash and that a
+    /// verify against it actually runs the KDF (returns Ok(false), not Err).
+    #[test]
+    fn dummy_hash_is_valid_argon2id_so_miss_path_spends_kdf() {
+        let h = dummy_password_hash();
+        assert!(
+            h.starts_with("$argon2id$"),
+            "dummy hash must be Argon2id PHC, got {h}"
+        );
+        // A real verify runs against it; a wrong password yields Ok(false),
+        // which means the full KDF executed (an invalid hash would be Err).
+        assert!(!verify_password("not-the-dummy", h).unwrap());
+    }
 }

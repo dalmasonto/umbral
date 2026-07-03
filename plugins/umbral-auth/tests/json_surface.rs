@@ -191,9 +191,62 @@ async fn post(router: &Router, uri: &str, body: &str) -> axum::http::StatusCode 
     router.clone().oneshot(req).await.unwrap().status()
 }
 
+/// Like [`post`] but returns both the status and the response body as a String.
+async fn post_full(router: &Router, uri: &str, body: &str) -> (axum::http::StatusCode, String) {
+    use tower::ServiceExt;
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
 // =========================================================================
 // Tests
 // =========================================================================
+
+/// Audit plugin-auth #5: a duplicate-username register must NOT echo the raw
+/// DB / sqlx error (which leaks driver / schema / column names) in the JSON
+/// `detail`. It should return the static generic message, while the status
+/// still signals the conflict.
+#[tokio::test]
+async fn register_duplicate_does_not_leak_raw_db_error() {
+    let (router, _rec) = boot_app_with_recorder().await;
+
+    let body = r#"{"username":"leaky","email":"leaky@example.com","password":"G00d$Pass!"}"#;
+    assert_eq!(
+        post(&router, "/api/auth/register", body).await,
+        axum::http::StatusCode::CREATED,
+        "first register of a fresh user must succeed"
+    );
+
+    // Second register with the same username/email trips the UNIQUE constraint.
+    let (status, resp_body) = post_full(&router, "/api/auth/register", body).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::CONFLICT,
+        "a duplicate register still signals a conflict via status"
+    );
+    // The body must carry only the static generic detail — no raw error text.
+    assert!(
+        resp_body.contains("could not create account"),
+        "detail must be the static generic message; got {resp_body}"
+    );
+    let lowered = resp_body.to_lowercase();
+    for leaked in ["unique", "constraint", "sqlx", "auth_user", "column"] {
+        assert!(
+            !lowered.contains(leaked),
+            "response body must not leak internal error token {leaked:?}; got {resp_body}"
+        );
+    }
+}
 
 #[tokio::test]
 async fn json_verify_and_reset_endpoints() {

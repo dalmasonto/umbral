@@ -518,13 +518,17 @@ async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response 
             (StatusCode::CREATED, Json(UserOut::from(&user))).into_response()
         }
         Err(e) => {
+            // Log the raw error server-side; NEVER echo it to the client. The
+            // raw `AuthError`/sqlx Display leaks DB driver / schema / column
+            // details to an unauthenticated caller (audit plugin-auth #5).
+            tracing::error!(error = %e, "umbral-auth: register create_user failed");
             let msg = format!("{e}");
             let status = if msg.to_lowercase().contains("unique") {
                 StatusCode::CONFLICT
             } else {
                 StatusCode::BAD_REQUEST
             };
-            err(status, "create_failed", msg)
+            err(status, "create_failed", "could not create account")
         }
     }
 }
@@ -578,10 +582,12 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
     let (_token_row, plaintext) = match AuthToken::create_for(&user, "login").await {
         Ok(t) => t,
         Err(e) => {
+            // Log server-side; return static text (audit plugin-auth #5).
+            tracing::error!(error = %e, "umbral-auth: login token mint failed");
             return err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "token_failed",
-                format!("{e}"),
+                "could not complete login",
             );
         }
     };
@@ -591,10 +597,12 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
     };
     let mut response = Json(body).into_response();
     if let Err(e) = crate::login_with_request(&headers, response.headers_mut(), &user).await {
+        // Log server-side; return static text (audit plugin-auth #5).
+        tracing::error!(error = %e, "umbral-auth: login session write failed");
         return err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "session_failed",
-            format!("{e}"),
+            "could not complete login",
         );
     }
     response
@@ -653,10 +661,12 @@ async fn me(OptionalIdentity(id): OptionalIdentity) -> Response {
             );
         }
         Err(e) => {
+            // Log server-side; return static text (audit plugin-auth #5).
+            tracing::error!(error = %e, "umbral-auth: /me user lookup failed");
             return err(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "lookup_failed",
-                format!("{e}"),
+                "could not load user",
             );
         }
     };

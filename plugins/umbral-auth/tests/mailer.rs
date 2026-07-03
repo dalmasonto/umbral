@@ -62,6 +62,45 @@ async fn recorder_mailer_captures_and_closure_impl_works() {
     assert_eq!(*hits.lock().unwrap(), 1);
 }
 
+/// Audit plugin-auth #7: outside Dev/Test the ConsoleMailer must NOT print the
+/// secret-bearing body (verification code / reset link). In Dev/Test it still
+/// prints the full body for developer visibility.
+#[test]
+fn console_output_suppresses_secret_body_in_prod() {
+    use umbral_auth::mailer::console_output;
+
+    let mail = OutgoingMail {
+        to: "victim@example.com".into(),
+        username: "victim".into(),
+        kind: MailKind::PasswordReset {
+            reset_url: "https://app/auth/reset?token=umbral_SECRET123".into(),
+        },
+        subject: "Reset your password".into(),
+        html: "<a href=\"https://app/auth/reset?token=umbral_SECRET123\">reset</a>".into(),
+        text: "Reset: https://app/auth/reset?token=umbral_SECRET123".into(),
+    };
+
+    // Prod: the secret must never appear; recipient + subject still shown.
+    let prod = console_output(&mail, true);
+    assert!(
+        !prod.contains("umbral_SECRET123"),
+        "prod console output must not leak the reset token; got {prod}"
+    );
+    assert!(
+        !prod.contains(&mail.text),
+        "prod console output must not print the rendered body; got {prod}"
+    );
+    assert!(prod.contains("victim@example.com"));
+    assert!(prod.contains("SUPPRESSED"));
+
+    // Dev/Test: full body (including the secret) is printed for the developer.
+    let dev = console_output(&mail, false);
+    assert!(
+        dev.contains("umbral_SECRET123"),
+        "dev console output should print the body so a developer can copy the link; got {dev}"
+    );
+}
+
 #[tokio::test]
 async fn console_mailer_send_does_not_panic_without_settings() {
     use umbral_auth::mailer::{AuthMailer, ConsoleMailer, MailKind, OutgoingMail};
