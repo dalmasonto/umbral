@@ -268,15 +268,19 @@ impl Service<Request<Body>> for EmbeddedDirService {
 /// path — a symlink inside the served root pointing outside it would be
 /// followed silently. This wrapper canonicalizes the candidate and rejects
 /// (404) anything that escapes the canonical root.
+///
+/// `pub(crate)` so the media side's `ServeDir` (in `lib.rs`) reuses the
+/// exact same guard — defence in depth for a media dir writable by
+/// another process (audit `plugin-storage-tasks` #8).
 #[derive(Clone)]
-struct SymlinkGuardService<S> {
+pub(crate) struct SymlinkGuardService<S> {
     canonical_root: Option<PathBuf>,
     root: PathBuf,
     inner: S,
 }
 
 impl<S> SymlinkGuardService<S> {
-    fn new(root: PathBuf, inner: S) -> Self {
+    pub(crate) fn new(root: PathBuf, inner: S) -> Self {
         let canonical_root = std::fs::canonicalize(&root).ok();
         Self {
             canonical_root,
@@ -319,7 +323,16 @@ where
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
+        // The root may not exist at construction time (a media dir is
+        // created lazily on the first upload); retry canonicalization per
+        // request until it resolves, so the guard isn't silently a
+        // permanent no-op for a root created after boot.
+        if self.canonical_root.is_none() {
+            self.canonical_root = std::fs::canonicalize(&self.root).ok();
+        }
         let Some(canonical_root) = self.canonical_root.clone() else {
+            // Root still doesn't exist, so nothing under it can either —
+            // let the inner service produce its 404.
             let fut = self.inner.call(req);
             return Box::pin(fut);
         };

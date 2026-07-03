@@ -137,6 +137,60 @@ async fn ambient_upload_tracks_exactly_one_row() {
     assert_eq!(got, bytes);
 }
 
+/// Audit `plugin-storage-tasks` #2: a media side configured WITHOUT an
+/// explicit `.max_size(..)` must still reject oversized uploads — the
+/// default cap (`DEFAULT_MAX_UPLOAD_SIZE`) applies, so an unauthenticated
+/// client can't stream an unbounded body to disk.
+#[tokio::test]
+async fn default_max_size_applies_without_opt_in() {
+    boot().await;
+    let media_dir = tempfile::tempdir().expect("media dir");
+
+    // No .max_size(..) call — the default cap must be in force.
+    let plugin = StoragePlugin::new().media("/media", media_dir.path());
+    assert_eq!(
+        plugin.media_max_size(),
+        Some(umbral_storage::DEFAULT_MAX_UPLOAD_SIZE),
+        "a media side without .max_size(..) must carry the default cap"
+    );
+
+    let oversized = vec![0u8; (umbral_storage::DEFAULT_MAX_UPLOAD_SIZE + 1) as usize];
+    let err = plugin
+        .save("huge.bin", "application/octet-stream", &oversized)
+        .await
+        .expect_err("an upload over the default cap must be rejected");
+    assert!(
+        matches!(err, umbral_storage::MediaError::TooLarge { .. }),
+        "expected TooLarge, got {err:?}"
+    );
+
+    // Under-cap uploads keep working with the default in place.
+    plugin
+        .save("small.bin", "application/octet-stream", b"tiny")
+        .await
+        .expect("an under-cap upload must still succeed with the default cap");
+}
+
+/// Uncapped uploads are a deliberate opt-out, not the default.
+#[tokio::test]
+async fn max_size_unlimited_removes_the_cap() {
+    let media_dir = tempfile::tempdir().expect("media dir");
+    let plugin = StoragePlugin::new()
+        .media("/media", media_dir.path())
+        .max_size_unlimited();
+    assert_eq!(
+        plugin.media_max_size(),
+        None,
+        "max_size_unlimited() must remove the default cap"
+    );
+
+    // And an explicit max_size overrides the default.
+    let plugin = StoragePlugin::new()
+        .media("/media", media_dir.path())
+        .max_size(7);
+    assert_eq!(plugin.media_max_size(), Some(7));
+}
+
 #[tokio::test]
 async fn save_enforces_max_size() {
     boot().await;

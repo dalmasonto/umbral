@@ -213,6 +213,46 @@ const ACTIVE_CONTENT_EXTENSIONS: &[&str] = &[
     "html", "htm", "xhtml", "shtml", "xml", "svg", "svgz", "js", "mjs", "mhtml", "htc", "vbs",
 ];
 
+/// Sanitise a client-supplied filename for embedding in a generated
+/// storage key: strip path separators, NUL bytes, and every other control
+/// character (a raw `\n`/escape in a stored name is a log-injection
+/// surface — audit `plugin-storage-tasks` #12), capped at 120 chars.
+/// Shared by every key-generating backend (`FsStorage`, `S3Storage`) and
+/// the deferred-save key generator so the rules can't drift apart.
+pub(crate) fn sanitise_filename(filename: &str) -> String {
+    filename
+        .chars()
+        .filter(|c| !matches!(c, '/' | '\\') && !c.is_control())
+        .take(120)
+        .collect()
+}
+
+/// The shared stored-XSS guard for every key-generating upload path
+/// (audit `plugin-storage-tasks` #1): sanitise `filename`, defang
+/// active-content extensions (`evil.html` → `evil.html.txt`), and return
+/// the content type the backend should record — forced to `text/plain`
+/// when the name was defanged, so a backend that serves the recorded
+/// client-declared type verbatim (S3/CDN) can't serve attacker HTML
+/// inline as `text/html`.
+pub(crate) fn neutralised_upload(filename: &str, content_type: &str) -> (String, String) {
+    let safe_name = sanitise_filename(filename);
+    let neutralised = neutralise_active_content(&safe_name);
+    let content_type = if neutralised != safe_name {
+        "text/plain".to_string()
+    } else {
+        content_type.to_string()
+    };
+    (neutralised, content_type)
+}
+
+/// Control-char-stripped copy of the client's original filename for the
+/// `media_file.filename` column. The on-disk/object key is sanitised
+/// separately ([`sanitise_filename`]); this guards the *retained* original
+/// name, which is stored and logged (audit `plugin-storage-tasks` #12).
+fn retained_filename(filename: &str) -> String {
+    filename.chars().filter(|c| !c.is_control()).collect()
+}
+
 /// If `name`'s extension is active content (`.html`, `.svg`, `.js`, …),
 /// append `.txt` so the served file is inert `text/plain` instead of
 /// executable markup. Returns `name` unchanged otherwise. Case-insensitive.
@@ -363,13 +403,10 @@ impl Storage for FsStorage {
         _content_type: &str,
         bytes: &[u8],
     ) -> Result<StoredFile, StorageError> {
-        // Sanitise the filename: drop any path separators or NUL bytes a
-        // malicious client might submit so we never escape `dir`.
-        let safe_name: String = filename
-            .chars()
-            .filter(|c| !matches!(c, '/' | '\\' | '\0'))
-            .take(120)
-            .collect();
+        // Sanitise the filename: drop any path separators, NUL bytes, or
+        // control chars a malicious client might submit so we never
+        // escape `dir` (shared helper — see `sanitise_filename`).
+        let safe_name = sanitise_filename(filename);
         // WEB-4: neutralise active-content extensions. The serving layer
         // (ServeDir) derives Content-Type from the on-disk extension, so a
         // stored `x.html` / `x.svg` would be served as `text/html` /
@@ -416,11 +453,7 @@ impl Storage for FsStorage {
         _content_type: &str,
         body: ByteStream,
     ) -> Result<StoredFile, StorageError> {
-        let safe_name: String = filename
-            .chars()
-            .filter(|c| !matches!(c, '/' | '\\' | '\0'))
-            .take(120)
-            .collect();
+        let safe_name = sanitise_filename(filename);
         let safe_name = neutralise_active_content(&safe_name);
         let key = format!("{}-{safe_name}", uuid::Uuid::new_v4());
         let path = self.path_for(&key);
@@ -690,7 +723,7 @@ async fn record_tracking_row(filename: &str, content_type: &str, stored: &Stored
     let row = MediaFile {
         id: 0,
         key: stored.key.clone(),
-        filename: filename.to_string(),
+        filename: retained_filename(filename),
         content_type: content_type.to_string(),
         size: stored.size as i64,
         uploaded_at: chrono::Utc::now(),
@@ -838,7 +871,7 @@ async fn finish_save(
     let row = MediaFile {
         id: 0,
         key: stored.key.clone(),
-        filename: filename.to_string(),
+        filename: retained_filename(filename),
         content_type: content_type.to_string(),
         size: stored.size as i64,
         uploaded_at: chrono::Utc::now(),
@@ -892,19 +925,17 @@ pub(crate) async fn save_deferred_through(
 
     // Same key-gen `store` uses (`<uuid>-<sanitised name>`) so the URL is
     // final the instant we return; the bytes land at this exact key later.
-    let safe_name: String = filename
-        .chars()
-        .filter(|c| !matches!(c, '/' | '\\' | '\0'))
-        .take(120)
-        .collect();
-    let safe_name = neutralise_active_content(&safe_name);
+    // The stored-XSS guard also picks the content type the backend records
+    // for the deferred `put` — `text/plain` when the name was defanged —
+    // so an S3-backed deferred upload can't be served inline as HTML.
+    let (safe_name, put_content_type) = neutralised_upload(filename, content_type);
     let key = format!("{}-{safe_name}", uuid::Uuid::new_v4());
     let url = storage.url(&key);
 
     let row = MediaFile {
         id: 0,
         key: key.clone(),
-        filename: filename.to_string(),
+        filename: retained_filename(filename),
         content_type: content_type.to_string(),
         size: bytes.len() as i64,
         uploaded_at: chrono::Utc::now(),
@@ -917,14 +948,13 @@ pub(crate) async fn save_deferred_through(
 
     let procs = processors();
     let storage = storage.clone();
-    let content_type = content_type.to_string();
     let spawn_row = saved.clone();
     tokio::spawn(async move {
         // The deferred WRITE is the `prelude`: it must succeed before the
         // processors run; a write error short-circuits to `status="failed"`.
         run_processing(spawn_row, procs, move || async move {
             storage
-                .put(&key, &content_type, &bytes)
+                .put(&key, &put_content_type, &bytes)
                 .await
                 .map(|_| ())
                 .map_err(|e| Box::new(e) as BoxError)
@@ -967,7 +997,68 @@ pub(crate) async fn save_stream_through(
 
 #[cfg(test)]
 mod active_content_tests {
-    use super::neutralise_active_content;
+    use super::{neutralise_active_content, neutralised_upload, sanitise_filename};
+
+    /// The shared stored-XSS guard every key-generating backend applies
+    /// (audit `plugin-storage-tasks` #1): active content is renamed to
+    /// `.txt` AND its recorded content type forced to `text/plain`, so a
+    /// backend that serves the recorded type verbatim (S3) stays inert.
+    #[test]
+    fn neutralised_upload_defangs_name_and_content_type() {
+        for (name, declared) in [
+            ("evil.html", "text/html"),
+            ("payload.svg", "image/svg+xml"),
+            ("worm.js", "application/javascript"),
+            ("page.XHTML", "application/xhtml+xml"),
+        ] {
+            let (safe_name, ct) = neutralised_upload(name, declared);
+            assert!(
+                safe_name.ends_with(".txt"),
+                "{name} must be renamed to .txt, got {safe_name}"
+            );
+            assert_eq!(
+                ct, "text/plain",
+                "{name} ({declared}) must be recorded as text/plain, got {ct}"
+            );
+        }
+    }
+
+    #[test]
+    fn neutralised_upload_leaves_inert_uploads_alone() {
+        for (name, declared) in [
+            ("photo.png", "image/png"),
+            ("doc.pdf", "application/pdf"),
+            ("notes.txt", "text/plain"),
+        ] {
+            let (safe_name, ct) = neutralised_upload(name, declared);
+            assert_eq!(safe_name, name, "{name} must keep its name");
+            assert_eq!(ct, declared, "{name} must keep its declared type");
+        }
+    }
+
+    /// A traversal-shaped filename must still be defanged AFTER the
+    /// separators are stripped — `../evil.html` sanitises to `..evil.html`,
+    /// which is active content and must come back `.txt` + `text/plain`.
+    #[test]
+    fn neutralised_upload_sanitises_before_defanging() {
+        let (safe_name, ct) = neutralised_upload("../evil.html", "text/html");
+        assert!(!safe_name.contains('/'), "separators stripped: {safe_name}");
+        assert!(safe_name.ends_with(".txt"), "defanged: {safe_name}");
+        assert_eq!(ct, "text/plain");
+    }
+
+    /// Audit `plugin-storage-tasks` #12: control characters (newlines,
+    /// escapes, NUL) must not survive into a generated key.
+    #[test]
+    fn sanitise_filename_strips_separators_and_control_chars() {
+        assert_eq!(sanitise_filename("a/b\\c.txt"), "abc.txt");
+        assert_eq!(sanitise_filename("evil\nname\r.png"), "evilname.png");
+        assert_eq!(sanitise_filename("nul\0byte.gif"), "nulbyte.gif");
+        assert_eq!(sanitise_filename("esc\u{1b}[31m.jpg"), "esc[31m.jpg");
+        // Length cap preserved from the original inline sanitiser.
+        let long = "x".repeat(200);
+        assert_eq!(sanitise_filename(&long).len(), 120);
+    }
 
     #[test]
     fn dangerous_extensions_get_neutralised() {

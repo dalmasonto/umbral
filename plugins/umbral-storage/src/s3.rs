@@ -162,17 +162,6 @@ impl S3Storage {
         format!("{prefix}{}", rel_path.trim_start_matches('/'))
     }
 
-    /// Generate a collision-resistant key from `filename` (the
-    /// `store`-side path), sanitised of separators.
-    fn generated_key(filename: &str) -> String {
-        let safe_name: String = filename
-            .chars()
-            .filter(|c| !matches!(c, '/' | '\\' | '\0'))
-            .take(120)
-            .collect();
-        format!("{}-{safe_name}", uuid::Uuid::new_v4())
-    }
-
     /// Upload `bytes` under the EXACT logical `key`, recording
     /// `content_type`. Runs the blocking `rust-s3` call off-runtime.
     async fn put_object(
@@ -341,7 +330,7 @@ fn warn_deprecated(old: &str, new: &str) {
     let seen = SEEN.get_or_init(|| Mutex::new(HashSet::new()));
     let mut guard = seen.lock().unwrap();
     if guard.insert(old.to_string()) {
-        eprintln!(
+        tracing::warn!(
             "umbral-storage: `{old}` is deprecated; use `{new}` instead (the old name still works \
              for now)."
         );
@@ -375,8 +364,17 @@ impl Storage for S3Storage {
         content_type: &str,
         bytes: &[u8],
     ) -> Result<StoredFile, StorageError> {
-        let key = Self::generated_key(filename);
-        self.put_object(&key, content_type, bytes.to_vec()).await?;
+        // The SAME stored-XSS guard the filesystem backend applies (audit
+        // `plugin-storage-tasks` #1): sanitise the filename, defang
+        // active-content extensions (`evil.html` → `evil.html.txt`), and
+        // force the recorded Content-Type to `text/plain` when defanged.
+        // Without this, a public/CDN-fronted bucket would serve an uploaded
+        // `evil.html` inline as `text/html` — stored XSS on the serving
+        // origin. (`store_stream` uses the trait's buffering default, which
+        // delegates here, so the streaming path is covered too.)
+        let (safe_name, content_type) = crate::media::neutralised_upload(filename, content_type);
+        let key = format!("{}-{safe_name}", uuid::Uuid::new_v4());
+        self.put_object(&key, &content_type, bytes.to_vec()).await?;
         Ok(StoredFile {
             url: self.url(&key),
             key,
@@ -503,9 +501,15 @@ impl Storage for S3Storage {
                 match futures_executor::block_on(self.bucket.presign_get(&object_key, ttl, None)) {
                     Ok(url) => url,
                     Err(e) => {
-                        eprintln!(
-                            "umbral-storage: presign failed for `{object_key}`: {e} — falling back to \
-                         public URL"
+                        // For a PRIVATE bucket the public-URL fallback will
+                        // not authorize — the returned link 404s/403s rather
+                        // than leaking anything. `url()` is infallible by
+                        // trait contract, so a loud warning + inert fallback
+                        // is the best available behaviour here.
+                        tracing::warn!(
+                            key = %object_key,
+                            "umbral-storage: presign failed: {e} — falling back to the public \
+                             URL, which will NOT authorize on a private bucket"
                         );
                         public()
                     }

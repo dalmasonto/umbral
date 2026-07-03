@@ -79,6 +79,15 @@ use media::{
 };
 use static_serve::StaticServe;
 
+/// The default media upload-size cap (25 MiB), applied whenever a media
+/// side is configured without an explicit [`StoragePlugin::max_size`].
+///
+/// A media side with NO cap lets any client stream an arbitrarily large
+/// body to storage — an unauthenticated disk-exhaustion DoS (audit
+/// `plugin-storage-tasks` #2) — so uncapped is opt-in via
+/// [`StoragePlugin::max_size_unlimited`], never the default.
+pub const DEFAULT_MAX_UPLOAD_SIZE: u64 = 25 * 1024 * 1024;
+
 /// The unified storage plugin: a static-serving side, a media-upload side,
 /// or both. Replaces the former `StaticPlugin` + `MediaPlugin`.
 #[derive(Clone)]
@@ -211,6 +220,10 @@ impl StoragePlugin {
 
     /// Serve user uploads from `dir` under URL prefix `mount`, backed by an
     /// [`FsStorage`] (the old `MediaPlugin::new`).
+    ///
+    /// Uploads are capped at [`DEFAULT_MAX_UPLOAD_SIZE`] (25 MiB) by
+    /// default; raise or lower it with [`Self::max_size`], or remove it
+    /// (deliberately) with [`Self::max_size_unlimited`].
     pub fn media(mut self, mount: impl Into<String>, dir: impl AsRef<Path>) -> Self {
         let mount = mount.into();
         let dir = dir.as_ref().to_path_buf();
@@ -219,7 +232,7 @@ impl StoragePlugin {
             mount,
             dir,
             storage,
-            max_size: None,
+            max_size: Some(DEFAULT_MAX_UPLOAD_SIZE),
             cleanup: Vec::new(),
         });
         self
@@ -239,7 +252,7 @@ impl StoragePlugin {
             dir: PathBuf::from(&mount),
             mount,
             storage,
-            max_size: None,
+            max_size: Some(DEFAULT_MAX_UPLOAD_SIZE),
             cleanup: Vec::new(),
         });
         self
@@ -254,7 +267,7 @@ impl StoragePlugin {
             dir: PathBuf::from(&mount),
             mount,
             storage: Arc::new(s3),
-            max_size: None,
+            max_size: Some(DEFAULT_MAX_UPLOAD_SIZE),
             cleanup: Vec::new(),
         });
         self
@@ -278,9 +291,9 @@ impl StoragePlugin {
         self
     }
 
-    /// Enforce a hard upload-size cap on the media side. [`Self::save`]
-    /// rejects bytes longer than this; the streaming path enforces it
-    /// mid-stream.
+    /// Enforce a hard upload-size cap on the media side (replacing the
+    /// [`DEFAULT_MAX_UPLOAD_SIZE`] default). [`Self::save`] rejects bytes
+    /// longer than this; the streaming path enforces it mid-stream.
     pub fn max_size(mut self, bytes: u64) -> Self {
         if let Some(media) = self.media.as_mut() {
             media.max_size = Some(bytes);
@@ -291,6 +304,31 @@ impl StoragePlugin {
             );
         }
         self
+    }
+
+    /// Remove the upload-size cap entirely (the default is
+    /// [`DEFAULT_MAX_UPLOAD_SIZE`]). Only reach for this when uploads come
+    /// from trusted/authenticated callers or an upstream proxy enforces its
+    /// own body limit: an uncapped media side lets any client stream an
+    /// arbitrarily large body to storage (disk-exhaustion DoS).
+    pub fn max_size_unlimited(mut self) -> Self {
+        if let Some(media) = self.media.as_mut() {
+            media.max_size = None;
+        } else {
+            tracing::warn!(
+                "umbral-storage: max_size_unlimited() called before a media side was \
+                 configured; add .media(..) first"
+            );
+        }
+        self
+    }
+
+    /// The effective media upload-size cap: `Some(bytes)` (the
+    /// [`DEFAULT_MAX_UPLOAD_SIZE`] default or a [`Self::max_size`]
+    /// override), or `None` after [`Self::max_size_unlimited`]. `None`
+    /// also when no media side is configured.
+    pub fn media_max_size(&self) -> Option<u64> {
+        self.media.as_ref().and_then(|m| m.max_size)
     }
 
     /// Opt model `M` into **file-lifecycle cleanup**, auto-detecting its
@@ -465,7 +503,12 @@ impl Plugin for StoragePlugin {
         }
 
         // Media side — `ServeDir` over the media dir, with a nosniff
-        // header, nested so `/media/<key>` maps to `<dir>/<key>`.
+        // header, nested so `/media/<key>` maps to `<dir>/<key>`. The
+        // same symlink-escape guard the static side uses wraps the
+        // `ServeDir` (defence in depth: uploads get sanitised UUID keys,
+        // but a media dir writable by another process could contain a
+        // symlink pointing outside the root — audit `plugin-storage-tasks`
+        // #8).
         if let Some(media) = &self.media {
             if !media.dir.exists() {
                 tracing::warn!(
@@ -476,13 +519,16 @@ impl Plugin for StoragePlugin {
                 );
             }
             let mount = media.mount.trim_end_matches('/').to_string();
-            let serve = ServeDir::new(&media.dir);
+            let serve = tower::ServiceBuilder::new()
+                .map_response(|resp: http::Response<_>| resp.map(axum::body::Body::new))
+                .service(ServeDir::new(&media.dir));
+            let guarded = static_serve::SymlinkGuardService::new(media.dir.clone(), serve);
             let svc = tower::ServiceBuilder::new()
                 .layer(SetResponseHeaderLayer::if_not_present(
                     HeaderName::from_static("x-content-type-options"),
                     HeaderValue::from_static("nosniff"),
                 ))
-                .service(serve);
+                .service(guarded);
             router = router.nest_service(&mount, svc);
         }
 

@@ -111,8 +111,16 @@ pub const STATUS_FAILED: &str = "failed";
 pub struct TaskRow {
     pub id: i64,
     pub name: String,
+    /// JSON-encoded handler args, persisted in PLAINTEXT (also shown in
+    /// the admin task detail and possibly in `error`/log output). Do not
+    /// carry secrets or sensitive PII here — see [`enqueue`].
     pub payload: String,
     pub status: String,
+    /// Claim count. Incremented at CLAIM time (in [`claim_one`]), BEFORE
+    /// the handler runs: a worker that crashes between claim and
+    /// completion burns an attempt without a real handler execution.
+    /// That's the accepted at-least-once trade-off — budget
+    /// `max_attempts` for "claims", not "guaranteed handler runs".
     pub attempts: i64,
     pub max_attempts: i64,
     pub scheduled_for: DateTime<Utc>,
@@ -437,6 +445,13 @@ pub const DEFAULT_MAX_ATTEMPTS: i64 = 3;
 /// Insert a pending task row and return its id. The handler must be
 /// registered under `name` before the worker reaches the row, otherwise
 /// the worker marks the row failed with [`TaskError::HandlerNotFound`].
+///
+/// **Payloads are persisted in PLAINTEXT.** The serialized payload is
+/// stored verbatim in the `task_row` table, shown read-only in the admin
+/// task detail, and may surface in `error`/log output when a handler
+/// fails or panics. Never put secrets (API tokens, passwords, reset
+/// links) or sensitive PII in a payload — pass an id and resolve the
+/// sensitive value inside the handler at execution time.
 pub async fn enqueue<P: Serialize>(
     name: &str,
     payload: P,
@@ -649,6 +664,14 @@ pub struct WorkerOptions {
     /// distinct from `visibility_timeout`: the timeout fails a *running*
     /// handler promptly, whereas the visibility timeout only reclaims a row
     /// after a *crashed* worker stops renewing its lease.
+    ///
+    /// **Cancellation is cooperative.** The timeout aborts the handler's
+    /// tokio task, which only takes effect at an `.await` point — a handler
+    /// stuck in a tight CPU loop or a blocking syscall cannot be cancelled
+    /// and pins its worker thread until it returns. Keep handlers async and
+    /// yielding; run CPU-bound or blocking work via
+    /// [`tokio::task::spawn_blocking`] inside the handler so the async
+    /// wrapper stays cancellable.
     pub task_timeout: Option<Duration>,
 }
 

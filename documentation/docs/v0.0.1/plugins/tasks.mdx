@@ -133,6 +133,10 @@ let _task_id = enqueue(
 The `#[task]` macro expands to exactly this pattern. Use it directly only when
 the macro's single-payload constraint does not fit your case.
 
+<Callout type="warning">
+**Never put secrets in a payload.** Payloads are persisted in **plaintext** in the `task_row` table, shown read-only in the admin task detail, and can surface in the `error` column and logs when a handler fails or panics. Pass an id (`user_id: 42`) and resolve tokens, passwords, or reset links inside the handler at execution time.
+</Callout>
+
 ## Running the worker
 
 ```bash
@@ -277,6 +281,10 @@ This is distinct from the visibility timeout below: `task_timeout` fails a
 *running* handler promptly, whereas the visibility timeout only reclaims a row
 after a *crashed* worker stops renewing its lease.
 
+<Callout type="note">
+**Cancellation is cooperative.** The timeout aborts the handler's tokio task, which only takes effect at an `.await` point. A handler stuck in a tight CPU loop or a blocking syscall cannot be cancelled and pins its worker until it returns - keep handlers async and yielding, and run CPU-bound or blocking work via `tokio::task::spawn_blocking` inside the handler.
+</Callout>
+
 ## Visibility timeout and at-least-once delivery
 
 When a worker claims a task it stamps `started_at = now()`. If the worker process
@@ -309,6 +317,10 @@ Set `visibility_timeout` to comfortably exceed the longest handler your applicat
 runs. A timeout shorter than the handler runtime will reclaim the task while it is
 still executing, resulting in duplicate runs (at-least-once, not exactly-once).
 Handlers must therefore be idempotent when `max_attempts > 1`.
+
+Note that `attempts` is incremented at **claim** time, before the handler runs: a
+worker that crashes between claim and completion burns an attempt without a real
+handler execution. Budget `max_attempts` for "claims", not "guaranteed handler runs".
 </Callout>
 
 You can also call `reclaim_orphaned_tasks` directly - for example, in a scheduled

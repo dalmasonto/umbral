@@ -223,6 +223,8 @@ App::builder()
 
 `./media/` is the on-disk directory; `/media/<key>` is the public URL.
 
+Uploads are capped at **25 MiB by default** (`DEFAULT_MAX_UPLOAD_SIZE`) even without a `.max_size(..)` call; raise/lower it with `.max_size(bytes)` or remove it deliberately with `.max_size_unlimited()` (only for trusted upload paths - an uncapped media side lets any client fill the disk).
+
 ## Model fields & the `Storage` trait
 
 The easiest way to attach a file to a model is a [`FileField` / `ImageField`](/docs/v0.0.1/orm/file-image-fields) column: you declare `cover: ImageField` and the admin renders an upload widget, stores the file, and writes the returned key for you. No hand-written upload handler.
@@ -368,7 +370,7 @@ let s3 = S3Storage::builder("private-bucket")
 - **Credentials** come from explicit `UMBRAL_S3_ACCESS_KEY` / `UMBRAL_S3_SECRET_KEY` or the standard AWS chain (IAM role, `~/.aws/credentials`) - never hard-code keys in source or `settings`.
 - **Public vs signed.** Without a presign TTL, `S3Storage::url()` returns `<public_base>/<key>` (or the bare key) - built for **public-read** buckets fronted by a CDN; set `UMBRAL_S3_PUBLIC_BASE` (or `.public_base(...)`) to that origin. For **private** buckets, set `UMBRAL_S3_PRESIGN_TTL` (or `.presign(secs)`) and `url()` returns signed, time-limited URLs instead.
 - **Feature-gated.** The `rust-s3` AWS client compiles only with the `s3` feature, so a local-only app never pulls it in.
-- **Active-content guard is NOT applied by the S3 backend.** The `.html` / `.svg` / `.js` → `.txt` rename that defends against stored XSS is performed by the local `FsStorage` backend (and the local `/media` serve path also sends `X-Content-Type-Options: nosniff`). `S3Storage::store` uploads the object under a UUID key with the **client-declared `Content-Type` verbatim** and does *not* rename active-content extensions. If your S3 bucket is public / CDN-fronted, an uploaded `evil.html` (Content-Type `text/html`) is served inline and can execute script on the serving origin. Serve S3-hosted user uploads through **presigned URLs on a private bucket** (`.presign(secs)`), or configure the bucket/CDN to force a safe `Content-Disposition: attachment` (or override `Content-Type` to `application/octet-stream`) for user-upload prefixes. Do not host untrusted uploads on a public bucket without one of these controls.
+- **Active-content guard applies on the S3 backend too.** `S3Storage::store` (and the streaming path, which delegates to it) applies the same stored-XSS defence as the local `FsStorage`: an upload with an active-content extension (`.html` / `.svg` / `.js`, ...) is renamed with a `.txt` suffix **and** stored with `Content-Type: text/plain`, so a public / CDN-fronted bucket serves it inert instead of executing script on the serving origin. Defence in depth still applies for untrusted uploads: prefer **presigned URLs on a private bucket** (`.presign(secs)`), or configure the bucket/CDN to force `Content-Disposition: attachment` for user-upload prefixes. Note the guard covers the key-generating `store` path (what `save` / admin uploads use); the exact-key `put` records the caller's content type verbatim.
 </Callout>
 
 To verify a live bucket end-to-end, the crate ships an env-gated integration test (`plugins/umbral-storage/tests/s3_integration.rs`): point `UMBRAL_S3_TEST_BUCKET` (+ `UMBRAL_S3_TEST_ENDPOINT` and AWS creds) at a throwaway MinIO/S3 bucket and run `cargo test --features s3 -p umbral-storage --test s3_integration`. It skips silently when unset.
@@ -438,7 +440,7 @@ The underlying `Storage` trait has two additional streaming methods with default
 - `store_stream(filename, content_type, body)` - true-streams to the backend. `FsStorage` writes chunk-by-chunk to disk; a backend that doesn't override it falls back to buffering then `store`.
 - `retrieve_stream(key)` - streams the object back. `FsStorage` reads off disk via `ReaderStream`; the default wraps `retrieve`'s bytes as a single chunk.
 
-On the **filesystem** backend, both `save`/`store` (buffered) and `save_stream`/`store_stream` (streaming) apply the **same** filename guards - path-separator sanitisation and active-content (`.html`/`.svg`/`.js` → `.txt`) neutralisation - so streaming never weakens the stored-XSS defence. The **S3** backend does not perform the active-content rename in `store`/`store_stream` (it keeps the client's `Content-Type`); see the S3 safety note above for how to serve untrusted S3-hosted uploads safely.
+Both `save`/`store` (buffered) and `save_stream`/`store_stream` (streaming) apply the **same** filename guards - path-separator/control-char sanitisation and active-content (`.html`/`.svg`/`.js` → `.txt`) neutralisation - on **every backend**, so streaming never weakens the stored-XSS defence. On the S3 backend the defanged upload is additionally stored with `Content-Type: text/plain` so a public bucket can't serve it inline as HTML; see the S3 safety note above.
 
 ## Background uploads & processing
 
@@ -620,7 +622,8 @@ This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying bo
 | `.media_with_storage(mount, s)` | -       | Mount path + a custom `Arc<dyn Storage>` backend.                                 |
 | `.media_s3(mount, s3)`          | -       | Mount path + the built-in `S3Storage` backend (feature `s3`).                     |
 | `.public_base(base)`            | -       | Absolute public base so resolved URLs are fully-qualified (filesystem backend).   |
-| `.max_size(bytes)`              | unlimited | Hard cap on upload size, returned as `MediaError::TooLarge` when exceeded. `save` checks the buffered length; `save_stream` enforces it **mid-stream** (no full buffering, no trusting `Content-Length`). |
+| `.max_size(bytes)`              | 25 MiB (`DEFAULT_MAX_UPLOAD_SIZE`) | Hard cap on upload size, returned as `MediaError::TooLarge` when exceeded. `save` checks the buffered length; `save_stream` enforces it **mid-stream** (no full buffering, no trusting `Content-Length`). |
+| `.max_size_unlimited()`         | off     | Removes the cap entirely. Only for trusted/authenticated upload paths (or when an upstream proxy enforces its own body limit) - an uncapped media side is a disk-exhaustion DoS surface. |
 | `.cleanup_on_delete::<M>()`     | off     | Delete a row's `FileField`/`ImageField` blobs when the row is deleted (auto-detected columns). |
 | `.cleanup_files::<M>(&[...])`   | off     | Same, naming the file columns explicitly (for widget-overridden columns).         |
 
