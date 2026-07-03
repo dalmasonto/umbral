@@ -19,28 +19,28 @@
 //! `AnyPool` therefore turns the simple multi-backend goal into a
 //! cascade through every binding site.
 //!
-//! The enum is the right shape for now. Every plugin still gets a
-//! typed `SqlitePool` from [`pool`] / [`pool_for`], and the
-//! ergonomics of `sqlx::query(...)` against that pool stay
-//! identical. Phase 2 of the Postgres rollout (per `FEATURES.md`)
-//! threads the variant choice through the migration engine and
-//! queryset; Phase 1 only needs the type seam.
+//! The enum is the right shape. The migration engine and queryset
+//! dispatch on the variant through [`pool_dispatched`], so both
+//! backends work. Legacy SQLite-only call sites can still get a typed
+//! `SqlitePool` from [`pool`] / [`pool_for`] and use `sqlx::query(...)`
+//! against it unchanged (those panic on a Postgres pool, pointing the
+//! caller at the dispatch API).
 //!
-//! ### Postgres at boot, today
+//! ### Postgres and the backend-dispatched accessors
 //!
 //! [`connect`] accepts both `sqlite://...` and `postgres://...`
 //! URLs and returns a [`DbPool`] of the matching variant. The
 //! detection mirrors [`crate::backend::detect`], so the boot path
 //! has one URL parser and they can't drift.
 //!
-//! At Phase 1 the rest of the framework (queryset, migration
-//! engine, every plugin) still reads through [`pool`] / [`pool_for`]
-//! which hand back a `SqlitePool`. If the registered pool is
-//! actually a `PgPool`, those functions panic with a clear
-//! "Postgres support arrives in Phase 2" message. That's
-//! deliberate: the type seam exists, but callers that aren't
-//! ready for Postgres surface immediately at runtime rather than
-//! limping along and producing wrong results.
+//! Postgres is fully wired: the queryset and migration engine
+//! dispatch on the [`DbPool`] variant via [`pool_dispatched`] /
+//! [`pool_for_dispatched`]. The older [`pool`] / [`pool_for`]
+//! accessors still hand back a concrete `SqlitePool` and therefore
+//! panic on a Postgres pool with a message telling the caller to
+//! migrate to [`pool_dispatched`]. They remain only for legacy
+//! SQLite-only call sites that haven't moved to the dispatch API
+//! yet; new code should call [`pool_dispatched`] directly.
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -63,23 +63,24 @@ pub use router::{Alias, DatabaseRouter, DefaultRouter, RouteOp, Schema, router};
 /// pool, so a `clone()` just bumps the refcount.
 #[derive(Debug, Clone)]
 pub enum DbPool {
-    /// SQLite-backed connection pool. The default through Phase 1
-    /// and the only variant the queryset / migration engine accepts
-    /// today.
+    /// SQLite-backed connection pool. The default backend (SQLite for
+    /// tests / local dev, per the Postgres-first principle) and the one
+    /// the legacy concrete-`SqlitePool` accessors return directly.
     Sqlite(SqlitePool),
-    /// Postgres-backed connection pool. Connectable at Phase 1, but
-    /// any code path that calls into the queryset or migration
-    /// engine against this variant panics with a clear "arrives in
-    /// Phase 2" message. The seam itself is the deliverable here.
+    /// Postgres-backed connection pool. Fully supported: the queryset
+    /// and migration engine dispatch on this variant through
+    /// [`pool_dispatched`]. Only the legacy concrete-`SqlitePool`
+    /// accessors ([`pool`] / [`pool_for`], via [`Self::sqlite_or_panic`])
+    /// reject it, with a message pointing at the dispatch API.
     Postgres(PgPool),
 }
 
 impl DbPool {
     /// Borrow the inner `SqlitePool`. Returns `None` for a Postgres
-    /// pool. Phase 1 callers that haven't migrated to the dispatch
-    /// API yet typically reach for [`Self::sqlite_or_panic`]; the
-    /// returned-Option variant is for the (rare today) code that
-    /// wants to gracefully fall back.
+    /// pool. Legacy SQLite-only callers that haven't migrated to the
+    /// dispatch API yet typically reach for [`Self::sqlite_or_panic`];
+    /// the returned-Option variant is for code that wants to
+    /// gracefully fall back.
     pub fn as_sqlite(&self) -> Option<&SqlitePool> {
         match self {
             DbPool::Sqlite(p) => Some(p),
@@ -95,17 +96,18 @@ impl DbPool {
         }
     }
 
-    /// Borrow the inner `SqlitePool`, panicking with a clear "Postgres
-    /// support arrives in Phase 2" message on a Postgres variant. Used
-    /// by [`pool`] and [`pool_for`] so existing plugin code (that
-    /// expects a `SqlitePool`) doesn't quietly limp along when the
-    /// operator connects to Postgres.
+    /// Borrow the inner `SqlitePool`, panicking on a Postgres variant.
+    /// Used by [`pool`] and [`pool_for`] so a legacy SQLite-only call
+    /// site doesn't quietly limp along when the operator connects to
+    /// Postgres. Postgres itself is fully supported — the fix is to
+    /// migrate the call site to [`pool_dispatched`], which dispatches
+    /// on the [`DbPool`] variant instead of assuming SQLite.
     pub fn sqlite_or_panic(&self) -> &SqlitePool {
         self.as_sqlite().expect(
             "umbral: a Postgres pool is registered but this code path \
-             still reads SqlitePool. Full Postgres support lands in \
-             Phase 2 of the rollout — see FEATURES.md and the \
-             `DbPool` rustdoc.",
+             still reads a concrete SqlitePool. Migrate this call site to \
+             `umbral::db::pool_dispatched()` (or `pool_for_dispatched`) \
+             and dispatch on the DbPool variant — see the `DbPool` rustdoc.",
         )
     }
 
@@ -181,10 +183,10 @@ pub(crate) fn init(pools: HashMap<String, DbPool>) {
 
 /// Return the default connection pool, typed as a [`SqlitePool`].
 ///
-/// This is the function every plugin and the queryset call. The
-/// internal storage is a [`DbPool`]; this unwraps to the
-/// `SqlitePool` variant or panics with a Phase-2 hint, matching
-/// the documented Phase 1 contract.
+/// Legacy SQLite-only accessor. The internal storage is a [`DbPool`];
+/// this unwraps to the `SqlitePool` variant or panics with a hint to
+/// migrate to [`pool_dispatched`] on a Postgres pool. New code should
+/// call [`pool_dispatched`] and dispatch on the variant.
 ///
 /// # Panics
 ///
@@ -196,9 +198,9 @@ pub fn pool() -> SqlitePool {
 
 /// Return the default connection pool as a typed [`DbPool`].
 ///
-/// Use this from code that's ready to dispatch on backend (the
-/// migration engine and queryset will move to this surface in
-/// Phase 2). Plugin code can stay on [`pool`] until then.
+/// This is the backend-dispatched surface the migration engine and
+/// queryset use; it works on both SQLite and Postgres. Prefer it over
+/// the legacy [`pool`] accessor in new code.
 ///
 /// # Panics
 ///
