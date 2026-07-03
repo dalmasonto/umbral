@@ -227,6 +227,28 @@ where
     Ok(if value == 0 { None } else { Some(value) })
 }
 
+/// Case-insensitive `Environment` deserialization (audit_2 core-app-config
+/// #16). The variants are `Dev` / `Test` / `Prod`, but every operator hint
+/// aside, `UMBRAL_ENVIRONMENT=prod` (lowercase — the natural thing to type)
+/// otherwise fails deserialization with a generic figment variant error.
+/// Accept any case plus the common long forms so a lowercase value boots the
+/// intended environment instead of erroring.
+fn deserialize_environment<'de, D>(de: D) -> Result<Environment, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let raw = String::deserialize(de)?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "dev" | "development" => Ok(Environment::Dev),
+        "test" | "testing" => Ok(Environment::Test),
+        "prod" | "production" => Ok(Environment::Prod),
+        other => Err(D::Error::custom(format!(
+            "unknown environment `{other}`; expected one of Dev, Test, Prod (case-insensitive)"
+        ))),
+    }
+}
+
 fn dotenv_key(key: &str) -> Option<String> {
     const PREFIX: &str = "UMBRAL_";
 
@@ -265,7 +287,7 @@ fn merge_dotenv(mut figment: Figment) -> Figment {
     figment
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_database_url")]
     pub database_url: String,
@@ -327,7 +349,7 @@ pub struct Settings {
     #[serde(default = "default_secret_key")]
     pub secret_key: String,
 
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_environment")]
     pub environment: Environment,
 
     #[serde(
@@ -414,6 +436,84 @@ pub struct Settings {
     /// the common scalar-string case.
     #[serde(flatten)]
     pub extra: std::collections::HashMap<String, toml::Value>,
+}
+
+/// Redact the userinfo (`user:password`) of a connection URL, keeping the
+/// scheme and host so the value stays diagnosable without leaking the
+/// password. `postgres://alice:s3cret@db.host/app` →
+/// `postgres://***@db.host/app`. A URL with no `@` (e.g. `sqlite::memory:`)
+/// is returned unchanged.
+fn redact_url_userinfo(url: &str) -> String {
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let after = scheme_end + 3;
+    // Only treat an `@` in the authority section (before the first `/`,
+    // `?`, or `#`) as a userinfo delimiter.
+    let authority_end = url[after..]
+        .find(['/', '?', '#'])
+        .map(|i| after + i)
+        .unwrap_or(url.len());
+    match url[after..authority_end].find('@') {
+        Some(at) => format!("{}***{}", &url[..after], &url[after + at..]),
+        None => url.to_string(),
+    }
+}
+
+/// Newtype so the redacting `Debug` for [`Settings`] can print the
+/// `databases` map with each URL's userinfo masked.
+struct RedactedDatabases<'a>(&'a std::collections::HashMap<String, String>);
+
+impl std::fmt::Debug for RedactedDatabases<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.0.iter().map(|(k, v)| (k, redact_url_userinfo(v))))
+            .finish()
+    }
+}
+
+/// Newtype so the redacting `Debug` for [`Settings`] can print the `extra`
+/// map's keys (useful for spotting a typo'd setting) while masking every
+/// value — `extra` is where arbitrary third-party API keys land.
+struct RedactedExtra<'a>(&'a std::collections::HashMap<String, toml::Value>);
+
+impl std::fmt::Debug for RedactedExtra<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.0.keys().map(|k| (k, "***")))
+            .finish()
+    }
+}
+
+/// Hand-written, redacting `Debug` (audit_2 core-app-config #11). The derived
+/// `Debug` printed `secret_key`, the DB password inside `database_url` /
+/// `databases`, and every `extra` value in plaintext — one `tracing::debug!
+/// (?settings)` or `?ctx` (which embeds `Settings`) away from leaking every
+/// credential the app holds. This impl masks the three secret-bearing fields
+/// and prints the rest verbatim so the value stays useful for debugging.
+impl std::fmt::Debug for Settings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Settings")
+            .field("database_url", &redact_url_userinfo(&self.database_url))
+            .field("databases", &RedactedDatabases(&self.databases))
+            .field("max_form_body_bytes", &self.max_form_body_bytes)
+            .field("db_max_connections", &self.db_max_connections)
+            .field("db_acquire_timeout_secs", &self.db_acquire_timeout_secs)
+            .field("db_min_connections", &self.db_min_connections)
+            .field("db_idle_timeout_secs", &self.db_idle_timeout_secs)
+            .field("db_max_lifetime_secs", &self.db_max_lifetime_secs)
+            .field("db_test_before_acquire", &self.db_test_before_acquire)
+            .field("secret_key", &"***redacted***")
+            .field("environment", &self.environment)
+            .field("allowed_hosts", &self.allowed_hosts)
+            .field("log_level", &self.log_level)
+            .field("bind_addr", &self.bind_addr)
+            .field("time_zone", &self.time_zone)
+            .field("static_url", &self.static_url)
+            .field("static_root", &self.static_root)
+            .field("extra", &RedactedExtra(&self.extra))
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -739,6 +839,119 @@ mod tests {
             assert!(matches!(s.environment, Environment::Prod));
             Ok(())
         });
+    }
+
+    #[test]
+    fn environment_is_case_insensitive() {
+        // audit_2 #16: lowercase `prod` (the natural thing to type) used to
+        // fail deserialization; now it resolves to Environment::Prod.
+        for value in ["prod", "PROD", "Production", "production"] {
+            Jail::expect_with(|jail| {
+                jail.set_env("UMBRAL_ENVIRONMENT", value);
+                let s = Settings::from_env().unwrap();
+                assert!(
+                    matches!(s.environment, Environment::Prod),
+                    "`{value}` should deserialize to Prod",
+                );
+                Ok(())
+            });
+        }
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRAL_ENVIRONMENT", "test");
+            assert!(matches!(
+                Settings::from_env().unwrap().environment,
+                Environment::Test
+            ));
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn environment_rejects_unknown_value() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRAL_ENVIRONMENT", "staging");
+            assert!(
+                Settings::from_env().is_err(),
+                "an unknown environment must still be a load error"
+            );
+            Ok(())
+        });
+    }
+
+    /// audit_2 #11: the redacting `Debug` must never surface `secret_key`,
+    /// the DB password in `database_url`/`databases`, or any `extra` value.
+    #[test]
+    fn debug_redacts_secrets() {
+        let mut databases = std::collections::HashMap::new();
+        databases.insert(
+            "replica".to_string(),
+            "postgres://ruser:rpass@replica.host/app".to_string(),
+        );
+        let mut extra = std::collections::HashMap::new();
+        extra.insert(
+            "stripe_secret".to_string(),
+            toml::Value::String("sk_live_TOPSECRET".to_string()),
+        );
+        let settings = Settings {
+            database_url: "postgres://alice:hunter2@db.host:5432/app".to_string(),
+            databases,
+            max_form_body_bytes: Some(1024),
+            db_max_connections: 10,
+            db_acquire_timeout_secs: 30,
+            db_min_connections: 0,
+            db_idle_timeout_secs: Some(600),
+            db_max_lifetime_secs: Some(1800),
+            db_test_before_acquire: true,
+            secret_key: "SUPERSECRETKEYVALUE-do-not-leak".to_string(),
+            environment: Environment::Prod,
+            allowed_hosts: vec!["example.com".to_string()],
+            log_level: "info".to_string(),
+            bind_addr: "127.0.0.1:8000".to_string(),
+            time_zone: None,
+            static_url: "/static/".to_string(),
+            static_root: "staticfiles/".to_string(),
+            extra,
+        };
+        let rendered = format!("{settings:?}");
+        assert!(
+            !rendered.contains("SUPERSECRETKEYVALUE"),
+            "secret_key leaked: {rendered}"
+        );
+        assert!(
+            !rendered.contains("hunter2"),
+            "database_url password leaked: {rendered}"
+        );
+        assert!(
+            !rendered.contains("rpass"),
+            "databases password leaked: {rendered}"
+        );
+        assert!(
+            !rendered.contains("sk_live_TOPSECRET"),
+            "extra value leaked: {rendered}"
+        );
+        // Non-secret context is still present + useful.
+        assert!(
+            rendered.contains("db.host"),
+            "host should survive redaction"
+        );
+        assert!(
+            rendered.contains("stripe_secret"),
+            "extra keys stay visible to spot typos"
+        );
+    }
+
+    #[test]
+    fn redact_url_userinfo_masks_password_keeps_host() {
+        assert_eq!(
+            redact_url_userinfo("postgres://alice:hunter2@db.host/app"),
+            "postgres://***@db.host/app"
+        );
+        // No userinfo → unchanged.
+        assert_eq!(redact_url_userinfo("sqlite::memory:"), "sqlite::memory:");
+        assert_eq!(
+            redact_url_userinfo("sqlite://data/app.db"),
+            "sqlite://data/app.db"
+        );
     }
 
     /// An `UMBRAL_`-prefixed env var that doesn't correspond to a known
