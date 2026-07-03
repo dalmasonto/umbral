@@ -259,10 +259,15 @@ pub trait Plugin: Send + Sync + 'static {
     /// overrides via attribute lands when a real workload needs it.
     ///
     /// The named alias must have been registered via
-    /// `AppBuilder::database(alias, pool)` or
-    /// `Settings.databases[alias]` before `App::build()`. A reference
-    /// to an unregistered alias surfaces as
+    /// `AppBuilder::database(alias, pool)` before `App::build()`. A
+    /// reference to an unregistered alias surfaces as
     /// `BuildError::PluginDatabaseAlias` at boot.
+    ///
+    /// Note: `Settings.databases[alias]` does **not** register a pool on
+    /// its own today — it is parsed config, but nothing opens a pool from
+    /// it (audit_2 core-app-config #4). Open the pool yourself
+    /// (`umbral::db::connect(&url).await?`) and pass it to
+    /// `AppBuilder::database(alias, pool)`.
     fn database(&self) -> Option<&'static str> {
         None
     }
@@ -370,8 +375,11 @@ pub trait Plugin: Send + Sync + 'static {
     ///   - User code can register arbitrary embedded assets.
     ///
     /// Conflicts across plugins (two plugins claiming the same
-    /// `url_path`) surface as the axum `Router::route` panic at
-    /// `App::build` time, with the second registrant losing.
+    /// `url_path`) are **not** silently resolved — axum's
+    /// `Router::route` panics at `App::build` time with an "overlapping
+    /// method route" error naming the path. The build fails loudly; fix
+    /// the collision by giving each plugin a distinct `url_path`
+    /// (namespacing under the plugin name is the convention).
     ///
     /// Default: no files. Plugins that ship no embedded assets leave
     /// this alone.
