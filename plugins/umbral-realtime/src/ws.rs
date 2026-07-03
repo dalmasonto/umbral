@@ -121,6 +121,12 @@ pub(crate) async fn ws_handler(
     headers: HeaderMap,
     Query(q): Query<WsQuery>,
 ) -> Response {
+    // Bound inbound frames BEFORE upgrading: without an explicit cap the WS
+    // stack accepts messages up to 64 MiB, letting one client force large
+    // allocations. An oversized frame errors the read (the inbound loop then
+    // closes the connection) instead of being buffered in full.
+    let cap = Realtime::ws_max_message_bytes();
+    let ws = ws.max_message_size(cap).max_frame_size(cap);
     // CSWSH guard: reject a cross-origin WS upgrade BEFORE upgrading, so a
     // hijacked socket never reaches the registry. CORS doesn't cover the WS
     // handshake, so this is the only thing standing between a cross-site page

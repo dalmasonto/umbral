@@ -85,6 +85,18 @@ RealtimePlugin::new().max_connections(10_000)
 
 The default is unlimited. Once the cap is reached, a new SSE or WebSocket handshake is refused with `503 Service Unavailable` instead of opening the stream; a disconnect frees a slot and the next connection is admitted immediately. `EventSource` treats the 503 as a transient error and retries on its own, so clients drain back in as capacity frees.
 
+<Callout type="warning">
+Set `max_connections` in production. Unlimited is a dev-friendly default, not a deployment posture — without a cap, a handful of misbehaving clients can exhaust file descriptors for the whole process.
+</Callout>
+
+## Inbound message size (`ws_max_message_bytes`)
+
+Inbound WebSocket messages (and frames) are capped at **1 MiB by default**, so a single client can't force multi-megabyte allocations per frame. A frame above the cap is refused by the socket layer — it never reaches your `MessageHandler`, and the offending connection is closed. Outbound (server→client) pushes are unaffected. Raise or lower it per app:
+
+```rust
+RealtimePlugin::new().ws_max_message_bytes(64 * 1024) // 64 KiB is plenty for chat
+```
+
 ## WebSocket: two-way traffic
 
 For chat or typed commands, connect to `GET /realtime/ws?groups=...`. The same `Realtime::to_user` / `to_group` / `broadcast` push API works unchanged; outbound events arrive as JSON text frames `{"event":"…","data":{…}}`. Inbound client text frames go to a `MessageHandler` you register:

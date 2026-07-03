@@ -392,7 +392,7 @@ impl From<TemplateError> for EmailError {
 /// first use and pinned for the process lifetime. A `Settings` reload
 /// would require restarting the process, which matches every other
 /// ambient handle in umbral.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct EmailConfig {
     backend: BackendKind,
     /// Host. None ⇒ console mode regardless of port / creds.
@@ -410,6 +410,26 @@ struct EmailConfig {
     /// in settings; defaults to 10 s. Set to 0 to remove the cap
     /// (not recommended in production).
     smtp_timeout_secs: u64,
+}
+
+/// Manual `Debug`: `smtp_password` and `api_key` are plaintext credentials,
+/// so a derived impl would leak them into any `{:?}`-formatted log or error.
+/// Presence (`Some(…)`/`None`) stays visible for diagnostics; the value never
+/// does.
+impl std::fmt::Debug for EmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailConfig")
+            .field("backend", &self.backend)
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field("smtp_user", &self.smtp_user)
+            .field("smtp_password", &self.smtp_password.as_ref().map(|_| "***"))
+            .field("default_from", &self.default_from)
+            .field("api_provider", &self.api_provider)
+            .field("api_key", &self.api_key.as_ref().map(|_| "***"))
+            .field("smtp_timeout_secs", &self.smtp_timeout_secs)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -821,7 +841,7 @@ async fn deliver_smtp(cfg: &EmailConfig, message: Message) -> Result<(), EmailEr
 /// function with no I/O, so the request mapping is unit-testable without
 /// a network round-trip) and consumed by [`deliver_api`], which performs
 /// the actual `reqwest` POST under the `api` feature.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ApiRequest {
     /// Provider endpoint to POST to.
     pub url: String,
@@ -829,6 +849,18 @@ pub struct ApiRequest {
     pub bearer: String,
     /// JSON request body in the provider's expected shape.
     pub body: serde_json::Value,
+}
+
+/// Manual `Debug`: `bearer` is the provider API key, so a derived impl would
+/// leak it into any `{:?}`-formatted log or error.
+impl std::fmt::Debug for ApiRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiRequest")
+            .field("url", &self.url)
+            .field("bearer", &"***")
+            .field("body", &self.body)
+            .finish()
+    }
 }
 
 /// Map an [`EmailMessage`] into a provider-specific HTTP request.
@@ -1207,6 +1239,68 @@ mod tests {
             Some(EmailApiProvider::SendGrid)
         );
         assert_eq!(EmailApiProvider::from_setting("mailgun"), None);
+    }
+
+    #[test]
+    fn email_config_debug_redacts_secrets() {
+        let cfg = EmailConfig {
+            backend: BackendKind::Smtp,
+            smtp_host: Some("mail.acme.test".into()),
+            smtp_port: 587,
+            smtp_user: Some("mailer".into()),
+            smtp_password: Some("hunter2-smtp".into()),
+            default_from: Some("noreply@acme.test".into()),
+            api_provider: Some(EmailApiProvider::Resend),
+            api_key: Some("re_secret_key".into()),
+            smtp_timeout_secs: 10,
+        };
+        let out = format!("{cfg:?}");
+        assert!(
+            !out.contains("hunter2-smtp"),
+            "smtp_password must never appear in Debug output; got: {out}"
+        );
+        assert!(
+            !out.contains("re_secret_key"),
+            "api_key must never appear in Debug output; got: {out}"
+        );
+        // Presence is still visible (Some vs None), just not the value.
+        assert!(out.contains("smtp_password"));
+        assert!(out.contains("api_key"));
+        // Non-secret fields still print normally.
+        assert!(out.contains("mail.acme.test"));
+        assert!(out.contains("587"));
+
+        // A secret-free config shows the absence.
+        let empty = EmailConfig {
+            backend: BackendKind::Console,
+            smtp_host: None,
+            smtp_port: 587,
+            smtp_user: None,
+            smtp_password: None,
+            default_from: None,
+            api_provider: None,
+            api_key: None,
+            smtp_timeout_secs: 10,
+        };
+        let out = format!("{empty:?}");
+        assert!(out.contains("smtp_password: None"), "got: {out}");
+    }
+
+    #[test]
+    fn api_request_debug_redacts_the_bearer_token() {
+        let req = ApiRequest {
+            url: "https://api.resend.com/emails".into(),
+            bearer: "re_live_secret".into(),
+            body: serde_json::json!({ "to": ["a@b.test"] }),
+        };
+        let out = format!("{req:?}");
+        assert!(
+            !out.contains("re_live_secret"),
+            "the bearer token must never appear in Debug output; got: {out}"
+        );
+        assert!(out.contains("bearer"));
+        // Non-secret fields still print normally.
+        assert!(out.contains("https://api.resend.com/emails"));
     }
 
     #[test]

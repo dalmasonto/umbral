@@ -83,6 +83,14 @@ pub const DEFAULT_BUFFER: usize = 64;
 /// [`RealtimePlugin::replay_buffer`].
 pub const DEFAULT_REPLAY_BUFFER: usize = 1024;
 
+/// Default cap on an inbound WebSocket message (and frame), in bytes: 1 MiB.
+/// Without an explicit cap the WS stack accepts messages up to 64 MiB, which
+/// lets a single client force large allocations (memory DoS). 1 MiB is far
+/// above any sane chat/command payload while bounding the per-frame
+/// allocation; raise it per app via
+/// [`RealtimePlugin::ws_max_message_bytes`].
+pub const DEFAULT_WS_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+
 static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// One server→client event: a named event plus a JSON payload. The SSE
@@ -796,11 +804,26 @@ pub struct MessageContext {
 /// Handles text frames a WebSocket client sends to the server. SSE is
 /// push-only, so this only matters for the WS transport. The default
 /// ([`NoopMessageHandler`]) ignores inbound frames; a chat app implements
-/// this to broadcast a received message to its room:
+/// this to broadcast a received message to its room.
+///
+/// **Inbound frames carry no automatic send-authorization.** The
+/// [`GroupPolicy`] gate runs at the *handshake* and decides which groups a
+/// connection may *join*; it does **not** run on inbound messages, and
+/// [`Realtime::to_group`] delivers to whoever is in the target group
+/// regardless of who sent the frame. Treat `text` as untrusted input and
+/// re-check authorization before publishing to any client-supplied room:
 ///
 /// ```ignore
 /// async fn on_message(&self, ctx: &MessageContext, text: String) {
-///     let msg: ChatMsg = serde_json::from_str(&text).unwrap();
+///     // Parse defensively — never unwrap attacker-controlled input.
+///     let msg: ChatMsg = match serde_json::from_str(&text) {
+///         Ok(m) => m,
+///         Err(_) => return,
+///     };
+///     // The sender may only publish to a room its own identity could join.
+///     if !Realtime::policy().can_join(ctx.user_id.as_deref(), &msg.room) {
+///         return; // drop the unauthorized publish
+///     }
 ///     Realtime::to_group(&msg.room).send("message", &msg).await;
 /// }
 /// ```
@@ -1256,6 +1279,9 @@ pub struct Realtime {
     /// The configured mount base (default `/realtime`). The served JS and the
     /// startup log are templated off this.
     base_path: Arc<str>,
+    /// Cap on an inbound WebSocket message/frame, in bytes. Default
+    /// [`DEFAULT_WS_MAX_MESSAGE_BYTES`].
+    ws_max_message_bytes: usize,
 }
 
 impl Realtime {
@@ -1313,6 +1339,14 @@ impl Realtime {
     /// `/realtime/...` URLs off this. Set via [`RealtimePlugin::at`].
     pub fn base_path() -> Arc<str> {
         Self::get().base_path.clone()
+    }
+
+    /// The cap on an inbound WebSocket message/frame in bytes (default
+    /// [`DEFAULT_WS_MAX_MESSAGE_BYTES`]). The WS transport applies it to the
+    /// upgrade so an oversized client frame is refused instead of allocated.
+    /// Set via [`RealtimePlugin::ws_max_message_bytes`].
+    pub fn ws_max_message_bytes() -> usize {
+        Self::get().ws_max_message_bytes
     }
 
     /// Target a single user's every live connection. `user_id` is the user's
@@ -1410,12 +1444,41 @@ pub struct RealtimePlugin {
     /// Mount base for the realtime endpoints. Default `/realtime`; set via
     /// [`at`](Self::at). The served JS templates its URLs off this.
     base_path: String,
+    /// Cap on an inbound WebSocket message/frame, in bytes. Defaults to
+    /// [`DEFAULT_WS_MAX_MESSAGE_BYTES`]; set via
+    /// [`ws_max_message_bytes`](Self::ws_max_message_bytes).
+    ws_max_message_bytes: usize,
 }
 
 /// The no-op identity resolver: every connection is anonymous (`None`).
 /// This is the default so anonymous / push-only feeds require no auth dep.
 fn anonymous_resolver() -> IdentityResolver {
     Arc::new(|_headers: HeaderMap| Box::pin(async { None }))
+}
+
+/// Strip the userinfo (`user:password@`) from a connection URL so it is safe
+/// to log. `redis://:s3cret@host:6379/0` → `redis://host:6379/0`. Only the
+/// authority section (between the scheme and the first `/`, `?` or `#`) is
+/// inspected, so an `@` in a path or query parameter is left alone. URLs
+/// without userinfo pass through unchanged.
+// The only production call site is the `redis`-gated broker boot log; unit
+// tests exercise it under every feature set.
+#[cfg_attr(not(feature = "redis"), allow(dead_code))]
+fn redact_url(url: &str) -> String {
+    let (scheme, rest) = match url.split_once("://") {
+        Some((s, r)) => (Some(s), r),
+        None => (None, url),
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let host = match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    };
+    match scheme {
+        Some(s) => format!("{s}://{host}{tail}"),
+        None => format!("{host}{tail}"),
+    }
 }
 
 impl Default for RealtimePlugin {
@@ -1431,6 +1494,7 @@ impl Default for RealtimePlugin {
             presence: Arc::new(PresenceSpec::default()),
             allowed_origins: Vec::new(),
             base_path: "/realtime".to_string(),
+            ws_max_message_bytes: DEFAULT_WS_MAX_MESSAGE_BYTES,
         }
     }
 }
@@ -1541,6 +1605,18 @@ impl RealtimePlugin {
     /// the next connection.
     pub fn max_connections(mut self, n: usize) -> Self {
         self.max_connections = Some(n);
+        self
+    }
+
+    /// Cap an **inbound WebSocket message** (and frame) at `n` bytes.
+    /// A client frame above the cap is refused by the socket layer — it is
+    /// never buffered in full and never reaches the [`MessageHandler`]; the
+    /// offending connection is closed. Defaults to
+    /// [`DEFAULT_WS_MAX_MESSAGE_BYTES`] (1 MiB) so a single client can't
+    /// force multi-megabyte allocations. Outbound (server→client) pushes are
+    /// unaffected.
+    pub fn ws_max_message_bytes(mut self, n: usize) -> Self {
+        self.ws_max_message_bytes = n;
         self
     }
 
@@ -1740,7 +1816,10 @@ impl RealtimePlugin {
     fn build_broker(&self, registry: Arc<Registry>) -> Arc<dyn Broker> {
         #[cfg(feature = "redis")]
         if let Some(url) = self.redis_url.clone() {
-            tracing::info!("realtime: redis broker backplane → {url}");
+            // Log the redacted form only: the configured URL commonly embeds
+            // a password (`redis://:password@host`), which must never reach
+            // a log sink.
+            tracing::info!("realtime: redis broker backplane → {}", redact_url(&url));
             return Arc::new(RedisBroker::start(url, registry));
         }
         #[cfg(not(feature = "redis"))]
@@ -1786,6 +1865,7 @@ impl Plugin for RealtimePlugin {
             presence: self.presence.clone(),
             allowed_origins: self.allowed_origins.clone().into(),
             base_path: Arc::from(self.base_path.as_str()),
+            ws_max_message_bytes: self.ws_max_message_bytes,
         });
         // Register the model-change subscriptions now that the ambient
         // handle exists (a fired handler calls Realtime::to_group, etc.).
@@ -2187,5 +2267,49 @@ mod tests {
         );
         // Empty by default — same-origin still works without any config.
         assert!(RealtimePlugin::new().allowed_origins.is_empty());
+    }
+
+    #[test]
+    fn redact_url_strips_password_userinfo() {
+        // The canonical Redis credential form: `redis://:password@host`.
+        let out = redact_url("redis://:s3cr3t@cache.internal:6379/0");
+        assert_eq!(out, "redis://cache.internal:6379/0");
+        assert!(!out.contains("s3cr3t"));
+    }
+
+    #[test]
+    fn redact_url_strips_user_and_password() {
+        let out = redact_url("redis://admin:hunter2@host:6380");
+        assert_eq!(out, "redis://host:6380");
+        assert!(!out.contains("hunter2"));
+        assert!(!out.contains("admin"));
+    }
+
+    #[test]
+    fn redact_url_passes_through_credential_free_urls() {
+        assert_eq!(
+            redact_url("redis://cache.internal:6379/0"),
+            "redis://cache.internal:6379/0"
+        );
+        assert_eq!(redact_url("rediss://host"), "rediss://host");
+    }
+
+    #[test]
+    fn redact_url_only_inspects_the_authority() {
+        // An `@` after the path/query is NOT userinfo — leave it alone.
+        assert_eq!(
+            redact_url("redis://host:6379/0?note=a@b"),
+            "redis://host:6379/0?note=a@b"
+        );
+        // ...but real userinfo is still stripped when a query also has an `@`.
+        let out = redact_url("redis://:pw@host:6379/0?note=a@b");
+        assert_eq!(out, "redis://host:6379/0?note=a@b");
+        assert!(!out.contains("pw@"));
+    }
+
+    #[test]
+    fn redact_url_handles_schemeless_urls() {
+        assert_eq!(redact_url("user:pw@host:6379"), "host:6379");
+        assert_eq!(redact_url("host:6379"), "host:6379");
     }
 }
