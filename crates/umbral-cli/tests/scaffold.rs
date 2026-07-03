@@ -149,6 +149,61 @@ fn scaffold_project_main_rs_references_all_plugins() {
     }
 }
 
+// audit core-macros-cli #1: the generated dev-superuser seed must NOT
+// plant a fixed-password `admin`/`admin` account. It has to be gated on
+// the Dev environment AND opt-in via an env-var password — otherwise a
+// bare `./app` launch against an empty prod DB mints a known-credential
+// superuser.
+#[test]
+fn scaffold_project_seed_has_no_hardcoded_admin_password() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("testapp", tmp.path(), None).unwrap();
+    let creds = fs::read_to_string(report.root.join("src/seed/credentials.rs")).unwrap();
+
+    // No hardcoded password literal reaches create_superuser.
+    assert!(
+        !creds.contains(r#"create_superuser("admin", "admin@example.com", "admin")"#),
+        "generated credentials.rs must not hardcode an admin/admin superuser;\ngot:\n{creds}"
+    );
+    // The seed is gated on the Dev environment.
+    assert!(
+        creds.contains("Environment::Dev"),
+        "seed must be gated on the Dev environment;\ngot:\n{creds}"
+    );
+    // The password is supplied via an env var (opt-in), not a literal.
+    assert!(
+        creds.contains("UMBRAL_DEV_ADMIN_PASSWORD"),
+        "seed must read the password from an env var;\ngot:\n{creds}"
+    );
+    // The password passed to create_superuser is the env-var value, not a literal.
+    assert!(
+        creds.contains("create_superuser(\"admin\", \"admin@example.com\", &password)"),
+        "create_superuser must receive the env-var password by reference;\ngot:\n{creds}"
+    );
+}
+
+// audit core-macros-cli #5: the generated README must not claim that
+// `serve` auto-migrates on first run — the boot guard only auto-migrates
+// on a bare `cargo run` (no subcommand). `serve` is a subcommand and
+// skips it.
+#[test]
+fn scaffold_project_readme_first_run_is_bare_cargo_run() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("testapp", tmp.path(), None).unwrap();
+    let readme = fs::read_to_string(report.root.join("README.md")).unwrap();
+
+    assert!(
+        !readme.contains(
+            "# First run — applies migrations and starts the server:\ncargo run -- serve"
+        ),
+        "README must not claim `serve` auto-migrates on first run;\ngot:\n{readme}"
+    );
+    assert!(
+        readme.contains("bare `cargo run`"),
+        "README should document that a bare `cargo run` auto-migrates;\ngot:\n{readme}"
+    );
+}
+
 // gap 20: base.html contains the Tailwind CDN link.
 #[test]
 fn scaffold_project_base_html_has_tailwind_cdn() {
