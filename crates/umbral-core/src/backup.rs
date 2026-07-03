@@ -56,6 +56,11 @@ use crate::orm::{ArrayElement, SqlType, TsVector};
 
 const DUMP_VERSION: &str = "1";
 
+/// One table resolved against the live schema, paired with the dump
+/// rows to load into it. Borrows the rows out of the [`Dump`] so the
+/// restore never copies row data.
+type ResolvedTable<'a> = (ModelMeta, &'a [Map<String, Value>]);
+
 /// The on-disk envelope. `models` order is the order [`dump`] wrote
 /// them in (sorted by table name for determinism). `exported_at` is
 /// captured at dump time for traceability; [`load`] doesn't read it.
@@ -102,6 +107,13 @@ pub enum BackupError {
         expected: SqlType,
         got: String,
     },
+    /// The dump carries two entries for the same table. A merged or
+    /// hand-edited dump would otherwise load the first entry and route
+    /// the rest to `skipped_tables` (the "unknown schema" bucket),
+    /// masking the duplicate. Fail loudly instead.
+    DuplicateTable {
+        table: String,
+    },
 }
 
 impl std::fmt::Display for BackupError {
@@ -129,6 +141,11 @@ impl std::fmt::Display for BackupError {
                 f,
                 "umbral backup: column `{table}.{column}` expects {expected:?} but the \
                  dump has {got}"
+            ),
+            BackupError::DuplicateTable { table } => write!(
+                f,
+                "umbral backup: dump contains two entries for table `{table}`; a dump must \
+                 carry one entry per table (was it merged or hand-edited?)"
             ),
         }
     }
@@ -191,25 +208,196 @@ pub async fn load(dump: &Dump) -> Result<LoadReport, BackupError> {
     }
     let pool = crate::db::pool_dispatched();
     let registered = crate::migrate::registered_models();
-    let mut by_table: std::collections::HashMap<String, ModelMeta> = registered
+    let by_table: std::collections::HashMap<String, ModelMeta> = registered
         .into_iter()
         .map(|m| (m.table.clone(), m))
         .collect();
 
     let mut report = LoadReport::default();
+
+    // Resolve every dump entry against the live schema. Duplicate table
+    // entries are a hard error (was the dump merged / hand-edited?); an
+    // entry whose table isn't in the schema is skipped with a warning
+    // (a dump from a richer schema still restores the tables this build
+    // knows). We look up WITHOUT removing so a legitimate duplicate is
+    // caught here rather than silently routed to `skipped_tables`.
+    let mut resolved: Vec<ResolvedTable<'_>> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for model in &dump.models {
-        let Some(meta) = by_table.remove(&model.table) else {
-            // Unknown table in dump. Skip with a warning rather than
-            // erroring — a dump from a newer schema is still useful
-            // for the tables this build does know about.
+        let Some(meta) = by_table.get(&model.table) else {
             report.skipped_tables.push(model.table.clone());
             continue;
         };
-        let inserted = load_one(pool, &meta, &model.rows).await?;
-        report.rows_loaded += inserted;
-        report.tables_loaded.push(meta.table);
+        if !seen.insert(model.table.clone()) {
+            return Err(BackupError::DuplicateTable {
+                table: model.table.clone(),
+            });
+        }
+        resolved.push((meta.clone(), model.rows.as_slice()));
+    }
+
+    // Topologically order by FK dependency so a child table never loads
+    // before its parent — the dump is written in alphabetical order,
+    // which puts `comment` before `post` and fails FK checks on
+    // restore. Cycles / self-references degrade to the dump's original
+    // order for the affected nodes rather than erroring.
+    let ordered = topo_order_by_fk(resolved);
+
+    // One transaction for the whole restore so a mid-load failure rolls
+    // back cleanly instead of leaving a half-populated database.
+    match pool {
+        DbPool::Sqlite(p) => load_all_sqlite(p, &ordered, &mut report).await?,
+        DbPool::Postgres(p) => load_all_postgres(p, &ordered, &mut report).await?,
     }
     Ok(report)
+}
+
+/// Order the resolved `(meta, rows)` pairs so every table appears after
+/// the tables its foreign keys reference. A Kahn-style walk: repeatedly
+/// emit the nodes whose FK targets are all already emitted, preserving
+/// the input order among ready nodes for determinism. FK targets that
+/// aren't part of this load (e.g. a table not in the dump) impose no
+/// ordering constraint. A dependency cycle (or a self-referential FK)
+/// can't be fully ordered by table; the walk breaks it by emitting the
+/// lowest-input-index remaining node, which reproduces the old
+/// best-effort behaviour for those nodes.
+fn topo_order_by_fk(items: Vec<ResolvedTable<'_>>) -> Vec<ResolvedTable<'_>> {
+    let present: std::collections::HashSet<String> =
+        items.iter().map(|(m, _)| m.table.clone()).collect();
+
+    let mut deps: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for (m, _) in &items {
+        let mut d = std::collections::HashSet::new();
+        for col in &m.fields {
+            if let Some(target) = &col.fk_target {
+                if target != &m.table && present.contains(target) {
+                    d.insert(target.clone());
+                }
+            }
+        }
+        deps.insert(m.table.clone(), d);
+    }
+
+    let order_index: std::collections::HashMap<String, usize> = items
+        .iter()
+        .enumerate()
+        .map(|(i, (m, _))| (m.table.clone(), i))
+        .collect();
+
+    let mut emitted_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut emitted: Vec<String> = Vec::new();
+    let mut remaining: Vec<String> = items.iter().map(|(m, _)| m.table.clone()).collect();
+
+    while !remaining.is_empty() {
+        let mut ready: Vec<String> = remaining
+            .iter()
+            .filter(|t| deps[*t].iter().all(|d| emitted_set.contains(d)))
+            .cloned()
+            .collect();
+        if ready.is_empty() {
+            // Cycle: break it deterministically by the lowest input index.
+            let pick = remaining
+                .iter()
+                .min_by_key(|t| order_index[*t])
+                .cloned()
+                .expect("remaining is non-empty");
+            ready.push(pick);
+        }
+        ready.sort_by_key(|t| order_index[t]);
+        for t in ready {
+            emitted_set.insert(t.clone());
+            emitted.push(t.clone());
+            remaining.retain(|x| x != &t);
+        }
+    }
+
+    let mut by_table: std::collections::HashMap<String, ResolvedTable<'_>> = items
+        .into_iter()
+        .map(|(m, r)| (m.table.clone(), (m, r)))
+        .collect();
+    emitted
+        .into_iter()
+        .filter_map(|t| by_table.remove(&t))
+        .collect()
+}
+
+async fn load_all_sqlite(
+    pool: &sqlx::SqlitePool,
+    ordered: &[ResolvedTable<'_>],
+    report: &mut LoadReport,
+) -> Result<(), BackupError> {
+    let mut tx = pool.begin().await?;
+    for (meta, rows) in ordered {
+        let inserted = insert_rows_sqlite(&mut tx, meta, rows).await?;
+        report.rows_loaded += inserted;
+        report.tables_loaded.push(meta.table.clone());
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn load_all_postgres(
+    pool: &sqlx::PgPool,
+    ordered: &[ResolvedTable<'_>],
+    report: &mut LoadReport,
+) -> Result<(), BackupError> {
+    let mut tx = pool.begin().await?;
+    for (meta, rows) in ordered {
+        let inserted = insert_rows_postgres(&mut tx, meta, rows).await?;
+        report.rows_loaded += inserted;
+        report.tables_loaded.push(meta.table.clone());
+    }
+    // A restore inserts explicit primary keys, but a BIGSERIAL sequence
+    // still starts at 1 — the first ORM insert after restore then
+    // collides on the PK. Advance each integer-PK table's sequence past
+    // its restored max so new inserts don't duplicate a restored id.
+    for (meta, _) in ordered {
+        reset_pg_sequence(&mut tx, meta).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Advance a table's owning sequence past `MAX(pk)` on Postgres. Only
+/// integer PKs own a BIGSERIAL sequence; String / Uuid / composite /
+/// absent PKs are skipped. `pg_get_serial_sequence` returns NULL for an
+/// integer PK that doesn't own a sequence (an app-assigned id), so the
+/// NULL guard keeps `setval(NULL, ...)` from ever running.
+async fn reset_pg_sequence(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    meta: &ModelMeta,
+) -> Result<(), BackupError> {
+    let Some(pk) = meta.fields.iter().find(|c| c.primary_key) else {
+        return Ok(());
+    };
+    if !matches!(
+        pk.ty,
+        SqlType::BigInt | SqlType::Integer | SqlType::SmallInt
+    ) {
+        return Ok(());
+    }
+    let seq: Option<String> = sqlx::query_scalar("SELECT pg_get_serial_sequence($1, $2)")
+        .bind(&meta.table)
+        .bind(&pk.name)
+        .fetch_one(&mut **tx)
+        .await?;
+    let Some(seq) = seq else {
+        return Ok(());
+    };
+    // `is_called = false` means the NEXT nextval() returns exactly this
+    // value, so `MAX(pk) + 1` is the next id handed out. On an empty
+    // table MAX is NULL → COALESCE → 0 → next id is 1.
+    let reset_sql = format!(
+        "SELECT setval($1, COALESCE((SELECT MAX({pk}) FROM {tbl}), 0) + 1, false)",
+        pk = quoted_ident(&pk.name),
+        tbl = quoted_ident(&meta.table),
+    );
+    sqlx::query(&reset_sql)
+        .bind(&seq)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 /// Convenience: read the JSON from `path` and load it.
@@ -265,25 +453,14 @@ async fn dump_one_sqlite(
     })
 }
 
-async fn load_one(
-    pool: &DbPool,
+async fn insert_rows_sqlite(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     model: &ModelMeta,
     rows: &[Map<String, Value>],
 ) -> Result<u64, BackupError> {
     if rows.is_empty() {
         return Ok(0);
     }
-    match pool {
-        DbPool::Sqlite(pool) => load_one_sqlite(pool, model, rows).await,
-        DbPool::Postgres(pool) => load_one_postgres(pool, model, rows).await,
-    }
-}
-
-async fn load_one_sqlite(
-    pool: &sqlx::SqlitePool,
-    model: &ModelMeta,
-    rows: &[Map<String, Value>],
-) -> Result<u64, BackupError> {
     let sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
         quoted_ident(&model.table),
@@ -308,7 +485,7 @@ async fn load_one_sqlite(
             let val = row.get(&col.name).cloned().unwrap_or(Value::Null);
             q = bind_value(q, &model.table, col, val)?;
         }
-        q.execute(pool).await?;
+        q.execute(&mut **tx).await?;
         count += 1;
     }
     Ok(count)
@@ -339,11 +516,14 @@ async fn dump_one_postgres(
     })
 }
 
-async fn load_one_postgres(
-    pool: &sqlx::PgPool,
+async fn insert_rows_postgres(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     model: &ModelMeta,
     rows: &[Map<String, Value>],
 ) -> Result<u64, BackupError> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
     let sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
         quoted_ident(&model.table),
@@ -366,7 +546,7 @@ async fn load_one_postgres(
             let val = row.get(&col.name).cloned().unwrap_or(Value::Null);
             q = bind_value_pg(q, &model.table, col, val)?;
         }
-        q.execute(pool).await?;
+        q.execute(&mut **tx).await?;
         count += 1;
     }
     Ok(count)
