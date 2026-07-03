@@ -5054,6 +5054,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+ "tracing",
  "umbral",
  "umbral-auth",
  "umbral-casing",
