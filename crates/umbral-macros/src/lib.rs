@@ -3996,12 +3996,21 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
                     &mut errs,
                 ).await;
             });
+            // Parse the submitted id into the TARGET model's declared PK
+            // type — not a hardcoded i64. `<T as Model>::PrimaryKey`
+            // resolves to the concrete key type (i64 / String / Uuid),
+            // each of which implements `FromStr`, so `parse` works for
+            // every supported PK shape. The error fallback uses
+            // `ForeignKey::<T>::default()` (a type-correct placeholder)
+            // rather than `new(0)`, which would fail to compile for a
+            // String / Uuid keyed target.
+            let target_pk_ty = quote! { <#target_ty as ::umbral::orm::Model>::PrimaryKey };
             let parse_expr = if is_nullable {
                 quote! {
                     if #raw_var.is_empty() {
                         ::core::option::Option::None
                     } else {
-                        match #raw_var.parse::<i64>() {
+                        match #raw_var.parse::<#target_pk_ty>() {
                             ::core::result::Result::Ok(v) =>
                                 ::core::option::Option::Some(::umbral::orm::ForeignKey::new(v)),
                             ::core::result::Result::Err(_) => {
@@ -4013,11 +4022,11 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
                 }
             } else {
                 quote! {
-                    match #raw_var.parse::<i64>() {
+                    match #raw_var.parse::<#target_pk_ty>() {
                         ::core::result::Result::Ok(v) => ::umbral::orm::ForeignKey::new(v),
                         ::core::result::Result::Err(_) => {
                             errs.add(#field_name, format!("{} must be a valid id", #field_name));
-                            ::umbral::orm::ForeignKey::new(0)
+                            ::umbral::orm::ForeignKey::<#target_ty>::default()
                         }
                     }
                 }
