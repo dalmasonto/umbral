@@ -99,7 +99,7 @@ pub trait FormValidate: Sized {
             out.push_str("<div class=\"field\">");
             out.push_str(&format!(
                 "<label for=\"{name}\">{name}</label>",
-                name = field.name
+                name = html_escape(&field.name)
             ));
             out.push_str(&field.render_html_async(value).await);
             out.push_str("</div>");
@@ -681,29 +681,22 @@ impl Field {
     /// raw user input on a re-render after validation failed).
     pub fn render_html(&self, value: &str) -> String {
         let safe_value = html_escape(value);
+        let name = html_escape(&self.name);
         let required = if self.required { " required" } else { "" };
         match self.kind {
-            InputKind::Textarea => format!(
-                "<textarea name=\"{name}\"{required}>{safe_value}</textarea>",
-                name = self.name,
-            ),
+            InputKind::Textarea => {
+                format!("<textarea name=\"{name}\"{required}>{safe_value}</textarea>",)
+            }
             InputKind::Checkbox => {
                 let checked = if value == "true" || value == "on" || value == "1" {
                     " checked"
                 } else {
                     ""
                 };
-                format!(
-                    "<input type=\"checkbox\" name=\"{name}\" value=\"true\"{checked}>",
-                    name = self.name,
-                )
+                format!("<input type=\"checkbox\" name=\"{name}\" value=\"true\"{checked}>",)
             }
             InputKind::Select => {
-                let mut s = format!(
-                    "<select name=\"{name}\"{required}>",
-                    name = self.name,
-                    required = required
-                );
+                let mut s = format!("<select name=\"{name}\"{required}>", required = required);
                 for (val, label) in &self.options {
                     let selected = if val == value { " selected" } else { "" };
                     s.push_str(&format!(
@@ -721,12 +714,10 @@ impl Field {
                 // the markup would leak it. The prefill is intentionally
                 // dropped.
                 "<input type=\"file\" name=\"{name}\"{required}>",
-                name = self.name,
             ),
             other => format!(
                 "<input type=\"{ty}\" name=\"{name}\" value=\"{safe_value}\"{required}>",
                 ty = other.html_type(),
-                name = self.name,
             ),
         }
     }
@@ -766,7 +757,7 @@ impl Field {
         let required = if self.required { " required" } else { "" };
         let mut s = format!(
             "<select name=\"{name}\"{multiple_attr}{required}>",
-            name = self.name,
+            name = html_escape(&self.name),
         );
         if !multiple && !self.required {
             s.push_str("<option value=\"\"></option>");
@@ -1019,11 +1010,19 @@ impl FormErrors {
                 axum::response::Html(html),
             )
                 .into_response(),
-            Err(e) => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("form re-render failed for `{template}`: {e}"),
-            )
-                .into_response(),
+            Err(e) => {
+                // The template name and raw minijinja error can carry
+                // internal paths / line numbers — log them server-side,
+                // never disclose them to the client. Mirrors the 500
+                // handler's generic-body-plus-tracing pattern in
+                // `errors.rs::render_500`.
+                tracing::error!("form re-render failed for `{template}`: {e}");
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal Server Error",
+                )
+                    .into_response()
+            }
         }
     }
 }
@@ -1548,6 +1547,91 @@ mod tests {
             Some("Bella Verifier")
         );
         assert_eq!(obj.get("phone").and_then(|v| v.as_str()), Some("none"));
+    }
+
+    #[test]
+    fn field_name_is_html_escaped_in_rendered_markup() {
+        // Field names are static struct identifiers in the derive-macro
+        // norm, but `Field::text(user_supplied_name)` is a public path.
+        // The `name` attribute must be HTML-escaped so a crafted name
+        // can't break out of the attribute and inject markup/handlers.
+        let malicious = "x\" onfocus=\"alert(1)";
+
+        // Text input
+        let out = Field::text(malicious).render_html("");
+        assert!(
+            !out.contains("onfocus=\"alert(1)"),
+            "text input leaked an unescaped name attribute: {out}"
+        );
+        assert!(out.contains("&quot;"), "name should be escaped: {out}");
+
+        // Textarea
+        let mut ta = Field::text(malicious);
+        ta.kind = InputKind::Textarea;
+        let out = ta.render_html("");
+        assert!(
+            !out.contains("onfocus=\"alert(1)"),
+            "textarea leaked an unescaped name attribute: {out}"
+        );
+
+        // Checkbox
+        let mut cb = Field::text(malicious);
+        cb.kind = InputKind::Checkbox;
+        let out = cb.render_html("");
+        assert!(
+            !out.contains("onfocus=\"alert(1)"),
+            "checkbox leaked an unescaped name attribute: {out}"
+        );
+
+        // Select
+        let mut sel = Field::text(malicious);
+        sel.kind = InputKind::Select;
+        let out = sel.render_html("");
+        assert!(
+            !out.contains("onfocus=\"alert(1)"),
+            "select leaked an unescaped name attribute: {out}"
+        );
+
+        // File
+        let mut file = Field::text(malicious);
+        file.kind = InputKind::File;
+        let out = file.render_html("");
+        assert!(
+            !out.contains("onfocus=\"alert(1)"),
+            "file input leaked an unescaped name attribute: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn form_render_failure_does_not_leak_template_name_or_error() {
+        // A form-template render failure must not disclose the template
+        // name or the raw minijinja error (which can carry file paths /
+        // line numbers) to the client. The client gets a generic 500;
+        // the detail is logged server-side.
+        let errs = FormErrors::new(WriteError::Validator {
+            field: "email".to_string(),
+            message: "invalid".to_string(),
+        });
+
+        // A template name that doesn't exist forces `render` down its
+        // error branch (missing template, or engine-not-initialised —
+        // either way, `Err`).
+        let secret_name = "signup/__nonexistent_secret_path__.html";
+        let resp = errs.render(secret_name);
+
+        assert_eq!(resp.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("collect body");
+        let text = String::from_utf8_lossy(&body);
+        assert!(
+            !text.contains(secret_name),
+            "500 body leaked the template name: {text}"
+        );
+        assert!(
+            !text.contains("form re-render failed"),
+            "500 body leaked internal render-error detail: {text}"
+        );
     }
 
     #[test]

@@ -730,6 +730,81 @@ mod tests {
     }
 
     #[test]
+    fn default_404_copy_button_does_not_interpolate_path_into_js() {
+        // Regression for the reflected-XSS finding: the request path is
+        // fully attacker-controlled and must never cross into a
+        // JavaScript-string context. HTML autoescape only guards the
+        // HTML-text/attribute context; the browser HTML-decodes an
+        // `onclick` attribute before the JS parser sees it, so an escaped
+        // quote still closes a JS string literal. The copy button must
+        // therefore read the path from the inert DOM text node rather
+        // than have it interpolated into `writeText('...')`.
+        let mut env = minijinja::Environment::new();
+        env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
+        env.add_template("default_404.html", DEFAULT_404_HTML)
+            .unwrap();
+
+        // A path crafted to break out of `writeText('…')` and execute JS.
+        let ctx = minijinja::context! {
+            path => "/x');alert(document.domain);('",
+            dev_mode => false,
+            routes_by_plugin => Vec::<minijinja::Value>::new(),
+        };
+        let out = env
+            .get_template("default_404.html")
+            .unwrap()
+            .render(&ctx)
+            .unwrap();
+
+        // No path data may be interpolated into a JS string literal.
+        // The literal `writeText('` prefix only exists in the vulnerable
+        // form where `{{ path }}` was inlined between the quotes; the
+        // fixed handler reads `writeText(document…textContent)`.
+        assert!(
+            !out.contains("writeText('"),
+            "copy button must not interpolate the path into a JS string literal: {out}"
+        );
+        // The raw (un-encoded) payload must not appear anywhere in the
+        // output — the safe contexts (title/text node) HTML-encode it.
+        assert!(
+            !out.contains("');alert(document.domain);('"),
+            "un-encoded JS-breakout payload leaked into the output: {out}"
+        );
+    }
+
+    #[test]
+    fn default_500_copy_button_does_not_interpolate_path_into_js() {
+        // Same JS-string-context guard as the 404 test. `request_path` is
+        // blanked in production, but dev/staging servers are frequently
+        // exposed, so the copy button must never inline the path into JS.
+        let mut env = minijinja::Environment::new();
+        env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
+        env.add_template("default_500.html", DEFAULT_500_HTML)
+            .unwrap();
+
+        let ctx = minijinja::context! {
+            dev_mode => true,
+            error_display => "boom",
+            error_chain => vec!["boom".to_owned()],
+            request_path => "/x');alert(document.domain);('",
+        };
+        let out = env
+            .get_template("default_500.html")
+            .unwrap()
+            .render(&ctx)
+            .unwrap();
+
+        assert!(
+            !out.contains("writeText('"),
+            "copy button must not interpolate request_path into a JS string literal: {out}"
+        );
+        assert!(
+            !out.contains("');alert(document.domain);('"),
+            "un-encoded JS-breakout payload leaked into the output: {out}"
+        );
+    }
+
+    #[test]
     fn default_404_omits_route_panel_when_dev_mode_is_off() {
         // Same template, but `dev_mode = false` — the panel block must
         // collapse to nothing. The page should still render the path
