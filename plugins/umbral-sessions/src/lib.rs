@@ -242,8 +242,41 @@ impl Plugin for SessionsPlugin {
 
     fn on_ready(
         &self,
-        _ctx: &umbral::plugin::AppContext,
+        ctx: &umbral::plugin::AppContext,
     ) -> Result<(), umbral::plugin::PluginError> {
+        // Hard-fail boot when the configured store's security depends on the
+        // ambient `secret_key` (a secret-derived CookieStore) but that secret
+        // is empty or still the insecure dev default, in production. Such a
+        // store seals every session cookie under a key an attacker can
+        // reproduce — a full auth bypass. Fail closed at boot (loud, before the
+        // first request) instead of serving forgeable sessions. Non-prod only
+        // warns; CookieStore::resolve_ambient_key emits that warning lazily.
+        if self.store.requires_ambient_secret()
+            && matches!(ctx.settings.environment, umbral::Environment::Prod)
+        {
+            let secret = ctx.settings.secret_key.trim();
+            // Kept in sync with umbral-core's `default_secret_key()` /
+            // `check.rs::INSECURE_DEV_SECRET_KEY`.
+            const INSECURE_DEV_SECRET_KEY: &str = "umbral-insecure-dev-key-change-me";
+            if secret.is_empty() || secret == INSECURE_DEV_SECRET_KEY {
+                let which = if secret.is_empty() {
+                    "empty"
+                } else {
+                    "the insecure dev default"
+                };
+                return Err(format!(
+                    "umbral-sessions: the configured session store (a secret-derived \
+                     CookieStore) is stateless and encrypts/authenticates every session \
+                     cookie with a key derived from `secret_key`, but `secret_key` is {which} \
+                     in production. Such cookies are TRIVIALLY FORGEABLE (an attacker can mint \
+                     a session for any user — full auth bypass). Set a real `secret_key` via \
+                     umbral.toml or UMBRAL_SECRET_KEY before deploying, or pin an explicit key \
+                     with CookieStore::with_secret(...)."
+                )
+                .into());
+            }
+        }
+
         // Seal the sliding-expiry flag into the ambient OnceLock so
         // session_layer can read it without carrying a reference to Self.
         // `set` is a no-op if another test already initialised the cell;

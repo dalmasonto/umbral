@@ -95,6 +95,18 @@ pub trait SessionStore: Send + Sync + std::fmt::Debug {
     /// Delete the session. Idempotent — deleting a non-existent token is
     /// treated as success.
     async fn destroy(&self, token: &str) -> Result<(), SessionError>;
+
+    /// Whether this store's security depends on the ambient `secret_key`.
+    ///
+    /// A stateless store that seals the whole session into the cookie (the
+    /// secret-derived [`crate::CookieStore`]) returns `true`: an empty or
+    /// insecure-default secret makes every cookie forgeable, so the
+    /// `SessionsPlugin` boot check hard-fails on it in production. Stores that
+    /// keep the session server-side ([`DbStore`], a Redis store) derive nothing
+    /// from the secret and return `false` (the default).
+    fn requires_ambient_secret(&self) -> bool {
+        false
+    }
 }
 
 // =========================================================================

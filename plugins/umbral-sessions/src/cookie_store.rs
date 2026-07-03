@@ -24,11 +24,13 @@
 //! like a client with no cookie.
 //!
 //! The 256-bit key is derived from the app `secret_key` via SHA-256. A
-//! stateless cookie session with an EMPTY key is trivially forgeable (anyone
-//! can mint a valid-looking session), so `new` mirrors umbral-security's
-//! empty-key handling: warn in dev/test, hard-error guidance in prod via the
-//! plugin boot path. We surface the empty-key state at construction with a
-//! `tracing::warn!`/`error!` so it's visible in logs even before boot checks.
+//! stateless cookie session with an EMPTY (or insecure-default) key is
+//! trivially forgeable (anyone can mint a valid-looking session). Two guards
+//! cover this: `SessionsPlugin::on_ready` HARD-FAILS boot in `Prod` when a
+//! secret-derived `CookieStore` is the active store and `secret_key` is empty
+//! or the dev default (see `requires_ambient_secret`); and, independent of the
+//! plugin path, `resolve_ambient_key` surfaces the empty-key state at first use
+//! with a `tracing::warn!`/`error!` so it's visible in logs even in dev.
 //!
 //! ## Why XChaCha20Poly1305 and a random nonce
 //!
@@ -120,7 +122,9 @@ impl CookieStore {
     ///
     /// The empty-key check also runs lazily, at the first load/save, by which
     /// point settings are installed: it warns in dev/test and error-shouts in
-    /// prod (the [`crate::SessionsPlugin`] boot check is the hard-fail point).
+    /// prod. The actual hard-fail happens earlier, at boot, in the
+    /// [`crate::SessionsPlugin`] `on_ready` check (which refuses to boot a
+    /// secret-derived `CookieStore` on an empty / dev-default secret in `Prod`).
     pub fn new() -> Self {
         Self {
             explicit_key: None,
@@ -147,9 +151,11 @@ impl CookieStore {
                 .unwrap_or_default();
 
             if secret.trim().is_empty() {
-                // Mirror umbral-security: error-shout in prod, warn elsewhere.
-                // No hard-fail here (the SessionsPlugin boot check owns that),
-                // but make the danger impossible to miss in logs.
+                // Error-shout in prod, warn elsewhere. The hard-fail lives in
+                // SessionsPlugin::on_ready (boot-time); this lazy log is the
+                // in-request backstop for paths that skip the plugin boot check
+                // (e.g. a store used directly in a test) — make the danger
+                // impossible to miss in logs.
                 match umbral::settings::get_opt().map(|s| &s.environment) {
                     Some(umbral::Environment::Prod) => {
                         tracing::error!(
@@ -278,6 +284,16 @@ impl SessionStore for CookieStore {
     /// the existing clear-cookie path in `session_layer` / the logout helper.
     async fn destroy(&self, _token: &str) -> Result<(), SessionError> {
         Ok(())
+    }
+
+    /// A `CookieStore` that derives its key from the ambient `secret_key`
+    /// (i.e. built via [`CookieStore::new`], not [`CookieStore::with_secret`])
+    /// is only as unforgeable as that secret. Report that dependency so the
+    /// `SessionsPlugin` boot check can hard-fail an empty / insecure-default
+    /// secret in production. An explicit-key store carries its own key and does
+    /// not depend on the ambient secret.
+    fn requires_ambient_secret(&self) -> bool {
+        self.explicit_key.is_none()
     }
 }
 
