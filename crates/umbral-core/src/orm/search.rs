@@ -134,6 +134,15 @@ pub fn branch_sql<T: Searchable>(backend: Backend) -> String {
     // Row-visibility scope, ANDed onto the match condition: the author's
     // business filter (`filter_sql`) plus the framework's soft-delete
     // exclusion when the model is soft-deletable. Backend-independent.
+    //
+    // SECURITY (audit_2 core-orm #8): `filter_sql()` is spliced into the SQL
+    // VERBATIM — it is NOT parameterized. The contract (enforced by the
+    // `-> Option<&'static str>` return type, which cannot carry a
+    // request-derived value without a deliberate `Box::leak`) is that it is
+    // ALWAYS a compile-time author constant with NO user input. Never build
+    // this string from a request value; that would be an SQL-injection sink.
+    // Request-driven query text flows only through the bound `$1`/`?1`
+    // parameter below.
     let mut scope: Vec<String> = Vec::new();
     if let Some(f) = T::filter_sql() {
         scope.push(format!("({f})"));
