@@ -154,8 +154,23 @@ pub(crate) fn install_router(router: Arc<dyn DatabaseRouter>) {
 /// `App::builder().router(...)` (installed during `build()`, before `on_ready`)
 /// therefore takes precedence over a plugin's. A plugin that needs to be sure
 /// it owns routing simply documents "don't also call `.router(...)`".
+///
+/// When the router is already installed (an explicit `.router(...)` or an
+/// earlier plugin won the slot) this call is a no-op — but it now warns
+/// (audit_2 core-app-config #17) so a silently-ignored second router doesn't
+/// leave the app running a routing policy one party didn't expect. The
+/// [`DatabaseRouter`] trait isn't `Debug`, so the warning can't name the
+/// concrete types; it flags the collision and the first-write-wins outcome.
 pub fn install_router_from_plugin(router: Arc<dyn DatabaseRouter>) {
-    let _ = ROUTER.set(router);
+    if ROUTER.set(router).is_err() {
+        tracing::warn!(
+            "umbral::db::router: a DatabaseRouter is already installed (via \
+             App::builder().router(...) or an earlier plugin); ignoring this \
+             plugin's router. Install exactly one router — don't combine a \
+             router-owning plugin with an explicit .router(...) or a second \
+             such plugin."
+        );
+    }
 }
 
 fn default_router_arc() -> Arc<dyn DatabaseRouter> {
