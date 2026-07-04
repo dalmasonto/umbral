@@ -23,6 +23,12 @@ impl TenantKey {
 #[derive(Clone, Default)]
 pub struct RouteContext {
     tenant: Option<TenantKey>,
+    /// Postgres session variables (GUCs) to set on the connection this request
+    /// uses — e.g. `("app.user_id", "42")` for an RLS policy that reads
+    /// `current_setting('app.user_id')`. The PG pool's `after_acquire` hook
+    /// runs `set_config(name, value, false)` for each; `after_release` resets
+    /// them, so a value can't leak to the next request on the same connection.
+    session_vars: Vec<(String, String)>,
     extensions: http::Extensions,
 }
 
@@ -36,6 +42,21 @@ impl RouteContext {
     }
     pub fn tenant(&self) -> Option<&TenantKey> {
         self.tenant.as_ref()
+    }
+    /// Add a Postgres session variable (GUC) to apply on this request's DB
+    /// connection. Builder form; see [`Self::session_vars`].
+    pub fn with_session_var(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.session_vars.push((name.into(), value.into()));
+        self
+    }
+    /// Mutating form of [`Self::with_session_var`] (used by middleware that
+    /// augments an already-scoped context).
+    pub fn add_session_var(&mut self, name: impl Into<String>, value: impl Into<String>) {
+        self.session_vars.push((name.into(), value.into()));
+    }
+    /// The Postgres session variables to set for this request.
+    pub fn session_vars(&self) -> &[(String, String)] {
+        &self.session_vars
     }
     /// Stash a typed routing value for a custom router to read back.
     pub fn insert<T: Clone + Send + Sync + 'static>(&mut self, value: T) {
@@ -99,6 +120,28 @@ mod tests {
             assert!(handle.await.unwrap().is_none());
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn session_vars_round_trip_through_scope() {
+        // audit_2 C2/R2: GUCs set on the context are visible inside the scope
+        // (the PG pool's before_acquire hook reads them) and gone outside it.
+        let ctx = RouteContext::new()
+            .with_session_var("app.user_id", "42")
+            .with_session_var("app.tenant_id", "acme");
+        scope(ctx, async {
+            let vars = current().session_vars().to_vec();
+            assert_eq!(
+                vars,
+                vec![
+                    ("app.user_id".to_string(), "42".to_string()),
+                    ("app.tenant_id".to_string(), "acme".to_string()),
+                ]
+            );
+        })
+        .await;
+        // Outside the scope: no session vars (nothing leaks to background work).
+        assert!(current().session_vars().is_empty());
     }
 
     #[tokio::test]

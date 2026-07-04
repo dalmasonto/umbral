@@ -122,6 +122,33 @@ impl Action {
 /// The plugin itself. Built with [`Self::new`] and configured via
 /// [`Self::enable_on`] + [`Self::policy`] builder chain, then handed
 /// to `App::builder().plugin(...)`.
+///
+/// ## Setting the policy variable (the GUC) — REQUIRED
+///
+/// The plugin emits `FORCE ROW LEVEL SECURITY` at boot so policies apply to the
+/// app's own DB role (audit_2 C2/R1). A policy that reads a session variable
+/// like `current_setting('app.user_id')::int` needs that variable SET on the
+/// connection each request uses — otherwise every RLS-enabled query errors.
+///
+/// Set it per request through the framework's route-context resolver, which
+/// flows into the `RouteContext` the Postgres pool reads in its `before_acquire`
+/// hook. The pool runs `set_config(name, value, false)` on acquire and resets
+/// it on the next acquire, so a value never leaks to another request's
+/// connection (audit_2 C2/R2):
+///
+/// ```ignore
+/// use umbral::db::RouteContext;
+///
+/// App::builder()
+///     .route_context(|req| {
+///         // Resolve the user id from the AUTHENTICATED session — never a
+///         // client-supplied header.
+///         let uid = current_session_user_id(req.headers());
+///         RouteContext::new().with_session_var("app.user_id", uid.to_string())
+///     })
+///     .plugin(RlsPlugin::new().policy("post", "own", Action::All,
+///         "user_id = current_setting('app.user_id')::int"))
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct RlsPlugin {
     /// Tables that should have `ENABLE ROW LEVEL SECURITY` applied.

@@ -421,6 +421,13 @@ impl PoolConfig {
 
 /// Open a Postgres pool from a URL with umbral's pool configuration.
 ///
+/// Set true the first time any request populates `RouteContext` session vars,
+/// so the Postgres `before_acquire` hook only pays the reset+set round-trips
+/// for apps that actually use them (RLS / per-connection GUCs). Apps that never
+/// set a session var never flip it → zero added overhead. audit_2 C2/R2.
+static SESSION_VARS_IN_USE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// PERF-5 / gaps2 #91: bare `PgPool::connect` uses sqlx's defaults with
 /// **no acquire timeout**, so a saturated pool blocks request tasks
 /// forever. We always apply the full set of pool knobs — `max_connections`,
@@ -439,7 +446,35 @@ pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
         .max_connections(cfg.max_connections.max(1))
         .min_connections(cfg.min_connections)
         .acquire_timeout(Duration::from_secs(cfg.acquire_timeout_secs))
-        .test_before_acquire(cfg.test_before_acquire);
+        .test_before_acquire(cfg.test_before_acquire)
+        // audit_2 C2/R2 — apply the request's RouteContext session variables
+        // (GUCs) to the connection it's about to use, so RLS policies that read
+        // `current_setting('app.user_id')` see the right value. before_acquire
+        // runs inside the acquiring request's task, so the task-local
+        // RouteContext is visible. We RESET ALL first to clear any GUC a PRIOR
+        // request left on this pooled connection (the leak the audit calls out),
+        // then set the current request's. A process-wide flag keeps apps that
+        // never use session vars paying zero extra round-trips.
+        .before_acquire(|conn, _meta| {
+            Box::pin(async move {
+                let ctx = route_context::current();
+                let vars = ctx.session_vars();
+                if !vars.is_empty() {
+                    SESSION_VARS_IN_USE.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                if SESSION_VARS_IN_USE.load(std::sync::atomic::Ordering::Relaxed) {
+                    sqlx::query("RESET ALL").execute(&mut *conn).await?;
+                    for (name, value) in vars {
+                        sqlx::query("SELECT set_config($1, $2, false)")
+                            .bind(name)
+                            .bind(value)
+                            .execute(&mut *conn)
+                            .await?;
+                    }
+                }
+                Ok(true)
+            })
+        });
     if let Some(secs) = cfg.idle_timeout_secs {
         opts = opts.idle_timeout(Duration::from_secs(secs));
     }
