@@ -212,6 +212,34 @@ async fn post_full(router: &Router, uri: &str, body: &str) -> (axum::http::Statu
 // Tests
 // =========================================================================
 
+/// gaps3 #11: every auth route resolves at BOTH the bare and trailing-slash
+/// form, so a client that follows the REST plugin's trailing-slash convention
+/// (or whose HTTP client auto-appends) doesn't 404 on login.
+#[tokio::test]
+async fn both_slash_forms_of_login_resolve() {
+    let (router, _rec) = boot_app_with_recorder().await;
+
+    let reg = r#"{"username":"slashuser","email":"slash@example.test","password":"G00d$Pass!"}"#;
+    assert_eq!(
+        post(&router, "/api/auth/register", reg).await,
+        axum::http::StatusCode::CREATED,
+        "register the fixture user"
+    );
+
+    let creds = r#"{"username":"slashuser","password":"G00d$Pass!"}"#;
+    let bare = post(&router, "/api/auth/login", creds).await;
+    let slash = post(&router, "/api/auth/login/", creds).await;
+    assert_ne!(
+        slash,
+        axum::http::StatusCode::NOT_FOUND,
+        "the trailing-slash login form must not 404"
+    );
+    assert_eq!(
+        bare, slash,
+        "both slash forms resolve to the same login handler"
+    );
+}
+
 /// Audit plugin-auth #5: a duplicate-username register must NOT echo the raw
 /// DB / sqlx error (which leaks driver / schema / column names) in the JSON
 /// `detail`. It should return the static generic message, while the status

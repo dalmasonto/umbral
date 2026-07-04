@@ -197,21 +197,41 @@ pub(crate) fn reset_url_base(headers: &HeaderMap) -> String {
 /// Build the four-route Router under `prefix`. Called from
 /// `AuthPlugin::routes()` when `with_default_routes()` is on.
 pub(crate) fn build_router(prefix: &str) -> Router {
+    // Register every route at BOTH the bare and trailing-slash form (gaps3
+    // #11). REST resources end in `/` and the scaffold turns on
+    // `SlashRedirect::Append`, so a client naturally tries `/api/auth/login/`
+    // — but Append only redirects a *no-slash* request TO the slash form, so
+    // registering only the no-slash form left the slash form 404ing. Binding
+    // both makes either path work regardless of the app's redirect policy.
     Router::new()
         .route(&format!("{prefix}/register"), post(register))
+        .route(&format!("{prefix}/register/"), post(register))
         .route(&format!("{prefix}/login"), post(login))
+        .route(&format!("{prefix}/login/"), post(login))
         .route(&format!("{prefix}/logout"), post(logout))
+        .route(&format!("{prefix}/logout/"), post(logout))
         .route(&format!("{prefix}/me"), umbral::web::get(me))
+        .route(&format!("{prefix}/me/"), umbral::web::get(me))
         .route(&format!("{prefix}/verify-email"), post(verify_email_h))
+        .route(&format!("{prefix}/verify-email/"), post(verify_email_h))
         .route(
             &format!("{prefix}/resend-verification"),
+            post(resend_verification_h),
+        )
+        .route(
+            &format!("{prefix}/resend-verification/"),
             post(resend_verification_h),
         )
         .route(
             &format!("{prefix}/password-forgot"),
             post(password_forgot_h),
         )
+        .route(
+            &format!("{prefix}/password-forgot/"),
+            post(password_forgot_h),
+        )
         .route(&format!("{prefix}/password-reset"), post(password_reset_h))
+        .route(&format!("{prefix}/password-reset/"), post(password_reset_h))
 }
 
 /// Same as [`build_router`] but also returns the route specs the
