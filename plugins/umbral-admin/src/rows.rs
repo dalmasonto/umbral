@@ -201,6 +201,7 @@ pub(crate) async fn insert_row_in_tx(
     model: &ModelMeta,
     form: &HashMap<String, String>,
     cfg: Option<&AdminConfig>,
+    authorize_privileged: bool,
 ) -> Result<String, AdminError> {
     let form_owned: HashMap<String, String>;
     let form = if let Some(pw_col) = cfg.and_then(|c| c.password_field.as_deref()) {
@@ -225,7 +226,7 @@ pub(crate) async fn insert_row_in_tx(
     };
 
     let skip = readonly_set(model, cfg);
-    let new_int_pk = DynQuerySet::for_meta(model)
+    let new_int_pk = allow_privileged_if(DynQuerySet::for_meta(model), model, authorize_privileged)
         .insert_form_in_tx(tx, form, &skip)
         .await?;
     let pk_col = model.fields.iter().find(|c| c.primary_key);
@@ -245,13 +246,41 @@ pub(crate) async fn update_row_in_tx(
     pk_value: &str,
     form: &HashMap<String, String>,
     cfg: Option<&AdminConfig>,
+    authorize_privileged: bool,
 ) -> Result<(), AdminError> {
     let skip = readonly_set(model, cfg);
-    DynQuerySet::for_meta(model)
+    allow_privileged_if(DynQuerySet::for_meta(model), model, authorize_privileged)
         .filter_eq_string(&pk.name, pk_value)
         .update_form_in_tx(tx, form, &skip)
         .await?;
     Ok(())
+}
+
+/// Opt a `DynQuerySet` into writing the model's `#[umbral(privileged)]` columns
+/// when the acting admin user is authorized (a superuser). Without this the
+/// write path default-denies those columns — the mass-assignment guard (audit_2
+/// H3) that stops a plain staff user from self-promoting to `is_superuser` via
+/// the admin form. A superuser legitimately manages staff/superuser status, so
+/// their writes authorize every privileged column on the model.
+fn allow_privileged_if<'a>(
+    qs: DynQuerySet<'a>,
+    model: &ModelMeta,
+    authorize: bool,
+) -> DynQuerySet<'a> {
+    if !authorize {
+        return qs;
+    }
+    let privileged: Vec<&str> = model
+        .fields
+        .iter()
+        .filter(|c| c.privileged)
+        .map(|c| c.name.as_str())
+        .collect();
+    if privileged.is_empty() {
+        qs
+    } else {
+        qs.allow_privileged(&privileged)
+    }
 }
 
 /// Compute the readonly set (config-supplied + sensitive-column
@@ -302,6 +331,7 @@ mod readonly_set_tests {
             nullable: false,
             fk_target: None,
             noform,
+            privileged: false,
             db_constraint: true,
             noedit,
             is_string_repr: false,

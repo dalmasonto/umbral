@@ -145,6 +145,12 @@ pub struct DynQuerySet<'a> {
     /// in the response for the full related-row JSON object.
     /// Drives the REST plugin's `?include=fk1,fk2` query param.
     select_related: Vec<String>,
+    /// Names of `#[umbral(privileged)]` columns the caller has authorized to
+    /// write on the JSON path. Empty by default → every privileged column is
+    /// stripped from the insert/update body (default-DENY mass assignment,
+    /// audit_2 H3). The REST/admin layer fills this from the requester's
+    /// authorization (e.g. only a superuser may set `is_superuser`).
+    allow_privileged: Vec<String>,
 }
 
 impl<'a> DynQuerySet<'a> {
@@ -164,7 +170,31 @@ impl<'a> DynQuerySet<'a> {
             only_deleted: false,
             hard_delete: false,
             select_related: Vec::new(),
+            allow_privileged: Vec::new(),
         }
+    }
+
+    /// Authorize specific `#[umbral(privileged)]` columns for this write.
+    ///
+    /// By default the dynamic JSON write path (`insert_json`/`update_json`)
+    /// strips every privileged column from the body — the default-DENY guard
+    /// against mass-assigning `is_superuser`/`is_staff`/ownership FKs (audit_2
+    /// H3). A caller that has verified the requester is allowed to set those
+    /// fields (e.g. an admin acting as a superuser) opts them back in here:
+    ///
+    /// ```ignore
+    /// // superuser request: allow the privileged fields through
+    /// DynQuerySet::for_meta(&meta)
+    ///     .allow_privileged(&["is_superuser", "is_staff"])
+    ///     .insert_json(&body).await?;
+    /// ```
+    ///
+    /// Names not present on the model are ignored. Calling this repeatedly
+    /// accumulates the allowlist.
+    pub fn allow_privileged(mut self, cols: &[&str]) -> Self {
+        self.allow_privileged
+            .extend(cols.iter().map(|c| c.to_string()));
+        self
     }
 
     /// Include soft-deleted rows for models tagged with
@@ -882,6 +912,12 @@ impl<'a> DynQuerySet<'a> {
             if col.primary_key || skip.iter().any(|s| s == &col.name) {
                 continue;
             }
+            // audit_2 H3: default-deny a `#[umbral(privileged)]` column on the
+            // untrusted form update path unless explicitly authorized (mirrors
+            // the JSON path + the insert form path).
+            if is_unauthorized_privileged(col, &self.allow_privileged) {
+                continue;
+            }
             // `auto_now` columns refresh on every update — push
             // `Utc::now()` regardless of whether the form carried
             // the column. `auto_now_add` stays frozen on update
@@ -1023,6 +1059,13 @@ impl<'a> DynQuerySet<'a> {
         let mut values: Vec<SeaValue> = Vec::new();
         for col in &self.meta.fields {
             if skip.iter().any(|s| s == &col.name) {
+                continue;
+            }
+            // audit_2 H3: a `#[umbral(privileged)]` column is never written
+            // from an untrusted form unless the caller authorized it via
+            // `allow_privileged` — default-deny mass assignment, same guard the
+            // JSON path applies, so the admin form and REST agree.
+            if is_unauthorized_privileged(col, &self.allow_privileged) {
                 continue;
             }
             // Auto-increment PK: omit when the form supplies no value
@@ -1389,7 +1432,7 @@ impl<'a> DynQuerySet<'a> {
         // `slug_from`). Shared with the tx path.
         let body_owned: serde_json::Map<String, serde_json::Value>;
         let body: &serde_json::Map<String, serde_json::Value> =
-            match normalise_insert_body(self.meta, body) {
+            match normalise_insert_body(self.meta, body, &self.allow_privileged) {
                 Some(owned) => {
                     body_owned = owned;
                     &body_owned
@@ -1569,7 +1612,7 @@ impl<'a> DynQuerySet<'a> {
         // Phase -1 — normalise (shared with the pool path).
         let body_owned: serde_json::Map<String, serde_json::Value>;
         let body: &serde_json::Map<String, serde_json::Value> =
-            match normalise_insert_body(self.meta, body) {
+            match normalise_insert_body(self.meta, body, &self.allow_privileged) {
                 Some(owned) => {
                     body_owned = owned;
                     &body_owned
@@ -1683,26 +1726,17 @@ impl<'a> DynQuerySet<'a> {
     ) -> Result<u64, crate::orm::write::WriteError> {
         use crate::orm::write::WriteError;
 
-        // Phase -1 — strip `noform` columns + derive `slug_from` (mirrors
-        // the pool path).
-        let needs_owned = self
-            .meta
-            .fields
-            .iter()
-            .any(|c| c.noform || c.slug_from.is_some());
-        let mut body_owned: serde_json::Map<String, serde_json::Value>;
-        let body: &serde_json::Map<String, serde_json::Value> = if needs_owned {
-            body_owned = body.clone();
-            for col in &self.meta.fields {
-                if col.noform {
-                    body_owned.remove(&col.name);
+        // Phase -1 — strip `noform` + unauthorized-`privileged` columns and
+        // derive `slug_from` (mirrors the pool path).
+        let body_owned: serde_json::Map<String, serde_json::Value>;
+        let body: &serde_json::Map<String, serde_json::Value> =
+            match normalise_update_body(self.meta, body, &self.allow_privileged) {
+                Some(owned) => {
+                    body_owned = owned;
+                    &body_owned
                 }
-            }
-            crate::orm::write::apply_slug_from(&self.meta.fields, &mut body_owned, true);
-            &body_owned
-        } else {
-            body
-        };
+                None => body,
+            };
 
         // Phase 0 — pre-DB validation, same shape as `update_json`. FK
         // existence reads through the open tx so an FK at an uncommitted
@@ -1878,30 +1912,21 @@ impl<'a> DynQuerySet<'a> {
     ) -> Result<u64, crate::orm::write::WriteError> {
         use crate::orm::write::WriteError;
 
-        // Phase -1 — strip `noform` columns (server-managed
-        // fields the client must not overwrite).
+        // Phase -1 — strip `noform` + unauthorized-`privileged` columns
+        // (server-managed fields the client must not overwrite).
         //
         // Gap 109: also auto-derive `slug_from` columns when the
         // source field is part of the update body (see
         // `apply_slug_from`'s update guard for why).
-        let needs_owned = self
-            .meta
-            .fields
-            .iter()
-            .any(|c| c.noform || c.slug_from.is_some());
-        let mut body_owned: serde_json::Map<String, serde_json::Value>;
-        let body: &serde_json::Map<String, serde_json::Value> = if needs_owned {
-            body_owned = body.clone();
-            for col in &self.meta.fields {
-                if col.noform {
-                    body_owned.remove(&col.name);
+        let body_owned: serde_json::Map<String, serde_json::Value>;
+        let body: &serde_json::Map<String, serde_json::Value> =
+            match normalise_update_body(self.meta, body, &self.allow_privileged) {
+                Some(owned) => {
+                    body_owned = owned;
+                    &body_owned
                 }
-            }
-            crate::orm::write::apply_slug_from(&self.meta.fields, &mut body_owned, true);
-            &body_owned
-        } else {
-            body
-        };
+                None => body,
+            };
 
         // Phase 0 — pre-DB validation. Update-shape: required-
         // field check only complains about EXPLICIT blanks
@@ -3237,24 +3262,55 @@ async fn collect_parent_pks_in_tx(
 /// when the body passes through untouched. Shared by `insert_json`
 /// and `insert_json_in_tx` so the two paths can't drift on what they
 /// strip / derive before validation runs.
+/// True when `col` is a privileged column the caller has NOT authorized, so it
+/// must be stripped from the untrusted JSON write body (audit_2 H3).
+fn is_unauthorized_privileged(col: &crate::migrate::Column, allow_privileged: &[String]) -> bool {
+    col.privileged && !allow_privileged.iter().any(|a| a == &col.name)
+}
+
 fn normalise_insert_body(
     meta: &crate::migrate::ModelMeta,
     body: &serde_json::Map<String, serde_json::Value>,
+    allow_privileged: &[String],
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let needs_owned = meta
-        .fields
-        .iter()
-        .any(|c| c.noform || c.slug_from.is_some());
+    let needs_owned = meta.fields.iter().any(|c| {
+        c.noform || c.slug_from.is_some() || is_unauthorized_privileged(c, allow_privileged)
+    });
     if !needs_owned {
         return None;
     }
     let mut owned = body.clone();
     for col in &meta.fields {
-        if col.noform {
+        if col.noform || is_unauthorized_privileged(col, allow_privileged) {
             owned.remove(&col.name);
         }
     }
     crate::orm::write::apply_slug_from(&meta.fields, &mut owned, false);
+    Some(owned)
+}
+
+/// Update-path twin of [`normalise_insert_body`]: strip `noform` and
+/// unauthorized-`privileged` columns, then derive `slug_from` with the update
+/// guard. Shared by `update_json` and `update_json_in_tx` so both honour the
+/// mass-assignment guard identically.
+fn normalise_update_body(
+    meta: &crate::migrate::ModelMeta,
+    body: &serde_json::Map<String, serde_json::Value>,
+    allow_privileged: &[String],
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let needs_owned = meta.fields.iter().any(|c| {
+        c.noform || c.slug_from.is_some() || is_unauthorized_privileged(c, allow_privileged)
+    });
+    if !needs_owned {
+        return None;
+    }
+    let mut owned = body.clone();
+    for col in &meta.fields {
+        if col.noform || is_unauthorized_privileged(col, allow_privileged) {
+            owned.remove(&col.name);
+        }
+    }
+    crate::orm::write::apply_slug_from(&meta.fields, &mut owned, true);
     Some(owned)
 }
 
@@ -3559,6 +3615,7 @@ mod tests {
             nullable,
             fk_target: None,
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,

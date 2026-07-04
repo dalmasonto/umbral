@@ -59,6 +59,7 @@ fn fk_col(on_delete: FkAction) -> Column {
         nullable: false,
         fk_target: Some("af_permission".to_string()),
         noform: false,
+        privileged: false,
         db_constraint: true,
         noedit: false,
         is_string_repr: false,

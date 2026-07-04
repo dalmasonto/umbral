@@ -743,6 +743,7 @@ mod tests {
             primary_key: false,
             nullable: false,
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,

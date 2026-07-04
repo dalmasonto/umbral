@@ -1276,6 +1276,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,

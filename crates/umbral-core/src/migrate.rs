@@ -731,6 +731,18 @@ pub struct Column {
     /// edit). Propagated from `FieldSpec::noform`.
     #[serde(default)]
     pub noform: bool,
+    /// When `true`, this field is a privileged/server-managed column that the
+    /// untrusted JSON write path (`insert_json`/`update_json`, i.e. REST
+    /// create/update + admin form-submit) strips UNLESS the caller explicitly
+    /// authorizes it via [`DynQuerySet::allow_privileged`]. Propagated from
+    /// `FieldSpec::privileged`. This is the default-DENY guard for mass
+    /// assignment of fields like `is_superuser`/`is_staff`/ownership FKs
+    /// (audit_2 H3): they can't be set by an unprivileged writer even if the
+    /// model exposes them on its create/update surface. Purely a write-auth
+    /// concern — never part of the schema shape, so it is skipped from
+    /// migration snapshots when at its `false` default.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub privileged: bool,
     /// For FK columns: whether to emit a physical `FOREIGN KEY ...
     /// REFERENCES` constraint. Propagated from `FieldSpec::db_constraint`.
     /// `false` (set via `#[umbral(db_constraint = false)]`) keeps the
@@ -1035,6 +1047,7 @@ impl From<&FieldSpec> for Column {
             nullable: f.nullable,
             fk_target: f.fk_target.map(|s| s.to_string()),
             noform: f.noform,
+            privileged: f.privileged,
             db_constraint: f.db_constraint,
             noedit: f.noedit,
             is_string_repr: f.is_string_repr,
@@ -4626,6 +4639,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,
@@ -4658,6 +4672,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,
@@ -4688,6 +4703,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,
@@ -4788,6 +4804,7 @@ mod tests {
             nullable: false,
             fk_target: Some("post".into()),
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,
@@ -4904,6 +4921,7 @@ mod tests {
                 nullable: false,
                 fk_target: None,
                 noform: false,
+                privileged: false,
                 db_constraint: true,
                 noedit: false,
                 is_string_repr: false,
@@ -5007,6 +5025,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,
@@ -5113,6 +5132,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,
@@ -5192,6 +5212,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            privileged: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,
@@ -5303,6 +5324,7 @@ mod tests {
                 nullable: false,
                 fk_target: None,
                 noform: false,
+                privileged: false,
                 db_constraint: true,
                 noedit: false,
                 is_string_repr: false,

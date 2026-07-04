@@ -352,7 +352,8 @@ pub(crate) async fn create(
     // Atomic save: parent INSERT + inline children, one transaction.
     // Any child failure drops the tx so neither the parent nor any
     // child persists (the load-bearing rollback guarantee).
-    let saved = save_parent_and_inlines(&model, None, &form, cfg, &multi_form).await;
+    let saved =
+        save_parent_and_inlines(&model, None, &form, cfg, &multi_form, user.is_superuser).await;
     match saved {
         Ok(new_pk) => {
             // BUG-16 admin: with the parent committed, apply any M2M
@@ -445,8 +446,9 @@ pub(crate) async fn create_parent_and_inlines_pub(
     form: &HashMap<String, String>,
     cfg: Option<&crate::config::AdminConfig>,
     multi_form: &[(String, String)],
+    authorize_privileged: bool,
 ) -> Result<String, AdminError> {
-    save_parent_and_inlines(model, None, form, cfg, multi_form).await
+    save_parent_and_inlines(model, None, form, cfg, multi_form, authorize_privileged).await
 }
 
 /// Save a parent row plus all its inline children atomically.
@@ -463,15 +465,25 @@ async fn save_parent_and_inlines(
     form: &HashMap<String, String>,
     cfg: Option<&crate::config::AdminConfig>,
     multi_form: &[(String, String)],
+    authorize_privileged: bool,
 ) -> Result<String, AdminError> {
     let mut tx = umbral::db::begin().await.map_err(AdminError::Sqlx)?;
 
     let parent_pk = match existing_pk {
         Some((pk, pk_value)) => {
-            update_row_in_tx(&mut tx, model, pk, pk_value, form, cfg).await?;
+            update_row_in_tx(
+                &mut tx,
+                model,
+                pk,
+                pk_value,
+                form,
+                cfg,
+                authorize_privileged,
+            )
+            .await?;
             pk_value.to_string()
         }
-        None => insert_row_in_tx(&mut tx, model, form, cfg).await?,
+        None => insert_row_in_tx(&mut tx, model, form, cfg, authorize_privileged).await?,
     };
 
     crate::inlines::save_inlines_in_tx(&mut tx, model, &parent_pk, cfg, multi_form).await?;
@@ -673,7 +685,15 @@ pub(crate) async fn update(
         };
     }
     // Atomic save: parent UPDATE + inline children, one transaction.
-    let saved = save_parent_and_inlines(&model, Some((pk, &id)), &form, cfg, &multi_form).await;
+    let saved = save_parent_and_inlines(
+        &model,
+        Some((pk, &id)),
+        &form,
+        cfg,
+        &multi_form,
+        user.is_superuser,
+    )
+    .await;
     match saved {
         Ok(_) => {
             // BUG-16 admin: replace this parent's M2M selections in

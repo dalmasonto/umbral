@@ -16,6 +16,7 @@ fn col(name: &str, nullable: bool, default: &str) -> Column {
         nullable,
         fk_target: None,
         noform: false,
+        privileged: false,
         db_constraint: true,
         noedit: false,
         is_string_repr: false,

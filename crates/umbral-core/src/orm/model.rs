@@ -514,6 +514,23 @@ pub struct FieldSpec {
     /// If `noform` is true, `noedit` is moot (noform takes precedence).
     pub noform: bool,
 
+    /// When `true`, this is a privileged/server-managed field: the untrusted
+    /// JSON write path (`insert_json`/`update_json` — REST create/update and
+    /// admin form-submit) strips it UNLESS the caller explicitly authorizes it
+    /// via [`crate::orm::dynamic::DynQuerySet::allow_privileged`]. Set via
+    /// `#[umbral(privileged)]`.
+    ///
+    /// This is the default-DENY mass-assignment guard (audit_2 H3): fields like
+    /// `is_superuser` / `is_staff` / ownership FKs stay writable through the
+    /// typed struct path and through an *authorized* dynamic write, but an
+    /// unprivileged client can't set them by smuggling them into a create/update
+    /// body. Unlike `noform`, the field still renders on forms (an admin with
+    /// the right permission legitimately edits it); the guard is on the write,
+    /// not the visibility. OpenAPI is unaffected — the field remains in the
+    /// writable schema, since whether a given caller may set it is a runtime
+    /// authorization decision, not a static contract.
+    pub privileged: bool,
+
     /// For `SqlType::ForeignKey` fields: whether the migration engine
     /// emits a *physical* `FOREIGN KEY ... REFERENCES` constraint.
     /// Toggles the physical FK constraint. Set via

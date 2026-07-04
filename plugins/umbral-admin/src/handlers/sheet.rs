@@ -327,8 +327,14 @@ pub(crate) async fn sheet_create(
     // Atomic save: parent INSERT + inline children in one transaction,
     // via the SAME shared path the full-page `crud::create` uses. A bad
     // child rolls back the parent too.
-    match crate::handlers::crud::create_parent_and_inlines_pub(&model, &form, cfg, &multi_form)
-        .await
+    match crate::handlers::crud::create_parent_and_inlines_pub(
+        &model,
+        &form,
+        cfg,
+        &multi_form,
+        who.is_superuser,
+    )
+    .await
     {
         Ok(new_pk) => {
             // BUG-16 admin: apply M2M selections to the auto-junction

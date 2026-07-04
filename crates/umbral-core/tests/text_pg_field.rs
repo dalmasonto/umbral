@@ -110,6 +110,7 @@ fn col(name: &str, ty: SqlType, nullable: bool) -> Column {
         nullable,
         fk_target: None,
         noform: false,
+        privileged: false,
         db_constraint: true,
         noedit: false,
         is_string_repr: false,

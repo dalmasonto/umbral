@@ -1,0 +1,60 @@
+---
+title: Privileged fields (mass-assignment guard)
+description: Mark server-managed fields like is_superuser so an untrusted create/update can't set them. Default-deny mass assignment with #[umbral(privileged)].
+sidebar_position: 17
+tags: [orm, security, mass-assignment, privileged, authorization]
+---
+
+# Privileged fields
+
+Some columns must never be set by whoever submits a form or a JSON body — `is_superuser`, `is_staff`, an `owner_id` that decides who a row belongs to. If your create/update surface accepts them blindly, a client can escalate itself by smuggling one extra key into the request. That's a **mass-assignment** vulnerability.
+
+`#[umbral(privileged)]` marks such a column. The dynamic JSON write path (`insert_json` / `update_json`, which is what REST create/update and admin form-submit use) and the admin form write path **strip privileged columns by default** — the client can't set them. A caller that has verified the requester is actually allowed to set them opts them back in, per-write, with `DynQuerySet::allow_privileged`.
+
+<Callout type="info">
+This is default-**deny**: unlike `noform` (which hides a field from every form), a privileged field still renders on forms and stays in the OpenAPI writable schema — because whether a *given* caller may set it is a runtime authorization decision, not a static contract. The guard is on the write, not the visibility.
+</Callout>
+
+## Declaring one
+
+```rust
+#[derive(Model)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    // A client cannot self-promote by POSTing `{ "is_superuser": true }`.
+    // `default = "false"` fills the safe value when the column is stripped
+    // from an INSERT, so a NOT NULL column never trips.
+    #[umbral(privileged, default = "false")]
+    pub is_superuser: bool,
+}
+```
+
+The built-in `AuthUser` already marks `is_staff` and `is_superuser` this way, so a stock auth + REST app is safe out of the box.
+
+## Authorizing a write
+
+When your handler has checked that the requester may set the field (e.g. they're a superuser), authorize the specific columns:
+
+```rust
+let allow: &[&str] = if requester.is_superuser {
+    &["is_superuser", "is_staff"]
+} else {
+    &[]
+};
+
+DynQuerySet::for_meta(&meta)
+    .allow_privileged(allow)
+    .insert_json(&body)
+    .await?;
+```
+
+Names not present on the model are ignored; calls accumulate. Without `allow_privileged`, every privileged column is stripped — the safe default.
+
+The built-in admin already does this: a **superuser** editing a user through the admin form can toggle `is_staff` / `is_superuser`; a plain staff user cannot.
+
+## See also
+
+- Design rationale: `planning/audit_2/AUDIT_REPORT.md` (finding H3) and `arch.md` (mass-assignment, secure-by-default).
+- [`noform`](/docs/v0.0.1/orm/models) — hide a field from all forms entirely (a blunter, visibility-level control).
+- [Masked fields](/docs/v0.0.1/orm/masked) — encrypt a column at rest.

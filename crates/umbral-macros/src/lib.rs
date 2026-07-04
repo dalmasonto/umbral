@@ -184,6 +184,11 @@ struct UmbralFieldAttr {
     bit: bool,
     /// `#[umbral(noform)]` — never show on any form.
     noform: bool,
+    /// `#[umbral(privileged)]` — server-managed/privileged field: the untrusted
+    /// JSON write path strips it unless the caller authorizes it via
+    /// `DynQuerySet::allow_privileged`. Default-deny mass-assignment guard for
+    /// `is_superuser`/ownership FKs (audit_2 H3). Still shown on forms.
+    privileged: bool,
     /// `#[umbral(db_constraint = false)]` — keep the FK logical (column +
     /// `fk_target`) but emit no physical `FOREIGN KEY ... REFERENCES`
     /// constraint. Disables the physical FK constraint.
@@ -330,6 +335,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         ltree: false,
         bit: false,
         noform: false,
+        privileged: false,
         db_constraint: true,
         noedit: false,
         primary_key: false,
@@ -386,6 +392,11 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 Ok(())
             } else if meta.path.is_ident("noform") {
                 parsed.noform = true;
+                Ok(())
+            } else if meta.path.is_ident("privileged") {
+                // `#[umbral(privileged)]` — server-managed field; stripped from
+                // the untrusted JSON write path unless explicitly authorized.
+                parsed.privileged = true;
                 Ok(())
             } else if meta.path.is_ident("db_constraint") {
                 // `#[umbral(db_constraint = false)]` / `= true`. Bare
@@ -548,7 +559,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 Err(meta.error(format!(
                     "unknown field-level umbral attribute `{path}` — known keys are \
                      `cidr`, `macaddr`, `xml`, `ltree`, `bit`, \
-                     `noform`, `db_constraint = false`, `noedit`, \
+                     `noform`, `privileged`, `db_constraint = false`, `noedit`, \
                      `primary_key`, `no_reverse`, \
                      `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
@@ -1175,6 +1186,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let privileged_lit = if field_attr.privileged {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
         let db_constraint_lit = if field_attr.db_constraint {
             quote!(true)
         } else {
@@ -1426,6 +1442,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 supported_backends: #backends_tokens,
                 fk_target: #fk_target_tokens,
                 noform: #noform_lit,
+                privileged: #privileged_lit,
                 db_constraint: #db_constraint_lit,
                 noedit: #noedit_lit,
                 is_string_repr: #is_string_repr_lit,

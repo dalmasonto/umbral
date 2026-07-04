@@ -258,7 +258,18 @@ pub struct AuthUser {
     #[umbral(noform)]
     pub password_hash: String,
     pub is_active: bool,
+    /// Staff flag — grants admin-site access. Privileged: the untrusted JSON
+    /// write path (REST create/update, admin form-submit) refuses to set it
+    /// unless the caller authorizes it via `DynQuerySet::allow_privileged`
+    /// (audit_2 H3). Prevents a self-service `POST /users {is_staff: true}`
+    /// privilege escalation. An admin acting as a superuser still toggles it.
+    /// `default = "false"` so a create that had the field stripped fills the
+    /// safe value at the DB rather than tripping NOT NULL.
+    #[umbral(privileged, default = "false")]
     pub is_staff: bool,
+    /// Superuser flag — full authority. Privileged for the same reason as
+    /// `is_staff`; this is the field a mass-assignment attack most wants.
+    #[umbral(privileged, default = "false")]
     pub is_superuser: bool,
     pub date_joined: DateTime<Utc>,
     pub last_login: Option<DateTime<Utc>>,
