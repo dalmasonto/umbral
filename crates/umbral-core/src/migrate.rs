@@ -3382,7 +3382,34 @@ fn diff_columns(
     // them sequentially (each is a table-recreation, so back-to-back
     // alters drop and recreate twice; the cost is acceptable while
     // M5.1 ships the simple case).
-    let new_columns: Vec<Column> = current.fields.clone();
+    //
+    // audit_2 H21: the SQLite recreation dance rebuilds the table by
+    // `INSERT INTO tmp (new_columns) SELECT new_columns FROM <old>`, so
+    // every name in `new_columns` MUST exist in the old table at alter
+    // time. Using `current.fields` here broke any diff that combined an
+    // alter with an add or drop on the same table: a newly-ADDED column
+    // is in `current` but not the old table (the SELECT hits "no such
+    // column"), and a DROPPED column is absent from `current` so the
+    // rebuild removed it early — the subsequent `DropColumn` op then
+    // failed on the already-gone column. Instead, shape `new_columns`
+    // like the PREVIOUS table (exactly the old table's columns), but
+    // apply the CURRENT definition to every column that survives so the
+    // type/nullable/default change still lands. A to-be-dropped column
+    // keeps its old definition and rides through the rebuild; its
+    // `DropColumn` op (emitted below, so it runs after) removes it. A
+    // to-be-added column is intentionally absent; its `AddColumn` op
+    // (also below) adds it after. Ordering alter → drop → add is what
+    // the existing op emission already does.
+    let new_columns: Vec<Column> = previous
+        .fields
+        .iter()
+        .map(|prev_col| {
+            curr_cols
+                .get(prev_col.name.as_str())
+                .map(|c| (*c).clone())
+                .unwrap_or_else(|| prev_col.clone())
+        })
+        .collect();
     let prev_columns_snapshot: Vec<Column> = previous.fields.clone();
     for name in alter_columns {
         ops.push(Operation::AlterColumn {
