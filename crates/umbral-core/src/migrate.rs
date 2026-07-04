@@ -1221,6 +1221,19 @@ pub enum MigrateError {
         requested: String,
         known: Vec<String>,
     },
+    /// audit_2 H23 — the column-shape rename heuristic found an unpaired
+    /// dropped model and an unpaired created model with **identical** column
+    /// shapes. That's genuinely ambiguous: it's either a model rename (move the
+    /// old table's rows to the new name) or two unrelated models that happen to
+    /// share a shape (drop the old, create the new empty). Auto-applying either
+    /// silently loses or mis-associates data, so `diff` refuses to guess and
+    /// fails closed. The operator resolves it explicitly via
+    /// `UMBRAL_MIGRATIONS_ASSUME_RENAMES` (`assume` → rename, `independent` →
+    /// drop+create) or by hand-writing the op. Carries the two table names.
+    AmbiguousRename {
+        from_table: String,
+        to_table: String,
+    },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -1269,6 +1282,20 @@ impl std::fmt::Display for MigrateError {
                 "umbral makemigrations --empty: no registered plugin named `{requested}`. \
                  Known plugins: {}",
                 known.join(", ")
+            ),
+            MigrateError::AmbiguousRename {
+                from_table,
+                to_table,
+            } => write!(
+                f,
+                "umbral makemigrations: ambiguous rename — the dropped model `{from_table}` and \
+                 the new model `{to_table}` have identical column shapes, so this is either a \
+                 rename (move `{from_table}`'s rows to `{to_table}`) or two unrelated models. \
+                 Refusing to guess: auto-renaming would hand one model's rows to another and skip \
+                 the intended drop, while auto-dropping would delete `{from_table}`'s rows — both \
+                 silent data bugs. Resolve it: set UMBRAL_MIGRATIONS_ASSUME_RENAMES=assume to \
+                 treat every shape match as a rename, or =independent to treat them as unrelated \
+                 (drop + create), or hand-write the intended op into the migration file."
             ),
         }
     }
@@ -2848,6 +2875,29 @@ fn read_migration_file(path: &Path) -> Result<MigrationFile, MigrateError> {
 /// directly with hand-built snapshots. Spec 06 calls the diff the
 /// engine's contract; exposing it lets the tests pin every scenario
 /// without laundering snapshots through the process-wide registry.
+/// audit_2 H23 — how `diff` should treat an ambiguous column-shape rename: an
+/// unpaired dropped model and an unpaired created model with *identical* shapes.
+/// Driven by `UMBRAL_MIGRATIONS_ASSUME_RENAMES`.
+enum RenameIntent {
+    /// Auto-pair every shape match into a `RenameTable` (the pre-H23 default).
+    Assume,
+    /// Treat the pair as unrelated: emit drop + create, no row transfer.
+    Independent,
+    /// Not configured → `diff` fails closed with `AmbiguousRename`.
+    Undecided,
+}
+
+fn rename_intent() -> RenameIntent {
+    match std::env::var("UMBRAL_MIGRATIONS_ASSUME_RENAMES") {
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "assume" | "1" | "true" | "yes" | "rename" => RenameIntent::Assume,
+            "independent" | "0" | "false" | "no" | "drop" => RenameIntent::Independent,
+            _ => RenameIntent::Undecided,
+        },
+        Err(_) => RenameIntent::Undecided,
+    }
+}
+
 pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, MigrateError> {
     use std::collections::{BTreeMap, HashSet};
 
@@ -2913,30 +2963,61 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
     // is the "shape" fingerprint. Bit-identical shapes → likely a model
     // rename where the struct name also changed.
 
+    // audit_2 H23 — a bit-identical column shape between a dropped and a
+    // created model is genuinely ambiguous (rename vs. two unrelated models).
+    // The pre-H23 code auto-emitted a `RenameTable` with only an `eprintln!`,
+    // silently handing one model's rows to another and skipping the intended
+    // drop. Now the ambiguity is resolved by explicit operator intent: `assume`
+    // restores auto-pairing, `independent` treats the pair as unrelated
+    // (drop + create), and the unset default fails closed so no destructive
+    // guess is ever applied silently.
+    let intent = rename_intent();
     let mut paired_drop_tables: HashSet<&str> = HashSet::new();
     let mut paired_create_tables: HashSet<&str> = HashSet::new();
 
-    for create in &create_candidates {
+    'creates: for create in &create_candidates {
         let create_shape = column_shape(&create.fields);
         for drop in &drop_candidates {
             if paired_drop_tables.contains(drop.table.as_str()) {
                 continue;
             }
-            let drop_shape = column_shape(&drop.fields);
-            if create_shape == drop_shape {
-                eprintln!(
-                    "umbral makemigrations: rename detected (column-shape match): \
-                     `{}` → `{}` — please verify this is a rename and not a coincidental \
-                     column-shape match between two unrelated models",
-                    drop.table, create.table
-                );
-                ops.push(Operation::RenameTable {
-                    from: drop.table.clone(),
-                    to: create.table.clone(),
-                });
-                paired_drop_tables.insert(drop.table.as_str());
-                paired_create_tables.insert(create.table.as_str());
-                break;
+            if column_shape(&drop.fields) != create_shape {
+                continue;
+            }
+            match intent {
+                RenameIntent::Assume => {
+                    eprintln!(
+                        "umbral makemigrations: rename ASSUMED (column-shape match): \
+                         `{}` → `{}` — moving the old table's rows to the new name. Set \
+                         UMBRAL_MIGRATIONS_ASSUME_RENAMES=independent if these are unrelated \
+                         models that merely share a shape.",
+                        drop.table, create.table
+                    );
+                    ops.push(Operation::RenameTable {
+                        from: drop.table.clone(),
+                        to: create.table.clone(),
+                    });
+                    paired_drop_tables.insert(drop.table.as_str());
+                    paired_create_tables.insert(create.table.as_str());
+                    continue 'creates;
+                }
+                RenameIntent::Independent => {
+                    eprintln!(
+                        "umbral makemigrations: column-shape match `{}` ↔ `{}` treated as \
+                         UNRELATED (drop + create) per UMBRAL_MIGRATIONS_ASSUME_RENAMES=\
+                         independent. Set it to `assume` (or hand-write a RenameTable) if this \
+                         is actually a rename — otherwise `{}`'s rows are dropped.",
+                        drop.table, create.table, drop.table
+                    );
+                    // Leave both unpaired → Pass 2 creates, Pass 3 drops.
+                    continue 'creates;
+                }
+                RenameIntent::Undecided => {
+                    return Err(MigrateError::AmbiguousRename {
+                        from_table: drop.table.clone(),
+                        to_table: create.table.clone(),
+                    });
+                }
             }
         }
     }

@@ -1,0 +1,55 @@
+---
+title: Renaming models
+description: How autodetection handles a renamed model, and how to resolve an ambiguous rename-vs-drop safely.
+sidebar_position: 7
+tags: [migrations, rename, autodetection, data-safety]
+---
+
+# Renaming models
+
+When you rename a model, `makemigrations` has to decide whether you *renamed* an existing table (keep its rows) or *dropped one and created another* (start empty). It uses two signals.
+
+## Struct-name match — resolved automatically
+
+If the Rust struct keeps its name but its table changes (e.g. you set a new `#[umbral(table = "...")]`), that's an unambiguous rename. Autodetection emits a `RenameTable` and moves the rows. Nothing to do.
+
+## Column-shape match — you decide
+
+If **both** the struct name and the table change, autodetection can only compare column shapes. A dropped model and a new model with a *bit-identical* shape is genuinely ambiguous:
+
+- it could be a rename (move the old rows to the new name), or
+- two unrelated models that happen to share a shape (drop the old, create the new empty).
+
+Guessing either way is a silent data bug — auto-renaming hands one model's rows to another and skips the intended drop; auto-dropping deletes rows you meant to keep. So `makemigrations` **fails closed** and asks you to choose:
+
+```
+umbral makemigrations: ambiguous rename — the dropped model `foo` and the new
+model `bar` have identical column shapes ... Resolve it: set
+UMBRAL_MIGRATIONS_ASSUME_RENAMES=assume ... or =independent ...
+```
+
+Resolve it with one environment variable:
+
+<Tabs>
+<Tab title="It's a rename">
+```bash
+UMBRAL_MIGRATIONS_ASSUME_RENAMES=assume cargo run -- makemigrations
+```
+Every shape match becomes a `RenameTable` — the old table's rows move to the new name.
+</Tab>
+<Tab title="They're unrelated">
+```bash
+UMBRAL_MIGRATIONS_ASSUME_RENAMES=independent cargo run -- makemigrations
+```
+Each shape match becomes a plain drop + create — no rows are transferred. The `DropTable` is written into the migration file, so review it before you `migrate`.
+</Tab>
+</Tabs>
+
+<Callout type="warning">
+The setting applies to the whole `makemigrations` run. If one change is a rename and another is a coincidental shot in a single run, split them into two runs so you can set the right intent for each — or hand-write the `RenameTable` op into the migration file.
+</Callout>
+
+## See also
+
+- [Managed migrations](/docs/v0.0.1/migrations/managed-migrations) — the declare → migrate loop.
+- Design rationale: `planning/audit_2/AUDIT_REPORT.md` (finding H23) and `arch.md` (autodetection).

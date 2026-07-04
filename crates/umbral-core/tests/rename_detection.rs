@@ -149,29 +149,35 @@ fn first_pass_rename_same_struct_name() {
 // Test 2: Second-pass rename — different struct names, identical columns
 // =========================================================================
 
-/// Snapshot has `Foo (table = "foo")`, current has `Bar (table = "bar")`
-/// with identical column shapes. diff emits `RenameTable { from: "foo",
-/// to: "bar" }`. The test cannot assert on the eprintln! warning directly;
-/// it verifies the operation is produced.
+/// audit_2 H23 — `Foo (table = "foo")` dropped, `Bar (table = "bar")` created
+/// with an identical column shape is genuinely ambiguous (rename vs. two
+/// unrelated models). With no `UMBRAL_MIGRATIONS_ASSUME_RENAMES` intent set,
+/// `diff` must FAIL CLOSED with `AmbiguousRename` rather than silently emit a
+/// `RenameTable` that hands `foo`'s rows to `bar`. The env-driven `assume` /
+/// `independent` resolutions are covered in `rename_intent_env.rs` (own binary,
+/// since the env is process-global).
+///
+/// This test must not run with the env set; it asserts the unset default.
 #[test]
-fn second_pass_rename_identical_column_shape() {
+fn second_pass_shape_match_is_ambiguous_and_errors_by_default() {
+    // Guard against a leaked env value from a parallel binary — skip rather
+    // than give a false failure (the dedicated binary owns the env cases).
+    if std::env::var("UMBRAL_MIGRATIONS_ASSUME_RENAMES").is_ok() {
+        return;
+    }
     let cols = vec![id_col(), title_col()];
     let prev = make_snapshot(vec![make_meta("Foo", "foo", cols.clone())]);
     let curr = make_snapshot(vec![make_meta("Bar", "bar", cols)]);
 
-    let ops = diff(&prev, &curr).expect("diff should not error");
-
-    assert_eq!(
-        ops.len(),
-        1,
-        "expected one RenameTable operation from shape match, got: {ops:?}"
-    );
-    match &ops[0] {
-        Operation::RenameTable { from, to } => {
-            assert_eq!(from, "foo");
-            assert_eq!(to, "bar");
+    match diff(&prev, &curr) {
+        Err(umbral_core::migrate::MigrateError::AmbiguousRename {
+            from_table,
+            to_table,
+        }) => {
+            assert_eq!(from_table, "foo");
+            assert_eq!(to_table, "bar");
         }
-        other => panic!("expected RenameTable, got {other:?}"),
+        other => panic!("expected AmbiguousRename error, got {other:?}"),
     }
 }
 
