@@ -57,3 +57,29 @@ Surfaced by the custom-views final review. `AdminPlugin::routes()` mounted `GET 
 8. [x] Per-widget permission checks batched (concurrent, deduped)
 
 `view::accessible_widget_sections_json` (the render filter for the dashboard + custom views) resolved each widget's codename with a sequential `has_codename` await, so a page with N permissioned widgets paid N sequential DB round-trips. Fix (commit `aaaa7ef`): collect the DISTINCT codenames across all widgets, resolve them ONCE and CONCURRENTLY via `futures_util::future::join_all` (already a dep, used by the parallel dashboard COUNTs), then filter widgets against the resulting `codename → bool` map. The render is now a single round of concurrent lookups regardless of widget count. Behavior is unchanged — the existing `test_widget_permission_filters_dashboard_render` regression test still passes.
+
+---
+
+11. [x] Auth JSON routes are slash-inconsistent with REST resources → `/api/auth/login/` 404s under the default `SlashRedirect::Append`
+
+Found building web3clubs_fc. `AuthPlugin::with_default_routes()` registered the JSON auth routes WITHOUT a trailing slash (`POST /api/auth/login`, `/register`, `/me`, `/logout`), but `RestPlugin` resources use a TRAILING slash and the `startproject` scaffold turns on `.slash_redirect(SlashRedirect::Append)`, so hitting `/api/auth/login/` (the natural try) 404'd — Append only redirects a no-slash request TO the slash form, which doesn't help when only the no-slash form is registered.
+
+**Fixed** (commit `4f30cc4`): `build_router` now binds every auth route at BOTH the bare and trailing-slash form (option (b) from the write-up), so either path resolves regardless of the app's redirect policy. Test: `both_slash_forms_of_login_resolve` in `plugins/umbral-auth/tests/json_surface.rs` asserts `/api/auth/login` and `/api/auth/login/` resolve to the same handler (neither 404s).
+
+12. [x] `GET /oauth/{provider}/login` returns 500 (not 404) for a provider key that isn't registered
+
+`begin_flow` (login/connect) and `oauth_callback` called `server_error` (500) when `plugin.lookup(provider)` was `None` — but an unregistered/misspelled provider key is a foreseeable client input.
+
+**Fixed** (commit `e6efb7a`): both sites return `404 Not Found` with `unknown or unconfigured oauth provider \`<key>\`` instead. Test: `plugins/umbral-oauth/tests/unknown_provider.rs` drives `/oauth/nonexistent/login` through the mounted route + session layer and asserts 404.
+
+13. [x] SQLite `AlterColumn` (null-flip / type change) fails with `FOREIGN KEY constraint failed` when the table has inbound FKs
+
+The table-recreation dance (CREATE new / copy / DROP old / RENAME) died with SQLite error 787 when the altered table had inbound FKs, because step 3's DROP ran under `foreign_keys=ON` (set by `connect_sqlite`) with child rows still referencing it. This dead-ended the declare→migrate loop for any relational schema.
+
+**Fixed** (commit `a60405a`): new `apply_sqlite_migration_tx` helper applies SQLite's official recipe — on a PINNED connection, `PRAGMA foreign_keys=OFF` OUTSIDE the tx (a no-op inside one), run the dance, `PRAGMA foreign_key_check` before commit (a genuinely orphaning migration still aborts), commit, restore `foreign_keys=ON` even on failure so the pooled connection never returns unsafe. Both the primary (`run_in_sqlite_for_alias`) and tenant SQLite apply loops route through it; Postgres uses native ALTER and is unaffected. Note: my original diagnosis suggested `PRAGMA foreign_keys=OFF` in the *executor*; `defer_foreign_keys` was tried first and STILL failed the commit-time check, so the connection-level `foreign_keys=OFF` recipe is the one that works. Test: `crates/umbral-core/tests/alter_column_inbound_fk.rs`.
+
+14. [x] `update_or_create`'s UPDATE branch emits `bulk_post_save`, not per-row `post_save` — silently bypasses signal/realtime consumers
+
+`umbral-realtime`'s `on_model` bridge (and `umbral-signals` `on_model().post_save`) subscribe to per-row `post_save:<table>`. `update_or_create` emitted NO per-row `post_save` on EITHER branch — the CREATE branch calls `create()` (deliberately signal-free, like `bulk_create`; only `save()` fires per-row signals) and the UPDATE branch uses `update_values` (`bulk_post_save`). So `on_model` consumers silently missed every upsert. (The original write-up mis-stated that the CREATE branch already emitted `post_save` via `self.create()` — it doesn't; both branches were silent.)
+
+**Fixed** (commit `fe200c1`): emit `post_save` explicitly on both branches (the create arm and both `do_update!` update sites). `create()`/`bulk_create` stay signal-free by design — only the higher-level convergent upsert notifies. `bulk_post_save` and `post_save` are distinct signal names, so no single consumer double-fires. Test: `post_save_fires_on_both_branches_of_update_or_create` in `crates/umbral-core/tests/update_signals.rs`.
