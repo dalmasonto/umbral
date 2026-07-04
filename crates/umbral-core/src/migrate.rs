@@ -1600,29 +1600,100 @@ async fn run_in_sqlite_for_alias(
                 continue;
             }
 
-            let mut tx = pool.begin().await?;
-            for op in &ops_for_this_db {
-                for sql in render_operation(op) {
-                    sqlx::query(&sql).execute(&mut *tx).await?;
-                }
-            }
             let snapshot_hash = file.snapshot_after.hash();
             let applied_at = chrono::Utc::now().to_rfc3339();
-            sqlx::query(
-                "INSERT INTO umbral_migrations (plugin, name, applied_at, snapshot_hash) \
-                 VALUES (?, ?, ?, ?)",
+            apply_sqlite_migration_tx(
+                pool,
+                &ops_for_this_db,
+                &file.plugin,
+                &file.id,
+                &applied_at,
+                &snapshot_hash,
             )
-            .bind(&file.plugin)
-            .bind(&file.id)
-            .bind(&applied_at)
-            .bind(&snapshot_hash)
-            .execute(&mut *tx)
             .await?;
-            tx.commit().await?;
             applied_count += 1;
         }
     }
     Ok(applied_count)
+}
+
+/// Apply one migration file's SQLite `ops` in a single transaction, then record
+/// it in the tracking table.
+///
+/// When any op is an `AlterColumn` (the table-recreation dance), the
+/// transaction is bracketed with `PRAGMA foreign_keys=OFF` … `PRAGMA
+/// foreign_key_check` … `PRAGMA foreign_keys=ON` on a **pinned** connection
+/// (SQLite's official recipe), so step 3's `DROP TABLE` on a table with inbound
+/// FKs doesn't fail with `FOREIGN KEY constraint failed` (error 787, gaps3
+/// #13). The pragma MUST be toggled outside the tx (it's a no-op inside one),
+/// and enforcement is restored even on failure so the pooled connection never
+/// returns with FK checks disabled. `foreign_key_check` before commit keeps the
+/// integrity guarantee: a migration that genuinely orphans a row is aborted.
+async fn apply_sqlite_migration_tx(
+    pool: &sqlx::SqlitePool,
+    ops: &[&Operation],
+    plugin: &str,
+    name: &str,
+    applied_at: &str,
+    snapshot_hash: &str,
+) -> Result<(), MigrateError> {
+    use sqlx::Acquire as _;
+
+    let needs_fk_off = ops
+        .iter()
+        .any(|op| matches!(op, Operation::AlterColumn { .. }));
+
+    let mut conn = pool.acquire().await?;
+    if needs_fk_off {
+        sqlx::query("PRAGMA foreign_keys=OFF")
+            .execute(&mut *conn)
+            .await?;
+    }
+
+    let result: Result<(), MigrateError> = async {
+        let mut tx = conn.begin().await?;
+        for op in ops {
+            for sql in render_operation_for(op, "sqlite") {
+                sqlx::query(&sql).execute(&mut *tx).await?;
+            }
+        }
+        if needs_fk_off {
+            // Enforcement was off during the dance; verify the recreation left
+            // no dangling references before we commit.
+            let violations = sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&mut *tx)
+                .await?;
+            if !violations.is_empty() {
+                return Err(MigrateError::Sqlx(sqlx::Error::Protocol(format!(
+                    "migration `{plugin}/{name}` would leave {} dangling foreign-key \
+                     reference(s); aborted",
+                    violations.len()
+                ))));
+            }
+        }
+        sqlx::query(
+            "INSERT INTO umbral_migrations (plugin, name, applied_at, snapshot_hash) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(plugin)
+        .bind(name)
+        .bind(applied_at)
+        .bind(snapshot_hash)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    .await;
+
+    if needs_fk_off {
+        // Restore enforcement before the connection returns to the pool, even
+        // on failure — but never mask the primary error with a pragma error.
+        let _ = sqlx::query("PRAGMA foreign_keys=ON")
+            .execute(&mut *conn)
+            .await;
+    }
+    result
 }
 
 /// Postgres per-alias variant. Mirror of `run_in_sqlite_for_alias`.
@@ -1960,25 +2031,18 @@ async fn migrate_tenant_apps_into_sqlite_pool(
             if shared_apps.contains(&file.plugin) {
                 continue;
             }
-            let mut tx = pool.begin().await?;
-            for op in &file.operations {
-                for sql in render_operation_for(op, "sqlite") {
-                    sqlx::query(&sql).execute(&mut *tx).await?;
-                }
-            }
             let snapshot_hash = file.snapshot_after.hash();
             let applied_at = chrono::Utc::now().to_rfc3339();
-            sqlx::query(
-                "INSERT INTO umbral_migrations (plugin, name, applied_at, snapshot_hash) \
-                 VALUES (?, ?, ?, ?)",
+            let ops: Vec<&Operation> = file.operations.iter().collect();
+            apply_sqlite_migration_tx(
+                pool,
+                &ops,
+                &file.plugin,
+                &file.id,
+                &applied_at,
+                &snapshot_hash,
             )
-            .bind(&file.plugin)
-            .bind(&file.id)
-            .bind(&applied_at)
-            .bind(&snapshot_hash)
-            .execute(&mut *tx)
             .await?;
-            tx.commit().await?;
             applied_count += 1;
         }
     }
@@ -3894,7 +3958,11 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
 /// 3. `DROP TABLE <table>`.
 /// 4. `ALTER TABLE _umbral_new_<table> RENAME TO <table>`.
 ///
-/// Wrapped in a transaction by the caller. Indexes, triggers, and FK
+/// Wrapped in a transaction by the caller, which — when the migration contains
+/// an `AlterColumn` — brackets that transaction with `PRAGMA foreign_keys=OFF`
+/// … `PRAGMA foreign_key_check` … `PRAGMA foreign_keys=ON` (SQLite's official
+/// recipe), so step 3's `DROP TABLE` on a table with **inbound** FKs doesn't
+/// trip `FOREIGN KEY constraint failed` (gaps3 #13). Indexes, triggers, and FK
 /// targets aren't preserved at M5.1 because umbral-core's schema model
 /// doesn't yet carry them; once it does, this routine picks them up
 /// by rebuilding them at step 1.
