@@ -166,9 +166,13 @@ async fn begin_flow(
     return_to: Option<String>,
 ) -> Response {
     let Some(p) = plugin.lookup(provider) else {
-        return server_error(&format!(
-            "provider `{provider}` is not configured on this server (no credentials set)"
-        ));
+        // Unknown / unconfigured provider key is a client error (a foreseeable
+        // input: a misspelled or unconfigured provider), NOT a server fault.
+        return (
+            StatusCode::NOT_FOUND,
+            format!("unknown or unconfigured oauth provider `{provider}`"),
+        )
+            .into_response();
     };
     let state = uuid::Uuid::new_v4().to_string();
     // PKCE (RFC 7636): mint a secret verifier, persist it with the flow,
@@ -237,9 +241,11 @@ async fn oauth_callback(
     headers: umbral::web::HeaderMap,
 ) -> Response {
     let Some(p) = plugin.lookup(&provider) else {
-        return server_error(&format!(
-            "provider `{provider}` is not configured on this server"
-        ));
+        return (
+            StatusCode::NOT_FOUND,
+            format!("unknown or unconfigured oauth provider `{provider}`"),
+        )
+            .into_response();
     };
 
     // The user denied consent (or the provider errored).
