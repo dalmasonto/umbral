@@ -161,6 +161,13 @@ pub struct AppBuilder {
     /// task forever (audit_2 core-web H11/#3). Defaults to 30s; `None`
     /// disables. Set via [`AppBuilder::request_timeout`].
     request_timeout: Option<std::time::Duration>,
+    /// Ship minimal hardening response headers from core (audit_2 H10):
+    /// `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+    /// `Referrer-Policy: strict-origin-when-cross-origin` — set ONLY if not
+    /// already present, so `SecurityPlugin` (which owns the configurable values
+    /// + CSRF + HSTS) wins when mounted. Default `true`; opt out via
+    /// [`AppBuilder::default_security_headers`].
+    default_security_headers: bool,
     /// App-level framework middleware (feature #68), prepended to the
     /// plugins' contributions in the final stack. Added via
     /// [`AppBuilder::middleware`].
@@ -204,6 +211,7 @@ impl Default for AppBuilder {
             // MiB body ceiling and a 30s timeout, both opt-out-able.
             max_request_body_bytes: Some(32 * 1024 * 1024),
             request_timeout: Some(std::time::Duration::from_secs(30)),
+            default_security_headers: true,
             middleware: Vec::new(),
             db_router: None,
             route_context_resolver: None,
@@ -616,6 +624,17 @@ impl AppBuilder {
     /// ```
     pub fn request_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
         self.request_timeout = timeout;
+        self
+    }
+
+    /// Toggle the core-shipped hardening response headers (audit_2 H10):
+    /// `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and
+    /// `Referrer-Policy: strict-origin-when-cross-origin`. On by default and
+    /// applied only when the header isn't already set, so `SecurityPlugin`'s
+    /// configured values win. Pass `false` to fully own response headers
+    /// yourself (e.g. an API behind a gateway that adds them at the edge).
+    pub fn default_security_headers(mut self, enabled: bool) -> Self {
+        self.default_security_headers = enabled;
         self
     }
 
@@ -1325,6 +1344,17 @@ impl AppBuilder {
             ));
         }
 
+        // audit_2 H10 — minimal hardening response headers from core, so a
+        // default app that forgot SecurityPlugin is still not clickjackable /
+        // MIME-sniffable. Set ONLY if absent (SecurityPlugin's configured
+        // values win), and applied outer to the host/limit/timeout layers so
+        // their 4xx responses carry them too. HSTS is deliberately NOT set here
+        // — it's sticky and subdomain-scoped, so it stays SecurityPlugin's
+        // configurable responsibility.
+        if self.default_security_headers {
+            router = router.layer(axum::middleware::from_fn(default_security_headers_layer));
+        }
+
         // Phase 5.99 — request tracing span. Applied outermost so every request
         // (including host-guard rejections) runs inside a span. The span
         // carries `http.method`, `http.route`/`uri`, and the response
@@ -1386,6 +1416,31 @@ async fn route_context_scope_layer(
 ) -> crate::web::Response {
     let ctx = resolver(&req);
     crate::db::route_context::scope(ctx, next.run(req)).await
+}
+
+/// Set minimal hardening response headers, each ONLY if the response doesn't
+/// already carry it — so `SecurityPlugin` (or a handler) can override, and no
+/// header is ever duplicated (audit_2 H10).
+async fn default_security_headers_layer(
+    req: crate::web::Request,
+    next: axum::middleware::Next,
+) -> crate::web::Response {
+    use axum::http::HeaderValue;
+    use axum::http::header::{
+        HeaderName, REFERRER_POLICY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    };
+
+    let mut resp = next.run(req).await;
+    let headers = resp.headers_mut();
+    let mut set_if_absent = |name: HeaderName, value: &'static str| {
+        if !headers.contains_key(&name) {
+            headers.insert(name, HeaderValue::from_static(value));
+        }
+    };
+    set_if_absent(X_CONTENT_TYPE_OPTIONS, "nosniff");
+    set_if_absent(X_FRAME_OPTIONS, "DENY");
+    set_if_absent(REFERRER_POLICY, "strict-origin-when-cross-origin");
+    resp
 }
 
 /// Validate the registered plugins and return them in a stable
