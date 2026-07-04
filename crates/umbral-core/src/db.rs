@@ -381,18 +381,33 @@ struct PoolConfig {
 }
 
 impl PoolConfig {
+    fn from_settings(s: &crate::settings::Settings) -> Self {
+        PoolConfig {
+            max_connections: s.db_max_connections,
+            min_connections: s.db_min_connections,
+            acquire_timeout_secs: s.db_acquire_timeout_secs,
+            idle_timeout_secs: s.db_idle_timeout_secs,
+            max_lifetime_secs: s.db_max_lifetime_secs,
+            test_before_acquire: s.db_test_before_acquire,
+        }
+    }
+
     fn resolve() -> Self {
-        match crate::settings::get_opt() {
-            Some(s) => PoolConfig {
-                max_connections: s.db_max_connections,
-                min_connections: s.db_min_connections,
-                acquire_timeout_secs: s.db_acquire_timeout_secs,
-                idle_timeout_secs: s.db_idle_timeout_secs,
-                max_lifetime_secs: s.db_max_lifetime_secs,
-                test_before_acquire: s.db_test_before_acquire,
-            },
+        // Prefer the ambient settings once published by `App::build()`.
+        if let Some(s) = crate::settings::get_opt() {
+            return PoolConfig::from_settings(&s);
+        }
+        // audit_2 H16: the default pool is opened via `db::connect()` BEFORE
+        // `App::build()` in every documented boot path, so at this point the
+        // ambient settings aren't published yet. Re-read the `UMBRAL_DB_*` knobs
+        // straight from the environment (same figment parse `build()` uses) so
+        // an operator's `UMBRAL_DB_MAX_CONNECTIONS=100` isn't silently discarded
+        // for the pool that serves ALL traffic. Only if the env can't be parsed
+        // do we fall back to the hardcoded production defaults.
+        match crate::settings::Settings::from_env() {
+            Ok(s) => PoolConfig::from_settings(&s),
             // Defaults mirror the `default_db_*` fns in `settings`.
-            None => PoolConfig {
+            Err(_) => PoolConfig {
                 max_connections: 10,
                 min_connections: 0,
                 acquire_timeout_secs: 30,

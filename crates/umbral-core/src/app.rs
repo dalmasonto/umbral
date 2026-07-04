@@ -791,6 +791,32 @@ impl AppBuilder {
             }
         }
 
+        // Phase 2.5a — `settings.databases` reachability guard (audit_2 H17).
+        //
+        // `settings.databases` (the `[databases]` TOML table / `UMBRAL_DATABASES__*`
+        // env) is deserialized and documented as a way to configure extra pools,
+        // but `build()` opens pools only from the builder (`.database(alias, pool)`).
+        // A `settings.databases`-only alias is therefore DEAD: a model routed to it
+        // already trips `PluginDatabaseAlias` above, and a custom router pointed at
+        // it panics `no database registered under alias` on the first query. Rather
+        // than let that config silently do nothing, surface it loudly at boot so the
+        // operator knows the alias needs an explicit `.database(alias, pool)`. We
+        // warn (not error) because an unrouted extra entry is harmless — the panic
+        // only fires if something actually routes there, and that path is either
+        // caught above (models) or owned by the router author (custom routers).
+        for alias in settings.databases.keys() {
+            if !self.databases.contains_key(alias) {
+                tracing::warn!(
+                    alias = %alias,
+                    "settings.databases entry '{alias}' has no registered pool — \
+                     settings.databases is NOT auto-opened. Open it explicitly: \
+                     `let pool = umbral::db::connect(url).await?;` then \
+                     `App::builder().database(\"{alias}\", pool)`. Any query routed \
+                     to this alias will panic until a pool is registered."
+                );
+            }
+        }
+
         // Phase 2.5b — cross-database foreign-key guard (gaps2 #22).
         //
         // A foreign key whose target model lives on a DIFFERENT database
