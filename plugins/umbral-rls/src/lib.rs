@@ -239,9 +239,27 @@ impl Plugin for RlsPlugin {
         let pool = umbral::db::pool_dispatched();
         match pool {
             umbral::db::DbPool::Sqlite(_) => {
+                // RLS is Postgres-only: SQLite provides NO row isolation, so a
+                // SQLite backend with RlsPlugin registered is a security
+                // misconfiguration — the operator believes rows are isolated
+                // when they aren't. Fail CLOSED in Prod (audit_2 C2/R3, H18);
+                // loud-warn in Dev so a SQLite dev setup still boots.
+                let is_prod = umbral::settings::get_opt()
+                    .map(|s| matches!(s.environment, umbral::Environment::Prod))
+                    .unwrap_or(false);
+                if is_prod {
+                    return Err(Box::<dyn std::error::Error + Send + Sync>::from(
+                        "umbral-rls: Row-Level Security is Postgres-only, but the active \
+                         backend is SQLite — it provides NO row isolation. Refusing to boot in \
+                         Environment::Prod with a false isolation guarantee. Use Postgres, or \
+                         remove RlsPlugin.",
+                    ) as PluginError);
+                }
                 tracing::warn!(
                     plugin = "umbral-rls",
-                    "Row-Level Security is Postgres-only; skipping {} table(s) and {} policy/policies",
+                    "Row-Level Security is Postgres-only; the SQLite backend provides NO row \
+                     isolation — skipping {} table(s) and {} policy/policies. This is a HARD \
+                     ERROR under Environment::Prod.",
                     self.tables.len(),
                     self.policies.len()
                 );
@@ -297,6 +315,17 @@ impl RlsPlugin {
         )
     }
 
+    /// Render the `ALTER TABLE ... FORCE ROW LEVEL SECURITY` statement for one
+    /// table. FORCE makes the policies apply to the table **owner** as well —
+    /// without it, the single-`DATABASE_URL` app (which connects as the owner)
+    /// is exempt and RLS enforces nothing (audit_2 C2/R1).
+    pub fn render_force_sql(&self, table: &str) -> String {
+        format!(
+            "ALTER TABLE \"{}\" FORCE ROW LEVEL SECURITY",
+            escape_ident(table)
+        )
+    }
+
     /// Apply every ENABLE and policy to the given Postgres pool.
     /// Async because sqlx execution is async; called from on_ready
     /// via `tokio::runtime::Handle::current().block_on()`.
@@ -305,9 +334,16 @@ impl RlsPlugin {
         // tolerates ENABLE on a table that already has RLS enabled,
         // so we don't bother with IF NOT EXISTS gymnastics.
         for table in &self.tables {
-            let sql = self.render_enable_sql(table);
-            tracing::info!(plugin = "umbral-rls", sql = %sql, "enabling RLS");
-            sqlx::query(&sql).execute(pool).await?;
+            let enable = self.render_enable_sql(table);
+            tracing::info!(plugin = "umbral-rls", sql = %enable, "enabling RLS");
+            sqlx::query(&enable).execute(pool).await?;
+            // FORCE subjects the table OWNER to the policies too (audit_2 C2/R1).
+            // umbral's single-`DATABASE_URL` app connects as the owner, whom
+            // Postgres exempts from non-forced RLS — so ENABLE alone silently
+            // enforces nothing on the common deployment.
+            let force = self.render_force_sql(table);
+            tracing::info!(plugin = "umbral-rls", sql = %force, "forcing RLS on owner");
+            sqlx::query(&force).execute(pool).await?;
         }
         // Then apply each policy. DROP IF EXISTS + CREATE is the
         // idempotent shape — Postgres has no CREATE OR REPLACE for
@@ -356,6 +392,27 @@ mod tests {
         assert_eq!(p.tables(), &["post"]);
         assert_eq!(p.policies().len(), 1);
         assert_eq!(p.policies()[0].name, "read_own");
+    }
+
+    // audit_2 C2/R1: ENABLE alone leaves the table OWNER exempt (the
+    // single-DATABASE_URL app connects as owner), so RLS enforces nothing.
+    // FORCE is the fix — it must be emitted alongside ENABLE.
+    #[test]
+    fn force_row_level_security_is_rendered_and_escaped() {
+        let p = RlsPlugin::new().enable_on("post");
+        assert_eq!(
+            p.render_enable_sql("post"),
+            "ALTER TABLE \"post\" ENABLE ROW LEVEL SECURITY"
+        );
+        assert_eq!(
+            p.render_force_sql("post"),
+            "ALTER TABLE \"post\" FORCE ROW LEVEL SECURITY"
+        );
+        // A hostile identifier is double-quote-escaped, not interpolated raw.
+        assert_eq!(
+            p.render_force_sql("a\"b"),
+            "ALTER TABLE \"a\"\"b\" FORCE ROW LEVEL SECURITY"
+        );
     }
 
     #[test]
