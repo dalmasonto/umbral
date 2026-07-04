@@ -1,0 +1,47 @@
+# Supply-chain gate: scan Cargo.lock against the RustSec advisory DB on every
+# push / PR that touches dependencies, and weekly to catch newly-published
+# advisories against unchanged deps. Tracked exceptions live in
+# `.cargo/audit.toml` (each justified — phantom deps, upstream-blocked fixes,
+# trusted-input-only paths). Added for audit_2 H24.
+
+name: cargo-audit
+
+on:
+  push:
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/audit.toml"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/audit.toml"
+  schedule:
+    # Mondays 07:00 UTC — surface advisories filed against pinned deps.
+    - cron: "0 7 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cargo-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # Reads exceptions from .cargo/audit.toml; non-zero exit on any
+      # un-ignored vulnerability fails the job.
+      - name: cargo audit
+        run: cargo audit

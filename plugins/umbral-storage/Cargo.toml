@@ -22,7 +22,7 @@ umbral = { path = "../../crates/umbral", version = "0.0.4" }
 # Optional S3 backend (rust-s3). `blocking` so the synchronous collect path
 # can upload without an async runtime; default features off to keep the dep
 # lean. Only built under the `s3` feature.
-rust-s3 = { version = "0.35", optional = true, default-features = false, features = ["blocking", "tokio-rustls-tls"] }
+rust-s3 = { version = "0.37", optional = true, default-features = false, features = ["blocking", "tokio-rustls-tls"] }
 # `url()` is a SYNC trait method called from inside async request handlers, so
 # it must NOT use rust-s3's `*_blocking` presign (which does `Runtime::new().
 # block_on` and panics inside an existing tokio runtime). Instead we drive the

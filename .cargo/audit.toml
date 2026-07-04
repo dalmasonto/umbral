@@ -1,0 +1,32 @@
+# cargo-audit configuration — https://github.com/rustsec/rustsec/tree/main/cargo-audit
+#
+# Residual advisories tracked and justified after the audit_2 H24 supply-chain
+# sweep (which bumped rust-s3 0.35 -> 0.37 to drop EOL rustls 0.21 / hyper 0.14,
+# and patched ammonia's mXSS, quinn-proto, time, and anyhow). Every entry here
+# is either not reachable in umbral's compiled graph or blocked upstream — NOT a
+# blanket silence. Re-review on each dependency bump; delete an entry the moment
+# its upstream fix is resolvable.
+
+[advisories]
+ignore = [
+    # rsa — Marvin timing side-channel. No fixed upgrade exists, AND `rsa` is not
+    # in umbral's compiled dependency graph: it's a Cargo.lock phantom pulled by an
+    # unused sqlx MySQL feature. `cargo tree -i rsa` prints "nothing to print".
+    # Re-evaluate if a real code path ever links it.
+    "RUSTSEC-2023-0071",
+
+    # quick-xml — NsReader namespace-allocation DoS + quadratic duplicate-attr
+    # scan. Transitive via `syntect -> plist`, which pins `quick-xml ^0.38`, so the
+    # >=0.41 fix can't resolve until syntect/plist bump. syntect parses only the
+    # syntax/theme XML BUNDLED with umbral (trusted build-time assets), never
+    # attacker-controlled input, so the DoS is not reachable. Drop when syntect
+    # ships quick-xml >=0.41.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+
+    # Unmaintained (maintenance warnings, not vulnerabilities), both transitive:
+    #   bincode   — pulled transitively; no active exploit.
+    #   yaml-rust — via syntect; parses bundled syntax defs only.
+    "RUSTSEC-2025-0141",
+    "RUSTSEC-2024-0320",
+]
