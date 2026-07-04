@@ -4124,7 +4124,7 @@ impl<T: Model> Manager<T> {
                 let refetch_pred: Predicate<T> = Predicate::new(
                     sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea2),
                 );
-                pin_to_pool(self.filter(refetch_pred), &write_pool)
+                let updated_row: T = pin_to_pool(self.filter(refetch_pred), &write_pool)
                     .first()
                     .await
                     .map_err(WriteError::Sqlx)?
@@ -4133,7 +4133,19 @@ impl<T: Model> Manager<T> {
                             "update_or_create: row vanished between UPDATE and re-fetch"
                                 .to_string(),
                         ))
-                    })?
+                    })?;
+
+                // `update_values` above fires `bulk_post_save`; ALSO fire the
+                // per-row `post_save` so signal / realtime `on_model` consumers
+                // (which subscribe to the per-row event) see this upsert-update.
+                // Without it, the CREATE branch (via `self.create()`) emits
+                // `post_save` but the UPDATE branch was silent to those
+                // consumers — an asymmetry that's very hard to reason about
+                // from the call site (gaps3 #14). `bulk_post_save` and
+                // `post_save` are distinct signal names, so no single consumer
+                // fires twice.
+                crate::signals::emit_post_save::<T>(&updated_row, false).await;
+                updated_row
             }};
         }
 
@@ -4151,7 +4163,15 @@ impl<T: Model> Manager<T> {
         // the now-existing row, and apply the update to it — same convergence
         // as get_or_create but with an extra UPDATE step.
         match self.create(defaults.clone()).await {
-            Ok(created) => Ok((created, true)),
+            Ok(created) => {
+                // `create()` is deliberately signal-free (only `save()` fires
+                // per-row signals), so emit `post_save` here — otherwise the
+                // CREATE branch would be silent to on_model / realtime
+                // consumers while the UPDATE branch (above) fires it, an
+                // inconsistency across the two halves of one API (gaps3 #14).
+                crate::signals::emit_post_save::<T>(&created, true).await;
+                Ok((created, true))
+            }
             Err(WriteError::UniqueViolation { .. }) => {
                 // A concurrent writer inserted the row between our SELECT and
                 // our INSERT. Re-fetch then update, same as the direct-hit path.

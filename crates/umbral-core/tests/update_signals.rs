@@ -16,6 +16,7 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex as TokioMutex, OnceCell};
 
+use umbral::orm::Predicate;
 use umbral_core::signals::{clear_for_tests, has_subscribers, subscribe};
 
 /// Process-wide serialiser so the shared `updpost` table isn't raced.
@@ -81,6 +82,58 @@ fn capture(signal: &str) -> Arc<Mutex<Vec<Value>>> {
     let c = captured.clone();
     subscribe(signal, move |p| c.lock().unwrap().push(p.clone()));
     captured
+}
+
+/// gaps3 #14 — `update_or_create` must fire the per-row `post_save` on BOTH
+/// its branches. The CREATE branch already did (via `self.create()`); the
+/// UPDATE branch previously only fired `bulk_post_save` (via `update_values`),
+/// so signal / realtime `on_model` consumers silently missed upsert-updates.
+#[tokio::test]
+async fn post_save_fires_on_both_branches_of_update_or_create() {
+    let _guard = SERIALISE.lock().await;
+    boot().await;
+    truncate().await;
+    clear_for_tests();
+
+    let captured = capture("post_save:updpost");
+
+    // First call: no matching row → CREATE branch → post_save (created=true).
+    let (_row, created) = Post::objects()
+        .update_or_create(
+            Predicate::col_eq("title", "uoc"),
+            Post {
+                id: 0,
+                title: "uoc".into(),
+                published: false,
+            },
+        )
+        .await
+        .expect("update_or_create insert");
+    assert!(created, "first call inserts");
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "post_save fires on the CREATE branch"
+    );
+
+    // Second call: the row now exists (title still 'uoc') → UPDATE branch.
+    let (_row2, created2) = Post::objects()
+        .update_or_create(
+            Predicate::col_eq("title", "uoc"),
+            Post {
+                id: 0,
+                title: "uoc".into(),
+                published: true,
+            },
+        )
+        .await
+        .expect("update_or_create update");
+    assert!(!created2, "second call updates the existing row");
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        2,
+        "post_save ALSO fires on the UPDATE branch (gaps3 #14)"
+    );
 }
 
 #[tokio::test]
