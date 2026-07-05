@@ -37,14 +37,14 @@ use umbral::prelude::*;
 use umbral::routes::RouteSpec;
 use umbral::templates::context;
 use umbral::web::{
-    Form, HeaderMap, Html, IntoResponse, Path, Query, Redirect, Response, Router, StatusCode, get,
-    post,
+    get, post, Form, HeaderMap, Html, IntoResponse, Path, Query, Redirect, Response, Router,
+    StatusCode,
 };
 use umbral_auth::{AuthUser, OptionalUser};
 
 use models::{
-    self as pd, Plugin as PluginModel, plugin, plugin_comment, plugin_compatibility,
-    plugin_feature, plugin_moderator,
+    self as pd, plugin, plugin_comment, plugin_compatibility, plugin_feature, plugin_moderator,
+    Plugin as PluginModel,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -89,6 +89,12 @@ impl Plugin for PluginDirectoryPlugin {
                 "/plugins/{slug}/issues/{comment_id}/reopen",
                 post(post_reopen_issue),
             )
+            // Self-service moderation area for plugin owners / moderators.
+            // Aggregates the plugins a signed-in user owns or moderates and,
+            // per plugin, the issues + notes they can act on — reusing the
+            // `/plugins/{slug}/...` moderation POST endpoints above.
+            .route("/account/plugins", get(account_plugins_page))
+            .route("/account/plugins/{slug}", get(account_plugin_manage_page))
             .route("/report", get(report_page).post(post_report))
             .route("/search", get(plugin_search))
     }
@@ -108,6 +114,8 @@ impl Plugin for PluginDirectoryPlugin {
             ),
             RouteSpec::new("/plugins/{slug}/issues/{comment_id}/resolve", vec!["POST"]),
             RouteSpec::new("/plugins/{slug}/issues/{comment_id}/reopen", vec!["POST"]),
+            RouteSpec::new("/account/plugins", vec!["GET"]),
+            RouteSpec::new("/account/plugins/{slug}", vec!["GET"]),
             RouteSpec::new("/report", vec!["GET", "POST"]),
             RouteSpec::new("/search", vec!["GET"]),
         ]
@@ -1705,7 +1713,7 @@ async fn post_moderate_comment(
 
     let action = form.get("action").map(|s| s.trim()).unwrap_or("");
     match moderate_comment_logic(&plugin, comment_id, action).await {
-        Ok(true) => Ok(Redirect::to(&format!("/plugins/{slug}")).into_response()),
+        Ok(true) => Ok(Redirect::to(&redirect_after_moderation(&form, &slug)).into_response()),
         Ok(false) => Err((
             StatusCode::NOT_FOUND,
             "That comment isn't on this plugin.".into(),
@@ -1719,8 +1727,9 @@ async fn post_moderate_comment(
 async fn post_resolve_issue(
     Path((slug, comment_id)): Path<(String, i64)>,
     OptionalUser(maybe_user): OptionalUser,
+    Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, (StatusCode, String)> {
-    moderate_issue_resolution(slug, comment_id, maybe_user, true).await
+    moderate_issue_resolution(slug, comment_id, maybe_user, true, &form).await
 }
 
 /// `POST /plugins/{slug}/issues/{comment_id}/reopen` —
@@ -1728,17 +1737,22 @@ async fn post_resolve_issue(
 async fn post_reopen_issue(
     Path((slug, comment_id)): Path<(String, i64)>,
     OptionalUser(maybe_user): OptionalUser,
+    Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, (StatusCode, String)> {
-    moderate_issue_resolution(slug, comment_id, maybe_user, false).await
+    moderate_issue_resolution(slug, comment_id, maybe_user, false, &form).await
 }
 
 /// Shared body for the resolve / reopen handlers (same authz + lookup, only
-/// the boolean differs).
+/// the boolean differs). `form` carries an optional `next` local path so the
+/// account-area pages return to `/account/plugins/{slug}` instead of the
+/// public detail page (the HTMX detail-page forms send no `next`, so they
+/// keep redirecting to `/plugins/{slug}`).
 async fn moderate_issue_resolution(
     slug: String,
     comment_id: i64,
     maybe_user: Option<AuthUser>,
     resolved: bool,
+    form: &HashMap<String, String>,
 ) -> Result<Response, (StatusCode, String)> {
     let Some(user) = maybe_user else {
         return Err((StatusCode::UNAUTHORIZED, "Please log in.".into()));
@@ -1760,12 +1774,271 @@ async fn moderate_issue_resolution(
         .await
         .map_err(internal_error)?
     {
-        true => Ok(Redirect::to(&format!("/plugins/{slug}")).into_response()),
+        true => Ok(Redirect::to(&redirect_after_moderation(form, &slug)).into_response()),
         false => Err((
             StatusCode::NOT_FOUND,
             "That issue isn't on this plugin.".into(),
         )),
     }
+}
+
+/// Where a moderation action redirects on success. An account-area form sends
+/// a `next` field (`/account/plugins/{slug}`); the public detail page's HTMX
+/// forms don't, so they fall back to `/plugins/{slug}`. `next` is accepted only
+/// when it's a same-site absolute path (leading `/`, not `//`) — an open-
+/// redirect guard, mirroring the accounts plugin's `safe_next`.
+fn redirect_after_moderation(form: &HashMap<String, String>, slug: &str) -> String {
+    form.get("next")
+        .map(|s| s.trim())
+        .filter(|s| s.starts_with('/') && !s.starts_with("//"))
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("/plugins/{slug}"))
+}
+
+// ---------------------------------------------------------------------------
+// Self-service moderation account area (`/account/plugins`)
+// ---------------------------------------------------------------------------
+//
+// A private home for a plugin author: the plugins they own (`created_by`) or
+// were granted moderation on (`PluginModerator`), and per plugin the issues +
+// notes they can act on. The action buttons POST to the EXISTING
+// `/plugins/{slug}/...` moderation endpoints (with a `next` field pointing
+// back here), so this area adds aggregation + authz-scoped listing, never new
+// mutation paths. Both pages resolve the caller with `OptionalUser` and gate
+// on the same `is_owner` / `can_moderate` checks the POST handlers use.
+
+/// One plugin row on the `/account/plugins` overview.
+#[derive(Serialize)]
+struct AccountPluginRow {
+    slug: String,
+    name: String,
+    icon: String,
+    role: &'static str,
+    status: String,
+    moderation: String,
+    open_issues: i64,
+    hidden: i64,
+    pending_notes: i64,
+}
+
+/// Count the moderation-relevant comments for one plugin. Soft-deleted rows are
+/// excluded automatically (the model is `soft_delete`, so `objects()` filters
+/// `deleted_at IS NULL`).
+async fn account_plugin_counts(plugin_id: i64) -> Result<(i64, i64, i64), String> {
+    let open_issues = pd::PluginComment::objects()
+        .filter(plugin_comment::PLUGIN.eq(plugin_id))
+        .filter(plugin_comment::IS_ISSUE.eq(true))
+        .filter(plugin_comment::IS_RESOLVED.eq(false))
+        .count()
+        .await
+        .map_err(|e| e.to_string())? as i64;
+    let hidden = pd::PluginComment::objects()
+        .filter(plugin_comment::PLUGIN.eq(plugin_id))
+        .filter(plugin_comment::MODERATION.eq("hidden"))
+        .count()
+        .await
+        .map_err(|e| e.to_string())? as i64;
+    let pending_notes = pd::PluginComment::objects()
+        .filter(plugin_comment::PLUGIN.eq(plugin_id))
+        .filter(plugin_comment::MODERATION.eq("pending"))
+        .count()
+        .await
+        .map_err(|e| e.to_string())? as i64;
+    Ok((open_issues, hidden, pending_notes))
+}
+
+/// `GET /account/plugins` — the plugins the signed-in user owns or moderates,
+/// each with the counts that tell them whether anything needs attention.
+async fn account_plugins_page(
+    OptionalUser(maybe_user): OptionalUser,
+) -> Result<Response, (StatusCode, String)> {
+    let Some(user) = maybe_user else {
+        return Ok(Redirect::to("/login?next=/account/plugins").into_response());
+    };
+
+    // Owned (created_by == the caller) and moderated (a PluginModerator grant)
+    // sets. A user can be both; owner wins for the role label, and we never
+    // list a plugin twice.
+    let owned = PluginModel::objects()
+        .filter(plugin::CREATED_BY.eq(user.id))
+        .fetch()
+        .await
+        .map_err(internal_error)?;
+    let owned_ids: std::collections::HashSet<i64> = owned.iter().map(|p| p.id).collect();
+
+    let grants = PluginModerator::objects()
+        .filter(plugin_moderator::USER.eq(user.id))
+        .fetch()
+        .await
+        .map_err(internal_error)?;
+
+    let mut rows: Vec<AccountPluginRow> = Vec::new();
+    for p in &owned {
+        rows.push(account_row(p, "Owner").await.map_err(internal_error)?);
+    }
+    for g in &grants {
+        let pid = g.plugin.id();
+        if owned_ids.contains(&pid) {
+            continue;
+        }
+        if let Some(p) = PluginModel::objects()
+            .filter(plugin::ID.eq(pid))
+            .first()
+            .await
+            .map_err(internal_error)?
+        {
+            rows.push(account_row(&p, "Moderator").await.map_err(internal_error)?);
+        }
+    }
+    // Stable, friendly order: needs-attention first (open issues desc), then
+    // name. Sorting in Rust keeps the query simple and the set is small.
+    rows.sort_by(|a, b| {
+        b.open_issues
+            .cmp(&a.open_issues)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    let body = umbral::templates::render("account/plugins.html", &context! { rows => rows })
+        .map_err(internal_error)?;
+    Ok(Html(body).into_response())
+}
+
+/// Build one overview row (identity + counts) for a plugin the caller manages.
+async fn account_row(p: &PluginModel, role: &'static str) -> Result<AccountPluginRow, String> {
+    let (open_issues, hidden, pending_notes) = account_plugin_counts(p.id).await?;
+    Ok(AccountPluginRow {
+        slug: p.slug.clone(),
+        name: p.name.clone(),
+        icon: initials(&p.name),
+        role,
+        status: title_case(&format!("{:?}", p.status)),
+        moderation: title_case(&format!("{:?}", p.moderation)),
+        open_issues,
+        hidden,
+        pending_notes,
+    })
+}
+
+/// One issue/note row on the per-plugin manage page.
+#[derive(Serialize)]
+struct ManageComment {
+    id: i64,
+    body: String,
+    kind: String,
+    author: String,
+    created: String,
+    is_resolved: bool,
+    moderation: String,
+    hidden: bool,
+    pending: bool,
+}
+
+impl ManageComment {
+    fn from_row(c: &pd::PluginComment) -> Self {
+        let moderation = moderation_db_literal(c.moderation).to_string();
+        ManageComment {
+            id: c.id,
+            body: c.body.clone(),
+            kind: title_case(&format!("{:?}", c.kind)),
+            // Prefer the curated self-identification label; a plain visitor
+            // note carries neither an author nor a label — show "Anonymous"
+            // rather than issuing an N+1 user lookup per row.
+            author: c
+                .author_label
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "Anonymous".to_string()),
+            created: c.created_at.format("%b %-d, %Y").to_string(),
+            is_resolved: c.is_resolved,
+            hidden: moderation == "hidden" || moderation == "flagged",
+            pending: moderation == "pending",
+            moderation,
+        }
+    }
+}
+
+/// The `/account/plugins/{slug}` manage view.
+#[derive(Serialize)]
+struct ManageView {
+    slug: String,
+    name: String,
+    icon: String,
+    role: &'static str,
+    next: String,
+    detail_url: String,
+    open_issues: Vec<ManageComment>,
+    resolved_issues: Vec<ManageComment>,
+    notes: Vec<ManageComment>,
+}
+
+/// `GET /account/plugins/{slug}` — manage one plugin's issues + notes. Gated to
+/// its owner or a granted moderator (403 otherwise); reuses the same
+/// `is_owner` / `can_moderate` checks the POST endpoints enforce.
+async fn account_plugin_manage_page(
+    Path(slug): Path<String>,
+    OptionalUser(maybe_user): OptionalUser,
+) -> Result<Response, (StatusCode, String)> {
+    let Some(user) = maybe_user else {
+        return Ok(Redirect::to(&format!("/login?next=/account/plugins/{slug}")).into_response());
+    };
+    let Some(plugin) = load_plugin_for_moderation(&slug)
+        .await
+        .map_err(internal_error)?
+    else {
+        return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
+    };
+    let role = if is_owner(&plugin, user.id) {
+        "Owner"
+    } else if can_moderate(&plugin, user.id).await {
+        "Moderator"
+    } else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "You don't own or moderate this plugin.".into(),
+        ));
+    };
+
+    // Every non-deleted comment for the plugin, oldest first, partitioned into
+    // open issues / resolved issues / notes.
+    let comments = pd::PluginComment::objects()
+        .filter(plugin_comment::PLUGIN.eq(plugin.id))
+        .order_by(plugin_comment::CREATED_AT.desc())
+        .fetch()
+        .await
+        .map_err(internal_error)?;
+
+    let mut open_issues = Vec::new();
+    let mut resolved_issues = Vec::new();
+    let mut notes = Vec::new();
+    for c in &comments {
+        let row = ManageComment::from_row(c);
+        if c.is_issue {
+            if c.is_resolved {
+                resolved_issues.push(row);
+            } else {
+                open_issues.push(row);
+            }
+        } else {
+            notes.push(row);
+        }
+    }
+
+    let view = ManageView {
+        slug: plugin.slug.clone(),
+        name: plugin.name.clone(),
+        icon: initials(&plugin.name),
+        role,
+        next: format!("/account/plugins/{}", plugin.slug),
+        detail_url: format!("/plugins/{}", plugin.slug),
+        open_issues,
+        resolved_issues,
+        notes,
+    };
+
+    let body =
+        umbral::templates::render("account/plugin_manage.html", &context! { plugin => view })
+            .map_err(internal_error)?;
+    Ok(Html(body).into_response())
 }
 
 /// Render the submit page. `errors` carries a failed submission's field

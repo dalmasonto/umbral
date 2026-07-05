@@ -255,12 +255,40 @@
         </a>
         {# Auth-aware CTA. `user` is injected globally by
            AuthPlugin::with_user_in_templates(); anonymous visitors get
-           `user.is_authenticated == false`. #}
+           `user.is_authenticated == false`. Signed-in users get a popover
+           exposing their account area (reuses the header dropdown JS via
+           data-dd/data-dd-btn/data-dd-panel). #}
         {% if user.is_authenticated %}
-        <a href="/account" class="flex items-center gap-[7px] rounded-[9px] bg-accent px-4 py-[9px] text-[14px] font-semibold text-white transition-colors hover:bg-accent-2">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-          <span>Account</span>
-        </a>
+        <div class="nav-dd" data-dd>
+          <button type="button" class="flex items-center gap-[7px] rounded-[9px] bg-accent px-4 py-[9px] text-[14px] font-semibold text-white transition-colors hover:bg-accent-2" aria-expanded="false" aria-haspopup="true" data-dd-btn>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <span class="hidden sm:inline">{{ user.username }}</span>
+            <svg class="nav-dd__chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="nav-dd__panel" role="menu" data-dd-panel style="right:0;left:auto;">
+            <a href="/account/plugins" class="nav-dd__link" role="menuitem">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12l8.73-5.04M12 22V12"/></svg>
+              <span>Your plugins<span class="nav-dd__link-sub block">Moderate issues &amp; notes</span></span>
+            </a>
+            <a href="/account" class="nav-dd__link" role="menuitem">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              <span>Account settings<span class="nav-dd__link-sub block">Profile &amp; connected accounts</span></span>
+            </a>
+            {% if user.is_superuser %}
+            <a href="/admin" class="nav-dd__link" role="menuitem">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>Admin<span class="nav-dd__link-sub block">Full back office</span></span>
+            </a>
+            {% endif %}
+            <form method="post" action="/logout" style="margin:0">
+              {{ csrf_input }}
+              <button type="submit" class="nav-dd__link" role="menuitem" style="width:100%;background:none;border:0;cursor:pointer;text-align:left;font:inherit">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>
+                <span>Log out</span>
+              </button>
+            </form>
+          </div>
+        </div>
         {% else %}
         <a href="/login" class="hidden text-[14px] font-semibold text-ink-2 transition-colors hover:text-ink sm:inline" style="text-decoration:none">Log in</a>
         <a href="/signup" class="rounded-[9px] bg-accent px-4 py-[9px] text-[14px] font-semibold text-white transition-colors hover:bg-accent-2">Sign up</a>

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{# Self-service moderation overview. `rows` is the list of plugins the
+   signed-in user owns or moderates, each with its attention counts. `user`
+   is in scope globally via AuthPlugin::with_user_in_templates(). #}
+
+{% block title %}Your plugins - Umbral{% endblock %}
+
+{% block content %}
+<div style="max-width: 880px; margin: 56px auto; padding: 0 16px">
+
+  <div style="margin-bottom: 22px">
+    <h1 style="margin: 0 0 6px; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; color: var(--ink)">Your plugins</h1>
+    <p style="margin: 0; font-size: 14px; color: var(--muted)">Moderate the issues and notes on the plugins you own or help maintain.</p>
+  </div>
+
+  {# Account area tabs — keep /account and this page one cohesive space. #}
+  <nav style="display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid var(--hairline)">
+    <a href="/account" style="padding: 9px 14px; font-size: 14px; font-weight: 600; color: var(--muted); text-decoration: none">Account</a>
+    <a href="/account/plugins" style="padding: 9px 14px; font-size: 14px; font-weight: 700; color: var(--ink); text-decoration: none; border-bottom: 2px solid var(--accent); margin-bottom: -1px">Your plugins</a>
+  </nav>
+
+  {% if rows %}
+  <div style="display: grid; gap: 14px">
+    {% for r in rows %}
+    <div style="background: var(--surface); border: 1px solid var(--hairline); border-radius: 16px; padding: 18px 20px; display: flex; align-items: center; gap: 16px">
+      <span style="flex-shrink: 0; width: 44px; height: 44px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-2); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 800">{{ r.icon }}</span>
+      <div style="flex: 1; min-width: 0">
+        <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap">
+          <span style="font-size: 15.5px; font-weight: 700; color: var(--ink)">{{ r.name }}</span>
+          <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); background: var(--surface-2, var(--hairline)); border: 1px solid var(--hairline); border-radius: 999px; padding: 2px 8px">{{ r.role }}</span>
+          <span style="font-size: 12px; color: var(--muted)">{{ r.status }}</span>
+        </div>
+        <div style="margin-top: 7px; display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px">
+          {% if r.open_issues > 0 %}
+          <span style="color: #B23A33; font-weight: 700">{{ r.open_issues }} open issue{% if r.open_issues != 1 %}s{% endif %}</span>
+          {% else %}
+          <span style="color: var(--muted)">No open issues</span>
+          {% endif %}
+          {% if r.hidden > 0 %}<span style="color: var(--muted)">{{ r.hidden }} hidden</span>{% endif %}
+          {% if r.pending_notes > 0 %}<span style="color: var(--warn, #B4690E); font-weight: 600">{{ r.pending_notes }} pending</span>{% endif %}
+        </div>
+      </div>
+      <a href="/account/plugins/{{ r.slug }}" style="flex-shrink: 0; padding: 9px 16px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 13.5px; font-weight: 600; text-decoration: none">Manage</a>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div style="background: var(--surface); border: 1px solid var(--hairline); border-radius: 16px; padding: 40px 24px; text-align: center">
+    <p style="margin: 0 0 6px; font-size: 15px; font-weight: 700; color: var(--ink)">You haven't listed any plugins yet</p>
+    <p style="margin: 0 0 18px; font-size: 13.5px; color: var(--muted)">List a plugin in the directory and you'll be able to moderate its issues and notes here.</p>
+    <a href="/plugins/submit" style="display: inline-block; padding: 10px 18px; border-radius: 9px; background: var(--accent); color: #fff; font-size: 13.5px; font-weight: 600; text-decoration: none">Submit a plugin</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
