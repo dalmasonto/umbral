@@ -312,8 +312,20 @@ fn host_validation_unenforced(environment: &Environment, bind_addr: &str) -> boo
 /// `127.0.0.1`, `::1`, or `localhost`. Anything else is treated as
 /// likely public-facing for the secret_key defence-in-depth check.
 fn is_loopback_bind(bind_addr: &str) -> bool {
-    // The setting is `host:port`; split off the port and inspect the
-    // host. Fall back to a string-prefix check for IPv6 brackets.
+    use std::net::{IpAddr, SocketAddr};
+    // Prefer real address parsing so IPv6 classifies correctly. `rsplit(':')`
+    // alone mangles a bare `::1` into host `::` (each colon is a candidate
+    // separator), misclassifying loopback as public (audit_2 findings #16). A
+    // full `SocketAddr` parse handles `[::1]:8000` / `127.0.0.1:8000`; a bare
+    // `IpAddr` parse handles `::1` / `127.0.0.1` with no port.
+    if let Ok(sa) = bind_addr.parse::<SocketAddr>() {
+        return sa.ip().is_loopback();
+    }
+    if let Ok(ip) = bind_addr.parse::<IpAddr>() {
+        return ip.is_loopback();
+    }
+    // Fall back to host-string inspection for `host:port` / `localhost` forms
+    // that aren't parseable IPs.
     let host = bind_addr
         .rsplit_once(':')
         .map(|(host, _)| host)
@@ -875,8 +887,13 @@ mod tests {
         assert!(is_loopback_bind("localhost:3000"));
         assert!(is_loopback_bind("[::1]:8080"));
         assert!(is_loopback_bind(":8000")); // host omitted → local
+        // audit_2 findings #16: a bare unbracketed IPv6 loopback used to be
+        // mangled by `rsplit(':')` into host `::` and misread as public.
+        assert!(is_loopback_bind("::1"));
+        assert!(is_loopback_bind("127.0.0.1"));
         assert!(!is_loopback_bind("0.0.0.0:8000"));
         assert!(!is_loopback_bind("192.168.1.10:8000"));
+        assert!(!is_loopback_bind("[2001:db8::1]:8000"));
     }
 
     #[test]

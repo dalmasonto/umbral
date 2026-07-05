@@ -28,7 +28,7 @@ pub struct Settings {
     pub db_max_lifetime_secs: Option<u64>,    // Some(1800); 0/empty disables
     pub db_test_before_acquire: bool,         // true (health-check on acquire)
     pub secret_key: String,                   // insecure dev default; required for prod
-    pub environment: Environment,             // Dev | Test | Prod (default Dev)
+    pub environment: Environment,             // Dev | Test | Prod (debug→Dev, release→Prod)
     pub allowed_hosts: Vec<String>,           // ["localhost", "127.0.0.1"] by default
     pub log_level: String,                    // "info"
     pub bind_addr: String,                    // "127.0.0.1:8000"
@@ -50,7 +50,7 @@ pub struct Settings {
 | `db_max_lifetime_secs` | `UMBRAL_DB_MAX_LIFETIME_SECS` | `db_max_lifetime_secs` | `Some(1800)` (`0`/empty disables) |
 | `db_test_before_acquire` | `UMBRAL_DB_TEST_BEFORE_ACQUIRE` | `db_test_before_acquire` | `true` |
 | `secret_key` | `UMBRAL_SECRET_KEY` | `secret_key` | `"umbral-insecure-dev-key-change-me"` (rejected in prod) |
-| `environment` | `UMBRAL_ENVIRONMENT` | `environment` | `Dev` (values: `Dev` / `Test` / `Prod`) |
+| `environment` | `UMBRAL_ENVIRONMENT` | `environment` | debug build → `Dev`, release build → `Prod` (values: `Dev` / `Test` / `Prod`) |
 | `allowed_hosts` | `UMBRAL_ALLOWED_HOSTS` (comma-list) | `allowed_hosts` | `["localhost", "127.0.0.1"]` |
 | `log_level` | `UMBRAL_LOG_LEVEL` | `log_level` | `"info"` |
 | `bind_addr` | `UMBRAL_BIND_ADDR` | `bind_addr` | `"127.0.0.1:8000"` |
@@ -114,6 +114,10 @@ cargo run -- serve
 ```
 
 The `UMBRAL_` prefix marks the env var as framework-owned. Anything else in your shell is invisible to umbral's settings loader, so there's no accidental capture.
+
+<Callout type="info" title="Secure by default: release builds are Prod">
+When `UMBRAL_ENVIRONMENT` is **unset**, the default depends on the build profile: a **debug** build (`cargo run`, `cargo test`) is `Dev`, and a **release** build (`cargo build --release`) is `Prod`. So a production binary that forgets the env var still boots locked down — Host validation on, the insecure dev `secret_key` rejected at boot, prod error pages — rather than silently serving with dev protections off. Setting `UMBRAL_ENVIRONMENT` explicitly always wins, so you can still run a release binary as `Dev` (or a debug build as `Prod`) when you mean to.
+</Callout>
 
 ## Reading settings from anywhere
 

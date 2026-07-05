@@ -516,12 +516,29 @@ impl std::fmt::Debug for Settings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize)]
 pub enum Environment {
-    #[default]
     Dev,
     Test,
     Prod,
+}
+
+impl Default for Environment {
+    /// audit_2 H14 — secure by default. A **release** binary defaults to
+    /// `Prod` (Host validation on, the dev `SECRET_KEY` rejected at boot, prod
+    /// error pages) so a deploy that forgets to set `UMBRAL_ENVIRONMENT` is
+    /// locked down instead of silently serving with the dev protections off.
+    /// **Debug** builds (`cargo run`, `cargo test`) stay `Dev` for a
+    /// frictionless local loop. An explicit `UMBRAL_ENVIRONMENT` always wins —
+    /// this default only applies when the variable is unset (via
+    /// `#[serde(default)]` on `Settings.environment`).
+    fn default() -> Self {
+        if cfg!(debug_assertions) {
+            Environment::Dev
+        } else {
+            Environment::Prod
+        }
+    }
 }
 
 impl Settings {
@@ -827,8 +844,22 @@ mod tests {
     }
 
     #[test]
-    fn environment_default_is_dev() {
-        assert!(matches!(Environment::default(), Environment::Dev));
+    fn environment_default_is_profile_aware() {
+        // audit_2 H14: debug builds default to Dev, release builds to Prod.
+        // This test is correct in BOTH profiles (`cargo test` and
+        // `cargo test --release`), so it pins the release branch too.
+        let d = Environment::default();
+        if cfg!(debug_assertions) {
+            assert!(
+                matches!(d, Environment::Dev),
+                "debug build must default to Dev"
+            );
+        } else {
+            assert!(
+                matches!(d, Environment::Prod),
+                "release build must default to Prod (H14 secure-by-default)"
+            );
+        }
     }
 
     #[test]
