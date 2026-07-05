@@ -135,6 +135,12 @@ diff produces the right operation:
 The `umbral_migrations` tracking table is keyed by `(plugin, name)`. Two plugins can each ship their own `0001_initial.json` without colliding.
 </Callout>
 
+## Concurrent deploys are safe (Postgres)
+
+When several replicas deploy at once and all run `migrate` against the same **Postgres** database, they don't race the same DDL. Each `migrate` run takes a session-level `pg_advisory_lock` (keyed per pool alias / tenant schema, so unrelated databases still migrate in parallel) before reading the applied-set and applying anything. The first migrator applies the pending migrations and records them; the others wait, then see them already applied and do nothing — instead of two replicas both issuing `CREATE TABLE` and one aborting the deploy with `relation already exists`.
+
+The wait is bounded by `UMBRAL_MIGRATION_LOCK_TIMEOUT_SECS` (default 300); a crashed migrator's lock releases automatically when its connection drops. On **SQLite** (single-writer, typically single-process migration) the lock isn't taken — the file lock already serializes writers.
+
 ## Rename detection
 
 When `makemigrations` sees a model disappear from the snapshot and a new model appear, it tries to determine whether the change is a rename (one DDL statement) or a genuine drop-and-create (two). The autodetector runs two passes:

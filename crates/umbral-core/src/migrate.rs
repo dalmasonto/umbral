@@ -1312,6 +1312,15 @@ pub enum MigrateError {
         from_table: String,
         to_table: String,
     },
+    /// audit_2 core-migrate #7 — couldn't acquire the Postgres migration
+    /// advisory lock within the timeout: another process has been holding it
+    /// (running a long migration, or wedged). Carries the alias/schema the lock
+    /// was keyed on and the seconds waited. The operator retries once the other
+    /// migrator finishes, or investigates a stuck migration.
+    MigrationLockTimeout {
+        discriminator: String,
+        waited_secs: u64,
+    },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -1374,6 +1383,17 @@ impl std::fmt::Display for MigrateError {
                  silent data bugs. Resolve it: set UMBRAL_MIGRATIONS_ASSUME_RENAMES=assume to \
                  treat every shape match as a rename, or =independent to treat them as unrelated \
                  (drop + create), or hand-write the intended op into the migration file."
+            ),
+            MigrateError::MigrationLockTimeout {
+                discriminator,
+                waited_secs,
+            } => write!(
+                f,
+                "umbral migrate: timed out after {waited_secs}s waiting for the Postgres \
+                 migration lock (alias/schema `{discriminator}`). Another process is holding it — \
+                 a long-running migration on another replica, or a wedged migrator. Retry once it \
+                 finishes; if nothing is migrating, check for a stuck backend holding \
+                 pg_advisory_lock."
             ),
         }
     }
@@ -1814,8 +1834,136 @@ async fn apply_sqlite_migration_tx(
     result
 }
 
+/// A stable 64-bit key for the Postgres migration advisory lock, derived from a
+/// fixed namespace + a `discriminator` (the pool alias or tenant schema). FNV-1a
+/// with fixed constants — deterministic and process-independent, so every
+/// migrator computes the SAME key for the same target and they mutually exclude.
+/// Different aliases/schemas get different keys, so unrelated logical databases
+/// migrate concurrently (audit_2 core-migrate #7).
+fn pg_migration_lock_key(discriminator: &str) -> i64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in b"umbral_migrations\0"
+        .iter()
+        .copied()
+        .chain(discriminator.bytes())
+    {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash as i64
+}
+
+/// How long a migrator waits for the advisory lock before giving up. Generous
+/// (another replica's migration set can take a while), bounded so a deploy can't
+/// hang forever on a wedged migrator. Override with
+/// `UMBRAL_MIGRATION_LOCK_TIMEOUT_SECS`.
+fn pg_migration_lock_timeout() -> std::time::Duration {
+    let secs = std::env::var("UMBRAL_MIGRATION_LOCK_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(300);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Acquire the session-level Postgres advisory lock keyed on `discriminator`,
+/// holding it on `conn` for the caller to release. Non-blocking polls
+/// (`pg_try_advisory_lock`) with a short sleep between attempts, bounded by
+/// [`pg_migration_lock_timeout`] — so a stuck migrator surfaces as a clear
+/// [`MigrateError::MigrationLockTimeout`] instead of an indefinite hang, and a
+/// crashed migrator's lock auto-releases (session locks die with the backend).
+async fn acquire_pg_migration_lock(
+    conn: &mut sqlx::PgConnection,
+    key: i64,
+    discriminator: &str,
+) -> Result<(), MigrateError> {
+    let timeout = pg_migration_lock_timeout();
+    let start = std::time::Instant::now();
+    let mut warned = false;
+    loop {
+        let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+            .bind(key)
+            .fetch_one(&mut *conn)
+            .await?;
+        if got {
+            return Ok(());
+        }
+        let waited = start.elapsed();
+        if waited >= timeout {
+            return Err(MigrateError::MigrationLockTimeout {
+                discriminator: discriminator.to_string(),
+                waited_secs: waited.as_secs(),
+            });
+        }
+        if !warned {
+            tracing::info!(
+                discriminator,
+                "umbral migrate: another process holds the migration lock; waiting for it to \
+                 finish before applying migrations…"
+            );
+            warned = true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// Release the advisory lock acquired by [`acquire_pg_migration_lock`]. Best
+/// effort — dropping `conn` also releases a session lock, so a failure here is
+/// logged, not propagated (it must never mask the migration's own result).
+async fn release_pg_migration_lock(conn: &mut sqlx::PgConnection, key: i64) {
+    if let Err(e) = sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(key)
+        .execute(&mut *conn)
+        .await
+    {
+        tracing::warn!("umbral migrate: failed to release the migration advisory lock: {e}");
+    }
+}
+
 /// Postgres per-alias variant. Mirror of `run_in_sqlite_for_alias`.
+///
+/// Wraps the apply loop in a session advisory lock (audit_2 core-migrate #7) so
+/// two replicas deploying at once can't both read the applied set and race the
+/// same DDL (the loser errors "relation already exists" mid-deploy). The lock is
+/// held on a dedicated connection for the whole run; the per-migration
+/// transactions use their own pooled connections and are unaffected.
 async fn run_in_postgres_for_alias(
+    dir: &Path,
+    alias: &str,
+    pool: &sqlx::PgPool,
+    shared_only: Option<&std::collections::HashSet<String>>,
+) -> Result<u64, MigrateError> {
+    let key = pg_migration_lock_key(alias);
+    let mut lock_conn = pool.acquire().await?;
+    acquire_pg_migration_lock(&mut lock_conn, key, alias).await?;
+    let result = run_in_postgres_for_alias_locked(dir, alias, pool, shared_only).await;
+    release_pg_migration_lock(&mut lock_conn, key).await;
+    result
+}
+
+/// Run `f` under the Postgres migration advisory lock keyed on `discriminator`.
+/// Shared by the checked-run and schema-per-tenant apply paths so they get the
+/// same cross-process serialization as [`run_in_postgres_for_alias`].
+async fn with_pg_migration_lock<F, Fut>(
+    pool: &sqlx::PgPool,
+    discriminator: &str,
+    f: F,
+) -> Result<u64, MigrateError>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<u64, MigrateError>>,
+{
+    let key = pg_migration_lock_key(discriminator);
+    let mut lock_conn = pool.acquire().await?;
+    acquire_pg_migration_lock(&mut lock_conn, key, discriminator).await?;
+    let result = f().await;
+    release_pg_migration_lock(&mut lock_conn, key).await;
+    result
+}
+
+/// The unlocked body of [`run_in_postgres_for_alias`] — runs while the caller
+/// holds the migration advisory lock.
+async fn run_in_postgres_for_alias_locked(
     dir: &Path,
     alias: &str,
     pool: &sqlx::PgPool,
@@ -1916,7 +2064,15 @@ pub async fn run_for_schema_in(
 ) -> Result<u64, MigrateError> {
     match crate::db::pool_dispatched() {
         crate::db::DbPool::Postgres(p) => {
-            run_tenant_apps_in_postgres_schema(dir, schema, shared_apps, p).await
+            // audit_2 core-migrate #7: serialize concurrent migrators of THIS
+            // tenant schema (keyed by schema name, so different tenants still
+            // migrate concurrently). The shared/public run uses a different key
+            // (its alias), so a tenant migrate and the public migrate don't
+            // block each other.
+            with_pg_migration_lock(p, schema.as_str(), || {
+                run_tenant_apps_in_postgres_schema(dir, schema, shared_apps, p)
+            })
+            .await
         }
         crate::db::DbPool::Sqlite(_) => Err(MigrateError::SchemaUnsupportedOnSqlite {
             schema: schema.as_str().to_string(),
@@ -4918,6 +5074,48 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// audit_2 core-migrate #7 — the advisory-lock key must be deterministic
+    /// (every process computes the same key for the same target, so they
+    /// mutually exclude) and distinct per discriminator (different aliases /
+    /// schemas migrate concurrently). Pins the FNV constants so a refactor that
+    /// changes the hash — silently breaking cross-process exclusion — fails.
+    #[test]
+    fn pg_migration_lock_key_is_deterministic_and_distinct() {
+        // Deterministic: same input → same key, run to run, process to process.
+        assert_eq!(
+            pg_migration_lock_key("default"),
+            pg_migration_lock_key("default"),
+        );
+        // Distinct: different aliases/schemas get different keys.
+        assert_ne!(
+            pg_migration_lock_key("default"),
+            pg_migration_lock_key("replica"),
+        );
+        assert_ne!(
+            pg_migration_lock_key("tenant_a"),
+            pg_migration_lock_key("tenant_b"),
+        );
+        // Pin the exact value so the hash can't drift unnoticed (two binaries on
+        // different umbral versions must still agree on the key).
+        assert_eq!(
+            pg_migration_lock_key("default"),
+            {
+                let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+                for b in b"umbral_migrations\0"
+                    .iter()
+                    .copied()
+                    .chain(b"default".iter().copied())
+                {
+                    hash ^= b as u64;
+                    hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                hash as i64
+            },
+            "the lock-key hash changed — this breaks cross-process exclusion \
+             between an old and a new migrator; bump deliberately if intended",
+        );
+    }
 
     /// M8 — `plugin_order()` falls back to `registered_plugins()` when
     /// no topological order has been published. The fallback keeps the
