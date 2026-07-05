@@ -689,6 +689,9 @@ fn op_kind(op: &umbral::migrate::Operation) -> &'static str {
         Operation::CreateM2MTable { .. } => "CREATE M2M",
         Operation::DropM2MTable { .. } => "DROP M2M",
         Operation::RunSql { .. } => "RUN SQL",
+        Operation::AddIndex { unique: true, .. } => "ADD UNIQUE",
+        Operation::AddIndex { unique: false, .. } => "ADD INDEX",
+        Operation::DropIndex { .. } => "DROP INDEX",
     }
 }
 

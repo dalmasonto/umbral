@@ -698,6 +698,38 @@ pub enum Operation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reverse_sql: Option<String>,
     },
+    /// Create a composite index, or a composite UNIQUE constraint, on an
+    /// EXISTING table. Emitted by `diff` when a model gains a
+    /// `unique_together` group or a multi-column `indexes` entry with no
+    /// accompanying column change — a case that previously produced NO
+    /// migration at all, so the constraint was silently never created.
+    ///
+    /// `unique` selects `CREATE UNIQUE INDEX` (a `unique_together` group)
+    /// vs a plain `CREATE INDEX` (an `indexes` group). The index NAME is
+    /// deterministic — `uniq_<table>_<cols>` when unique, `idx_<table>_<cols>`
+    /// otherwise — so the matching [`DropIndex`](Operation::DropIndex) can
+    /// name it. Rendered `IF NOT EXISTS` on both backends, so it is a safe
+    /// no-op when a same-migration `AlterColumn` already rebuilt the table
+    /// with the constraint (the SQLite dance) — the two never conflict.
+    AddIndex {
+        table: String,
+        columns: Vec<String>,
+        #[serde(default)]
+        unique: bool,
+    },
+    /// Drop a composite index / UNIQUE constraint previously created by an
+    /// [`AddIndex`](Operation::AddIndex), or by a `CreateTable` that renders
+    /// its `unique_together`/`indexes` as the same deterministically-named
+    /// indexes. Emitted by `diff` when a model LOSES a `unique_together`
+    /// group or `indexes` entry. Rendered `DROP INDEX IF EXISTS <name>` on
+    /// both backends (the name is recomputed from `table` + `columns` +
+    /// `unique`, matching `AddIndex`).
+    DropIndex {
+        table: String,
+        columns: Vec<String>,
+        #[serde(default)]
+        unique: bool,
+    },
 }
 
 impl Operation {
@@ -715,7 +747,9 @@ impl Operation {
             | Operation::AddColumn { table, .. }
             | Operation::DropColumn { table, .. }
             | Operation::AlterColumn { table, .. }
-            | Operation::RenameColumn { table, .. } => table,
+            | Operation::RenameColumn { table, .. }
+            | Operation::AddIndex { table, .. }
+            | Operation::DropIndex { table, .. } => table,
             Operation::RenameTable { from, .. } => from,
             Operation::CreateM2MTable { junction_table, .. }
             | Operation::DropM2MTable { junction_table } => junction_table,
@@ -953,27 +987,57 @@ fn create_gin_index_stmt(table: &str, column: &str) -> String {
 /// helper still returns a no-op SQL string to keep the caller
 /// simple).
 fn create_multi_index_stmt(table: &str, columns: &[String]) -> String {
-    if columns.is_empty() {
-        return String::new();
-    }
-    // The index NAME uses a quote-stripped table/column (a bare
-    // identifier, not a quoted one); the ON-clause table reference is a
-    // *quoted* identifier and must escape inner quotes by doubling them
-    // — matching `create_index_stmt`. Previously the ON clause reused
-    // the quote-stripped name, silently dropping a `"` from the table.
-    let t_name = table.replace('"', "");
-    let t_esc = table.replace('"', "\"\"");
-    let name_suffix = columns
+    // A plain composite index IS an `AddIndex { unique: false }` render —
+    // delegate so the NAME (`idx_<table>_<cols>`) is defined in exactly one
+    // place and a `CreateTable`'s composite index and a later `DropIndex`
+    // always agree on it.
+    add_index_stmt(table, columns, false)
+}
+
+/// Deterministic name for a composite index. `unique` selects the `uniq_`
+/// prefix (a `unique_together` group), otherwise `idx_`. Derived purely
+/// from the quote-stripped table + column list so an [`Operation::AddIndex`]
+/// and the later [`Operation::DropIndex`] that reverses it always compute
+/// the same name. The `uniq_`/`idx_` split means a UNIQUE and a plain index
+/// on the SAME columns never collide.
+fn index_name(table: &str, columns: &[String], unique: bool) -> String {
+    let t = table.replace('"', "");
+    let suffix = columns
         .iter()
         .map(|c| c.replace('"', ""))
         .collect::<Vec<_>>()
         .join("_");
+    let prefix = if unique { "uniq" } else { "idx" };
+    format!("{prefix}_{t}_{suffix}")
+}
+
+/// `CREATE [UNIQUE] INDEX IF NOT EXISTS "<name>" ON "<table>" (cols)` —
+/// identical syntax on SQLite and Postgres. The index NAME is a bare
+/// identifier (via [`index_name`]); the ON-clause table reference is a
+/// *quoted* identifier with inner quotes doubled. An empty column list
+/// renders an empty string (defensive no-op; the macro layer rejects
+/// empty groups upstream).
+fn add_index_stmt(table: &str, columns: &[String], unique: bool) -> String {
+    if columns.is_empty() {
+        return String::new();
+    }
+    let name = index_name(table, columns, unique);
+    let t_esc = table.replace('"', "\"\"");
     let col_list = columns
         .iter()
         .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("CREATE INDEX IF NOT EXISTS \"idx_{t_name}_{name_suffix}\" ON \"{t_esc}\" ({col_list})")
+    let unique_kw = if unique { "UNIQUE " } else { "" };
+    format!("CREATE {unique_kw}INDEX IF NOT EXISTS \"{name}\" ON \"{t_esc}\" ({col_list})")
+}
+
+/// `DROP INDEX IF EXISTS "<name>"` — same on both backends. Postgres
+/// resolves the unqualified name via the search_path (so a schema-per-tenant
+/// migrate drops the index inside the active schema).
+fn drop_index_stmt(name: &str) -> String {
+    let n = name.replace('"', "\"\"");
+    format!("DROP INDEX IF EXISTS \"{n}\"")
 }
 
 /// Lower an M2M junction column's PK type into the SQLite column
@@ -2779,6 +2843,24 @@ pub fn classify_operation(op: &Operation) -> OpSafety {
         Operation::RunSql { .. } => OpSafety::Warning(
             "runs a hand-authored data migration (raw SQL) — review its row impact, ensure it's idempotent or guarded, and verify it against production data first".to_string(),
         ),
+
+        // Adding a composite UNIQUE constraint fails at apply time if
+        // existing rows already violate it — same hazard as a single-column
+        // UNIQUE add. A plain (non-unique) index is purely additive.
+        Operation::AddIndex {
+            table,
+            columns,
+            unique: true,
+        } => OpSafety::Warning(format!(
+            "adds a composite UNIQUE constraint on `{table}` ({}) — fails on existing duplicate rows; de-duplicate first or the migration aborts",
+            columns.join(", ")
+        )),
+        Operation::AddIndex { unique: false, .. } => OpSafety::Safe,
+
+        // Dropping an index / UNIQUE constraint touches no rows. It removes
+        // a guarantee (a later duplicate becomes insertable) but that is the
+        // intent when a `unique_together` is removed, and no data is lost.
+        Operation::DropIndex { .. } => OpSafety::Safe,
     }
 }
 
@@ -2912,6 +2994,55 @@ fn rename_intent() -> RenameIntent {
     }
 }
 
+/// Emit `AddIndex` / `DropIndex` ops for changes to a model's TABLE-level
+/// `unique_together` and `indexes` between two snapshots.
+///
+/// Column-shape changes are handled by [`diff_columns`]; this covers the
+/// constraint-only deltas it can't see. Before this existed, adding a
+/// `unique_together` group or a multi-column `indexes` entry with no column
+/// change produced NO migration at all — `makemigrations` said "no changes"
+/// and the constraint was silently never created.
+///
+/// A group is identified by its ORDERED column list, so re-ordering a group
+/// (`[a, b]` → `[b, a]`) reads as drop-old + add-new — correct, since column
+/// order changes which queries the index serves. `AddIndex`/`DropIndex`
+/// render `IF NOT EXISTS` / `IF EXISTS`, so when a same-table `AlterColumn`
+/// in the same migration already rebuilt the table with the new constraint
+/// set (the SQLite dance), these ops are harmless no-ops.
+fn diff_indexes(previous: &ModelMeta, current: &ModelMeta) -> Vec<Operation> {
+    use std::collections::BTreeSet;
+
+    let mut ops: Vec<Operation> = Vec::new();
+
+    let mut emit = |prev_groups: &[Vec<String>], curr_groups: &[Vec<String>], unique: bool| {
+        let prev_set: BTreeSet<&Vec<String>> = prev_groups.iter().collect();
+        let curr_set: BTreeSet<&Vec<String>> = curr_groups.iter().collect();
+        // Added groups → AddIndex (on the current table name).
+        for group in curr_set.difference(&prev_set) {
+            ops.push(Operation::AddIndex {
+                table: current.table.clone(),
+                columns: (*group).clone(),
+                unique,
+            });
+        }
+        // Removed groups → DropIndex (on the previous table name — a rename
+        // in the same diff emits its own RenameTable first, and the index
+        // travels with the table, so the drop names the post-rename table;
+        // use current.table for that reason).
+        for group in prev_set.difference(&curr_set) {
+            ops.push(Operation::DropIndex {
+                table: current.table.clone(),
+                columns: (*group).clone(),
+                unique,
+            });
+        }
+    };
+
+    emit(&previous.unique_together, &current.unique_together, true);
+    emit(&previous.indexes, &current.indexes, false);
+    ops
+}
+
 pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, MigrateError> {
     use std::collections::{BTreeMap, HashSet};
 
@@ -2957,10 +3088,15 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
                 // After the rename the columns might also have changed; diff them.
                 let col_ops = diff_columns(name, prev, curr)?;
                 ops.extend(col_ops);
+                // ...and the table-level constraints (unique_together/indexes).
+                ops.extend(diff_indexes(prev, curr));
             }
             Some(prev) if prev == curr => {}
             Some(prev) => {
                 ops.extend(diff_columns(name, prev, curr)?);
+                // Constraint-only deltas (a new/removed unique_together or
+                // composite index with no column change) — otherwise silent.
+                ops.extend(diff_indexes(prev, curr));
             }
         }
     }
@@ -3665,6 +3801,12 @@ fn suffix_for(ops: &[Operation]) -> String {
             },
         ] => format!("rename_{table}_{from}_to_{to}"),
         [Operation::RunSql { .. }] => "run_sql".to_string(),
+        [Operation::AddIndex { table, columns, .. }] => {
+            format!("add_index_{table}_{}", columns.join("_"))
+        }
+        [Operation::DropIndex { table, columns, .. }] => {
+            format!("drop_index_{table}_{}", columns.join("_"))
+        }
         _ => "auto".to_string(),
     }
 }
@@ -3789,23 +3931,25 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             indexes,
         } => {
             // sea-query's TableCreateStatement renders columns inline.
-            // For composite UNIQUE constraints, we append them via
-            // `stmt.index(Index::create().unique().col(...))` — works on
-            // both backends and uses sea-query's quoting.
             let mut stmt = Table::create();
             stmt.table(Alias::new(table));
             for col in columns {
                 let mut def = build_column_def_sqlite(col);
                 stmt.col(&mut def);
             }
-            for group in unique_together {
-                let mut idx = sea_query::Index::create().unique().to_owned();
-                for col in group {
-                    idx.col(Alias::new(col));
-                }
-                stmt.index(&mut idx);
-            }
             let mut stmts = vec![stmt.build(SqliteQueryBuilder)];
+            // `unique_together` groups render as follow-up
+            // `CREATE UNIQUE INDEX` statements rather than inline table
+            // constraints. A named unique index enforces the SAME
+            // constraint, but — unlike an inline `UNIQUE(...)` (which becomes
+            // an un-droppable auto-index on SQLite / an implicit constraint
+            // on Postgres) — it can be added and DROPPED by name after the
+            // table exists. That is what makes `unique_together`
+            // autodetection reversible: the exact statement an `AddIndex`
+            // would emit, so a later `DropIndex` names the same index.
+            for group in unique_together {
+                stmts.push(add_index_stmt(table, group, true));
+            }
             // Single-column explicit indexes plus ORM-required helper
             // indexes follow the CREATE TABLE. FK columns need indexes
             // for reverse/select-related queries, and soft-delete
@@ -3955,6 +4099,20 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
         // A data migration renders to its raw forward SQL verbatim —
         // the author owns portability across backends.
         Operation::RunSql { sql, .. } => vec![sql.clone()],
+        // Composite index / UNIQUE constraint add + drop. The
+        // `CREATE [UNIQUE] INDEX IF NOT EXISTS` / `DROP INDEX IF EXISTS`
+        // forms are identical on SQLite and Postgres, so both render arms
+        // share the same helpers.
+        Operation::AddIndex {
+            table,
+            columns,
+            unique,
+        } => vec![add_index_stmt(table, columns, *unique)],
+        Operation::DropIndex {
+            table,
+            columns,
+            unique,
+        } => vec![drop_index_stmt(&index_name(table, columns, *unique))],
     }
 }
 
@@ -3981,14 +4139,13 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
                 let mut def = build_column_def_postgres(col);
                 stmt.col(&mut def);
             }
-            for group in unique_together {
-                let mut idx = sea_query::Index::create().unique().to_owned();
-                for col in group {
-                    idx.col(Alias::new(col));
-                }
-                stmt.index(&mut idx);
-            }
             let mut stmts = vec![stmt.build(PostgresQueryBuilder)];
+            // `unique_together` as follow-up `CREATE UNIQUE INDEX` (not an
+            // inline constraint) so it is droppable by name — see the SQLite
+            // render arm for the full rationale.
+            for group in unique_together {
+                stmts.push(add_index_stmt(table, group, true));
+            }
             for col in columns {
                 if matches!(col.ty, crate::orm::SqlType::FullText) {
                     // tsvector columns get an auto-GIN index (#33) — they're
@@ -4091,6 +4248,18 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
         // A data migration renders to its raw forward SQL verbatim —
         // the author owns portability across backends.
         Operation::RunSql { sql, .. } => vec![sql.clone()],
+        // Same `CREATE [UNIQUE] INDEX IF NOT EXISTS` / `DROP INDEX IF EXISTS`
+        // as SQLite — Postgres accepts the identical form.
+        Operation::AddIndex {
+            table,
+            columns,
+            unique,
+        } => vec![add_index_stmt(table, columns, *unique)],
+        Operation::DropIndex {
+            table,
+            columns,
+            unique,
+        } => vec![drop_index_stmt(&index_name(table, columns, *unique))],
     }
 }
 
@@ -4132,16 +4301,6 @@ fn render_alter_column_dance_sqlite(
         let mut def = build_column_def_sqlite(col);
         create.col(&mut def);
     }
-    // audit_2 core-migrate #10: re-emit composite UNIQUE constraints inline, or
-    // the rebuild silently drops them (duplicates become insertable). Mirrors
-    // the CreateTable render.
-    for group in unique_together {
-        let mut idx = sea_query::Index::create().unique().to_owned();
-        for col in group {
-            idx.col(Alias::new(col));
-        }
-        create.index(&mut idx);
-    }
 
     // Step 2 — INSERT ... SELECT. Same column list both sides; the
     // dance only handles nullable flips (columns are otherwise
@@ -4171,14 +4330,20 @@ fn render_alter_column_dance_sqlite(
         drop_sql,
         rename_sql,
     ];
-    // Step 5 — audit_2 core-migrate #10: re-create the secondary indexes the
-    // dropped table carried. Single-column / FK / soft-delete indexes are
-    // derived from the columns (same rule as CreateTable); composite indexes
-    // come from `indexes`. `CREATE INDEX IF NOT EXISTS` is idempotent.
+    // Step 5 — audit_2 core-migrate #10: re-create the secondary indexes and
+    // composite UNIQUE constraints the dropped table carried, or the rebuild
+    // silently drops them (duplicates become insertable — integrity loss).
+    // Single-column / FK / soft-delete indexes are derived from the columns
+    // (same rule as CreateTable); `unique_together` re-emits as a named
+    // `CREATE UNIQUE INDEX` and composite `indexes` as plain `CREATE INDEX`.
+    // All are `IF NOT EXISTS`, so the step is idempotent.
     for col in new_columns {
         if should_emit_btree_index(col) {
             stmts.push(create_index_stmt(table, &col.name));
         }
+    }
+    for group in unique_together {
+        stmts.push(add_index_stmt(table, group, true));
     }
     for group in indexes {
         stmts.push(create_multi_index_stmt(table, group));

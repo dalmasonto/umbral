@@ -604,40 +604,45 @@ fn create_table_int_with_min_max_emits_check_on_postgres() {
 // BUG-6/7: `unique_together` + `indexes` struct-level attributes          //
 // --------------------------------------------------------------------- //
 
-/// A `CreateTable` carrying a `unique_together` group emits an inline
-/// `UNIQUE (col, col)` clause on both backends. Two groups → two
-/// clauses.
+/// A `CreateTable` carrying a `unique_together` group emits the constraint
+/// as a follow-up `CREATE UNIQUE INDEX` (named `uniq_<table>_<cols>`) on both
+/// backends — NOT an inline `UNIQUE(...)` table constraint. A named unique
+/// index enforces the same rule but, unlike an inline constraint (an
+/// un-droppable auto-index on SQLite / an implicit constraint on Postgres),
+/// is droppable by name — which is what makes `unique_together`
+/// autodetection reversible (audit_2 core-migrate: AddIndex/DropIndex).
 #[test]
-fn create_table_emits_unique_together_clauses() {
-    let op = Operation::CreateTable {
+fn create_table_emits_unique_together_as_named_unique_index() {
+    let make = || Operation::CreateTable {
         table: "post".to_string(),
         columns: vec![id_pk(), text_not_null("tenant_id"), text_not_null("slug")],
         unique_together: vec![vec!["tenant_id".to_string(), "slug".to_string()]],
         indexes: Vec::new(),
     };
-    let sql_pg = &render_operation_for(&op, "postgres")[0];
-    let sql_lite = &render_operation_for(
-        &Operation::CreateTable {
-            table: "post".to_string(),
-            columns: vec![id_pk(), text_not_null("tenant_id"), text_not_null("slug")],
-            unique_together: vec![vec!["tenant_id".to_string(), "slug".to_string()]],
-            indexes: Vec::new(),
-        },
-        "sqlite",
-    )[0]
-    .clone();
-    assert!(
-        sql_pg.to_ascii_uppercase().contains("UNIQUE")
-            && sql_pg.contains("\"tenant_id\"")
-            && sql_pg.contains("\"slug\""),
-        "expected composite UNIQUE on postgres; got {sql_pg}",
-    );
-    assert!(
-        sql_lite.to_ascii_uppercase().contains("UNIQUE")
-            && sql_lite.contains("tenant_id")
-            && sql_lite.contains("slug"),
-        "expected composite UNIQUE on sqlite; got {sql_lite}",
-    );
+    for backend in ["postgres", "sqlite"] {
+        let stmts = render_operation_for(&make(), backend);
+        // The first statement is the plain CREATE TABLE (no inline UNIQUE).
+        assert!(
+            stmts[0].to_ascii_uppercase().contains("CREATE TABLE")
+                && !stmts[0].to_ascii_uppercase().contains("UNIQUE"),
+            "[{backend}] CreateTable stmt[0] must be a plain table without inline UNIQUE; got {}",
+            stmts[0],
+        );
+        // A follow-up statement is the named CREATE UNIQUE INDEX over both cols.
+        let uniq = stmts.iter().find(|s| {
+            let u = s.to_ascii_uppercase();
+            u.contains("CREATE UNIQUE INDEX") && u.contains("IF NOT EXISTS")
+        });
+        let uniq = uniq.unwrap_or_else(|| {
+            panic!("[{backend}] expected a follow-up CREATE UNIQUE INDEX; got {stmts:?}")
+        });
+        assert!(
+            uniq.contains("\"uniq_post_tenant_id_slug\"")
+                && uniq.contains("\"tenant_id\"")
+                && uniq.contains("\"slug\""),
+            "[{backend}] unique index must be named uniq_post_tenant_id_slug over both cols; got {uniq}",
+        );
+    }
 }
 
 /// A `CreateTable` with an `indexes` group emits a follow-up

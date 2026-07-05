@@ -121,6 +121,14 @@ diff produces the right operation:
   are all rejected because the cast can fail at runtime on existing data. Hand-write
   the migration with an explicit data-preserving step.
 - PK flip → `UnsafeAlter` (PK rebuild is its own dance, not shipped yet).
+- New / removed `#[umbral(unique_together = ...)]` group → `AddIndex { unique }` /
+  `DropIndex` — even when no column changed. The group renders as a **named**
+  `CREATE UNIQUE INDEX "uniq_<table>_<cols>"` (not an inline `UNIQUE(...)`
+  constraint) precisely so it can be dropped by name later; adding a
+  `unique_together` fails at apply time if existing rows already violate it
+  (de-duplicate first).
+- New / removed multi-column `#[umbral(indexes = ...)]` group → `AddIndex` /
+  `DropIndex`, named `idx_<table>_<cols>`.
 - Table rename → `RenameTable` (see [Rename detection](#rename-detection) below).
 
 <Callout type="info">

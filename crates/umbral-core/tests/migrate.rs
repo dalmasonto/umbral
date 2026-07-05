@@ -365,6 +365,8 @@ fn create_table_names(ops: &[Operation]) -> Vec<String> {
             | Operation::RenameTable { .. }
             | Operation::RenameColumn { .. }
             | Operation::CreateM2MTable { .. }
+            | Operation::AddIndex { .. }
+            | Operation::DropIndex { .. }
             | Operation::RunSql { .. } => None,
         })
         .collect();
