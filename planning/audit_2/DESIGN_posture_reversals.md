@@ -67,6 +67,21 @@ The related tenant work has its own doc: [`DESIGN_rls_tenant_isolation.md`](./DE
 
 **Recommendation.** Ship **#1 as a boot Warning (Prod: configurable to Error)** + **#3** now. Ship **#2 as opt-in** (`gated_by_construction()`), default-deny deferred to a major. **Open decision:** should the boot audit be a hard Error in `Prod` by default, or Warning-everywhere with opt-in escalation?
 
+**Decision (recorded):** #3 (P3, `is_active`) shipped in `860eeb18` (`pre_perm_check` + tests). User chose **Warning-everywhere + opt-in gated router**.
+
+**Implementation constraints discovered while building #1/#2 (must be resolved in the design before coding):**
+
+1. **Tower-layer opacity.** Gating today is `.layer(permission_required("perm"))` — an opaque tower layer. `RouteSpec` (`crates/umbral-core/src/routes.rs`) records only `{ path, methods }`, so the framework cannot tell a gated route from an ungated one after assembly. An always-on "warn on every ungated mutating route" therefore **false-positives on every `.layer()`-gated route**, which trains developers to ignore the warning. The audit is only accurate for routes whose permission is *tracked* in metadata.
+
+2. **Core/plugin dependency inversion.** `Routes` lives in `umbral-core`; `permission_required` lives in the `umbral-permissions` *plugin*. Core cannot call the plugin, so a tracked `Routes::require_permission("perm")` that both records the perm AND applies the layer can't live entirely in either crate. The seam that works:
+   - `umbral-core`: add `permission: Option<String>` to `RouteSpec` + a public setter on `Routes` (e.g. `.gated_with(perm)` that only records the string — no layer).
+   - `umbral-permissions`: a helper / extension that reads the recorded perm and applies the matching `permission_required` layer (or a `Routes` ext-trait `.require_permission(perm)` that calls the core setter *and* layers).
+   - `App::build` (core): walk `RouteSpec`; for each mutating method (POST/PUT/PATCH/DELETE) with `permission.is_none()` and not on an explicit public allow-list, emit the Warning.
+
+   With this, the audit is accurate for the tracked API, and the message can tell authors that `.layer()`-only gating isn't boot-visible → prefer the tracked form.
+
+**Recommended next step for #1/#2:** build the `RouteSpec.permission` seam + `.require_permission()` tracked builder first (makes gating introspectable — also feeds OpenAPI), then layer the boot Warning on top. Skipping the seam and warning purely on `RouteSpec` as it exists today would ship a false-positive-heavy audit.
+
 ---
 
 ## Decisions I need
