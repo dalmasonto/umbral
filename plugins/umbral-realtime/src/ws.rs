@@ -220,10 +220,36 @@ async fn handle_socket(
 
     // Inbound: dispatch client text frames to the app handler. axum
     // auto-replies to pings; we ignore binary/ping/pong here.
+    //
+    // audit_2 realtime #4: bound the per-connection inbound message rate. A
+    // client that sustains more than `max_per_sec` text frames within a rolling
+    // 1-second window is flooding the handler — break the loop (closing the
+    // socket) rather than dispatch unboundedly. `0` disables the cap.
+    let max_per_sec = Realtime::ws_max_messages_per_sec();
     let inbound = async {
+        let mut window_start = tokio::time::Instant::now();
+        let mut count_in_window: u32 = 0;
         while let Some(Ok(msg)) = wrx.next().await {
             match msg {
-                Message::Text(t) => handler.on_message(&ctx, t.as_str().to_string()).await,
+                Message::Text(t) => {
+                    if max_per_sec > 0 {
+                        let now = tokio::time::Instant::now();
+                        if now.duration_since(window_start) >= std::time::Duration::from_secs(1) {
+                            window_start = now;
+                            count_in_window = 0;
+                        }
+                        count_in_window += 1;
+                        if count_in_window > max_per_sec {
+                            tracing::warn!(
+                                conn_id,
+                                max_per_sec,
+                                "realtime: inbound message-rate cap exceeded; closing connection"
+                            );
+                            break;
+                        }
+                    }
+                    handler.on_message(&ctx, t.as_str().to_string()).await
+                }
                 Message::Close(_) => break,
                 _ => {}
             }

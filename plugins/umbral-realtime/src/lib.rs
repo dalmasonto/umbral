@@ -91,6 +91,20 @@ pub const DEFAULT_REPLAY_BUFFER: usize = 1024;
 /// [`RealtimePlugin::ws_max_message_bytes`].
 pub const DEFAULT_WS_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
+/// Default aggregate live-connection cap across SSE + WebSocket (audit_2
+/// realtime #4). Previously unlimited, which let a handful of clients exhaust
+/// file descriptors / memory. 10k concurrent connections is generous for a
+/// single node yet bounds the blast radius; raise it with
+/// [`RealtimePlugin::max_connections`] or opt back into unlimited with
+/// [`RealtimePlugin::unlimited_connections`].
+pub const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
+
+/// Default per-connection inbound-message rate cap, messages per second
+/// (audit_2 realtime #4). A client that sustains more than this floods the
+/// connection; the socket is closed. Generous for chat/command traffic; tune
+/// with [`RealtimePlugin::ws_max_messages_per_sec`].
+pub const DEFAULT_WS_MAX_MESSAGES_PER_SEC: u32 = 100;
+
 static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// One server→client event: a named event plus a JSON payload. The SSE
@@ -1282,6 +1296,9 @@ pub struct Realtime {
     /// Cap on an inbound WebSocket message/frame, in bytes. Default
     /// [`DEFAULT_WS_MAX_MESSAGE_BYTES`].
     ws_max_message_bytes: usize,
+    /// Per-connection inbound message-rate cap, messages/sec (`0` = disabled).
+    /// Default [`DEFAULT_WS_MAX_MESSAGES_PER_SEC`].
+    ws_max_messages_per_sec: u32,
 }
 
 impl Realtime {
@@ -1347,6 +1364,12 @@ impl Realtime {
     /// Set via [`RealtimePlugin::ws_max_message_bytes`].
     pub fn ws_max_message_bytes() -> usize {
         Self::get().ws_max_message_bytes
+    }
+
+    /// Per-connection inbound message-rate cap, messages/sec (`0` = disabled).
+    /// Set via [`RealtimePlugin::ws_max_messages_per_sec`] (audit_2 realtime #4).
+    pub fn ws_max_messages_per_sec() -> u32 {
+        Self::get().ws_max_messages_per_sec
     }
 
     /// Target a single user's every live connection. `user_id` is the user's
@@ -1448,6 +1471,10 @@ pub struct RealtimePlugin {
     /// [`DEFAULT_WS_MAX_MESSAGE_BYTES`]; set via
     /// [`ws_max_message_bytes`](Self::ws_max_message_bytes).
     ws_max_message_bytes: usize,
+    /// Per-connection inbound message-rate cap, messages per second (audit_2
+    /// realtime #4). Defaults to [`DEFAULT_WS_MAX_MESSAGES_PER_SEC`]; `0`
+    /// disables the cap. Set via [`ws_max_messages_per_sec`](Self::ws_max_messages_per_sec).
+    ws_max_messages_per_sec: u32,
 }
 
 /// The no-op identity resolver: every connection is anonymous (`None`).
@@ -1490,11 +1517,12 @@ impl Default for RealtimePlugin {
             subscriptions: Vec::new(),
             redis_url: None,
             replay_cap: DEFAULT_REPLAY_BUFFER,
-            max_connections: None,
+            max_connections: Some(DEFAULT_MAX_CONNECTIONS),
             presence: Arc::new(PresenceSpec::default()),
             allowed_origins: Vec::new(),
             base_path: "/realtime".to_string(),
             ws_max_message_bytes: DEFAULT_WS_MAX_MESSAGE_BYTES,
+            ws_max_messages_per_sec: DEFAULT_WS_MAX_MESSAGES_PER_SEC,
         }
     }
 }
@@ -1605,6 +1633,24 @@ impl RealtimePlugin {
     /// the next connection.
     pub fn max_connections(mut self, n: usize) -> Self {
         self.max_connections = Some(n);
+        self
+    }
+
+    /// Remove the aggregate connection cap entirely (audit_2 realtime #4 ships a
+    /// sane [`DEFAULT_MAX_CONNECTIONS`] default; this is the explicit opt-out for
+    /// a deployment that fronts its own connection limiting, e.g. at the load
+    /// balancer).
+    pub fn unlimited_connections(mut self) -> Self {
+        self.max_connections = None;
+        self
+    }
+
+    /// Cap each connection's inbound message rate at `n` messages per second
+    /// (audit_2 realtime #4). A client that sustains a higher rate is flooding;
+    /// its socket is closed. `0` disables the cap. Defaults to
+    /// [`DEFAULT_WS_MAX_MESSAGES_PER_SEC`].
+    pub fn ws_max_messages_per_sec(mut self, n: u32) -> Self {
+        self.ws_max_messages_per_sec = n;
         self
     }
 
@@ -1866,6 +1912,7 @@ impl Plugin for RealtimePlugin {
             allowed_origins: self.allowed_origins.clone().into(),
             base_path: Arc::from(self.base_path.as_str()),
             ws_max_message_bytes: self.ws_max_message_bytes,
+            ws_max_messages_per_sec: self.ws_max_messages_per_sec,
         });
         // Register the model-change subscriptions now that the ambient
         // handle exists (a fired handler calls Realtime::to_group, etc.).
@@ -2311,5 +2358,38 @@ mod tests {
     fn redact_url_handles_schemeless_urls() {
         assert_eq!(redact_url("user:pw@host:6379"), "host:6379");
         assert_eq!(redact_url("host:6379"), "host:6379");
+    }
+}
+
+#[cfg(test)]
+mod audit_realtime4_tests {
+    use super::*;
+
+    // audit_2 realtime #4: sane connection cap + message-rate cap by default,
+    // with explicit opt-outs.
+    #[test]
+    fn defaults_ship_a_connection_cap_and_rate_cap() {
+        let p = RealtimePlugin::default();
+        assert_eq!(
+            p.max_connections,
+            Some(DEFAULT_MAX_CONNECTIONS),
+            "default must cap connections, not be unlimited"
+        );
+        assert_eq!(p.ws_max_messages_per_sec, DEFAULT_WS_MAX_MESSAGES_PER_SEC);
+    }
+
+    #[test]
+    fn unlimited_connections_opts_out() {
+        let p = RealtimePlugin::default().unlimited_connections();
+        assert_eq!(p.max_connections, None);
+    }
+
+    #[test]
+    fn builders_override_the_caps() {
+        let p = RealtimePlugin::default()
+            .max_connections(5)
+            .ws_max_messages_per_sec(7);
+        assert_eq!(p.max_connections, Some(5));
+        assert_eq!(p.ws_max_messages_per_sec, 7);
     }
 }
