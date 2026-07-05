@@ -766,6 +766,18 @@ pub trait GroupPolicy: Send + Sync {
         let _ = user_id;
         group.starts_with("public:")
     }
+
+    /// Decides whether a connection may **send** (broadcast) to a group
+    /// (audit_2 realtime #2). A [`MessageHandler`] that forwards to a
+    /// client-supplied room MUST authorize it — via [`Realtime::can_send`] —
+    /// before broadcasting, or a client joined to one room can inject messages
+    /// into ANY group (IDOR). The default mirrors [`Self::can_join`] ("if you
+    /// can't join it, you can't send to it"), the safe default; override for
+    /// asymmetric rooms (e.g. a read-only broadcast channel, or a room you may
+    /// post to but not subscribe).
+    fn can_send(&self, user_id: Option<&str>, group: &str) -> bool {
+        self.can_join(user_id, group)
+    }
 }
 
 /// The permissive-for-public default policy.
@@ -834,8 +846,9 @@ pub struct MessageContext {
 ///         Ok(m) => m,
 ///         Err(_) => return,
 ///     };
-///     // The sender may only publish to a room its own identity could join.
-///     if !Realtime::policy().can_join(ctx.user_id.as_deref(), &msg.room) {
+///     // audit_2 realtime #2: authorize the SEND to a client-supplied room —
+///     // a joined client could otherwise inject into any group (IDOR).
+///     if !Realtime::can_send(ctx.user_id.as_deref(), &msg.room) {
 ///         return; // drop the unauthorized publish
 ///     }
 ///     Realtime::to_group(&msg.room).send("message", &msg).await;
@@ -1323,6 +1336,15 @@ impl Realtime {
     /// handshake before joining a connection to a group).
     pub fn policy() -> Arc<dyn GroupPolicy> {
         Self::get().policy.clone()
+    }
+
+    /// Whether `user_id` may **send** to `group` under the configured policy
+    /// (audit_2 realtime #2). A [`MessageHandler`] that broadcasts to a
+    /// client-supplied room MUST call this first — a joined client can otherwise
+    /// inject into any group (IDOR). Delegates to [`GroupPolicy::can_send`],
+    /// which defaults to the same rule as join.
+    pub fn can_send(user_id: Option<&str>, group: &str) -> bool {
+        Self::get().policy.can_send(user_id, group)
     }
 
     /// The configured inbound-message handler (WS transport).
@@ -2358,6 +2380,37 @@ mod tests {
     fn redact_url_handles_schemeless_urls() {
         assert_eq!(redact_url("user:pw@host:6379"), "host:6379");
         assert_eq!(redact_url("host:6379"), "host:6379");
+    }
+}
+
+#[cfg(test)]
+mod audit_realtime2_tests {
+    use super::*;
+
+    // audit_2 realtime #2: can_send defaults to can_join (safe default), and a
+    // policy can override it independently.
+    #[test]
+    fn can_send_defaults_to_can_join() {
+        let p = PublicGroupsOnly;
+        assert!(p.can_send(Some("1"), "public:lobby"));
+        assert!(!p.can_send(Some("1"), "chat:secret")); // same rule as join
+    }
+
+    #[test]
+    fn can_send_is_overridable_independently_of_join() {
+        // A room you may POST to but not SUBSCRIBE to.
+        struct PostOnly;
+        impl GroupPolicy for PostOnly {
+            fn can_join(&self, _u: Option<&str>, group: &str) -> bool {
+                group.starts_with("public:")
+            }
+            fn can_send(&self, _u: Option<&str>, group: &str) -> bool {
+                group == "feedback" || group.starts_with("public:")
+            }
+        }
+        let p = PostOnly;
+        assert!(!p.can_join(None, "feedback"));
+        assert!(p.can_send(None, "feedback"));
     }
 }
 

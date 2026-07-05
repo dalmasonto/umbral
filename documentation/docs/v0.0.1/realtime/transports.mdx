@@ -116,7 +116,7 @@ impl MessageHandler for Chat {
             Err(_) => return,
         };
         // The sender may only publish to a room its own identity could join.
-        if !Realtime::policy().can_join(ctx.user_id.as_deref(), &msg.room) {
+        if !Realtime::can_send(ctx.user_id.as_deref(), &msg.room) {
             return; // drop unauthorized publish
         }
         Realtime::to_group(&msg.room).send("message", &msg).await;
@@ -129,7 +129,7 @@ RealtimePlugin::new().message_handler(Chat);
 <Callout type="warning">
 **Inbound frames carry no automatic send-authorization.** The `GroupPolicy` gate runs at the *handshake* and decides which groups a connection may *join*. It does **not** run on inbound messages. `Realtime::to_group(room)` delivers to whoever is in `room` regardless of who sent the frame — so a client that joined only `public:lobby` can still `send({"room":"chat:secret"})` and inject into a room it never joined.
 
-Always re-check authorization inside `on_message` before publishing to any client-supplied room (as above: `Realtime::policy().can_join(ctx.user_id, &room)`, or your own membership lookup). Treat `text` as untrusted: parse without `unwrap`, and validate every field you route on.
+Always re-check authorization inside `on_message` before publishing to any client-supplied room (as above: `Realtime::can_send(ctx.user_id, &room)`, or your own membership lookup). Treat `text` as untrusted: parse without `unwrap`, and validate every field you route on.
 </Callout>
 
 ```js
