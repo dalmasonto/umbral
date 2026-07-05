@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-oauth-v0.0.4...umbral-oauth-v0.0.5) - 2026-07-05
+
+### Fixed
+
+- *(oauth)* unknown provider key returns 404, not 500 (gaps3 #12)
+- *(oauth,tenants)* fail-closed tenant routing, error leak, email-verified allowlist (audit_2)
+
+### Other
+
+- cargo fmt across the workspace
+
 ## [0.0.3](https://github.com/dalmasonto/umbral/compare/umbral-oauth-v0.0.2...umbral-oauth-v0.0.3) - 2026-06-29
 
 ### Added
