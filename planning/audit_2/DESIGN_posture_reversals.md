@@ -1,5 +1,7 @@
 # audit_2 — Secure-by-default posture reversals (design for approval)
 
+> **Status update — ALL FOUR SHIPPED.** C3 (`b80bac5e` TenantMembership guard), H7 (`9fb1e8f5` SessionStore::destroy_user), H14 (`6fcbffa8` Prod-in-release env), H19 (`860eeb18` P3 + `549f8dd1` boot audit + gated builders). Decisions taken: H14 = Prod-by-default in release builds; H19 = Warning-everywhere + opt-in gated builders (default-deny-by-construction deferred to a future major); H7 = CookieStore revocation is `Unsupported` (loud) + rotation; C3 = pluggable `TenantMembership` guard, fail-closed 404. Per-item status is inline below.
+
 Status: **proposal, awaiting approval.** These four items were deferred from the top-down hardening pass because each changes a framework-wide default: it alters how *every* consumer app behaves at boot or on the request path, and in some cases hard-fails an existing build. Unlike the contained fixes (C2, H3, H10, H16/H17, H21, H23, H24 — all shipped), these are not mine to decide unilaterally. This doc states the problem, the proposed change, the blast radius, and a migration path for each, and ends with the specific decisions I need from you.
 
 The related tenant work has its own doc: [`DESIGN_rls_tenant_isolation.md`](./DESIGN_rls_tenant_isolation.md). C3 below is the session-binding half of it.
