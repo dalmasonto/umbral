@@ -41,7 +41,7 @@ async fn boot() -> &'static axum::Router {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(
-                sqlx::sqlite::SqliteConnectOptions::new()
+                sqlx::sqlite::SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                     .filename(&path)
                     .create_if_missing(true),
             )

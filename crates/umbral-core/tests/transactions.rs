@@ -84,7 +84,7 @@ async fn pool() -> sqlx::SqlitePool {
         let pool = SqlitePoolOptions::new()
             .max_connections(1) // single connection: avoids WAL-mode write-lock contention
             .connect_with(
-                SqliteConnectOptions::new()
+                SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                     .filename(&path)
                     .create_if_missing(true),
             )

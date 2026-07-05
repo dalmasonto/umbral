@@ -74,7 +74,14 @@ impl TempPool {
             .connect_with(
                 SqliteConnectOptions::new()
                     .filename(&path)
-                    .create_if_missing(true),
+                    .create_if_missing(true)
+                    // A file-backed pool with >1 connection contends under the
+                    // load of a full `cargo test --workspace` run; without a
+                    // busy-timeout SQLite returns SQLITE_BUSY instantly instead
+                    // of waiting, which surfaces as flaky "empty body" failures.
+                    // Mirrors the 5s busy-timeout the framework's real
+                    // `connect_sqlite` applies to production pools.
+                    .busy_timeout(std::time::Duration::from_secs(5)),
             )
             .await
             .expect("connect to tempfile sqlite");

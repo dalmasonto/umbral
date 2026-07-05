@@ -24,7 +24,7 @@ async fn build_fails_when_image_field_has_no_storage_backend() {
     std::mem::forget(tmp);
     let pool = SqlitePoolOptions::new()
         .connect_with(
-            SqliteConnectOptions::new()
+            SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                 .filename(&path)
                 .create_if_missing(true),
         )

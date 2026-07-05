@@ -55,7 +55,7 @@ async fn boot_with_recorder() -> Recorder {
         std::mem::forget(tmp); // keep file alive for the test binary's lifetime
 
         use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-        let options = SqliteConnectOptions::new()
+        let options = SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
             .filename(&db_path)
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new()

@@ -84,7 +84,7 @@ async fn boot() {
         // — when the OnceCell init function returns, the local `tmp`
         // would Drop and unlink the file mid-test.
         std::mem::forget(tmp);
-        let opts = SqliteConnectOptions::new()
+        let opts = SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
             .filename(&db_path)
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new()

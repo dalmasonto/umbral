@@ -42,7 +42,7 @@ async fn boot() {
     BOOT.get_or_init(|| async {
         let settings = umbral::Settings::from_env().expect("figment defaults");
         let pool = SqlitePoolOptions::new()
-            .connect_with(SqliteConnectOptions::new().in_memory(true))
+            .connect_with(SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5)).in_memory(true))
             .await
             .expect("pool");
         umbral::App::builder()

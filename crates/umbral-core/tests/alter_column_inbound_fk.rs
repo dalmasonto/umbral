@@ -59,7 +59,7 @@ async fn alter_column_on_table_with_inbound_fk_applies() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
-            SqliteConnectOptions::new()
+            SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                 .filename(&path)
                 .create_if_missing(true)
                 .foreign_keys(true),

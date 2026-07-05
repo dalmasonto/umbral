@@ -45,7 +45,7 @@ async fn file_field_round_trips_through_sqlite_text_column() {
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(
-            SqliteConnectOptions::new()
+            SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                 .filename(&path)
                 .create_if_missing(true),
         )

@@ -86,7 +86,7 @@ async fn boot_custom() {
             let tmp = tempfile::tempdir().expect("create tempdir for custom_user test DB");
             let db_path = tmp.path().join("umbral_custom_user.sqlite");
             std::mem::forget(tmp);
-            let options = SqliteConnectOptions::new()
+            let options = SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                 .filename(&db_path)
                 .create_if_missing(true);
             let pool = SqlitePoolOptions::new()
