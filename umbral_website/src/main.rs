@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // and would serve one visitor's view to another; and in dev it
         // would defeat live-reload. Page caching needs an anonymous-only +
         // non-dev mode first (see the framework follow-up).
-        // .plugin(CachePlugin::new(Cache::memory()))
+        .plugin(CachePlugin::new(Cache::memory()))
         // OAuth / social login. Credentials are read from the environment
         // (UMBRAL_OAUTH_<PROVIDER>_CLIENT_ID / _CLIENT_SECRET); a provider
         // with no credentials is simply not registered, so this is safe to
