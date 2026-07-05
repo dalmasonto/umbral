@@ -567,10 +567,79 @@ impl Settings {
     /// The error type is boxed because `figment::Error` is large (over 200
     /// bytes); see `clippy::result_large_err`.
     pub fn from_env() -> Result<Self, Box<figment::Error>> {
-        merge_dotenv(Figment::new().merge(Toml::file("umbral.toml")))
+        let settings: Settings = merge_dotenv(Figment::new().merge(Toml::file("umbral.toml")))
             .merge(Env::prefixed("UMBRAL_").split("__"))
             .extract()
-            .map_err(Box::new)
+            .map_err(Box::new)?;
+        warn_on_near_miss_keys(&settings.extra);
+        Ok(settings)
+    }
+}
+
+/// The flat `Settings` field names. A `UMBRAL_`-prefixed key that lands in the
+/// `extra` catch-all but is a near-miss of one of these is almost certainly a
+/// typo (`UMBRAL_ALOWED_HOSTS`, `UMBRAL_DB_MAX_CONNECTION`) rather than an
+/// app-defined value — warned at load (audit_2 core-app-config #16).
+const KNOWN_SETTINGS_KEYS: &[&str] = &[
+    "database_url",
+    "databases",
+    "max_form_body_bytes",
+    "db_max_connections",
+    "db_acquire_timeout_secs",
+    "db_min_connections",
+    "db_idle_timeout_secs",
+    "db_max_lifetime_secs",
+    "db_test_before_acquire",
+    "secret_key",
+    "environment",
+    "allowed_hosts",
+    "log_level",
+    "bind_addr",
+    "time_zone",
+    "static_url",
+    "static_root",
+];
+
+/// Classic iterative Levenshtein edit distance (two-row). Used only to catch
+/// misspelled framework settings keys at boot.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr: Vec<usize> = vec![0; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Warn for each `extra` key that is within a small edit distance of a known
+/// framework settings key — a likely typo silently swallowed by the `extra`
+/// catch-all (audit_2 core-app-config #16). A genuine app-defined key that
+/// happens to be close is a harmless false positive (this only logs).
+fn warn_on_near_miss_keys(extra: &std::collections::HashMap<String, toml::Value>) {
+    for key in extra.keys() {
+        let key_l = key.to_ascii_lowercase();
+        if let Some((known, dist)) = KNOWN_SETTINGS_KEYS
+            .iter()
+            .map(|k| (*k, levenshtein(&key_l, k)))
+            .min_by_key(|(_, d)| *d)
+            && (1..=2).contains(&dist)
+        {
+            tracing::warn!(
+                key = %key,
+                did_you_mean = %known,
+                "settings: `UMBRAL_{}` is not a known framework key but is very close to \
+                 `UMBRAL_{}` — did you mean that? It was accepted as an app-defined value \
+                 in `extra` and will NOT configure the framework.",
+                key_l.to_ascii_uppercase(),
+                known.to_ascii_uppercase(),
+            );
+        }
     }
 }
 
@@ -585,6 +654,30 @@ mod tests {
     //! is incompatible with cargo test's parallel runner. Covering them
     //! correctly needs `serial_test` or a thread-local refactor.
     use super::*;
+
+    // audit_2 core-app-config #16: misspelled framework keys are caught as
+    // near-misses; genuine app-defined keys are not flagged.
+    #[test]
+    fn misspelled_framework_keys_are_near_misses() {
+        for (typo, target) in [
+            ("alowed_hosts", "allowed_hosts"),
+            ("db_max_connection", "db_max_connections"),
+            ("secret_ky", "secret_key"),
+            ("enviroment", "environment"),
+        ] {
+            let d = levenshtein(typo, target);
+            assert!((1..=2).contains(&d), "`{typo}` vs `{target}`: distance {d}");
+        }
+        // A genuine app-defined key is far from every framework key → not flagged.
+        for app_key in ["openai_api_key", "stripe_secret", "sentry_dsn"] {
+            let min = KNOWN_SETTINGS_KEYS
+                .iter()
+                .map(|k| levenshtein(app_key, k))
+                .min()
+                .unwrap();
+            assert!(min > 2, "`{app_key}` should not be a near-miss (min {min})");
+        }
+    }
     use figment::Jail;
 
     #[test]
