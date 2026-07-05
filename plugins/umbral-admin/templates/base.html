@@ -186,7 +186,7 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
             </p>
             <div class="space-y-1 px-md">
                 <a
-                    href="{{ admin_base }}/?dashboard=1"
+                    href="{{ admin_base }}/{% if restore_last_path %}?dashboard=1{% endif %}"
                     class="sidebar-link sidebar-model-link flex items-center gap-2 px-sm py-1.5 rounded-xl border border-transparent {% if active_table == '' %}bg-primary-container text-on-primary-container{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
                     data-model-name="dashboard"
                     data-sidebar-tooltip="Dashboard"
