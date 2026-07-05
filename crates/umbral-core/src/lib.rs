@@ -32,6 +32,7 @@ pub mod storage;
 pub mod templates;
 pub mod timezone;
 pub mod web;
+pub mod api_error;
 
 /// Top-level transaction helper. Sugar for `umbral_core::db::transaction`.
 ///

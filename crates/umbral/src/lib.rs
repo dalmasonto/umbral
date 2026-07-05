@@ -36,8 +36,8 @@ pub mod prelude {
     // `umbral::storage` module — power-user surface, not bare names.
     pub use crate::storage::Storage;
     pub use crate::web::{
-        Form, IntoResponse, Json, JsonResponse, Path, Query, Router, StreamingResponse, delete,
-        get, patch, post, put,
+        ApiError, Form, IntoResponse, Json, JsonResponse, Path, Query, Router, StreamingResponse,
+        delete, get, patch, post, put,
     };
     pub use crate::{App, AppBuilder, Environment, Settings};
     // `models![Product, Order, Customer]` — type-safe shorthand
@@ -543,6 +543,7 @@ pub mod web {
         parse_and_store_multipart, parse_multipart,
     };
     pub use umbral_core::web::*;
+    pub use umbral_core::api_error::ApiError;
 }
 
 pub mod orm {
