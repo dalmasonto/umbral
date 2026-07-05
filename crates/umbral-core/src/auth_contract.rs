@@ -107,6 +107,20 @@ impl Identity {
         self.extras.insert(key.into(), value);
         self
     }
+
+    /// Parse the stringified [`user_id`](Self::user_id) back into the caller's
+    /// primary-key type.
+    ///
+    /// `Identity::user_id` is a `String` — the lowest common denominator across
+    /// `i64` / `String` / UUID user models. Rather than hand-roll
+    /// `identity.user_id.parse::<i64>().map_err(|_| /* 401 */)?` in every scoped
+    /// handler (the pattern a live consumer repeated ~8×), call
+    /// `identity.user_pk::<i64>()?`. Generic over any `T: FromStr`, so it works
+    /// for numeric, string, and UUID keys alike; a parse mismatch is returned
+    /// as `T::Err` so the caller owns the HTTP shape (usually a 401/400).
+    pub fn user_pk<T: std::str::FromStr>(&self) -> Result<T, T::Err> {
+        self.user_id.parse()
+    }
 }
 
 /// The authentication contract. Inspect headers, return an `Identity`
@@ -410,5 +424,17 @@ mod tests {
     fn parse_basic_credentials_returns_none_for_invalid_base64() {
         let headers = headers_with(AUTHORIZATION.as_str(), "Basic !!!notbase64");
         assert!(parse_basic_credentials(&headers).is_none());
+    }
+
+    #[test]
+    fn user_pk_parses_the_stringified_pk_into_the_requested_type() {
+        // i64 PK — the common case that consumers hand-parse today.
+        let id = Identity::user(42);
+        assert_eq!(id.user_pk::<i64>().expect("i64 pk"), 42);
+        // Non-i64 PK models (String / UUID codenames) ride the same FromStr path.
+        let named = Identity::user("codename-x");
+        assert_eq!(named.user_pk::<String>().expect("string pk"), "codename-x");
+        // A PK that can't parse into the requested type is an `Err`, never a panic.
+        assert!(Identity::user("not-a-number").user_pk::<i64>().is_err());
     }
 }
