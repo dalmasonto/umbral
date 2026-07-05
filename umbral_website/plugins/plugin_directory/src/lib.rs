@@ -35,16 +35,16 @@ use umbral::migrate::ModelMeta;
 use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::prelude::*;
 use umbral::routes::RouteSpec;
-use umbral_auth::{AuthUser, OptionalUser};
 use umbral::templates::context;
 use umbral::web::{
     Form, HeaderMap, Html, IntoResponse, Path, Query, Redirect, Response, Router, StatusCode, get,
     post,
 };
+use umbral_auth::{AuthUser, OptionalUser};
 
 use models::{
-    self as pd, Plugin as PluginModel, plugin, plugin_comment, plugin_compatibility, plugin_feature,
-    plugin_moderator,
+    self as pd, Plugin as PluginModel, plugin, plugin_comment, plugin_compatibility,
+    plugin_feature, plugin_moderator,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -101,11 +101,11 @@ impl Plugin for PluginDirectoryPlugin {
             RouteSpec::new("/plugins/{slug}", vec!["GET"]),
             RouteSpec::new("/plugins/{slug}/notes", vec!["POST"]),
             RouteSpec::new("/plugins/{slug}/moderators", vec!["POST"]),
+            RouteSpec::new("/plugins/{slug}/moderators/{user_id}/remove", vec!["POST"]),
             RouteSpec::new(
-                "/plugins/{slug}/moderators/{user_id}/remove",
+                "/plugins/{slug}/comments/{comment_id}/moderate",
                 vec!["POST"],
             ),
-            RouteSpec::new("/plugins/{slug}/comments/{comment_id}/moderate", vec!["POST"]),
             RouteSpec::new("/plugins/{slug}/issues/{comment_id}/resolve", vec!["POST"]),
             RouteSpec::new("/plugins/{slug}/issues/{comment_id}/reopen", vec!["POST"]),
             RouteSpec::new("/report", vec!["GET", "POST"]),
@@ -146,6 +146,15 @@ impl Plugin for PluginDirectoryPlugin {
                 Ok(0) => {}
                 Ok(n) => tracing::info!("{}: back-filled audit status on {} rows", plugin_name, n),
                 Err(e) => tracing::warn!("{}: audit-status back-fill failed: {e}", plugin_name),
+            }
+            // Re-assert the curated Markdown `full_content` / `setup_notes` on
+            // already-seeded rows. The row insert short-circuits on a present
+            // slug, so a copy edit to the seed reaches the live rows only
+            // through this back-fill. Only writes rows whose content differs.
+            match seed::backfill_plugin_content().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("{}: refreshed content on {} plugin rows", plugin_name, n),
+                Err(e) => tracing::warn!("{}: plugin-content back-fill failed: {e}", plugin_name),
             }
             // Seed each official plugin's feature tracker rows so the
             // /prebuilt grid and the /plugins/{slug} tracker render real
@@ -266,8 +275,11 @@ pub async fn render_prebuilt() -> Result<String, String> {
         })
         .collect();
 
-    umbral::templates::render("plugin_directory/prebuilt.html", &context! { plugins => cards })
-        .map_err(|e| e.to_string())
+    umbral::templates::render(
+        "plugin_directory/prebuilt.html",
+        &context! { plugins => cards },
+    )
+    .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -705,10 +717,8 @@ pub async fn render_search(q: &str) -> Result<String, String> {
                 for h in found {
                     match h.kind.as_str() {
                         "plugin" => {
-                            let (logo, label) = meta_by_slug
-                                .get(&h.pk)
-                                .cloned()
-                                .unwrap_or((None, "plugin"));
+                            let (logo, label) =
+                                meta_by_slug.get(&h.pk).cloned().unwrap_or((None, "plugin"));
                             hits.push(SearchHit {
                                 kind: "plugin",
                                 href: format!("/plugins/{}", h.pk),
@@ -1629,9 +1639,7 @@ async fn post_add_moderator(
         .await
         .map_err(internal_error)?
     {
-        AddModeratorOutcome::Added => {
-            Ok(Redirect::to(&format!("/plugins/{slug}")).into_response())
-        }
+        AddModeratorOutcome::Added => Ok(Redirect::to(&format!("/plugins/{slug}")).into_response()),
         AddModeratorOutcome::AlreadyModerator => Ok((
             StatusCode::OK,
             format!("`{target}` is already a moderator of this plugin."),
