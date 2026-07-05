@@ -136,7 +136,7 @@ tempfile = "3"
 # `sync` carries tokio::sync::OnceCell, which the migrate integration tests
 # use to boot App::build() exactly once across tokio::test cases that share
 # the same process.
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "test-util"] }
 # tower::ServiceExt::oneshot drives a single synthetic request through the
 # merged axum::Router in `tests/plugin_contract.rs` so the plugin-routes-
 # mount-under-the-app-router check doesn't need a real TCP listener.

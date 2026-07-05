@@ -52,6 +52,14 @@ use std::sync::{Mutex, OnceLock};
 
 use serde_json::{Map, Value};
 
+/// Upper bound on how long a single async signal subscriber may run inline on
+/// the ORM write path before [`emit`] cancels it and moves on (audit_2
+/// observability #10). This is a safety ceiling against a hung subscriber
+/// wedging every write for a model — NOT a per-subscriber SLA; well-behaved
+/// subscribers finish in milliseconds. Deliberately generous so a legitimately
+/// slow one (external search-index sync, a remote webhook) still completes.
+const ASYNC_SUBSCRIBER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 // =============================================================================
 // Actor task-local
 //
@@ -243,10 +251,29 @@ pub async fn emit(name: &str, payload: Value) -> usize {
         // handler already opted in to `Send + Sync + 'static`) and use
         // FutureExt::catch_unwind; on Err log and continue to the next
         // subscriber, exactly as the sync branch does above.
+        //
+        // audit_2 observability #10: subscribers run inline on the ORM write
+        // path (so an audit-log / cache-invalidation subscriber completes
+        // before the write returns). A slow or HUNG subscriber would otherwise
+        // stall every `Manager::save`/`delete` for that model indefinitely — a
+        // latency amplifier / soft-DoS. Bound each subscriber with a timeout:
+        // on expiry the future is dropped (cancelled), logged, and the emit
+        // moves on, so one misbehaving subscriber can't wedge the write path.
         use futures_util::future::FutureExt as _;
-        let result = std::panic::AssertUnwindSafe(fut).catch_unwind().await;
-        if result.is_err() {
-            tracing::error!(signal = %name, "async signal handler panicked; skipping it");
+        let guarded = std::panic::AssertUnwindSafe(fut).catch_unwind();
+        match tokio::time::timeout(ASYNC_SUBSCRIBER_TIMEOUT, guarded).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                tracing::error!(signal = %name, "async signal handler panicked; skipping it");
+            }
+            Err(_) => {
+                tracing::error!(
+                    signal = %name,
+                    timeout_secs = ASYNC_SUBSCRIBER_TIMEOUT.as_secs(),
+                    "async signal handler exceeded the timeout; cancelling it so it can't \
+                     stall the ORM write path"
+                );
+            }
         }
     }
     total

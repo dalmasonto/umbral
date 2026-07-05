@@ -180,3 +180,20 @@ async fn panicking_sync_handler_does_not_brick_the_registry() {
         "registry still usable after a handler panicked"
     );
 }
+
+/// audit_2 observability #10: a hung async subscriber must NOT stall the ORM
+/// write path forever. `emit` bounds each subscriber with a timeout and
+/// cancels it on expiry. Under `start_paused` tokio auto-advances to the
+/// timeout, so this returns promptly instead of blocking for an hour.
+#[tokio::test(start_paused = true)]
+async fn slow_async_subscriber_is_timed_out_not_hung() {
+    let _guard = test_lock().lock().await;
+    clear_for_tests();
+    subscribe_async("obs10_slow", move |_| async move {
+        // Would hang far past the emit timeout.
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+    });
+    // If the timeout weren't enforced this would never return.
+    let n = emit("obs10_slow", json!({})).await;
+    assert_eq!(n, 1, "the timed-out subscriber is still counted");
+}
