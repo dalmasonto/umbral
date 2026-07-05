@@ -82,6 +82,56 @@ fn max_session_age() -> Option<i64> {
     MAX_SESSION_AGE_SECONDS.get().copied().filter(|&n| n > 0)
 }
 
+/// The `SameSite` attribute applied to the session cookie (audit_2
+/// plugin-sessions #7). Controls when the browser sends the cookie on
+/// cross-site requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SameSite {
+    /// Sent on same-site requests and top-level cross-site GET navigations.
+    /// The safe, compatible default.
+    #[default]
+    Lax,
+    /// Sent only on same-site requests — never on any cross-site navigation.
+    /// Highest CSRF resistance; can break inbound links that expect a live
+    /// session (e.g. following a link from an email into an authed page).
+    Strict,
+    /// Sent on all cross-site requests. Requires `Secure` (the framework forces
+    /// it), so it only works over HTTPS. Needed for cross-origin embedding.
+    None,
+}
+
+impl SameSite {
+    fn as_str(self) -> &'static str {
+        match self {
+            SameSite::Lax => "Lax",
+            SameSite::Strict => "Strict",
+            SameSite::None => "None",
+        }
+    }
+}
+
+/// Ambient `SameSite` policy for the session cookie, sealed from
+/// `SessionsPlugin::same_site` at `on_ready`. Defaults to `Lax`.
+static SAME_SITE: OnceLock<SameSite> = OnceLock::new();
+
+fn same_site() -> SameSite {
+    SAME_SITE.get().copied().unwrap_or_default()
+}
+
+/// The cookie attribute pair `"{Secure; }SameSite=<policy>"`. `SameSite=None`
+/// is invalid without `Secure` (browsers reject it), so it forces `Secure` even
+/// in Dev; every other policy defers to [`secure_attr`] (Secure everywhere but
+/// Dev).
+fn cookie_security_attrs() -> String {
+    let ss = same_site();
+    let secure = if ss == SameSite::None {
+        "Secure; "
+    } else {
+        secure_attr()
+    };
+    format!("{secure}SameSite={}", ss.as_str())
+}
+
 /// Default cookie name. Users override via `set_cookie_header_named`
 /// when they need a project-specific name.
 pub const COOKIE_NAME: &str = "umbral_session";
@@ -172,6 +222,9 @@ pub struct SessionsPlugin {
     /// `created_at` is rejected and destroyed even if `expires_at` (which
     /// sliding expiry keeps bumping) is still in the future.
     max_age_seconds: Option<i64>,
+    /// `SameSite` policy for the session cookie (audit_2 plugin-sessions #7).
+    /// `None` = the framework default (`Lax`).
+    same_site: Option<SameSite>,
     store: std::sync::Arc<dyn SessionStore>,
 }
 
@@ -181,6 +234,7 @@ impl std::fmt::Debug for SessionsPlugin {
             .field("auto_layer", &self.auto_layer)
             .field("sliding_expiry", &self.sliding_expiry)
             .field("max_age_seconds", &self.max_age_seconds)
+            .field("same_site", &self.same_site)
             .field("store", &self.store)
             .finish()
     }
@@ -192,6 +246,7 @@ impl Clone for SessionsPlugin {
             auto_layer: self.auto_layer,
             sliding_expiry: self.sliding_expiry,
             max_age_seconds: self.max_age_seconds,
+            same_site: self.same_site,
             store: self.store.clone(),
         }
     }
@@ -203,6 +258,7 @@ impl Default for SessionsPlugin {
             auto_layer: true,
             sliding_expiry: false,
             max_age_seconds: None,
+            same_site: None,
             store: std::sync::Arc::new(DbStore::default()),
         }
     }
@@ -243,6 +299,21 @@ impl SessionsPlugin {
     /// ```
     pub fn max_session_age(mut self, secs: i64) -> Self {
         self.max_age_seconds = Some(secs);
+        self
+    }
+
+    /// Set the session cookie's `SameSite` attribute (audit_2 plugin-sessions
+    /// #7). Defaults to [`SameSite::Lax`] — sent on same-site requests and
+    /// top-level cross-site GET navigations, the safe and compatible choice.
+    /// Use [`SameSite::Strict`] for maximum CSRF resistance (the cookie is never
+    /// sent on any cross-site navigation), or [`SameSite::None`] for cross-origin
+    /// embedding (which forces `Secure`, so it only works over HTTPS).
+    ///
+    /// ```ignore
+    /// SessionsPlugin::default().same_site(SameSite::Strict)
+    /// ```
+    pub fn same_site(mut self, policy: SameSite) -> Self {
+        self.same_site = Some(policy);
         self
     }
 
@@ -331,6 +402,9 @@ impl Plugin for SessionsPlugin {
         // means "no cap"; first boot wins (idempotent), matching the
         // sliding-expiry / ambient-store contract.
         let _ = MAX_SESSION_AGE_SECONDS.set(self.max_age_seconds.unwrap_or(0));
+        // Seal the SameSite cookie policy (audit_2 plugin-sessions #7). Unset =
+        // Lax (the default). First boot wins (idempotent).
+        let _ = SAME_SITE.set(self.same_site.unwrap_or_default());
 
         // Install the configured store so `active_store()` returns it.
         // Idempotent: if a store was already installed (e.g. a second plugin
@@ -625,8 +699,8 @@ fn secure_attr() -> &'static str {
 pub fn set_cookie_header_named(name: &str, id: &str, max_age: Option<i64>) -> String {
     let max_age = max_age.unwrap_or(DEFAULT_TTL_SECONDS);
     format!(
-        "{name}={id}; Path=/; HttpOnly; {secure}SameSite=Lax; Max-Age={max_age}",
-        secure = secure_attr()
+        "{name}={id}; Path=/; HttpOnly; {attrs}; Max-Age={max_age}",
+        attrs = cookie_security_attrs()
     )
 }
 
@@ -640,8 +714,8 @@ pub fn clear_cookie_header() -> String {
 /// [`clear_cookie_header`] with an explicit cookie name.
 pub fn clear_cookie_header_named(name: &str) -> String {
     format!(
-        "{name}=; Path=/; HttpOnly; {secure}SameSite=Lax; Max-Age=0",
-        secure = secure_attr()
+        "{name}=; Path=/; HttpOnly; {attrs}; Max-Age=0",
+        attrs = cookie_security_attrs()
     )
 }
 

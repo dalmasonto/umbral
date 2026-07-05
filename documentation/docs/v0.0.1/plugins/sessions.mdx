@@ -111,6 +111,21 @@ App::builder()
 
 Default is **off** (no cap) - behavior is unchanged unless you set it. A `0` or negative value also disables it.
 
+## Cookie `SameSite` policy
+
+The session cookie is `SameSite=Lax` by default - sent on same-site requests and top-level cross-site GET navigations, the safe and compatible choice. Tune it with `.same_site(..)`:
+
+```rust
+use umbral_sessions::{SessionsPlugin, SameSite};
+
+App::builder()
+    // Never send the cookie on any cross-site navigation (max CSRF resistance).
+    .plugin(SessionsPlugin::default().same_site(SameSite::Strict))
+    .build()?;
+```
+
+`SameSite::Strict` gives the strongest CSRF resistance but can break inbound links that expect a live session (e.g. following an emailed link into an authed page). `SameSite::None` is for cross-origin embedding and **forces `Secure`** (browsers reject `None` without it), so it only works over HTTPS. Default is **`Lax`**.
+
 ## CookieStore (stateless sessions)
 
 By default sessions are DB rows (`DbStore`): the cookie holds an opaque token and every request reads the row from the database. `CookieStore` flips that around - it is a **stateless, AEAD-encrypted session-in-cookie** store. The entire session record (user id, JSON data, timestamps) is encrypted and stuffed into the cookie value itself, so there is **zero DB round-trip** on load or save and **no session table rows are ever created**.
