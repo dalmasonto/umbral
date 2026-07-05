@@ -529,6 +529,13 @@ async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response 
             }
             (StatusCode::CREATED, Json(UserOut::from(&user))).into_response()
         }
+        // audit_2 plugin-auth #4: the argon2 gate shed this registration under
+        // load — 503 so the client retries later instead of into the flood.
+        Err(crate::AuthError::Overloaded) => err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "overloaded",
+            "the server is busy; please retry shortly",
+        ),
         Err(e) => {
             // Log the raw error server-side; NEVER echo it to the client. The
             // raw `AuthError`/sqlx Display leaks DB driver / schema / column
@@ -570,6 +577,15 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
     }
     let user: AuthUser = match crate::authenticate(&body.username, &body.password).await {
         Ok(u) => u,
+        // audit_2 plugin-auth #4: the argon2 gate shed this request under load.
+        // 503 (not 401) so clients back off instead of retrying into the flood.
+        Err(crate::AuthError::Overloaded) => {
+            return err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "overloaded",
+                "the server is busy; please retry shortly",
+            );
+        }
         Err(_) => {
             // The failed attempt is already counted by the check above.
             return err(

@@ -405,6 +405,10 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// [`AuthPlugin::require_verified_email`] (available on
     /// `AuthPlugin<AuthUser>` only, since it gates the built-in routes).
     require_verified: bool,
+    /// Optional override for the argon2 concurrency cap (audit_2 plugin-auth
+    /// #4). `None` uses the framework default — machine parallelism (min 2),
+    /// or the `UMBRAL_AUTH_HASH_CONCURRENCY` env var. Sealed at `on_ready`.
+    hash_concurrency: Option<usize>,
     _u: PhantomData<U>,
 }
 
@@ -425,6 +429,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
             throttle_config: throttle::ThrottleConfig::default(),
             mailer: MailerSlot(std::sync::Mutex::new(None)),
             require_verified: false,
+            hash_concurrency: None,
             _u: PhantomData,
         }
     }
@@ -551,6 +556,22 @@ impl<U: UserModel> AuthPlugin<U> {
     /// instead.
     pub fn disable_throttle(mut self) -> Self {
         self.throttle_config.enabled = false;
+        self
+    }
+
+    /// Cap how many argon2 hash/verify operations may run concurrently
+    /// (audit_2 plugin-auth #4). Each argon2id op allocates ~19 MiB and pins a
+    /// CPU, so without a bound a login/register/reset flood can spawn hundreds
+    /// at once and OOM the process. The default is the machine's parallelism
+    /// (min 2) — more concurrent hashes than cores only thrashes and multiplies
+    /// peak memory. Requests past `cap × 8` in-flight (running + waiting) are
+    /// shed with HTTP 503 so clients back off. Override only if you have a
+    /// specific reason (e.g. reserving cores for request handling).
+    ///
+    /// `UMBRAL_AUTH_HASH_CONCURRENCY` overrides this at runtime; a `0` here is
+    /// ignored (the default applies).
+    pub fn hash_concurrency(mut self, cap: usize) -> Self {
+        self.hash_concurrency = Some(cap);
         self
     }
 
@@ -838,6 +859,13 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         // Seal the verified-email enforcement flag. First boot wins (idempotent),
         // matching the password-policy / mailer / ambient-pool contract.
         let _ = REQUIRE_VERIFIED.set(self.require_verified);
+        // Seal the argon2 concurrency cap BEFORE any request hashing runs, so
+        // the gate's semaphore is sized from it (audit_2 plugin-auth #4). Only
+        // when the builder set an explicit value; otherwise the lazy default
+        // (machine parallelism / env var) applies.
+        if let Some(n) = self.hash_concurrency.filter(|&n| n > 0) {
+            let _ = HASH_CONCURRENCY.set(n);
+        }
         Ok(())
     }
 }
@@ -895,6 +923,11 @@ pub enum AuthError {
     /// attempt cap reached, wrong code) so a caller can't distinguish
     /// which arm fired — prevents account enumeration.
     InvalidChallenge,
+    /// The argon2 concurrency gate shed this request: too much password
+    /// hashing/verification is already in flight (audit_2 plugin-auth #4).
+    /// Route handlers map this to HTTP 503 so clients back off rather than
+    /// the process ballooning memory under a login/register flood.
+    Overloaded,
 }
 
 impl std::fmt::Display for AuthError {
@@ -912,6 +945,12 @@ impl std::fmt::Display for AuthError {
             AuthError::Template(msg) => write!(f, "umbral-auth: template: {msg}"),
             AuthError::Mail(msg) => write!(f, "umbral-auth: mail: {msg}"),
             AuthError::InvalidChallenge => write!(f, "umbral-auth: invalid or expired challenge"),
+            AuthError::Overloaded => {
+                write!(
+                    f,
+                    "umbral-auth: password-hashing capacity exceeded (try again)"
+                )
+            }
         }
     }
 }
@@ -996,32 +1035,114 @@ pub fn verify_password(plaintext: &str, hash: &str) -> Result<bool, AuthError> {
     }
 }
 
+// ── Argon2 concurrency gate (audit_2 plugin-auth #4) ─────────────────────────
+//
+// Each argon2id hash/verify allocates ~19 MiB and pins a CPU for ~100 ms.
+// `spawn_blocking` alone bounds nothing: tokio's blocking pool defaults to 512
+// threads, so a login/register/reset flood (e.g. distinct usernames that slip
+// past the per-IP throttle) can run hundreds of hashes at once — 512 × 19 MiB
+// ≈ 10 GB — and OOM the process. The gate caps CONCURRENT argon2 work so peak
+// memory is bounded to `cap × 19 MiB`.
+//
+// The permit is acquired BEFORE `spawn_blocking`, so a waiting request holds
+// only its plaintext `String`, not the 19-MiB argon2 buffer — waiting is cheap
+// and memory stays bounded no matter how deep the queue. To also bound LATENCY
+// (and stop connections piling up without limit) a second cap on total
+// in-flight work (`cap × HASH_QUEUE_MULT`, running + waiting) sheds load past
+// that point with [`AuthError::Overloaded`] → HTTP 503, so clients back off
+// instead of hanging.
+
+/// How many waiters-per-running-slot to admit before shedding load with 503.
+/// `cap` running + `cap × (MULT-1)` waiting are admitted; the rest get 503.
+const HASH_QUEUE_MULT: usize = 8;
+
+static HASH_CONCURRENCY: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+static HASH_GATE: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+static HASH_IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The maximum number of argon2 operations that may run at once. Defaults to
+/// the machine's parallelism (min 2) — running more concurrent hashes than
+/// cores only thrashes and multiplies peak memory for no throughput. Override
+/// with the `UMBRAL_AUTH_HASH_CONCURRENCY` env var (a positive integer);
+/// [`AuthPlugin::hash_concurrency`] seals a programmatic value at boot.
+fn hash_concurrency() -> usize {
+    *HASH_CONCURRENCY.get_or_init(|| {
+        std::env::var("UMBRAL_AUTH_HASH_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+                    .max(2)
+            })
+    })
+}
+
+fn hash_gate() -> &'static tokio::sync::Semaphore {
+    HASH_GATE.get_or_init(|| tokio::sync::Semaphore::new(hash_concurrency()))
+}
+
+/// Run one CPU-bound argon2 closure on the blocking pool under the concurrency
+/// gate. Sheds load with [`AuthError::Overloaded`] once total in-flight work
+/// exceeds `cap × HASH_QUEUE_MULT`; otherwise waits for a permit (cheaply) and
+/// runs `f` on `spawn_blocking`.
+async fn with_hash_gate<F, T>(f: F) -> Result<T, AuthError>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    use std::sync::atomic::Ordering;
+
+    let max_in_flight = hash_concurrency().saturating_mul(HASH_QUEUE_MULT);
+    // Reserve a slot; reject immediately if the bounded queue is full.
+    let prev = HASH_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    if prev >= max_in_flight {
+        HASH_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        return Err(AuthError::Overloaded);
+    }
+    // Ensure the counter is decremented on every exit path.
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            HASH_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    let _guard = Guard;
+
+    // Wait for one of `cap` permits — cheap: only a String is held meanwhile.
+    let _permit = hash_gate()
+        .acquire()
+        .await
+        .map_err(|e| AuthError::Runtime(e.to_string()))?;
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| AuthError::Runtime(e.to_string()))
+}
+
 /// Async wrapper around [`hash_password`] that runs the CPU-bound argon2
-/// work on tokio's blocking pool via `spawn_blocking`. argon2id with the
-/// framework parameters takes ~100ms of CPU; calling it directly from a
-/// request handler pins an async worker thread for that whole time, so a
-/// login/registration burst starves the runtime and HTTP/1.1 connections
-/// hang. Offloading keeps the async workers free to drive other tasks.
-/// **Async request handlers must use this**; the sync [`hash_password`]
-/// remains for non-async / CLI / test callers.
+/// work on tokio's blocking pool via `spawn_blocking`, under the concurrency
+/// gate (see above). argon2id with the framework parameters takes ~100ms of
+/// CPU; calling it directly from a request handler pins an async worker thread
+/// for that whole time, so a login/registration burst starves the runtime and
+/// HTTP/1.1 connections hang. Offloading keeps the async workers free to drive
+/// other tasks. **Async request handlers must use this**; the sync
+/// [`hash_password`] remains for non-async / CLI / test callers.
 pub async fn hash_password_async(plaintext: &str) -> Result<String, AuthError> {
     let p = plaintext.to_owned();
-    tokio::task::spawn_blocking(move || hash_password(&p))
-        .await
-        .map_err(|e| AuthError::Runtime(e.to_string()))?
+    with_hash_gate(move || hash_password(&p)).await?
 }
 
 /// Async wrapper around [`verify_password`] that runs the CPU-bound argon2
-/// verification on tokio's blocking pool via `spawn_blocking`. See
-/// [`hash_password_async`] for the starvation rationale. **Async request
-/// handlers must use this**; the sync [`verify_password`] remains for
-/// non-async / CLI / test callers.
+/// verification on tokio's blocking pool via `spawn_blocking`, under the same
+/// concurrency gate. See [`hash_password_async`] for the starvation rationale.
+/// **Async request handlers must use this**; the sync [`verify_password`]
+/// remains for non-async / CLI / test callers.
 pub async fn verify_password_async(plaintext: &str, hash: &str) -> Result<bool, AuthError> {
     let p = plaintext.to_owned();
     let h = hash.to_owned();
-    tokio::task::spawn_blocking(move || verify_password(&p, &h))
-        .await
-        .map_err(|e| AuthError::Runtime(e.to_string()))?
+    with_hash_gate(move || verify_password(&p, &h)).await?
 }
 
 fn password_hasher() -> Argon2<'static> {

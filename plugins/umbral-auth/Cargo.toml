@@ -24,8 +24,10 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
 # tokio's rt for spawn_blocking: the argon2 hash/verify helpers
 # (hash_password_async / verify_password_async) offload their CPU-bound
 # work to the blocking pool so a login burst can't starve the async
-# runtime. Only `rt` is needed here — the app supplies the runtime.
-tokio = { version = "1", features = ["rt"] }
+# runtime. `sync` for the Semaphore that bounds concurrent argon2 work
+# (audit_2 plugin-auth #4) so a flood can't spawn thousands of 19-MiB
+# hashes and OOM. The app supplies the runtime.
+tokio = { version = "1", features = ["rt", "sync"] }
 # clap for the `createsuperuser` management command — Plugin::commands()
 # returns a Vec<Box<dyn PluginCommand>>, and each command exposes a
 # clap::Command for arg parsing.
