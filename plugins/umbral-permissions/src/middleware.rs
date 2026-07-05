@@ -227,27 +227,30 @@ where
                 return Ok(config.unauth_response(&uri));
             };
 
-            // Superuser bypass: if the auth user table carries an
-            // `is_superuser` column set to 1, skip the perm check.
-            // umbral-permissions does not own the user table schema —
-            // we read the column with a tolerant query that returns
-            // false when the column doesn't exist (custom user
-            // models can opt out by omitting `is_superuser`).
-            let is_super = is_superuser_safe(user_id).await;
+            // One probe of the built-in AuthUser gives both the account's
+            // active status and its superuser flag. `None` = not an AuthUser
+            // (a custom user model owns activity/superuser elsewhere), so we
+            // don't lock those out here.
+            let flags = auth_user_flags(user_id).await;
 
-            // Stringify the user id once — the perm-query layer
-            // takes `&str` because the perm tables now store
-            // `user_id` as TEXT (PK-agnostic — UUID, slug, int all
-            // round-trip via to_string()).
-            let user_id_str = user_id.to_string();
-            let allowed = if is_super {
-                true
-            } else {
-                has_perm(&user_id_str, &config.perm).await.unwrap_or(false)
-            };
-
-            if !allowed {
-                return Ok(config.forbidden_response());
+            // Resolve the deactivation / superuser precedence in a pure fn
+            // (audit_2 P3 — see `pre_perm_check`). Deactivated denies before
+            // any perm/superuser logic; a live superuser bypasses the perm
+            // check; everyone else falls through to the DB perm lookup (only
+            // then do we pay for `has_perm`).
+            match pre_perm_check(flags) {
+                PrePermCheck::Deny => return Ok(config.unauth_response(&uri)),
+                PrePermCheck::SuperuserAllow => {}
+                PrePermCheck::NeedsPerm => {
+                    // Stringify the user id once — the perm-query layer takes
+                    // `&str` because the perm tables store `user_id` as TEXT
+                    // (PK-agnostic — UUID, slug, int all round-trip via
+                    // `to_string()`).
+                    let user_id_str = user_id.to_string();
+                    if !has_perm(&user_id_str, &config.perm).await.unwrap_or(false) {
+                        return Ok(config.forbidden_response());
+                    }
+                }
             }
 
             inner.call(req).await
@@ -255,20 +258,48 @@ where
     }
 }
 
-/// Best-effort superuser check via the ORM. Hits `auth_user` directly
-/// through the `umbral_auth::AuthUser` model so the dispatch goes through
-/// the backend-aware QuerySet. Returns false on any error (custom user
-/// models that don't carry the `is_superuser` column simply never
-/// match — `AuthUser` is the only model probed here).
-async fn is_superuser_safe(user_id: i64) -> bool {
+/// The decision reached from the AuthUser flags probe, before any DB perm
+/// lookup. Extracted as a pure enum so the deactivation/superuser/perm
+/// precedence (audit_2 P3) is exhaustively unit-testable without a live session.
+#[derive(Debug, PartialEq, Eq)]
+enum PrePermCheck {
+    /// Deactivated account — deny outright (a stolen/lingering session for a
+    /// disabled user must not retain access, superuser or not).
+    Deny,
+    /// Active superuser — bypass the perm check.
+    SuperuserAllow,
+    /// Everyone else — fall through to the `has_perm` DB lookup.
+    NeedsPerm,
+}
+
+/// Pure precedence for the perm layer, given the `(is_active, is_superuser)`
+/// probe (or `None` for a non-AuthUser / custom user model). Deactivation wins
+/// over superuser; a custom model is never treated as deactivated or superuser
+/// here, so it falls through to the perm lookup rather than being locked out.
+fn pre_perm_check(flags: Option<(bool, bool)>) -> PrePermCheck {
+    match flags {
+        Some((false, _)) => PrePermCheck::Deny, // deactivated — precedence over superuser
+        Some((true, true)) => PrePermCheck::SuperuserAllow,
+        Some((true, false)) => PrePermCheck::NeedsPerm,
+        None => PrePermCheck::NeedsPerm, // custom user model — not locked out
+    }
+}
+
+/// Best-effort `(is_active, is_superuser)` probe of the built-in AuthUser via
+/// the ORM (backend-aware QuerySet). Returns `None` when the id doesn't resolve
+/// to an `AuthUser` (a custom user model, or any query error) so custom models
+/// aren't locked out — `AuthUser` is the only model probed here. One query
+/// serves both the P3 deactivation gate and the superuser bypass.
+async fn auth_user_flags(user_id: i64) -> Option<(bool, bool)> {
     use umbral_auth::AuthUser;
-    matches!(
-        AuthUser::objects()
-            .filter(umbral::orm::Predicate::<AuthUser>::col_eq("id", user_id))
-            .first()
-            .await,
-        Ok(Some(u)) if u.is_superuser && u.is_active
-    )
+    match AuthUser::objects()
+        .filter(umbral::orm::Predicate::<AuthUser>::col_eq("id", user_id))
+        .first()
+        .await
+    {
+        Ok(Some(u)) => Some((u.is_active, u.is_superuser)),
+        _ => None,
+    }
 }
 
 // =========================================================================
@@ -288,4 +319,36 @@ pub fn permission_required_html(
     login_url: impl Into<String>,
 ) -> PermissionRequiredLayer {
     PermissionRequiredLayer::new(PermissionRequired::html(perm, login_url))
+}
+
+#[cfg(test)]
+mod pre_perm_check_tests {
+    use super::{PrePermCheck, pre_perm_check};
+
+    // audit_2 P3: deactivation must win over every other signal.
+    #[test]
+    fn deactivated_is_denied_even_when_superuser() {
+        assert_eq!(pre_perm_check(Some((false, true))), PrePermCheck::Deny);
+        assert_eq!(pre_perm_check(Some((false, false))), PrePermCheck::Deny);
+    }
+
+    #[test]
+    fn active_superuser_bypasses_perm_check() {
+        assert_eq!(
+            pre_perm_check(Some((true, true))),
+            PrePermCheck::SuperuserAllow
+        );
+    }
+
+    #[test]
+    fn active_non_superuser_needs_perm() {
+        assert_eq!(pre_perm_check(Some((true, false))), PrePermCheck::NeedsPerm);
+    }
+
+    #[test]
+    fn custom_user_model_is_not_locked_out() {
+        // `None` = the id isn't the built-in AuthUser; fall through to the perm
+        // lookup rather than deny (custom models own their own activity check).
+        assert_eq!(pre_perm_check(None), PrePermCheck::NeedsPerm);
+    }
 }
