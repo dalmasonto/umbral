@@ -36,7 +36,7 @@
 use crate::bearer_auth::parse_bearer_header;
 use crate::login_required::current_session_user_id;
 use crate::token::AuthToken;
-use crate::{auth_user, AuthUser};
+use crate::{AuthUser, auth_user};
 use axum_core::extract::FromRequestParts;
 use axum_core::response::{IntoResponse, Response};
 use http::request::Parts;
@@ -218,7 +218,7 @@ where
 
 #[cfg(test)]
 mod require_staff_tests {
-    use super::{require_staff_decision, StaffReject};
+    use super::{StaffReject, require_staff_decision};
     use umbral::auth::Identity;
 
     #[test]
