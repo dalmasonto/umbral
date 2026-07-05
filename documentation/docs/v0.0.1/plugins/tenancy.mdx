@@ -217,6 +217,41 @@ A few rules keep tenant isolation airtight:
 - **Resolve the tenant from something you trust.** The subdomain/header maps to a `Tenant` row by `domain`; only an **active** registered network resolves. Don't let an end user pick an arbitrary schema name.
 - **Decide what an unknown tenant does.** `on_missing_tenant(MissingTenant::NotFound)` 404s an unrecognized network; `FallThroughToPublic` (the default) serves the bare-domain/public site. Pick per route group as needed.
 - **Shared writes are shared.** Anything in a shared app (`api_key`, `blog_post`) is visible to - and writable from - every network's requests. Keep per-network data in a tenant app; only put genuinely cross-tenant data in shared apps.
+- **Bind the tenant to the caller.** The subdomain/header only says *which* tenant a request names — it doesn't prove the caller belongs to it. If your sessions are shared across tenants (or you enable a client-settable `tenant_header`), install a `TenantMembership` guard so a resolved tenant is served only when the caller is actually a member; otherwise any logged-in user could act under any tenant by naming it.
+
+### Binding the tenant to the caller (`TenantMembership`)
+
+A `TenantMembership` guard is a server-side check run after the tenant is resolved and confirmed to exist. It extracts the caller's identity from the request (however your app authenticates) and decides whether they may act under that tenant. A denied request **fails closed with the same 404 as an unknown tenant**, so a non-member can't tell "no such tenant" from "not your tenant".
+
+```rust
+use std::sync::Arc;
+use umbral_tenants::{TenantsPlugin, TenantMembership};
+
+#[derive(Debug)]
+struct MyMembership;
+
+#[async_trait::async_trait]
+impl TenantMembership for MyMembership {
+    async fn allows(&self, headers: &axum::http::HeaderMap, tenant_key: &str) -> bool {
+        // Resolve the caller (e.g. the session user), then check them against a
+        // user→tenant membership table. Fail CLOSED: return false when unsure.
+        let Some(uid) = umbral_auth::current_session_user_id(headers).await else {
+            return false; // anonymous → denied
+        };
+        is_member(uid, tenant_key).await // your lookup
+    }
+}
+
+App::builder()
+    .plugin(TenantsPlugin::new().membership(Arc::new(MyMembership)))
+    // …
+```
+
+Inside a handler, read the bound tenant with `umbral_tenants::current_tenant()` — by that point it's been resolved and (with a guard installed) authorized, so you can trust it rather than re-reading client input.
+
+<Callout type="warning">
+Without a `membership` guard, a resolved tenant is honored **on trust**. That's only safe when the tenant signal can't be influenced by the caller — e.g. a subdomain-isolated deployment behind a proxy that sets the host, and per-tenant (not shared) sessions. The moment sessions are shared or a `tenant_header` is enabled, install the guard.
+</Callout>
 
 ## Cross-boundary relations: a tenant model pointing at a shared one
 

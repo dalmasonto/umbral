@@ -237,6 +237,32 @@ pub struct TenantsPlugin {
     /// Schema-per-tenant (default) vs database-per-tenant. Threaded into the
     /// [`TenantRouter`] at `on_ready`.
     strategy: TenantStrategy,
+    /// Optional server-side membership guard (audit_2 C3). When set, a request
+    /// that resolves to an existing tenant is additionally checked: the guard
+    /// decides whether THIS caller may act under that tenant, and the request
+    /// fails closed (404) if not. `None` (default) keeps the pre-C3 behavior —
+    /// a resolved tenant is honored on trust, which is only safe on a
+    /// subdomain-isolated deployment behind a proxy that controls the signal.
+    membership: Option<Arc<dyn TenantMembership>>,
+}
+
+/// A server-side check that the caller may act under a resolved tenant
+/// (audit_2 C3). `umbral-tenants` resolves a tenant KEY from the request
+/// (header / subdomain), confirms the tenant exists, then — if a guard is
+/// installed via [`TenantsPlugin::membership`] — asks it whether this caller is
+/// bound to that tenant, failing closed (404, no enumeration oracle) when not.
+///
+/// The guard extracts the caller's identity however the app authenticates
+/// (session cookie, bearer, mTLS header), so the tenant plugin stays decoupled
+/// from any specific auth plugin. A typical impl reads the session user id and
+/// checks it against a `user_id → tenant` membership table.
+#[async_trait::async_trait]
+pub trait TenantMembership: Send + Sync + std::fmt::Debug {
+    /// Return `true` iff the request (identified via `headers`) may act under
+    /// the tenant identified by `tenant_key` (the resolved domain key). **Fail
+    /// closed:** return `false` when the caller is anonymous, not a member, or
+    /// the check errors — a `false` rejects the request.
+    async fn allows(&self, headers: &axum::http::HeaderMap, tenant_key: &str) -> bool;
 }
 
 impl Default for TenantsPlugin {
@@ -262,7 +288,20 @@ impl TenantsPlugin {
             tenant_header: None,
             on_missing: MissingTenant::default(),
             strategy: TenantStrategy::default(),
+            membership: None,
         }
+    }
+
+    /// Install a server-side [`TenantMembership`] guard (audit_2 C3). Once set,
+    /// a request that resolves to an existing tenant is only served if the guard
+    /// confirms the caller is bound to that tenant; otherwise it fails closed
+    /// (404). This is the binding that stops any authenticated user from acting
+    /// under any tenant merely by naming it — enable it whenever the tenant
+    /// signal is client-influenceable (an `X-Tenant` header, or shared sessions
+    /// across subdomains).
+    pub fn membership(mut self, guard: Arc<dyn TenantMembership>) -> Self {
+        self.membership = Some(guard);
+        self
     }
 
     /// Declare the **TENANT** apps — the apps whose tables are per-tenant
@@ -654,6 +693,16 @@ pub fn resolve_tenant_key(
     None
 }
 
+/// The tenant the current request is scoped to, or `None` outside a tenant
+/// context (bare-domain / public path / background work). Reads the ambient
+/// [`RouteContext`] the resolution middleware established — by this point the
+/// tenant has been resolved AND (when a [`TenantMembership`] guard is installed)
+/// bound to the caller server-side, so a handler can trust it as the authorized
+/// tenant rather than re-reading client input (audit_2 C3).
+pub fn current_tenant() -> Option<TenantKey> {
+    umbral::db::route_context().tenant().cloned()
+}
+
 /// Read the `Host` header as a string (forwarded `X-Forwarded-Host` is left to
 /// a reverse proxy / the host-guard layer; here we read the literal `Host`).
 fn host_header(headers: &http::HeaderMap) -> Option<&str> {
@@ -686,6 +735,7 @@ impl Plugin for TenantsPlugin {
             tenant_header: self.tenant_header.clone(),
             subdomain_base: self.subdomain_base.clone(),
             on_missing: self.on_missing,
+            membership: self.membership.clone(),
         });
         router.layer(axum::middleware::from_fn_with_state(
             cfg,
@@ -731,6 +781,7 @@ struct ResolverConfig {
     tenant_header: Option<String>,
     subdomain_base: Option<String>,
     on_missing: MissingTenant,
+    membership: Option<Arc<dyn TenantMembership>>,
 }
 
 /// The resolution middleware: extract the tenant key, look the [`Tenant`] up in
@@ -763,6 +814,18 @@ async fn tenant_resolution_middleware(
 
     match found {
         Ok(Some(t)) => {
+            // audit_2 C3: the tenant exists — now bind it to the CALLER. If a
+            // membership guard is installed, the request may proceed under this
+            // tenant only when the guard confirms the caller belongs to it.
+            // Fail closed with the SAME 404 as an unknown tenant so a non-member
+            // can't distinguish "tenant doesn't exist" from "you're not a
+            // member" (no enumeration oracle). Without a guard, behavior is
+            // unchanged (honored on trust — safe only under subdomain isolation).
+            if let Some(rejection) =
+                check_membership(cfg.membership.as_ref(), req.headers(), &key).await
+            {
+                return rejection;
+            }
             let ctx = RouteContext::new().with_tenant(TenantKey::new(t.schema_name));
             umbral::db::route_context_scope(ctx, next.run(req)).await
         }
@@ -784,6 +847,28 @@ async fn tenant_resolution_middleware(
                 .into_response()
         }
     }
+}
+
+/// audit_2 C3: consult the membership guard (if any) for a resolved-and-existing
+/// tenant. Returns `Some(reject)` when the guard denies the caller — a 404 that
+/// matches an unknown tenant so a non-member can't tell "no such tenant" from
+/// "not your tenant". `None` means proceed (no guard installed, or the guard
+/// allowed). No DB access here → unit-testable without a live tenant DB.
+async fn check_membership(
+    guard: Option<&Arc<dyn TenantMembership>>,
+    headers: &axum::http::HeaderMap,
+    key: &str,
+) -> Option<axum::response::Response> {
+    let guard = guard?;
+    if guard.allows(headers, key).await {
+        return None;
+    }
+    tracing::warn!(
+        key = %key,
+        "umbral-tenants: caller is not a member of the resolved tenant; \
+         rejecting (C3 membership guard)"
+    );
+    Some(reject_unknown_tenant())
 }
 
 /// Fail-closed response for a request that named a tenant which doesn't resolve
@@ -899,6 +984,74 @@ mod tests {
 
     fn shared_set(tables: &[&str]) -> HashSet<String> {
         tables.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A membership guard that allows the request iff its `x-user` header equals
+    /// a member id in the allowed set — a stand-in for a real session-user →
+    /// tenant-membership lookup.
+    #[derive(Debug)]
+    struct HeaderMembership(&'static str);
+    #[async_trait::async_trait]
+    impl TenantMembership for HeaderMembership {
+        async fn allows(&self, headers: &axum::http::HeaderMap, _tenant_key: &str) -> bool {
+            headers.get("x-user").and_then(|v| v.to_str().ok()) == Some(self.0)
+        }
+    }
+
+    fn headers_with_user(user: Option<&str>) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        if let Some(u) = user {
+            h.insert("x-user", u.parse().unwrap());
+        }
+        h
+    }
+
+    #[tokio::test]
+    async fn no_guard_proceeds() {
+        // audit_2 C3: without a membership guard, resolution is unchanged.
+        assert!(
+            check_membership(None, &headers_with_user(None), "acme")
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn member_proceeds_non_member_rejected_404() {
+        let guard: Arc<dyn TenantMembership> = Arc::new(HeaderMembership("alice"));
+
+        // Member → proceed.
+        assert!(
+            check_membership(Some(&guard), &headers_with_user(Some("alice")), "acme")
+                .await
+                .is_none(),
+            "a member must be allowed under the tenant"
+        );
+
+        // Non-member and anonymous → fail closed with 404 (no enumeration oracle).
+        for who in [Some("mallory"), None] {
+            let resp = check_membership(Some(&guard), &headers_with_user(who), "acme")
+                .await
+                .expect("non-member must be rejected");
+            assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
+        }
+    }
+
+    #[tokio::test]
+    async fn current_tenant_reads_the_scoped_context() {
+        // Outside any scope → no tenant.
+        assert!(current_tenant().is_none());
+        // Inside a scoped RouteContext → the bound tenant.
+        let ctx = RouteContext::new().with_tenant(TenantKey::new("acme"));
+        umbral::db::route_context_scope(ctx, async {
+            assert_eq!(
+                current_tenant().map(|t| t.as_str().to_string()),
+                Some("acme".to_string())
+            );
+        })
+        .await;
+        // Back to none after the scope.
+        assert!(current_tenant().is_none());
     }
 
     /// Schema-per-tenant needs Postgres schemas — registering the plugin on a
