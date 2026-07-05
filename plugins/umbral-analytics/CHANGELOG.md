@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-analytics-v0.0.4...umbral-analytics-v0.0.5) - 2026-07-05
+
+### Added
+
+- *(analytics)* exclude sensitive path prefixes from pageview capture (audit_2 #4)
+
+### Fixed
+
+- *(analytics)* bound concurrent outbound sends (audit_2 plugin-observability #5)
+
+### Other
+
+- cargo fmt across the workspace
+
 ## [0.0.2](https://github.com/dalmasonto/umbral/compare/umbral-analytics-v0.0.1...umbral-analytics-v0.0.2) - 2026-06-26
 
 ### Other

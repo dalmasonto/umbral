@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.4...umbral-auth-v0.0.5) - 2026-07-05
+
+### Added
+
+- *(signals)* #[umbral(signal_skip)] strips fields from signal payloads (audit_2 core-app-config #10)
+- *(auth)* bound argon2 concurrency to prevent hashing-flood OOM (audit_2 plugin-auth #4)
+- *(config)* trusted-proxy client-IP resolution (audit_2 H9)
+- *(orm)* #[umbral(privileged)] — default-deny mass assignment on write paths (audit_2 H3)
+
+### Fixed
+
+- *(auth)* register JSON auth routes at both slash forms (gaps3 #11)
+- *(auth)* close enumeration timing oracle, error leaks, mailer secret print (audit_2)
+
+### Other
+
+- cargo fmt across the workspace
+
 ## [0.0.3](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.2...umbral-auth-v0.0.3) - 2026-06-29
 
 ### Added

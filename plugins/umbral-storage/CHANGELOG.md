@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.4...umbral-storage-v0.0.5) - 2026-07-05
+
+### Added
+
+- *(storage)* access-control hook for media serving (audit_2 plugin-storage-tasks #3)
+- *(storage)* bound media-processing concurrency (audit_2 plugin-storage-tasks #4)
+
+### Fixed
+
+- *(storage)* S3 active-content guard, upload cap, media symlink guard (audit_2 H25)
+
+### Other
+
+- *(deps)* drop EOL rustls/hyper via rust-s3 0.37, patch audit findings (audit_2 H24)
+- cargo fmt across the workspace
+
 ## [0.0.2](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.1...umbral-storage-v0.0.2) - 2026-06-26
 
 ### Other

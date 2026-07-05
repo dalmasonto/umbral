@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.4...umbral-openapi-v0.0.5) - 2026-07-05
+
+### Added
+
+- *(orm)* #[umbral(privileged)] — default-deny mass assignment on write paths (audit_2 H3)
+
+### Fixed
+
+- *(openapi)* pin + make Swagger UI asset source configurable (audit_2 plugin-observability #9)
+- *(openapi)* don't mount spec + Swagger UI in Prod by default (audit_2 H12)
+
 ## [0.0.3](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.2...umbral-openapi-v0.0.3) - 2026-06-29
 
 ### Added
