@@ -14,7 +14,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::models::{
-    BlogPost, BlogPostKind, ChangelogEntry, ChangelogKind, PublishStatus,
+    BlogPost, BlogPostKind, ChangelogEntry, ChangelogKind, PublishStatus, blog_post,
 };
 
 struct Seed {
@@ -312,16 +312,210 @@ let pending = Plugin::objects()
 Declare once, and the form, the admin, the API, and your queries all read the same truth. That's the boilerplate you didn't write.
 "#,
     },
+    Seed {
+        slug: "we-tried-to-break-our-own-framework",
+        title: "The week we tried to break our own framework",
+        excerpt: "A batteries-included framework makes a quiet promise: the easy path is the safe path. So we spent a week attacking our own defaults — and shipped a stack of fixes. Here's what 'secure by default' actually costs, and why it's the feature you never see.",
+        kind: BlogPostKind::DesignNote,
+        reading_minutes: 8,
+        featured: true,
+        body: r#"Every framework that says "batteries included" is really making a promise about *defaults*. The whole pitch — declare your data and get an admin, a REST API, forms, migrations — only holds up if the thing you get for free is also the thing that's safe. The moment the convenient path and the correct path diverge, "batteries included" becomes "footguns included."
+
+So one week, we stopped adding features and tried to break Umbral instead. We read every plugin as if we were the attacker, not the author. The rule was simple: assume nothing, and treat every "this is probably fine" as a bug until proven otherwise.
+
+It was not a comfortable week. But it was the most important one.
+
+## The uncomfortable questions
+
+Good security review is mostly a list of rude questions you'd rather not ask about your own code.
+
+*"What happens if two users hit this at the same time?"* Our signal system ran subscriber callbacks while holding a global lock — so one slow audit-log handler could quietly throttle every write in the whole process, and a handler that re-entered the API would deadlock it forever. We now clone the handler list, drop the lock, and run handlers free.
+
+*"Whose IP is this, really?"* Throttles and logs keyed on `X-Forwarded-For` — a header any client can forge. Behind a reverse proxy that's fine; directly exposed it's a rate-limit bypass and a way to frame another user. So we made the framework ask you how many proxies it should trust, and resolve the real client from there. If you configure a per-IP throttle without a trusted proxy, it now tells you at boot instead of silently sharing one bucket across the whole internet.
+
+*"Can I read a row that isn't mine?"* A REST API that serves every row to anyone who can guess an ID is the single most common web vulnerability there is. We added object-level scoping — `.scope()` and `.owned_by()` — so list and detail endpoints only ever return the rows a caller is allowed to see. And uploaded files, which used to be world-readable by URL, got an access-control hook that runs *before a single byte is served*.
+
+*"What ends up in the logs?"* Signals fanned out the entire row to every subscriber — password hashes, tokens, PII — which an innocent audit-log subscriber would then dutifully copy into permanent storage. Now a field marked `#[umbral(signal_skip)]` never leaves the building.
+
+## The defaults nobody thinks about
+
+Some of the best fixes were the ones that change *nothing* on the happy path and everything under stress.
+
+Argon2 password hashing is deliberately expensive — that's the point. But a flood of logins could spawn hundreds of those hashes at once and simply eat all the memory on the box. We put a concurrency gate in front of it: peak memory is now bounded, and past a threshold the server sheds load with a 503 instead of falling over. You never notice it. An attacker does.
+
+Sessions could live forever if you used them once a fortnight. Now you can set an absolute maximum age and a `SameSite` policy, so "stay logged in" has an outer limit. And on Postgres, tenant isolation is enforced by the database itself with `FORCE` row-level security and a per-request context that can't leak from one request into the next — the last line of defence lives below your handler, where a coding mistake can't reach it.
+
+## Even the migrations
+
+Security isn't only the request path. Deploys are where quiet disasters happen.
+
+Two app replicas deploying at once used to race the same schema change; one would win and the other would abort mid-migration. Now a Postgres advisory lock serializes them — one migrates, the rest wait and skip. A migration that would drop a table (because you deleted one line of model registration) no longer runs on a `makemigrations && migrate` reflex; it stops and makes you type `--allow-destructive`. And tightening a column to `NOT NULL` now backfills the existing nulls instead of failing halfway through against real data.
+
+## Why this is a feature
+
+Here's the thing about all of this: if we did it right, you will never see any of it. There's no dashboard for "the OOM that didn't happen" or "the row you didn't leak." Secure-by-default is the rarest kind of feature — the one whose entire job is to be invisible.
+
+But it's also the reason a batteries-included framework is worth using at all. The value was never that you *can* build auth, or throttling, or multi-tenancy. You can build those anywhere. The value is that you get them already thought through — including the 3 a.m. edge cases you'd never have time to chase on a deadline.
+
+We tried to break our own framework for a week. What we actually did was write down all the hard questions once, so you don't have to ask them every time you ship.
+"#,
+    },
+    Seed {
+        slug: "ship-a-saas-this-weekend-in-rust",
+        title: "Ship a SaaS this weekend, in Rust, without the boilerplate",
+        excerpt: "You have an idea and two free days. Here's how a batteries-included Rust framework takes you from an empty repo to a real multi-tenant app — auth, an admin, a REST API, background jobs — before Sunday night. No DTOs, no glue code, no yak-shaving.",
+        kind: BlogPostKind::Tutorial,
+        reading_minutes: 9,
+        featured: true,
+        body: r#"It's Friday evening. You have an idea you can't shake and a weekend with nothing on it. The idea is a small SaaS — a dashboard your customers log into, each seeing only their own data. Nothing exotic. The kind of thing you've built before and remember mostly as *boilerplate*: wiring auth, hand-rolling an admin, writing the same CRUD endpoints, gluing a job queue on.
+
+This time you reach for Umbral, a batteries-included framework for Rust — think the productivity of Django or Rails, on top of Rust's compile-time guarantees. Here's how the weekend goes.
+
+## Friday night: declare your data
+
+You start a project and an app, then write the one thing that actually matters — your model.
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+pub struct Project {
+    pub id: i64,
+    pub owner: ForeignKey<AuthUser>,
+    #[umbral(max_length = 120)]
+    pub name: String,
+    pub status: ProjectStatus,
+    #[umbral(auto_now_add)]
+    pub created_at: DateTime<Utc>,
+}
+```
+
+That's not just a table. It's your migration, your admin screen, your form, and — if you want it — your REST resource. You declare the shape of your data once, and every other system reads that same declaration. No DTOs to keep in sync, no serializer that drifts from the model.
+
+Two commands and the schema is real:
+
+```bash
+cargo run -- makemigrations   # diffs your models, writes the migration
+cargo run -- migrate          # applies it
+```
+
+You go to bed having written a struct and gotten a database.
+
+## Saturday morning: the parts you'd normally dread
+
+You wire up the plugins. This is the part that usually eats a Saturday; here it eats a coffee.
+
+```rust
+App::builder()
+    .plugin(AuthPlugin::<AuthUser>::default().with_default_routes())
+    .plugin(SessionsPlugin::default())
+    .plugin(OAuthPlugin::new(base).provider(google).provider(github))
+    .plugin(AdminPlugin::default().site_title("Acme".into()))
+    .plugin(RestPlugin::default())
+    .build()?;
+```
+
+**Auth** gives you a user model, argon2 hashing, and login/logout routes. **OAuth** adds "Sign in with Google/GitHub" — and reads its keys from the environment, so a provider with no credentials just isn't registered. **Admin** generates a full control panel for *every* model you declared: list views, search, filters, relation pickers, the works. **REST** turns those same models into a JSON API, safe-by-default (writes are refused until you grant permission).
+
+By lunch you have a login page, a social login button, an admin you didn't design, and an API you didn't write. You spent your effort on the model, and everything else fell out of it.
+
+## Saturday afternoon: the multi-tenant part
+
+Your whole idea hinges on isolation — customer A must never see customer B's projects. This is the part that keeps people up at night, so you let the framework carry it.
+
+You scope every REST endpoint to the caller's own rows:
+
+```rust
+RestPlugin::default()
+    .resource(ResourceConfig::for_::<Project>().owned_by("owner"))
+```
+
+Now a list request only ever returns the projects that belong to whoever's asking. For defence in depth on Postgres, you turn on row-level security so the *database itself* enforces the boundary — even a bug in your handler can't read across it. Multi-tenancy, the thing you were dreading, is a couple of lines and a plugin.
+
+## Sunday: the moving parts
+
+Real apps do work off the request path. A customer clicks "export," and you don't want them staring at a spinner while you build a PDF.
+
+```rust
+#[task]
+async fn build_export(project_id: i64) -> Result<(), TaskError> {
+    // ... slow work, retried on failure ...
+    Ok(())
+}
+```
+
+Enqueue it from a handler, run `cargo run -- worker`, and it drains in the background with retries. On Postgres the queue uses `FOR UPDATE SKIP LOCKED`, so you can run ten workers and each grabs a *different* job instead of fighting over the same one — the queue scales sideways for free.
+
+Then you sprinkle in the finishing touches: file uploads for avatars through a storage backend that's local in dev and S3 in prod with the same code; a live toast when something happens, pushed over SSE; a `/healthz` endpoint so your deploy target stops guessing whether you're up.
+
+## Sunday night
+
+You didn't build a framework this weekend. You built *your app* — and the framework quietly handled auth, the admin, the API, migrations, isolation, and background work, each as an opt-in plugin you could swap or drop.
+
+The batteries-included promise was never "you can't do this yourself." Of course you can. The promise is that you shouldn't have to spend a weekend on the parts that are the same in every app — so you can spend it on the part that's only in yours.
+
+Ship it. It's still Sunday.
+"#,
+    },
+    Seed {
+        slug: "twenty-one-plugins-one-contract",
+        title: "Twenty-one plugins, one contract: a tour of the Umbral toolbox",
+        excerpt: "Auth, admin, REST, background jobs, realtime, storage, multi-tenancy — in Umbral they're all plugins, structurally identical to one you'd write yourself. Here's the whole toolbox, and why 'it's just a plugin' is the most important sentence in the framework.",
+        kind: BlogPostKind::PluginSpotlight,
+        reading_minutes: 8,
+        featured: false,
+        body: r#"Most frameworks have a *core* and then some *extensions*. The core gets special privileges — hooks the extensions can't reach, a fast path only the built-ins get to use. Extensions are second-class citizens, and you feel it the first time you try to build something the authors didn't anticipate.
+
+Umbral made a different bet, and it's the bet that shapes everything else: **the core is thin, and everything else is a plugin — including the batteries.** Auth, sessions, the admin, REST, the task queue: structurally, each is identical to a plugin you'd write yourself. There is no privileged path. If a built-in couldn't be expressed as a plugin, that would be a bug in the plugin contract, not a reason to cheat.
+
+Cargo enforces this for us. `umbral-core` doesn't depend on the REST plugin — so "serializers are a plugin" isn't a slogan, it's a fact the compiler won't let us break. A REST-free app compiles with zero serializer code in the binary.
+
+Here's the toolbox that contract produced.
+
+## The parts you reach for first
+
+**umbral-admin** turns every model into a control panel — list views, search, combinable filters, relation pickers, dashboards. **umbral-auth** and **umbral-permissions** give you users, groups, argon2 hashing, and role-based access the admin and API already understand. **umbral-sessions** keeps the identity around; **umbral-oauth** adds "sign in with Google/GitHub" and account connection.
+
+Declare a model, mount these four, and you have a login page and an admin before you've written a route.
+
+## The parts that make it an API
+
+**umbral-rest** turns the same models into JSON resources — serializers, viewsets, pagination, filtering — safe-by-default, with object-level scoping so nobody reads across a boundary. **umbral-openapi** documents them and mounts a Swagger UI, and **umbral-playground** drops a mini-Postman right into your app so you can share an endpoint with a frontend teammate without anyone installing anything.
+
+## The parts that move work off the request
+
+**umbral-tasks** is a database-backed job queue — define work with `#[task]`, enqueue it, drain it with a worker, scale horizontally with `SKIP LOCKED`. **umbral-realtime** pushes updates to the browser over SSE or WebSockets, targeted at a single user or a room, with connection and rate caps so no one client can flood you. **umbral-email** sends the transactional mail your reset flows need, and **umbral-cache** memoises the expensive stuff.
+
+## The parts that keep you safe and sane in production
+
+**umbral-security** ships CSRF, HSTS, and clickjacking protection on by default. **umbral-rls** pushes tenant isolation into Postgres itself, and **umbral-tenants** routes each customer to their own schema and binds the tenant to the caller. **umbral-storage** serves both your static assets and user uploads through one pluggable backend — filesystem in dev, S3 in prod. **umbral-health** answers the probes your load balancer asks for. **umbral-logs** logs the real client IP, and **umbral-analytics** captures product events without dragging down the request path.
+
+## The parts you only notice when they're gone
+
+**umbral-livereload** refreshes your browser the instant you save a template or CSS — inert in production. **umbral-signals** lets you hang audit logs, cache-busting, and notifications off your data without touching the write code.
+
+## Why "it's just a plugin" matters to you
+
+Count them and it's twenty-one first-party plugins. But the number isn't the point. The point is that *your* plugin sits at exactly the same table. The extension point that powers the admin is the one you use to add your billing integration. The signal the framework fires on save is the one your code subscribes to. There's no inside track you're locked out of.
+
+That's the real batteries-included promise: not a fixed menu of features, but a toolbox where the tools you build are indistinguishable from the ones that came in the box. Browse the whole set on the [plugin directory](/plugins) — and then go write the twenty-second.
+"#,
+    },
 ];
 
-/// Seed the blog posts. Idempotent: short-circuits if any post exists.
+/// Seed the blog posts. Idempotent AND self-healing: each post is get-or-created
+/// by its unique slug, so adding a new entry to `POSTS` publishes it on the next
+/// boot without re-inserting or clobbering the posts already there (an admin's
+/// later edit is safe). Returns the number of posts newly published.
 pub async fn seed() -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    if BlogPost::objects().count().await? > 0 {
-        return Ok(0);
-    }
     let now = Utc::now();
     let mut n = 0;
     for s in POSTS {
+        if BlogPost::objects()
+            .filter(blog_post::SLUG.eq(s.slug))
+            .exists()
+            .await?
+        {
+            continue;
+        }
         let post = BlogPost {
             id: 0,
             public_id: Uuid::new_v4(),
@@ -336,7 +530,8 @@ pub async fn seed() -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
             tags: Default::default(),
             cover_image_url: None,
             attachment_url: None,
-            seo_title: None,
+            // SEO: an explicit <title> plus the excerpt as the meta description.
+            seo_title: Some(s.title.to_string()),
             seo_description: Some(s.excerpt.to_string()),
             reading_minutes: s.reading_minutes,
             view_count: 0,

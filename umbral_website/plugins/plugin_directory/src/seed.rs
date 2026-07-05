@@ -149,31 +149,264 @@ const OFFICIAL: &[OfficialRow] = &[
         display_order: 70,
     },
     OfficialRow {
-        crate_name: "umbral-static",
-        name: "Umbral Static",
-        slug: "umbral-static",
+        crate_name: "umbral-storage",
+        name: "Umbral Storage",
+        slug: "umbral-storage",
         author: "Umbral contributors",
-        short_description: "prod static file serving",
+        short_description: "static assets + user uploads, one trait",
         full_content:
-            "Production static file serving (whitenoise-equivalent). Serves compiled CSS, \
-             baked screenshots, and the user-uploaded media dir.",
-        installation_commands: "umbral-static = { path = \"../plugins/umbral-static\" }",
+            "One plugin, two jobs. Serve your compiled static assets AND user uploads through a \
+             single pluggable Storage trait — local filesystem in dev, S3 in prod, same code. \
+             File and image model fields, streaming size caps, background processing behind a \
+             concurrency gate, and an access-control hook so private uploads aren't world-readable \
+             by URL.",
+        installation_commands: "umbral-storage = { path = \"../plugins/umbral-storage\" }",
         version: "0.1.0",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
         display_order: 80,
     },
+    OfficialRow {
+        crate_name: "umbral-permissions",
+        name: "Umbral Permissions",
+        slug: "umbral-permissions",
+        author: "Umbral contributors",
+        short_description: "RBAC, groups, per-object checks",
+        full_content:
+            "Role-based access control the admin and REST already speak. Groups, per-model \
+             view/add/change/delete permissions, and per-object ownership checks — and a \
+             deactivated account is denied at the permission layer, not just the login form.",
+        installation_commands: "umbral-permissions = { path = \"../plugins/umbral-permissions\" }",
+        version: "0.1.0",
+        status: PluginStatus::Shipped,
+        maturity: PluginMaturity::Stable,
+        featured: false,
+        display_order: 25,
+    },
+    OfficialRow {
+        crate_name: "umbral-oauth",
+        name: "Umbral OAuth",
+        slug: "umbral-oauth",
+        author: "Umbral contributors",
+        short_description: "Google / GitHub social login",
+        full_content:
+            "Social login without the boilerplate. Drop in Google and GitHub providers, and connect \
+             a provider to an existing account. Credentials read from the environment, so a provider \
+             with no keys simply isn't registered — safe to leave wired with nothing configured.",
+        installation_commands: "umbral-oauth = { path = \"../plugins/umbral-oauth\" }",
+        version: "0.1.0",
+        status: PluginStatus::Shipped,
+        maturity: PluginMaturity::Beta,
+        featured: true,
+        display_order: 90,
+    },
+    OfficialRow {
+        crate_name: "umbral-realtime",
+        name: "Umbral Realtime",
+        slug: "umbral-realtime",
+        author: "Umbral contributors",
+        short_description: "SSE / WebSocket push, user- and room-targeted",
+        full_content:
+            "Push updates to the browser without polling. Target a single user or a room, and let an \
+             ORM post_save signal fan out a live event. Ships with a default connection cap and a \
+             per-connection message-rate cap so one client can't flood the server.",
+        installation_commands: "umbral-realtime = { path = \"../plugins/umbral-realtime\" }",
+        version: "0.1.0",
+        status: PluginStatus::Usable,
+        maturity: PluginMaturity::Beta,
+        featured: false,
+        display_order: 100,
+    },
+    OfficialRow {
+        crate_name: "umbral-cache",
+        name: "Umbral Cache",
+        slug: "umbral-cache",
+        author: "Umbral contributors",
+        short_description: "process-wide cache + page caching",
+        full_content:
+            "A process-wide in-memory cache installed as an ambient handle — reach for it from any \
+             handler to memoise an expensive query or fragment. An opt-in cache_page layer covers \
+             whole responses when the page is safe to share.",
+        installation_commands: "umbral-cache = { path = \"../plugins/umbral-cache\" }",
+        version: "0.1.0",
+        status: PluginStatus::Shipped,
+        maturity: PluginMaturity::Stable,
+        featured: false,
+        display_order: 110,
+    },
+    OfficialRow {
+        crate_name: "umbral-health",
+        name: "Umbral Health",
+        slug: "umbral-health",
+        author: "Umbral contributors",
+        short_description: "/healthz + /ready probes",
+        full_content:
+            "The two endpoints every load balancer and orchestrator asks for: a liveness probe and a \
+             readiness probe that checks the database is actually reachable. Zero config — mount the \
+             plugin and your deploy target stops guessing.",
+        installation_commands: "umbral-health = { path = \"../plugins/umbral-health\" }",
+        version: "0.1.0",
+        status: PluginStatus::Shipped,
+        maturity: PluginMaturity::Stable,
+        featured: false,
+        display_order: 120,
+    },
+    OfficialRow {
+        crate_name: "umbral-livereload",
+        name: "Umbral Live Reload",
+        slug: "umbral-livereload",
+        author: "Umbral contributors",
+        short_description: "dev browser reload over SSE",
+        full_content:
+            "Save a template, some CSS, or an asset and the browser refreshes itself — CSS hot-swaps \
+             in place, no manual reload. A file watcher pushes events over SSE and the client script \
+             injects itself into HTML responses. Completely inert in production.",
+        installation_commands: "umbral-livereload = { path = \"../plugins/umbral-livereload\" }",
+        version: "0.1.0",
+        status: PluginStatus::Shipped,
+        maturity: PluginMaturity::Beta,
+        featured: false,
+        display_order: 130,
+    },
+    OfficialRow {
+        crate_name: "umbral-analytics",
+        name: "Umbral Analytics",
+        slug: "umbral-analytics",
+        author: "Umbral contributors",
+        short_description: "product analytics (PostHog)",
+        full_content:
+            "Auto-capture pageviews and fire custom events to PostHog, with the outbound sends bounded \
+             so an analytics burst can't fan out unbounded connections and take the request path down \
+             with it.",
+        installation_commands: "umbral-analytics = { path = \"../plugins/umbral-analytics\" }",
+        version: "0.1.0",
+        status: PluginStatus::Usable,
+        maturity: PluginMaturity::Beta,
+        featured: false,
+        display_order: 140,
+    },
+    OfficialRow {
+        crate_name: "umbral-email",
+        name: "Umbral Email",
+        slug: "umbral-email",
+        author: "Umbral contributors",
+        short_description: "transactional email, SMTP / API",
+        full_content:
+            "Send transactional email through an SMTP or API backend behind one interface, so the \
+             password-reset and verification flows have somewhere to go and swapping providers is a \
+             config change, not a rewrite.",
+        installation_commands: "umbral-email = { path = \"../plugins/umbral-email\" }",
+        version: "0.1.0",
+        status: PluginStatus::Usable,
+        maturity: PluginMaturity::Beta,
+        featured: false,
+        display_order: 150,
+    },
+    OfficialRow {
+        crate_name: "umbral-logs",
+        name: "Umbral Logs",
+        slug: "umbral-logs",
+        author: "Umbral contributors",
+        short_description: "structured request logging",
+        full_content:
+            "Structured, per-request logging with the real client IP resolved from your trusted-proxy \
+             setup — so behind nginx you log the caller, not the proxy, and never a header an attacker \
+             can forge.",
+        installation_commands: "umbral-logs = { path = \"../plugins/umbral-logs\" }",
+        version: "0.1.0",
+        status: PluginStatus::Shipped,
+        maturity: PluginMaturity::Stable,
+        featured: false,
+        display_order: 160,
+    },
+    OfficialRow {
+        crate_name: "umbral-signals",
+        name: "Umbral Signals",
+        slug: "umbral-signals",
+        author: "Umbral contributors",
+        short_description: "pub/sub lifecycle hooks",
+        full_content:
+            "Hang behaviour off your data without touching the write code. Subscribe to pre/post \
+             save/update/delete and react — audit logs, cache busting, notifications. Handlers run \
+             outside the registry lock (so a slow one doesn't throttle every write), and \
+             #[umbral(signal_skip)] keeps secrets and PII out of the payload.",
+        installation_commands: "umbral-signals = { path = \"../plugins/umbral-signals\" }",
+        version: "0.1.0",
+        status: PluginStatus::Shipped,
+        maturity: PluginMaturity::Stable,
+        featured: false,
+        display_order: 170,
+    },
+    OfficialRow {
+        crate_name: "umbral-rls",
+        name: "Umbral RLS",
+        slug: "umbral-rls",
+        author: "Umbral contributors",
+        short_description: "Postgres row-level security",
+        full_content:
+            "Push tenant isolation down into Postgres itself. FORCE row-level security with a \
+             per-request GUC set through the pool so one request's tenant context can never leak into \
+             another's, and the database — not your handler — is the last line of defence.",
+        installation_commands: "umbral-rls = { path = \"../plugins/umbral-rls\" }",
+        version: "0.1.0",
+        status: PluginStatus::Usable,
+        maturity: PluginMaturity::Beta,
+        featured: false,
+        display_order: 180,
+    },
+    OfficialRow {
+        crate_name: "umbral-tenants",
+        name: "Umbral Tenants",
+        slug: "umbral-tenants",
+        author: "Umbral contributors",
+        short_description: "multi-tenancy (schema- or row-per-tenant)",
+        full_content:
+            "Turn one app into a multi-tenant SaaS. Route each tenant to its own Postgres schema (or \
+             scope by a tenant column), resolve the tenant from the request, and bind it to the caller \
+             via membership so nobody reads across the wall. Pairs with umbral-rls for defence in depth.",
+        installation_commands: "umbral-tenants = { path = \"../plugins/umbral-tenants\" }",
+        version: "0.1.0",
+        status: PluginStatus::Usable,
+        maturity: PluginMaturity::Beta,
+        featured: false,
+        display_order: 190,
+    },
+    OfficialRow {
+        crate_name: "umbral-playground",
+        name: "Umbral Playground",
+        slug: "umbral-playground",
+        author: "Umbral contributors",
+        short_description: "in-app API playground",
+        full_content:
+            "A mini-Postman baked into your app. Browse the REST resources, build a request, send it, \
+             and read the response — no external tool, no copy-pasting curl. Great for sharing an API \
+             with a frontend teammate.",
+        installation_commands: "umbral-playground = { path = \"../plugins/umbral-playground\" }",
+        version: "0.1.0",
+        status: PluginStatus::Usable,
+        maturity: PluginMaturity::Beta,
+        featured: false,
+        display_order: 200,
+    },
 ];
 
-/// Idempotent. Returns the number of rows inserted.
+/// Idempotent AND self-healing. Get-or-creates each official plugin by slug, so
+/// adding a new entry to `OFFICIAL` surfaces it on the next boot without
+/// re-inserting the rows already there or needing a DB wipe. Returns the number
+/// of rows newly inserted.
 pub async fn seed_official_plugins() -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    if Plugin::objects().count().await? > 0 {
-        return Ok(0);
-    }
-
     let mut inserted = 0;
     for row in OFFICIAL {
+        // Skip a plugin that already exists (by its unique slug) — never clobber
+        // an admin's later hand-edit.
+        if Plugin::objects()
+            .filter(plugin::SLUG.eq(row.slug))
+            .exists()
+            .await?
+        {
+            continue;
+        }
         let mut p = Plugin::default();
         p.name = row.name.to_string();
         p.slug = row.slug.to_string();
@@ -195,6 +428,22 @@ pub async fn seed_official_plugins() -> Result<usize, Box<dyn std::error::Error 
         Plugin::objects().create(p).await?;
         inserted += 1;
     }
+
+    // umbral-static was merged into umbral-storage. If an older seed already
+    // inserted a `umbral-static` row, retire it (mark Deprecated) so the
+    // directory shows one current storage plugin, not a stale pair. Idempotent:
+    // only touches a still-non-deprecated row.
+    let mut dep = serde_json::Map::new();
+    dep.insert(
+        "status".to_string(),
+        serde_json::Value::String("deprecated".to_string()),
+    );
+    Plugin::objects()
+        .filter(plugin::SLUG.eq("umbral-static"))
+        .filter(plugin::STATUS.ne("deprecated"))
+        .update_values(dep)
+        .await?;
+
     Ok(inserted)
 }
 
@@ -208,11 +457,24 @@ const AUDIT: &[(&str, &str)] = &[
     ("umbral-admin", "umbral_reviewed"),
     ("umbral-auth", "umbral_reviewed"),
     ("umbral-sessions", "umbral_reviewed"),
-    ("umbral-rest", "self_reviewed"),
+    ("umbral-permissions", "umbral_reviewed"),
+    ("umbral-rest", "umbral_reviewed"),
     ("umbral-openapi", "self_reviewed"),
-    ("umbral-tasks", "needs_review"),
+    ("umbral-tasks", "self_reviewed"),
     ("umbral-security", "third_party_reviewed"),
-    ("umbral-static", "self_reviewed"),
+    ("umbral-storage", "umbral_reviewed"),
+    ("umbral-oauth", "self_reviewed"),
+    ("umbral-realtime", "umbral_reviewed"),
+    ("umbral-cache", "self_reviewed"),
+    ("umbral-health", "self_reviewed"),
+    ("umbral-livereload", "self_reviewed"),
+    ("umbral-analytics", "umbral_reviewed"),
+    ("umbral-email", "needs_review"),
+    ("umbral-logs", "umbral_reviewed"),
+    ("umbral-signals", "umbral_reviewed"),
+    ("umbral-rls", "umbral_reviewed"),
+    ("umbral-tenants", "umbral_reviewed"),
+    ("umbral-playground", "self_reviewed"),
 ];
 
 /// Back-fill `audit_status` on already-seeded rows. Idempotent: only
