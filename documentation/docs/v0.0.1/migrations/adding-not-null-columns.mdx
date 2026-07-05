@@ -76,6 +76,19 @@ After step 2 every existing row has a sensible value. The column ends up **NULL-
 SQLite's `ALTER TABLE ADD COLUMN` requires a **constant** default. `CURRENT_TIMESTAMP` is computed at evaluation time, not constant, so SQLite rejects it with "Cannot add a column with non-constant default". The full table-rebuild dance (CREATE new, COPY, DROP, RENAME) would let us keep DB-level NOT NULL, but it's heavy machinery for a guarantee Rust already provides at the type level. We picked the lighter compromise.
 </Callout>
 
+## Tightening an existing nullable column to NOT NULL
+
+The same backfill applies when you make an *existing* `Option<T>` field non-optional and give it a `#[umbral(default = "...")]` — some rows may already hold `NULL`. The migration engine backfills them as part of the same migration: on Postgres it emits `UPDATE "t" SET "c" = <default> WHERE "c" IS NULL` before `ALTER COLUMN c SET NOT NULL`; on SQLite the table-recreation dance copies the column as `COALESCE(c, <default>)`. So the tighten applies cleanly against a populated table instead of aborting with `column "c" contains null values` / a failed rebuild.
+
+```rust
+// Before: pub note: Option<String>
+// After — existing NULL notes become '' at migrate time:
+#[umbral(default = "")]
+pub note: String,
+```
+
+(Without a default, `makemigrations` still refuses the tighten — there'd be no value to backfill the existing `NULL`s with.)
+
 ## What NOT to do
 
 - **Don't `rm -f *.db`** to dodge a failing migration. The framework's CLAUDE.md spells this out: the failure IS the test, deleting your DB hides it and destroys real data.

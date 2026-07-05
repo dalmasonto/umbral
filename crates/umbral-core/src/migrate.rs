@@ -4497,17 +4497,32 @@ fn render_alter_column_dance_sqlite(
         create.col(&mut def);
     }
 
-    // Step 2 — INSERT ... SELECT. Same column list both sides; the
-    // dance only handles nullable flips (columns are otherwise
-    // identical). Each name is double-quoted so SQLite identifier
-    // rules don't bite on reserved words.
-    let column_list = new_columns
+    // Step 2 — INSERT ... SELECT. The INSERT target list is the plain column
+    // names; each is double-quoted so SQLite identifier rules don't bite on
+    // reserved words. The SELECT side backfills any NOT-NULL-with-default column
+    // via `COALESCE(col, <default>)` (audit_2 core-migrate #5) — a
+    // nullable→NOT NULL tightening whose existing rows hold NULL would otherwise
+    // copy NULL into the new NOT NULL column and abort the rebuild. COALESCE is
+    // a harmless no-op for a column that never held NULLs.
+    let insert_cols = new_columns
         .iter()
         .map(|c| format!("\"{}\"", c.name.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(", ");
+    let select_exprs = new_columns
+        .iter()
+        .map(|c| {
+            let name = format!("\"{}\"", c.name.replace('"', "\"\""));
+            if !c.nullable && !c.default.is_empty() {
+                format!("COALESCE({name}, {})", default_sql_literal(c, false))
+            } else {
+                name
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     let insert_sql =
-        format!("INSERT INTO \"{tmp}\" ({column_list}) SELECT {column_list} FROM \"{table}\"");
+        format!("INSERT INTO \"{tmp}\" ({insert_cols}) SELECT {select_exprs} FROM \"{table}\"");
 
     // Step 3 — DROP TABLE <table>.
     let drop_sql = Table::drop()
@@ -4598,6 +4613,17 @@ fn render_alter_column_postgres(
         None => true,
     };
     if nullable_changed {
+        // audit_2 core-migrate #5: backfill existing NULLs before tightening.
+        // A nullable→NOT NULL flip whose column carries a default would abort on
+        // any pre-existing NULL row (bare `SET NOT NULL` doesn't backfill, and
+        // `SET DEFAULT` only affects future inserts). Emit the backfill UPDATE
+        // first so the subsequent `SET NOT NULL` succeeds.
+        if !new.nullable && !new.default.is_empty() {
+            let lit = default_sql_literal(new, true);
+            stmts.push(format!(
+                "UPDATE {q_table} SET {q_column} = {lit} WHERE {q_column} IS NULL"
+            ));
+        }
         let clause = if new.nullable {
             "DROP NOT NULL"
         } else {
@@ -4922,6 +4948,38 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
     // through the macro-emitted Rust path which always supplies the
     // value. See `Operation::AddColumn` render below.
     def
+}
+
+/// Render a column's `#[umbral(default = ...)]` value as a raw SQL literal for
+/// a hand-built statement (the NOT-NULL backfill, audit_2 core-migrate #5).
+/// sea-query quotes literals itself in the column-def path, but the backfill
+/// `UPDATE`/`COALESCE` is a raw `format!`, so it needs the literal here.
+/// Numeric and boolean types render unquoted (`0`, `true`); everything else is
+/// a single-quoted string with inner quotes doubled. `is_postgres` only affects
+/// booleans (`true`/`false` on PG, `1`/`0` on SQLite, matching each backend's
+/// boolean storage).
+fn default_sql_literal(col: &Column, is_postgres: bool) -> String {
+    use crate::orm::SqlType::*;
+    match col.ty {
+        Boolean => {
+            let truthy = matches!(
+                col.default.trim().to_ascii_lowercase().as_str(),
+                "true" | "1" | "t" | "yes"
+            );
+            if is_postgres {
+                if truthy { "true" } else { "false" }.to_string()
+            } else if truthy {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            }
+        }
+        SmallInt | Integer | BigInt | Real | Double | Decimal | ForeignKey => {
+            // Numeric literal — validated at derive time; emit unquoted.
+            col.default.clone()
+        }
+        _ => format!("'{}'", col.default.replace('\'', "''")),
+    }
 }
 
 /// Map a user-supplied boolean default string (`"true"` / `"false"`
