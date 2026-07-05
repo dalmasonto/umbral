@@ -36,7 +36,7 @@
 use crate::bearer_auth::parse_bearer_header;
 use crate::login_required::current_session_user_id;
 use crate::token::AuthToken;
-use crate::{AuthUser, auth_user};
+use crate::{auth_user, AuthUser};
 use axum_core::extract::FromRequestParts;
 use axum_core::response::{IntoResponse, Response};
 use http::request::Parts;
@@ -141,4 +141,113 @@ async fn identity_from_bearer(headers: &HeaderMap) -> Option<Identity> {
             .with_superuser(user.is_superuser)
             .with_extra("auth", serde_json::json!("bearer")),
     )
+}
+
+/// Why a [`RequireStaff`] extraction was rejected. Split out so the gate rules
+/// are unit-testable without wiring a DB session.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum StaffReject {
+    /// No authenticated identity on the request.
+    Unauthenticated,
+    /// Authenticated, but not a staff user.
+    NotStaff,
+    /// Staff, but `user_id` doesn't parse into the requested pk type.
+    BadPk,
+}
+
+/// The staff-gate decision: require a present, staff identity whose pk parses
+/// into `T`. Pure + synchronous so the rules are testable without a session; the
+/// async [`RequireStaff`] extractor resolves the identity, then calls this.
+pub(crate) fn require_staff_decision<T: std::str::FromStr>(
+    identity: Option<&Identity>,
+) -> Result<T, StaffReject> {
+    let id = identity.ok_or(StaffReject::Unauthenticated)?;
+    if !id.is_staff {
+        return Err(StaffReject::NotStaff);
+    }
+    id.user_pk::<T>().map_err(|_| StaffReject::BadPk)
+}
+
+/// Extractor requiring an authenticated STAFF user; yields their primary key
+/// parsed into `T` (default `i64`). Replaces the `require_staff(&identity)`
+/// helper consumers copy-paste across plugins:
+///
+/// ```ignore
+/// async fn organizers_only(RequireStaff(uid): RequireStaff) -> impl IntoResponse {
+///     // `uid: i64` — the authenticated staff user's id, already typed.
+/// }
+/// ```
+///
+/// Rejections: `401` (not authenticated), `403` (authenticated but not staff),
+/// `400` (pk doesn't parse into `T`).
+pub struct RequireStaff<T = i64>(pub T);
+
+impl<T, S> FromRequestParts<S> for RequireStaff<T>
+where
+    T: std::str::FromStr + Send,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let identity = resolve_identity(&parts.headers).await;
+        match require_staff_decision::<T>(identity.as_ref()) {
+            Ok(pk) => Ok(Self(pk)),
+            Err(StaffReject::Unauthenticated) => Err((
+                StatusCode::UNAUTHORIZED,
+                axum_core::body::Body::from(
+                    r#"{"error":"authentication required","code":"unauthenticated"}"#,
+                ),
+            )
+                .into_response()),
+            Err(StaffReject::NotStaff) => Err((
+                StatusCode::FORBIDDEN,
+                axum_core::body::Body::from(
+                    r#"{"error":"staff access required","code":"forbidden"}"#,
+                ),
+            )
+                .into_response()),
+            Err(StaffReject::BadPk) => Err((
+                StatusCode::BAD_REQUEST,
+                axum_core::body::Body::from(r#"{"error":"invalid user id","code":"bad_identity"}"#),
+            )
+                .into_response()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod require_staff_tests {
+    use super::{require_staff_decision, StaffReject};
+    use umbral::auth::Identity;
+
+    #[test]
+    fn gates_unauthenticated_staff_and_typed_pk() {
+        // No identity → unauthenticated.
+        assert!(matches!(
+            require_staff_decision::<i64>(None),
+            Err(StaffReject::Unauthenticated)
+        ));
+        // Authenticated non-staff → forbidden.
+        let member = Identity::user(5);
+        assert!(matches!(
+            require_staff_decision::<i64>(Some(&member)),
+            Err(StaffReject::NotStaff)
+        ));
+        // Staff → returns the pk parsed into the requested type.
+        let staff = Identity::user(7).with_staff(true);
+        assert_eq!(require_staff_decision::<i64>(Some(&staff)).unwrap(), 7);
+        // Staff, but the pk can't parse into the requested type → bad identity.
+        let named = Identity::user("codename").with_staff(true);
+        assert!(matches!(
+            require_staff_decision::<i64>(Some(&named)),
+            Err(StaffReject::BadPk)
+        ));
+        // Non-i64 keys work through the same path.
+        let named_ok = Identity::user("codename").with_staff(true);
+        assert_eq!(
+            require_staff_decision::<String>(Some(&named_ok)).unwrap(),
+            "codename"
+        );
+    }
 }
