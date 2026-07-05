@@ -930,6 +930,13 @@ async fn claim_one() -> Result<Option<TaskRow>, TaskError> {
                 .order_by(task_row::SCHEDULED_FOR.asc())
                 .order_by(task_row::ID.asc())
                 .limit(1)
+                // audit_2 plugin-storage-tasks #6: on Postgres, skip rows another
+                // worker's transaction already locked so N workers each claim a
+                // DIFFERENT row instead of all contending on the head row (the
+                // losers then wasting a blocked SELECT + a no-op conditional
+                // UPDATE). No-op on SQLite (single writer). The conditional UPDATE
+                // below still guards correctness on both backends.
+                .for_update_skip_locked()
                 .on_tx(tx)
                 .first()
                 .await?;

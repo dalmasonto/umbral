@@ -223,6 +223,12 @@ pub struct QuerySet<T> {
     /// `annotate()` contract: an annotation is query-builder state,
     /// not a side query.
     pub(crate) annotations: Vec<RelatedAnnotation>,
+    /// audit_2 plugin-storage-tasks #6 — when `true`, a read terminal appends
+    /// `FOR UPDATE SKIP LOCKED` (Postgres only). Lets N contending workers each
+    /// claim a DIFFERENT row instead of all piling onto the same head row and
+    /// serializing on its lock. A no-op on SQLite (no such clause; its
+    /// single-writer model needs none). Set via [`Self::for_update_skip_locked`].
+    pub(crate) for_update_skip_locked: bool,
     _phantom: PhantomData<T>,
 }
 
@@ -250,6 +256,7 @@ impl<T> Clone for QuerySet<T> {
             only_cols: self.only_cols.clone(),
             join_related: self.join_related.clone(),
             annotations: self.annotations.clone(),
+            for_update_skip_locked: self.for_update_skip_locked,
             _phantom: PhantomData,
         }
     }
@@ -416,6 +423,7 @@ impl<T> QuerySet<T> {
             only_cols: None,
             join_related: Vec::new(),
             annotations: Vec::new(),
+            for_update_skip_locked: false,
             _phantom: PhantomData,
         }
     }
@@ -623,6 +631,17 @@ impl<T> QuerySet<T> {
                 q.order_by(Alias::new(*col), order);
             }
         }
+        // audit_2 plugin-storage-tasks #6 — `FOR UPDATE SKIP LOCKED`, Postgres
+        // ONLY. It lets concurrent claimers skip rows another txn already locked
+        // (each grabs a different row) instead of all blocking on the head row's
+        // lock. SQLite has no such clause and its single-writer model makes it
+        // unnecessary, so it's a no-op there (never appended).
+        if self.for_update_skip_locked && backend_name != "sqlite" {
+            q.lock_with_behavior(
+                sea_query::LockType::Update,
+                sea_query::LockBehavior::SkipLocked,
+            );
+        }
         q
     }
 }
@@ -676,6 +695,21 @@ impl<T> QuerySet<T> {
     /// Set OFFSET.
     pub fn offset(mut self, n: u64) -> Self {
         self.query.offset(n);
+        self
+    }
+
+    /// Append `FOR UPDATE SKIP LOCKED` to a read terminal — **Postgres only**
+    /// (a no-op on SQLite). Rows another transaction has already locked are
+    /// skipped rather than blocked on, so N concurrent workers running the same
+    /// `SELECT ... LIMIT k` each claim DIFFERENT rows instead of all contending
+    /// for the same head row. The canonical use is a task/job queue's claim
+    /// query (audit_2 plugin-storage-tasks #6): pair it with a conditional
+    /// `UPDATE ... WHERE status = 'pending'` inside the same transaction.
+    ///
+    /// Must be used inside a transaction (`.on_tx(&mut tx)`) — the row locks a
+    /// bare `SELECT` takes are released immediately, defeating the point.
+    pub fn for_update_skip_locked(mut self) -> Self {
+        self.for_update_skip_locked = true;
         self
     }
 

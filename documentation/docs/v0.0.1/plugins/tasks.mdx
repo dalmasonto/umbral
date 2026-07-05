@@ -151,6 +151,16 @@ The worker claims one pending row at a time inside a transaction, dispatches the
 handler, and writes back `succeeded` or `failed`. Panicking handlers are caught
 via `tokio::task::spawn` so one bad job cannot take the worker down.
 
+On **Postgres**, the claim `SELECT` uses `FOR UPDATE SKIP LOCKED`, so many workers
+running against the same queue each grab a *different* pending row instead of all
+contending on (and blocking behind) the head row's lock — the standard way to
+scale a database-backed queue horizontally. On SQLite the clause is omitted (its
+single-writer model already serializes claimers); correctness on both backends
+still rests on the conditional `UPDATE ... WHERE status = 'pending'` that only
+counts a claim if it actually transitioned the row. The same
+`QuerySet::for_update_skip_locked()` primitive is available for your own queue-like
+tables.
+
 `EnqueueOptions` lets you set `max_attempts` (default 3), `scheduled_for`
 (default `Utc::now()`), and the scheduling/timeout knobs below.
 
