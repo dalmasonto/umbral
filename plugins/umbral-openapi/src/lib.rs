@@ -50,7 +50,20 @@ pub struct OpenApiPlugin {
     /// unauthenticated callers — recon for attacking the live API. Opt in with
     /// [`Self::allow_in_prod`].
     allow_in_prod: bool,
+    /// Base URL the Swagger UI CSS/JS assets load from (audit_2
+    /// plugin-observability #9). Defaults to a **pinned exact** version on a
+    /// public CDN ([`DEFAULT_SWAGGER_ASSET_BASE`]) — pinned so a resolved
+    /// version can't drift under you. Point it at a self-hosted / vendored copy
+    /// (e.g. served from your own static files) for an air-gapped or
+    /// CSP-strict deployment that must not fetch third-party JS. Set via
+    /// [`Self::swagger_asset_base`].
+    swagger_asset_base: String,
 }
+
+/// Default Swagger UI asset base: an **exact** pinned version (not `@5`, which
+/// silently resolves to whatever the CDN serves for the major). audit_2
+/// plugin-observability #9.
+pub const DEFAULT_SWAGGER_ASSET_BASE: &str = "https://unpkg.com/swagger-ui-dist@5.17.14";
 
 impl Default for OpenApiPlugin {
     fn default() -> Self {
@@ -67,7 +80,17 @@ impl OpenApiPlugin {
             description: None,
             extra_exclude: Vec::new(),
             allow_in_prod: false,
+            swagger_asset_base: DEFAULT_SWAGGER_ASSET_BASE.to_string(),
         }
+    }
+
+    /// Override where the Swagger UI CSS/JS load from (audit_2
+    /// plugin-observability #9). Point it at a self-hosted / vendored copy to
+    /// avoid a third-party CDN entirely (air-gapped, CSP-strict). The base is
+    /// used as `<base>/swagger-ui.css` and `<base>/swagger-ui-bundle.js`.
+    pub fn swagger_asset_base(mut self, base: impl Into<String>) -> Self {
+        self.swagger_asset_base = base.into();
+        self
     }
 
     /// Mount the OpenAPI spec + Swagger UI even in `Environment::Prod`. Off by
@@ -239,7 +262,9 @@ async fn spec_handler() -> Response {
 
 async fn swagger_ui_handler() -> Response {
     let cfg = CONFIG.get().expect("OpenApiPlugin::routes was called");
-    let body = SWAGGER_UI_HTML.replace("{SPEC_URL}", &cfg.spec_url());
+    let body = SWAGGER_UI_HTML
+        .replace("{ASSET_BASE}", &cfg.swagger_asset_base)
+        .replace("{SPEC_URL}", &cfg.spec_url());
     Html(body).into_response()
 }
 
@@ -1267,6 +1292,28 @@ mod tests {
     use super::*;
     use umbral::migrate::Column;
     use umbral::orm::SqlType;
+
+    // audit_2 plugin-observability #9: the Swagger UI asset base is pinned to an
+    // EXACT version (not a drifting major) and configurable for self-hosting.
+    #[test]
+    fn swagger_asset_base_is_pinned_and_configurable() {
+        // Default is an exact pin, not a bare `@5` major.
+        assert!(
+            DEFAULT_SWAGGER_ASSET_BASE.contains("@5.17"),
+            "default asset base must pin an exact version, got {DEFAULT_SWAGGER_ASSET_BASE}"
+        );
+        assert!(!SWAGGER_UI_HTML.contains("unpkg.com/swagger-ui-dist@5/"));
+        assert!(SWAGGER_UI_HTML.contains("{ASSET_BASE}"));
+        assert!(SWAGGER_UI_HTML.contains("crossorigin=\"anonymous\""));
+
+        // A custom (self-hosted) base flows through the render substitution.
+        let p = OpenApiPlugin::new().swagger_asset_base("/static/swagger");
+        let rendered = SWAGGER_UI_HTML
+            .replace("{ASSET_BASE}", &p.swagger_asset_base)
+            .replace("{SPEC_URL}", "/openapi/openapi.json");
+        assert!(rendered.contains("/static/swagger/swagger-ui-bundle.js"));
+        assert!(!rendered.contains("{ASSET_BASE}"));
+    }
 
     fn base_col(name: &str, ty: SqlType) -> Column {
         Column {
