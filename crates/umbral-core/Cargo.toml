@@ -93,7 +93,7 @@ regex = "1"
 # move.
 toml = "0.8"
 http = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "signal"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v7"] }
 # multipart/form-data body parsing for file uploads (FileField/ImageField,

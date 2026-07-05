@@ -79,7 +79,18 @@ impl App {
         // slower with keep-alive. No `ConnectInfo` regression: the direct
         // path didn't provide it either (that needs
         // `into_make_service_with_connect_info`).
-        axum::serve(listener, self.router.into_make_service()).await
+        // audit_2 core-app-config #13: graceful shutdown. Without it, a deploy
+        // (SIGTERM) drops every in-flight request and never drains the pools —
+        // Postgres logs abrupt terminations, SQLite skips its WAL checkpoint.
+        // `with_graceful_shutdown` stops accepting new connections on the
+        // signal and waits for in-flight requests to finish; then we close the
+        // pools so connections shut down cleanly.
+        axum::serve(listener, self.router.into_make_service())
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+        tracing::info!("umbral: server stopped accepting; draining DB pools");
+        crate::db::close().await;
+        Ok(())
     }
 
     /// Consume the [`App`] and return its merged axum router.
@@ -1450,6 +1461,34 @@ async fn route_context_scope_layer(
 ) -> crate::web::Response {
     let ctx = resolver(&req);
     crate::db::route_context::scope(ctx, next.run(req)).await
+}
+
+/// Resolve when the process receives a shutdown signal — `SIGTERM` (the deploy
+/// / container-stop signal) or `SIGINT` (Ctrl-C). Drives `serve`'s graceful
+/// shutdown (audit_2 core-app-config #13). On non-Unix only Ctrl-C is wired.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            // If the handler can't be installed, never fire this arm.
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    tracing::info!("umbral: shutdown signal received; finishing in-flight requests");
 }
 
 /// audit_2 H19 — warn about the app's own mutating routes that carry no
