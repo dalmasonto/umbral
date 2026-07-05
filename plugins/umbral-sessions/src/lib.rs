@@ -70,6 +70,18 @@ use uuid::Uuid;
 /// every request. Default OFF — no extra write per request unless opted in.
 static SLIDING_EXPIRY_ENABLED: OnceLock<bool> = OnceLock::new();
 
+/// Ambient absolute session-lifetime cap in seconds (audit_2 plugin-sessions
+/// #5). `0` (the sealed default when the builder isn't called) means "no cap".
+/// Sealed from `SessionsPlugin::max_session_age` at `on_ready`; read by
+/// [`read_session`] to expire sessions older than this regardless of sliding
+/// expiry.
+static MAX_SESSION_AGE_SECONDS: OnceLock<i64> = OnceLock::new();
+
+/// The configured absolute session-age cap, or `None` when unset/`<= 0`.
+fn max_session_age() -> Option<i64> {
+    MAX_SESSION_AGE_SECONDS.get().copied().filter(|&n| n > 0)
+}
+
 /// Default cookie name. Users override via `set_cookie_header_named`
 /// when they need a project-specific name.
 pub const COOKIE_NAME: &str = "umbral_session";
@@ -155,6 +167,11 @@ pub struct Session {
 pub struct SessionsPlugin {
     auto_layer: bool,
     sliding_expiry: bool,
+    /// Absolute session lifetime cap in seconds (audit_2 plugin-sessions #5).
+    /// `None` = no cap (default). When set, a session older than this from its
+    /// `created_at` is rejected and destroyed even if `expires_at` (which
+    /// sliding expiry keeps bumping) is still in the future.
+    max_age_seconds: Option<i64>,
     store: std::sync::Arc<dyn SessionStore>,
 }
 
@@ -163,6 +180,7 @@ impl std::fmt::Debug for SessionsPlugin {
         f.debug_struct("SessionsPlugin")
             .field("auto_layer", &self.auto_layer)
             .field("sliding_expiry", &self.sliding_expiry)
+            .field("max_age_seconds", &self.max_age_seconds)
             .field("store", &self.store)
             .finish()
     }
@@ -173,6 +191,7 @@ impl Clone for SessionsPlugin {
         Self {
             auto_layer: self.auto_layer,
             sliding_expiry: self.sliding_expiry,
+            max_age_seconds: self.max_age_seconds,
             store: self.store.clone(),
         }
     }
@@ -183,6 +202,7 @@ impl Default for SessionsPlugin {
         Self {
             auto_layer: true,
             sliding_expiry: false,
+            max_age_seconds: None,
             store: std::sync::Arc::new(DbStore::default()),
         }
     }
@@ -206,6 +226,23 @@ impl SessionsPlugin {
     /// Refresh the session TTL on every request.
     pub fn sliding_expiry(mut self) -> Self {
         self.sliding_expiry = true;
+        self
+    }
+
+    /// Set an ABSOLUTE session lifetime cap in seconds (audit_2 plugin-sessions
+    /// #5). Off by default. Without it, [`sliding_expiry`](Self::sliding_expiry)
+    /// has no upper bound: a session (or a stolen cookie) used at least once per
+    /// TTL window never expires. With a cap, [`read_session`] rejects and
+    /// destroys any session older than `secs` from its `created_at`, no matter
+    /// how far sliding expiry has pushed `expires_at`. A `0` or negative value
+    /// disables the cap.
+    ///
+    /// ```ignore
+    /// // Force re-authentication at least every 7 days even with sliding expiry.
+    /// SessionsPlugin::default().sliding_expiry().max_session_age(7 * 24 * 60 * 60)
+    /// ```
+    pub fn max_session_age(mut self, secs: i64) -> Self {
+        self.max_age_seconds = Some(secs);
         self
     }
 
@@ -290,6 +327,10 @@ impl Plugin for SessionsPlugin {
         // `set` is a no-op if another test already initialised the cell;
         // production binaries build once so the first (and only) call wins.
         let _ = SLIDING_EXPIRY_ENABLED.set(self.sliding_expiry);
+        // Seal the absolute session-age cap (audit_2 plugin-sessions #5). `0`
+        // means "no cap"; first boot wins (idempotent), matching the
+        // sliding-expiry / ambient-store contract.
+        let _ = MAX_SESSION_AGE_SECONDS.set(self.max_age_seconds.unwrap_or(0));
 
         // Install the configured store so `active_store()` returns it.
         // Idempotent: if a store was already installed (e.g. a second plugin
@@ -475,13 +516,32 @@ pub async fn read_session(token: &str) -> Result<Option<Session>, SessionError> 
     // stored token hash, the same identity the DB row's PK carried.
     match active_store().load(token).await? {
         None => Ok(None),
-        Some(rec) => Ok(Some(Session {
-            id: hash_token(token),
-            user_id: rec.user_id,
-            data: rec.data,
-            created_at: rec.created_at,
-            expires_at: rec.expires_at,
-        })),
+        Some(rec) => {
+            // audit_2 plugin-sessions #5: enforce the absolute lifetime cap.
+            // The store already applied sliding/`expires_at` expiry; this is the
+            // separate idle-vs-absolute bound. A session older than the cap from
+            // its `created_at` is dead no matter how far sliding expiry pushed
+            // `expires_at` — destroy it (best-effort) and resolve anonymous.
+            if let Some(max_age) = max_session_age() {
+                let age = Utc::now() - rec.created_at;
+                if age > Duration::seconds(max_age) {
+                    if let Err(e) = active_store().destroy(token).await {
+                        tracing::warn!(
+                            "umbral-sessions: failed to destroy a session past its \
+                             absolute max age: {e}"
+                        );
+                    }
+                    return Ok(None);
+                }
+            }
+            Ok(Some(Session {
+                id: hash_token(token),
+                user_id: rec.user_id,
+                data: rec.data,
+                created_at: rec.created_at,
+                expires_at: rec.expires_at,
+            }))
+        }
     }
 }
 

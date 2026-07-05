@@ -98,6 +98,19 @@ App::builder()
 
 Default is **off** - the default path incurs zero extra writes per request.
 
+## Absolute lifetime cap
+
+Sliding expiry has no upper bound on its own: a session (or a stolen cookie) used at least once per TTL window never expires. Pair it with `.max_session_age(secs)` to set an **absolute** cap measured from `created_at` - once a session is older than that, `read_session` rejects and destroys it no matter how far sliding expiry has pushed `expires_at`, forcing re-authentication.
+
+```rust
+App::builder()
+    // Slide the idle window, but force re-login at least every 7 days.
+    .plugin(SessionsPlugin::default().sliding_expiry().max_session_age(7 * 24 * 60 * 60))
+    .build()?;
+```
+
+Default is **off** (no cap) - behavior is unchanged unless you set it. A `0` or negative value also disables it.
+
 ## CookieStore (stateless sessions)
 
 By default sessions are DB rows (`DbStore`): the cookie holds an opaque token and every request reads the row from the database. `CookieStore` flips that around - it is a **stateless, AEAD-encrypted session-in-cookie** store. The entire session record (user id, JSON data, timestamps) is encrypted and stuffed into the cookie value itself, so there is **zero DB round-trip** on load or save and **no session table rows are ever created**.
