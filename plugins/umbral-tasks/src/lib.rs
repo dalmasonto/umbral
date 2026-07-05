@@ -107,7 +107,15 @@ pub const STATUS_FAILED: &str = "failed";
 
 /// One enqueued task. `name` keys the handler registry; `payload` is the
 /// JSON-encoded args the handler deserializes.
+///
+/// `indexes`: a composite index on the claim query's selective predicate
+/// (`status` equality + `run_at` range) — audit_2 plugin-storage-tasks #5.
+/// Without it, every worker poll (`claim_one`) full-scans `task_row`; at scale
+/// that's a throughput cliff plus per-poll contention with the write path. Now
+/// that the migration autodetector diffs model-level `indexes`, an existing
+/// app's `makemigrations` picks this up as an `AddIndex` on both backends.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(indexes = [["status", "run_at"]])]
 pub struct TaskRow {
     pub id: i64,
     pub name: String,
