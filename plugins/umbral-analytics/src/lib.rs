@@ -86,6 +86,22 @@ pub fn ambient_client() -> Option<&'static AnalyticsClient> {
 /// Mirrors the `umbral-oauth` `http_client()` pattern exactly.
 static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
+/// Ceiling on concurrent in-flight analytics sends (audit_2
+/// plugin-observability #5). Each `capture_fire_and_forget` spawned an outbound
+/// HTTPS POST with no bound, so a request burst at scale fanned out unbounded
+/// tasks/connections — resource amplification / self-DoS. A permit is acquired
+/// BEFORE spawning; when all are in use the event is dropped (analytics is
+/// best-effort) rather than piling up.
+const MAX_CONCURRENT_ANALYTICS_SENDS: usize = 64;
+
+static SEND_SLOTS: OnceLock<std::sync::Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+fn send_slots() -> &'static std::sync::Arc<tokio::sync::Semaphore> {
+    SEND_SLOTS.get_or_init(|| {
+        std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_ANALYTICS_SENDS))
+    })
+}
+
 /// Returns a clone of the process-wide shared HTTP client.
 ///
 /// Configured with:
@@ -142,7 +158,10 @@ impl AnalyticsClient {
     /// the path starts with any configured exclusion prefix, so sensitive
     /// routes never ship their path to the analytics host.
     pub fn should_capture_path(&self, path: &str) -> bool {
-        !self.exclude_prefixes.iter().any(|p| path.starts_with(p.as_str()))
+        !self
+            .exclude_prefixes
+            .iter()
+            .any(|p| path.starts_with(p.as_str()))
     }
 
     /// Build the PostHog `/capture/` JSON payload.
@@ -169,11 +188,23 @@ impl AnalyticsClient {
         event: impl Into<String>,
         properties: Value,
     ) {
+        // audit_2 #5: acquire a send slot BEFORE spawning so a burst can't fan
+        // out unbounded outbound tasks. At capacity we drop the event (analytics
+        // is best-effort) instead of queueing without bound. The permit is moved
+        // into the task and released when the send finishes.
+        let permit = match send_slots().clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                debug!("analytics: concurrent-send limit reached; dropping event");
+                return;
+            }
+        };
         let payload = self.build_payload(&distinct_id.into(), &event.into(), properties);
         let url = format!("{}/capture/", self.host.trim_end_matches('/'));
         let client = http_client();
 
         tokio::spawn(async move {
+            let _permit = permit; // released when the send completes
             match client.post(&url).json(&payload).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     debug!(url = %url, "analytics: event captured");
@@ -481,12 +512,33 @@ impl Plugin for AnalyticsPlugin {
 mod tests {
     use super::AnalyticsClient;
 
+    // audit_2 plugin-observability #5: outbound sends are bounded so a burst
+    // can't fan out unbounded tasks. The semaphore starts sized to the ceiling,
+    // and once exhausted, further acquisitions fail (→ the event is dropped).
+    #[test]
+    fn outbound_sends_are_concurrency_bounded() {
+        let sem = super::send_slots();
+        assert_eq!(
+            sem.available_permits(),
+            super::MAX_CONCURRENT_ANALYTICS_SENDS
+        );
+        // Exhaust a private clone's worth to prove the drop path: hold every
+        // permit, then the next acquire fails (what `capture` treats as "drop").
+        let mut held = Vec::new();
+        for _ in 0..super::MAX_CONCURRENT_ANALYTICS_SENDS {
+            held.push(sem.clone().try_acquire_owned().expect("permit"));
+        }
+        assert!(
+            sem.clone().try_acquire_owned().is_err(),
+            "at capacity, a further send must be refused (dropped)"
+        );
+        // Permits released here (held dropped) so sibling tests aren't starved.
+    }
+
     #[test]
     fn excluded_prefixes_are_not_captured() {
-        let client = AnalyticsClient::new("k", "https://h").with_exclude_prefixes(vec![
-            "/reset-password".to_string(),
-            "/verify".to_string(),
-        ]);
+        let client = AnalyticsClient::new("k", "https://h")
+            .with_exclude_prefixes(vec!["/reset-password".to_string(), "/verify".to_string()]);
         // Sensitive paths (incl. a token segment) are excluded.
         assert!(!client.should_capture_path("/reset-password/abc123token"));
         assert!(!client.should_capture_path("/verify/xyz"));
