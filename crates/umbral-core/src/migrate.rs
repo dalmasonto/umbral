@@ -3040,6 +3040,41 @@ fn diff_indexes(previous: &ModelMeta, current: &ModelMeta) -> Vec<Operation> {
 
     emit(&previous.unique_together, &current.unique_together, true);
     emit(&previous.indexes, &current.indexes, false);
+
+    // Single-column `#[umbral(index)]` flag flips. A column that gains the
+    // flag → AddIndex; one that loses it (but still exists) → DropIndex. PK
+    // and UNIQUE columns are excluded — they carry their own index, matching
+    // `should_emit_btree_index`. A column that was DROPPED entirely takes its
+    // index with it (DROP COLUMN cascades on both backends), so we don't emit a
+    // redundant DropIndex for it. The `idx_<table>_<col>` name matches the one
+    // `create_index_stmt` uses at CreateTable time, so add/drop stay symmetric.
+    let indexed = |m: &ModelMeta| -> std::collections::BTreeSet<String> {
+        m.fields
+            .iter()
+            .filter(|c| c.index && !c.primary_key && !c.unique)
+            .map(|c| c.name.clone())
+            .collect()
+    };
+    let curr_col_names: std::collections::BTreeSet<&str> =
+        current.fields.iter().map(|c| c.name.as_str()).collect();
+    let prev_indexed = indexed(previous);
+    let curr_indexed = indexed(current);
+    for name in curr_indexed.difference(&prev_indexed) {
+        ops.push(Operation::AddIndex {
+            table: current.table.clone(),
+            columns: vec![name.clone()],
+            unique: false,
+        });
+    }
+    for name in prev_indexed.difference(&curr_indexed) {
+        if curr_col_names.contains(name.as_str()) {
+            ops.push(Operation::DropIndex {
+                table: current.table.clone(),
+                columns: vec![name.clone()],
+                unique: false,
+            });
+        }
+    }
     ops
 }
 
@@ -3586,8 +3621,13 @@ fn diff_columns(
             // `is_string_repr`, `is_multichoice`) are intentionally
             // excluded — they affect admin / OpenAPI rendering but
             // not the database schema, so emitting an ALTER would do
-            // no DB work. The snapshot still updates because the next
-            // CreateTable in the migration stream carries the flag.
+            // no DB work. The single-column `index` flag is ALSO excluded
+            // here: an index add/remove is not a column rewrite. Folding it
+            // into `AlterColumn` created no index on Postgres (its native
+            // ALTER handles TYPE/nullable/UNIQUE/DEFAULT/FK/CHECK but not
+            // indexes) and forced a full table-recreation dance on SQLite.
+            // `diff_indexes` now emits a proper `AddIndex`/`DropIndex` for it,
+            // which is correct and cheap on both backends.
             if type_changed
                 || prev_col.nullable != curr_col.nullable
                 || prev_col.fk_target != curr_col.fk_target
@@ -3597,7 +3637,6 @@ fn diff_columns(
                 || prev_col.choice_labels != curr_col.choice_labels
                 || prev_col.on_delete != curr_col.on_delete
                 || prev_col.on_update != curr_col.on_update
-                || prev_col.index != curr_col.index
             {
                 alter_columns.push(*name);
             }

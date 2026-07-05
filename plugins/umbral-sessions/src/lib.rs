@@ -104,6 +104,10 @@ pub struct Session {
     pub user_id: Option<String>,
     pub data: String,
     pub created_at: DateTime<Utc>,
+    /// Indexed: `clearsessions` deletes on `expires_at < now()` (audit_2
+    /// plugin-sessions #4). At scale an unindexed column full-scans the whole
+    /// session table on every sweep, contending with per-request PK reads.
+    #[umbral(index)]
     pub expires_at: DateTime<Utc>,
 }
 

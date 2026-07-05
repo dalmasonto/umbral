@@ -232,3 +232,101 @@ async fn unchanged_constraints_produce_no_index_ops() {
         "identical unique_together must produce no ops; got {ops:?}"
     );
 }
+
+/// Build a `Membership` meta where `status` carries the given single-column
+/// `#[umbral(index)]` flag — everything else identical.
+fn meta_status_indexed(indexed: bool) -> ModelMeta {
+    let mut m = meta(Vec::new(), Vec::new());
+    for f in &mut m.fields {
+        if f.name == "status" {
+            f.index = indexed;
+        }
+    }
+    m
+}
+
+/// Flipping a single column's `#[umbral(index)]` flag on an EXISTING model must
+/// emit a real `AddIndex`/`DropIndex` — NOT an `AlterColumn`. Folding it into
+/// `AlterColumn` created no index on Postgres (whose native ALTER doesn't touch
+/// indexes) and forced a needless table rebuild on SQLite (audit_2
+/// plugin-sessions #4).
+#[tokio::test]
+async fn single_column_index_flag_flip_emits_add_and_drop_index() {
+    let without = Snapshot {
+        models: vec![meta_status_indexed(false)],
+    };
+    let with = Snapshot {
+        models: vec![meta_status_indexed(true)],
+    };
+
+    // ADD: gains the index → exactly one AddIndex, no AlterColumn.
+    let add_ops = diff(&without, &with).expect("diff add");
+    assert!(
+        add_ops
+            .iter()
+            .any(|o| matches!(o, Operation::AddIndex { columns, unique: false, .. } if columns == &vec!["status".to_string()])),
+        "index-flag flip must emit AddIndex(status); got {add_ops:?}"
+    );
+    assert!(
+        !add_ops
+            .iter()
+            .any(|o| matches!(o, Operation::AlterColumn { .. })),
+        "an index-only change must NOT emit an AlterColumn; got {add_ops:?}"
+    );
+
+    // The Postgres render actually creates the index (the latent gap: PG's
+    // native AlterColumn never did). Proven at the DDL level since there's no
+    // live-PG harness.
+    for backend in ["postgres", "sqlite"] {
+        let sql = add_ops
+            .iter()
+            .flat_map(|op| render_operation_for(op, backend))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            sql.to_ascii_uppercase().contains("CREATE INDEX")
+                && sql.contains("\"idx_membership_status\""),
+            "[{backend}] index add must render CREATE INDEX idx_membership_status; got {sql}"
+        );
+    }
+
+    // Applied against a live SQLite table, the index appears.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("idx_flag.sqlite");
+    std::mem::forget(tmp);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("pool");
+    sqlx::query(
+        "CREATE TABLE membership (id INTEGER PRIMARY KEY, org_id INTEGER NOT NULL, \
+         user_id INTEGER NOT NULL, status TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("create");
+    apply(&pool, &add_ops).await;
+    assert!(
+        index_exists(&pool, "idx_membership_status").await,
+        "the single-column index must exist after applying the add"
+    );
+
+    // DROP: loses the flag → DropIndex, and the index is gone.
+    let drop_ops = diff(&with, &without).expect("diff drop");
+    assert!(
+        drop_ops
+            .iter()
+            .any(|o| matches!(o, Operation::DropIndex { columns, .. } if columns == &vec!["status".to_string()])),
+        "losing the index flag must emit DropIndex(status); got {drop_ops:?}"
+    );
+    apply(&pool, &drop_ops).await;
+    assert!(
+        !index_exists(&pool, "idx_membership_status").await,
+        "the single-column index must be gone after applying the drop"
+    );
+}
