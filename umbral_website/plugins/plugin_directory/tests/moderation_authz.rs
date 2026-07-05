@@ -38,7 +38,7 @@ impl umbral::storage::Storage for TestStorage {
     ) -> Result<umbral::storage::StoredFile, umbral::storage::StorageError> {
         let key = filename.to_string();
         let url = self.url(&key);
-        Ok(umbral::storage::StoredFile { key, url })
+        Ok(umbral::storage::StoredFile { key, url, size: 0 })
     }
     async fn retrieve(&self, _key: &str) -> Result<Vec<u8>, umbral::storage::StorageError> {
         Err(umbral::storage::StorageError::NotFound)
