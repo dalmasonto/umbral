@@ -319,3 +319,17 @@ async fn end_to_end_through_session_layer_zero_db_rows() {
         "reading a cookie session must also create no rows",
     );
 }
+
+/// audit_2 H7: a stateless CookieStore cannot revoke by user id — there's no
+/// server-side record to delete. `destroy_user` must fail LOUDLY with
+/// `RevocationUnsupported` (which `revoke_user_sessions` surfaces to the
+/// password-reset flow) rather than silently succeed and leave stolen cookies
+/// live.
+#[tokio::test]
+async fn cookie_store_destroy_user_is_unsupported() {
+    let store = CookieStore::with_secret(TEST_SECRET);
+    match store.destroy_user("42").await {
+        Err(SessionError::RevocationUnsupported) => {}
+        other => panic!("expected RevocationUnsupported, got {other:?}"),
+    }
+}

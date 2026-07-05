@@ -62,6 +62,9 @@ use crate::{
 /// Key prefix for all session keys in Redis. Namespaces umbral sessions
 /// away from other data in the same Redis database.
 const KEY_PREFIX: &str = "umbral:session:";
+/// Prefix for the per-user session-index SET (audit_2 H7 — enables
+/// `destroy_user` / "log out everywhere" on Redis).
+const USER_KEY_PREFIX: &str = "umbral:user-sessions:";
 
 // =========================================================================
 // RedisStore
@@ -131,6 +134,15 @@ impl RedisStore {
     fn key(token: &str) -> String {
         format!("{}{}", KEY_PREFIX, hash_token(token))
     }
+
+    /// The Redis key for a user's session-index SET (audit_2 H7). Each member
+    /// is a session-token hash owned by `user_id`, so `destroy_user` can find
+    /// and DEL every one. The set is refreshed with the same TTL as the
+    /// longest-lived session on each save, and stale members (whose session key
+    /// already expired) are harmless — `destroy_user`'s DEL is a no-op on them.
+    fn user_key(user_id: &str) -> String {
+        format!("{}{}", USER_KEY_PREFIX, user_id)
+    }
 }
 
 #[async_trait::async_trait]
@@ -186,6 +198,22 @@ impl SessionStore for RedisStore {
         conn.set_ex::<_, _, ()>(&key, json, ttl_secs)
             .await
             .map_err(|e| SessionError::Redis(e.to_string()))?;
+        // audit_2 H7: index the session under its owner so `destroy_user` can
+        // revoke every session on password reset. Only for authenticated
+        // sessions — anonymous ones have no user to revoke. `SADD` the token
+        // hash, then push the set's TTL out to at least this session's TTL so
+        // the index outlives its members (a stale member is a harmless no-op
+        // DEL later).
+        if let Some(user_id) = &record.user_id {
+            let user_key = Self::user_key(user_id);
+            let member = hash_token(token);
+            conn.sadd::<_, _, ()>(&user_key, &member)
+                .await
+                .map_err(|e| SessionError::Redis(e.to_string()))?;
+            conn.expire::<_, ()>(&user_key, ttl_secs as i64)
+                .await
+                .map_err(|e| SessionError::Redis(e.to_string()))?;
+        }
         Ok(token.to_string())
     }
 
@@ -199,5 +227,34 @@ impl SessionStore for RedisStore {
             .await
             .map_err(|e| SessionError::Redis(e.to_string()))?;
         Ok(())
+    }
+
+    /// Delete every session owned by `user_id` (audit_2 H7). Reads the user's
+    /// session-index SET, DELs each token's session key, then DELs the index
+    /// itself. Returns the count of session keys actually removed (stale
+    /// members whose key already expired don't count). Idempotent: an unknown
+    /// user (empty/absent set) removes nothing and returns 0.
+    async fn destroy_user(&self, user_id: &str) -> Result<u64, SessionError> {
+        use redis::AsyncCommands;
+        let user_key = Self::user_key(user_id);
+        let mut conn = self.client.clone();
+        let members: Vec<String> = conn
+            .smembers(&user_key)
+            .await
+            .map_err(|e| SessionError::Redis(e.to_string()))?;
+        let mut removed: u64 = 0;
+        for member in &members {
+            let session_key = format!("{KEY_PREFIX}{member}");
+            let n: u64 = conn
+                .del(&session_key)
+                .await
+                .map_err(|e| SessionError::Redis(e.to_string()))?;
+            removed += n;
+        }
+        // Drop the index itself so a later save starts clean.
+        conn.del::<_, ()>(&user_key)
+            .await
+            .map_err(|e| SessionError::Redis(e.to_string()))?;
+        Ok(removed)
     }
 }

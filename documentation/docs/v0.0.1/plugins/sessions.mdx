@@ -120,6 +120,8 @@ How it works:
 
 <Callout type="warning">
 `CookieStore` sessions live entirely in the client's cookie. There is no server row to invalidate, so a logout clears the cookie but a copy captured before logout stays valid until it expires. Rotate `secret_key` to mass-invalidate every outstanding cookie session.
+
+**"Log out everywhere" (`revoke_user_sessions`, which the password-reset flow calls) works on `DbStore` and `RedisStore`** — both keep the session server-side, so every one of a user's sessions is deleted immediately. On the stateless `CookieStore` there is nothing server-side to delete, so `revoke_user_sessions` returns `SessionError::RevocationUnsupported` and the caller logs it loudly rather than silently pretending to have revoked. If you need reliable server-side revocation (e.g. to invalidate a stolen session on password reset), use `DbStore` or `RedisStore`.
 </Callout>
 
 ## Purging expired rows: `clearsessions`

@@ -96,6 +96,18 @@ pub trait SessionStore: Send + Sync + std::fmt::Debug {
     /// treated as success.
     async fn destroy(&self, token: &str) -> Result<(), SessionError>;
 
+    /// Delete EVERY session owned by `user_id` — the "log out everywhere"
+    /// primitive behind password-reset revocation (audit_2 H7). Returns the
+    /// number of sessions removed.
+    ///
+    /// The default fails with [`SessionError::RevocationUnsupported`] so a store
+    /// that can't enumerate by user (a stateless [`crate::CookieStore`]) reports
+    /// the gap LOUDLY rather than silently no-op'ing and leaving stolen cookies
+    /// live. Server-side stores ([`DbStore`], a Redis store) override it.
+    async fn destroy_user(&self, _user_id: &str) -> Result<u64, SessionError> {
+        Err(SessionError::RevocationUnsupported)
+    }
+
     /// Whether this store's security depends on the ambient `secret_key`.
     ///
     /// A stateless store that seals the whole session into the cookie (the
@@ -218,6 +230,18 @@ impl SessionStore for DbStore {
             .delete()
             .await?;
         Ok(())
+    }
+
+    /// Delete every session row owned by `user_id` (audit_2 H7). Anonymous
+    /// sessions (`user_id IS NULL`) never match a `=` predicate, so they're
+    /// left alone. Returns the number of rows removed.
+    async fn destroy_user(&self, user_id: &str) -> Result<u64, SessionError> {
+        use crate::{Session, session};
+        let removed = Session::objects()
+            .filter(session::USER_ID.eq(user_id))
+            .delete()
+            .await?;
+        Ok(removed)
     }
 }
 

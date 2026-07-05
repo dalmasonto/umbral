@@ -97,6 +97,10 @@ pub const DEFAULT_TTL_SECONDS: i64 = 14 * 24 * 60 * 60;
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 pub struct Session {
     pub id: String,
+    /// Indexed: `destroy_user` (audit_2 H7) and `clearsessions` filter on
+    /// `user_id`, so at scale an unindexed column would force a full scan on
+    /// every password-reset revocation.
+    #[umbral(index)]
     pub user_id: Option<String>,
     pub data: String,
     pub created_at: DateTime<Utc>,
@@ -341,6 +345,14 @@ pub enum SessionError {
     /// loudly rather than silently producing a cookie the browser drops.
     /// Carries the encoded byte length that tripped the limit.
     CookieTooLarge(usize),
+    /// The active store can't revoke by user id (audit_2 H7). A stateless
+    /// [`crate::CookieStore`] seals the session into the cookie itself, so
+    /// there's no server-side record to delete — "log out everywhere" is
+    /// impossible without token rotation or a denylist. Returned by
+    /// `SessionStore::destroy_user` so the caller (e.g. password-reset
+    /// revocation) surfaces the gap LOUDLY instead of silently no-op'ing and
+    /// leaving stolen cookies live.
+    RevocationUnsupported,
     /// A Redis-level error (connection, protocol, server). Only produced by
     /// [`RedisStore`] when the `redis` feature is active.
     #[cfg(feature = "redis")]
@@ -357,6 +369,12 @@ impl std::fmt::Display for SessionError {
                 f,
                 "umbral-sessions: encoded session cookie is {n} bytes, over the ~4 KB browser \
                  limit; store less in the session or switch to a server-side store"
+            ),
+            SessionError::RevocationUnsupported => write!(
+                f,
+                "umbral-sessions: the active session store cannot revoke by user id (a stateless \
+                 CookieStore has no server-side session to delete). 'Log out everywhere' needs a \
+                 server-side store (DbStore/RedisStore) or short-TTL cookies with rotation"
             ),
             #[cfg(feature = "redis")]
             SessionError::Redis(e) => write!(f, "umbral-sessions: redis: {e}"),
@@ -446,18 +464,21 @@ pub async fn create_session(
 /// OR if it's expired (in which case the row is also deleted — lazy
 /// cleanup, no scheduled job needed).
 pub async fn read_session(token: &str) -> Result<Option<Session>, SessionError> {
-    let stored_id = hash_token(token);
-    let row: Option<Session> = Session::objects()
-        .filter(session::ID.eq(&stored_id))
-        .first()
-        .await?;
-    if let Some(s) = &row
-        && s.expires_at < Utc::now()
-    {
-        destroy_session_by_hash(&stored_id).await?;
-        return Ok(None);
+    // audit_2 H7: read from the installed store, not always the SQL table, so a
+    // RedisStore/CookieStore session resolves. The store hashes the token and
+    // applies lazy expiry (deleting the stale record) itself. Rebuild the
+    // `Session` model shape from the store's `SessionRecord` — `id` is the
+    // stored token hash, the same identity the DB row's PK carried.
+    match active_store().load(token).await? {
+        None => Ok(None),
+        Some(rec) => Ok(Some(Session {
+            id: hash_token(token),
+            user_id: rec.user_id,
+            data: rec.data,
+            created_at: rec.created_at,
+            expires_at: rec.expires_at,
+        })),
     }
-    Ok(row)
 }
 
 /// Delete every session row owned by `user_id_str` — the "log out
@@ -471,11 +492,13 @@ pub async fn read_session(token: &str) -> Result<Option<Session>, SessionError> 
 /// string that was passed to [`create_session`] at login time. For an
 /// `AuthUser` (i64 PK) call `revoke_user_sessions(&user.id.to_string())`.
 pub async fn revoke_user_sessions(user_id_str: &str) -> Result<u64, SessionError> {
-    let removed = Session::objects()
-        .filter(session::USER_ID.eq(user_id_str))
-        .delete()
-        .await?;
-    Ok(removed)
+    // audit_2 H7: route through the installed store, not the raw `session`
+    // table. Under RedisStore/CookieStore the old direct-SQL delete hit an
+    // empty table and left the real sessions live — a password reset then
+    // didn't invalidate a stolen session. `destroy_user` deletes from wherever
+    // the sessions actually live (DB rows / Redis keys), or returns
+    // `RevocationUnsupported` for a stateless CookieStore so the caller logs it.
+    active_store().destroy_user(user_id_str).await
 }
 
 /// Delete a session row by its raw token. Used by logout. Idempotent:
@@ -483,18 +506,10 @@ pub async fn revoke_user_sessions(user_id_str: &str) -> Result<u64, SessionError
 /// before the DELETE so the same hash-on-write/hash-on-read invariant
 /// holds for destruction too.
 pub async fn destroy_session(token: &str) -> Result<(), SessionError> {
-    let stored_id = hash_token(token);
-    destroy_session_by_hash(&stored_id).await
-}
-
-/// Internal: takes the already-hashed stored id, not the raw token.
-/// Used by `read_session`'s expiry-cleanup branch and `destroy_session`.
-async fn destroy_session_by_hash(stored_id: &str) -> Result<(), SessionError> {
-    Session::objects()
-        .filter(session::ID.eq(stored_id))
-        .delete()
-        .await?;
-    Ok(())
+    // audit_2 H7: logout must delete from the installed store (DB row / Redis
+    // key / cookie), not always the SQL table. The store hashes the token
+    // itself. Idempotent on every backend.
+    active_store().destroy(token).await
 }
 
 /// Parse the `Cookie` header and return the umbral session id, if
