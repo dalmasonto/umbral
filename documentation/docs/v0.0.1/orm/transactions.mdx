@@ -103,6 +103,23 @@ Post::objects().on_tx(&mut tx).create(post).await?;
 tx.commit().await?;
 ```
 
+## Transactions on a non-default database
+
+`transaction(...)` and `begin()` always run on the **`"default"`** pool — they don't consult the [database router](/docs/v0.0.1/orm/database-routing), per-model `#[umbral(database = "...")]` aliases, or the tenant route context. In a multi-DB or DB-per-tenant app, running a replica/tenant-routed model inside a plain `transaction()` would execute its SQL on the *default* database — a silent wrong-database write.
+
+Use `begin_for(alias)` / `transaction_on(alias, ...)` to pin the transaction to the intended pool. `on_tx(&mut tx)` then runs every statement on that pool regardless of the model's own routing:
+
+```rust
+use umbral::db::transaction_on;
+
+transaction_on("replica_writes", |tx| Box::pin(async move {
+    Ledger::objects().on_tx(tx).create(entry).await?;
+    Ok::<_, MyError>(())
+})).await?;
+```
+
+Both panic if `App::build()` hasn't run or if no pool is registered under `alias`.
+
 ## The `Box::pin` wrapper
 
 Because Rust's async closures do not yet support capturing mutable references across the closure boundary on stable Rust, the closure must return a pinned boxed future. Wrap the `async move` block in `Box::pin(...)`:

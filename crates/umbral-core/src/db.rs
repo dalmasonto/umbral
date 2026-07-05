@@ -783,6 +783,33 @@ pub async fn begin() -> Result<Transaction, sqlx::Error> {
     }
 }
 
+/// Begin a transaction against the pool registered under `alias` (audit_2
+/// core-app-config #5).
+///
+/// [`begin`] / [`transaction`] always target the `"default"` pool — they
+/// consult neither the [`DatabaseRouter`] nor per-model aliases nor the tenant
+/// route context. In a multi-DB or DB-per-tenant app, a model routed to a
+/// replica/tenant alias run inside a plain `transaction()` would execute its
+/// SQL on the DEFAULT database — a silent wrong-database write. Use this to
+/// pin the transaction to the intended pool; `Model::objects().on_tx(&mut tx)`
+/// then runs every statement on `alias`'s pool regardless of the model's own
+/// routing.
+///
+/// # Panics
+///
+/// Panics if `App::build()` hasn't run, or if no pool is registered under
+/// `alias` (same contract as [`pool_for_dispatched`]).
+pub async fn begin_for(alias: &str) -> Result<Transaction, sqlx::Error> {
+    match pool_for_dispatched(alias) {
+        DbPool::Sqlite(pool) => Ok(Transaction {
+            inner: TransactionInner::Sqlite(pool.begin().await?),
+        }),
+        DbPool::Postgres(pool) => Ok(Transaction {
+            inner: TransactionInner::Postgres(pool.begin().await?),
+        }),
+    }
+}
+
 /// Begin a transaction against an explicit SQLite pool.
 pub async fn begin_sqlite(pool: &sqlx::SqlitePool) -> Result<Transaction, sqlx::Error> {
     let tx = pool.begin().await?;
@@ -858,6 +885,40 @@ where
     E: From<sqlx::Error>,
 {
     let mut tx = begin().await.map_err(E::from)?;
+    match f(&mut tx).await {
+        Ok(val) => {
+            tx.commit().await.map_err(E::from)?;
+            Ok(val)
+        }
+        Err(e) => {
+            // Best-effort rollback — if it fails we surface the original error.
+            let _ = tx.rollback().await;
+            Err(e)
+        }
+    }
+}
+
+/// Run an async closure inside a transaction against the pool registered under
+/// `alias` (audit_2 core-app-config #5) — the alias-aware sibling of
+/// [`transaction`]. Use this for a multi-DB / DB-per-tenant app so the
+/// transaction (and every `on_tx` statement inside it) runs on the RIGHT
+/// database instead of silently on `"default"`. See [`begin_for`] for the
+/// routing rationale and panics.
+///
+/// ```rust,ignore
+/// use umbral::db::transaction_on;
+///
+/// transaction_on("replica_writes", |tx| Box::pin(async move {
+///     Ledger::objects().on_tx(tx).create(entry).await?;
+///     Ok::<_, MyError>(())
+/// })).await?;
+/// ```
+pub async fn transaction_on<F, T, E>(alias: &str, f: F) -> Result<T, E>
+where
+    for<'a> F: FnOnce(&'a mut Transaction) -> TxFuture<'a, T, E>,
+    E: From<sqlx::Error>,
+{
+    let mut tx = begin_for(alias).await.map_err(E::from)?;
     match f(&mut tx).await {
         Ok(val) => {
             tx.commit().await.map_err(E::from)?;

@@ -196,10 +196,10 @@ pub mod db {
     pub use umbral_core::db::router::install_router_from_plugin;
     pub use umbral_core::db::{
         Alias, DatabaseRouter, DbPool, DefaultRouter, RouteContext, RouteOp, Schema, TenantKey,
-        Transaction, TxFuture, begin, begin_pg, begin_sqlite, close, connect, connect_sqlite, ping,
-        pool, pool_alias_registered, pool_dispatched, pool_for, pool_for_dispatched,
-        register_tenant_pool, registered_aliases, route_context, router, transaction,
-        transaction_pg, transaction_sqlite,
+        Transaction, TxFuture, begin, begin_for, begin_pg, begin_sqlite, close, connect,
+        connect_sqlite, ping, pool, pool_alias_registered, pool_dispatched, pool_for,
+        pool_for_dispatched, register_tenant_pool, registered_aliases, route_context, router,
+        transaction, transaction_on, transaction_pg, transaction_sqlite,
     };
 }
 
