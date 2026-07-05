@@ -38,21 +38,18 @@
       >
         {{ cancel_label }}
       </button>
-      <form
-        method="post"
-        action="{{ delete_url }}"
-        hx-delete="{{ delete_url }}"
-        hx-target="#table-body"
-        hx-swap="innerHTML"
-        hx-on::after-request="umbral.closeDialog()"
+      {# JS-driven delete: fetch DELETE with the CSRF token, check the real HTTP
+         status, refresh the table, and toast honestly. A bare `hx-delete` form
+         would (a) need the token threaded and (b) swap the handler's empty body
+         into #table-body, blanking it. `umbral._deleteRow` lives in the
+         changelist JS (data_table.html) — the only place this dialog opens. #}
+      <button
+        type="button"
+        onclick="umbral._deleteRow('{{ delete_url }}')"
+        class="px-lg py-sm rounded-xl bg-error text-on-error hover:opacity-90 active:scale-[0.98] font-label-md text-label-md transition-all focus:outline-none focus:ring-2 focus:ring-error/40"
       >
-        <button
-          type="submit"
-          class="px-lg py-sm rounded-xl bg-error text-on-error hover:opacity-90 active:scale-[0.98] font-label-md text-label-md transition-all focus:outline-none focus:ring-2 focus:ring-error/40"
-        >
-          {{ confirm_label }}
-        </button>
-      </form>
+        {{ confirm_label }}
+      </button>
     </div>
   </div>
 </div>

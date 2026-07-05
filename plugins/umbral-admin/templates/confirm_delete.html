@@ -6,5 +6,5 @@
 {{ confirm_dialog(
   "Delete " ~ model.name ~ "?",
   "You are about to permanently delete \"" ~ display_label ~ "\" (#" ~ instance_id ~ "). This action cannot be undone.",
-  "{{ admin_base }}/" ~ model.table ~ "/" ~ instance_id
+  admin_base ~ "/" ~ model.table ~ "/" ~ instance_id
 ) }}

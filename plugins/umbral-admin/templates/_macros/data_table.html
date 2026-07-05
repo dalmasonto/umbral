@@ -706,6 +706,42 @@
     }
   };
 
+  // Read the double-submit CSRF token from its (non-HttpOnly) cookie so raw
+  // fetch() calls carry it. Without it umbral-security 403s the request BEFORE
+  // the handler — the delete silently never happens.
+  umbral._csrfToken = function() {
+    var m = document.cookie.match(/(?:^|;\s*)umbral_csrf_token=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  };
+
+  // Refresh the changelist body from its authoritative rows URL.
+  umbral._refreshTable = function() {
+    var tb = document.getElementById('table-body');
+    var url = tb && tb.getAttribute('data-rows-url');
+    if (url) htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML' });
+  };
+
+  // Single-row delete (from the confirm dialog). A raw fetch so we can check the
+  // real HTTP status and refresh the table — an empty-body HTMX swap would blank
+  // #table-body, and reporting success without checking resp.ok would lie when
+  // the server refused (404/403/500).
+  umbral._deleteRow = function(url) {
+    umbral.closeDialog();
+    fetch(url, {
+      method: 'DELETE',
+      headers: { 'HX-Request': 'true', 'X-CSRF-Token': umbral._csrfToken() }
+    }).then(function(resp) {
+      if (resp.ok) {
+        umbral._refreshTable();
+        if (umbral.showToast) umbral.showToast('Deleted.', 'success');
+      } else if (umbral.showToast) {
+        umbral.showToast('Delete failed (server returned ' + resp.status + ').', 'error');
+      }
+    }).catch(function(e) {
+      if (umbral.showToast) umbral.showToast('Delete failed: ' + e, 'error');
+    });
+  };
+
   // Bulk delete: show a confirm dialog then DELETE all selected ids (Bug 5).
   umbral._bulkDeleteSelected = function(btn) {
     var table = btn.getAttribute('data-table') || btn.closest('[data-table]').getAttribute('data-table');
@@ -733,22 +769,35 @@
     // Confirm handler.
     document.getElementById('bulk-del-confirm').addEventListener('click', function() {
       umbral.closeDialog();
-      // Delete each selected row sequentially via DELETE requests.
+      // Delete each selected row sequentially via DELETE requests. Count the
+      // ones that ACTUALLY succeeded — fetch() resolves even on a 4xx/5xx, so
+      // reporting success unconditionally would be a lie when the server refused
+      // (e.g. a missing CSRF token → 403). Only claim what really deleted.
       var pending = selected.slice();
-      function deleteNext() {
-        if (pending.length === 0) {
-          htmx.ajax('GET', '{{ admin_base }}/' + table + '/rows', { target: '#table-body', swap: 'innerHTML' });
-          umbral.selectAllRows(false);
-          if (umbral.showToast) umbral.showToast('Deleted ' + count + ' ' + noun + '.', 'success');
-          return;
+      var ok = 0, failed = 0;
+      function finish() {
+        umbral._refreshTable();
+        umbral.selectAllRows(false);
+        if (umbral.showToast) {
+          if (failed === 0) {
+            umbral.showToast('Deleted ' + ok + ' ' + (ok === 1 ? 'record' : 'records') + '.', 'success');
+          } else if (ok === 0) {
+            umbral.showToast('Delete failed for all ' + failed + ' ' + (failed === 1 ? 'record' : 'records') + '.', 'error');
+          } else {
+            umbral.showToast('Deleted ' + ok + ', failed ' + failed + '.', 'warning');
+          }
         }
+      }
+      function deleteNext() {
+        if (pending.length === 0) { finish(); return; }
         var id = pending.shift();
         fetch('{{ admin_base }}/' + table + '/' + id, {
           method: 'DELETE',
-          headers: { 'HX-Request': 'true' }
-        }).then(deleteNext).catch(function(err) {
-          if (umbral.showToast) umbral.showToast('Delete failed: ' + err, 'error');
-        });
+          headers: { 'HX-Request': 'true', 'X-CSRF-Token': umbral._csrfToken() }
+        }).then(function(resp) {
+          if (resp.ok) { ok++; } else { failed++; }
+          deleteNext();
+        }).catch(function() { failed++; deleteNext(); });
       }
       deleteNext();
     });
@@ -772,9 +821,13 @@
     if (selected.length === 0) return;
     fetch('{{ admin_base }}/' + table + '/actions/' + key, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'HX-Request': 'true' },
+      headers: { 'Content-Type': 'application/json', 'HX-Request': 'true', 'X-CSRF-Token': umbral._csrfToken() },
       body: JSON.stringify({ ids: selected })
     }).then(function(resp) {
+      if (!resp.ok) {
+        if (window.umbral && umbral.showToast) umbral.showToast('Action failed (server refused the request).', 'error');
+        return;
+      }
       var trigger = resp.headers.get('HX-Trigger');
       if (trigger) {
         try {
