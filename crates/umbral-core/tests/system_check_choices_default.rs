@@ -72,6 +72,7 @@ fn make_settings() -> Settings {
         db_max_lifetime_secs: Some(1800),
         db_test_before_acquire: true,
         bind_addr: "127.0.0.1:8000".to_string(),
+        trusted_proxy_hops: 0,
         time_zone: None,
         static_url: "/static/".to_string(),
         static_root: "staticfiles/".to_string(),

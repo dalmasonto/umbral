@@ -42,8 +42,12 @@ static ROUTER: std::sync::OnceLock<Router> = std::sync::OnceLock::new();
 
 async fn boot() -> &'static Router {
     BOOT.get_or_init(|| async {
-        let settings =
+        let mut settings =
             umbral::Settings::from_env().expect("figment defaults always load in a test env");
+        // audit_2 H9: per-IP throttling requires a trusted proxy — otherwise
+        // `X-Forwarded-For` is client-forgeable and everyone shares one bucket.
+        // These tests simulate a single reverse proxy in front of the app.
+        settings.trusted_proxy_hops = 1;
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let db_path = tmp.path().join("umbral_email_action_throttle.sqlite");

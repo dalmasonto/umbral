@@ -138,6 +138,53 @@ fn default_db_test_before_acquire() -> bool {
     true
 }
 
+fn default_trusted_proxy_hops() -> usize {
+    0
+}
+
+/// Derive the caller's IP from proxy headers under the ambient trusted-proxy
+/// policy (audit_2 H9). Returns `None` when no reliable client IP can be
+/// established — the caller (a throttle) then falls back to a scope that isn't
+/// client-forgeable rather than trusting a spoofable header.
+///
+/// - `trusted_proxy_hops == 0`: trust nothing. `X-Forwarded-For` is
+///   client-controlled with no proxy in front, so it's ignored → `None`.
+/// - `trusted_proxy_hops == n`: take the `(n+1)`-th `X-Forwarded-For` entry from
+///   the RIGHT (skipping the `n` entries your own proxies appended). A chain
+///   shorter than that is malformed/spoofed → `None` (fail closed).
+pub fn client_ip(headers: &crate::web::HeaderMap) -> Option<String> {
+    let hops = get_opt().map(|s| s.trusted_proxy_hops).unwrap_or(0);
+    client_ip_with_hops(headers, hops)
+}
+
+/// Pure core of [`client_ip`] — the `X-Forwarded-For` resolution for a given
+/// trusted-proxy hop count, independent of the ambient settings (so it's
+/// unit-testable). See [`client_ip`] for the policy.
+fn client_ip_with_hops(headers: &crate::web::HeaderMap, hops: usize) -> Option<String> {
+    if hops == 0 {
+        return None;
+    }
+    let xff = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())?;
+    let chain: Vec<&str> = xff
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    // Each of our `hops` trusted proxies appended the address of its immediate
+    // upstream to the RIGHT of the chain (the nginx `$proxy_add_x_forwarded_for`
+    // convention). So the real client is the `hops`-th entry from the right —
+    // the address the OUTERMOST trusted proxy recorded. Anything further left
+    // was prepended by the client and is untrusted. A chain shorter than `hops`
+    // means the proxies didn't all append (spoofed / misconfigured) → None.
+    let idx = chain.len().checked_sub(hops)?;
+    chain
+        .get(idx)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
 fn default_bind_addr() -> String {
     // 127.0.0.1 only by default — exposing the server on 0.0.0.0
     // is a deliberate keystroke. Override with UMBRAL_BIND_ADDR or
@@ -360,6 +407,24 @@ pub struct Settings {
 
     #[serde(default = "default_log_level")]
     pub log_level: String,
+
+    /// Number of trusted reverse-proxy hops in front of the app (audit_2 H9).
+    /// Governs how the framework derives a caller's IP for rate-limiting and
+    /// abuse controls from the `X-Forwarded-For` chain.
+    ///
+    /// **Default `0` — TRUST NOTHING.** With no proxy in front, `X-Forwarded-For`
+    /// is entirely client-controlled, so keying a throttle on it lets an
+    /// attacker rotate the header to dodge every limit. At `0` the framework
+    /// refuses to derive an IP from the header at all (throttles fall back to a
+    /// non-IP scope that can't be forged).
+    ///
+    /// Set it to the number of proxies YOU control that append to the header
+    /// (e.g. `1` behind a single nginx / cloud LB). The real client IP is then
+    /// taken as the `(hops+1)`-th entry from the RIGHT of the chain — the
+    /// entries your own proxies added are trusted; anything the client prepended
+    /// is ignored. Set `UMBRAL_TRUSTED_PROXY_HOPS` or `umbral.toml`.
+    #[serde(default = "default_trusted_proxy_hops")]
+    pub trusted_proxy_hops: usize,
 
     /// The address the development server binds to.
     /// `host:port` format, e.g. `127.0.0.1:8000` (default), `0.0.0.0:80`,
@@ -654,6 +719,47 @@ mod tests {
     //! is incompatible with cargo test's parallel runner. Covering them
     //! correctly needs `serial_test` or a thread-local refactor.
     use super::*;
+
+    // audit_2 H9: the trusted-proxy client-IP resolver.
+    #[test]
+    fn client_ip_honors_trusted_proxy_hops() {
+        use super::client_ip_with_hops;
+        fn hdrs(xff: Option<&str>) -> crate::web::HeaderMap {
+            let mut h = crate::web::HeaderMap::new();
+            if let Some(v) = xff {
+                h.insert("x-forwarded-for", v.parse().unwrap());
+            }
+            h
+        }
+
+        // hops=0: never trust the header, whatever it says.
+        assert_eq!(client_ip_with_hops(&hdrs(Some("1.2.3.4")), 0), None);
+        assert_eq!(client_ip_with_hops(&hdrs(None), 0), None);
+
+        // hops=1, one proxy: it appended the client's IP as the single (rightmost)
+        // entry → that's the client.
+        assert_eq!(
+            client_ip_with_hops(&hdrs(Some("203.0.113.7")), 1).as_deref(),
+            Some("203.0.113.7")
+        );
+        // hops=1 with a client-prepended spoof: the proxy still appended the real
+        // client to the right, so the spoof ("9.9.9.9") is IGNORED.
+        assert_eq!(
+            client_ip_with_hops(&hdrs(Some("9.9.9.9, 203.0.113.7")), 1).as_deref(),
+            Some("203.0.113.7")
+        );
+
+        // hops=2: two trusted proxies appended the two rightmost entries; the real
+        // client is the 2nd from the right.
+        assert_eq!(
+            client_ip_with_hops(&hdrs(Some("9.9.9.9, real, proxy1")), 2).as_deref(),
+            Some("real")
+        );
+
+        // Chain shorter than `hops` (proxies didn't all append) → fail closed.
+        assert_eq!(client_ip_with_hops(&hdrs(Some("only-one")), 2), None);
+        assert_eq!(client_ip_with_hops(&hdrs(None), 1), None);
+    }
 
     // audit_2 core-app-config #16: misspelled framework keys are caught as
     // near-misses; genuine app-defined keys are not flagged.
@@ -1031,6 +1137,7 @@ mod tests {
             allowed_hosts: vec!["example.com".to_string()],
             log_level: "info".to_string(),
             bind_addr: "127.0.0.1:8000".to_string(),
+            trusted_proxy_hops: 0,
             time_zone: None,
             static_url: "/static/".to_string(),
             static_root: "staticfiles/".to_string(),

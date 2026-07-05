@@ -333,22 +333,14 @@ impl Plugin for LogsPlugin {
 /// Resolve the client IP best-effort from proxy headers. ConnectInfo isn't
 /// wired in umbral's serve path (it uses `into_make_service()` without connect
 /// info), so the peer address isn't available; the reverse-proxy headers are
-/// the reliable source. Takes the first hop of `X-Forwarded-For`, else
-/// `X-Real-IP`.
+/// the reliable source.
+///
+/// audit_2 H9: resolve under the framework's trusted-proxy policy
+/// (`settings.trusted_proxy_hops`) so the LOGGED ip matches the one used for
+/// rate-limiting and isn't a client-forged `X-Forwarded-For` leftmost. `None`
+/// when no trusted proxy is configured (the log simply omits the ip).
 fn resolve_ip(headers: &axum::http::HeaderMap) -> Option<String> {
-    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            let ip = first.trim();
-            if !ip.is_empty() {
-                return Some(ip.to_string());
-            }
-        }
-    }
-    headers
-        .get("x-real-ip")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    umbral::settings::client_ip(headers)
 }
 
 /// Trusted authenticated user id for request logging. Your auth/session

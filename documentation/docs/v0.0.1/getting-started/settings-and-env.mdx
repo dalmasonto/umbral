@@ -53,10 +53,15 @@ pub struct Settings {
 | `environment` | `UMBRAL_ENVIRONMENT` | `environment` | debug build → `Dev`, release build → `Prod` (values: `Dev` / `Test` / `Prod`) |
 | `allowed_hosts` | `UMBRAL_ALLOWED_HOSTS` (comma-list) | `allowed_hosts` | `["localhost", "127.0.0.1"]` |
 | `log_level` | `UMBRAL_LOG_LEVEL` | `log_level` | `"info"` |
+| `trusted_proxy_hops` | `UMBRAL_TRUSTED_PROXY_HOPS` | `trusted_proxy_hops` | `0` (trust no proxy — see below) |
 | `bind_addr` | `UMBRAL_BIND_ADDR` | `bind_addr` | `"127.0.0.1:8000"` |
 | `time_zone` | `UMBRAL_TIME_ZONE` | `time_zone` | `None` (treats naive datetimes as UTC) |
 | `static_url` | `UMBRAL_STATIC_URL` | `static_url` | `"/static/"` |
 | `static_root` | `UMBRAL_STATIC_ROOT` | `static_root` | `"staticfiles/"` |
+
+<Callout type="warning">
+**Set `trusted_proxy_hops` to the number of reverse proxies YOU run in front of the app.** Rate-limiting and abuse controls (login/password-reset throttles, REST throttles) key on the caller's IP, derived from `X-Forwarded-For`. That header is **client-controlled**: with no trusted proxy, an attacker rotates it to get a fresh rate-limit bucket per request and bypasses every limit. So the default is `0` — **trust nothing**: the framework refuses to read an IP from the header, and throttles fall back to a shared bucket that can't be forged. Behind one nginx / cloud load balancer, set `trusted_proxy_hops=1`; the real client is then taken as the entry your proxy appended (the rightmost), ignoring anything the client prepended. Set it to the exact number of proxies that append to the header — too high lets a client spoof one hop deeper.
+</Callout>
 
 <Callout type="warning">
 **The `db_*` pool knobs don't reach a pool opened before `App::build()`.** `umbral::db::connect` reads them from the ambient settings, and the ambient settings are only published *during* `build()`. In the canonical boot order (`Settings::from_env()` → `connect(&settings.database_url)` → `.database("default", pool)` → `.build()`) the default pool is opened before that point, so it always gets the built-in defaults (`max_connections = 10`, `acquire_timeout = 30s`, `min_connections = 0`, `idle_timeout = 600s`, `max_lifetime = 1800s`, `test_before_acquire = true`) - setting `UMBRAL_DB_MAX_CONNECTIONS` etc. has no effect on it. Pools opened after `build()` (runtime tenant pools) do honour these settings. To size the default pool, build it directly with `sqlx::postgres::PgPoolOptions` / `sqlx::sqlite::SqlitePoolOptions` using the values from your loaded `Settings`, and pass that pool to `.database("default", pool)`. Check the `umbral: opening database pool` boot-log line for the effective values.

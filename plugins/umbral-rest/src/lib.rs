@@ -623,21 +623,12 @@ fn action_label(action: &Action) -> String {
 /// rather than opening a hole. Mirrors `umbral-auth`'s `client_ip` and
 /// `umbral-logs`'s `resolve_ip`.
 fn throttle_client_ip(headers: &umbral::web::HeaderMap) -> Option<String> {
-    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            let ip = first.trim();
-            if !ip.is_empty() {
-                return Some(ip.to_string());
-            }
-        }
-    }
-    if let Some(real) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        let ip = real.trim();
-        if !ip.is_empty() {
-            return Some(ip.to_string());
-        }
-    }
-    None
+    // audit_2 H9: derive the client IP under the framework's trusted-proxy
+    // policy (`settings.trusted_proxy_hops`). With no trusted proxy configured
+    // (the default) this returns `None` — `X-Forwarded-For` is client-forgeable,
+    // so keying a throttle on it would let an attacker rotate the header to dodge
+    // every limit. A `None` IP makes the throttle fall back to a non-IP scope.
+    umbral::settings::client_ip(headers)
 }
 
 impl RestPlugin {

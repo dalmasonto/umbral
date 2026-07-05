@@ -115,22 +115,14 @@ struct ResetIn {
 /// counts — every un-proxied caller shares one bucket, which is the safe side:
 /// it limits, it never opens a hole. Mirrors `umbral_logs`'s `resolve_ip`.
 pub(crate) fn client_ip(headers: &HeaderMap) -> String {
-    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first) = xff.split(',').next() {
-            let ip = first.trim();
-            if !ip.is_empty() {
-                return ip.to_string();
-            }
-        }
-    }
-    if let Some(real) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        let ip = real.trim();
-        if !ip.is_empty() {
-            return ip.to_string();
-        }
-    }
-    // No IP resolvable: a fixed sentinel so the limiter still functions.
-    "unknown".to_string()
+    // audit_2 H9: resolve the client IP under the framework's trusted-proxy
+    // policy (`settings.trusted_proxy_hops`) instead of blindly trusting the
+    // forgeable leftmost `X-Forwarded-For`. When no trusted proxy is configured
+    // (the default) or the chain is spoofed, this yields `None` → the shared
+    // "unknown" bucket: every un-attributable caller is limited TOGETHER, which
+    // never opens a hole, rather than each getting their own bucket via a header
+    // they control.
+    umbral::settings::client_ip(headers).unwrap_or_else(|| "unknown".to_string())
 }
 
 fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Response {

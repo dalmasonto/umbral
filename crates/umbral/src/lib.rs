@@ -156,7 +156,7 @@ pub mod timezone {
 /// run at route-build time (before boot) and need to check the environment
 /// without forcing the app to be fully initialised.
 pub mod settings {
-    pub use umbral_core::settings::{get, get_opt};
+    pub use umbral_core::settings::{client_ip, get, get_opt};
 }
 
 pub mod db {
