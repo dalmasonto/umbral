@@ -44,7 +44,21 @@ pub(crate) async fn require_staff(
 
     let user = match umbral_auth::current_user(headers).await {
         Ok(Some(u)) => u,
-        _ => return Err(login_redirect()),
+        // Genuinely not authenticated → send them to login.
+        Ok(None) => return Err(login_redirect()),
+        // A session/user LOOKUP FAILURE (e.g. a transient DB error under load)
+        // is NOT the same as "not logged in": folding it into a login redirect
+        // silently logs a staff user out on a DB hiccup — and it flaked the
+        // admin sheet tests, which then saw a redirect instead of the fragment.
+        // Surface it: log the real error, return an opaque 500.
+        Err(e) => {
+            tracing::error!(error = %e, "umbral-admin: current_user lookup failed");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "umbral-admin: authentication check failed",
+            )
+                .into_response());
+        }
     };
     if !user.is_staff {
         return Err((StatusCode::FORBIDDEN, "umbral-admin: not a staff user").into_response());
