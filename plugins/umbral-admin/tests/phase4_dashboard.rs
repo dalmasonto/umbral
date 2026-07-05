@@ -32,7 +32,7 @@ async fn boot() -> &'static axum::Router {
         let path = tmp.path().join("phase4_dashboard.sqlite");
         std::mem::forget(tmp);
         let pool_obj = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(1)
             .connect_with(
                 SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                     .filename(&path)

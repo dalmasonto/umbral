@@ -75,7 +75,7 @@ async fn boot_app_with_recorder() -> (Router, Recorder) {
         // writers fail immediately with "database is locked"; with WAL + a
         // generous busy timeout they queue safely.
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(1)
             .connect_with(
                 SqliteConnectOptions::new()
                     .filename(&db_path)

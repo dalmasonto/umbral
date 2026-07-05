@@ -39,7 +39,7 @@ async fn boot() -> &'static axum::Router {
         let path = tmp.path().join("phase5_polish.sqlite");
         std::mem::forget(tmp);
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(1)
             .connect_with(
                 sqlx::sqlite::SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                     .filename(&path)

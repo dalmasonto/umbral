@@ -31,7 +31,7 @@ async fn boot_app_default() -> Router {
 
         use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(1)
             .connect_with(
                 SqliteConnectOptions::new()
                     .filename(&db_path)

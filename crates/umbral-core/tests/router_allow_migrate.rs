@@ -111,7 +111,7 @@ async fn make_pool(db_path: &std::path::Path) -> SqlitePool {
         .filename(db_path)
         .create_if_missing(true);
     SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(1)
         .connect_with(options)
         .await
         .expect("sqlite file-backed pool")

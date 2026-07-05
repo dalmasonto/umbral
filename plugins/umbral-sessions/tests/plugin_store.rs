@@ -29,7 +29,7 @@ async fn boot() {
         let path = tmp.path().join("plugin_store.sqlite");
         std::mem::forget(tmp);
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(1)
             .connect_with(
                 SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                     .filename(&path)
