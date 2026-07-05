@@ -356,7 +356,10 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
 
         let removed_json: Vec<serde_json::Value> = match pool {
             crate::db::DbPool::Sqlite(p) => {
-                let mut tx = p.begin().await?;
+                // BEGIN IMMEDIATE: this M2M write-through reads then writes; a
+                // deferred begin would upgrade the lock mid-tx and hit SQLITE_BUSY
+                // under concurrent writes (see `crate::db::begin`).
+                let mut tx = p.begin_with("BEGIN IMMEDIATE").await?;
                 let (sql, values) = delete.build_sqlx(SqliteQueryBuilder);
                 let rows = sqlx::query_with(&sql, values).fetch_all(&mut *tx).await?;
                 let removed: Vec<serde_json::Value> = rows
@@ -658,7 +661,8 @@ pub async fn set_junction_dynamic(
     let pool = junction_pool_for_write(parent_model);
     match pool {
         crate::db::DbPool::Sqlite(p) => {
-            let mut tx = p.begin().await?;
+            // BEGIN IMMEDIATE — see the sibling write-through branch above.
+            let mut tx = p.begin_with("BEGIN IMMEDIATE").await?;
             let (sql, values) = delete.build_sqlx(SqliteQueryBuilder);
             sqlx::query_with(&sql, values).execute(&mut *tx).await?;
             if let Some(insert) = insert {

@@ -769,7 +769,11 @@ impl Transaction {
 pub async fn begin() -> Result<Transaction, sqlx::Error> {
     match pool_dispatched() {
         DbPool::Sqlite(pool) => {
-            let tx = pool.begin().await?;
+            // `BEGIN IMMEDIATE`: acquire the write lock at BEGIN so a contending
+            // writer WAITS (busy_timeout) instead of hitting the deferred-upgrade
+            // SQLITE_BUSY (SQLite skips the busy handler for a read→write upgrade
+            // to avoid deadlock). Postgres keeps the default (deferred) begin.
+            let tx = pool.begin_with("BEGIN IMMEDIATE").await?;
             Ok(Transaction {
                 inner: TransactionInner::Sqlite(tx),
             })
@@ -802,7 +806,8 @@ pub async fn begin() -> Result<Transaction, sqlx::Error> {
 pub async fn begin_for(alias: &str) -> Result<Transaction, sqlx::Error> {
     match pool_for_dispatched(alias) {
         DbPool::Sqlite(pool) => Ok(Transaction {
-            inner: TransactionInner::Sqlite(pool.begin().await?),
+            // BEGIN IMMEDIATE for SQLite — see `begin()`.
+            inner: TransactionInner::Sqlite(pool.begin_with("BEGIN IMMEDIATE").await?),
         }),
         DbPool::Postgres(pool) => Ok(Transaction {
             inner: TransactionInner::Postgres(pool.begin().await?),
@@ -812,7 +817,8 @@ pub async fn begin_for(alias: &str) -> Result<Transaction, sqlx::Error> {
 
 /// Begin a transaction against an explicit SQLite pool.
 pub async fn begin_sqlite(pool: &sqlx::SqlitePool) -> Result<Transaction, sqlx::Error> {
-    let tx = pool.begin().await?;
+    // BEGIN IMMEDIATE for SQLite — see `begin()`.
+    let tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     Ok(Transaction {
         inner: TransactionInner::Sqlite(tx),
     })

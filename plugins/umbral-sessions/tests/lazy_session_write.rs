@@ -16,7 +16,7 @@ async fn boot() {
     let path = tmp.path().join("lazy_session_write.sqlite");
     std::mem::forget(tmp);
     let pool = SqlitePoolOptions::new()
-        .max_connections(1)
+        .max_connections(5)
         .connect_with(
             SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                 .filename(&path)

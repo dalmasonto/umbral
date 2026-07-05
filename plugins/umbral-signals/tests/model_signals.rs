@@ -49,7 +49,7 @@ async fn boot() {
         let path = tmp.path().join("model_signals.sqlite");
         std::mem::forget(tmp); // keep the dir alive for the process lifetime
         let pool = SqlitePoolOptions::new()
-            .max_connections(1)
+            .max_connections(5)
             .connect_with(
                 SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
                     .filename(&path)

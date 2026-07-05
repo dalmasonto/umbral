@@ -54,7 +54,7 @@ async fn boot() {
             .filename(&db_path)
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new()
-            .max_connections(1)
+            .max_connections(5)
             .connect_with(opts)
             .await
             .expect("sqlite connect");

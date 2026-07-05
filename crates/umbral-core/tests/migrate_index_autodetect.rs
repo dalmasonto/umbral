@@ -123,7 +123,8 @@ async fn adding_then_removing_unique_together_and_index_round_trips() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
-            SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+            SqliteConnectOptions::new()
+                .busy_timeout(std::time::Duration::from_secs(5))
                 .filename(&path)
                 .create_if_missing(true),
         )
@@ -297,7 +298,8 @@ async fn single_column_index_flag_flip_emits_add_and_drop_index() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
-            SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+            SqliteConnectOptions::new()
+                .busy_timeout(std::time::Duration::from_secs(5))
                 .filename(&path)
                 .create_if_missing(true),
         )
