@@ -310,6 +310,16 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// flips to DESC). Closes BUG-8. Default empty.
     const ORDERING: &'static [(&'static str, bool)] = &[];
 
+    /// Field names to STRIP from signal payloads (audit_2 core-app-config #10).
+    /// Set per-field via `#[umbral(signal_skip)]`. The ORM signal emitters
+    /// (`pre/post_save`, `pre/post_delete`, `pre/post_update`) serialize the
+    /// whole row into the `"instance"` payload that fans out to every
+    /// subscriber; a subscriber that logs or persists payloads (the natural
+    /// audit-log shape) would otherwise copy password hashes, tokens, and PII
+    /// into logs / secondary stores. Listed fields are removed from the
+    /// serialized instance before it is emitted. Default empty (full row).
+    const SIGNAL_SKIP_FIELDS: &'static [&'static str] = &[];
+
     /// Many-to-many relations declared on this model. Each entry names
     /// a field and its target model. The migration engine uses this to
     /// auto-generate junction tables; the admin uses it to render M2M

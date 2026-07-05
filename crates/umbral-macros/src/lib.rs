@@ -184,6 +184,11 @@ struct UmbralFieldAttr {
     bit: bool,
     /// `#[umbral(noform)]` — never show on any form.
     noform: bool,
+    /// `#[umbral(signal_skip)]` — strip this field from ORM signal payloads
+    /// (audit_2 core-app-config #10). Keeps password hashes / tokens / PII out
+    /// of the `pre/post_save`/`delete`/`update` payloads that fan out to every
+    /// subscriber (an audit-log subscriber would otherwise copy them to logs).
+    signal_skip: bool,
     /// `#[umbral(privileged)]` — server-managed/privileged field: the untrusted
     /// JSON write path strips it unless the caller authorizes it via
     /// `DynQuerySet::allow_privileged`. Default-deny mass-assignment guard for
@@ -335,6 +340,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         ltree: false,
         bit: false,
         noform: false,
+        signal_skip: false,
         privileged: false,
         db_constraint: true,
         noedit: false,
@@ -392,6 +398,10 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 Ok(())
             } else if meta.path.is_ident("noform") {
                 parsed.noform = true;
+                Ok(())
+            } else if meta.path.is_ident("signal_skip") {
+                // `#[umbral(signal_skip)]` — strip from signal payloads.
+                parsed.signal_skip = true;
                 Ok(())
             } else if meta.path.is_ident("privileged") {
                 // `#[umbral(privileged)]` — server-managed field; stripped from
@@ -559,7 +569,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 Err(meta.error(format!(
                     "unknown field-level umbral attribute `{path}` — known keys are \
                      `cidr`, `macaddr`, `xml`, `ltree`, `bit`, \
-                     `noform`, `privileged`, `db_constraint = false`, `noedit`, \
+                     `noform`, `signal_skip`, `privileged`, `db_constraint = false`, `noedit`, \
                      `primary_key`, `no_reverse`, \
                      `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
@@ -2004,6 +2014,27 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    // audit_2 core-app-config #10: the field names (serde/JSON keys == idents)
+    // marked `#[umbral(signal_skip)]`, lowered to the SIGNAL_SKIP_FIELDS const
+    // so the signal emit path strips them from every payload. A field whose attr
+    // fails to parse is skipped here (its compile error is already emitted by the
+    // main field loop).
+    let signal_skip_fields: Vec<String> = fields
+        .iter()
+        .filter_map(|f| {
+            let name = f.ident.as_ref()?.to_string();
+            parse_umbral_field_attr(&f.attrs)
+                .ok()
+                .and_then(|a| a.signal_skip.then_some(name))
+        })
+        .collect();
+    let signal_skip_tokens: TokenStream2 = if signal_skip_fields.is_empty() {
+        quote!(&[])
+    } else {
+        let names = signal_skip_fields.iter();
+        quote!(&[ #(#names),* ])
+    };
+
     let output = quote! {
         impl ::umbral::orm::Model for #struct_name {
             type PrimaryKey = #pk_ty_tokens;
@@ -2021,6 +2052,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const UNIQUE_TOGETHER: &'static [&'static [&'static str]] = #unique_together_tokens;
             const INDEXES: &'static [&'static [&'static str]] = #indexes_tokens;
             const ORDERING: &'static [(&'static str, bool)] = #ordering_tokens;
+            const SIGNAL_SKIP_FIELDS: &'static [&'static str] = #signal_skip_tokens;
             const M2M_RELATIONS: &'static [::umbral::orm::M2MRelationSpec] = &[
                 #(#m2m_specs),*
             ];

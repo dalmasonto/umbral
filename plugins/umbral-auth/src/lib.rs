@@ -254,8 +254,10 @@ pub struct AuthUser {
     #[umbral(noedit, unique)]
     pub email: String,
     /// Never shown on any form — password management goes through the
-    /// dedicated Change Password flow in the admin.
-    #[umbral(noform)]
+    /// dedicated Change Password flow in the admin. `signal_skip` keeps the
+    /// hash out of every ORM signal payload (audit_2 core-app-config #10), so
+    /// an audit-log subscriber can't copy password hashes into its logs.
+    #[umbral(noform, signal_skip)]
     pub password_hash: String,
     pub is_active: bool,
     /// Staff flag — grants admin-site access. Privileged: the untrusted JSON

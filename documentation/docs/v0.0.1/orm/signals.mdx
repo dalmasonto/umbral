@@ -35,6 +35,22 @@ User-defined signals keep their own namespace. The `<event>:<table>` prefix on O
 
 PK shape: the `instance` JSON and `ids` array carry the row's primary key in whatever shape the model declares (`i64`, `String`, `Uuid`). Subscribers that index on PK should read the value as a `serde_json::Value` rather than assuming `i64`. The framework's planned `PrimaryKey` refactor will lift the rest of the i64-hardcoded surfaces, and signal subscribers should already be forward-compatible.
 
+## Excluding sensitive fields from payloads
+
+The `instance` / `previous` payloads carry the **whole serialized row**. A subscriber that logs or persists the payload — the natural audit-log shape — would copy every column into its store, including password hashes, tokens, and PII. Mark such fields `#[umbral(signal_skip)]` and they are stripped from every signal payload before it fans out:
+
+```rust
+#[derive(sqlx::FromRow, umbral::orm::Model)]
+struct Account {
+    id: i64,
+    email: String,
+    #[umbral(signal_skip)]
+    password_hash: String, // never appears in any signal payload
+}
+```
+
+`umbral-auth`'s `AuthUser.password_hash` already carries this. The per-row bulk signals (`bulk_post_save` / `bulk_post_delete`) are unaffected — they only carry primary keys, never field values.
+
 ## Subscribing
 
 ```rust
