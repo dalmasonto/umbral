@@ -47,6 +47,22 @@ use include_dir::Dir;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use umbral::prelude::*;
+
+/// An access-control callback for media serving (audit_2 plugin-storage-tasks
+/// #3). Given the request headers and the requested media key (the path under
+/// the mount), it returns `true` to allow the response or `false` to deny it
+/// (403). It runs on EVERY `GET <mount>/<key>` before any bytes are served —
+/// check a session cookie / bearer token and, if the file is private, its
+/// per-user ownership. `None` (the default) serves every file to anyone, the
+/// original backward-compatible behaviour.
+pub type MediaAccessFn = Arc<
+    dyn Fn(
+            &http::HeaderMap,
+            &str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>
+        + Send
+        + Sync,
+>;
 use umbral::storage::{ByteStream, DEFAULT, STATICFILES};
 
 mod collect;
@@ -100,6 +116,9 @@ pub struct StoragePlugin {
     /// bytes land in storage. Installed ambiently at `on_ready` (see
     /// [`media::set_processors`]) so EVERY save path can trigger them.
     processors: Vec<Processor>,
+    /// Optional access-control gate for the media GET route (audit_2
+    /// plugin-storage-tasks #3). `None` serves every file to anyone.
+    media_access: Option<MediaAccessFn>,
 }
 
 /// The media side's configuration: mount, on-disk dir, the backend, an
@@ -128,7 +147,35 @@ impl StoragePlugin {
             static_side: None,
             media: None,
             processors: Vec::new(),
+            media_access: None,
         }
+    }
+
+    /// Gate the media GET route behind an access-control callback (audit_2
+    /// plugin-storage-tasks #3). By default `ServeDir` serves **every** uploaded
+    /// file to anyone who knows (or guesses / is handed) its URL — fine for
+    /// public assets, an IDOR for private uploads. Set this and the callback
+    /// runs on every `GET <mount>/<key>`: return `true` to serve, `false` for a
+    /// 403. The closure receives the request headers (read a session cookie /
+    /// bearer token) and the requested key (look up per-file ownership).
+    ///
+    /// ```ignore
+    /// StoragePlugin::new()
+    ///     .media_with_storage("/media", fs)
+    ///     .media_access(|headers: HeaderMap, key: String| async move {
+    ///         // e.g. resolve the session user and check they own `key`
+    ///         is_authenticated(&headers).await
+    ///     })
+    /// ```
+    pub fn media_access<F, Fut>(mut self, f: F) -> Self
+    where
+        F: Fn(http::HeaderMap, String) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = bool> + Send + 'static,
+    {
+        self.media_access = Some(Arc::new(move |headers: &http::HeaderMap, key: &str| {
+            Box::pin(f(headers.clone(), key.to_string()))
+        }));
+        self
     }
 
     /// Register a **background upload processor** — an async fn run over each
@@ -529,7 +576,41 @@ impl Plugin for StoragePlugin {
                     HeaderValue::from_static("nosniff"),
                 ))
                 .service(guarded);
-            router = router.nest_service(&mount, svc);
+            // Build the media routes in their OWN sub-router so an access-control
+            // layer (audit_2 plugin-storage-tasks #3) wraps ONLY media GETs, not
+            // the static side. Without a gate this is byte-identical to before.
+            let mut media_router = Router::new().nest_service(&mount, svc);
+            if let Some(access) = &self.media_access {
+                let access = access.clone();
+                let mount_prefix = mount.clone();
+                media_router = media_router.layer(axum::middleware::from_fn(
+                    move |req: axum::extract::Request, next: axum::middleware::Next| {
+                        let access = access.clone();
+                        let mount_prefix = mount_prefix.clone();
+                        async move {
+                            // The requested key = path with the mount prefix and
+                            // any leading slash stripped (`/media/a/b.jpg` → `a/b.jpg`).
+                            let path = req.uri().path();
+                            let key = path
+                                .strip_prefix(&mount_prefix)
+                                .unwrap_or(path)
+                                .trim_start_matches('/')
+                                .to_string();
+                            let allowed = access(req.headers(), &key).await;
+                            if allowed {
+                                next.run(req).await
+                            } else {
+                                (
+                                    axum::http::StatusCode::FORBIDDEN,
+                                    "forbidden: you are not allowed to access this file",
+                                )
+                                    .into_response()
+                            }
+                        }
+                    },
+                ));
+            }
+            router = router.merge(media_router);
         }
 
         router

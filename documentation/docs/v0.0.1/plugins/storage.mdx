@@ -626,6 +626,26 @@ This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying bo
 | `.max_size_unlimited()`         | off     | Removes the cap entirely. Only for trusted/authenticated upload paths (or when an upstream proxy enforces its own body limit) - an uncapped media side is a disk-exhaustion DoS surface. |
 | `.cleanup_on_delete::<M>()`     | off     | Delete a row's `FileField`/`ImageField` blobs when the row is deleted (auto-detected columns). |
 | `.cleanup_files::<M>(&[...])`   | off     | Same, naming the file columns explicitly (for widget-overridden columns).         |
+| `.media_access(callback)`       | off (public) | Gate the media GET route: the async callback receives the request headers + the requested key and returns `true` to serve or `false` for a 403. Off by default (every file public). |
+
+## Access control for private uploads
+
+By default the media route serves **every** file under the mount to anyone with the URL — correct for public assets (avatars, logos), but an IDOR for private uploads (a leaked or shared URL grants permanent, unauthenticated access). Gate it with `.media_access(...)`:
+
+```rust
+StoragePlugin::new()
+    .media_with_storage("/media", fs)
+    .media_access(|headers: HeaderMap, key: String| async move {
+        // Your helpers: resolve the caller from the session cookie / bearer
+        // token, then (for private files) confirm they own `key`.
+        let Some(user) = current_user(&headers).await else {
+            return false; // anonymous → denied
+        };
+        owns_media(&user, &key).await
+    })
+```
+
+The callback runs on every `GET <mount>/<key>` **before any bytes are served**; a `false` short-circuits with a 403 and the file contents never leave the server. It's async, so an ownership lookup against the database is fine.
 
 ## What v0 does not ship
 
