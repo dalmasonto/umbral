@@ -58,6 +58,26 @@ fn processor_slot() -> &'static Mutex<Arc<Vec<Processor>>> {
     PROCESSORS.get_or_init(|| Mutex::new(Arc::new(Vec::new())))
 }
 
+/// Default cap on concurrently-running media-processing tasks (audit_2
+/// plugin-storage-tasks #4). Each upload with processors spawns a detached task
+/// that decodes / scans the file (CPU + memory heavy); without a bound an upload
+/// burst fans out unbounded parallel processing. Override with
+/// `UMBRAL_MEDIA_PROCESSING_CONCURRENCY`.
+const DEFAULT_MEDIA_PROCESSING_CONCURRENCY: usize = 8;
+
+static PROCESSING_SLOTS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+
+fn processing_slots() -> &'static tokio::sync::Semaphore {
+    PROCESSING_SLOTS.get_or_init(|| {
+        let cap = std::env::var("UMBRAL_MEDIA_PROCESSING_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(DEFAULT_MEDIA_PROCESSING_CONCURRENCY);
+        tokio::sync::Semaphore::new(cap)
+    })
+}
+
 /// Install the processor list ambiently. Called from `on_ready`.
 pub(crate) fn set_processors(list: Arc<Vec<Processor>>) {
     *processor_slot().lock().expect("processor registry mutex") = list;
@@ -91,7 +111,16 @@ where
 {
     let id = media.id;
     let outcome: Result<(), BoxError> = async {
+        // The deferred write (if any) runs FIRST and unbounded, so a
+        // `save_deferred` frees its file bytes promptly rather than holding
+        // them while queued for a processing slot.
         prelude().await?;
+        // audit_2 plugin-storage-tasks #4: bound concurrent processing. The
+        // permit is acquired only around the CPU/memory-heavy processor loop, so
+        // an upload burst can't run unbounded parallel decodes/scans. Waiting
+        // tasks hold only the (already-persisted) MediaFile row. The static
+        // semaphore is never closed, so acquire never errors in practice.
+        let _permit = processing_slots().acquire().await?;
         for processor in processors.iter() {
             processor(media.clone()).await?;
         }

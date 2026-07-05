@@ -31,7 +31,10 @@ rust-s3 = { version = "0.37", optional = true, default-features = false, feature
 futures-executor = { version = "0.3", optional = true, default-features = false, features = ["std"] }
 tower-http = { version = "0.6", features = ["fs", "set-header"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
-tokio = { version = "1", features = ["fs", "io-util"] }
+# `sync` for the Semaphore that bounds concurrent media processing (audit_2
+# plugin-storage-tasks #4) so an upload burst can't fan out unbounded
+# CPU/memory-heavy processing tasks.
+tokio = { version = "1", features = ["fs", "io-util", "sync"] }
 # tokio-util `io` gives StreamReader (stream -> AsyncRead, for streaming a
 # body to disk) and ReaderStream (AsyncRead -> stream, for streaming a file
 # off disk). futures-util provides the Stream combinators store_stream uses.
