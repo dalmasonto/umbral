@@ -781,12 +781,15 @@ pub fn get_data<T: serde::de::DeserializeOwned>(
 /// ## Fallback (out-of-request / token mismatch)
 ///
 /// For a background task, a different session's token, or any caller
-/// outside a request scope, falls back to the direct upsert
-/// (`upsert_session_data_key`) so the row is written immediately — the
-/// original direct-write semantics, unchanged.
+/// outside a request scope, routes a read-modify-write through the
+/// installed store ([`active_store`]) so the write lands wherever the
+/// sessions live (DB row / Redis key), not always the raw SQL table
+/// (audit_2 plugin-sessions #6). A stateless `CookieStore` out of a request
+/// still can't persist (there's no response to re-set the cookie on), but
+/// the DB and Redis stores round-trip correctly.
 ///
-/// `session_token` is the raw token from the cookie; hashed before the
-/// WHERE clause like every other session-lookup path.
+/// `session_token` is the raw token from the cookie; the store hashes it
+/// before the lookup like every other session path.
 pub async fn set_data<T: Serialize>(
     session_token: &str,
     key: &str,
@@ -811,68 +814,32 @@ pub async fn set_data<T: Serialize>(
         return Ok(());
     }
 
-    // Fallback: direct upsert (preserves the out-of-request write
-    // semantics for background callers / a non-active session token).
-    let stored_id = hash_token(session_token);
-    let encoded_value = serde_json::to_string(&json_value)?;
-    upsert_session_data_key(&stored_id, key, &encoded_value).await
-}
-
-fn sqlite_json_path(key: &str) -> String {
-    let escaped = key.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("$.\"{escaped}\"")
-}
-
-async fn upsert_session_data_key(
-    stored_id: &str,
-    key: &str,
-    encoded_value: &str,
-) -> Result<(), SessionError> {
-    let now = Utc::now();
-    let expires_at = now + Duration::seconds(DEFAULT_TTL_SECONDS);
-    match umbral::db::pool_dispatched() {
-        umbral::db::DbPool::Sqlite(pool) => {
-            let path = sqlite_json_path(key);
-            sqlx::query(
-                r#"
-                INSERT INTO session (id, user_id, data, created_at, expires_at)
-                VALUES (?1, NULL, json_set('{}', ?2, json(?3)), ?4, ?5)
-                ON CONFLICT(id) DO UPDATE SET
-                    data = json_set(COALESCE(NULLIF(session.data, ''), '{}'), ?2, json(?3))
-                "#,
-            )
-            .bind(stored_id)
-            .bind(path)
-            .bind(encoded_value)
-            .bind(now)
-            .bind(expires_at)
-            .execute(pool)
-            .await?;
+    // Fallback (out-of-request / token mismatch): route the write through the
+    // installed store (audit_2 plugin-sessions #6) so it lands wherever the
+    // sessions actually live — a DB row, a Redis key — not always the raw SQL
+    // `session` table. Under a RedisStore/CookieStore the old direct-SQL upsert
+    // wrote to an empty SQL table that was never read back, silently losing the
+    // data. Read-modify-write the record's JSON `data` map. An unknown token
+    // creates a fresh anonymous record, matching the old upsert's
+    // INSERT-if-absent semantics.
+    let store = active_store();
+    let mut rec = match store.load(session_token).await? {
+        Some(rec) => rec,
+        None => {
+            let now = Utc::now();
+            SessionRecord {
+                user_id: None,
+                data: "{}".to_string(),
+                created_at: now,
+                expires_at: now + Duration::seconds(DEFAULT_TTL_SECONDS),
+            }
         }
-        umbral::db::DbPool::Postgres(pool) => {
-            let path = vec![key.to_string()];
-            sqlx::query(
-                r#"
-                INSERT INTO session (id, user_id, data, created_at, expires_at)
-                VALUES ($1, NULL, jsonb_set('{}'::jsonb, $2::text[], $3::jsonb, true)::text, $4, $5)
-                ON CONFLICT (id) DO UPDATE SET
-                    data = jsonb_set(
-                        COALESCE(NULLIF(session.data, '')::jsonb, '{}'::jsonb),
-                        $2::text[],
-                        $3::jsonb,
-                        true
-                    )::text
-                "#,
-            )
-            .bind(stored_id)
-            .bind(path)
-            .bind(encoded_value)
-            .bind(now)
-            .bind(expires_at)
-            .execute(pool)
-            .await?;
-        }
-    }
+    };
+    let mut map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&rec.data).unwrap_or_default();
+    map.insert(key.to_string(), json_value);
+    rec.data = serde_json::to_string(&serde_json::Value::Object(map))?;
+    store.save(session_token, &rec).await?;
     Ok(())
 }
 
