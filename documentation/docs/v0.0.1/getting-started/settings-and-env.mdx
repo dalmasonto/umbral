@@ -89,19 +89,21 @@ analytics = "postgres://analytics:pw@db-host/analytics"
 cache = "sqlite://cache.db?mode=rwc"
 ```
 
-<Callout type="warning">
-`settings.databases` is configuration data only - `App::build()` does not read it to open or register pools. A model routed to an alias that was never registered with `.database(alias, pool)` panics at its first query with `no database registered under alias '…'`. Register every alias explicitly:
+<Callout type="info">
+`App::build()` **opens a pool for every `settings.databases` entry** — lazily (the pool connects on first use), so a model routed to an alias via `#[umbral(database = "alias")]` (or a `Plugin::database()`) just works with no extra wiring. The lazy pools use the same `UMBRAL_DB_*` knobs and per-connection settings (SQLite PRAGMAs, the RLS session-var hook) as the default pool.
+
+You only need to build a pool by hand if you want to control the alias's pool object directly (a custom `PgPoolOptions`, a shared pool, a test pool) — an explicit `.database("alias", pool)` **overrides** the `settings.databases` URL for that alias:
 
 ```rust
 let settings = Settings::from_env()?;
 let default_pool = umbral::db::connect(&settings.database_url).await?;
-let mut builder = App::builder()
-    .settings(settings.clone())
-    .database("default", default_pool);
-for (alias, url) in &settings.databases {
-    builder = builder.database(alias, umbral::db::connect(url).await?);
-}
-let app = builder.build()?;
+let app = App::builder()
+    .settings(settings)
+    .database("default", default_pool)
+    // "analytics" / "cache" from [databases] are opened automatically;
+    // register one explicitly only to override its pool object:
+    // .database("analytics", my_tuned_pool)
+    .build()?;
 ```
 </Callout>
 

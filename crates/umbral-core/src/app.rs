@@ -717,6 +717,25 @@ impl AppBuilder {
             return Err(BuildError::DefaultPoolMissing);
         }
 
+        // Phase 1.4 — audit_2 H17: open the pools declared in `settings.databases`.
+        // Each `[databases] <alias> = "<url>"` entry that a builder `.database()`
+        // call didn't already register is opened LAZILY (sync; connects on first
+        // use) and added to the pool set, so a model/router routed to that alias
+        // resolves instead of panicking at query time — and the documented
+        // `settings.databases` config actually does something. A builder-registered
+        // alias wins (an explicitly-built pool overrides the settings URL).
+        for (alias, url) in &settings.databases {
+            if self.databases.contains_key(alias) {
+                continue;
+            }
+            let pool =
+                crate::db::connect_lazy(url).map_err(|error| BuildError::SettingsDatabasePool {
+                    alias: alias.clone(),
+                    error,
+                })?;
+            self.databases.insert(alias.clone(), pool);
+        }
+
         // Phase 1.5 — validate plugins and compute a stable topological
         // order. Reserved-name and duplicate-name checks reject the
         // build before any ambient state gets published; the toposort
@@ -802,31 +821,9 @@ impl AppBuilder {
             }
         }
 
-        // Phase 2.5a — `settings.databases` reachability guard (audit_2 H17).
-        //
-        // `settings.databases` (the `[databases]` TOML table / `UMBRAL_DATABASES__*`
-        // env) is deserialized and documented as a way to configure extra pools,
-        // but `build()` opens pools only from the builder (`.database(alias, pool)`).
-        // A `settings.databases`-only alias is therefore DEAD: a model routed to it
-        // already trips `PluginDatabaseAlias` above, and a custom router pointed at
-        // it panics `no database registered under alias` on the first query. Rather
-        // than let that config silently do nothing, surface it loudly at boot so the
-        // operator knows the alias needs an explicit `.database(alias, pool)`. We
-        // warn (not error) because an unrouted extra entry is harmless — the panic
-        // only fires if something actually routes there, and that path is either
-        // caught above (models) or owned by the router author (custom routers).
-        for alias in settings.databases.keys() {
-            if !self.databases.contains_key(alias) {
-                tracing::warn!(
-                    alias = %alias,
-                    "settings.databases entry '{alias}' has no registered pool — \
-                     settings.databases is NOT auto-opened. Open it explicitly: \
-                     `let pool = umbral::db::connect(url).await?;` then \
-                     `App::builder().database(\"{alias}\", pool)`. Any query routed \
-                     to this alias will panic until a pool is registered."
-                );
-            }
-        }
+        // (audit_2 H17: `settings.databases` pools were opened lazily in Phase 1.4
+        // above, so every declared alias is now a registered pool — the earlier
+        // "not auto-opened" boot warning is gone.)
 
         // Phase 2.5b — cross-database foreign-key guard (gaps2 #22).
         //
@@ -1707,6 +1704,10 @@ pub enum BuildError {
         plugin: &'static str,
         alias: &'static str,
     },
+    /// A `settings.databases` entry could not be opened as a lazy pool at boot
+    /// (audit_2 H17) — e.g. an unsupported URL scheme. Carries the alias and the
+    /// sqlx error.
+    SettingsDatabasePool { alias: String, error: sqlx::Error },
     /// The URL-derived backend (from `settings.database_url`) doesn't
     /// match the runtime type of the default pool passed to
     /// `.database("default", ...)`. Catches the case where the URL
@@ -1776,6 +1777,11 @@ impl std::fmt::Display for BuildError {
                 f,
                 "umbral: two plugins both report name `{name}`; plugin names are unique keys \
                  (migration tracking, dependency graph)"
+            ),
+            BuildError::SettingsDatabasePool { alias, error } => write!(
+                f,
+                "umbral: could not open the `settings.databases` pool for alias `{alias}`: \
+                 {error}"
             ),
             BuildError::ReservedPluginName => write!(
                 f,

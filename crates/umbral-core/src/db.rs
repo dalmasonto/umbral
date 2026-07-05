@@ -366,6 +366,25 @@ pub async fn connect(url: &str) -> Result<DbPool, sqlx::Error> {
     }
 }
 
+/// Open a pool LAZILY from a URL — synchronous, connects on first use (audit_2
+/// H17). This is what `App::build()` uses to open the pools declared in
+/// `settings.databases`, which it can't do with the async [`connect`] because
+/// `build()` is a sync fn. Same backend dispatch and pool config as [`connect`].
+pub fn connect_lazy(url: &str) -> Result<DbPool, sqlx::Error> {
+    let scheme = url
+        .split("://")
+        .next()
+        .and_then(|s| s.split(':').next())
+        .unwrap_or(url);
+    match scheme {
+        "sqlite" => Ok(DbPool::Sqlite(connect_sqlite_lazy(url)?)),
+        "postgres" | "postgresql" => Ok(DbPool::Postgres(connect_postgres_lazy(url)?)),
+        other => Err(sqlx::Error::Configuration(
+            format!("umbral::db::connect_lazy: unsupported URL scheme `{other}://`.").into(),
+        )),
+    }
+}
+
 /// The effective pool configuration, resolved from [`crate::settings`]
 /// when installed and falling back to the documented production defaults
 /// otherwise (a pool can be opened before settings are installed). Shared
@@ -453,6 +472,21 @@ static SESSION_VARS_IN_USE: std::sync::atomic::AtomicBool =
 /// installed). `idle_timeout`/`max_lifetime` are only applied when `Some`;
 /// a `None` (env `0`/empty) leaves that recycling disabled.
 pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
+    pg_pool_options().connect(url).await
+}
+
+/// Open a Postgres pool LAZILY (audit_2 H17): the pool object is created
+/// synchronously and connects on first use. This is what lets `App::build()`
+/// (a sync fn) open the pools declared in `settings.databases` without an async
+/// context. Same [`PoolConfig`] knobs and the same RLS `before_acquire` GUC
+/// hook as the eager [`connect_postgres`].
+pub fn connect_postgres_lazy(url: &str) -> Result<PgPool, sqlx::Error> {
+    Ok(pg_pool_options().connect_lazy(url)?)
+}
+
+/// Shared `PgPoolOptions` builder for the eager + lazy connect paths, so the
+/// pool knobs and the RLS session-var hook never drift between them.
+fn pg_pool_options() -> sqlx::postgres::PgPoolOptions {
     use std::time::Duration;
     let cfg = PoolConfig::resolve();
     cfg.log("postgres");
@@ -496,7 +530,7 @@ pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
     if let Some(secs) = cfg.max_lifetime_secs {
         opts = opts.max_lifetime(Duration::from_secs(secs));
     }
-    opts.connect(url).await
+    opts
 }
 
 /// Open a SQLite-backed pool from a URL.
@@ -528,6 +562,22 @@ pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
 /// already documents. File-backed (`sqlite://app.db`) and Postgres URLs are
 /// untouched.
 pub async fn connect_sqlite(url: &str) -> Result<SqlitePool, sqlx::Error> {
+    let (pool_opts, opts) = sqlite_options(url)?;
+    pool_opts.connect_with(opts).await
+}
+
+/// Open a SQLite pool LAZILY (audit_2 H17): the pool is created synchronously
+/// and connects on first use, so `App::build()` can open `settings.databases`
+/// entries without an async context. Same PRAGMAs and [`PoolConfig`] knobs as
+/// the eager [`connect_sqlite`].
+pub fn connect_sqlite_lazy(url: &str) -> Result<SqlitePool, sqlx::Error> {
+    let (pool_opts, opts) = sqlite_options(url)?;
+    Ok(pool_opts.connect_lazy_with(opts))
+}
+
+/// Shared SQLite options builder (pool knobs + connection PRAGMAs + in-memory
+/// temp-file handling) for the eager + lazy connect paths, so they never drift.
+fn sqlite_options(url: &str) -> Result<(SqlitePoolOptions, SqliteConnectOptions), sqlx::Error> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static MEM_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -577,7 +627,7 @@ pub async fn connect_sqlite(url: &str) -> Result<SqlitePool, sqlx::Error> {
     if let Some(secs) = cfg.max_lifetime_secs {
         pool_opts = pool_opts.max_lifetime(Duration::from_secs(secs));
     }
-    pool_opts.connect_with(opts).await
+    Ok((pool_opts, opts))
 }
 
 /// Gracefully close the ambient default database pool (gaps2 #91).
