@@ -127,8 +127,13 @@ fn with_payload_actor(mut payload: Value) -> Value {
     }
 }
 
-pub(crate) type SyncHandler = Box<dyn Fn(&Value) + Send + Sync + 'static>;
-pub(crate) type AsyncHandler = Box<
+// `Arc`, not `Box` (audit_2 core-app-config #8): so `emit` can CLONE the handler
+// list under the registry lock, drop the guard, and invoke handlers WITHOUT the
+// lock held — otherwise every signal-emitting ORM write serializes on the mutex
+// for the duration of user handler code, and a handler that re-enters the signals
+// API (subscribe / emit / has_subscribers) deadlocks on the non-reentrant Mutex.
+pub(crate) type SyncHandler = std::sync::Arc<dyn Fn(&Value) + Send + Sync + 'static>;
+pub(crate) type AsyncHandler = std::sync::Arc<
     dyn Fn(&Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
         + Send
         + Sync
@@ -180,7 +185,7 @@ where
     reg.sync
         .entry(name.to_string())
         .or_default()
-        .push(Box::new(handler));
+        .push(std::sync::Arc::new(handler));
 }
 
 /// Register an async handler for `name`. The emitter awaits each
@@ -191,9 +196,9 @@ where
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let mut reg = lock_registry();
-    let wrapped: AsyncHandler = Box::new(move |payload| {
+    let wrapped: AsyncHandler = std::sync::Arc::new(move |payload| {
         let fut = handler(payload);
-        Box::pin(fut)
+        Box::pin(fut) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
     });
     reg.r#async
         .entry(name.to_string())
@@ -218,32 +223,33 @@ pub async fn emit(name: &str, payload: Value) -> usize {
     // `with_actor(...)` scope the actor is `Value::Null` — the key is
     // always present, which keeps subscriber payload-shape stable.
     let payload = with_payload_actor(payload);
-    let (futures, total) = {
+    // audit_2 core-app-config #8: CLONE the handler lists under the lock, then
+    // drop the guard BEFORE running any handler. The handlers are `Arc`s, so the
+    // clone is a few refcount bumps. This keeps the registry mutex unheld while
+    // user handler code runs, so (a) signal-emitting ORM writes across the
+    // process don't serialize on one mutex for the duration of every handler,
+    // and (b) a handler that re-enters the signals API (subscribe / emit /
+    // has_subscribers) can't deadlock on the non-reentrant Mutex.
+    let (sync_handlers, async_handlers): (Vec<SyncHandler>, Vec<AsyncHandler>) = {
         let reg = lock_registry();
-        let mut count = 0;
-        if let Some(handlers) = reg.sync.get(name) {
-            for h in handlers {
-                // Isolate each handler: a panic here would otherwise
-                // poison the registry mutex (bricking every later signal
-                // emit, hence every ORM write) and abort this emit before
-                // the remaining handlers run. Catch it, log it, carry on.
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h(&payload)));
-                if result.is_err() {
-                    tracing::error!(signal = %name, "sync signal handler panicked; skipping it");
-                }
-                count += 1;
-            }
-        }
-        let mut futs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
-            Vec::new();
-        if let Some(handlers) = reg.r#async.get(name) {
-            for h in handlers {
-                futs.push(h(&payload));
-                count += 1;
-            }
-        }
-        (futs, count)
+        (
+            reg.sync.get(name).cloned().unwrap_or_default(),
+            reg.r#async.get(name).cloned().unwrap_or_default(),
+        )
     };
+    let total = sync_handlers.len() + async_handlers.len();
+
+    for h in &sync_handlers {
+        // Isolate each handler: a panic here must not unwind through emit() into
+        // the ORM write that fired the signal. Catch it, log it, carry on.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h(&payload)));
+        if result.is_err() {
+            tracing::error!(signal = %name, "sync signal handler panicked; skipping it");
+        }
+    }
+
+    let futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
+        async_handlers.iter().map(|h| h(&payload)).collect();
     for fut in futures {
         // Mirror the sync path's catch_unwind isolation: a panicking async
         // subscriber must not unwind through emit() into the ORM write that

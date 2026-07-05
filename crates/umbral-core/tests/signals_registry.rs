@@ -181,6 +181,43 @@ async fn panicking_sync_handler_does_not_brick_the_registry() {
     );
 }
 
+/// audit_2 core-app-config #8: a sync handler may re-enter the signals API
+/// (subscribe / has_subscribers / a nested emit) without deadlocking. Handlers
+/// used to run while `emit` held the registry mutex, so any re-lock hung on the
+/// non-reentrant `std::sync::Mutex`. `emit` now clones the handler list and
+/// DROPS the guard before invoking, so the registry is free during dispatch.
+/// A regression here manifests as a HANG (harness timeout), which is the
+/// failure signal — the assertions only run if no deadlock occurred.
+#[tokio::test]
+async fn sync_handler_may_reenter_the_registry_without_deadlock() {
+    let _guard = test_lock().lock().await;
+    clear_for_tests();
+
+    let nested_ran = Arc::new(AtomicUsize::new(0));
+    let nr = nested_ran.clone();
+    subscribe("reentrant", move |_| {
+        // Re-enter the registry from INSIDE a running handler — this re-locks
+        // the same mutex `emit` used to hold across dispatch.
+        let nr2 = nr.clone();
+        subscribe("nested_from_handler", move |_| {
+            nr2.fetch_add(1, Ordering::SeqCst);
+        });
+    });
+
+    // Must not deadlock even though the handler re-locks the registry.
+    let n = emit("reentrant", json!({})).await;
+    assert_eq!(n, 1, "the re-entrant handler ran to completion");
+
+    // Adding to a DIFFERENT key mid-dispatch is safe (we iterate a clone), and
+    // the nested subscribe actually took effect for the next emit.
+    let m = emit("nested_from_handler", json!({})).await;
+    assert_eq!(
+        m, 1,
+        "the handler's nested subscribe registered a new handler"
+    );
+    assert_eq!(nested_ran.load(Ordering::SeqCst), 1);
+}
+
 /// audit_2 observability #10: a hung async subscriber must NOT stall the ORM
 /// write path forever. `emit` bounds each subscriber with a timeout and
 /// cancels it on expiry. Under `start_paused` tokio auto-advances to the
