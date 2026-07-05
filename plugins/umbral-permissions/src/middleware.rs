@@ -221,17 +221,23 @@ where
 
         Box::pin(async move {
             let uri = req.uri().clone();
-            let user_id = umbral_auth::current_session_user_id(req.headers()).await;
 
-            let Some(user_id) = user_id else {
-                return Ok(config.unauth_response(&uri));
+            // audit_2 P4: resolve the caller as a raw STRING user id so the
+            // layer is PK-agnostic (i64 / UUID / slug all round-trip). The perm
+            // tables already store `user_id` as TEXT; the old i64-only
+            // resolver locked every non-i64-PK app out of `permission_required`
+            // entirely. Fail closed on an anonymous session OR a session-store
+            // error (never trust the request when we can't identify it).
+            let user_id_str = match umbral_sessions::current_user_id_str(req.headers()).await {
+                Ok(Some(id)) => id,
+                _ => return Ok(config.unauth_response(&uri)),
             };
 
             // One probe of the built-in AuthUser gives both the account's
-            // active status and its superuser flag. `None` = not an AuthUser
-            // (a custom user model owns activity/superuser elsewhere), so we
-            // don't lock those out here.
-            let flags = auth_user_flags(user_id).await;
+            // active status and its superuser flag. `None` = not the built-in
+            // AuthUser (a custom user model owns activity/superuser elsewhere),
+            // so we don't lock those out here.
+            let flags = auth_user_flags(&user_id_str).await;
 
             // Resolve the deactivation / superuser precedence in a pure fn
             // (audit_2 P3 — see `pre_perm_check`). Deactivated denies before
@@ -242,11 +248,6 @@ where
                 PrePermCheck::Deny => return Ok(config.unauth_response(&uri)),
                 PrePermCheck::SuperuserAllow => {}
                 PrePermCheck::NeedsPerm => {
-                    // Stringify the user id once — the perm-query layer takes
-                    // `&str` because the perm tables store `user_id` as TEXT
-                    // (PK-agnostic — UUID, slug, int all round-trip via
-                    // `to_string()`).
-                    let user_id_str = user_id.to_string();
                     if !has_perm(&user_id_str, &config.perm).await.unwrap_or(false) {
                         return Ok(config.forbidden_response());
                     }
@@ -290,10 +291,16 @@ fn pre_perm_check(flags: Option<(bool, bool)>) -> PrePermCheck {
 /// to an `AuthUser` (a custom user model, or any query error) so custom models
 /// aren't locked out — `AuthUser` is the only model probed here. One query
 /// serves both the P3 deactivation gate and the superuser bypass.
-async fn auth_user_flags(user_id: i64) -> Option<(bool, bool)> {
+async fn auth_user_flags(user_id: &str) -> Option<(bool, bool)> {
     use umbral_auth::AuthUser;
+    // The built-in AuthUser has an i64 PK. A `user_id` that doesn't parse as
+    // i64 is a custom user model (UUID/slug PK) — not this AuthUser — so we
+    // return `None` and let the request fall through to the `has_perm` check
+    // rather than locking it out (audit_2 P4). Deactivation/superuser (P3) still
+    // apply to the built-in AuthUser.
+    let id: i64 = user_id.parse().ok()?;
     match AuthUser::objects()
-        .filter(umbral::orm::Predicate::<AuthUser>::col_eq("id", user_id))
+        .filter(umbral::orm::Predicate::<AuthUser>::col_eq("id", id))
         .first()
         .await
     {
@@ -350,5 +357,16 @@ mod pre_perm_check_tests {
         // `None` = the id isn't the built-in AuthUser; fall through to the perm
         // lookup rather than deny (custom models own their own activity check).
         assert_eq!(pre_perm_check(None), PrePermCheck::NeedsPerm);
+    }
+
+    // audit_2 P4: a non-i64 user PK (UUID/slug) isn't the built-in AuthUser, so
+    // the flags probe returns `None` WITHOUT a DB hit (the parse short-circuits)
+    // — the caller falls through to the PK-agnostic `has_perm` instead of being
+    // denied outright as the old i64-only layer did.
+    #[tokio::test]
+    async fn non_i64_user_id_is_not_probed_as_authuser() {
+        let flags = super::auth_user_flags("11111111-1111-1111-1111-111111111111").await;
+        assert_eq!(flags, None);
+        assert_eq!(pre_perm_check(flags), PrePermCheck::NeedsPerm);
     }
 }

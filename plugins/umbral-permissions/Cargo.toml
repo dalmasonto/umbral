@@ -16,6 +16,11 @@ umbral = { path = "../../crates/umbral", version = "0.0.4" }
 # in the layering — you need to know who the user is before you can
 # check what they're allowed to do.
 umbral-auth = { path = "../umbral-auth", version = "0.0.4" }
+# The perm layer resolves the caller's user id as a raw STRING (PK-agnostic:
+# i64/UUID/String) via `umbral_sessions::current_user_id_str`, so an app with a
+# non-i64 user PK can still gate routes (audit_2 P4). permissions → sessions is
+# acyclic (sessions deps auth only as a dev-dep).
+umbral-sessions = { path = "../umbral-sessions", version = "0.0.4" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }

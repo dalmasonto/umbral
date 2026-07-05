@@ -37,6 +37,12 @@
 use std::collections::HashSet;
 
 use crate::models::{Group, UserGroup, UserPermission, user_group, user_permission};
+
+/// Safety ceiling on the number of direct permission / group rows `user_perms`
+/// loads for a single user (audit_2 P6). Far above any real RBAC assignment;
+/// exists only so a pathological/misconfigured row count can't load unbounded
+/// memory on every listing.
+const PERM_FETCH_LIMIT: u64 = 10_000;
 // Post-gap-#60 simplification: `has_perm` and `user_perms` no longer
 // look up `ContentType` or `Permission` rows directly — the codename
 // IS the FK value carried in `UserPermission` (direct grant) and the
@@ -188,6 +194,12 @@ pub async fn user_perms(user_id: &str) -> Result<HashSet<String>, PermError> {
     let user_id_owned = user_id.to_string();
     let mut codenames: Vec<String> = UserPermission::objects()
         .filter(user_permission::USER_ID.eq(user_id_owned.clone()))
+        // audit_2 P6: bound the fetch. Direct grants and group memberships are
+        // admin-assigned (not attacker-influenced) in a normal app, so this cap
+        // is a pathological-input ceiling — a user with more than this many
+        // direct perms/groups is a misconfiguration, not a real RBAC shape —
+        // that stops an unbounded load into memory on every listing.
+        .limit(PERM_FETCH_LIMIT)
         .fetch()
         .await?
         .into_iter()
@@ -200,6 +212,7 @@ pub async fn user_perms(user_id: &str) -> Result<HashSet<String>, PermError> {
     // no per-group fan-out and no dedup pass needed here.
     let group_ids: Vec<i64> = UserGroup::objects()
         .filter(user_group::USER_ID.eq(user_id_owned))
+        .limit(PERM_FETCH_LIMIT) // audit_2 P6 — same pathological-input ceiling.
         .fetch()
         .await?
         .into_iter()
