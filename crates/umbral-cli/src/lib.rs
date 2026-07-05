@@ -129,6 +129,13 @@ enum Command {
         /// on drift.
         #[arg(long, default_value_t = false)]
         allow_drift: bool,
+        /// Allow destructive operations (DROP TABLE / DROP COLUMN / DROP M2M)
+        /// to be applied. Without this flag, `migrate` REFUSES to run when any
+        /// pending migration would drop a table or column and destroy its rows —
+        /// the guard against one missing `.model::<T>()` registration silently
+        /// dropping a production table (audit_2 core-migrate #6).
+        #[arg(long, default_value_t = false)]
+        allow_destructive: bool,
     },
     /// List applied vs pending migrations per plugin.
     ///
@@ -307,7 +314,8 @@ pub async fn dispatch_with_argv(
             fake,
             fake_initial,
             allow_drift,
-        } => migrate(fake, fake_initial, allow_drift).await,
+            allow_destructive,
+        } => migrate(fake, fake_initial, allow_drift, allow_destructive).await,
         Command::Showmigrations => showmigrations().await,
         Command::Checkmigrations { strict } => checkmigrations(strict).await,
         Command::Inspectdb {
@@ -524,6 +532,7 @@ async fn migrate(
     fake: Option<String>,
     fake_initial: bool,
     allow_drift: bool,
+    allow_destructive: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // --fake <plugin/name>: mark one migration applied without running SQL.
     if let Some(ref spec) = fake {
@@ -531,6 +540,46 @@ async fn migrate(
         umbral::migrate::fake_apply(plugin, name).await?;
         println!("Marked {spec} as applied (no SQL executed)");
         return Ok(());
+    }
+
+    // audit_2 core-migrate #6: refuse to APPLY a migration that drops a table /
+    // column (destroys rows) unless the operator explicitly opts in with
+    // `--allow-destructive`. A single missing `.model::<T>()` registration
+    // auto-generates a DropTable, and the plain `makemigrations && migrate` loop
+    // would otherwise drop a production table with no confirmation. This gates
+    // the APPLY (checkmigrations is only advisory / CI-side).
+    if !allow_destructive {
+        let unsafe_ops: Vec<_> = umbral::migrate::check_pending_safety()
+            .await?
+            .into_iter()
+            .filter(|c| c.safety.is_unsafe())
+            .collect();
+        if !unsafe_ops.is_empty() {
+            eprintln!(
+                "error: umbral migrate: {} pending destructive operation(s) would DESTROY DATA:",
+                unsafe_ops.len()
+            );
+            for c in &unsafe_ops {
+                eprintln!(
+                    "    [UNSAFE] {}/{}: {}",
+                    c.plugin,
+                    c.migration,
+                    c.safety.reason()
+                );
+            }
+            eprintln!();
+            eprintln!(
+                "  These usually come from an unregistered model/plugin (a removed \
+                 `.model::<T>()`, a dropped plugin, or a feature flag off).\n  \
+                 If the drop is intended, re-run: `umbral migrate --allow-destructive`.\n  \
+                 If NOT, restore the model registration and re-run `makemigrations`."
+            );
+            return Err(format!(
+                "refusing to apply {} destructive migration operation(s) without --allow-destructive",
+                unsafe_ops.len()
+            )
+            .into());
+        }
     }
 
     // --fake-initial: for every plugin, if the 0001 tables exist, fake-apply.

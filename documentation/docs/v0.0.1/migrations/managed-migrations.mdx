@@ -65,6 +65,7 @@ Apply every pending migration in topological order. Pre-checks for drift (rows i
 ```bash
 cargo run -- migrate                                 # apply all pending
 cargo run -- migrate --allow-drift                   # proceed past orphan tracking rows
+cargo run -- migrate --allow-destructive             # permit DROP TABLE / DROP COLUMN operations
 cargo run -- migrate --fake <plugin>/<name>          # mark one migration applied without running SQL
 cargo run -- migrate --fake-initial                  # for each plugin, fake-apply 0001 when its tables already exist
 ```
@@ -72,8 +73,13 @@ cargo run -- migrate --fake-initial                  # for each plugin, fake-app
 | Flag | What it does | When to reach for it |
 |---|---|---|
 | `--allow-drift` | Logs each missing-on-disk migration as a warning and proceeds. The orphan rows stay in `umbral_migrations`. | You deleted a migration file and the schema change it represented is already in the DB. |
+| `--allow-destructive` | Permits pending migrations that DROP a table/column (destroy rows) to apply. Without it, `migrate` refuses and lists the destructive ops. | You genuinely intend to drop the table/column — e.g. after an expand-contract removal. |
 | `--fake <plugin>/<name>` | Inserts a tracking row for the named migration without executing its SQL. | A schema change was applied out-of-band (psql, raw script) and you're reconciling state. |
 | `--fake-initial` | For every plugin, if the tables the `0001_*` migration would create already exist, mark it applied without SQL. | Adopting a legacy database - paired with [`inspectdb`](./inspectdb). |
+
+<Callout type="warning" title="Destructive migrations are refused by default">
+A removed `.model::<T>()` registration (or a dropped plugin / feature flag) auto-generates a `DropTable`, and the routine `makemigrations && migrate` loop would otherwise drop that table and every row in it with no confirmation. `migrate` now **refuses to apply** any pending `DROP TABLE` / `DROP COLUMN` / `DROP M2M` and prints each one; re-run with `--allow-destructive` only once you've confirmed the drop is intended. If it wasn't, restore the model registration and re-run `makemigrations`.
+</Callout>
 
 Full drift-recovery walk-throughs (lost-file scenario, legacy-database scenario, the four `[X]` / `[ ]` / `[!]` / `[?]` state markers) live on the [Recovering from migration drift](./migration-drift) page.
 
