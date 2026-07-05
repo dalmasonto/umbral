@@ -50,6 +50,12 @@ The scope the dispatch hands each throttle is `"<table>:<action>"` - `post:list`
 
 Pairing `AnonRateThrottle` with `UserRateThrottle` is the common shape: one rate for the public, a higher one for logged-in users.
 
+<Callout type="warning" title="IP throttling needs a trusted proxy">
+  Any throttle keyed by client IP (`AnonRateThrottle`, and `ScopedRateThrottle` for anonymous callers) can only tell clients apart when umbral can trust a client IP. Under the secure default `trusted_proxy_hops = 0`, `X-Forwarded-For` is client-forgeable and is **ignored** — so every anonymous caller collapses into a single shared bucket and a `"100/hour"` limit caps *all* anonymous traffic collectively, not per client.
+
+  IP throttling is therefore a reverse-proxy-deployment feature. Set `trusted_proxy_hops` in your settings to the number of trusted reverse proxies in front of the app (`1` behind a single nginx / load balancer) so the real client IP is recovered from `X-Forwarded-For` and each IP gets its own bucket. umbral logs a warning at boot if a throttle is configured while `trusted_proxy_hops = 0`. See [Settings & env](../getting-started/settings-and-env).
+</Callout>
+
 ## Rate format
 
 Both `default_throttle` and `.throttle(...)` take a `"<num>/<period>"` rate string. The period token is case-insensitive:

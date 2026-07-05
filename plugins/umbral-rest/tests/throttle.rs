@@ -30,7 +30,14 @@ static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 /// fires — we want to isolate the THROTTLE behaviour, not the permission.
 async fn boot() -> &'static axum::Router {
     BOOT.get_or_init(|| async {
-        let settings = umbral::Settings::from_env().expect("figment defaults");
+        let mut settings = umbral::Settings::from_env().expect("figment defaults");
+        // audit_2 H9: per-IP throttling requires a trusted proxy so the client
+        // IP can be recovered from `X-Forwarded-For` — without one (the secure
+        // default), XFF is forgeable and every anonymous caller collapses into a
+        // single shared bucket. These tests model the recommended deployment:
+        // one trusted reverse proxy in front, so the single-hop XFF the requests
+        // send is the (trusted) client IP and each IP gets its own bucket.
+        settings.trusted_proxy_hops = 1;
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("rest_throttle.sqlite");
         std::mem::forget(tmp);

@@ -1824,6 +1824,33 @@ impl Plugin for RestPlugin {
             }
         }
 
+        // audit_2 H9: an IP-keyed throttle (AnonRateThrottle) can only isolate
+        // callers when the framework can trust a client IP. Under the secure
+        // default `trusted_proxy_hops == 0`, `X-Forwarded-For` is client-forgeable
+        // and therefore ignored, so EVERY anonymous caller collapses into a single
+        // shared bucket: a "2/min" limit then caps the entire anonymous userbase
+        // collectively (a self-inflicted DoS), and an attacker can't be singled
+        // out anyway. IP throttling is a reverse-proxy-deployment feature — the
+        // operator must declare how many trusted proxies sit in front so the real
+        // client IP can be recovered from `X-Forwarded-For`. Warn loudly rather
+        // than silently degrade to the shared bucket.
+        if !self.has_no_throttle() {
+            let hops = umbral::settings::get_opt()
+                .map(|s| s.trusted_proxy_hops)
+                .unwrap_or(0);
+            if hops == 0 {
+                tracing::warn!(
+                    "umbral-rest: an IP-keyed throttle is configured but \
+                     settings.trusted_proxy_hops == 0, so X-Forwarded-For is not trusted and \
+                     every anonymous caller shares ONE rate-limit bucket — the limit applies to \
+                     all anonymous traffic collectively, not per client. Set trusted_proxy_hops \
+                     to the number of trusted reverse proxies in front of the app (e.g. 1 behind \
+                     a single nginx/LB) so the real client IP can be recovered and throttled \
+                     per-IP.",
+                );
+            }
+        }
+
         // Compute the URL prefixes the resource route-set mounts under.
         // Without versioning (or with accept-header versioning, where the
         // version travels in a header) that's just the base path. With
