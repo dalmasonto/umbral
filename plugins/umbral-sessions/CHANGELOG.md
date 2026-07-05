@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-sessions-v0.0.4...umbral-sessions-v0.0.5) - 2026-07-05
+
+### Added
+
+- *(sessions)* configurable cookie SameSite policy (audit_2 plugin-sessions #7)
+- *(sessions)* absolute session-age cap alongside sliding expiry (audit_2 plugin-sessions #5)
+
+### Fixed
+
+- *(sessions)* route out-of-request set_data through the installed store (audit_2 plugin-sessions #6)
+- *(migrate,sessions)* single-column index flips emit AddIndex, not a PG-broken AlterColumn (audit_2 plugin-sessions #4)
+- *(sessions)* revocation works on every store via SessionStore::destroy_user (audit_2 H7)
+- *(sessions)* hard-fail Prod boot on empty CookieStore secret (audit_2 H8)
+
+### Other
+
+- cargo fmt across the workspace
+
 ## [0.0.3](https://github.com/dalmasonto/umbral/compare/umbral-sessions-v0.0.2...umbral-sessions-v0.0.3) - 2026-06-29
 
 ### Added

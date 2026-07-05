@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-rls-v0.0.4...umbral-rls-v0.0.5) - 2026-07-05
+
+### Added
+
+- *(db,rls)* per-request RLS GUC via pool hook, no cross-request leak (C2 pt.2)
+
+### Fixed
+
+- *(rls)* FORCE row-level security + fail closed on SQLite (audit_2 C2 pt.1)
+
+### Other
+
+- cargo fmt across the workspace
+
 ## [0.0.2](https://github.com/dalmasonto/umbral/compare/umbral-rls-v0.0.1...umbral-rls-v0.0.2) - 2026-06-26
 
 ### Other
