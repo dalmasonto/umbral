@@ -589,6 +589,20 @@ pub enum Operation {
         table: String,
         column: String,
         new_columns: Vec<Column>,
+        /// The table's composite UNIQUE groups (audit_2 core-migrate #10). The
+        /// SQLite recreation dance rebuilds the table from scratch, so it must
+        /// re-emit these — otherwise a nullable-flip / safe-cast alter silently
+        /// DROPS every composite UNIQUE constraint (duplicates become
+        /// insertable — integrity loss). Postgres alters in place and ignores
+        /// this. `serde(default)` keeps older on-disk migrations deserialising.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unique_together: Vec<Vec<String>>,
+        /// The table's composite (multi-column) index groups (audit_2
+        /// core-migrate #10). Re-created by the SQLite dance after the rebuild,
+        /// for the same reason as `unique_together`. Single-column / FK /
+        /// soft-delete indexes are re-derived from `new_columns`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        indexes: Vec<Vec<String>>,
         /// Snapshot of the table's columns *before* this alter. Carried
         /// so the Postgres renderer can decide per-column whether it
         /// needs a TYPE/USING clause vs a SET/DROP NOT NULL — without
@@ -3498,6 +3512,10 @@ fn diff_columns(
             column: name.to_string(),
             new_columns: new_columns.clone(),
             prev_columns: Some(prev_columns_snapshot.clone()),
+            // audit_2 core-migrate #10: carry the table-level constraints so the
+            // SQLite recreation dance re-creates them instead of dropping them.
+            unique_together: current.unique_together.clone(),
+            indexes: current.indexes.clone(),
         });
     }
 
@@ -3874,7 +3892,9 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             column: _,
             new_columns,
             prev_columns: _,
-        } => render_alter_column_dance_sqlite(table, new_columns),
+            unique_together,
+            indexes,
+        } => render_alter_column_dance_sqlite(table, new_columns, unique_together, indexes),
         Operation::CreateM2MTable {
             junction_table,
             parent_table,
@@ -4014,6 +4034,10 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             column,
             new_columns,
             prev_columns,
+            // Postgres alters in place — indexes/UNIQUE survive the ALTER, so
+            // it doesn't re-create them (only the SQLite recreation dance does).
+            unique_together: _,
+            indexes: _,
         } => render_alter_column_postgres(table, column, new_columns, prev_columns.as_deref()),
         Operation::CreateM2MTable {
             junction_table,
@@ -4091,7 +4115,12 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
 /// Nullable `TRUE -> FALSE` fails at step 2 if any row holds NULL,
 /// which is the correct data-integrity behaviour. Nullable
 /// `FALSE -> TRUE` always succeeds.
-fn render_alter_column_dance_sqlite(table: &str, new_columns: &[Column]) -> Vec<String> {
+fn render_alter_column_dance_sqlite(
+    table: &str,
+    new_columns: &[Column],
+    unique_together: &[Vec<String>],
+    indexes: &[Vec<String>],
+) -> Vec<String> {
     use sea_query::{Alias, SqliteQueryBuilder, Table};
 
     let tmp = format!("_umbral_new_{table}");
@@ -4102,6 +4131,16 @@ fn render_alter_column_dance_sqlite(table: &str, new_columns: &[Column]) -> Vec<
     for col in new_columns {
         let mut def = build_column_def_sqlite(col);
         create.col(&mut def);
+    }
+    // audit_2 core-migrate #10: re-emit composite UNIQUE constraints inline, or
+    // the rebuild silently drops them (duplicates become insertable). Mirrors
+    // the CreateTable render.
+    for group in unique_together {
+        let mut idx = sea_query::Index::create().unique().to_owned();
+        for col in group {
+            idx.col(Alias::new(col));
+        }
+        create.index(&mut idx);
     }
 
     // Step 2 — INSERT ... SELECT. Same column list both sides; the
@@ -4126,12 +4165,25 @@ fn render_alter_column_dance_sqlite(table: &str, new_columns: &[Column]) -> Vec<
         .table(Alias::new(&tmp), Alias::new(table))
         .build(SqliteQueryBuilder);
 
-    vec![
+    let mut stmts = vec![
         create.build(SqliteQueryBuilder),
         insert_sql,
         drop_sql,
         rename_sql,
-    ]
+    ];
+    // Step 5 — audit_2 core-migrate #10: re-create the secondary indexes the
+    // dropped table carried. Single-column / FK / soft-delete indexes are
+    // derived from the columns (same rule as CreateTable); composite indexes
+    // come from `indexes`. `CREATE INDEX IF NOT EXISTS` is idempotent.
+    for col in new_columns {
+        if should_emit_btree_index(col) {
+            stmts.push(create_index_stmt(table, &col.name));
+        }
+    }
+    for group in indexes {
+        stmts.push(create_multi_index_stmt(table, group));
+    }
+    stmts
 }
 
 /// Native Postgres `AlterColumn`. Postgres supports

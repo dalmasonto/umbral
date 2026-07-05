@@ -215,6 +215,8 @@ fn alter_column_to_nullable_uses_native_alter_on_postgres() {
         column: "title".to_string(),
         new_columns: vec![id_pk(), text_nullable("title")],
         prev_columns: None,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -251,6 +253,8 @@ fn alter_column_to_not_null_uses_set_not_null_on_postgres() {
         column: "title".to_string(),
         new_columns: vec![id_pk(), text_not_null("title")],
         prev_columns: None,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -277,6 +281,8 @@ fn alter_column_keeps_recreation_dance_on_sqlite() {
         column: "title".to_string(),
         new_columns: vec![id_pk(), text_nullable("title")],
         prev_columns: None,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "sqlite");
@@ -400,6 +406,8 @@ fn safe_cast_bigint_to_text_emits_using_on_postgres() {
         column: "user_id".to_string(),
         new_columns: vec![id_pk(), col("user_id", SqlType::Text)],
         prev_columns: Some(vec![id_pk(), col("user_id", SqlType::BigInt)]),
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -428,6 +436,8 @@ fn safe_cast_smallint_to_integer_emits_using_on_postgres() {
         column: "count".to_string(),
         new_columns: vec![id_pk(), col("count", SqlType::Integer)],
         prev_columns: Some(vec![id_pk(), col("count", SqlType::SmallInt)]),
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -457,6 +467,8 @@ fn safe_cast_with_nullable_flip_emits_two_statements_in_order() {
         column: "user_id".to_string(),
         new_columns: vec![id_pk(), next],
         prev_columns: Some(vec![id_pk(), prev]),
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -479,6 +491,8 @@ fn missing_prev_columns_keeps_legacy_nullable_only_behaviour() {
         column: "title".to_string(),
         new_columns: vec![id_pk(), text_nullable("title")],
         prev_columns: None,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");

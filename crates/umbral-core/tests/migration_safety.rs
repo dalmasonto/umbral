@@ -132,6 +132,8 @@ fn renames_and_alters_warn() {
         column: "total".into(),
         new_columns: vec![col("total", false, "")],
         prev_columns: None,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     let s = classify_operation(&alter);
     assert!(s.is_warning());

@@ -99,6 +99,8 @@ async fn alter_column_on_table_with_inbound_fk_applies() {
             col("name", SqlType::Text, false, true),
         ],
         prev_columns: None,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     let stmts = render_operation_for(&op, "sqlite");
 

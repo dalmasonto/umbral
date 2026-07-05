@@ -98,6 +98,8 @@ async fn alter_fk_readd_resolves_string_pk_target_column() {
         column: "permission".to_string(),
         new_columns: vec![next],
         prev_columns: Some(vec![prev]),
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");

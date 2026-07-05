@@ -277,6 +277,8 @@ async fn migrated_dir() -> &'static Path {
                     column: "note".to_string(),
                     new_columns,
                     prev_columns: None,
+                    unique_together: Vec::new(),
+                    indexes: Vec::new(),
                 }],
                 snapshot_after: Snapshot::current(),
             };
@@ -1124,6 +1126,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             column,
             new_columns,
             prev_columns: _,
+            ..
         } => {
             assert_eq!(table, "post");
             assert_eq!(column, "title");
