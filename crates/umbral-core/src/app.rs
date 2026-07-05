@@ -978,6 +978,14 @@ impl AppBuilder {
         // looking up by `Model::NAME`.
         crate::migrate::init_model_aliases(model_aliases);
 
+        // audit_2 H19: warn at boot about the app's own mutating routes
+        // (POST/PUT/PATCH/DELETE) that carry no RECORDED permission, so a
+        // forgotten authorization gate surfaces here instead of as a silently
+        // open endpoint. Only `.routes(...)` (the app's hand-written routes)
+        // are audited — plugin routes gate via their own conventions and are
+        // merged separately. Runs before `self.route_paths` is moved below.
+        audit_ungated_mutating_routes(&self.route_paths);
+
         // Snapshot the declared route paths into the registry so the
         // dev-mode 404 page can surface them. The implicit `"app"`
         // plugin holds whatever `.route_paths([...])` declared on the
@@ -1444,6 +1452,47 @@ async fn route_context_scope_layer(
     crate::db::route_context::scope(ctx, next.run(req)).await
 }
 
+/// audit_2 H19 — warn about the app's own mutating routes that carry no
+/// recorded permission. A default-DENY router is a future-major change; this
+/// boot Warning is the non-breaking first step: it makes a forgotten
+/// authorization gate visible at boot instead of shipping as an open endpoint.
+///
+/// Scope + honesty: only routes registered through `Routes` (the app's
+/// `.routes(...)`) are checked — plugin routes gate via their own conventions.
+/// A route gated by a hand-applied `.layer(permission_required(...))` is opaque
+/// to `RouteSpec`, so it can't be distinguished from an ungated one; the
+/// warning says so and points at the `require_permission(...)` builder (which
+/// records the permission). An intentionally-public route is a false positive
+/// the operator ignores.
+fn audit_ungated_mutating_routes(specs: &[crate::routes::RouteSpec]) {
+    let ungated = ungated_mutating_routes(specs);
+    if ungated.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        "audit_2 H19: {} app mutating route(s) have no recorded permission: [{}]. \
+         Gate them with the umbral-permissions `Routes::require_permission(...)` builder \
+         so the framework records the permission (a hand-applied \
+         `.layer(permission_required(...))` is NOT visible to this audit — prefer the \
+         builder). If a route is intentionally public, ignore this.",
+        ungated.len(),
+        ungated.join(", ")
+    );
+}
+
+/// The pure core of [`audit_ungated_mutating_routes`]: the `"METHOD /path"`
+/// labels of every route with a mutating method and no recorded permission.
+/// Split out so the audit's selection logic is unit-testable without a live
+/// `App::build()` / tracing subscriber.
+fn ungated_mutating_routes(specs: &[crate::routes::RouteSpec]) -> Vec<String> {
+    const MUTATING: [&str; 4] = ["POST", "PUT", "PATCH", "DELETE"];
+    specs
+        .iter()
+        .filter(|s| s.permission.is_none() && s.methods.iter().any(|m| MUTATING.contains(m)))
+        .map(|s| format!("{} {}", s.methods.join("/"), s.path))
+        .collect()
+}
+
 /// Set minimal hardening response headers, each ONLY if the response doesn't
 /// already carry it — so `SecurityPlugin` (or a handler) can override, and no
 /// header is ever duplicated (audit_2 H10).
@@ -1745,3 +1794,46 @@ impl std::fmt::Display for BuildError {
 }
 
 impl std::error::Error for BuildError {}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::ungated_mutating_routes;
+    use crate::routes::RouteSpec;
+
+    fn spec(methods: Vec<&'static str>, path: &str, perm: Option<&str>) -> RouteSpec {
+        RouteSpec {
+            path: path.to_string(),
+            methods,
+            permission: perm.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn flags_ungated_mutating_routes_only() {
+        let specs = vec![
+            spec(vec!["GET"], "/", None),                     // read → ignored
+            spec(vec!["POST"], "/contact", None),             // ungated mutating → flagged
+            spec(vec!["POST"], "/posts", Some("blog.add")),   // gated → ignored
+            spec(vec!["DELETE"], "/posts/{id}", None),        // ungated mutating → flagged
+            spec(vec!["GET", "POST"], "/api/comments", None), // has a mutating verb → flagged
+        ];
+        let flagged = ungated_mutating_routes(&specs);
+        assert_eq!(
+            flagged,
+            vec![
+                "POST /contact".to_string(),
+                "DELETE /posts/{id}".to_string(),
+                "GET/POST /api/comments".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_warning_when_all_mutating_routes_are_gated_or_read_only() {
+        let specs = vec![
+            spec(vec!["GET"], "/", None),
+            spec(vec!["POST"], "/posts", Some("blog.add")),
+        ];
+        assert!(ungated_mutating_routes(&specs).is_empty());
+    }
+}

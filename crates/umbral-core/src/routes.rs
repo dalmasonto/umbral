@@ -57,6 +57,15 @@ use axum::handler::Handler;
 pub struct RouteSpec {
     pub path: String,
     pub methods: Vec<&'static str>,
+    /// The permission string this route is gated on, when it was registered
+    /// through a permission-aware builder (`route_gated` / the umbral-permissions
+    /// `require_permission` helper). `None` means the framework has no *recorded*
+    /// permission for the route — it may still be gated by a hand-applied
+    /// `.layer(permission_required(...))` (opaque to `RouteSpec`) or be
+    /// intentionally public. Drives the boot audit of ungated mutating routes
+    /// (audit_2 H19) and future OpenAPI security annotations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
 }
 
 impl RouteSpec {
@@ -67,6 +76,7 @@ impl RouteSpec {
         Self {
             path: path.into(),
             methods,
+            permission: None,
         }
     }
 }
@@ -77,6 +87,7 @@ impl From<&str> for RouteSpec {
         Self {
             path: path.to_string(),
             methods: Vec::new(),
+            permission: None,
         }
     }
 }
@@ -86,6 +97,7 @@ impl From<String> for RouteSpec {
         Self {
             path,
             methods: Vec::new(),
+            permission: None,
         }
     }
 }
@@ -96,6 +108,7 @@ impl From<(&'static str, &str)> for RouteSpec {
         Self {
             path: path.to_string(),
             methods: vec![method],
+            permission: None,
         }
     }
 }
@@ -105,6 +118,7 @@ impl From<(&'static str, String)> for RouteSpec {
         Self {
             path,
             methods: vec![method],
+            permission: None,
         }
     }
 }
@@ -115,6 +129,7 @@ impl From<(&[&'static str], &str)> for RouteSpec {
         Self {
             path: path.to_string(),
             methods: methods.to_vec(),
+            permission: None,
         }
     }
 }
@@ -319,6 +334,32 @@ impl Routes {
         self.specs.push(RouteSpec {
             path: path.to_string(),
             methods: methods.to_vec(),
+            permission: None,
+        });
+        self.inner = self.inner.route(path, handler);
+        self
+    }
+
+    /// Register a route AND record the permission it's gated on (audit_2 H19).
+    ///
+    /// Identical to [`Self::route`] except the recorded [`RouteSpec`] carries
+    /// `permission`, so the boot audit of ungated mutating routes can see the
+    /// route as gated. This method does NOT apply an enforcement layer — the
+    /// caller passes a `handler` that already carries it. The ergonomic pairing
+    /// (apply the `permission_required` layer AND record the string in one call)
+    /// is the umbral-permissions `Routes::require_permission(...)` helper; core
+    /// stays free of any dependency on the permissions plugin.
+    pub fn route_gated(
+        mut self,
+        methods: &[&'static str],
+        path: &str,
+        handler: axum::routing::MethodRouter<()>,
+        permission: impl Into<String>,
+    ) -> Self {
+        self.specs.push(RouteSpec {
+            path: path.to_string(),
+            methods: methods.to_vec(),
+            permission: Some(permission.into()),
         });
         self.inner = self.inner.route(path, handler);
         self
@@ -354,6 +395,7 @@ impl Routes {
         self.specs.push(RouteSpec {
             path: path.to_string(),
             methods: vec![method],
+            permission: None,
         });
         self.inner = self.inner.route(path, handler);
         self

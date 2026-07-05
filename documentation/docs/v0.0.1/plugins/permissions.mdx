@@ -154,8 +154,30 @@ let admin = Router::new()
 
 When the layer fires, it checks the `auth_user` row for **`is_superuser = 1` AND `is_active = 1`** - an active superuser passes every `permission_required` check without consulting the perm tables; a deactivated superuser does not. This is best-effort and silent: custom user models that don't carry an `is_superuser` column simply never trigger the bypass. If you want explicit superuser-only gates instead, use a separate `is_superuser_required()` middleware (not shipped at v1; the convention is to add a `LoggedIn<U>` extractor inside the handler that returns 403 when `!user.is_superuser()`).
 
+<Callout type="info">
+**Deactivated accounts are denied on every path.** When the layer fires it reads the `auth_user` row once and, if the account is **inactive**, rejects the request *before* the superuser bypass and the `has_perm` lookup — so a deactivated user who still holds a valid, unexpired session cookie stops passing `permission_required` immediately, whether or not they were a superuser and whatever permissions they hold. (A custom user model that isn't the built-in `AuthUser` falls through to the normal perm check rather than being locked out.)
+</Callout>
+
+## Boot audit of ungated routes, and gated builders
+
+Authorization is opt-in: a route is protected only if you attach `permission_required`. To catch a *forgotten* gate, `App::build()` logs a **Warning** at boot listing your app's own mutating routes (`POST`/`PUT`/`PATCH`/`DELETE`) that have no **recorded** permission. It's a nudge, not a hard error — an intentionally public route is a false positive you ignore.
+
+The catch: a route gated with a hand-applied `.layer(permission_required(...))` is invisible to the audit (the framework can't see a tower layer on a route), so it would show up as "ungated". Register it through the `RoutesPermExt` builders instead — they apply the enforcement layer **and** record the permission, so the audit sees the gate:
+
+```rust
+use umbral::routes::Routes;
+use umbral_permissions::RoutesPermExt;
+
+let routes = Routes::new()
+    .get("/", home)                                            // public
+    .post_gated("/posts", create_post, "blog.add_post")        // enforced + recorded
+    .delete_gated("/posts/{id}", delete_post, "blog.delete_post");
+```
+
+`get_gated` / `post_gated` / `put_gated` / `patch_gated` / `delete_gated` each apply `permission_required(perm)` to the handler and record `perm` on the route. A future major may flip authorization to default-**deny** by construction; using these builders now makes that transition a no-op for your gated routes.
+
 <Callout type="warning">
-**The `is_active` check applies only to the superuser bypass, not to the ordinary permission path.** For a non-superuser, the layer resolves the session, then calls `has_perm(user_id, perm)` directly - it does **not** re-check `is_active`. A user who was deactivated but still holds a valid, unexpired session cookie keeps passing `permission_required` for every permission they were granted until that session is invalidated. If deactivation must revoke access immediately, invalidate the user's sessions on the deactivation path (session validity is `umbral-auth`'s responsibility, not this layer's).
+**The `permission_required` / `permission_required_html` tower layers only support `i64` user primary keys.** They resolve the caller through `umbral_auth::current_session_user_id`, which returns `Option<i64>`. The `has_perm` free function is PK-agnostic (it takes `&str`), but the *layer* is not - an app whose user model uses a `Uuid` or `String` PK cannot gate routes with these layers and must call `has_perm(&user.id().to_string(), ...)` inside the handler instead.
 </Callout>
 
 <Callout type="warning">

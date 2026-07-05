@@ -69,6 +69,7 @@ pub mod membership;
 pub mod middleware;
 pub mod models;
 pub mod perm;
+pub mod routes_ext;
 
 /// REST plugin extension — adapter types that let `umbral-rest`'s
 /// viewset permission gates check `umbral-permissions` codenames.
@@ -82,6 +83,7 @@ pub use middleware::{
 };
 pub use models::{ContentType, Group, Permission, UserGroup, UserPermission};
 pub use perm::{PermError, has_perm, has_perm_for_superuser, has_perm_scoped, user_perms};
+pub use routes_ext::RoutesPermExt;
 
 /// gap #61 part 2: typed M2M-shape membership helpers
 /// (`add_user_to_group`, `set_user_groups`, `grant_user_permission`,
