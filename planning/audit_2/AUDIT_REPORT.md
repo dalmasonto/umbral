@@ -147,3 +147,27 @@ Auditor rated HIGH; elevated because the impact is unauthenticated-of-boundary c
 ## Appendix 2 — Documentation corrected inline during the audit (15 pages)
 
 `auth/oauth.mdx` (open-redirect claim), `auth/users-and-passwords.mdx` (re-hash + XFF claims), `backends/postgres.mdx` + `backends/sqlite.mdx` (pool config behavior), `cli/management-commands.mdx` (`maskkeygen` key handling), `getting-started/settings-and-env.mdx` (pool/env), `orm/masked.mdx` (plaintext-at-rest gap), `plugins/cache.mdx` (cache key + auth caveats), `plugins/permissions.mdx` (superuser/active/PK caveats), `plugins/rls.mdx` (owner-bypass + GUC danger), `plugins/sessions.mdx` (revocation + secret_key), `plugins/storage.mdx` (S3 content-type), `realtime/transports.mdx` (inbound authz), `rest/permissions.mdx` (object-scoping), `templates/rendering-html.mdx` (autoescape is HTML-context-only). All edits make the docs match current code behavior. No source/config was modified by any auditor.
+
+## Appendix 3 — Round-2 plugin & component findings sweep
+
+A second pass fixed the open MEDIUM/LOW items in the per-component findings that weren't in the consolidated CRITICAL/HIGH table above. Each shipped with tests + docs.
+
+| Finding | Sev | Fix | Commit |
+|---|---|---|---|
+| plugin-authz P4 | MEDIUM | Perm layer is PK-agnostic (resolves the caller as a raw string via `current_user_id_str`); AuthUser probe parses to i64 first so UUID/String PKs aren't locked out. | ee6b517d |
+| plugin-authz P6 | LOW | `user_perms` fetch bounded (10k ceiling) against pathological input. | ee6b517d |
+| observability #5 | MEDIUM | Analytics outbound sends bounded by a 64-permit semaphore (permit acquired before spawn; drop-on-full). | c8215cb3 |
+| observability #9 | MEDIUM | Swagger UI asset base pinned to an exact version + configurable (`swagger_asset_base`) for self-hosting + crossorigin/referrerpolicy. | 7dad8135 |
+| observability #10 | LOW | Async signal subscribers bounded by a 30s timeout so a hung one can't stall the ORM write path. | f86b1270 |
+| realtime #2 | MEDIUM | `GroupPolicy::can_send` hook (defaults to `can_join`) + `Realtime::can_send` for `MessageHandler` send-authz; docs use it. | d6878afc |
+| realtime #4 | MEDIUM | Default connection cap (10k, `unlimited_connections()` opt-out) + per-connection inbound message-rate cap (100/s). | 8d4cfe96 |
+| core-app-config #13 | MEDIUM | Graceful shutdown on SIGTERM/SIGINT + DB pool drain. | b8a43a6e |
+| core-app-config #16 | LOW | Boot warning for misspelled `UMBRAL_` keys (edit-distance near-miss). | 3fc863c6 |
+
+Plus stale-status items confirmed already fixed earlier this pass: plugin-authz **P1** = H19 (boot audit + gated builders, `549f8dd1`), plugin-authz **P3** = deactivation gate (`860eeb18`), observability **#6** = H14 Prod-in-release default (`6fcbffa8`), observability #8 (stored-XSS in logs admin) = confirmed already safe (admin templates autoescape as HTML globally).
+
+**Still deferred (documented, not silently dropped):**
+- **plugin-authz P2** (MEDIUM) — object/row-level permissions. A model-level perm still authorizes any row; genuine object-permission scoping is a large new primitive (an `ObjectPermission` table + per-row checks + a `has_object_perm` API), not a contained fix. Documented loudly in `rest/permissions.mdx`; the convention today is an in-handler ownership check.
+- **plugin-authz P5** (LOW) — no action: `has_perm` failing closed on a DB error is correct (a positive), noted only so it isn't mistaken for a bug.
+- **core-app-config #4 / H17** — replica pools from `settings.databases` aren't auto-opened; the request-path panic is already a boot error/warning. Auto-opening needs async pool-open in `build()` (deferred).
+- **observability #5** full PostHog `/batch` batching (fewer requests) — the concurrency bound lands the self-DoS fix; batching is a further optimization.
