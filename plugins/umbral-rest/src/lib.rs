@@ -304,6 +304,8 @@ pub struct RestPlugin {
     /// a hook restricts every built-in CRUD action to the rows the caller may
     /// access. Merged from `ResourceConfig::scope(...)` / `.owned_by(...)`.
     object_scopes: HashMap<String, crate::resource::ObjectScopeFn>,
+    /// gaps3 #16: per-table owner column filled from the identity on create.
+    owner_fields: HashMap<String, String>,
     /// Gap 107: base URL prefix for all REST endpoints. Default
     /// `/api`. Set via `RestPlugin::at("/v1")`. Always normalised
     /// to one leading slash, no trailing slash.
@@ -654,6 +656,7 @@ impl RestPlugin {
             nested: HashMap::new(),
             bulk: std::collections::HashSet::new(),
             object_scopes: HashMap::new(),
+            owner_fields: HashMap::new(),
             base_path: "/api".to_string(),
             versioning: None,
         }
@@ -999,6 +1002,7 @@ impl RestPlugin {
             nested,
             bulk,
             scope,
+            owner_field,
         } = config;
         for field in hidden {
             self.hidden.push((table.clone(), field));
@@ -1053,6 +1057,10 @@ impl RestPlugin {
         if let Some(scope) = scope {
             // Last `.resource(...)` wins for the same table (as with permission).
             self.object_scopes.insert(table.clone(), scope);
+        }
+        if let Some(col) = owner_field {
+            // gaps3 #16: last `.resource(...)` wins (as with permission/scope).
+            self.owner_fields.insert(table.clone(), col);
         }
         self
     }
@@ -2795,6 +2803,39 @@ async fn retrieve(
     Ok(Json(row))
 }
 
+/// gaps3 #16: if `table` declared `.owner_field(col)`, set `col` in `body` from
+/// the authenticated identity's user id and reject a body-supplied value. A
+/// no-op for resources without an owner field. Anonymous callers are a 401
+/// (there's no identity to inject).
+///
+/// The value is written as an integer when `user_id` parses as one (an `i64`
+/// FK) and as a string otherwise (a `String`/UUID key), so the ORM's insert
+/// type-coercion accepts it either way.
+fn inject_owner_field(
+    cfg: &RestPlugin,
+    table: &str,
+    identity: Option<&Identity>,
+    body: &mut serde_json::Map<String, Value>,
+) -> Result<(), ApiError> {
+    let Some(owner_col) = cfg.owner_fields.get(table) else {
+        return Ok(());
+    };
+    let Some(id) = identity else {
+        return Err(ApiError::Unauthenticated);
+    };
+    if body.contains_key(owner_col) {
+        return Err(ApiError::BadInput(format!(
+            "`{owner_col}` is set from your identity and must not be supplied in the request body"
+        )));
+    }
+    let value = match id.user_id.parse::<i64>() {
+        Ok(n) => Value::from(n),
+        Err(_) => Value::String(id.user_id.clone()),
+    };
+    body.insert(owner_col.clone(), value);
+    Ok(())
+}
+
 async fn create(
     Path(table): Path<String>,
     uri: axum::http::Uri,
@@ -2835,7 +2876,7 @@ async fn create(
                     .into(),
             ));
         }
-        return bulk_create(cfg, &table, model, items).await;
+        return bulk_create(cfg, &table, model, items, identity.as_ref()).await;
     }
 
     let Value::Object(mut body) = raw else {
@@ -2848,6 +2889,13 @@ async fn create(
 
     // WEB-2: a hidden field must not be writable (see strip_hidden_for_write).
     cfg.strip_hidden_for_write(&table, &mut body);
+
+    // gaps3 #16: owner-field injection — fill the declared owner column from the
+    // authenticated identity and reject a body-supplied value (a client can't
+    // create a row owned by someone else). No-op unless `.owner_field(col)` was
+    // declared. Runs before the nested split so both flat and nested creates
+    // inject the parent's owner.
+    inject_owner_field(cfg, &table, identity.as_ref(), &mut body)?;
 
     // Flat path (the common case) — unchanged, zero overhead. The ORM owns
     // pre-validation + constraint classification + noform-stripping;
@@ -2896,6 +2944,7 @@ async fn bulk_create(
     table: &str,
     model: ModelMeta,
     items: Vec<Value>,
+    identity: Option<&Identity>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     check_bulk_size(items.len())?;
 
@@ -2909,6 +2958,9 @@ async fn bulk_create(
         };
         // SAME hidden-field denylist (incl. password_hash) as single create.
         cfg.strip_hidden_for_write(table, &mut body);
+        // gaps3 #16: owner-field injection per item — same rule as single create,
+        // so bulk can't be used to forge ownership on any row.
+        inject_owner_field(cfg, table, identity, &mut body)?;
         let mut row = umbral::orm::DynQuerySet::for_meta(&model)
             .insert_json_in_tx(&body, &mut tx)
             .await

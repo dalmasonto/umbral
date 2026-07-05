@@ -296,6 +296,11 @@ pub struct ResourceConfig {
     /// CRUD action to the rows the caller may access. Declared via
     /// [`Self::scope`] / [`Self::owned_by`].
     pub(crate) scope: Option<ObjectScopeFn>,
+    /// gaps3 #16: owner-field injection on create. `Some(col)` fills `col` from
+    /// the authenticated identity's user id when a row is created, and rejects a
+    /// body-supplied value — so a client can't create a row owned by someone
+    /// else. Declared via [`ResourceConfig::owner_field`].
+    pub(crate) owner_field: Option<String>,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -328,6 +333,7 @@ impl ResourceConfig {
             nested: Vec::new(),
             bulk: false,
             scope: None,
+            owner_field: None,
         }
     }
 
@@ -372,6 +378,25 @@ impl ResourceConfig {
             Some(id) => ScopeDecision::Restrict(vec![(col.clone(), id.user_id.clone())]),
             None => ScopeDecision::None,
         })
+    }
+
+    /// Fill `owner_column` from the authenticated identity when a row is
+    /// CREATED, and reject a body-supplied value — so a client can't create a
+    /// row owned by someone else (the DRF `perform_create(owner=request.user)`
+    /// pattern). Anonymous creates are rejected (401): there's no identity to
+    /// inject. Pairs naturally with [`Self::owned_by`] (inject on write, scope
+    /// on read):
+    ///
+    /// ```ignore
+    /// ResourceConfig::new("order").owner_field("owner_id").owned_by("owner_id")
+    /// ```
+    ///
+    /// The injected value is the identity's `user_id`; if it parses as an
+    /// integer it's written as a number (an `i64` FK), otherwise as the string
+    /// (a `String`/UUID key).
+    pub fn owner_field(mut self, owner_column: impl Into<String>) -> Self {
+        self.owner_field = Some(owner_column.into());
+        self
     }
 
     /// Opt IN to bulk endpoints for this resource.
