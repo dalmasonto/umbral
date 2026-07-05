@@ -54,7 +54,9 @@ pub use pagination::{
 };
 
 pub mod resource;
-pub use resource::{ActionContext, ActionError, ActionScope, RequestContext, ResourceConfig};
+pub use resource::{
+    ActionContext, ActionError, ActionScope, RequestContext, ResourceConfig, ScopeDecision,
+};
 
 pub mod versioning;
 pub use versioning::{VersioningConfig, VersioningScheme, version_from_headers};
@@ -201,6 +203,18 @@ impl HideFields for Vec<String> {
 /// to every outgoing JSON response (the list / retrieve / create /
 /// update payloads). See [`Self::hide`], [`Self::transform`], and
 /// [`Self::computed`].
+/// The applied form of a resource's object-level row scope (audit_2 H1/P2),
+/// resolved per-request by [`RestPlugin::object_scope`].
+enum ObjectScopeOutcome {
+    /// No scoping — every row is reachable.
+    Unconstrained,
+    /// AND this condition into every CRUD query for the request.
+    Filter(sea_query::Condition),
+    /// No rows are in scope: list returns an empty page, and
+    /// retrieve/update/destroy return `404`.
+    DenyAll,
+}
+
 #[derive(Clone)]
 pub struct RestPlugin {
     include_only: Option<Vec<String>>,
@@ -286,6 +300,10 @@ pub struct RestPlugin {
     /// permission/throttle/denylist/blocked-table checks as the
     /// single-object handlers.
     bulk: std::collections::HashSet<String>,
+    /// Object-level row-scoping hooks per table (audit_2 H1/P2). A table with
+    /// a hook restricts every built-in CRUD action to the rows the caller may
+    /// access. Merged from `ResourceConfig::scope(...)` / `.owned_by(...)`.
+    object_scopes: HashMap<String, crate::resource::ObjectScopeFn>,
     /// Gap 107: base URL prefix for all REST endpoints. Default
     /// `/api`. Set via `RestPlugin::at("/v1")`. Always normalised
     /// to one leading slash, no trailing slash.
@@ -519,6 +537,31 @@ impl RestPlugin {
         }
     }
 
+    /// Resolve this request's object-level row scope (audit_2 H1/P2). Consults
+    /// the resource's `scope`/`owned_by` hook with the caller's identity and
+    /// turns the [`ScopeDecision`] into an [`ObjectScopeOutcome`] the CRUD
+    /// handlers apply: `Unconstrained` (no hook / `All`), a `Filter` condition
+    /// ANDed into every query, or `DenyAll` (list → empty, detail → 404).
+    fn object_scope(&self, table: &str, identity: Option<&Identity>) -> ObjectScopeOutcome {
+        let Some(hook) = self.object_scopes.get(table) else {
+            return ObjectScopeOutcome::Unconstrained;
+        };
+        match hook(identity) {
+            crate::resource::ScopeDecision::All => ObjectScopeOutcome::Unconstrained,
+            crate::resource::ScopeDecision::None => ObjectScopeOutcome::DenyAll,
+            crate::resource::ScopeDecision::Restrict(pairs) => {
+                if pairs.is_empty() {
+                    return ObjectScopeOutcome::Unconstrained;
+                }
+                let mut cond = sea_query::Condition::all();
+                for (col, val) in pairs {
+                    cond = cond.add(sea_query::Expr::col(sea_query::Alias::new(col)).eq(val));
+                }
+                ObjectScopeOutcome::Filter(cond)
+            }
+        }
+    }
+
     /// Run every applicable throttle for `(table, action)` after auth has
     /// resolved, before the handler. Returns
     /// `Err(ApiError::Throttled { retry_after })` on the FIRST denial so
@@ -619,6 +662,7 @@ impl RestPlugin {
             search_fields: HashMap::new(),
             nested: HashMap::new(),
             bulk: std::collections::HashSet::new(),
+            object_scopes: HashMap::new(),
             base_path: "/api".to_string(),
             versioning: None,
         }
@@ -963,6 +1007,7 @@ impl RestPlugin {
             search_fields,
             nested,
             bulk,
+            scope,
         } = config;
         for field in hidden {
             self.hidden.push((table.clone(), field));
@@ -1013,6 +1058,10 @@ impl RestPlugin {
         }
         if bulk {
             self.bulk.insert(table.clone());
+        }
+        if let Some(scope) = scope {
+            // Last `.resource(...)` wins for the same table (as with permission).
+            self.object_scopes.insert(table.clone(), scope);
         }
         self
     }
@@ -2498,6 +2547,18 @@ async fn list(
         }
     }
 
+    // audit_2 H1/P2: AND the object-level scope into the list filter so only
+    // in-scope rows are returned. `DenyAll` becomes an always-false predicate,
+    // so the normal pagination/response path yields an empty page (no special
+    // early-return, no oracle).
+    match cfg.object_scope(&table, identity.as_ref()) {
+        ObjectScopeOutcome::Unconstrained => {}
+        ObjectScopeOutcome::Filter(cond) => filter = filter.and(cond),
+        ObjectScopeOutcome::DenyAll => {
+            filter = filter.and(sea_query::Condition::all().add(sea_query::Expr::val(1).eq(0)));
+        }
+    }
+
     // `?ordering=-created_at,name` — comma-separated
     // field names, leading `-` for DESC. Unknown fields are silently
     // dropped (same as DynQuerySet::order_by_col does internally).
@@ -2677,7 +2738,19 @@ async fn retrieve(
         throttle_client_ip(&headers).as_deref(),
     )?;
     let pk = pk_column(&model)?;
-    let no_filter = FilterClause::default();
+    // audit_2 H1/P2: object-level scope. A DenyAll (e.g. anonymous on an
+    // owner-scoped resource) is a 404 — never reveal the row exists; a Filter
+    // is ANDed into the by-id lookup so a non-owned row is Not Found.
+    let scope_filter = match cfg.object_scope(&table, identity.as_ref()) {
+        ObjectScopeOutcome::DenyAll => {
+            return Err(ApiError::NotFound(format!(
+                "no row with {} = {} in {}",
+                pk.name, id, table
+            )));
+        }
+        ObjectScopeOutcome::Filter(cond) => FilterClause::default().and(cond),
+        ObjectScopeOutcome::Unconstrained => FilterClause::default(),
+    };
     // `?include=` works the same on the retrieve path — `GET
     // /api/customer/123/?include=user` returns the customer with
     // its `user` FK expanded to the full AuthUser object. Same
@@ -2687,7 +2760,7 @@ async fn retrieve(
         &model,
         Some((&pk.name, &id)),
         None,
-        &no_filter,
+        &scope_filter,
         &include,
         &[],
     )
@@ -3580,9 +3653,25 @@ async fn update(
     // WEB-2: a hidden field must not be writable (see strip_hidden_for_write).
     cfg.strip_hidden_for_write(&table, &mut body);
 
-    // 404 if the target row doesn't exist before we attempt the UPDATE.
-    let no_filter = FilterClause::default();
-    let existing = fetch_rows(&model, Some((&pk_name, &id)), None, &no_filter, &[], &[]).await?;
+    // audit_2 H1/P2: object-level scope. DenyAll → 404; a Filter is ANDed into
+    // the existence check, the UPDATE's WHERE, and the read-back, so a caller
+    // can't update a row outside their scope by id (the row is Not Found).
+    let scope_cond = match cfg.object_scope(&table, identity.as_ref()) {
+        ObjectScopeOutcome::DenyAll => {
+            return Err(ApiError::NotFound(format!(
+                "no row with {pk_name} = {id} in {table}"
+            )));
+        }
+        ObjectScopeOutcome::Filter(cond) => Some(cond),
+        ObjectScopeOutcome::Unconstrained => None,
+    };
+    let scope_filter = match &scope_cond {
+        Some(c) => FilterClause::default().and(c.clone()),
+        None => FilterClause::default(),
+    };
+
+    // 404 if the target row doesn't exist (or is out of scope) before the UPDATE.
+    let existing = fetch_rows(&model, Some((&pk_name, &id)), None, &scope_filter, &[], &[]).await?;
     if existing.is_empty() {
         return Err(ApiError::NotFound(format!(
             "no row with {pk_name} = {id} in {table}"
@@ -3618,11 +3707,12 @@ async fn update(
     // written, primary key never. The ORM's `update_json` owns
     // validation + constraint classification; `From<WriteError>
     // for ApiError` handles the 400 translation.
-    umbral::orm::DynQuerySet::for_meta(&model)
-        .filter_eq_string(&pk_name, &id)
-        .update_json(&body)
-        .await?;
-    let mut rows = fetch_rows(&model, Some((&pk_name, &id)), None, &no_filter, &[], &[]).await?;
+    let mut update_qs = umbral::orm::DynQuerySet::for_meta(&model).filter_eq_string(&pk_name, &id);
+    if let Some(c) = &scope_cond {
+        update_qs = update_qs.filter_condition(c.clone());
+    }
+    update_qs.update_json(&body).await?;
+    let mut rows = fetch_rows(&model, Some((&pk_name, &id)), None, &scope_filter, &[], &[]).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row updated but disappeared on read-back".into(),
@@ -3658,10 +3748,24 @@ async fn destroy(
         throttle_client_ip(&headers).as_deref(),
     )?;
     let pk = pk_column(&model)?;
-    let affected = umbral::orm::DynQuerySet::for_meta(&model)
-        .filter_eq_string(&pk.name, &id)
-        .delete()
-        .await?;
+    // audit_2 H1/P2: scope the DELETE. DenyAll → 404; a Filter is ANDed into
+    // the WHERE, so deleting an out-of-scope row affects 0 rows → 404 (a caller
+    // can't delete another owner's/tenant's row by id).
+    let scope_cond = match cfg.object_scope(&table, identity.as_ref()) {
+        ObjectScopeOutcome::DenyAll => {
+            return Err(ApiError::NotFound(format!(
+                "no row with {} = {} in {}",
+                pk.name, id, table
+            )));
+        }
+        ObjectScopeOutcome::Filter(cond) => Some(cond),
+        ObjectScopeOutcome::Unconstrained => None,
+    };
+    let mut delete_qs = umbral::orm::DynQuerySet::for_meta(&model).filter_eq_string(&pk.name, &id);
+    if let Some(c) = scope_cond {
+        delete_qs = delete_qs.filter_condition(c);
+    }
+    let affected = delete_qs.delete().await?;
     if affected == 0 {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -3887,7 +3991,16 @@ async fn fetch_rows(
     if let Some((col, val)) = where_clause {
         // Single-row lookup (retrieve / update / delete read-back).
         // The WHERE col = val + LIMIT 1 shape is the same as before.
-        qs = qs.filter_eq_string(col, val).limit(1);
+        qs = qs.filter_eq_string(col, val);
+        // audit_2 H1/P2: apply the object-scope filter on the single-row path
+        // too, so an out-of-scope row is simply NOT FOUND (no oracle) rather
+        // than returned by id. The list path applies it below.
+        if !filter.is_empty()
+            && let Some(cond) = filter.condition_clone()
+        {
+            qs = qs.filter_condition(cond);
+        }
+        qs = qs.limit(1);
     } else {
         // List path: pagination applies, plus any filter the resource
         // opted in to. `FilterClause` ANDs every parsed predicate.

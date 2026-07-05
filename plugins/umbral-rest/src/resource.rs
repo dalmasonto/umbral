@@ -209,6 +209,29 @@ impl std::fmt::Debug for ActionDef {
     }
 }
 
+/// The rows a request may see/act on, decided per-request from the caller's
+/// [`Identity`] (audit_2 H1/P2 — object-level scoping). Returned by a
+/// [`ResourceConfig::scope`] hook and applied to EVERY built-in CRUD action
+/// (list / retrieve / update / destroy), so a caller can't reach another
+/// tenant's / owner's row by id.
+pub enum ScopeDecision {
+    /// No additional constraint — every row is in scope (the default when no
+    /// scope hook is set).
+    All,
+    /// Restrict to rows where every `(column, value)` equality holds (ANDed).
+    /// The canonical owner scope is `vec![("owner_id".into(), id.user_id.clone())]`.
+    Restrict(Vec<(String, String)>),
+    /// No rows are in scope — e.g. an anonymous caller on an owner-scoped
+    /// resource. List returns an empty page; retrieve/update/destroy 404
+    /// (a non-owned row is indistinguishable from a missing one — no oracle).
+    None,
+}
+
+/// A per-request row-scoping hook: maps the caller's [`Identity`] (or `None`
+/// for anonymous) to a [`ScopeDecision`]. Installed via
+/// [`ResourceConfig::scope`] / [`ResourceConfig::owned_by`].
+pub(crate) type ObjectScopeFn = Arc<dyn Fn(Option<&Identity>) -> ScopeDecision + Send + Sync>;
+
 /// Bundled REST customization for one table. Build via
 /// [`Self::new`] + chainable methods; register with
 /// [`crate::RestPlugin::resource`].
@@ -268,6 +291,11 @@ pub struct ResourceConfig {
     /// SAME permission / throttle / field-denylist / blocked-table checks
     /// as the single-object handlers. Declared via [`ResourceConfig::bulk`].
     pub(crate) bulk: bool,
+    /// Object-level row scope (audit_2 H1/P2). `None` = every row is reachable
+    /// (the backward-compatible default); `Some(fn)` restricts every built-in
+    /// CRUD action to the rows the caller may access. Declared via
+    /// [`Self::scope`] / [`Self::owned_by`].
+    pub(crate) scope: Option<ObjectScopeFn>,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -299,7 +327,51 @@ impl ResourceConfig {
             search_fields: None,
             nested: Vec::new(),
             bulk: false,
+            scope: None,
         }
+    }
+
+    /// Restrict every built-in CRUD action (list / retrieve / update /
+    /// destroy) to the rows the caller may access (audit_2 H1/P2 — object-level
+    /// authorization / IDOR fix). Without a scope, model-level permission only
+    /// gates *whether* a caller may use the endpoint, not *which rows* — so any
+    /// caller past the gate can read/mutate any row by id.
+    ///
+    /// The hook maps the authenticated [`Identity`] (or `None` for anonymous)
+    /// to a [`ScopeDecision`]. The decision is ANDed into the query, so an
+    /// out-of-scope row returns `404` (never revealing it exists) and list only
+    /// returns in-scope rows.
+    ///
+    /// ```ignore
+    /// use umbral_rest::{ResourceConfig, ScopeDecision};
+    /// ResourceConfig::new("order").scope(|identity| match identity {
+    ///     Some(id) if id.is_staff => ScopeDecision::All,          // staff see all
+    ///     Some(id) => ScopeDecision::Restrict(vec![("owner_id".into(), id.user_id.clone())]),
+    ///     None => ScopeDecision::None,                            // anonymous see none
+    /// });
+    /// ```
+    pub fn scope<F>(mut self, f: F) -> Self
+    where
+        F: Fn(Option<&Identity>) -> ScopeDecision + Send + Sync + 'static,
+    {
+        self.scope = Some(Arc::new(f));
+        self
+    }
+
+    /// The common owner-scope shorthand for [`Self::scope`]: restrict every
+    /// CRUD action to rows whose `owner_column` equals the caller's user id,
+    /// and deny anonymous callers entirely. A superuser sees all rows.
+    ///
+    /// ```ignore
+    /// ResourceConfig::new("order").owned_by("owner_id")
+    /// ```
+    pub fn owned_by(self, owner_column: impl Into<String>) -> Self {
+        let col = owner_column.into();
+        self.scope(move |identity| match identity {
+            Some(id) if id.is_superuser => ScopeDecision::All,
+            Some(id) => ScopeDecision::Restrict(vec![(col.clone(), id.user_id.clone())]),
+            None => ScopeDecision::None,
+        })
     }
 
     /// Opt IN to bulk endpoints for this resource.
