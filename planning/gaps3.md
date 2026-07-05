@@ -26,3 +26,67 @@
 14. [x] `update_or_create` UPDATE branch emits bulk_post_save not per-row post_save — archived (fixed, commit fe200c1)
 
    **Options:** (a) have `update_or_create`'s update branch fetch-and-`save()` the single row (per-row `post_save`) instead of `update_values`, so the whole API is per-row-signal-consistent; or (b) at minimum document loudly that `on_model`/`post_save` won't see `update_or_create` updates and point consumers at `save()` or an explicit push. **Workaround used:** pushed the payment notification explicitly from the handler with `Realtime::to_user(...)` rather than relying on the `on_model` bridge.
+
+---
+
+_Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see [[project_web3clubs_fc_backend]]). Findings verified against umbral 0.0.5's actual surface — the app is on 0.0.4, so a few of its workarounds are already resolved (SQLite alter-with-inbound-FK #13, object-scope reads via `ResourceConfig::owned_by`/`.scope`, and `umbral_auth::validate_password` all now exist)._
+
+15. [ ] No `IntoResponse` for ORM errors → every handler re-declares `err500` and sprinkles `.map_err(err500)?`
+
+    In the consumer, all 5 plugins open with an identical `fn err500<E: Display>(e: E) -> (StatusCode, String)` and every ORM terminal is `.map_err(err500)?`. The highest-volume boilerplate in the app. REST already has `impl IntoResponse for ApiError` + `From<WriteError>` (`plugins/umbral-rest/src/lib.rs:2222,2254`), but it's REST-internal — plain axum handlers can't reach it.
+
+    **Proposal:** lift an `ApiError` (with `From<WriteError>`/`From<sqlx::Error>` + `IntoResponse`, safe-by-default opaque 500 like WEB-5) to `umbral-core` and re-export from the facade, so a plain handler returns `Result<Json<T>, umbral::ApiError>` and uses bare `?` on ORM calls.
+
+16. [ ] REST has read scoping (`owned_by`) but no owner-*injection* on create (`perform_create`)
+
+    `ResourceConfig::owned_by("col")` / `.scope(...)` filter reads/updates to the caller's rows (audit_2 H1/P2), which the consumer didn't have on 0.0.4 (it hand-rolled `GET /api/me/*`). But there is still no way to *fill* an owner FK from the authenticated identity on **create** and reject a body-supplied value — so every "the member comes from the token, never the body" write (RSVP, chat post, payment record) bypasses REST for a bespoke handler.
+
+    **Proposal:** `ResourceConfig::owner_field("member")` — on create, set the FK from the identity; ignore/reject a client-supplied value. Collapses most of the app's bespoke write handlers back into declarative REST.
+
+17. [ ] No lightweight typed current-user extractor — handlers parse `identity.user_id: String → i64` (~8×)
+
+    `LoggedIn<AuthUser>` exists but does a DB fetch; the token-only `Identity` gives `user_id: Option<String>` (the PK-LCD), so every scoped handler repeats `let uid: i64 = identity.user_id.parse().map_err(|_| (UNAUTHORIZED, ...))?`.
+
+    **Proposal:** `Identity::user_pk::<T: FromStr>() -> Result<T, _>` and/or a `CurrentUserId<T>(pub T)` extractor (no fetch, 401 on parse failure) generic over the app's PK type.
+
+18. [ ] No permission-gated extractor for plain handlers — `require_staff` copy-pasted across plugins
+
+    REST `Permission` types (`IsStaff`, etc.) can only gate viewsets, so the app re-declares an identical `require_staff(&Identity) -> Result<i64, ApiErr>` in `fc-teams` and `fc-payments`.
+
+    **Proposal:** a `Require<P: Permission>` extractor (403s on failure) usable on any axum handler, plus a `RequireStaff(pub i64)` convenience that returns the parsed uid.
+
+19. [ ] `AuthUser` isn't extensible — forced a ~130-line sidecar-profile + signal + backfill apparatus
+
+    To add `display_name`/`color`/`position` to a user, the consumer built a `UserProfile` (unique FK) + a `post_save` on `AuthUser` to auto-create it + an idempotent `ensure_profile` racing the unique FK + a `backfill_profiles` seed + an in-memory left-join on every read.
+
+    **Proposal:** either a swappable user model (Django `AUTH_USER_MODEL`) or a first-class "profile" helper the auth plugin owns (auto-create-on-insert signal + backfill), so consumers stop rebuilding this.
+
+20. [ ] Auth ships no authenticated change-password route, and `set_password` skips the strength policy
+
+    Default auth routes are login/logout/signup/verify-email/resend/password-forgot/password-reset (`plugins/umbral-auth/src/form_routes.rs:433`) — no change-password. `umbral_auth::validate_password` IS public (the app just reinvented an 8-char check), but `set_password` (`lib.rs:1338`) doesn't call it.
+
+    **Proposal:** add a `change-password` default route (verify current → validate → rotate), and either run `validate_password` inside `set_password` or document the pairing loudly.
+
+21. [ ] No `DecimalField` / money type — consumers fall back to `i64` "whole units" to dodge float
+
+    `Fixture.fee_amount` / `Payment.amount` are `i64` whole-shillings by comment. **Proposal:** a `DecimalField` (PG `NUMERIC`, SQLite `TEXT`/affinity + a rust_decimal-backed value) so money/precise-decimal columns have a home.
+
+22. [ ] No permission combinators / common preset — the app's main gate is 7 lines of `Box::new(..) as Box<dyn Permission>`
+
+    `And(IsAuthenticated, Or(ReadOnly, IsStaff))` is the app's most-used gate (fixtures, attendance, announcements, chat, teams) and reads as verbose dyn-boxing. **Proposal:** ship a named `IsAuthenticatedOrReadOnly` (DRF-style) and/or `.and()`/`.or()` combinators on `Permission` so consumers stop hand-boxing.
+
+23. [ ] No `serve`-only migrate/seed lifecycle — apps hand-roll argv sniffing
+
+    The consumer inspects `std::env::args()` in `main.rs` to avoid `auto_migrate()` firing during `makemigrations`/`migrate` CLI commands. **Proposal:** `App::auto_migrate_on_serve()` / an `on_serve` hook that runs only for the `serve` subcommand.
+
+24. [ ] Adding a `Choices` variant forces a full `AlterColumn` table rebuild (unnecessary churn)
+
+    `fc_payments` migrated `status` to `Choices` then just added a `"waived"` variant — each a full `AlterColumn` (whole-table rebuild on SQLite) though the storage type stays `Text`. **Proposal:** the autodetector should treat a choices-list-only delta as a no-op on SQLite (TEXT-backed, no CHECK) / a lightweight CHECK swap on PG, not a table rebuild. Also indirectly discourages `Choices` adoption (app left most closed-set fields as hand-validated `String`).
+
+25. [ ] ORM SQLite write transactions use `BEGIN DEFERRED` → SQLITE_BUSY under concurrent writes (production hardening)
+
+    Root-caused while fixing the test-suite flake: `m2m.rs` (and `db::begin*`) use `pool.begin()`, i.e. sqlx `BEGIN DEFERRED`. Under concurrent writes on a file DB with >1 connection, a deferred read→write lock upgrade returns SQLITE_BUSY *immediately* (deadlock-avoidance path the `busy_timeout` handler is never consulted for). The test suite worked around it with `max_connections(1)` (commit cbbd1571), but real SQLite apps with concurrent writers can hit it.
+
+    **Proposal:** issue `BEGIN IMMEDIATE` for SQLite write transactions (acquire the write lock at BEGIN, so `busy_timeout` applies and writers wait instead of erroring). Postgres unaffected. SQLite is test-first here, so lower priority — but it's the correct fix.
+
+    **Minor (same source):** roster/payment endpoints do `AuthUser::objects().fetch()` into an in-memory id→username map (a manual join) because there's no `.values()`/annotate-join to pull just `(id, username)` — a scale trap the ORM could close.
