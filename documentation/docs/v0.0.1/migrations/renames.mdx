@@ -49,6 +49,12 @@ Each shape match becomes a plain drop + create — no rows are transferred. The 
 The setting applies to the whole `makemigrations` run. If one change is a rename and another is a coincidental shot in a single run, split them into two runs so you can set the right intent for each — or hand-write the `RenameTable` op into the migration file.
 </Callout>
 
+## Renaming a model with an M2M field
+
+A model's many-to-many junction table is named `<parent_table>_<field>` (e.g. an `Article` with a `tags: M2M<Tag>` field owns `article_tags`). When you rename the parent — `article` → `post` — the autodetector renames the junction too (`article_tags` → `post_tags`) instead of dropping and recreating it, so **every relationship row is preserved**. No extra step is required; `makemigrations` emits the `RenameTable` for the junction automatically alongside the parent's rename.
+
+This works because the junction's columns are generic (`parent_id` / `child_id`, not `article_id`) and its foreign key to the parent is updated by the parent's own rename, so a table rename is all that's needed.
+
 ## See also
 
 - [Managed migrations](/docs/v0.0.1/migrations/managed-migrations) — the declare → migrate loop.
