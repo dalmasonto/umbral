@@ -406,6 +406,41 @@ pub async fn start_password_reset(
 /// Returns [`crate::AuthError::InvalidChallenge`] for ALL failure arms
 /// that involve the token (not found, expired, already used, no user) —
 /// the same opaque error prevents oracle attacks.
+/// Change an authenticated user's password: verify `current`, enforce the
+/// strength policy on `new`, then rotate the hash. Backs the
+/// `POST {prefix}/change-password` route (gaps3 #20).
+///
+/// Returns [`crate::AuthError::InvalidCredentials`] when `current` doesn't
+/// match, and [`crate::AuthError::WeakPassword`] when `new` fails the policy.
+/// Unlike [`reset_password`], this does NOT revoke sessions/tokens — the user
+/// proved knowledge of the current password, so no compromise is implied.
+pub async fn change_password(
+    user: &crate::AuthUser,
+    current: &str,
+    new: &str,
+) -> Result<(), crate::AuthError> {
+    // 1. The caller must know the current password.
+    if !crate::verify_password_async(current, &user.password_hash).await? {
+        return Err(crate::AuthError::InvalidCredentials);
+    }
+    // 2. The new password must pass the strength policy (the same
+    //    `validate_password` the register/reset boundaries use).
+    crate::validate_password(
+        new,
+        &crate::PasswordContext::new(Some(&user.username), Some(&user.email)),
+    )
+    .map_err(crate::AuthError::WeakPassword)?;
+    // 3. Rotate the hash.
+    let hash = crate::hash_password(new)?;
+    let mut delta = serde_json::Map::new();
+    delta.insert("password_hash".to_string(), serde_json::json!(hash));
+    crate::AuthUser::objects()
+        .filter(crate::auth_user::ID.eq(user.id))
+        .update_values(delta)
+        .await?;
+    Ok(())
+}
+
 pub async fn reset_password(token: &str, new_password: &str) -> Result<(), crate::AuthError> {
     let Some(challenge) =
         AuthChallenge::find_active_by_secret(token, PURPOSE_PASSWORD_RESET).await?

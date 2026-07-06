@@ -186,6 +186,78 @@ pub(crate) fn reset_url_base(headers: &HeaderMap) -> String {
     format!("{proto}://{host}/auth/reset")
 }
 
+#[derive(serde::Deserialize)]
+struct ChangePasswordIn {
+    current_password: String,
+    new_password: String,
+}
+
+/// `POST {prefix}/change-password` — `{current_password, new_password}` for the
+/// authenticated caller (session OR bearer). Verifies the current password,
+/// enforces the strength policy on the new one, rotates the hash. `204` on
+/// success; `401` unauthenticated; `400 invalid_credentials` (wrong current) /
+/// `400 weak_password` (policy).
+async fn change_password_h(
+    OptionalIdentity(id): OptionalIdentity,
+    Json(body): Json<ChangePasswordIn>,
+) -> Response {
+    let Some(id) = id else {
+        return err(
+            StatusCode::UNAUTHORIZED,
+            "not_authenticated",
+            "send a session cookie or a Bearer token",
+        );
+    };
+    let Ok(uid) = id.user_id.parse::<i64>() else {
+        return err(
+            StatusCode::UNAUTHORIZED,
+            "not_authenticated",
+            "session user id does not match the AuthUser PK shape",
+        );
+    };
+    let user: AuthUser = match AuthUser::objects()
+        .filter(auth_user::ID.eq(uid) & auth_user::IS_ACTIVE.eq(true))
+        .first()
+        .await
+    {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            return err(
+                StatusCode::UNAUTHORIZED,
+                "not_authenticated",
+                "user record went away between auth and lookup",
+            );
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "change-password: user lookup failed");
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "internal error",
+            );
+        }
+    };
+    match crate::change_password(&user, &body.current_password, &body.new_password).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(crate::AuthError::InvalidCredentials) => err(
+            StatusCode::BAD_REQUEST,
+            "invalid_credentials",
+            "current password is incorrect",
+        ),
+        Err(crate::AuthError::WeakPassword(reasons)) => {
+            err(StatusCode::BAD_REQUEST, "weak_password", reasons.join(" "))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "change-password: rotate failed");
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                "internal error",
+            )
+        }
+    }
+}
+
 /// Build the four-route Router under `prefix`. Called from
 /// `AuthPlugin::routes()` when `with_default_routes()` is on.
 pub(crate) fn build_router(prefix: &str) -> Router {
@@ -204,6 +276,14 @@ pub(crate) fn build_router(prefix: &str) -> Router {
         .route(&format!("{prefix}/logout/"), post(logout))
         .route(&format!("{prefix}/me"), umbral::web::get(me))
         .route(&format!("{prefix}/me/"), umbral::web::get(me))
+        .route(
+            &format!("{prefix}/change-password"),
+            post(change_password_h),
+        )
+        .route(
+            &format!("{prefix}/change-password/"),
+            post(change_password_h),
+        )
         .route(&format!("{prefix}/verify-email"), post(verify_email_h))
         .route(&format!("{prefix}/verify-email/"), post(verify_email_h))
         .route(
