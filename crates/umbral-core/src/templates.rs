@@ -1075,9 +1075,18 @@ pub fn render<C: Serialize>(name: &str, ctx: &C) -> Result<String, TemplateError
 
 /// Render an inline template source through the ambient-context path.
 /// Test/bench helper only.
+///
+/// SECURITY (audit_2 core-templates-forms #3): this builds a fresh
+/// `Environment`, whose minijinja default is `AutoEscape::None`. A no-escape
+/// inline renderer that's `pub` (even `#[doc(hidden)]`) is an SSTI/XSS foot-gun
+/// the moment any caller feeds it user data. We force `AutoEscape::Html` so
+/// `{{ x }}` escapes exactly like a `.html` template rendered through
+/// [`build_env`]; a caller that genuinely wants raw output opts in per value
+/// with minijinja's `| safe`.
 #[doc(hidden)]
 pub fn render_str<C: Serialize>(src: &str, ctx: &C) -> Result<String, TemplateError> {
     let mut env = minijinja::Environment::new();
+    env.set_auto_escape_callback(|_| AutoEscape::Html);
     env.add_template("__inline", src)
         .map_err(TemplateError::Render)?;
     render_with(&env, "__inline", ctx)
