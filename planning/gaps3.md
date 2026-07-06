@@ -94,3 +94,5 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
     - **[supply-chain SC-3 / SC-5]** `umbral-core` has no `[features]` table (feature-gating touches every consumer); `notify` pinned at 6 (7/8 are API-breaking, dev-only plugin).
 
 29. [ ] We need to start thinking about optimization ie what else can we move to the orm layer that is fully reimplemented everywhere, how can we improve the boilerplate.
+
+30. [x] SQLite `AlterColumn` (inbound FKs + data) → 787 — could NOT reproduce on main; already fixed in 0.0.5 (repro was on 0.0.4); engine-level regression test added — archived

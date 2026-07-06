@@ -145,3 +145,15 @@ From a full re-triage of the untouched `planning/audit_2/findings/*.md` against 
 - **[realtime #1]** — `cache_page` bypasses the shared cache on `Proxy-Authorization` and on `Vary: Cookie/Authorization/*`. Commit `091f0dcc`.
 
 (The two MEDIUM audit items — `render_str` autoescape `cadc061e` and `SecurityConfig::production_hardened()` `725ee6c3` — shipped earlier the same day.) Remaining audit residue is the big-design / live-Postgres set tracked in gaps3 #28.
+
+30. [x] SQLite `AlterColumn` (inbound FKs + data) → 787 — could NOT reproduce on main; already fixed in 0.0.5 (2026-07-07 investigation)
+
+Reported (from web3clubs_fc) as the "sharper, breaking" version of #24: an `AlterColumn` on a SQLite table with inbound FKs AND existing data aborting with `FOREIGN KEY constraint failed` (787), the proposed fix being SQLite's `PRAGMA foreign_keys=OFF` rebuild recipe.
+
+**Root cause of the report:** that exact recipe already shipped as **gaps3 #13** (commit `a60405a`, in `umbral-core-v0.0.5`, 2026-07-04) — `apply_sqlite_migration_tx` brackets the rebuild with `PRAGMA foreign_keys=OFF` (outside the tx) → rebuild → `PRAGMA foreign_key_check` before commit → `PRAGMA foreign_keys=ON`, on a pinned connection. **web3clubs_fc is on 0.0.4**, which predates it — that's why it 787'd there.
+
+**Verified NOT reproducible on main.** Every migrate entrypoint funnels through the fixed apply function: CLI `migrate` → `run_checked` → `run_in_sqlite_for_alias` → `apply_sqlite_migration_tx` (and `run()`/`run_in` likewise). `connect_sqlite` sets `foreign_keys(true)` (db.rs:604), so enforcement really is on. A new engine-driven test drives the REAL path end to end against a `connect_sqlite` pool, with the exact #30 shape — a `fixture` hub, three inbound-FK children (`attendance`/`goal`/`payment`), seeded rows, and a migration carrying BOTH pending alters (opponent `NOT NULL`→nullable rebuild + `status`→`Choices`, a SQLite no-op per #24): it applies cleanly, the hub row + every child FK row survive, and `opponent` is nullable afterward. No 787.
+
+**What was added:** `crates/umbral-core/tests/alter_inbound_fk_engine.rs`. The pre-existing `alter_column_inbound_fk.rs` (#13) applied the recipe BY HAND — it proved the recipe works but never that the engine *uses* it; this new test closes that gap and guards against a future refactor dropping the FK-off bracket. No production code change was needed.
+
+**Action for the reporter:** upgrade web3clubs_fc from 0.0.4 to 0.0.5+ (or the upcoming 0.0.6) to get the fix; the null-flip migrations it avoided will then apply against a populated local SQLite DB.
