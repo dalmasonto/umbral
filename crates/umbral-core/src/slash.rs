@@ -92,6 +92,13 @@ impl SlashRedirect {
     /// `alt` against the inner router after a 404 and redirects
     /// when the probe succeeds.
     pub fn alternate_path(&self, path: &str) -> Option<String> {
+        // audit_2 core-web #6: never build a redirect target from a
+        // protocol-relative path. `//evil.com` is parsed by browsers as
+        // `scheme://evil.com`, so a `Location: //evil.com/` would be an open
+        // redirect. Refuse it here (the single source of the alternate path).
+        if path.starts_with("//") {
+            return None;
+        }
         match self {
             SlashRedirect::Off => None,
             SlashRedirect::Append => {
@@ -244,6 +251,22 @@ mod tests {
     fn alternate_path_append_skips_already_slashed() {
         assert_eq!(SlashRedirect::Append.alternate_path("/foo/"), None);
         assert_eq!(SlashRedirect::Append.alternate_path("/"), None);
+    }
+
+    /// audit_2 core-web #6 — a `//`-prefixed path is protocol-relative
+    /// (`//evil.com` → `https://evil.com`). Building a redirect Location from it
+    /// would be an open redirect, so the policy must refuse to produce an
+    /// alternate path for one (defense-in-depth; the router normalizes today).
+    #[test]
+    fn alternate_path_refuses_protocol_relative_paths() {
+        assert_eq!(SlashRedirect::Append.alternate_path("//evil.com"), None);
+        assert_eq!(SlashRedirect::Append.alternate_path("//evil.com/x"), None);
+        assert_eq!(SlashRedirect::Strip.alternate_path("//evil.com/"), None);
+        // A legitimate single-slash path is unaffected.
+        assert_eq!(
+            SlashRedirect::Append.alternate_path("/foo"),
+            Some("/foo/".to_string())
+        );
     }
 
     #[test]

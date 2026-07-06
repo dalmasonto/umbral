@@ -885,7 +885,14 @@ pub fn collect_into_with(
             continue;
         }
 
-        let files = copy_tree(source_dir, namespace, storage, hashed, &mut manifest)?;
+        let files = copy_tree(
+            source_dir,
+            source_dir,
+            namespace,
+            storage,
+            hashed,
+            &mut manifest,
+        )?;
 
         summary.collected.push(CollectedNamespace {
             namespace,
@@ -904,7 +911,7 @@ pub fn collect_into_with(
         if !root.exists() {
             continue;
         }
-        let files = copy_tree(root, "", storage, hashed, &mut manifest)?;
+        let files = copy_tree(root, root, "", storage, hashed, &mut manifest)?;
         summary.root_files += files;
         summary.root_dirs.push(root.clone());
     }
@@ -937,6 +944,7 @@ pub fn collect_into_with(
 /// collect idempotent.
 fn copy_tree(
     src: &Path,
+    root: &Path,
     prefix: &str,
     storage: &dyn StaticStorage,
     hashed: bool,
@@ -965,8 +973,24 @@ fn copy_tree(
             format!("{prefix}/{name}")
         };
 
+        // audit_2 core-web #7: collect follows symlinks-to-files by design (see
+        // the `std::fs::read` note below), but a symlink whose target ESCAPES
+        // the source root would publish an arbitrary file (e.g. a link to
+        // `/etc/passwd`) into the world-readable static tree. Skip any symlink
+        // that doesn't canonicalise to a path under `root` — mirroring the
+        // serving-path containment in `resolve_under_root`.
+        if file_type.is_symlink() {
+            let contained = match (src_path.canonicalize(), root.canonicalize()) {
+                (Ok(target), Ok(root_c)) => target.starts_with(&root_c),
+                _ => false, // dangling / unresolvable → skip to be safe
+            };
+            if !contained {
+                continue;
+            }
+        }
+
         if file_type.is_dir() {
-            count += copy_tree(&src_path, &child_prefix, storage, hashed, manifest)?;
+            count += copy_tree(&src_path, root, &child_prefix, storage, hashed, manifest)?;
         } else {
             // Covers regular files and symlinks-to-files alike:
             // `std::fs::read` follows symlinks and reads the target
@@ -1131,6 +1155,41 @@ mod tests {
         // Lexically clean ("escape" is a Normal component), but
         // canonicalisation + containment catches the escape.
         assert!(resolve_under_root(root.path(), "escape").is_none());
+    }
+
+    /// audit_2 core-web #7 — `collect_static` must not publish a file a symlink
+    /// points to OUTSIDE the source tree (a link to `/etc/passwd` would land in
+    /// the world-readable static root). In-tree files still collect.
+    #[cfg(unix)]
+    #[test]
+    fn copy_tree_skips_symlinks_escaping_the_source_root() {
+        let src = tempfile::tempdir().expect("src");
+        let outside = tempfile::tempdir().expect("outside");
+        std::fs::write(outside.path().join("secret.txt"), b"TOPSECRET").expect("secret");
+        // A legit in-tree asset.
+        std::fs::write(src.path().join("app.css"), b"body{}").expect("asset");
+        // A symlink inside src pointing OUTSIDE it.
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            src.path().join("leak.txt"),
+        )
+        .expect("symlink");
+
+        let dest = tempfile::tempdir().expect("dest");
+        let storage = LocalStorage::new(dest.path().to_path_buf());
+        let mut manifest = BTreeMap::new();
+        let n = copy_tree(src.path(), src.path(), "", &storage, false, &mut manifest)
+            .expect("copy_tree");
+
+        assert!(
+            dest.path().join("app.css").exists(),
+            "the in-tree asset is collected"
+        );
+        assert!(
+            !dest.path().join("leak.txt").exists(),
+            "the escaping symlink must NOT be collected"
+        );
+        assert_eq!(n, 1, "only the one in-tree file is counted");
     }
 
     #[tokio::test]
