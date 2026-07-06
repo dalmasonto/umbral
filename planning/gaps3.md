@@ -31,25 +31,25 @@
 
 _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see [[project_web3clubs_fc_backend]]). Findings verified against umbral 0.0.5's actual surface — the app is on 0.0.4, so a few of its workarounds are already resolved (SQLite alter-with-inbound-FK #13, object-scope reads via `ResourceConfig::owned_by`/`.scope`, and `umbral_auth::validate_password` all now exist)._
 
-15. [ ] No `IntoResponse` for ORM errors → every handler re-declares `err500` and sprinkles `.map_err(err500)?`
+15. [x] No `IntoResponse` for ORM errors → every handler re-declares `err500` and sprinkles `.map_err(err500)?` — shipped (commit 0763d0c3)
 
     In the consumer, all 5 plugins open with an identical `fn err500<E: Display>(e: E) -> (StatusCode, String)` and every ORM terminal is `.map_err(err500)?`. The highest-volume boilerplate in the app. REST already has `impl IntoResponse for ApiError` + `From<WriteError>` (`plugins/umbral-rest/src/lib.rs:2222,2254`), but it's REST-internal — plain axum handlers can't reach it.
 
     **Proposal:** lift an `ApiError` (with `From<WriteError>`/`From<sqlx::Error>` + `IntoResponse`, safe-by-default opaque 500 like WEB-5) to `umbral-core` and re-export from the facade, so a plain handler returns `Result<Json<T>, umbral::ApiError>` and uses bare `?` on ORM calls.
 
-16. [ ] REST has read scoping (`owned_by`) but no owner-*injection* on create (`perform_create`)
+16. [x] REST has read scoping (`owned_by`) but no owner-*injection* on create (`perform_create`) — shipped (commit 4746e946)
 
     `ResourceConfig::owned_by("col")` / `.scope(...)` filter reads/updates to the caller's rows (audit_2 H1/P2), which the consumer didn't have on 0.0.4 (it hand-rolled `GET /api/me/*`). But there is still no way to *fill* an owner FK from the authenticated identity on **create** and reject a body-supplied value — so every "the member comes from the token, never the body" write (RSVP, chat post, payment record) bypasses REST for a bespoke handler.
 
     **Proposal:** `ResourceConfig::owner_field("member")` — on create, set the FK from the identity; ignore/reject a client-supplied value. Collapses most of the app's bespoke write handlers back into declarative REST.
 
-17. [ ] No lightweight typed current-user extractor — handlers parse `identity.user_id: String → i64` (~8×)
+17. [x] No lightweight typed current-user extractor — handlers parse `identity.user_id: String → i64` (~8×) — shipped (commit d84e91e2)
 
     `LoggedIn<AuthUser>` exists but does a DB fetch; the token-only `Identity` gives `user_id: Option<String>` (the PK-LCD), so every scoped handler repeats `let uid: i64 = identity.user_id.parse().map_err(|_| (UNAUTHORIZED, ...))?`.
 
     **Proposal:** `Identity::user_pk::<T: FromStr>() -> Result<T, _>` and/or a `CurrentUserId<T>(pub T)` extractor (no fetch, 401 on parse failure) generic over the app's PK type.
 
-18. [ ] No permission-gated extractor for plain handlers — `require_staff` copy-pasted across plugins
+18. [x] No permission-gated extractor for plain handlers — `require_staff` copy-pasted across plugins — shipped (commit c44c8a0c)
 
     REST `Permission` types (`IsStaff`, etc.) can only gate viewsets, so the app re-declares an identical `require_staff(&Identity) -> Result<i64, ApiErr>` in `fc-teams` and `fc-payments`.
 
