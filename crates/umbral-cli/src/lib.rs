@@ -486,6 +486,17 @@ async fn serve(
     app: App,
     addr_override: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // gaps3 #23: `App::builder().auto_migrate_on_serve()` applies pending
+    // migrations here — on the `serve` command ONLY, never during
+    // `makemigrations` / `migrate` / any other subcommand (which don't route
+    // through this fn). This owns the "migrate exactly when starting the server"
+    // logic that consumers otherwise hand-roll with an argv-sniffing guard.
+    if app.auto_migrate_on_serve_enabled() {
+        let n = umbral::migrate::run().await?;
+        if n > 0 {
+            eprintln!("auto-migrate: applied {n} migration(s)");
+        }
+    }
     let addr_str = match addr_override {
         Some(s) => s,
         None => umbral_core::settings::get().bind_addr.clone(),

@@ -22,9 +22,20 @@ type RouteContextResolver =
 pub struct App {
     router: Router,
     plugins: Vec<Box<dyn Plugin>>,
+    /// gaps3 #23: when true, `umbral_cli::dispatch` applies pending migrations
+    /// before starting the server (the `serve` command only) — so a fresh DB
+    /// "just works" WITHOUT running migrate during `makemigrations`/`migrate`
+    /// or any other subcommand. Opt in via [`AppBuilder::auto_migrate_on_serve`].
+    auto_migrate_on_serve: bool,
 }
 
 impl App {
+    /// Whether the app opted into auto-migrate on `serve` (gaps3 #23). Read by
+    /// `umbral_cli`'s serve path; see [`AppBuilder::auto_migrate_on_serve`].
+    pub fn auto_migrate_on_serve_enabled(&self) -> bool {
+        self.auto_migrate_on_serve
+    }
+
     /// Create a new [`AppBuilder`].
     pub fn builder() -> AppBuilder {
         // Load `.env` into the *process* environment so plain
@@ -142,6 +153,8 @@ pub struct AppBuilder {
     /// When `true` (the default), the embedded default 404/500 templates
     /// are used as fallbacks when the user hasn't supplied their own.
     default_error_pages: bool,
+    /// gaps3 #23: apply pending migrations on `serve` (opt-in).
+    auto_migrate_on_serve: bool,
     /// Path-scoped cross-origin policies (prefix → config), applied via
     /// [`AppBuilder::cors_for`]. Each is layered only onto requests whose
     /// path starts with the prefix (e.g. `"/api"`).
@@ -214,6 +227,7 @@ impl Default for AppBuilder {
             error_templates: HashMap::new(),
             server_error_hook: None,
             default_error_pages: true,
+            auto_migrate_on_serve: false,
             cors: None,
             cors_scoped: Vec::new(),
             atomic_transactions: None,
@@ -502,6 +516,25 @@ impl AppBuilder {
     ///     .disable_default_error_pages()
     ///     .build()?
     /// ```
+    /// gaps3 #23: apply pending migrations automatically when the app is
+    /// STARTED (`umbral_cli::dispatch` → the `serve` command), and NEVER during
+    /// `makemigrations` / `migrate` / any other subcommand. This replaces the
+    /// argv-sniffing guard consumers hand-rolled in `main.rs` to avoid
+    /// auto-migrating during CLI commands:
+    ///
+    /// ```ignore
+    /// let app = App::builder().auto_migrate_on_serve().plugin(...).build()?;
+    /// umbral_cli::dispatch(app).await   // migrate runs iff this serves
+    /// ```
+    ///
+    /// A convenience for demos / small apps; a large deploy still runs
+    /// `migrate` as an explicit release step. Seeding stays app-owned (a
+    /// plugin's `on_ready` or an explicit call).
+    pub fn auto_migrate_on_serve(mut self) -> Self {
+        self.auto_migrate_on_serve = true;
+        self
+    }
+
     pub fn disable_default_error_pages(mut self) -> Self {
         self.default_error_pages = false;
         self
@@ -1440,6 +1473,7 @@ impl AppBuilder {
         Ok(App {
             router,
             plugins: sorted_plugins,
+            auto_migrate_on_serve: self.auto_migrate_on_serve,
         })
     }
 }
