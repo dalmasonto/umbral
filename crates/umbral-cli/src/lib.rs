@@ -365,6 +365,33 @@ async fn squashmigrations(plugin: String) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+/// The built-in commands that need NO project — no `App`, database, settings,
+/// or compiled models — and can therefore run standalone. Every OTHER command
+/// (`serve`, `migrate`, `makemigrations`, `seed_data`, …) needs the project's
+/// compiled `App`, so the global `umbral` binary forwards it to
+/// `cargo run -- <cmd>` instead.
+///
+/// Keep this in sync with [`try_run_standalone`]. It's a list, not a special
+/// case: add a project-independent utility here and both the global binary and
+/// `cargo run -- <cmd>` pick it up.
+pub const STANDALONE_COMMANDS: &[&str] = &["maskkeygen"];
+
+/// If `argv` names a [project-independent](STANDALONE_COMMANDS) built-in, run it
+/// and return `Some(result)`. Return `None` otherwise, so the caller (the global
+/// `umbral` binary) forwards the command to the project via `cargo run`.
+///
+/// This is what lets `umbral maskkeygen` work anywhere — including outside a
+/// project — without a build, while `umbral migrate` / `umbral seed_data` still
+/// forward to the compiled project that actually owns those commands.
+pub fn try_run_standalone(
+    argv: &[String],
+) -> Option<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    match argv.first().map(String::as_str) {
+        Some("maskkeygen") => Some(maskkeygen()),
+        _ => None,
+    }
+}
+
 /// Generate a fresh `Masked<T>` field-encryption keypair and print the
 /// two env-var lines. The public key encrypts (every tier that writes
 /// masked data needs it); the private key decrypts (`reveal()`) and

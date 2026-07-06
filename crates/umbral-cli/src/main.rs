@@ -28,8 +28,9 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "umbral",
-    about = "umbral CLI. Scaffolds projects (startproject/startapp/startplugin); \
-             any other command (dev, migrate, serve, …) is forwarded to \
+    about = "umbral CLI. Scaffolds projects (startproject/startapp/startplugin) and \
+             runs project-free utilities (maskkeygen) directly; every other command \
+             (serve, migrate, makemigrations, worker, seed_data, …) is forwarded to \
              `cargo run -- <command>` in the current project.",
     disable_help_subcommand = true
 )]
@@ -140,8 +141,22 @@ fn forward_to_project(args: &[String]) -> ExitCode {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    // Non-scaffolding commands forward to the project's `cargo run -- <cmd>`.
+    // Non-scaffolding commands are handled in one of two ways:
+    //   1. Project-INDEPENDENT built-ins (e.g. `maskkeygen`) run right here —
+    //      no project, no `cargo run` build. See `STANDALONE_COMMANDS`.
+    //   2. Everything else (`serve`, `migrate`, `seed_data`, custom plugin
+    //      commands, …) needs the project's compiled `App`, so it forwards to
+    //      `cargo run -- <cmd>` in the current project.
     if let Command::Forward(args) = &cli.command {
+        if let Some(result) = umbral_cli::try_run_standalone(args) {
+            return match result {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         return forward_to_project(args);
     }
     let result = match cli.command {
