@@ -65,7 +65,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 40. [x] I haven't seen any places for signals! Also this goes hand in hand with the Tasks plugin. We need … — archived
 41. [x] The commands are not well explained, even with basic usage. … — archived
 42. [x] No doc illustrating use of umbral.toml or .env anywhere. This is part of env and settings module — archived
-43. [ ] Can a plugin be extended ie extension of AdminPlugin with more features maybe, like more pages, components, etc
+43. [x] Plugin/admin extensibility — `AdminView` custom pages + `register_widget` components shipped — archived
 44. [x] I forgot - When creating models, is it possible we define display name and icon (ie "users" for a … — archived
 45. [x] The admin templates, both base.html and login.html have the same general layout ie tailwind config, … — archived
 46. [x] We want a way of defining the string method of a column. Instead of displaying all the columns, … — archived
@@ -131,7 +131,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 67. [x] Static files pipeline — STATIC_URL/static_root settings, Plugin::static_dirs(), collect_static command, unified /static/ serving (admin + playground migrated) — archived
 68. [x] Expose on_delete and on_update for ForeignKeys — archived
 69. [x] How do we do foreignkeys to self, some frameworks use a string rep of the model name to refer to … — archived
-70. [ ] Cache middleware improvements ie ability to control cache through redis, in memory or in other ways. Should be easy to use. Redis has sorted sets and can be used for caching with TTL. So for caching, we should fully explore redis options and have it as CachePlugin::Redis, or memcache as CachePlugin::Memcache etc
+70. [x] Cache middleware (Redis / in-memory / SQLite backends) shipped; memcached the only deferred backend — archived
 71. [x] The current PLaygroundPlugin does not take in app name, meaning the playground is not properly … — archived
 72. [x] ./plugins/umbral-rest/src/auth.rs ln 57 is wrong, I thought we improved … — archived
 73. [x] Variables in the playground are not being stored. Also the variables are hidden using password … — archived
@@ -141,7 +141,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 77. [x] Does the ORM auto emit database changes? This will be good for audit logs, this way, we audit log … — archived
 78. [x] RestPlugin expand Fks and M2M relationships - This is more like a feature where a user, in the rest plugin setup, can select tables and expand specific relationships (Fks and M2M) to see the related data. Since data can be nested around tables, we need to support this recursively like 1 level by another, the user has to define that.
        — Deferred. The ORM has `select_related` for FKs, but RestPlugin's `fetch_rows` doesn't thread it. Scope: a `ResourceConfig::expand([("author", 1), ("comments", 2)])` builder method, then in the row-building path do per-row JOINs / batched SELECTs (N+1 avoidance via `IN`-list grouping), then nest the result under the FK column name. Depth control needs an explicit limit to stop accidental quadratic explosion. Separate spec; pairs naturally with the OpenAPI plugin so the `$ref` chain reflects expand depth - This seems to have been done already using the include query parameter
-79. [ ] What is the protection we have for migrations ie a migration might be faulty in a given plugin, how do we protect the developer from crashing their backend because of some faulty plugin? I know of the fake apply a given migration. Do we have the right protections in place for any random migration related issues?
+79. [x] Migration crash protections — drift detection, checkmigrations safety-classification, destructive-op gate, fake/fake_initial recovery all shipped — archived
        — Deferred (research). Survey first: what fails today (unsafe ALTERs already guarded by the `UnsafeAlter { reason }` whitelist in `crates/umbral-core/src/migrate.rs`; per-migration snapshot_hash mismatches caught in the tracking table; `--fake` exists), and what's missing (transactional per-plugin migrations on Postgres so a failure rolls back the whole plugin batch; a `--dry-run` flag that prints the SQL without executing; a `migrate --plan` that shows the topological order with detected-rename pairings; per-step abort messages that name the failing migration file + line). Then design. Bundles cleanly with gap #66 (MySQL) since each backend has different transactional-DDL guarantees.
 80. [x] We haven't exposed the Cors middleware to the user yet. Either we set it up as a plugin or expose … — archived
 81. [x] RestPlugin improvements - We added search by default, can we add another param, like search, but … — archived
