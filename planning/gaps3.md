@@ -61,11 +61,9 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     **Proposal:** either a swappable user model (Django `AUTH_USER_MODEL`) or a first-class "profile" helper the auth plugin owns (auto-create-on-insert signal + backfill), so consumers stop rebuilding this.
 
-20. [ ] Auth ships no authenticated change-password route, and `set_password` skips the strength policy
+20. [x] Auth ships no authenticated change-password route, and `set_password` skips the strength policy — shipped (commit 926d1c11)
 
-    Default auth routes are login/logout/signup/verify-email/resend/password-forgot/password-reset (`plugins/umbral-auth/src/form_routes.rs:433`) — no change-password. `umbral_auth::validate_password` IS public (the app just reinvented an 8-char check), but `set_password` (`lib.rs:1338`) doesn't call it.
-
-    **Proposal:** add a `change-password` default route (verify current → validate → rotate), and either run `validate_password` inside `set_password` or document the pairing loudly.
+    Shipped `change_password(user, current, new)` (verify current via `verify_password_async` → `validate_password` on the new → rotate the hash) plus a default `POST {prefix}/change-password` route (204 on success; 401 invalid_credentials; 400 weak_password). TDD: `plugins/umbral-auth/tests/change_password.rs`.
 
 21. [ ] No `DecimalField` / money type — consumers fall back to `i64` "whole units" to dodge float
 
@@ -75,13 +73,13 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     `And(IsAuthenticated, Or(ReadOnly, IsStaff))` is the app's most-used gate (fixtures, attendance, announcements, chat, teams) and reads as verbose dyn-boxing. **Proposal:** ship a named `IsAuthenticatedOrReadOnly` (DRF-style) and/or `.and()`/`.or()` combinators on `Permission` so consumers stop hand-boxing.
 
-23. [ ] No `serve`-only migrate/seed lifecycle — apps hand-roll argv sniffing
+23. [x] No `serve`-only migrate/seed lifecycle — apps hand-roll argv sniffing — shipped (commit aad2c684)
 
-    The consumer inspects `std::env::args()` in `main.rs` to avoid `auto_migrate()` firing during `makemigrations`/`migrate` CLI commands. **Proposal:** `App::auto_migrate_on_serve()` / an `on_serve` hook that runs only for the `serve` subcommand.
+    Shipped `AppBuilder::auto_migrate_on_serve()` (opt-in flag on the built `App`, read via `auto_migrate_on_serve_enabled()`). The CLI `serve` path runs `migrate::run()` before binding *only* when the flag is set, so `makemigrations`/`migrate` subcommands never trip an ambient auto-migrate. TDD: `crates/umbral-core/tests/auto_migrate_on_serve.rs`.
 
-24. [ ] Adding a `Choices` variant forces a full `AlterColumn` table rebuild (unnecessary churn)
+24. [x] Adding a `Choices` variant forces a full `AlterColumn` table rebuild (unnecessary churn) — shipped (commit a86967a6)
 
-    `fc_payments` migrated `status` to `Choices` then just added a `"waived"` variant — each a full `AlterColumn` (whole-table rebuild on SQLite) though the storage type stays `Text`. **Proposal:** the autodetector should treat a choices-list-only delta as a no-op on SQLite (TEXT-backed, no CHECK) / a lightweight CHECK swap on PG, not a table rebuild. Also indirectly discourages `Choices` adoption (app left most closed-set fields as hand-validated `String`).
+    Shipped `alter_is_choices_only`: the SQLite `AlterColumn` renderer now short-circuits to *no DDL* when the only column difference is `choices`/`choice_labels` (choices aren't a DB CHECK on SQLite — `build_column_def_sqlite` emits none — so the rebuild produced a byte-identical table). Postgres, which stores `CHECK (col IN (...))`, still swaps the constraint via its own renderer. The op is still recorded; only the SQLite render is empty. TDD: `crates/umbral-core/tests/choices_only_alter_sqlite.rs`.
 
 25. [x] ORM SQLite write transactions used `BEGIN DEFERRED` → SQLITE_BUSY under concurrent writes — shipped `BEGIN IMMEDIATE` (commit 7a03c196)
 
