@@ -3587,6 +3587,11 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
 
     let mut ops: Vec<Operation> = Vec::new();
 
+    // gaps.md #93: every table rename `diff` decides on (old_table → new_table),
+    // recorded so Pass 4 can rename the parent's M2M junctions instead of
+    // dropping + recreating them (which would destroy every relationship row).
+    let mut renamed_tables: BTreeMap<String, String> = BTreeMap::new();
+
     // ---- Pass 0: Walk models present in both snapshots (same NAME). ----
     // Same-name models with a different table produce a first-pass rename.
     // Same-name models with identical table+columns produce nothing.
@@ -3613,6 +3618,7 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
                     from: prev.table.clone(),
                     to: curr.table.clone(),
                 });
+                renamed_tables.insert(prev.table.clone(), curr.table.clone());
                 // After the rename the columns might also have changed; diff them.
                 let col_ops = diff_columns(name, prev, curr)?;
                 ops.extend(col_ops);
@@ -3675,6 +3681,7 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
                         from: drop.table.clone(),
                         to: create.table.clone(),
                     });
+                    renamed_tables.insert(drop.table.clone(), create.table.clone());
                     paired_drop_tables.insert(drop.table.as_str());
                     paired_create_tables.insert(create.table.as_str());
                     continue 'creates;
@@ -3788,15 +3795,47 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
 
     // ---- Pass 4: Diff M2M relations. Closes the remaining BUG-16 gap. ----
     //
-    // Treat each (parent_table, field_name) pair as a junction-table
-    // identity. Compare the flattened set across snapshots and emit
-    // CreateM2MTable / DropM2MTable per delta. Renames of the parent
-    // model trip a Drop + Create on the junction; the rename-tracking
-    // we'd need to do better is ambitious enough to defer.
+    // Treat each (parent_table, field_name) pair as a junction-table identity.
+    // Compare the flattened set across snapshots and emit CreateM2MTable /
+    // DropM2MTable per delta.
+    //
+    // gaps.md #93: when the PARENT model was renamed (Pass 0/1), its junction's
+    // key moves from `(old_table, field)` to `(new_table, field)` — which would
+    // otherwise read as one junction dropped and a different one created,
+    // destroying every relationship row. Detect that case via `renamed_tables`
+    // and emit a plain `RenameTable` on the junction instead. The junction's
+    // columns are generic (`parent_id`/`child_id`) and its FK to the parent is
+    // auto-updated by the parent's own rename, so a table rename is sufficient.
     let prev_m2m = collect_m2m_pairs(previous);
     let curr_m2m = collect_m2m_pairs(current);
+
+    // Prev junction keys consumed by a junction rename below — skip their drop.
+    let mut renamed_prev_junctions: HashSet<(String, String)> = HashSet::new();
+
     for (key, spec) in &curr_m2m {
         if prev_m2m.contains_key(key) {
+            continue;
+        }
+        let (new_parent, field) = key;
+        // Was this junction's parent renamed FROM some old table? If the prior
+        // snapshot has the same field on that old parent, targeting the same
+        // table, it's a junction rename, not a fresh create.
+        let renamed_from = renamed_tables
+            .iter()
+            .find(|(_, new)| *new == new_parent)
+            .and_then(|(old, _)| {
+                let old_key = (old.clone(), field.clone());
+                prev_m2m.get(&old_key).and_then(|old_spec| {
+                    (old_spec.target_table == spec.target_table).then_some(old_key)
+                })
+            });
+        if let Some(old_key) = renamed_from {
+            let old_junction = prev_m2m[&old_key].junction_table.clone();
+            ops.push(Operation::RenameTable {
+                from: old_junction,
+                to: spec.junction_table.clone(),
+            });
+            renamed_prev_junctions.insert(old_key);
             continue;
         }
         // New M2M field on an existing or new model. Resolve the
@@ -3807,7 +3846,7 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
         }
     }
     for (key, spec) in &prev_m2m {
-        if curr_m2m.contains_key(key) {
+        if curr_m2m.contains_key(key) || renamed_prev_junctions.contains(key) {
             continue;
         }
         // M2M field removed (or its parent was dropped). The junction

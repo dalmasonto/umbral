@@ -14,7 +14,9 @@
 //! - **DDL:** `RenameTable` renders to `ALTER TABLE "from" RENAME TO "to"`
 //!   on both backends.
 
-use umbral_core::migrate::{Column, ModelMeta, Operation, Snapshot, diff, render_operation_for};
+use umbral_core::migrate::{
+    Column, M2MRelation, ModelMeta, Operation, Snapshot, diff, render_operation_for,
+};
 use umbral_core::orm::SqlType;
 
 // =========================================================================
@@ -375,6 +377,90 @@ fn rename_table_ddl_sqlite() {
 // =========================================================================
 // Test 6: DDL rendering for RenameTable on Postgres
 // =========================================================================
+
+// =========================================================================
+// Test 7: Renaming a parent model RENAMES its M2M junction (gaps.md #93)
+// =========================================================================
+
+/// A model with an `M2M<Tag>` field is renamed (`article` → `post`). The
+/// junction, whose name is `<parent_table>_<field>`, must be RENAMED
+/// (`article_tags` → `post_tags`) — not dropped and recreated, which would
+/// destroy every relationship row. The junction's columns are generic
+/// (`parent_id`/`child_id`) and its FK to the parent is auto-updated by the
+/// parent's own rename, so a plain table rename is sufficient.
+#[test]
+fn parent_rename_renames_its_m2m_junction_not_drop_create() {
+    let tag = make_meta("Tag", "tag", vec![id_col()]);
+
+    let mut article_prev = make_meta("Article", "article", vec![id_col(), title_col()]);
+    article_prev.m2m_relations = vec![M2MRelation {
+        field_name: "tags".to_string(),
+        target_table: "tag".to_string(),
+        target_name: "Tag".to_string(),
+    }];
+    // Same struct NAME, table renamed article → post (first-pass rename).
+    let mut article_curr = article_prev.clone();
+    article_curr.table = "post".to_string();
+
+    let prev = make_snapshot(vec![tag.clone(), article_prev]);
+    let curr = make_snapshot(vec![tag, article_curr]);
+
+    let ops = diff(&prev, &curr).expect("diff should not error");
+
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, Operation::RenameTable { from, to }
+            if from == "article" && to == "post")),
+        "the parent table must rename article → post; ops: {ops:?}"
+    );
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, Operation::RenameTable { from, to }
+            if from == "article_tags" && to == "post_tags")),
+        "the junction must be RENAMED article_tags → post_tags, not drop+create; ops: {ops:?}"
+    );
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Operation::DropM2MTable { .. })),
+        "the junction must NOT be dropped (would destroy the relationship rows); ops: {ops:?}"
+    );
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Operation::CreateM2MTable { .. })),
+        "the junction must NOT be recreated; ops: {ops:?}"
+    );
+}
+
+/// Guard: a genuinely NEW M2M field (no parent rename) still emits
+/// CreateM2MTable — the rename detection must not swallow a real create.
+#[test]
+fn new_m2m_without_parent_rename_still_creates_junction() {
+    let tag = make_meta("Tag", "tag", vec![id_col()]);
+    let article_prev = make_meta("Article", "article", vec![id_col(), title_col()]);
+    let mut article_curr = article_prev.clone();
+    article_curr.m2m_relations = vec![M2MRelation {
+        field_name: "tags".to_string(),
+        target_table: "tag".to_string(),
+        target_name: "Tag".to_string(),
+    }];
+
+    let prev = make_snapshot(vec![tag.clone(), article_prev]);
+    let curr = make_snapshot(vec![tag, article_curr]);
+
+    let ops = diff(&prev, &curr).expect("diff should not error");
+    assert!(
+        ops.iter().any(
+            |op| matches!(op, Operation::CreateM2MTable { junction_table, .. }
+            if junction_table == "article_tags")
+        ),
+        "a new M2M field must create its junction; ops: {ops:?}"
+    );
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Operation::RenameTable { .. })),
+        "no table was renamed; ops: {ops:?}"
+    );
+}
 
 #[test]
 fn rename_table_ddl_postgres() {
