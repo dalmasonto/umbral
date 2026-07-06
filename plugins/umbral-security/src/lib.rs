@@ -239,6 +239,40 @@ impl Default for SecurityConfig {
 }
 
 impl SecurityConfig {
+    /// A production-grade preset (audit_2 plugin-authz S1). The defaults are
+    /// deliberately dev-safe — HSTS, CSP, and cross-origin isolation are OFF so
+    /// local HTTP dev works — but that leaves a default deployment without an
+    /// XSS backstop (no CSP) or SSL-stripping protection (no HSTS). Rather than
+    /// have every operator hand-assemble a config and risk forgetting one, this
+    /// turns on the headline prod headers in a single call:
+    ///
+    /// - `hsts` + `hsts_preload` (long max-age, subdomains, preload-eligible),
+    /// - a strict `content_security_policy` baseline (`default-src 'self'` with
+    ///   `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'self'`) —
+    ///   loosen it per app as needed,
+    /// - `cross_origin_resource_policy: same-origin` (COOP is already same-origin
+    ///   by default),
+    /// - `csrf_cookie_secure` (prod serves over HTTPS, so the CSRF cookie should
+    ///   carry the `Secure` attribute).
+    ///
+    /// Everything else keeps the secure defaults (`csrf`, `signed_csrf`,
+    /// `nosniff`, `X-Frame-Options: DENY`, referrer policy). Note the strict CSP
+    /// has no `'unsafe-inline'`, so inline `<script>`/`<style>` won't run —
+    /// adjust the policy for your asset strategy.
+    pub fn production_hardened() -> Self {
+        Self {
+            hsts: true,
+            hsts_preload: true,
+            content_security_policy: Some(
+                "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+                    .to_string(),
+            ),
+            cross_origin_resource_policy: Some("same-origin".to_string()),
+            csrf_cookie_secure: true,
+            ..Self::default()
+        }
+    }
+
     fn hsts_value(&self) -> String {
         let mut v = format!("max-age={}", self.hsts_max_age);
         if self.hsts_include_subdomains {
@@ -266,6 +300,13 @@ impl SecurityPlugin {
     /// Construct from an explicit config — the preferred entry point.
     pub fn with_config(config: SecurityConfig) -> Self {
         Self { config }
+    }
+
+    /// The production-hardening preset — HSTS + a strict CSP + CORP +
+    /// Secure CSRF cookie in one call. See
+    /// [`SecurityConfig::production_hardened`] for exactly what it flips.
+    pub fn production_hardened() -> Self {
+        Self::with_config(SecurityConfig::production_hardened())
     }
 
     /// Borrow the active config.
