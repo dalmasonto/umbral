@@ -82,7 +82,6 @@
 //! - Typed event enums with compile-time emitter/subscriber agreement.
 //! - Cross-process broadcast (Redis / NATS adapter).
 //! - Signal `disconnect` / per-call `disable` for testing.
-//! - `m2m_changed` signals for many-to-many relationships.
 
 use std::future::Future;
 use std::marker::PhantomData;
