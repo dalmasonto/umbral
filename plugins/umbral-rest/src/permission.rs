@@ -120,6 +120,26 @@ pub trait Permission: Send + Sync + 'static {
     fn is_open(&self) -> bool {
         false
     }
+
+    /// Combine with another permission — passes only when BOTH pass. A fluent
+    /// alternative to `AndPermission::new(vec![Box::new(a), Box::new(b)])` that
+    /// keeps the dyn-boxing out of `main.rs`: `IsAuthenticated.and(IsStaff)`.
+    fn and<P: Permission>(self, other: P) -> AndPermission
+    where
+        Self: Sized,
+    {
+        AndPermission::new(vec![Box::new(self), Box::new(other)])
+    }
+
+    /// Combine with another permission — passes when EITHER passes.
+    /// `ReadOnly.or(IsStaff)`. Chainable with [`Self::and`]:
+    /// `IsAuthenticated.and(ReadOnly.or(IsStaff))`.
+    fn or<P: Permission>(self, other: P) -> OrPermission
+    where
+        Self: Sized,
+    {
+        OrPermission::new(vec![Box::new(self), Box::new(other)])
+    }
 }
 
 // =========================================================================
@@ -185,6 +205,20 @@ impl Permission for ReadOnly {
     }
 }
 
+/// DRF's `IsAuthenticatedOrReadOnly`: safe (read) methods for ANYONE, writes
+/// only for authenticated callers. Equivalent to `ReadOnly.or(IsAuthenticated)`,
+/// shipped as a named preset because it's one of the most common resource gates.
+pub struct IsAuthenticatedOrReadOnly;
+
+impl Permission for IsAuthenticatedOrReadOnly {
+    fn check(&self, action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
+        if action.is_read() {
+            return Ok(());
+        }
+        IsAuthenticated.check(action, identity)
+    }
+}
+
 // =========================================================================
 // Combinators: AND / OR
 // =========================================================================
@@ -247,6 +281,45 @@ mod tests {
     }
     fn admin() -> Identity {
         Identity::user(2).staff()
+    }
+
+    #[test]
+    fn and_or_combinators_compose_without_dyn_boxing() {
+        // The consumer's most-used gate — "read for any authenticated user,
+        // write only for staff" — as a fluent chain instead of
+        // `Box::new(And(IsAuthenticated, Or(ReadOnly, IsStaff))) as Box<dyn _>`.
+        let perm = IsAuthenticated.and(ReadOnly.or(IsStaff));
+        assert!(perm.check(&Action::List, None).is_err(), "anon read denied");
+        assert!(
+            perm.check(&Action::List, Some(&alice())).is_ok(),
+            "authed read ok"
+        );
+        assert!(
+            perm.check(&Action::Create, Some(&alice())).is_err(),
+            "authed non-staff write denied"
+        );
+        assert!(
+            perm.check(&Action::Create, Some(&admin())).is_ok(),
+            "staff write ok"
+        );
+    }
+
+    #[test]
+    fn is_authenticated_or_read_only_preset() {
+        // DRF's IsAuthenticatedOrReadOnly: anyone reads, authenticated writes.
+        let perm = IsAuthenticatedOrReadOnly;
+        assert!(
+            perm.check(&Action::List, None).is_ok(),
+            "anon read ok (safe method)"
+        );
+        assert!(
+            perm.check(&Action::Create, None).is_err(),
+            "anon write denied"
+        );
+        assert!(
+            perm.check(&Action::Create, Some(&alice())).is_ok(),
+            "authed write ok"
+        );
     }
 
     #[test]

@@ -69,8 +69,8 @@ pub use auth::{
 
 pub mod permission;
 pub use permission::{
-    Action, AllowAny, AndPermission, IsAuthenticated, IsStaff, OrPermission, Permission,
-    PermissionError, ReadOnly,
+    Action, AllowAny, AndPermission, IsAuthenticated, IsAuthenticatedOrReadOnly, IsStaff,
+    OrPermission, Permission, PermissionError, ReadOnly,
 };
 
 pub mod throttle;
