@@ -4228,12 +4228,27 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
         ],
         Operation::AlterColumn {
             table,
-            column: _,
+            column,
             new_columns,
-            prev_columns: _,
+            prev_columns,
             unique_together,
             indexes,
-        } => render_alter_column_dance_sqlite(table, new_columns, unique_together, indexes),
+        } => {
+            // gaps3 #24: choices are Rust-enforced on SQLite (build_column_def_sqlite
+            // emits no CHECK), so an alter that ONLY changes this column's
+            // choices/labels is invisible to the schema. Skip the otherwise
+            // byte-identical table-recreation dance. Postgres still swaps its
+            // CHECK constraint via the Postgres renderer, so the op is still
+            // emitted and recorded — only the SQLite render short-circuits.
+            if prev_columns
+                .as_ref()
+                .is_some_and(|prev| alter_is_choices_only(column, prev, new_columns))
+            {
+                Vec::new()
+            } else {
+                render_alter_column_dance_sqlite(table, new_columns, unique_together, indexes)
+            }
+        }
         Operation::CreateM2MTable {
             junction_table,
             parent_table,
@@ -4479,6 +4494,32 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
 /// Nullable `TRUE -> FALSE` fails at step 2 if any row holds NULL,
 /// which is the correct data-integrity behaviour. Nullable
 /// `FALSE -> TRUE` always succeeds.
+/// gaps3 #24: true when an `AlterColumn` on `column` changes ONLY the closed-set
+/// `choices` / `choice_labels` — every schema-relevant field (type, nullable,
+/// unique, default, FK, on_delete/update, pk, length, multichoice) is identical.
+/// On SQLite such a delta is a no-op: choices are enforced in Rust there, not by
+/// a DB CHECK, so rebuilding the table would produce a byte-identical schema.
+fn alter_is_choices_only(column: &str, prev: &[Column], new: &[Column]) -> bool {
+    let (Some(p), Some(n)) = (
+        prev.iter().find(|c| c.name == column),
+        new.iter().find(|c| c.name == column),
+    ) else {
+        return false;
+    };
+    let choices_changed = p.choices != n.choices || p.choice_labels != n.choice_labels;
+    let schema_same = p.ty == n.ty
+        && p.nullable == n.nullable
+        && p.unique == n.unique
+        && p.default == n.default
+        && p.fk_target == n.fk_target
+        && p.on_delete == n.on_delete
+        && p.on_update == n.on_update
+        && p.primary_key == n.primary_key
+        && p.max_length == n.max_length
+        && p.is_multichoice == n.is_multichoice;
+    choices_changed && schema_same
+}
+
 fn render_alter_column_dance_sqlite(
     table: &str,
     new_columns: &[Column],
