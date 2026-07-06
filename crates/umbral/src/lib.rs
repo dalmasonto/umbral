@@ -255,14 +255,15 @@ pub mod migrate {
     pub use umbral_core::migrate::{
         APP_PLUGIN_NAME, ClassifiedOp, Column, DriftReport, M2MRelation, MIGRATIONS_DIR,
         MigrateError, MigrationEntry, MigrationFile, MigrationRef, MigrationStatus, ModelMeta,
-        OpSafety, Operation, Snapshot, check_pending_safety, check_pending_safety_in,
-        classify_operation, detect_all_drift, detect_drift, diff, fake_apply, fake_apply_in,
-        fake_initial, fake_initial_in, fk_effective_type, is_initialised, make, make_empty,
-        make_empty_in, make_in, migrate_apps_into_pool, migrate_apps_into_pool_in, model_alias,
-        model_meta_for_table, models_for_plugin, pk_meta_for_table, plugin_order, record_applied,
-        registered_api_endpoints, registered_models, registered_plugins, render_operation_for, run,
-        run_checked, run_checked_in, run_for_schema, run_for_schema_in, run_in, run_shared,
-        run_shared_in, show, show_in, table_alias,
+        OpSafety, Operation, Snapshot, SquashOutcome, check_pending_safety,
+        check_pending_safety_in, classify_operation, detect_all_drift, detect_drift, diff,
+        fake_apply, fake_apply_in, fake_initial, fake_initial_in, fk_effective_type,
+        is_initialised, make, make_empty, make_empty_in, make_in, migrate_apps_into_pool,
+        migrate_apps_into_pool_in, model_alias, model_meta_for_table, models_for_plugin,
+        pk_meta_for_table, plugin_order, record_applied, registered_api_endpoints,
+        registered_models, registered_plugins, render_operation_for, run, run_checked,
+        run_checked_in, run_for_schema, run_for_schema_in, run_in, run_shared, run_shared_in, show,
+        show_in, squash_in, table_alias,
     };
 }
 
@@ -537,13 +538,13 @@ pub mod web {
     //! axum). Later milestones will add umbral-specific wrappers without
     //! changing the names here.
 
+    pub use umbral_core::api_error::ApiError;
     pub use umbral_core::slash::SlashRedirect;
     pub use umbral_core::web::multipart::{
         FilePart, MultipartError, MultipartForm, MultipartUploadError, is_multipart,
         parse_and_store_multipart, parse_multipart,
     };
     pub use umbral_core::web::*;
-    pub use umbral_core::api_error::ApiError;
 }
 
 pub mod orm {

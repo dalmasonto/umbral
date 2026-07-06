@@ -100,6 +100,7 @@ fn write_boundary_data_migration(dir: &Path, snapshot: umbral::migrate::Snapshot
             reverse_sql: Some("DELETE FROM subscription".to_string()),
         }],
         snapshot_after: snapshot,
+        replaces: Vec::new(),
     };
     let plugin_dir = dir.join("app");
     std::fs::create_dir_all(&plugin_dir).expect("create app dir");

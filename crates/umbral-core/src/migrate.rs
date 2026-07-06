@@ -1171,6 +1171,14 @@ pub struct MigrationFile {
     /// The full snapshot of every model after this migration has run.
     /// Source of truth for the next `make` to diff against.
     pub snapshot_after: Snapshot,
+    /// gaps2 #100: when non-empty, this is a *squash* — it collapses the
+    /// listed predecessor migrations into one optimized file. The originals
+    /// are kept on disk (non-destructive) so older deploys still migrate; the
+    /// runner treats the squash and its replaced set as mutually exclusive
+    /// (see [`squash_plan`]). Empty for an ordinary migration; `#[serde(default)]`
+    /// so every pre-squash file on disk deserializes unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<MigrationRef>,
 }
 
 /// A pointer to one (plugin, migration_id) pair.
@@ -1178,6 +1186,136 @@ pub struct MigrationFile {
 pub struct MigrationRef {
     pub plugin: String,
     pub migration: String,
+}
+
+/// gaps2 #100 — what the runner does with one on-disk migration file, given the
+/// tracking-table's applied-set. The decision is pure and backend-agnostic; the
+/// only DB-specific step downstream is *how* a tracking row is written, never
+/// *whether* the file's operations run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyDecision {
+    /// Run the file's operations, then record it in the tracking table. The
+    /// normal "pending migration" path.
+    Apply,
+    /// Do nothing: the migration is already applied, or it's an original that a
+    /// squash the runner is using has shadowed (running it too would
+    /// double-apply the schema the squash already built).
+    Skip,
+    /// A squash whose entire replaced set is already applied. Its operations
+    /// would rebuild schema that already exists, so DON'T run them — but insert
+    /// a tracking row so future runs treat the squash as applied and the now
+    /// redundant original files can be deleted.
+    RecordOnly,
+}
+
+/// gaps2 #100 — decide, per on-disk migration file for ONE plugin, whether to
+/// [`Apply`](ApplyDecision::Apply) / [`Skip`](ApplyDecision::Skip) /
+/// [`RecordOnly`](ApplyDecision::RecordOnly) it, honoring squash `replaces`.
+///
+/// `files` is every migration file for the plugin (the returned Vec is in the
+/// same order). `applied` is the `(plugin, id)` set from the tracking table.
+/// The function is pure: no DB, no IO — so both the SQLite and Postgres apply
+/// loops route through it and inherit identical squash semantics.
+///
+/// For a squash `S` replacing set `R`:
+/// - **all of `R` applied** → `S` is `RecordOnly` (or `Skip` if `S` itself is
+///   already recorded); every member of `R` is `Skip` (already applied).
+/// - **none of `R` applied** → `S` is `Apply` (or `Skip` if already recorded);
+///   every member of `R` is `Skip` (the squash builds their schema).
+/// - **some of `R` applied** (an interrupted transition) → fall back to the
+///   individual originals if they are ALL still on disk: `S` is `Skip` and each
+///   unapplied member of `R` applies as usual. If any original is gone, the
+///   history can't be reconciled → [`MigrateError::SquashInconsistent`].
+///
+/// A plain migration (empty `replaces`) is `Skip` if applied or shadowed by an
+/// active squash, else `Apply`.
+fn squash_plan(
+    files: &[MigrationFile],
+    applied: &std::collections::HashSet<(String, String)>,
+) -> Result<Vec<ApplyDecision>, MigrateError> {
+    use std::collections::HashSet;
+
+    let is_applied =
+        |plugin: &str, id: &str| applied.contains(&(plugin.to_string(), id.to_string()));
+    let on_disk: HashSet<&str> = files.iter().map(|f| f.id.as_str()).collect();
+
+    let mut decisions = vec![ApplyDecision::Apply; files.len()];
+    // Ids covered by a squash the runner is USING (fully-applied or fully-
+    // unapplied). Their originals must be skipped so they don't double-apply.
+    let mut shadowed: HashSet<String> = HashSet::new();
+
+    // First pass: classify every squash and collect the shadow set.
+    for (i, f) in files.iter().enumerate() {
+        if f.replaces.is_empty() {
+            continue;
+        }
+        let applied_in_r = f
+            .replaces
+            .iter()
+            .filter(|m| is_applied(&m.plugin, &m.migration))
+            .count();
+        let self_applied = is_applied(&f.plugin, &f.id);
+
+        if applied_in_r == f.replaces.len() {
+            // Whole history already applied: adopt the squash without running it.
+            decisions[i] = if self_applied {
+                ApplyDecision::Skip
+            } else {
+                ApplyDecision::RecordOnly
+            };
+            for m in &f.replaces {
+                shadowed.insert(m.migration.clone());
+            }
+        } else if applied_in_r == 0 {
+            // Fresh: the squash builds the whole schema in one shot.
+            decisions[i] = if self_applied {
+                ApplyDecision::Skip
+            } else {
+                ApplyDecision::Apply
+            };
+            for m in &f.replaces {
+                shadowed.insert(m.migration.clone());
+            }
+        } else {
+            // Partial transition: prefer the originals if they all survive.
+            let missing: Vec<String> = f
+                .replaces
+                .iter()
+                .filter(|m| !on_disk.contains(m.migration.as_str()))
+                .map(|m| format!("{}/{}", m.plugin, m.migration))
+                .collect();
+            if missing.is_empty() {
+                // Inactive squash: skip it, let the originals run individually.
+                decisions[i] = ApplyDecision::Skip;
+            } else {
+                return Err(MigrateError::SquashInconsistent {
+                    plugin: f.plugin.clone(),
+                    squash: f.id.clone(),
+                    missing,
+                });
+            }
+        }
+    }
+
+    // Second pass: plain migrations (applied or shadowed → Skip, else Apply).
+    for (i, f) in files.iter().enumerate() {
+        if !f.replaces.is_empty() {
+            continue;
+        }
+        if shadowed.contains(&f.id) || is_applied(&f.plugin, &f.id) {
+            decisions[i] = ApplyDecision::Skip;
+        }
+    }
+
+    // A squash can itself be shadowed by a larger squash (squash-of-squashes):
+    // an active outer squash covers it, so it must not run either.
+    for (i, f) in files.iter().enumerate() {
+        if shadowed.contains(&f.id) {
+            decisions[i] = ApplyDecision::Skip;
+        }
+    }
+
+    Ok(decisions)
 }
 
 /// At M5 every migration belongs to a single placeholder plugin. M7's
@@ -1321,6 +1459,24 @@ pub enum MigrateError {
         discriminator: String,
         waited_secs: u64,
     },
+    /// gaps2 #100 — a squash migration is stuck in a partially-applied state:
+    /// SOME of the migrations it replaces are recorded as applied and others
+    /// aren't, and the unapplied originals are no longer on disk to fall back
+    /// to. The engine can't safely apply the squash (it would re-run schema the
+    /// applied originals already built) nor complete the originals (their files
+    /// are gone). Carries the plugin and squash id. The operator restores the
+    /// missing original files from VCS (finish the transition), or resets the
+    /// tracking rows for this plugin to a consistent point.
+    SquashInconsistent {
+        plugin: String,
+        squash: String,
+        missing: Vec<String>,
+    },
+    /// gaps2 #100 — `squashmigrations <plugin>` couldn't produce a squash:
+    /// fewer than two squashable migrations, an unknown plugin, or the history
+    /// already contains a squash (nested squashing isn't supported yet). Carries
+    /// the plugin and a human-readable reason.
+    CannotSquash { plugin: String, reason: String },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -1394,6 +1550,22 @@ impl std::fmt::Display for MigrateError {
                  a long-running migration on another replica, or a wedged migrator. Retry once it \
                  finishes; if nothing is migrating, check for a stuck backend holding \
                  pg_advisory_lock."
+            ),
+            MigrateError::SquashInconsistent {
+                plugin,
+                squash,
+                missing,
+            } => write!(
+                f,
+                "umbral migrate: squash `{plugin}/{squash}` is half-applied — some of the \
+                 migrations it replaces are recorded as applied and the unapplied ones are \
+                 missing from disk:\n  {}\nRestore those original migration files from VCS so \
+                 the transition can finish, then re-run migrate.",
+                missing.join("\n  ")
+            ),
+            MigrateError::CannotSquash { plugin, reason } => write!(
+                f,
+                "umbral squashmigrations: can't squash `{plugin}`: {reason}"
             ),
         }
     }
@@ -1478,6 +1650,7 @@ pub async fn make_in(dir: &Path) -> Result<Vec<PathBuf>, MigrateError> {
             depends_on: Vec::new(),
             operations,
             snapshot_after: current,
+            replaces: Vec::new(),
         };
 
         std::fs::create_dir_all(&plugin_dir)?;
@@ -1543,6 +1716,7 @@ pub async fn make_empty_in(dir: &Path, plugin: &str) -> Result<PathBuf, MigrateE
         depends_on: Vec::new(),
         operations: Vec::new(),
         snapshot_after: snapshot,
+        replaces: Vec::new(),
     };
 
     std::fs::create_dir_all(&plugin_dir)?;
@@ -1550,6 +1724,116 @@ pub async fn make_empty_in(dir: &Path, plugin: &str) -> Result<PathBuf, MigrateE
     let json = serde_json::to_string_pretty(&file)?;
     std::fs::write(&path, json)?;
     Ok(path)
+}
+
+/// The numeric sequence prefix of a migration id (`0003_add_x` → `0003`),
+/// used to name a squash `0001_squashed_0003`.
+fn seq_prefix(id: &str) -> &str {
+    id.split('_').next().unwrap_or(id)
+}
+
+/// Outcome of [`squash_in`]: where the squash landed and what it collapsed.
+pub struct SquashOutcome {
+    /// Path of the written squash file.
+    pub path: PathBuf,
+    /// Id of the new squash migration (e.g. `0001_squashed_0005`).
+    pub id: String,
+    /// Ids of the original migrations it replaces — kept on disk, non-destructive.
+    pub replaced: Vec<String>,
+}
+
+/// gaps2 #100 — collapse a plugin's entire linear migration history into ONE
+/// optimized squash file, **non-destructively**: the originals stay on disk so
+/// older deploys still migrate, and the runner ([`squash_plan`]) treats the
+/// squash and its originals as mutually exclusive.
+///
+/// The squash's operations are the diff from an empty schema to the last
+/// migration's `snapshot_after` — i.e. one `CreateTable` per model with every
+/// intermediate `AlterColumn` already folded into the final column set. That's
+/// the minimal replay of the whole history, which is the entire point (a 20-file
+/// history with repeated alters collapses to N clean creates).
+///
+/// Refuses (with [`MigrateError::CannotSquash`]) when it can't produce a safe
+/// squash: fewer than two migrations, a history that already contains a squash
+/// (nested squashing is out of scope), or a history containing a `RunSql` data
+/// migration — a snapshot diff can't see hand-written data steps, so squashing
+/// across one would silently drop it. The operator squashes the schema-only
+/// prefix, or leaves that history intact.
+pub fn squash_in(dir: &Path, plugin: &str) -> Result<SquashOutcome, MigrateError> {
+    let plugin_dir = dir.join(plugin);
+    let paths = list_migration_files(&plugin_dir)?;
+    let files: Vec<MigrationFile> = paths
+        .iter()
+        .map(|p| read_migration_file(p))
+        .collect::<Result<_, _>>()?;
+
+    if files.len() < 2 {
+        return Err(MigrateError::CannotSquash {
+            plugin: plugin.to_string(),
+            reason: format!(
+                "need at least 2 migrations to squash, found {}",
+                files.len()
+            ),
+        });
+    }
+    if files.iter().any(|f| !f.replaces.is_empty()) {
+        return Err(MigrateError::CannotSquash {
+            plugin: plugin.to_string(),
+            reason: "this history already contains a squash; nested squashing isn't supported \
+                     yet. Delete the now-redundant original files once every deploy has migrated, \
+                     then squash again"
+                .to_string(),
+        });
+    }
+    if files.iter().any(|f| {
+        f.operations
+            .iter()
+            .any(|op| matches!(op, Operation::RunSql { .. }))
+    }) {
+        return Err(MigrateError::CannotSquash {
+            plugin: plugin.to_string(),
+            reason: "this history contains a RunSql data migration, which a snapshot diff can't \
+                     reconstruct — squashing across it would silently drop the data step. Squash \
+                     the schema-only migrations before/after it, or leave this history intact"
+                .to_string(),
+        });
+    }
+
+    let first = &files[0];
+    let last = files.last().expect("len >= 2 checked above");
+
+    // Optimal from-scratch replay: empty schema → final snapshot. Every
+    // intermediate alter is already baked into `snapshot_after`.
+    let empty = Snapshot { models: Vec::new() };
+    let operations = diff(&empty, &last.snapshot_after)?;
+
+    let id = format!(
+        "{}_squashed_{}",
+        seq_prefix(&first.id),
+        seq_prefix(&last.id)
+    );
+    let replaced: Vec<String> = files.iter().map(|f| f.id.clone()).collect();
+    let squash = MigrationFile {
+        id: id.clone(),
+        plugin: plugin.to_string(),
+        // Preserve the first migration's cross-plugin predecessors: the squash
+        // stands in for the whole run, so it inherits the run's external deps.
+        depends_on: first.depends_on.clone(),
+        operations,
+        snapshot_after: last.snapshot_after.clone(),
+        replaces: replaced
+            .iter()
+            .map(|mid| MigrationRef {
+                plugin: plugin.to_string(),
+                migration: mid.clone(),
+            })
+            .collect(),
+    };
+
+    let path = plugin_dir.join(format!("{id}.json"));
+    let json = serde_json::to_string_pretty(&squash)?;
+    std::fs::write(&path, json)?;
+    Ok(SquashOutcome { path, id, replaced })
 }
 
 /// Apply every pending migration across every registered plugin's
@@ -1719,9 +2003,18 @@ async fn run_in_sqlite_for_alias(
         let plugin_dir = dir.join(&plugin);
         let paths = list_migration_files(&plugin_dir)?;
 
-        for path in paths {
-            let file = read_migration_file(&path)?;
-            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+        // Read the plugin's full file set, then plan squash decisions in one
+        // pass (gaps2 #100). `squash_plan` decides Apply / Skip / RecordOnly per
+        // file, honoring `replaces` so a squash and its originals never both
+        // apply. Pure and backend-agnostic — the Postgres runner plans the same.
+        let files: Vec<MigrationFile> = paths
+            .iter()
+            .map(|p| read_migration_file(p))
+            .collect::<Result<_, _>>()?;
+        let plan = squash_plan(&files, &applied)?;
+
+        for (file, decision) in files.iter().zip(plan) {
+            if decision == ApplyDecision::Skip {
                 continue;
             }
 
@@ -1740,9 +2033,17 @@ async fn run_in_sqlite_for_alias(
 
             let snapshot_hash = file.snapshot_after.hash();
             let applied_at = chrono::Utc::now().to_rfc3339();
+            // RecordOnly: the squash's replaced set is already applied, so its
+            // schema exists — insert the tracking row without running any ops
+            // (an empty op slice inserts the row and commits).
+            let ops_to_run: &[&Operation] = if decision == ApplyDecision::RecordOnly {
+                &[]
+            } else {
+                &ops_for_this_db
+            };
             apply_sqlite_migration_tx(
                 pool,
-                &ops_for_this_db,
+                ops_to_run,
                 &file.plugin,
                 &file.id,
                 &applied_at,
@@ -1987,9 +2288,16 @@ async fn run_in_postgres_for_alias_locked(
         let plugin_dir = dir.join(&plugin);
         let paths = list_migration_files(&plugin_dir)?;
 
-        for path in paths {
-            let file = read_migration_file(&path)?;
-            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+        // Plan squash decisions for the plugin's whole file set (gaps2 #100),
+        // identical to the SQLite runner — `squash_plan` is backend-agnostic.
+        let files: Vec<MigrationFile> = paths
+            .iter()
+            .map(|p| read_migration_file(p))
+            .collect::<Result<_, _>>()?;
+        let plan = squash_plan(&files, &applied)?;
+
+        for (file, decision) in files.iter().zip(plan) {
+            if decision == ApplyDecision::Skip {
                 continue;
             }
 
@@ -2003,9 +2311,13 @@ async fn run_in_postgres_for_alias_locked(
             }
 
             let mut tx = pool.begin().await?;
-            for op in &ops_for_this_db {
-                for sql in render_operation(op) {
-                    sqlx::query(&sql).execute(&mut *tx).await?;
+            // RecordOnly (squash whose replaced set is already applied): its
+            // schema exists, so run no DDL — just insert the tracking row.
+            if decision != ApplyDecision::RecordOnly {
+                for op in &ops_for_this_db {
+                    for sql in render_operation(op) {
+                        sqlx::query(&sql).execute(&mut *tx).await?;
+                    }
                 }
             }
             let snapshot_hash = file.snapshot_after.hash();
@@ -2138,9 +2450,15 @@ async fn run_tenant_apps_in_postgres_schema(
         let plugin_dir = dir.join(&plugin);
         let paths = list_migration_files(&plugin_dir)?;
 
-        for path in paths {
-            let file = read_migration_file(&path)?;
-            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+        // Squash-aware planning (gaps2 #100), same as every other apply loop.
+        let files: Vec<MigrationFile> = paths
+            .iter()
+            .map(|p| read_migration_file(p))
+            .collect::<Result<_, _>>()?;
+        let plan = squash_plan(&files, &applied)?;
+
+        for (file, decision) in files.iter().zip(plan) {
+            if decision == ApplyDecision::Skip {
                 continue;
             }
             // Belt-and-braces: skip a file whose declared plugin is shared.
@@ -2164,9 +2482,13 @@ async fn run_tenant_apps_in_postgres_schema(
             sqlx::query(&format!("SET LOCAL search_path TO {quoted}, public"))
                 .execute(&mut *tx)
                 .await?;
-            for op in &file.operations {
-                for sql in render_operation_for(op, "postgres") {
-                    sqlx::query(&sql).execute(&mut *tx).await?;
+            // RecordOnly: schema already built by the replaced originals — run
+            // no DDL, just record the squash.
+            if decision != ApplyDecision::RecordOnly {
+                for op in &file.operations {
+                    for sql in render_operation_for(op, "postgres") {
+                        sqlx::query(&sql).execute(&mut *tx).await?;
+                    }
                 }
             }
             let snapshot_hash = file.snapshot_after.hash();
@@ -2249,18 +2571,24 @@ async fn migrate_tenant_apps_into_pg_pool(
             continue;
         }
         let plugin_dir = dir.join(&plugin);
-        for path in list_migration_files(&plugin_dir)? {
-            let file = read_migration_file(&path)?;
-            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+        let files: Vec<MigrationFile> = list_migration_files(&plugin_dir)?
+            .iter()
+            .map(|p| read_migration_file(p))
+            .collect::<Result<_, _>>()?;
+        let plan = squash_plan(&files, &applied)?;
+        for (file, decision) in files.iter().zip(plan) {
+            if decision == ApplyDecision::Skip {
                 continue;
             }
             if shared_apps.contains(&file.plugin) {
                 continue;
             }
             let mut tx = pool.begin().await?;
-            for op in &file.operations {
-                for sql in render_operation_for(op, "postgres") {
-                    sqlx::query(&sql).execute(&mut *tx).await?;
+            if decision != ApplyDecision::RecordOnly {
+                for op in &file.operations {
+                    for sql in render_operation_for(op, "postgres") {
+                        sqlx::query(&sql).execute(&mut *tx).await?;
+                    }
                 }
             }
             let snapshot_hash = file.snapshot_after.hash();
@@ -2297,9 +2625,13 @@ async fn migrate_tenant_apps_into_sqlite_pool(
             continue;
         }
         let plugin_dir = dir.join(&plugin);
-        for path in list_migration_files(&plugin_dir)? {
-            let file = read_migration_file(&path)?;
-            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+        let files: Vec<MigrationFile> = list_migration_files(&plugin_dir)?
+            .iter()
+            .map(|p| read_migration_file(p))
+            .collect::<Result<_, _>>()?;
+        let plan = squash_plan(&files, &applied)?;
+        for (file, decision) in files.iter().zip(plan) {
+            if decision == ApplyDecision::Skip {
                 continue;
             }
             if shared_apps.contains(&file.plugin) {
@@ -2307,7 +2639,12 @@ async fn migrate_tenant_apps_into_sqlite_pool(
             }
             let snapshot_hash = file.snapshot_after.hash();
             let applied_at = chrono::Utc::now().to_rfc3339();
-            let ops: Vec<&Operation> = file.operations.iter().collect();
+            // RecordOnly → empty op slice: inserts the tracking row, no DDL.
+            let ops: Vec<&Operation> = if decision == ApplyDecision::RecordOnly {
+                Vec::new()
+            } else {
+                file.operations.iter().collect()
+            };
             apply_sqlite_migration_tx(
                 pool,
                 &ops,
@@ -5173,6 +5510,149 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    // ---- gaps2 #100: squash_plan (pure squash-vs-originals decision) ----
+
+    /// A minimal migration file for `plugin`/`id`; `replaces` lists the ids it
+    /// squashes (all within `plugin`). Empty `replaces` = an ordinary migration.
+    fn mf(plugin: &str, id: &str, replaces: &[&str]) -> MigrationFile {
+        MigrationFile {
+            id: id.to_string(),
+            plugin: plugin.to_string(),
+            depends_on: Vec::new(),
+            operations: Vec::new(),
+            snapshot_after: Snapshot::default(),
+            replaces: replaces
+                .iter()
+                .map(|m| MigrationRef {
+                    plugin: plugin.to_string(),
+                    migration: m.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    fn applied_set(plugin: &str, ids: &[&str]) -> HashSet<(String, String)> {
+        ids.iter()
+            .map(|id| (plugin.to_string(), id.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn squash_plan_plain_migrations_apply_when_unrecorded_skip_when_applied() {
+        let files = vec![mf("app", "0001", &[]), mf("app", "0002", &[])];
+        let applied = applied_set("app", &["0001"]);
+        let plan = squash_plan(&files, &applied).unwrap();
+        assert_eq!(plan, vec![ApplyDecision::Skip, ApplyDecision::Apply]);
+    }
+
+    #[test]
+    fn squash_plan_fresh_db_applies_squash_and_shadows_its_originals() {
+        // Both the squash and its originals are on disk (Django keeps both).
+        // Nothing applied → run the squash once, skip every original.
+        let files = vec![
+            mf("app", "0001", &[]),
+            mf("app", "0002", &[]),
+            mf("app", "0001_squashed_0002", &["0001", "0002"]),
+        ];
+        let applied = applied_set("app", &[]);
+        let plan = squash_plan(&files, &applied).unwrap();
+        assert_eq!(
+            plan,
+            vec![
+                ApplyDecision::Skip,  // 0001 shadowed by the squash
+                ApplyDecision::Skip,  // 0002 shadowed by the squash
+                ApplyDecision::Apply  // the squash builds the whole schema
+            ]
+        );
+    }
+
+    #[test]
+    fn squash_plan_existing_db_with_full_history_record_only() {
+        // Both originals already applied → the squash records itself without
+        // running (its schema already exists), originals skipped.
+        let files = vec![
+            mf("app", "0001", &[]),
+            mf("app", "0002", &[]),
+            mf("app", "0001_squashed_0002", &["0001", "0002"]),
+        ];
+        let applied = applied_set("app", &["0001", "0002"]);
+        let plan = squash_plan(&files, &applied).unwrap();
+        assert_eq!(
+            plan,
+            vec![
+                ApplyDecision::Skip,
+                ApplyDecision::Skip,
+                ApplyDecision::RecordOnly
+            ]
+        );
+    }
+
+    #[test]
+    fn squash_plan_already_recorded_squash_is_skipped() {
+        // The squash ran on a previous migrate; it's in the tracking table.
+        let files = vec![
+            mf("app", "0001", &[]),
+            mf("app", "0002", &[]),
+            mf("app", "0001_squashed_0002", &["0001", "0002"]),
+        ];
+        let applied = applied_set("app", &["0001_squashed_0002"]);
+        let plan = squash_plan(&files, &applied).unwrap();
+        // originals never applied but shadowed by the (already-applied) squash.
+        assert_eq!(
+            plan,
+            vec![
+                ApplyDecision::Skip,
+                ApplyDecision::Skip,
+                ApplyDecision::Skip
+            ]
+        );
+    }
+
+    #[test]
+    fn squash_plan_partial_transition_falls_back_to_surviving_originals() {
+        // 0001 applied, 0002 not; originals still on disk → ignore the squash,
+        // finish 0002 individually.
+        let files = vec![
+            mf("app", "0001", &[]),
+            mf("app", "0002", &[]),
+            mf("app", "0001_squashed_0002", &["0001", "0002"]),
+        ];
+        let applied = applied_set("app", &["0001"]);
+        let plan = squash_plan(&files, &applied).unwrap();
+        assert_eq!(
+            plan,
+            vec![
+                ApplyDecision::Skip,  // 0001 already applied
+                ApplyDecision::Apply, // 0002 finishes individually
+                ApplyDecision::Skip   // squash ignored during the transition
+            ]
+        );
+    }
+
+    #[test]
+    fn squash_plan_partial_transition_with_missing_original_errors() {
+        // 0001 applied, 0002 not, and 0002's file is GONE → can't reconcile.
+        let files = vec![
+            mf("app", "0001", &[]),
+            mf("app", "0001_squashed_0002", &["0001", "0002"]),
+        ];
+        let applied = applied_set("app", &["0001"]);
+        let err = squash_plan(&files, &applied).unwrap_err();
+        match err {
+            MigrateError::SquashInconsistent {
+                plugin,
+                squash,
+                missing,
+            } => {
+                assert_eq!(plugin, "app");
+                assert_eq!(squash, "0001_squashed_0002");
+                assert_eq!(missing, vec!["app/0002".to_string()]);
+            }
+            other => panic!("expected SquashInconsistent, got {other:?}"),
+        }
+    }
 
     /// audit_2 core-migrate #7 — the advisory-lock key must be deterministic
     /// (every process computes the same key for the same target, so they

@@ -747,6 +747,7 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
         depends_on: Vec::new(),
         operations,
         snapshot_after: Snapshot { models },
+        replaces: Vec::new(),
     }
 }
 

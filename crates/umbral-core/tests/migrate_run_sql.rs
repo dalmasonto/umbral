@@ -73,6 +73,7 @@ fn write_run_sql_migration(dir: &Path, snapshot: Snapshot) {
             },
         ],
         snapshot_after: snapshot,
+        replaces: Vec::new(),
     };
     let plugin_dir = dir.join("app");
     std::fs::create_dir_all(&plugin_dir).expect("create app dir");

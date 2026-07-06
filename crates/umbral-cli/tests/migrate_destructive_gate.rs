@@ -23,6 +23,7 @@ async fn migrate_refuses_a_pending_drop_table_without_allow_destructive() {
             table: "legacy".to_string(),
         }],
         snapshot_after: Snapshot::default(),
+        replaces: Vec::new(),
     };
     std::fs::write(
         app_mig.join("0001_drop_legacy.json"),

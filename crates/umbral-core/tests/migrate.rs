@@ -171,6 +171,7 @@ async fn migrated_dir() -> &'static Path {
                     column: new_col,
                 }],
                 snapshot_after: Snapshot::current(),
+                replaces: Vec::new(),
             };
             write_prior_migration(tmp.path(), &file);
             let applied = run_in(tmp.path())
@@ -281,6 +282,7 @@ async fn migrated_dir() -> &'static Path {
                     indexes: Vec::new(),
                 }],
                 snapshot_after: Snapshot::current(),
+                replaces: Vec::new(),
             };
             write_prior_migration(tmp.path(), &file);
             let applied = run_in(tmp.path())
@@ -335,6 +337,7 @@ fn migration_with_snapshot(id: &str, snapshot: Snapshot) -> MigrationFile {
         depends_on: Vec::new(),
         operations: Vec::new(),
         snapshot_after: snapshot,
+        replaces: Vec::new(),
     }
 }
 
@@ -1675,6 +1678,7 @@ async fn check_pending_safety_classifies_a_pending_migration_off_disk() {
             },
         ],
         snapshot_after: Snapshot::default(),
+        replaces: Vec::new(),
     };
     std::fs::write(
         app_dir.join("0099_safety_fixture.json"),

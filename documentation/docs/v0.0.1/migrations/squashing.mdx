@@ -1,0 +1,60 @@
+---
+title: Squashing migrations
+description: Collapse a plugin's long migration history into one optimized file with squashmigrations, non-destructively — the originals stay on disk and live databases are never rebuilt.
+sidebar_position: 8
+tags: [migrations, cli]
+---
+
+Over a project's life a plugin accumulates migrations: a table here, a column there, a choices tweak later. A fresh database has to replay all of them in order — dozens of `CREATE`/`ALTER` steps to reach a schema you could build with a handful of `CREATE TABLE`s. `squashmigrations` collapses that history into **one optimized migration**, without throwing the old files away.
+
+## Purpose
+
+`umbral squashmigrations <plugin>` reads a plugin's entire migration history and writes a single *squash* file whose operations are the diff from an empty schema to the final snapshot — one `CreateTable` per model, with every intermediate `AlterColumn` already folded into the final column set. It is **non-destructive**: the original migration files stay on disk so older deploys still migrate, and the runner treats the squash and its originals as mutually exclusive. A live database that already ran the originals is **never rebuilt** — the squash records itself without re-running any DDL.
+
+<Callout type="warning">
+This is the safe, Django-style `squashmigrations`. It never deletes migration files and never drops your tables. Squashing a deployed database records the squash and moves on; your rows are untouched.
+</Callout>
+
+## One example
+
+```bash
+# Collapse the blog plugin's 0001..0012 into one file.
+cargo run -- squashmigrations blog
+```
+
+```text
+Squashed 12 migrations for `blog` into 0001_squashed_0012
+  wrote migrations/blog/0001_squashed_0012.json
+  replaces: 0001_initial, 0002_add_slug, ... , 0012_add_pinned
+
+The originals are kept on disk (non-destructive). `migrate` now applies the
+squash on a fresh database and record-only on databases that already ran the
+originals. Once EVERY deploy has migrated past this squash, delete the 12
+original file(s) it replaces.
+```
+
+What happens on the next `migrate`:
+
+<Steps>
+<Step title="Fresh database">
+Nothing is applied yet, so the squash runs once — building the whole schema in one shot — and the originals are skipped.
+</Step>
+<Step title="Already-migrated database">
+The originals are already recorded, so the squash is *record-only*: it inserts its tracking row and runs no DDL. Tables and rows are untouched.
+</Step>
+<Step title="Cleanup, later">
+Once every deploy has migrated past the squash, delete the original files it lists under `replaces`. The squash stands alone from then on.
+</Step>
+</Steps>
+
+## When it refuses
+
+`squashmigrations` fails closed rather than produce a squash that could lose work:
+
+- **Fewer than two migrations** — nothing to collapse.
+- **A history that already contains a squash** — nested squashing isn't supported yet; delete the redundant originals first, then squash again.
+- **A `RunSql` data migration in the history** — a snapshot diff can't see hand-written data steps, so squashing across one would silently drop it. Leave that history intact, or squash only the schema-only migrations around it.
+
+## Link to the design
+
+Squash semantics — the `replaces` field, the fresh / record-only / partial-transition decision, and why the originals are kept — live in [`arch.md`](https://github.com/) and the migration-engine spec under `docs/specs/`. The behaviour is gaps2 #100.

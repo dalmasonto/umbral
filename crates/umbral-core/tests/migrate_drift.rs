@@ -152,6 +152,7 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
             indexes: Vec::new(),
         }],
         snapshot_after: Snapshot::default(),
+        replaces: Vec::new(),
     };
     let json = serde_json::to_string_pretty(&file).expect("serialize");
     std::fs::write(plugin_dir.join(format!("{id}.json")), json).expect("write migration");

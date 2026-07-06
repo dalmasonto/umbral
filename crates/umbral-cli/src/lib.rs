@@ -212,6 +212,15 @@ enum Command {
     /// and print the two env-var lines (`UMBRAL_MASK_PUBLIC_KEY` /
     /// `UMBRAL_MASK_PRIVATE_KEY`) needed to configure it.
     Maskkeygen,
+    /// Collapse a plugin's whole migration history into one optimized squash
+    /// file, non-destructively (the originals stay on disk). Applying the
+    /// squash on a fresh DB builds the schema in one shot; on a DB that already
+    /// ran the originals it records without re-running. Once every deploy has
+    /// migrated past the squash, delete the now-redundant original files.
+    Squashmigrations {
+        /// The plugin whose migrations to squash (e.g. `blog`, `auth`).
+        plugin: String,
+    },
 }
 
 /// Parse argv and run the requested management subcommand against the
@@ -327,7 +336,33 @@ pub async fn dispatch_with_argv(
         Command::Importcsv { table, input } => importcsv(table, input).await,
         Command::Dev { watch, run_args } => dev(watch, run_args).await,
         Command::Maskkeygen => maskkeygen(),
+        Command::Squashmigrations { plugin } => squashmigrations(plugin).await,
     }
+}
+
+/// gaps2 #100 — collapse `<plugin>`'s migration history into a single optimized
+/// squash file. Non-destructive: originals stay on disk so older deploys keep
+/// working, and the runner treats the squash and its originals as mutually
+/// exclusive. Prints what was written and the next step.
+async fn squashmigrations(plugin: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let out = umbral::migrate::squash_in(
+        std::path::Path::new(umbral::migrate::MIGRATIONS_DIR),
+        &plugin,
+    )?;
+    println!(
+        "Squashed {} migrations for `{plugin}` into {}",
+        out.replaced.len(),
+        out.id
+    );
+    println!("  wrote {}", out.path.display());
+    println!("  replaces: {}", out.replaced.join(", "));
+    println!(
+        "\nThe originals are kept on disk (non-destructive). `migrate` now applies the squash on \n\
+         a fresh database and record-only on databases that already ran the originals. Once EVERY \n\
+         deploy has migrated past this squash, delete the {} original file(s) it replaces.",
+        out.replaced.len()
+    );
+    Ok(())
 }
 
 /// Generate a fresh `Masked<T>` field-encryption keypair and print the
