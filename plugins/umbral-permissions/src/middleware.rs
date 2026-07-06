@@ -248,7 +248,21 @@ where
                 PrePermCheck::Deny => return Ok(config.unauth_response(&uri)),
                 PrePermCheck::SuperuserAllow => {}
                 PrePermCheck::NeedsPerm => {
-                    if !has_perm(&user_id_str, &config.perm).await.unwrap_or(false) {
+                    // audit_2 P5: still fail closed on a DB error, but don't
+                    // swallow it — a perm check silently denied under a DB
+                    // outage is invisible to operators. Log, then deny.
+                    let granted = match has_perm(&user_id_str, &config.perm).await {
+                        Ok(g) => g,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                perm = %config.perm,
+                                "umbral-permissions: has_perm lookup failed; denying (fail-closed)"
+                            );
+                            false
+                        }
+                    };
+                    if !granted {
                         return Ok(config.forbidden_response());
                     }
                 }
