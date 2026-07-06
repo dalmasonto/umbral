@@ -54,6 +54,24 @@ const ALLOWED_IMAGE_TYPES: &[&str] = &[
     "image/svg+xml",
 ];
 
+/// Recognise the allow-listed raster image types by their leading magic bytes,
+/// returning the canonical MIME. `None` when the bytes match no known raster
+/// format. SVG is text (no reliable signature) and is validated separately.
+/// audit_2 admin #6.
+fn sniff_raster_image(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
 /// Build a small JSON error response. EasyMDE's `imageUploadFunction`
 /// surfaces the `error` string through its `onError` callback.
 fn json_error(status: StatusCode, message: &str) -> Response {
@@ -140,6 +158,30 @@ pub(crate) async fn upload_image(headers: HeaderMap, body: Bytes) -> Response {
         return json_error(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "only image uploads are allowed (png, jpeg, gif, webp, svg)",
+        );
+    }
+
+    // audit_2 admin #6 — the allow-list above trusts the *declared* content
+    // type; a script/HTML payload labelled `image/png` sails through it. Sniff
+    // the leading magic bytes and require them to match the declared raster
+    // type. SVG has no binary signature (it's XML text), so we instead require
+    // it to begin with markup; the storage layer's active-content rename
+    // (svg/html → .txt) is its second line of defence.
+    if declared == "image/svg+xml" {
+        let head = part
+            .bytes
+            .strip_prefix(&[0xEF, 0xBB, 0xBF])
+            .unwrap_or(&part.bytes);
+        if head.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'<') {
+            return json_error(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "SVG upload does not look like SVG/XML markup",
+            );
+        }
+    } else if sniff_raster_image(&part.bytes) != Some(declared.as_str()) {
+        return json_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "uploaded file content does not match its declared image type",
         );
     }
 

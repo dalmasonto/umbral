@@ -37,7 +37,8 @@ async fn boot() -> &'static axum::Router {
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(
-                SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+                SqliteConnectOptions::new()
+                    .busy_timeout(std::time::Duration::from_secs(5))
                     .filename(&path)
                     .create_if_missing(true),
             )
@@ -248,5 +249,52 @@ async fn no_storage_backend_returns_conflict() {
             .unwrap_or_default()
             .contains("storage backend"),
         "error mentions the missing storage backend, got {text}"
+    );
+}
+
+/// audit_2 admin #6 — a payload declared `image/png` whose bytes are NOT a PNG
+/// (here, an HTML/script blob) must be rejected with 415 by the magic-byte
+/// sniff BEFORE the storage path, not accepted on the declared type alone.
+#[tokio::test]
+async fn declared_png_with_non_png_bytes_is_rejected() {
+    let router = boot().await.clone();
+    let session = login(router.clone()).await;
+
+    let not_png = b"<script>alert(document.cookie)</script>";
+    let body = multipart_image("image", "evil.png", "image/png", not_png);
+
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/upload-image")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={BOUNDARY}"),
+                )
+                .header(header::COOKIE, format!("umbral_session={session}"))
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .expect("oneshot");
+    let status = resp.status();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("collect")
+        .to_bytes();
+    let text = String::from_utf8_lossy(&bytes);
+
+    assert_eq!(
+        status,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "content/declared-type mismatch must be 415, not reach storage; body={text}"
+    );
+    assert!(
+        text.contains("does not match its declared image type"),
+        "error explains the content mismatch, got {text}"
     );
 }
