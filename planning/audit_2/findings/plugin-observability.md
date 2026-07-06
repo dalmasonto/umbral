@@ -1,5 +1,7 @@
 # Audit: Observability & Dev-Surface Plugins (`plugin-observability`)
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current code. **Fixed:** #1 (openapi empty router in Prod), #2 (`JoinHandle` reaping), #3 (opaque `/ready`), #4 (analytics path exclusion), #5 (bounded fan-out semaphore), #6 (release defaults to Prod), #7 (logs read request-extension not header), #8 (admin `AutoEscape::Html`), #10 (async subscriber timeout), #11 (`min_status` doc warning). **Still open →** #9 (Swagger UI SRI) and #12 (stale `m2m_changed` "deferred" bullet) tracked in `planning/gaps3.md #27`. Treat the per-finding text below as historical.
+
 Scope: `umbral-logs`, `umbral-analytics`, `umbral-health`, `umbral-openapi`, `umbral-playground`, `umbral-livereload`, `umbral-signals`. Primary lens: observability (area 6), plus the "must-not-ship-to-prod" gating of dev/introspection surfaces. Every finding cites code that was read.
 
 ---

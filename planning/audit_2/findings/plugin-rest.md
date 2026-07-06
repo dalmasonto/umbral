@@ -1,5 +1,7 @@
 # Audit — `plugins/umbral-rest/`
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current code. **All 8 findings are FIXED** — including H-1 (object/queryset scoping via `scope`/`owned_by`/`owner_field`, enforced on every CRUD lookup) despite its stale "deferred" annotation, H-2 (nested-write authz), H-3 (nest-depth/node caps), M-4/M-5 (boot warnings), L-6/L-7/L-8. No open items. Treat the per-finding text below as historical.
+
 Scope: the auto-REST plugin only. Every finding cites code I read. Files reviewed: `src/lib.rs` (4258 lines), `src/permission.rs`, `src/throttle.rs`, `src/auth.rs`, `src/resource.rs`, `src/filtering.rs` (partial), plus the `documentation/docs/v0.0.1/rest/` pages I own.
 
 ## Claims verified against code

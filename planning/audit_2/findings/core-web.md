@@ -1,5 +1,7 @@
 # Audit: core-web (transport / headers / injection)
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current code. **Fixed** (two were still mislabeled "deferred"): #1 (core ships `default_security_headers_layer` — nosniff + `X-Frame-Options: DENY` + referrer-policy), #2 (32 MiB body limit + multipart cap), #3 (30s request timeout), #4 (rate-limiter map bounded by periodic sweep), #5 (HTTP/2 authority fallback). **Still open →** #6 (open-redirect `//host` normalize) and #7 (collectstatic symlink skip) tracked in `planning/gaps3.md #27`; #8 (styled-error body in prod) in `#28`. Treat the per-finding text below as historical.
+
 Scope: `crates/umbral-core/src/web.rs`, `web/multipart.rs`, `web/streaming.rs`, `routes.rs`, `middleware.rs`, `cors.rs`, `hosts.rs`, `slash.rs`, `static_files.rs`, `errors.rs`, `ratelimit.rs`. Wiring cross-checked in `app.rs` and `check.rs` (read-only, out of edit scope).
 
 ---

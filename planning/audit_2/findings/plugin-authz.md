@@ -1,5 +1,7 @@
 # Plugin authorization audit — `umbral-permissions`, `umbral-rls`, `umbral-security`
 
+> **Verification stamp — code re-triaged 2026-07-06.** The findings below were checked against current code (file:line refs had drifted). **All CRITICAL/HIGH items are FIXED in code** (this file just wasn't re-annotated): R1 FORCE RLS, R2 GUC plumbing (`db.rs` `before_acquire`), R3 SQLite hard-fail, P3 `is_active` recheck, P4 PK-agnostic layer, S2 scaffold mounts SecurityPlugin. **Shipped this pass:** S1 → `SecurityConfig::production_hardened()` (commit `725ee6c3`). **Still open →** S3/P5/P6 tracked in `planning/gaps3.md #27`; P1/P2/R4/R5/R6 in `#28` (big-design / live-PG). Treat the per-finding text below as historical.
+
 Slug: `plugin-authz`
 Scope: `plugins/umbral-permissions/`, `plugins/umbral-rls/`, `plugins/umbral-security/` (every `.rs` read in full).
 Auditor stance: skeptical production-readiness review for a ~10M-user deployment. Authorization is the #1 concern.

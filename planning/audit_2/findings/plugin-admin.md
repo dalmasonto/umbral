@@ -1,5 +1,7 @@
 # Audit — `plugins/umbral-admin/` (auto-CRUD admin UI)
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current code. **Fixed:** #1 (`escapejs` at every JS sink + test), #2 (palette perm-filter), #3 (filter-dialog perm), #4 (history perm), #7 (developer `action.confirm`/`facet.field` escaped). **Still open →** #6 (upload magic-byte sniff) tracked in `planning/gaps3.md #27`; #5 (in-handler CSRF verify) in `#28` (needs a boot-breaking dep or a multi-handler sweep; severity hinges on session-cookie `SameSite`). Treat the per-finding text below as historical.
+
 Scope: authorization on every admin route, XSS in rendered output, IDOR, file/image upload, inline formsets/actions, CSRF on mutating POSTs. Rust handlers + Jinja templates only (minified `admin.css` ignored). Read: `lib.rs`, `auth.rs`, `permcheck.rs`, all of `handlers/*`, `util.rs`, `engine.rs`, `view.rs`, `files.rs`, and the templates.
 
 ---

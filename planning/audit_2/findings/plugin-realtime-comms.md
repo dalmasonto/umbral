@@ -1,5 +1,7 @@
 # Audit — plugin-realtime-comms (`umbral-realtime`, `umbral-email`, `umbral-cache`)
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current code. **Fixed:** #1 (`cache_page` bypasses personalised/`Authorization` responses + honors `no-store`/`private`), #3 (Redis URL redacted before logging), #4 (WS conn cap 10k + 1 MiB frame + inbound rate limit — all three sub-parts), #6 (`EmailConfig`/`ApiRequest` `Debug` masks creds), #8 (docs). **Still open →** #2 (per-message WS publish-authz seam), #5 (O(N²) presence rebroadcast — wire-protocol change), #7 (unbounded cache body buffer) tracked in `planning/gaps3.md #28`; #1's optional `PROXY_AUTHORIZATION`/`Vary` extension in `#27`. Treat the per-finding text below as historical.
+
 Scope: security-first production audit of the three communication/caching plugins. Every finding cites `file:line` from code read in this pass. Runtime infra (TLS termination, log sinks, reverse-proxy caching, deployment env vars) was out of reach and is listed in Blind spots.
 
 ---

@@ -1,5 +1,7 @@
 # Audit — `umbral-oauth` + `umbral-tenants`
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current code. **All HIGH/MED items FIXED:** TEN-1 (`X-Tenant` off by default + `TenantMembership` guard seam), TEN-2 (db-per-tenant fails closed to a sentinel, never `default()`), TEN-3/TEN-4 (unresolved/invalid key → 404 fail-closed), OAU-1 (opaque callback error), OAU-2 (`trusts_verified_email` gate against auto-link takeover). **Still open →** OAU-4/OAU-5 (non-transactional user+social create) and OAU-3 (cross-plugin CSRF posture) tracked in `planning/gaps3.md #28`. Treat the per-finding text below as historical.
+
 Slug: `plugin-oauth-tenants`
 Scope: `plugins/umbral-oauth/` and `plugins/umbral-tenants/` only. Read-only audit of source + tests. Postgres + SQLite, axum, ~10M-user multi-tenant target.
 

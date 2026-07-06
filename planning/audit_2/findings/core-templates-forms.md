@@ -1,5 +1,7 @@
 # Audit: core templates + forms
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current code. **Fixed:** #1/#2 (404/500 JS-context XSS — no `{{ path }}` in JS), #4 (field name/label escaped), #5 (form render-fail leaks nothing to client). **Shipped this pass:** #3 → `render_str` now forces `AutoEscape::Html` (commit `cadc061e`). **Still open →** #6 (`max_form_body_bytes=0` documented intentional opt-in) tracked in `planning/gaps3.md #28`. Treat the per-finding text below as historical.
+
 Scope: `crates/umbral-core/src/templates.rs`, `crates/umbral-core/src/templates/` (incl. `defaults/default_404.html`, `defaults/default_500.html`), `crates/umbral-core/src/forms.rs`. Focus: template autoescaping / XSS, server-side template injection, form validation completeness, mass-assignment, file-upload handling, error-message leakage, CSRF field integration.
 
 ## A. Executive summary

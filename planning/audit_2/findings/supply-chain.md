@@ -1,5 +1,7 @@
 # Audit — Dependencies & Supply Chain (+ facade / testing crates)
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current manifests + lockfile. **Fixed** (SC-1 was still mislabeled "deferred"): SC-1 (rust-s3 bumped 0.35→0.37.2 — the EOL rustls-0.21/hyper-0.14 stack is gone from the lock; only rustls 0.23.40 remains), SC-2 (`deny.toml` + `audit.yml` CI), SC-6 (`_sqlx`/`_serde_json`/`_sea_query` re-exports `#[doc(hidden)]`), SC-7 (testing crate inert). **Still open →** SC-3 (`umbral-core` `[features]` table) and SC-5 (`notify` 6→7/8 API-breaking, dev-only) tracked in `planning/gaps3.md #28`; SC-4 dup-versions partly resolved by SC-1. Treat the per-finding text below as historical.
+
 Slug: `supply-chain`
 Auditor scope: root virtual manifest, every `crates/*/Cargo.toml` + `plugins/*/Cargo.toml`, `Cargo.lock`, the `umbral` facade re-exports, and `umbral-testing`.
 Date: 2026-07-02

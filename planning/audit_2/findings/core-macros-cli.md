@@ -1,5 +1,7 @@
 # Audit — `umbral-macros`, `umbral-cli`, `umbral-casing`
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current code. **Fixed:** #1 (no hardcoded admin/admin — seed gated on non-Dev + env password), #4 (`maskkeygen` stdout warning + doc), #5 (README serve claim), #8 (form FK uses `Model::PrimaryKey`, not hardcoded i64). **Still open →** #7 (random per-scaffold dev `secret_key`) tracked in `planning/gaps3.md #27`; #2 (Form-derive allowlist API), #3 (Tailwind CDN SRI — versionless play-CDN), #6 (`default=` verbatim DDL) in `#28`. Treat the per-finding text below as historical.
+
 Slug: `core-macros-cli`
 Scope: `crates/umbral-macros/`, `crates/umbral-cli/`, `crates/umbral-casing/` only. SQL-emission and runtime enforcement live in `umbral-core` (out of scope) and are called out as blind spots where a finding depends on them.
 

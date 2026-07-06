@@ -1,5 +1,7 @@
 # Audit — Core ORM (`umbral-core/src/orm/*`, `pagination.rs`)
 
+> **Verification stamp — code re-triaged 2026-07-06.** Checked against current code. **Fixed:** #1 (CRITICAL — `seal_masked_json` on all four dynamic write sites, fails closed), #2 (parent+M2M write now transactional + atomicity test), #4 (`update_json` returns real `rows_affected`), #8 (`filter_sql` verbatim narrowed + documented). **Still open →** #3 (mass-assignment field allowlist), #5 (verbatim client integer PK), #6 (per-write round-trip storm — perf), #7 (no default LIMIT), #9 (Masked redaction-skip on write) tracked in `planning/gaps3.md #28`. Treat the per-finding text below as historical.
+
 Component slug: **core-orm**
 Scope audited: `crates/umbral-core/src/orm/` (dynamic queryset, write path, validation, foreign_key, m2m, masked, search, expr) + `crates/umbral-core/src/pagination.rs`. Read-only audit; the only files edited are the ORM doc `.mdx` and this report.
 
