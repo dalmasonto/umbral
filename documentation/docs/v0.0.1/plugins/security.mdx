@@ -44,4 +44,18 @@ SecurityPlugin::with_config(SecurityConfig {
 })
 ```
 
+## Production preset
+
+The defaults are dev-safe: HSTS, CSP, and cross-origin isolation are **off** so local HTTP development works. A default deployment therefore ships with no XSS backstop (no CSP) and no SSL-stripping protection (no HSTS). Instead of hand-assembling those headers, use the one-call preset:
+
+```rust
+.plugin(SecurityPlugin::production_hardened())
+```
+
+It turns on HSTS (with `preload`), a strict CSP baseline (`default-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`), `Cross-Origin-Resource-Policy: same-origin`, and marks the CSRF cookie `Secure`, while keeping every other secure default.
+
+<Callout type="warning">
+The strict CSP has no `'unsafe-inline'`, so inline `<script>`/`<style>` won't run. Adjust `content_security_policy` for your asset strategy — start from `SecurityConfig::production_hardened()` and override the one field.
+</Callout>
+
 Design rationale: `docs/decisions/2026-06-10-automatic-csrf.md` in the repository.
