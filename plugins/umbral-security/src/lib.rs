@@ -458,24 +458,39 @@ struct CsrfState {
 
 impl CsrfState {
     fn from_config(cfg: &SecurityConfig) -> Self {
-        let settings = umbral::settings::get_opt();
-        let is_prod = settings
+        let is_prod = umbral::settings::get_opt()
             .map(|s| matches!(s.environment, Environment::Prod))
             .unwrap_or(false);
-        let secret = if cfg.signed_csrf {
-            settings
-                .map(|s| s.secret_key.trim().to_string())
-                .filter(|s| !s.is_empty())
-        } else {
-            None
-        };
         Self {
             secure: cfg.csrf_cookie_secure || is_prod,
             signed: cfg.signed_csrf,
-            secret,
+            // audit_2 S3: do NOT capture the signing secret here. `wrap_router`
+            // (where this runs) could execute before `umbral::settings` is in
+            // the OnceLock, which would pin `secret = None` and silently degrade
+            // signed CSRF to plain double-submit for the app's whole life — even
+            // in prod, where `on_ready` later confirms a secret exists. Resolve
+            // it per request in `resolve_secret` instead, so there is no
+            // build-order dependency. The field stays for test injection.
+            secret: None,
             session_cookie: cfg.session_bind_cookie.clone(),
             exempt_paths: cfg.csrf_exempt_paths.clone(),
         }
+    }
+
+    /// Resolve the HMAC signing secret at REQUEST time (audit_2 S3). Prefers a
+    /// secret injected onto the state (tests); otherwise reads the ambient
+    /// `secret_key` from settings — which, by the time a request is served, is
+    /// always populated. Returns `None` in plain (unsigned) mode or when no
+    /// non-empty secret is configured (then CSRF degrades to double-submit).
+    fn resolve_secret(&self) -> Option<String> {
+        if !self.signed {
+            return None;
+        }
+        self.secret.clone().or_else(|| {
+            umbral::settings::get_opt()
+                .map(|s| s.secret_key.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
     }
 
     /// True when `path` falls under a configured CSRF-exempt prefix.
@@ -508,13 +523,13 @@ impl CsrfState {
         if !self.signed {
             return true;
         }
-        let Some(secret) = self.secret.as_deref() else {
+        let Some(secret) = self.resolve_secret() else {
             return true; // signing requested but no secret resolved: degrade
         };
         let Some((raw, sig)) = token.rsplit_once('.') else {
             return false;
         };
-        tokens_match(sig, &sign(secret, raw, self.session_bind(session_value)))
+        tokens_match(sig, &sign(&secret, raw, self.session_bind(session_value)))
     }
 }
 
@@ -557,8 +572,8 @@ fn sign(secret: &str, raw: &str, session: Option<&str>) -> String {
 fn mint_token(state: &CsrfState, session_value: Option<&str>) -> String {
     let raw = generate_token();
     if state.signed {
-        if let Some(secret) = state.secret.as_deref() {
-            let sig = sign(secret, &raw, state.session_bind(session_value));
+        if let Some(secret) = state.resolve_secret() {
+            let sig = sign(&secret, &raw, state.session_bind(session_value));
             return format!("{raw}.{sig}");
         }
     }
@@ -580,7 +595,7 @@ fn csrf_valid(
     if !state.signed {
         return true;
     }
-    let Some(secret) = state.secret.as_deref() else {
+    let Some(secret) = state.resolve_secret() else {
         // Signing requested but no secret resolved (e.g. before App::build()):
         // fall back to plain double-submit rather than locking writes out.
         return true;
@@ -589,7 +604,7 @@ fn csrf_valid(
         // Signed mode requires a signature; an unsigned token can't be trusted.
         return false;
     };
-    let expected = sign(secret, raw, state.session_bind(session_value));
+    let expected = sign(&secret, raw, state.session_bind(session_value));
     tokens_match(sig, &expected)
 }
 
@@ -865,6 +880,46 @@ mod tests {
         assert_eq!(sign("k", "abc", None), sign("k", "abc", None));
         assert_ne!(sign("k1", "abc", None), sign("k2", "abc", None));
         assert_ne!(sign("k", "abc", None), sign("k", "abc", Some("sess")));
+    }
+
+    /// audit_2 S3 — `from_config` must NOT capture the secret at build time
+    /// (that pinned plain double-submit if settings weren't ready at
+    /// `wrap_router`); the secret is resolved per request instead.
+    #[test]
+    fn from_config_does_not_capture_the_secret_at_build_time() {
+        let cfg = SecurityConfig {
+            csrf: true,
+            signed_csrf: true,
+            ..Default::default()
+        };
+        let state = CsrfState::from_config(&cfg);
+        assert!(state.signed, "signed mode still requested");
+        assert!(
+            state.secret.is_none(),
+            "the secret must not be captured at build time — it's resolved per request"
+        );
+    }
+
+    /// `resolve_secret` prefers an injected secret, and returns `None` for
+    /// unsigned mode. (The ambient-settings fallback is exercised end-to-end in
+    /// a real request, where settings are always populated.)
+    #[test]
+    fn resolve_secret_precedence() {
+        let injected = signed_state("captured", None);
+        assert_eq!(injected.resolve_secret().as_deref(), Some("captured"));
+
+        let unsigned = CsrfState {
+            secure: false,
+            signed: false,
+            secret: Some("ignored".to_string()),
+            session_cookie: None,
+            exempt_paths: Vec::new(),
+        };
+        assert_eq!(
+            unsigned.resolve_secret(),
+            None,
+            "unsigned mode never resolves a secret"
+        );
     }
 
     #[test]
