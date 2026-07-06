@@ -206,6 +206,17 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// overrides it.
     const TABLE: &'static str;
 
+    /// The SQL table name as a call — `UserProfile::table_name()` → `"profile"`.
+    ///
+    /// A convenience over the [`TABLE`](Self::TABLE) associated const so callers
+    /// never hardcode the table string (which can diverge from the struct name,
+    /// e.g. `UserProfile` → `profile`) and don't need the
+    /// `<UserProfile as Model>::TABLE` turbofish. With `Model` in scope (it's in
+    /// the prelude) `UserProfile::table_name()` resolves directly.
+    fn table_name() -> &'static str {
+        Self::TABLE
+    }
+
     /// The app label (the owning plugin's name) this model belongs to.
     ///
     /// Sourced from `#[umbral(plugin = "...")]`; defaults to `"app"` (the
