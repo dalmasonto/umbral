@@ -129,3 +129,19 @@ The complaint: `Fixture.fee_amount` / `Payment.amount` were `i64` whole-shilling
 **Confirmed done for Postgres** (no new code): `rust_decimal::Decimal` already classifies as `SqlType::Decimal` → `NUMERIC(19, 4)` and is wired end-to-end — derive detection (`umbral-macros/src/lib.rs:2642,2749,3044`), `DecimalCol`/`NullableDecimalCol` predicate columns (`umbral-core/src/orm/column.rs:2739+`), `Option<Decimal>` nullable support (closed gaps2 #70), backup/restore (`backup.rs`), and `inspectdb` reverse-mapping (`inspect.rs:694`). Tests: `crates/umbral-core/tests/decimal_field.rs` (3 pass: classification + nullable; live PG round-trip `#[ignore]`'d). Docs already accurate: `documentation/docs/v0.0.1/orm/column-types.mdx:39-40,575` document it as Postgres-only with `NUMERIC(19,4)`. So a money app on Postgres uses `rust_decimal::Decimal` today; the stale gap text ("consumers fall back to i64") predates that.
 
 **SQLite deferred, deliberately** (user call, 2026-07-06 — "close as Postgres-done"): the SQLite half of the original proposal is intentionally not done. `SqliteBackend::map_type` panics on `Decimal` and the boot system-check (`check.rs:836`) rejects a Decimal field on SQLite with a clear message, because sqlx-sqlite ships no `rust_decimal` Encode/Decode. Supporting it would need an umbral-owned `Decimal` newtype with a TEXT-backed dual-backend codec (plus a decimal-ordering-on-TEXT caveat for range queries) — real work with an API shift, and Postgres-first means money apps test on Postgres. If SQLite money-model dev/test is ever needed, that's a fresh entry: umbral `Decimal` newtype + TEXT codec.
+
+27. [x] audit_2 residual low-severity hardening backlog — all 9 items shipped (2026-07-06)
+
+From a full re-triage of the untouched `planning/audit_2/findings/*.md` against current code: the CRITICAL/HIGH findings were all already fixed (the files just weren't re-annotated). These nine small, no-live-infra items were the genuine residue — each shipped this session, TDD'd, one commit apiece:
+
+- **[authz S3]** — CSRF secret resolved per-request instead of captured at `wrap_router`, closing the build-order gap that could silently pin plain double-submit. Commit `a6f21eda`.
+- **[authz P5]** — `has_perm` DB error logged before the fail-closed deny (was `unwrap_or(false)`). Commit `d1973c93`.
+- **[admin #6]** — image upload sniffs magic bytes (PNG/JPEG/GIF/WEBP signatures; SVG must be markup) and 415s a content-vs-declared mismatch. Commit `fb4416b1`.
+- **[core-web #6]** — `SlashRedirect::alternate_path` refuses `//host` protocol-relative paths (open-redirect guard). Commit `73a03739`.
+- **[core-web #7]** — `collectstatic`/`copy_tree` skips symlinks whose target escapes the source root (canonicalize + containment, mirroring `resolve_under_root`). Commit `73a03739`.
+- **[macros-cli #7]** — scaffold generates a random per-project dev `secret_key` (OS-seeded RandomState) instead of the shared literal. Commit `a05373ef`.
+- **[observability #9]** — Swagger UI carries SHA-384 SRI on the pinned default unpkg assets, omitted when the base is overridden (self-host). Commit `35aee2b9`.
+- **[observability #12]** — deleted the stale `m2m_changed` "Deferred past v1" bullet in umbral-signals. Commit `34fb184e`.
+- **[realtime #1]** — `cache_page` bypasses the shared cache on `Proxy-Authorization` and on `Vary: Cookie/Authorization/*`. Commit `091f0dcc`.
+
+(The two MEDIUM audit items — `render_str` autoescape `cadc061e` and `SecurityConfig::production_hardened()` `725ee6c3` — shipped earlier the same day.) Remaining audit residue is the big-design / live-Postgres set tracked in gaps3 #28.
