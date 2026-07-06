@@ -71,7 +71,7 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     `Fixture.fee_amount` / `Payment.amount` are `i64` whole-shillings by comment. **Proposal:** a `DecimalField` (PG `NUMERIC`, SQLite `TEXT`/affinity + a rust_decimal-backed value) so money/precise-decimal columns have a home.
 
-22. [ ] No permission combinators / common preset — the app's main gate is 7 lines of `Box::new(..) as Box<dyn Permission>`
+22. [x] No permission combinators / common preset — the app's main gate is 7 lines of `Box::new(..) as Box<dyn Permission>` — shipped (commit 55ca0cdc)
 
     `And(IsAuthenticated, Or(ReadOnly, IsStaff))` is the app's most-used gate (fixtures, attendance, announcements, chat, teams) and reads as verbose dyn-boxing. **Proposal:** ship a named `IsAuthenticatedOrReadOnly` (DRF-style) and/or `.and()`/`.or()` combinators on `Permission` so consumers stop hand-boxing.
 
@@ -83,7 +83,7 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     `fc_payments` migrated `status` to `Choices` then just added a `"waived"` variant — each a full `AlterColumn` (whole-table rebuild on SQLite) though the storage type stays `Text`. **Proposal:** the autodetector should treat a choices-list-only delta as a no-op on SQLite (TEXT-backed, no CHECK) / a lightweight CHECK swap on PG, not a table rebuild. Also indirectly discourages `Choices` adoption (app left most closed-set fields as hand-validated `String`).
 
-25. [ ] ORM SQLite write transactions use `BEGIN DEFERRED` → SQLITE_BUSY under concurrent writes (production hardening)
+25. [x] ORM SQLite write transactions used `BEGIN DEFERRED` → SQLITE_BUSY under concurrent writes — shipped `BEGIN IMMEDIATE` (commit 7a03c196)
 
     Root-caused while fixing the test-suite flake: `m2m.rs` (and `db::begin*`) use `pool.begin()`, i.e. sqlx `BEGIN DEFERRED`. Under concurrent writes on a file DB with >1 connection, a deferred read→write lock upgrade returns SQLITE_BUSY *immediately* (deadlock-avoidance path the `busy_timeout` handler is never consulted for). The test suite worked around it with `max_connections(1)` (commit cbbd1571), but real SQLite apps with concurrent writers can hit it.
 

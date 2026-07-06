@@ -173,7 +173,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 107. [x] The base path for admin plugin is fixed at `/admin/`. Can this be made dynamic so a user can use … — archived
 108. [x] How can we safely do api versioning using our rest plugin? — ANSWERED/SHIPPED: `umbral-rest` versioning (`versioning.rs`) — URL-path versions with `.default_version(...)`/`.allowed_version(...)` (features #63).
 109. [x] We need an auto-slugify field given a field value ie `title` -> `title-slug`. Should be a model … — archived
-110. [ ] Can we use `Rayon` in this project?
+110. [x] Can we use `Rayon` in this project? — answered: umbral is async-I/O-bound (tokio); Rayon is for CPU-bound *data* parallelism and must not replace tokio for I/O. Legit use: CPU-heavy work (image resize, large in-memory transforms) run under `tokio::task::spawn_blocking` (or a dedicated rayon pool) so the async runtime is never blocked. Not a general concurrency model here; no framework-level Rayon dependency needed. Reach for it per-workload, not per-framework.
 111. [x] How do we select specific fields from a model? `let explained_query = … — archived
 112. [x] Admin FK/M2M filters no longer hard-code i64 PKs (PK-lift Pass B/E) — archived
 
