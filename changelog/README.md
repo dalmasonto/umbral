@@ -6,7 +6,7 @@ Versions follow [Semantic Versioning](https://semver.org/); the format is inspir
 
 | Version | Date | Theme |
 |---|---|---|
-| [0.0.5](./0.0.5.md) | 2026-07-05 | Security-hardening sweep (audit_2) + custom admin views, object-level REST scoping, recursive nested writes |
+| [0.0.5](./0.0.5.md) | 2026-07-05 | Security-hardening sweep + custom admin views, object-level REST scoping, recursive nested writes |
 | [0.0.4](./0.0.4.md) | 2026-06-30 | Hotfix — Postgres FK migration ordering |
 | [0.0.3](./0.0.3.md) | 2026-06-29 | The auth release — email verification, password reset, form + JSON auth, pluggable mailer |
 | [0.0.2](./0.0.2.md) | 2026-06-26 | Packaging & polish — crates.io-ready, docs site live |
