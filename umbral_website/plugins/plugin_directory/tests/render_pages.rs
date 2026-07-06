@@ -76,7 +76,7 @@ impl umbral::storage::Storage for TestStorage {
     ) -> Result<umbral::storage::StoredFile, umbral::storage::StorageError> {
         let key = filename.to_string();
         let url = self.url(&key);
-        Ok(umbral::storage::StoredFile { key, url })
+        Ok(umbral::storage::StoredFile { key, url, size: 0 })
     }
     async fn retrieve(&self, _key: &str) -> Result<Vec<u8>, umbral::storage::StorageError> {
         Err(umbral::storage::StorageError::NotFound)
@@ -652,7 +652,8 @@ async fn listing_and_detail_render_real_db_rows() {
     watch_groups.insert(format!("public:plugin-{}", rest_row.id));
     let (_watch_id, mut watcher) = umbral_realtime::Realtime::registry()
         .register(None, watch_groups, umbral_realtime::DEFAULT_BUFFER)
-        .await;
+        .await
+        .expect("realtime register");
 
     let created = create_note(
         "umbral-rest",
@@ -671,7 +672,9 @@ async fn listing_and_detail_render_real_db_rows() {
         created.html
     );
     assert!(
-        created.html.contains(&format!("data-comment-id=\"{}\"", created.id)),
+        created
+            .html
+            .contains(&format!("data-comment-id=\"{}\"", created.id)),
         "the payload html tags the row with its id for client dedupe; got {}",
         created.html
     );
@@ -873,21 +876,24 @@ async fn listing_and_detail_render_real_db_rows() {
     }
 
     // --- Submit a plugin: valid data creates a pending community row -----
-    let id = create_submission(&submission_data(&[
-        ("name", "Umbral Webhooks"),
-        ("slug", "umbral-webhooks"),
-        ("crate_name", "umbral-webhooks"),
-        ("author", "@webhooks"),
-        (
-            "short_description",
-            "Outbound webhook delivery with retries.",
-        ),
-        (
-            "full_content",
-            "## Webhooks\n\nSign, queue and deliver outbound webhooks the Umbral way.",
-        ),
-        ("installation_commands", "umbral add umbral-webhooks"),
-    ]), None)
+    let id = create_submission(
+        &submission_data(&[
+            ("name", "Umbral Webhooks"),
+            ("slug", "umbral-webhooks"),
+            ("crate_name", "umbral-webhooks"),
+            ("author", "@webhooks"),
+            (
+                "short_description",
+                "Outbound webhook delivery with retries.",
+            ),
+            (
+                "full_content",
+                "## Webhooks\n\nSign, queue and deliver outbound webhooks the Umbral way.",
+            ),
+            ("installation_commands", "umbral add umbral-webhooks"),
+        ]),
+        None,
+    )
     .await
     .expect("valid submission creates a row");
 
@@ -914,22 +920,25 @@ async fn listing_and_detail_render_real_db_rows() {
 
     // --- Submit a plugin: invalid data → Err, no row, error renders ------
     let before_plugins = Plugin::objects().count().await.expect("count ok");
-    let errs: ValidationErrors = create_submission(&submission_data(&[
-        // Blank required name.
-        ("name", ""),
-        ("slug", "umbral-x"),
-        ("crate_name", "umbral-x"),
-        ("author", "@x"),
-        (
-            "short_description",
-            "A short description that is long enough.",
-        ),
-        (
-            "full_content",
-            "Enough body content to satisfy the minimum length.",
-        ),
-        ("installation_commands", "umbral add umbral-x"),
-    ]), None)
+    let errs: ValidationErrors = create_submission(
+        &submission_data(&[
+            // Blank required name.
+            ("name", ""),
+            ("slug", "umbral-x"),
+            ("crate_name", "umbral-x"),
+            ("author", "@x"),
+            (
+                "short_description",
+                "A short description that is long enough.",
+            ),
+            (
+                "full_content",
+                "Enough body content to satisfy the minimum length.",
+            ),
+            ("installation_commands", "umbral add umbral-x"),
+        ]),
+        None,
+    )
     .await
     .expect_err("blank name is rejected");
     assert!(
@@ -947,7 +956,11 @@ async fn listing_and_detail_render_real_db_rows() {
     let resubmit = render_submit(
         false,
         Some(&errs),
-        &submission_data(&[("name", ""), ("slug", "umbral-x"), ("crate_name", "umbral-x")]),
+        &submission_data(&[
+            ("name", ""),
+            ("slug", "umbral-x"),
+            ("crate_name", "umbral-x"),
+        ]),
     )
     .await
     .expect("submit form re-renders with errors");
@@ -1010,12 +1023,21 @@ async fn create_note_threads_replies_under_a_visible_top_level_note() {
         .await
         .expect("note create ok")
         .expect("a payload for an existing plugin");
-    assert!(note.parent_id.is_none(), "a top-level note has no parent_id");
+    assert!(
+        note.parent_id.is_none(),
+        "a top-level note has no parent_id"
+    );
 
-    let reply = create_note("umbral-rest", "A reply body.", "general", None, Some(note.id))
-        .await
-        .expect("reply create ok")
-        .expect("a payload for a valid parent");
+    let reply = create_note(
+        "umbral-rest",
+        "A reply body.",
+        "general",
+        None,
+        Some(note.id),
+    )
+    .await
+    .expect("reply create ok")
+    .expect("a payload for a valid parent");
     assert_eq!(
         reply.parent_id,
         Some(note.id),
@@ -1034,7 +1056,10 @@ async fn create_note_threads_replies_under_a_visible_top_level_note() {
     let nested = create_note("umbral-rest", "Nested.", "general", None, Some(reply.id))
         .await
         .expect("create ok");
-    assert!(nested.is_none(), "replying to a reply is rejected (depth-1)");
+    assert!(
+        nested.is_none(),
+        "replying to a reply is rejected (depth-1)"
+    );
 
     let bad = create_note("umbral-rest", "Orphan.", "general", None, Some(999_999))
         .await
@@ -1087,10 +1112,16 @@ async fn detail_page_nests_replies_under_their_note() {
         .await
         .expect("ok")
         .expect("payload");
-    create_note("umbral-rest", "First reply.", "general", None, Some(note.id))
-        .await
-        .expect("ok")
-        .expect("payload");
+    create_note(
+        "umbral-rest",
+        "First reply.",
+        "general",
+        None,
+        Some(note.id),
+    )
+    .await
+    .expect("ok")
+    .expect("payload");
 
     let html = render_detail("umbral-rest")
         .await
@@ -1099,7 +1130,10 @@ async fn detail_page_nests_replies_under_their_note() {
 
     assert!(html.contains("Top note here."), "note renders");
     assert!(html.contains("First reply."), "reply renders");
-    assert!(html.contains("data-reply"), "reply uses the slim reply partial");
+    assert!(
+        html.contains("data-reply"),
+        "reply uses the slim reply partial"
+    );
     assert!(
         html.contains(&format!("data-replies-for=\"{}\"", note.id)),
         "the note has a replies container keyed by its id"

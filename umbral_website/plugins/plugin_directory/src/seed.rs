@@ -12,8 +12,8 @@
 //! `DELETE FROM plugin_directory_plugin;` then trigger `on_ready` again.
 
 use crate::models::{
-    CommentKind, CommentModeration, Plugin, PluginComment, PluginFeature, PluginMaturity,
-    PluginModeration, PluginSource, PluginStatus, plugin, plugin_feature,
+    plugin, plugin_feature, CommentKind, CommentModeration, Plugin, PluginComment, PluginFeature,
+    PluginMaturity, PluginModeration, PluginSource, PluginStatus,
 };
 use chrono::Utc;
 use umbral::prelude::*;

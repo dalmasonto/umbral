@@ -46,7 +46,7 @@ impl umbral::storage::Storage for TestStorage {
     ) -> Result<umbral::storage::StoredFile, umbral::storage::StorageError> {
         let key = filename.to_string();
         let url = self.url(&key);
-        Ok(umbral::storage::StoredFile { key, url })
+        Ok(umbral::storage::StoredFile { key, url, size: 0 })
     }
     async fn retrieve(&self, _key: &str) -> Result<Vec<u8>, umbral::storage::StorageError> {
         Err(umbral::storage::StorageError::NotFound)
@@ -137,7 +137,8 @@ async fn ensure_tables(pool: &sqlx::SqlitePool) {
             is_staff INTEGER NOT NULL DEFAULT 0,
             is_superuser INTEGER NOT NULL DEFAULT 0,
             date_joined TEXT NOT NULL DEFAULT '',
-            last_login TEXT
+            last_login TEXT,
+            email_verified_at TEXT
         )"
         .to_string(),
         format!(
@@ -314,7 +315,11 @@ async fn owner_adds_moderator_and_grant_is_real() {
     let outcome = add_moderator_logic(&plugin, "dave", 1)
         .await
         .expect("add moderator");
-    assert_eq!(outcome, AddModeratorOutcome::Added, "dave is added by username");
+    assert_eq!(
+        outcome,
+        AddModeratorOutcome::Added,
+        "dave is added by username"
+    );
 
     // The grant is real: dave now passes `can_moderate`.
     assert!(
