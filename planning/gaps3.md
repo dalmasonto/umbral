@@ -59,9 +59,7 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
 20. [x] Auth ships no authenticated change-password route + `set_password` strength policy — archived
 
-21. [ ] No `DecimalField` / money type — consumers fall back to `i64` "whole units" to dodge float
-
-    `Fixture.fee_amount` / `Payment.amount` are `i64` whole-shillings by comment. **Proposal:** a `DecimalField` (PG `NUMERIC`, SQLite `TEXT`/affinity + a rust_decimal-backed value) so money/precise-decimal columns have a home.
+21. [x] `DecimalField` / money type — already shipped for Postgres (`rust_decimal::Decimal` → `NUMERIC(19,4)`); SQLite deferred — archived
 
 22. [x] No permission combinators / common preset — the app's main gate is 7 lines of `Box::new(..) as Box<dyn Permission>` — shipped (commit 55ca0cdc)
 
@@ -79,3 +77,30 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     **Minor (same source):** roster/payment endpoints do `AuthUser::objects().fetch()` into an in-memory id→username map (a manual join) because there's no `.values()`/annotate-join to pull just `(id, username)` — a scale trap the ORM could close.
 26. [x] Admin sheet read flake — product bug fixed; residual is a test-only read-lock artifact, production unaffected — archived
+
+27. [ ] audit_2 residual low-severity hardening backlog (verified open 2026-07-06)
+
+    From a full re-triage of the untouched `planning/audit_2/findings/*.md` against current code (2026-07-06): the CRITICAL/HIGH findings are all already fixed in code — these are the small, no-live-infra items that remain. Each is independently shippable; grouped here to avoid tracker sprawl.
+
+    - **[authz S3]** CSRF signed-vs-plain hinges on the secret being resolvable at `wrap_router` time (`CsrfState::from_config`, `umbral-security/src/lib.rs:419`). Assert `umbral::settings` is populated before `wrap_router` (or resolve the secret per-request) + a regression test that a prod build with `secret_key` set never runs plain double-submit.
+    - **[authz P5]** `has_perm(...).await.unwrap_or(false)` (`umbral-permissions/src/middleware.rs:251`) fails closed but silently — log the discarded DB error before denying.
+    - **[admin #6]** Image upload allow-list is MIME-string only, no magic-byte sniff (`umbral-admin/src/upload.rs:126`). Add a leading-byte signature check (e.g. `infer`) and reject on mismatch. Partly mitigated by the storage active-content rename.
+    - **[core-web #6]** Open-redirect `//host` shape — normalize/reject a path starting `//` in `slash.rs` before probing so `Location` always begins with a single `/`. Latent (router normalizes today), defense-in-depth.
+    - **[core-web #7]** `collectstatic` follows symlinks (`static_files.rs` `copy_tree`) — skip `entry.file_type().is_symlink()` entries. Build-time, trusted input, cheap.
+    - **[macros-cli #7]** Scaffold ships the shared literal dev `secret_key` (`scaffold.rs:784`) — generate a random per-scaffold dev key. Backstopped by the Prod boot guard, so polish.
+    - **[observability #9]** Swagger UI is version-pinned (`@5.17.14`) but has no SRI (`umbral-openapi/templates/swagger_ui.html:10,15`) — add `integrity=` hashes or vendor the assets locally.
+    - **[observability #12]** `umbral-signals/src/lib.rs:83` still lists `m2m_changed` under "Deferred past v1" though it fires — delete the stale bullet.
+    - **[realtime #1, optional]** `cache_page` `request_is_personalised` could also match `PROXY_AUTHORIZATION` / bypass on `Vary`.
+
+28. [ ] audit_2 deferred findings — big-design or live-Postgres-gated (verified open 2026-07-06)
+
+    Genuinely-open findings that need a design decision or infra the local env can't provide. Recorded so they're tracked, not lost. See `planning/audit_2/findings/` for full write-ups.
+
+    - **[authz P1]** Authorization is default-allow — no default-deny/gated-by-construction router primitive or boot-time audit of ungated mutating routes. Framework-posture design.
+    - **[authz P2]** Model-level perms only — no object/row-level permission primitive (per-row grants / IDOR-by-design). Design.
+    - **[authz R4 / R5]** RLS: no non-ignored two-tenant *enforcement* test, and policies are append-only across boots (no drop-undeclared diff). Both need a containerized Postgres.
+    - **[admin #5]** Admin handlers have no in-handler CSRF verify (only `login_post` self-verifies); depends on either a boot-breaking `"security"` dep or a broad multi-handler sweep + hinges on the session cookie `SameSite`. Design call.
+    - **[orm #3 / macros #2]** Mass-assignment: no field allowlist on the dynamic write path / no `#[form(fields=[...])]` allowlist API. Framework-wide write-policy design.
+    - **[realtime #2 / #5]** No `authorize_publish` seam for inbound WS messages; presence re-broadcast is O(N²) and changing it alters the shipped wire protocol.
+    - **[oauth OAU-4]** create-user + create-social aren't transactional (threading a txn through the username-retry loop).
+    - **[supply-chain SC-3 / SC-5]** `umbral-core` has no `[features]` table (feature-gating touches every consumer); `notify` pinned at 6 (7/8 are API-breaking, dev-only plugin).
