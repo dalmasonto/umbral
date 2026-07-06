@@ -293,6 +293,8 @@ pub struct User {
 }
 ```
 
+Read the table name back with `User::table_name()` (→ `"auth_user"`) instead of hardcoding the string — handy when the table name diverges from the struct name (`UserProfile` → `profile`). It's a convenience over the `Model::TABLE` associated const; `Model` is in the prelude, so `User::table_name()` resolves directly.
+
 Beyond `table`, the struct-level `#[umbral(...)]` also accepts `plugin`, `display`, `icon`, `database`, `singleton`, `soft_delete`, `unique_together = [[...]]`, `indexes = [[...]]`, and `ordering = ["-col", "col"]`. The field-level `#[umbral(...)]` accepts `primary_key`, `unique`, `index`, `default = "..."`, `on_delete = "..."` / `on_update = "..."`, `auto_now` / `auto_now_add`, `max_length = N`, `min = N` / `max = N`, `string`, `noform`, `noedit`, `help = "..."`, `example = "..."`, `widget = "..."`, `backend = "..."`, `cidr`, `db_constraint = false`, `slug_from = "..."`, `choices`, `reverse_fk = "..."`, and `no_reverse`. (`choices` pairs `#[derive(Choices)]` on the enum with `#[umbral(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
 
 ## Display hints (`string`, `max_length`)
