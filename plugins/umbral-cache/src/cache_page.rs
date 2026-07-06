@@ -247,7 +247,11 @@ where
 /// bearer auth). Caching a token-authenticated response and serving it to the
 /// next anonymous/other caller leaks one user's data (audit_2 cache #1 / H26).
 fn request_is_personalised<B>(req: &Request<B>) -> bool {
-    request_has_session_cookie(req) || req.headers().contains_key(header::AUTHORIZATION)
+    request_has_session_cookie(req)
+        || req.headers().contains_key(header::AUTHORIZATION)
+        // audit_2 realtime #1: a proxy-auth'd request is equally per-user;
+        // don't serve its response to the next caller.
+        || req.headers().contains_key(header::PROXY_AUTHORIZATION)
 }
 
 fn request_has_session_cookie<B>(req: &Request<B>) -> bool {
@@ -285,6 +289,20 @@ fn response_bypasses_cache<B>(resp: &Response<B>) -> bool {
     // Any Set-Cookie header means the response is personalised
     if headers.contains_key(header::SET_COOKIE) {
         return true;
+    }
+
+    // audit_2 realtime #1: a `Vary` on `Cookie` / `Authorization` (or `*`) means
+    // the response body depends on the caller's identity — a shared cache keyed
+    // only on the URL would replay one user's response to another. Bypass.
+    if let Some(vary) = headers.get(header::VARY) {
+        if vary.to_str().unwrap_or("").split(',').any(|field| {
+            let field = field.trim();
+            field == "*"
+                || field.eq_ignore_ascii_case("cookie")
+                || field.eq_ignore_ascii_case("authorization")
+        }) {
+            return true;
+        }
     }
 
     false
@@ -400,5 +418,43 @@ mod tests {
         assert!(!request_is_personalised(&req));
         let resp = Response::builder().body(Body::empty()).unwrap();
         assert!(!response_bypasses_cache(&resp));
+    }
+
+    /// audit_2 realtime #1 — a proxy-authenticated request is per-user too.
+    #[test]
+    fn proxy_authorization_header_makes_request_personalised() {
+        let req = Request::builder()
+            .header(header::PROXY_AUTHORIZATION, "Basic dXNlcjpwYXNz")
+            .body(Body::empty())
+            .unwrap();
+        assert!(
+            request_is_personalised(&req),
+            "a Proxy-Authorization request must bypass the shared page cache"
+        );
+    }
+
+    /// audit_2 realtime #1 — a `Vary` on an identity header (or `*`) means the
+    /// body depends on the caller, so a URL-keyed shared cache must not store it.
+    #[test]
+    fn vary_on_identity_headers_bypasses_cache() {
+        for vary in ["Cookie", "Authorization", "*", "Accept-Encoding, Cookie"] {
+            let resp = Response::builder()
+                .header(header::VARY, vary)
+                .body(Body::empty())
+                .unwrap();
+            assert!(
+                response_bypasses_cache(&resp),
+                "`Vary: {vary}` must bypass the shared cache"
+            );
+        }
+        // A benign Vary (only on encoding) stays cacheable.
+        let resp = Response::builder()
+            .header(header::VARY, "Accept-Encoding")
+            .body(Body::empty())
+            .unwrap();
+        assert!(
+            !response_bypasses_cache(&resp),
+            "`Vary: Accept-Encoding` alone is fine to cache"
+        );
     }
 }
