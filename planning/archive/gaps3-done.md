@@ -83,3 +83,31 @@ The table-recreation dance (CREATE new / copy / DROP old / RENAME) died with SQL
 `umbral-realtime`'s `on_model` bridge (and `umbral-signals` `on_model().post_save`) subscribe to per-row `post_save:<table>`. `update_or_create` emitted NO per-row `post_save` on EITHER branch — the CREATE branch calls `create()` (deliberately signal-free, like `bulk_create`; only `save()` fires per-row signals) and the UPDATE branch uses `update_values` (`bulk_post_save`). So `on_model` consumers silently missed every upsert. (The original write-up mis-stated that the CREATE branch already emitted `post_save` via `self.create()` — it doesn't; both branches were silent.)
 
 **Fixed** (commit `fe200c1`): emit `post_save` explicitly on both branches (the create arm and both `do_update!` update sites). `create()`/`bulk_create` stay signal-free by design — only the higher-level convergent upsert notifies. `bulk_post_save` and `post_save` are distinct signal names, so no single consumer double-fires. Test: `post_save_fires_on_both_branches_of_update_or_create` in `crates/umbral-core/tests/update_signals.rs`.
+
+19. [x] `AuthUser` isn't extensible — CONFIRMED already solved by the swappable `UserModel` mechanism (no new code)
+
+The complaint: to add `display_name`/`color`/`position` to a user, the consumer built a `UserProfile` (unique FK) + a `post_save` on `AuthUser` to auto-create it + an idempotent `ensure_profile` racing the unique FK + a `backfill_profiles` seed + an in-memory left-join on every read.
+
+**Confirmed done** (2026-07-06 audit, no new code needed): the "swappable user model (Django `AUTH_USER_MODEL`)" arm of the proposal already exists as the `UserModel` trait + the generic `AuthPlugin<U: UserModel = AuthUser>` (`plugins/umbral-auth/src/lib.rs:183`, `:356`). A consumer declares their OWN user struct with whatever extra columns they need and implements four required methods (`id`/`username`/`password_hash`/`set_password_hash`; the three flag methods default). `AuthPlugin::<CustomUser>::default()` registers it and `authenticate` / `set_password` / bearer-token / argon2 hash-verify all operate generically over `U`. That eliminates the sidecar-profile apparatus outright — the extra fields live directly on the user model instead of a `UserProfile` + signal + backfill + join. The PK is polymorphic (`<U as Model>::PrimaryKey`), so a `uuid::Uuid`- or `String`-keyed user works too.
+
+Proven by existing tests: `plugins/umbral-auth/tests/custom_user.rs` (9 tests — `CustomUser` carries `display_name` + `tenant_id`, the exact "extra columns AuthUser doesn't have" case; registers via `AuthPlugin::<CustomUser>`, authenticates, rejects wrong-password/inactive, rotates password) and `plugins/umbral-auth/tests/uuid_user.rs` (4 tests — non-`i64` PK). Both green on 2026-07-06.
+
+**Documented caveat** (not a gap): a *fully* custom user model brings its own request-time extractor / `current_user` loader and its own default routes — the built-in extractors, `session_user::current_user`, and the `with_default_routes()` opt-in are `AuthPlugin<AuthUser>`-only by design (they hardcode the `auth_user` shape). The generic auth CORE that #19 was about (define a richer user model, stop rebuilding the profile apparatus) is complete. If a first-class profile *helper* is ever wanted as the second arm, that's a fresh, lower-priority entry — this one is closed on the swappable-model arm.
+
+20. [x] Auth ships no authenticated change-password route, and `set_password` skips the strength policy — shipped (commit 926d1c11)
+
+Default auth routes were login/logout/signup/verify-email/resend/password-forgot/password-reset — no change-password. `umbral_auth::validate_password` was public (the app reinvented an 8-char check) but `set_password` didn't call it.
+
+**Shipped** (commit `926d1c11`): `change_password(user, current, new)` — verify the current password via `verify_password_async` (else `InvalidCredentials`) → run `validate_password` on the new one (else `WeakPassword`) → rotate the hash via `update_values`. Plus a default `POST {prefix}/change-password` route mapping the outcomes (204 success; 401 invalid_credentials; 400 weak_password). TDD: `plugins/umbral-auth/tests/change_password.rs`.
+
+23. [x] No `serve`-only migrate/seed lifecycle — apps hand-roll argv sniffing — shipped (commit aad2c684)
+
+The consumer inspected `std::env::args()` in `main.rs` to avoid `auto_migrate()` firing during the `makemigrations`/`migrate` CLI commands.
+
+**Shipped** (commit `aad2c684`): `AppBuilder::auto_migrate_on_serve()` sets an opt-in flag on the built `App`, read via `auto_migrate_on_serve_enabled()`. The CLI `serve` path runs `migrate::run()` before binding the listener *only* when the flag is set, so the `makemigrations`/`migrate` subcommands never trip an ambient auto-migrate. TDD: `crates/umbral-core/tests/auto_migrate_on_serve.rs`.
+
+24. [x] Adding a `Choices` variant forces a full `AlterColumn` table rebuild (unnecessary churn) — shipped (commit a86967a6)
+
+`fc_payments` migrated `status` to `Choices` then added a `"waived"` variant — each a full `AlterColumn` (whole-table rebuild on SQLite) though the storage type stayed `Text`.
+
+**Shipped** (commit `a86967a6`): `alter_is_choices_only` — the SQLite `AlterColumn` renderer short-circuits to *no DDL* when the only column difference is `choices`/`choice_labels` (choices aren't a DB CHECK on SQLite; `build_column_def_sqlite` emits none, so the rebuild produced a byte-identical table). Postgres, which stores `CHECK (col IN (...))`, still swaps the constraint via its own renderer. The op is still recorded; only the SQLite render is empty. TDD: `crates/umbral-core/tests/choices_only_alter_sqlite.rs`.

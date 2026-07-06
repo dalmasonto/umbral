@@ -55,15 +55,9 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     **Proposal:** a `Require<P: Permission>` extractor (403s on failure) usable on any axum handler, plus a `RequireStaff(pub i64)` convenience that returns the parsed uid.
 
-19. [ ] `AuthUser` isn't extensible — forced a ~130-line sidecar-profile + signal + backfill apparatus
+19. [x] `AuthUser` isn't extensible — confirmed already solved by the swappable `UserModel` / `AuthPlugin<U>` mechanism — archived
 
-    To add `display_name`/`color`/`position` to a user, the consumer built a `UserProfile` (unique FK) + a `post_save` on `AuthUser` to auto-create it + an idempotent `ensure_profile` racing the unique FK + a `backfill_profiles` seed + an in-memory left-join on every read.
-
-    **Proposal:** either a swappable user model (Django `AUTH_USER_MODEL`) or a first-class "profile" helper the auth plugin owns (auto-create-on-insert signal + backfill), so consumers stop rebuilding this.
-
-20. [x] Auth ships no authenticated change-password route, and `set_password` skips the strength policy — shipped (commit 926d1c11)
-
-    Shipped `change_password(user, current, new)` (verify current via `verify_password_async` → `validate_password` on the new → rotate the hash) plus a default `POST {prefix}/change-password` route (204 on success; 401 invalid_credentials; 400 weak_password). TDD: `plugins/umbral-auth/tests/change_password.rs`.
+20. [x] Auth ships no authenticated change-password route + `set_password` strength policy — archived
 
 21. [ ] No `DecimalField` / money type — consumers fall back to `i64` "whole units" to dodge float
 
@@ -73,13 +67,9 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     `And(IsAuthenticated, Or(ReadOnly, IsStaff))` is the app's most-used gate (fixtures, attendance, announcements, chat, teams) and reads as verbose dyn-boxing. **Proposal:** ship a named `IsAuthenticatedOrReadOnly` (DRF-style) and/or `.and()`/`.or()` combinators on `Permission` so consumers stop hand-boxing.
 
-23. [x] No `serve`-only migrate/seed lifecycle — apps hand-roll argv sniffing — shipped (commit aad2c684)
+23. [x] No `serve`-only migrate/seed lifecycle (auto_migrate_on_serve) — archived
 
-    Shipped `AppBuilder::auto_migrate_on_serve()` (opt-in flag on the built `App`, read via `auto_migrate_on_serve_enabled()`). The CLI `serve` path runs `migrate::run()` before binding *only* when the flag is set, so `makemigrations`/`migrate` subcommands never trip an ambient auto-migrate. TDD: `crates/umbral-core/tests/auto_migrate_on_serve.rs`.
-
-24. [x] Adding a `Choices` variant forces a full `AlterColumn` table rebuild (unnecessary churn) — shipped (commit a86967a6)
-
-    Shipped `alter_is_choices_only`: the SQLite `AlterColumn` renderer now short-circuits to *no DDL* when the only column difference is `choices`/`choice_labels` (choices aren't a DB CHECK on SQLite — `build_column_def_sqlite` emits none — so the rebuild produced a byte-identical table). Postgres, which stores `CHECK (col IN (...))`, still swaps the constraint via its own renderer. The op is still recorded; only the SQLite render is empty. TDD: `crates/umbral-core/tests/choices_only_alter_sqlite.rs`.
+24. [x] Adding a `Choices` variant forces a full `AlterColumn` table rebuild — archived
 
 25. [x] ORM SQLite write transactions used `BEGIN DEFERRED` → SQLITE_BUSY under concurrent writes — shipped `BEGIN IMMEDIATE` (commit 7a03c196)
 

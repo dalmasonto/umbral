@@ -361,11 +361,4 @@
 98. [x] **REST resources answer OPTIONS — SHIPPED (2026-06-24).** Collection (`/api/{table}`) + detail (`/api/{table}/{id}`) method-routers gained an `.options(...)` handler returning **204 No Content + an `Allow` header**: collection = `OPTIONS, GET, POST` (+ `PATCH, DELETE` when the resource opted into `.bulk()`), detail = `OPTIONS, GET, PUT, PATCH, DELETE`. Replaces the bare 405; CORS-preflight OPTIONS still handled by the cors layer. Tests `plugins/umbral-rest/tests/options.rs` (3, incl. the bulk-aware collection Allow). Deferred follow-up: a JSON metadata body (fields / writable columns).
 
 99. [x] Data sanitization / custom model validation — MOVED to features.md #83 (a way to add app-defined validation + sanitization hooks to models).
-100. [x] `squashmigrations <plugin>` — collapse a plugin's history into one optimized file — shipped (non-destructive squash)
-
-    The literal ask ("remove migration files + clean up the DB schema") is the exact destructive shortcut CLAUDE.md forbids (never delete `migrations/` files; never rebuild a live DB). Shipped the safe, Django-style reading instead:
-
-    - `MigrationFile.replaces: Vec<MigrationRef>` (serde-default, backward-compatible) marks a *squash*.
-    - `squash_in(dir, plugin)` / CLI `squashmigrations <plugin>` writes ONE file whose ops are `diff(empty, last.snapshot_after)` — every intermediate alter folded into final `CreateTable`s — keeping the originals on disk. Refuses on <2 migrations, an already-squashed history (no nested squash yet), or a `RunSql` data migration (a snapshot diff can't reconstruct it → would silently drop the data step).
-    - Pure `squash_plan(files, applied) -> [Apply|Skip|RecordOnly]` decides squash-vs-originals (fully-applied → RecordOnly, fully-unapplied → Apply + shadow originals, partial → fall back to surviving originals or `SquashInconsistent`). Routed through ALL five apply loops (sqlite/pg alias + pg schema + pg/sqlite tenant-DB) so a squash and its originals never both apply. A live DB that already ran the originals records the squash with NO DDL — tables/rows untouched.
-    - TDD: 6 `squash_plan` unit tests + `squash_migrations.rs` behavioural E2E (real rows survive the record-only re-migrate) + a refuse test. Docs: `documentation/docs/v0.0.1/migrations/squashing.mdx`.
+100. [x] `squashmigrations <plugin>` — non-destructive history collapse (commit 5c614d44) — archived
