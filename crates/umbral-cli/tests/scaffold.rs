@@ -182,6 +182,53 @@ fn scaffold_project_seed_has_no_hardcoded_admin_password() {
     );
 }
 
+/// audit_2 macros-cli #7 — the scaffold must NOT write the shared literal
+/// `umbral-insecure-dev-key-change-me`; each project gets a random dev key,
+/// consistent between umbral.toml and the working .env.
+#[test]
+fn scaffold_project_generates_a_unique_dev_secret_key() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("keyapp", tmp.path(), None).unwrap();
+    let toml = fs::read_to_string(report.root.join("umbral.toml")).unwrap();
+    let env = fs::read_to_string(report.root.join(".env")).unwrap();
+
+    assert!(
+        !toml.contains("umbral-insecure-dev-key-change-me"),
+        "umbral.toml must not ship the shared literal dev key;\ngot:\n{toml}"
+    );
+    assert!(
+        !env.contains("umbral-insecure-dev-key-change-me"),
+        ".env must not ship the shared literal dev key;\ngot:\n{env}"
+    );
+
+    // Extract the generated key from each file; they must match and be a real
+    // 64-hex-char random key.
+    let toml_key = toml
+        .lines()
+        .find_map(|l| l.strip_prefix("secret_key = \"")?.strip_suffix('"'))
+        .expect("umbral.toml has a secret_key");
+    let env_key = env
+        .lines()
+        .find_map(|l| l.strip_prefix("UMBRAL_SECRET_KEY="))
+        .expect(".env has UMBRAL_SECRET_KEY");
+    assert_eq!(toml_key, env_key, "toml + .env keys must match");
+    assert_eq!(toml_key.len(), 64, "key is 64 hex chars");
+    assert!(
+        toml_key.chars().all(|c| c.is_ascii_hexdigit()),
+        "key is all hex; got {toml_key}"
+    );
+
+    // A second scaffold produces a different key (not a fixed constant).
+    let tmp2 = TempDir::new().unwrap();
+    let report2 = scaffold_project("keyapp2", tmp2.path(), None).unwrap();
+    let toml2 = fs::read_to_string(report2.root.join("umbral.toml")).unwrap();
+    let key2 = toml2
+        .lines()
+        .find_map(|l| l.strip_prefix("secret_key = \"")?.strip_suffix('"'))
+        .expect("second umbral.toml has a secret_key");
+    assert_ne!(toml_key, key2, "two scaffolds must not share a dev key");
+}
+
 // audit core-macros-cli #5: the generated README must not claim that
 // `serve` auto-migrates on first run — the boot guard only auto-migrates
 // on a bare `cargo run` (no subcommand). `serve` is a subcommand and

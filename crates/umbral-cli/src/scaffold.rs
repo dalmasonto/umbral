@@ -218,6 +218,28 @@ fn rust_ident(name: &str) -> String {
     name.replace('-', "_")
 }
 
+/// A random 64-hex-char dev secret key, unique per scaffold (audit_2
+/// macros-cli #7). Replaces the old shared `umbral-insecure-dev-key-change-me`
+/// literal so two scaffolded projects never share a key. Dev-only — production
+/// still requires a real key (the boot guard rejects a default/dev key under
+/// `environment = "Prod"`). Entropy comes from the OS-seeded `RandomState`; a
+/// crypto dependency isn't warranted for a dev-only, prod-boot-guarded value.
+fn random_dev_secret_key() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    // Each `RandomState::new()` pulls a fresh OS-seeded random state, so the
+    // key differs across scaffold runs. Fold four seeded hashes into 64 hex
+    // chars (256 bits of key material).
+    let seed = std::collections::hash_map::RandomState::new();
+    let mut out = String::with_capacity(64);
+    for i in 0..4u64 {
+        let mut h = seed.build_hasher();
+        h.write_u64(i);
+        h.write_u64(i.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        out.push_str(&format!("{:016x}", h.finish()));
+    }
+    out
+}
+
 /// Write a new umbral project at `parent_dir/<name>/`.
 ///
 /// The generated layout is a complete blog-style demo that exercises every
@@ -797,6 +819,9 @@ pub fn overview_section() -> WidgetSection {
     // ------------------------------------------------------------------ //
     // umbral.toml                                                           //
     // ------------------------------------------------------------------ //
+    // A random dev secret, unique per scaffolded project (audit_2 macros-cli #7)
+    // — shared into both umbral.toml and the working .env below so they match.
+    let dev_secret = random_dev_secret_key();
     let umbral_toml = format!(
         r#"# umbral settings for {name}.
 # Environment variables (UMBRAL_*) override these at runtime.
@@ -810,9 +835,9 @@ bind_addr = "127.0.0.1:8000"
 
 environment = "Dev"
 
-# CHANGE THIS IN PRODUCTION. The framework errors at boot when this
-# default key is used with environment = "Prod".
-secret_key = "umbral-insecure-dev-key-change-me"
+# A random dev-only key, unique to this project. CHANGE THIS IN PRODUCTION —
+# the framework errors at boot if a dev key is used with environment = "Prod".
+secret_key = "{dev_secret}"
 "#
     );
     write_file(&root, "umbral.toml", &umbral_toml, &mut files)?;
@@ -825,7 +850,7 @@ secret_key = "umbral-insecure-dev-key-change-me"
 # Generate a real secret key: openssl rand -hex 32
 UMBRAL_DATABASE_URL=sqlite://{name}.db?mode=rwc
 UMBRAL_BIND_ADDR=127.0.0.1:8000
-UMBRAL_SECRET_KEY=umbral-insecure-dev-key-change-me
+UMBRAL_SECRET_KEY={dev_secret}
 RUST_LOG=info,umbral=debug
 "#
     );
