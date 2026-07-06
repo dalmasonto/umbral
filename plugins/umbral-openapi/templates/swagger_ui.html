@@ -5,14 +5,16 @@
   <title>umbral API docs</title>
   <!-- audit_2 plugin-observability #9: asset base is pinned to an exact version
        and configurable (OpenApiPlugin::swagger_asset_base) so it can be
-       self-hosted. crossorigin + referrerpolicy limit what a third-party CDN
-       sees and how errors are reported. -->
-  <link rel="stylesheet" href="{ASSET_BASE}/swagger-ui.css"
+       self-hosted. SRI (integrity=) is emitted for the pinned default assets so
+       a tampered CDN response is refused; it is omitted when the base is
+       overridden (unknown bytes / same-origin self-host). crossorigin +
+       referrerpolicy limit what a third-party CDN sees and how errors report. -->
+  <link rel="stylesheet" href="{ASSET_BASE}/swagger-ui.css"{CSS_INTEGRITY}
         crossorigin="anonymous" referrerpolicy="no-referrer">
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="{ASSET_BASE}/swagger-ui-bundle.js"
+  <script src="{ASSET_BASE}/swagger-ui-bundle.js"{JS_INTEGRITY}
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script>
     window.onload = () => {

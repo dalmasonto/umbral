@@ -79,7 +79,8 @@ async fn boot() -> &'static axum::Router {
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(
-                SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+                SqliteConnectOptions::new()
+                    .busy_timeout(std::time::Duration::from_secs(5))
                     .filename(&path)
                     .create_if_missing(true),
             )
@@ -157,6 +158,24 @@ async fn get_request(router: axum::Router, uri: &str) -> (StatusCode, String) {
 // =========================================================================
 // 1. Valid OpenAPI 3.0 envelope.
 // =========================================================================
+
+/// audit_2 plugin-observability #9 — the Swagger UI page, served with the
+/// default (pinned unpkg) asset base, must carry SRI `integrity` hashes on both
+/// the CSS and the JS so a tampered CDN response is refused by the browser.
+#[tokio::test]
+async fn swagger_ui_default_assets_carry_sri_integrity() {
+    let router = boot().await.clone();
+    let (status, body) = get_request(router, "/openapi/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("swagger-ui.css\" integrity=\"sha384-"),
+        "the CSS <link> must carry an SRI integrity hash;\ngot:\n{body}"
+    );
+    assert!(
+        body.contains("swagger-ui-bundle.js\" integrity=\"sha384-"),
+        "the JS <script> must carry an SRI integrity hash;\ngot:\n{body}"
+    );
+}
 
 #[tokio::test]
 async fn openapi_json_serves_a_valid_openapi_3_0_document() {

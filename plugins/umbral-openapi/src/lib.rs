@@ -65,6 +65,19 @@ pub struct OpenApiPlugin {
 /// plugin-observability #9.
 pub const DEFAULT_SWAGGER_ASSET_BASE: &str = "https://unpkg.com/swagger-ui-dist@5.17.14";
 
+/// Subresource-Integrity (SHA-384) hashes for the two Swagger UI assets at the
+/// pinned [`DEFAULT_SWAGGER_ASSET_BASE`] version (audit_2 plugin-observability
+/// #9). The browser refuses an asset whose bytes don't match, so a compromised
+/// or MITM'd CDN response can't inject script. These are version-specific: they
+/// are only emitted when the asset base is the default. If an operator points
+/// `swagger_asset_base` at a self-hosted / different-version copy, integrity is
+/// omitted (we can't know their bytes) — and same-origin self-hosting doesn't
+/// need it. Bump these whenever the pinned version changes.
+const SWAGGER_CSS_SRI: &str =
+    "sha384-wxLW6kwyHktdDGr6Pv1zgm/VGJh99lfUbzSn6HNHBENZlCN7W602k9VkGdxuFvPn";
+const SWAGGER_JS_SRI: &str =
+    "sha384-wmyclcVGX/WhUkdkATwhaK1X1JtiNrr2EoYJ+diV3vj4v6OC5yCeSu+yW13SYJep";
+
 impl Default for OpenApiPlugin {
     fn default() -> Self {
         Self::new()
@@ -262,8 +275,22 @@ async fn spec_handler() -> Response {
 
 async fn swagger_ui_handler() -> Response {
     let cfg = CONFIG.get().expect("OpenApiPlugin::routes was called");
+    // Only emit SRI when serving the known, pinned default assets — the hashes
+    // are version-specific and would BREAK a self-hosted / re-versioned base
+    // (audit_2 plugin-observability #9).
+    let is_default = cfg.swagger_asset_base == DEFAULT_SWAGGER_ASSET_BASE;
+    let (css_integrity, js_integrity) = if is_default {
+        (
+            format!(" integrity=\"{SWAGGER_CSS_SRI}\""),
+            format!(" integrity=\"{SWAGGER_JS_SRI}\""),
+        )
+    } else {
+        (String::new(), String::new())
+    };
     let body = SWAGGER_UI_HTML
         .replace("{ASSET_BASE}", &cfg.swagger_asset_base)
+        .replace("{CSS_INTEGRITY}", &css_integrity)
+        .replace("{JS_INTEGRITY}", &js_integrity)
         .replace("{SPEC_URL}", &cfg.spec_url());
     Html(body).into_response()
 }
