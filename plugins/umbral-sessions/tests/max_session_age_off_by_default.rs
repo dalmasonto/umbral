@@ -15,7 +15,8 @@ async fn boot_no_cap() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
-            SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+            SqliteConnectOptions::new()
+                .busy_timeout(std::time::Duration::from_secs(5))
                 .filename(&path)
                 .create_if_missing(true),
         )

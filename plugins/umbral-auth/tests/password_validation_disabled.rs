@@ -32,7 +32,8 @@ async fn disabled_validation_accepts_weak_password_at_register_route() {
     let tmp = tempfile::tempdir().expect("create tempdir for the test DB");
     let db_path = tmp.path().join("umbral_auth_pwdisabled.sqlite");
     std::mem::forget(tmp);
-    let options = SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+    let options = SqliteConnectOptions::new()
+        .busy_timeout(std::time::Duration::from_secs(5))
         .filename(&db_path)
         .create_if_missing(true);
     let pool = SqlitePoolOptions::new()

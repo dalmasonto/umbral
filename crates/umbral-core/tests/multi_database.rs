@@ -87,7 +87,8 @@ async fn boot_app_with_two_dbs() -> &'static PathBuf {
 }
 
 async fn make_pool(db_path: &std::path::Path) -> SqlitePool {
-    let options = SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+    let options = SqliteConnectOptions::new()
+        .busy_timeout(std::time::Duration::from_secs(5))
         .filename(db_path)
         .create_if_missing(true);
     SqlitePoolOptions::new()

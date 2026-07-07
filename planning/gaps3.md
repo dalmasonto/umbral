@@ -84,14 +84,14 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     Genuinely-open findings that need a design decision or infra the local env can't provide. Recorded so they're tracked, not lost. See `planning/audit_2/findings/` for full write-ups.
 
-    - **[authz P1]** Authorization is default-allow — no default-deny/gated-by-construction router primitive or boot-time audit of ungated mutating routes. Framework-posture design.
-    - **[authz P2]** Model-level perms only — no object/row-level permission primitive (per-row grants / IDOR-by-design). Design.
-    - **[authz R4 / R5]** RLS: no non-ignored two-tenant *enforcement* test, and policies are append-only across boots (no drop-undeclared diff). Both need a containerized Postgres.
-    - **[admin #5]** Admin handlers have no in-handler CSRF verify (only `login_post` self-verifies); depends on either a boot-breaking `"security"` dep or a broad multi-handler sweep + hinges on the session cookie `SameSite`. Design call.
-    - **[orm #3 / macros #2]** Mass-assignment: no field allowlist on the dynamic write path / no `#[form(fields=[...])]` allowlist API. Framework-wide write-policy design.
-    - **[realtime #2 / #5]** No `authorize_publish` seam for inbound WS messages; presence re-broadcast is O(N²) and changing it alters the shipped wire protocol.
-    - **[oauth OAU-4]** create-user + create-social aren't transactional (threading a txn through the username-retry loop).
-    - **[supply-chain SC-3 / SC-5]** `umbral-core` has no `[features]` table (feature-gating touches every consumer); `notify` pinned at 6 (7/8 are API-breaking, dev-only plugin).
+    - [ ] **[authz P1]** Authorization is default-allow — no default-deny/gated-by-construction router primitive or boot-time audit of ungated mutating routes. Framework-posture design.
+    - [ ] **[authz R4 / R5]** RLS: no non-ignored two-tenant *enforcement* test, and policies are append-only across boots (no drop-undeclared diff). Both need a containerized Postgres.
+    - [ ] **[authz P2]** Model-level perms only — no object/row-level permission primitive (per-row grants / IDOR-by-design). Design.
+    - [ ] **[admin #5]** Admin handlers have no in-handler CSRF verify (only `login_post` self-verifies); depends on either a boot-breaking `"security"` dep or a broad multi-handler sweep + hinges on the session cookie `SameSite`. Design call.
+    - [ ] **[orm #3 / macros #2]** Mass-assignment: no field allowlist on the dynamic write path / no `#[form(fields=[...])]` allowlist API. Framework-wide write-policy design.
+    - [ ] **[realtime #2 / #5]** No `authorize_publish` seam for inbound WS messages; presence re-broadcast is O(N²) and changing it alters the shipped wire protocol.
+    - [ ] **[oauth OAU-4]** create-user + create-social aren't transactional (threading a txn through the username-retry loop).
+    - [ ] **[supply-chain SC-3 / SC-5]** `umbral-core` has no `[features]` table (feature-gating touches every consumer); `notify` pinned at 6 (7/8 are API-breaking, dev-only plugin).
 
 29. [ ] We need to start thinking about optimization ie what else can we move to the orm layer that is fully reimplemented everywhere, how can we improve the boilerplate.
 

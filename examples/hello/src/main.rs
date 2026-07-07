@@ -69,12 +69,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // umbral's genuine SQLite pool (WAL + synchronous=NORMAL + busy_timeout).
     let pool = umbral::db::connect_sqlite(&db_url).await?;
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS hello_note \
-         (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
-    )
-    .execute(&pool)
-    .await?;
 
     let app = App::builder()
         .settings(settings)

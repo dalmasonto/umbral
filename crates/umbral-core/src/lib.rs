@@ -4,6 +4,7 @@
 //!
 //! Status: M0 shipped — Settings, db pool, web re-exports, App builder.
 
+pub mod api_error;
 pub mod app;
 pub mod auth_contract;
 pub mod backend;
@@ -32,7 +33,6 @@ pub mod storage;
 pub mod templates;
 pub mod timezone;
 pub mod web;
-pub mod api_error;
 
 /// Top-level transaction helper. Sugar for `umbral_core::db::transaction`.
 ///

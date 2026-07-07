@@ -52,7 +52,8 @@ async fn boot() {
         // delete the file under us. Test-only; the OS cleans /tmp
         // between boots.
         std::mem::forget(tmp);
-        let options = SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+        let options = SqliteConnectOptions::new()
+            .busy_timeout(std::time::Duration::from_secs(5))
             .filename(&db_path)
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new()

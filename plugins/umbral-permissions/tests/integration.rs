@@ -64,7 +64,8 @@ async fn boot() {
         let db_path = tmp.path().join("umbral_permissions_integration.sqlite");
         std::mem::forget(tmp);
 
-        let options = SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+        let options = SqliteConnectOptions::new()
+            .busy_timeout(std::time::Duration::from_secs(5))
             .filename(&db_path)
             .create_if_missing(true);
 

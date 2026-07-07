@@ -26,7 +26,8 @@ async fn rest_publishes_custom_base_into_api_base() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(
-            SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+            SqliteConnectOptions::new()
+                .busy_timeout(std::time::Duration::from_secs(5))
                 .filename(":memory:")
                 .create_if_missing(true),
         )

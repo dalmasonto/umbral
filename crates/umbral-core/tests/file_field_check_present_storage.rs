@@ -42,7 +42,8 @@ async fn build_succeeds_with_storage_providing_plugin() {
     std::mem::forget(tmp);
     let pool = SqlitePoolOptions::new()
         .connect_with(
-            SqliteConnectOptions::new().busy_timeout(std::time::Duration::from_secs(5))
+            SqliteConnectOptions::new()
+                .busy_timeout(std::time::Duration::from_secs(5))
                 .filename(&path)
                 .create_if_missing(true),
         )
