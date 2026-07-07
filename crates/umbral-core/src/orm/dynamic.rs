@@ -1773,6 +1773,11 @@ impl<'a> DynQuerySet<'a> {
                     });
                 }
             }
+            // gaps3 #34: apply declared trim/lowercase to the incoming string
+            // before masking / binding, so admin-form + REST writes store the
+            // canonical value (the typed path is caller-controlled).
+            let normalized_json = normalize_json_for_col(col, json);
+            let json = normalized_json.as_ref().unwrap_or(json);
             // Masked columns: seal the plaintext before binding so the dynamic
             // write path encrypts at rest too (audit_2 core-orm C1).
             let sealed = crate::orm::write::seal_masked_json(col, json)?;
@@ -1970,6 +1975,11 @@ impl<'a> DynQuerySet<'a> {
                     });
                 }
             }
+            // gaps3 #34: apply declared trim/lowercase to the incoming string
+            // before masking / binding, so admin-form + REST writes store the
+            // canonical value (the typed path is caller-controlled).
+            let normalized_json = normalize_json_for_col(col, json);
+            let json = normalized_json.as_ref().unwrap_or(json);
             // Masked columns: seal the plaintext before binding so the dynamic
             // write path encrypts at rest too (audit_2 core-orm C1).
             let sealed = crate::orm::write::seal_masked_json(col, json)?;
@@ -2607,6 +2617,33 @@ pub fn decode_pg_to_json(
     })
 }
 
+/// Apply a column's declared `#[umbral(trim)]` / `#[umbral(lowercase)]`
+/// normalization to a string value (gaps3 #34). `trim` runs first (so a
+/// then-empty value falls into the empty/NULL branch), then `lowercase`.
+/// No-op when neither flag is set. Only string columns ever carry these flags
+/// (the derive rejects them elsewhere), so this is unreachable for non-strings.
+fn normalize_str(col: &Column, s: &str) -> String {
+    let trimmed = if col.trim { s.trim() } else { s };
+    if col.lowercase {
+        trimmed.to_lowercase()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// The JSON-path companion to [`normalize_str`]: returns a normalized owned
+/// `String` value when the column declares trim/lowercase AND the incoming
+/// JSON is a string, else `None` (the caller keeps the original borrow). A
+/// non-string JSON value on a normalized column is left untouched — the type
+/// mismatch surfaces later in `json_to_sea_value` as it would today.
+fn normalize_json_for_col(col: &Column, v: &serde_json::Value) -> Option<serde_json::Value> {
+    if !(col.trim || col.lowercase) {
+        return None;
+    }
+    let s = v.as_str()?;
+    Some(serde_json::Value::String(normalize_str(col, s)))
+}
+
 /// Convert one form-submitted string into a `SeaValue` ready for
 /// binding. Handles the "empty + nullable" case explicitly so a blank
 /// form field produces SQL NULL instead of an empty-string mismatch
@@ -2615,6 +2652,11 @@ pub fn decode_pg_to_json(
 /// which already understands "true"/"false" booleans and RFC3339
 /// timestamps the HTML form layer hands in.
 fn form_str_to_sea_value(col: &Column, raw: &str) -> Result<SeaValue, WriteError> {
+    // gaps3 #34: apply declared trim/lowercase before any parsing, so the
+    // empty/NULL check below sees the post-trim value (a field that trims to
+    // empty is treated as blank).
+    let normalized = normalize_str(col, raw);
+    let raw = normalized.as_str();
     if raw.is_empty() {
         if col.ty == SqlType::Boolean {
             // Unchecked checkbox = false, not NULL.
@@ -3373,6 +3415,10 @@ fn build_insert_plan(
                 });
             }
         }
+        // gaps3 #34: apply declared trim/lowercase to the incoming string
+        // before masking / binding (dynamic write path only).
+        let normalized_json = normalize_json_for_col(col, json);
+        let json = normalized_json.as_ref().unwrap_or(json);
         // Masked columns: seal the plaintext before binding (audit_2 core-orm C1).
         let sealed = crate::orm::write::seal_masked_json(col, json)?;
         let sea_value = crate::orm::write::json_to_sea_value(
@@ -3630,6 +3676,8 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,

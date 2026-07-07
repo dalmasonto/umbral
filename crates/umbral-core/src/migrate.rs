@@ -884,6 +884,19 @@ pub struct Column {
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_now: bool,
 
+    /// Carries `FieldSpec::trim` into the snapshot. Behavioral (dynamic write
+    /// path strips surrounding whitespace), not schema-affecting — excluded
+    /// from the schema diff like `auto_now`. Default `false` so existing
+    /// migration JSON round-trips unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub trim: bool,
+
+    /// Carries `FieldSpec::lowercase` into the snapshot. Behavioral (dynamic
+    /// write path lowercases the value), not schema-affecting. Default `false`
+    /// so existing migration JSON round-trips unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lowercase: bool,
+
     /// Carries `FieldSpec::help` into the migration snapshot.
     /// Default empty string is omitted from JSON so existing
     /// migration files round-trip unchanged.
@@ -1140,6 +1153,8 @@ impl From<&FieldSpec> for Column {
             index: f.index,
             auto_now_add: f.auto_now_add,
             auto_now: f.auto_now,
+            trim: f.trim,
+            lowercase: f.lowercase,
             help: f.help.to_string(),
             example: f.example.to_string(),
             widget: f.widget.map(|s| s.to_string()),
@@ -5836,6 +5851,8 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -5867,6 +5884,8 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -5898,6 +5917,8 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -5999,6 +6020,8 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6014,6 +6037,8 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6116,6 +6141,8 @@ mod tests {
                 index: false,
                 auto_now_add: false,
                 auto_now: false,
+                trim: false,
+                lowercase: false,
                 help: String::new(),
                 example: String::new(),
                 widget: None,
@@ -6220,6 +6247,8 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6327,6 +6356,8 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6410,6 +6441,8 @@ mod tests {
             index: true,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6427,6 +6460,8 @@ mod tests {
             index: true,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6441,6 +6476,8 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6519,6 +6556,8 @@ mod tests {
                 index: false,
                 auto_now_add,
                 auto_now,
+                trim: false,
+                lowercase: false,
                 help: String::new(),
                 example: String::new(),
                 widget: None,

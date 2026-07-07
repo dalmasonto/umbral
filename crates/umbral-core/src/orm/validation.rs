@@ -761,6 +761,8 @@ mod tests {
             text_format: None,
             slug_from: None,
             auto_now: false,
+            trim: false,
+            lowercase: false,
             auto_now_add: false,
             help: String::new(),
             example: String::new(),

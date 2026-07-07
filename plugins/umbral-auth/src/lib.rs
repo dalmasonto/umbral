@@ -248,11 +248,17 @@ pub trait UserModel: Model + Send + Sync + 'static {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 pub struct AuthUser {
     pub id: i64,
-    #[umbral(unique)]
+    /// `trim` + `lowercase` (gaps3 #34) canonicalize the username on the
+    /// dynamic write path (admin form-submit, REST create/update) so it's
+    /// case-insensitively unique there too — the typed `create_user` path
+    /// normalizes explicitly via `normalize_username` (gaps3 #33). Together
+    /// they close every write surface.
+    #[umbral(unique, trim, lowercase)]
     pub username: String,
     /// Shown read-only on edit forms; never on create forms (use the
-    /// admin's password field mechanism for changes).
-    #[umbral(noedit, unique)]
+    /// admin's password field mechanism for changes). `trim` + `lowercase`
+    /// canonicalize on the dynamic write path — see `username`.
+    #[umbral(noedit, unique, trim, lowercase)]
     pub email: String,
     /// Never shown on any form — password management goes through the
     /// dedicated Change Password flow in the admin. `signal_skip` keeps the

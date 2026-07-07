@@ -702,6 +702,27 @@ pub struct FieldSpec {
     /// a future v2 toggle if a real consumer asks.
     pub auto_now: bool,
 
+    /// When `true`, the dynamic write path strips leading/trailing whitespace
+    /// from this column's string value before INSERT/UPDATE. Set via
+    /// `#[umbral(trim)]`; only valid on `String` / `Option<String>` fields
+    /// (the derive rejects it elsewhere at compile time).
+    ///
+    /// **Where this fires:** the dynamic write path only
+    /// (`DynQuerySet::insert_json`/`update_json` + the admin form builders),
+    /// exactly like [`auto_now`](Self::auto_now). The typed
+    /// `Manager::create(instance)` path is caller-controlled — normalize there
+    /// yourself (e.g. `umbral_auth::normalize_email`) if you need it. Combines
+    /// with [`lowercase`](Self::lowercase): trim runs first, then lowercase.
+    pub trim: bool,
+
+    /// When `true`, the dynamic write path lowercases this column's string
+    /// value before INSERT/UPDATE. Set via `#[umbral(lowercase)]`; only valid
+    /// on `String` / `Option<String>` fields. Pair with [`unique`](Self::unique)
+    /// to get case-insensitive uniqueness for free (every stored row is already
+    /// lowercased), and with [`trim`](Self::trim) to also drop surrounding
+    /// whitespace. Same dynamic-path-only scope as [`trim`](Self::trim).
+    pub lowercase: bool,
+
     /// Human-readable column description (help text).
     /// Set via `#[umbral(help = "...")]`. Flows
     /// through to:

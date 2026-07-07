@@ -268,6 +268,12 @@ struct UmbralFieldAttr {
     /// `#[umbral(auto_now)]` — populate with `Utc::now()` on every
     /// write. Closes BUG-5.
     auto_now: bool,
+    /// `#[umbral(trim)]` — strip surrounding whitespace on the dynamic
+    /// write path. String columns only (gaps3 #34).
+    trim: bool,
+    /// `#[umbral(lowercase)]` — lowercase on the dynamic write path.
+    /// String columns only (gaps3 #34).
+    lowercase: bool,
     /// `#[umbral(help = "...")]` — column help text. Flows to
     /// OpenAPI `description` and admin form hints. Closes
     /// playground-openapi-gaps item 5.
@@ -356,6 +362,8 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         index: false,
         auto_now_add: false,
         auto_now: false,
+        trim: false,
+        lowercase: false,
         help: None,
         example: None,
         widget: None,
@@ -492,6 +500,12 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
             } else if meta.path.is_ident("auto_now") {
                 parsed.auto_now = true;
                 Ok(())
+            } else if meta.path.is_ident("trim") {
+                parsed.trim = true;
+                Ok(())
+            } else if meta.path.is_ident("lowercase") {
+                parsed.lowercase = true;
+                Ok(())
             } else if meta.path.is_ident("help") {
                 // `#[umbral(help = "human text")]` — column
                 // description string. Flows to OpenAPI
@@ -575,7 +589,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
-                     `auto_now_add`, `help = \"...\"`, \
+                     `auto_now_add`, `trim`, `lowercase`, `help = \"...\"`, \
                      `example = \"...\"`, `widget = \"...\"`, \
                      `backend = \"...\"`, \
                      `min = N`, `max = N`, `slug_from = \"...\"`, \
@@ -1336,6 +1350,30 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        // `#[umbral(trim)]` / `#[umbral(lowercase)]` only make sense on a plain
+        // string column (`String` / `Option<String>`). On anything else —
+        // choices (would break the CHECK), xml/ltree/bit (format-sensitive),
+        // numbers, timestamps — reject at compile time so the mistake surfaces
+        // at the field, not as a silently-ignored attribute (gaps3 #34).
+        if (field_attr.trim || field_attr.lowercase)
+            && !matches!(kind, FieldKind::Str | FieldKind::NullableStr)
+        {
+            return Err(syn::Error::new_spanned(
+                field,
+                "#[umbral(trim)] / #[umbral(lowercase)] are only valid on `String` or \
+                 `Option<String>` fields",
+            ));
+        }
+        let trim_lit = if field_attr.trim {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
+        let lowercase_lit = if field_attr.lowercase {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
         let help_tokens = match &field_attr.help {
             Some(s) => quote! { #s },
             None => quote! { "" },
@@ -1467,6 +1505,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 index: #index_lit,
                 auto_now_add: #auto_now_add_lit,
                 auto_now: #auto_now_lit,
+                trim: #trim_lit,
+                lowercase: #lowercase_lit,
                 help: #help_tokens,
                 example: #example_tokens,
                 widget: #widget_tokens,

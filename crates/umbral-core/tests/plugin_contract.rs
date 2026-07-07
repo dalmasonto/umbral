@@ -136,6 +136,8 @@ impl Plugin for TestPlugin {
                 index: false,
                 auto_now_add: false,
                 auto_now: false,
+                trim: false,
+                lowercase: false,
                 help: String::new(),
                 example: String::new(),
                 widget: None,

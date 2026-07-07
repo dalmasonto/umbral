@@ -1,0 +1,46 @@
+---
+title: Normalized fields (trim / lowercase)
+description: Canonicalize a string column on write with #[umbral(trim)] / #[umbral(lowercase)] — e.g. store usernames and emails lowercased so uniqueness is case-insensitive.
+sidebar_position: 18
+tags: [orm, normalization, trim, lowercase, uniqueness]
+---
+
+# Normalized fields
+
+Some string columns should be stored in a canonical form: an email is the same account whether the user types `Dave@Example.com` or `dave@example.com`, and a leading space in a username is almost always an accident. `#[umbral(trim)]` and `#[umbral(lowercase)]` declare that invariant on the field, and the framework applies it on write.
+
+```rust
+#[derive(umbral::orm::Model, /* … */)]
+struct Account {
+    id: i64,
+    #[umbral(unique, trim, lowercase)]
+    email: String,
+    display_name: String,   // stored verbatim
+}
+```
+
+- `trim` strips leading/trailing whitespace.
+- `lowercase` lowercases the value.
+
+They combine (`#[umbral(trim, lowercase)]`) — trim runs first, so a value that trims to empty is treated as blank. Both are **string-only**: applying them to a non-`String` / `Option<String>` field is a compile error.
+
+## Case-insensitive uniqueness, for free
+
+Pair `lowercase` with [`unique`](column-types): because every stored row is already lowercased, the ordinary `UNIQUE` constraint enforces case-insensitive uniqueness with no special index. A second signup of `DAVE@example.com` collides with the existing `dave@example.com` instead of creating a twin account.
+
+## Where it applies
+
+<Callout type="note">
+Normalization runs on the **dynamic write path only** — REST create/update (`insert_json` / `update_json`) and admin form-submit — exactly like [`auto_now`](column-types). The typed `Model::objects().create(instance)` path is caller-controlled: it stores the struct field as-is, so normalize it yourself before creating if you build the struct by hand.
+
+This mirrors how the built-in `AuthUser` works: `username` / `email` carry `#[umbral(trim, lowercase)]` so admin and REST writes canonicalize, while the `create_user` helper normalizes the typed path itself.
+</Callout>
+
+## Reading back
+
+Normalization is a write-time transform — it changes what's stored, not what's queried. To match a stored value in a filter, normalize your query term the same way (`email.eq(input.trim().to_lowercase())`).
+
+## See also
+
+- [Privileged fields](privileged-fields) — the other default-deny write-path guard.
+- `arch.md` and `planning/gaps3.md` #34 for the design rationale (dynamic-path-only, mirroring `auto_now`).

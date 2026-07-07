@@ -1069,6 +1069,8 @@ mod tests {
             index: false,
             auto_now_add,
             auto_now,
+            trim: false,
+            lowercase: false,
             help: String::new(),
             example: String::new(),
             widget: None,

@@ -34,6 +34,8 @@ fn col(name: &str, ty: SqlType, nullable: bool, default: &str) -> Column {
         index: false,
         auto_now_add: false,
         auto_now: false,
+        trim: false,
+        lowercase: false,
         help: String::new(),
         example: String::new(),
         widget: None,

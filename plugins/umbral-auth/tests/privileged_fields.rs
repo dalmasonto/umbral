@@ -42,3 +42,19 @@ fn auth_user_password_hash_is_never_form_writable() {
         "AuthUser.password_hash must be #[umbral(noform)]"
     );
 }
+
+/// gaps3 #34 — `username` / `email` carry `#[umbral(trim, lowercase)]` so the
+/// dynamic write path (admin form-submit, REST create/update) canonicalizes
+/// them too, closing the #33 residual (those paths bypass the `create_user`
+/// helper's explicit normalization). A refactor dropping the attribute would
+/// silently re-open the case-variant-duplicate hole on the admin/REST surface.
+#[test]
+fn auth_user_identifier_columns_normalize_on_dynamic_writes() {
+    for name in ["username", "email"] {
+        let f = field(name);
+        assert!(
+            f.trim && f.lowercase,
+            "AuthUser.{name} must be #[umbral(trim, lowercase)] so admin/REST writes canonicalize"
+        );
+    }
+}
