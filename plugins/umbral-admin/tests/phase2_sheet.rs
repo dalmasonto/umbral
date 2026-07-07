@@ -263,8 +263,24 @@ async fn test_preview_sheet_htmx_returns_fragment() {
     let router = boot().await.clone();
     let session = login_session(router.clone(), "sheet_admin", "password123").await;
 
+    // Seed our OWN note with a unique title rather than reading the shared
+    // `note/1`: sibling edit tests (`POST /note/1/edit` with `title=...`)
+    // permanently rename row 1, so asserting its seed title "Test Note" here
+    // flaked under parallel ordering (NOTE_LOCK serializes but doesn't restore
+    // state). A row this test owns is order-independent. Held under NOTE_LOCK,
+    // so the insert + read see no concurrent writer.
+    let pool = umbral::db::pool();
+    sqlx::query("INSERT INTO note (title, body, published) VALUES ('PreviewFragmentNote', 'b', 1)")
+        .execute(&pool)
+        .await
+        .expect("seed preview note");
+    let id: i64 = sqlx::query_scalar("SELECT id FROM note WHERE title = 'PreviewFragmentNote'")
+        .fetch_one(&pool)
+        .await
+        .expect("preview note id");
+
     let req = Request::builder()
-        .uri("/admin/note/1/sheet")
+        .uri(format!("/admin/note/{id}/sheet"))
         .header(header::COOKIE, format!("umbral_session={session}"))
         .header("hx-request", "true")
         .body(Body::empty())
@@ -280,8 +296,11 @@ async fn test_preview_sheet_htmx_returns_fragment() {
     );
     // Should not be a full HTML page
     assert!(!body.contains("<!doctype html>"), "not a full page: {body}");
-    // Should contain the record title
-    assert!(body.contains("Test Note"), "record data present: {body}");
+    // Should contain this record's (own, stable) title.
+    assert!(
+        body.contains("PreviewFragmentNote"),
+        "record data present: {body}"
+    );
 }
 
 #[tokio::test]
@@ -569,6 +588,31 @@ async fn test_confirm_delete_dialog_fragment() {
     assert!(body.contains("Cancel"), "Cancel button present: {body}");
     // Should not be a full HTML page
     assert!(!body.contains("<!doctype html>"), "not full page: {body}");
+    // Regression guard for the v0.0.4 delete bug: the delete URL must be the
+    // RESOLVED absolute path, wired safely into the confirm button — NOT a
+    // literal `{{ admin_base }}` (which produced a 404ing URL + a dead button).
+    // `admin_base` is a registered template global, so the fragment resolves it
+    // even though the handler doesn't pass it in-context. The URL rides a
+    // `data-delete-url` attribute the JS reads (injection-safe), so the raw
+    // attribute value is HTML-entity-escaped (`/` -> `&#x2f;`) — the browser
+    // decodes it back to `/admin/note/1` before `_deleteRow` runs. We accept
+    // either form so the assertion tracks intent, not the escaping detail.
+    let resolved = body.contains("data-delete-url=\"/admin/note/1\"")
+        || body.contains("data-delete-url=\"&#x2f;admin&#x2f;note&#x2f;1\"");
+    assert!(
+        resolved,
+        "the confirm button must carry the resolved delete URL in data-delete-url; got: {body}"
+    );
+    assert!(
+        body.contains("umbral._deleteRow(this.dataset.deleteUrl)"),
+        "the confirm button must call _deleteRow with the data attribute (not an interpolated JS \
+         string); got: {body}"
+    );
+    // The exact v0.0.4 symptom: no un-rendered template expression may leak.
+    assert!(
+        !body.contains("{{") && !body.contains("}}"),
+        "no un-rendered template expressions may leak into the fragment; got: {body}"
+    );
 }
 
 // =========================================================================

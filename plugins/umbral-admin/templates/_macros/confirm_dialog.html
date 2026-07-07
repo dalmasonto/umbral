@@ -42,10 +42,19 @@
          status, refresh the table, and toast honestly. A bare `hx-delete` form
          would (a) need the token threaded and (b) swap the handler's empty body
          into #table-body, blanking it. `umbral._deleteRow` lives in the
-         changelist JS (data_table.html) — the only place this dialog opens. #}
+         changelist JS (data_table.html) — the only place this dialog opens.
+
+         The URL rides a `data-delete-url` attribute rather than being spliced
+         into the `onclick` JS string: an interpolated `_deleteRow('{{ url }}')`
+         is unsafe because HTML-entity escaping does NOT stop JS-string breakout
+         in an event-handler attribute (the browser decodes entities before the
+         JS parser runs). As a data attribute the value is read as a plain string
+         (`this.dataset.deleteUrl`), never executed — injection-safe by
+         construction. #}
       <button
         type="button"
-        onclick="umbral._deleteRow('{{ delete_url }}')"
+        data-delete-url="{{ delete_url }}"
+        onclick="umbral._deleteRow(this.dataset.deleteUrl)"
         class="px-lg py-sm rounded-xl bg-error text-on-error hover:opacity-90 active:scale-[0.98] font-label-md text-label-md transition-all focus:outline-none focus:ring-2 focus:ring-error/40"
       >
         {{ confirm_label }}
