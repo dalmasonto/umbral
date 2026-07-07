@@ -704,6 +704,28 @@ pub fn set_cookie_header_named(name: &str, id: &str, max_age: Option<i64>) -> St
     )
 }
 
+/// Does the response already carry a `Set-Cookie` for the **session** cookie
+/// (`umbral_session`)?
+///
+/// The session layer's fresh-session emit must be gated on *this*, not on
+/// "any `Set-Cookie` present". An unrelated cookie on the same response —
+/// most commonly the CSRF token `umbral_csrf_token`, which the CSRF layer
+/// sets on the very first request — must NOT suppress the session cookie.
+/// The old `contains_key(SET_COOKIE)` guard did exactly that: a fresh
+/// client hitting an endpoint that both got a CSRF cookie and wrote the
+/// session (e.g. OAuth `begin_flow`'s `set_data`) received only the CSRF
+/// cookie, so the session row was orphaned and the callback couldn't find
+/// it. `login_with_request`'s token rotation, which sets its own
+/// `umbral_session` cookie, still short-circuits here. gaps3 #32.
+fn session_cookie_present(headers: &HeaderMap) -> bool {
+    let prefix = format!("{COOKIE_NAME}=");
+    headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.starts_with(&prefix))
+}
+
 /// Build the Set-Cookie header that deletes the session cookie.
 /// Used on logout: the client sees an immediately-expired cookie and
 /// drops the local value.
@@ -1449,8 +1471,13 @@ pub async fn session_layer(
     // own Set-Cookie to rotate the token after the credential check
     // (session-fixation defense). Without this guard the layer would
     // clobber the authenticated cookie with the anonymous one, breaking
-    // every cookie-based login.
-    if fresh && !response.headers().contains_key(header::SET_COOKIE) {
+    // every cookie-based login. The guard is scoped to the SESSION cookie
+    // (`session_cookie_present`), not "any Set-Cookie": an unrelated cookie
+    // on the response — the CSRF token being the usual one — must not
+    // suppress the session cookie (gaps3 #32). We `append` rather than
+    // `insert` so the session cookie coexists with that CSRF cookie instead
+    // of replacing it.
+    if fresh && !session_cookie_present(response.headers()) {
         let row_exists = rs.is_dirty() || matches!(read_session(&token).await, Ok(Some(_)));
         if row_exists {
             // Use the value `save` returned when it ran (the encrypted blob
@@ -1462,7 +1489,7 @@ pub async fn session_layer(
             let value_to_set = cookie_value.as_deref().unwrap_or(&token);
             let cookie = set_cookie_header(value_to_set, None);
             if let Ok(value) = cookie.parse() {
-                response.headers_mut().insert(header::SET_COOKIE, value);
+                response.headers_mut().append(header::SET_COOKIE, value);
             }
         }
     } else if let Some(value) = cookie_value.as_deref() {
@@ -1474,11 +1501,12 @@ pub async fn session_layer(
         // token, which equals the cookie already present, so we skip the
         // redundant Set-Cookie to preserve the existing no-cookie-churn
         // behaviour. The handler-set-cookie guard still wins (login rotation
-        // owns its own Set-Cookie).
-        if value != token && !response.headers().contains_key(header::SET_COOKIE) {
+        // owns its own Set-Cookie) — scoped to the session cookie so an
+        // unrelated CSRF cookie doesn't suppress the re-set (gaps3 #32).
+        if value != token && !session_cookie_present(response.headers()) {
             let cookie = set_cookie_header(value, None);
             if let Ok(parsed) = cookie.parse() {
-                response.headers_mut().insert(header::SET_COOKIE, parsed);
+                response.headers_mut().append(header::SET_COOKIE, parsed);
             }
         }
     }
