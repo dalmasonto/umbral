@@ -6,6 +6,7 @@ Versions follow [Semantic Versioning](https://semver.org/); the format is inspir
 
 | Version | Date | Theme |
 |---|---|---|
+| [0.0.6](./0.0.6.md) | 2026-07-08 | Data ergonomics & authorization — case-insensitive accounts/columns, `trim`/`lowercase`/`case_insensitive`, object (row-level) permissions, gated-by-construction routes, `llms.txt` |
 | [0.0.5](./0.0.5.md) | 2026-07-05 | Security-hardening sweep + custom admin views, object-level REST scoping, recursive nested writes |
 | [0.0.4](./0.0.4.md) | 2026-06-30 | Hotfix — Postgres FK migration ordering |
 | [0.0.3](./0.0.3.md) | 2026-06-29 | The auth release — email verification, password reset, form + JSON auth, pluggable mailer |
@@ -14,6 +15,6 @@ Versions follow [Semantic Versioning](https://semver.org/); the format is inspir
 
 ## Upcoming
 
-`0.0.6` is in progress. Add its notes as `changelog/0.0.6.md` when it ships.
+`0.0.7` is next. Add its notes as `changelog/0.0.7.md` when it ships.
 
 > Longer-term, these notes are intended to be served from the app (tracked in the database) so releases can be browsed in-product; the files here are the source of truth until then.
