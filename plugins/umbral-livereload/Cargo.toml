@@ -13,7 +13,7 @@ rust-version.workspace = true
 umbral = { path = "../../crates/umbral", version = "0.0.5" }
 tokio = { version = "1", features = ["sync", "rt", "time", "macros"] }
 # OS file-system watcher (inotify/FSEvents/ReadDirectoryChangesW).
-notify = "6"
+notify = "8"
 # SSE transport + the HTML-injection middleware.
 axum = "0.8"
 http = "1"

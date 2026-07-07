@@ -31,6 +31,17 @@
 //! Why SSE over WebSocket: a reload signal is one-way (server → client),
 //! and `EventSource` reconnects on its own — which is exactly the
 //! restart→reload behaviour we want, for free.
+//!
+//! ## Production
+//!
+//! This is a **development-only** plugin. Every effect (the route, the
+//! `notify` file watcher, the client-script injection) is gated on
+//! [`Environment::Dev`], so even if the plugin is left in an app's builder
+//! for a production build it spawns no watcher and mounts nothing — but the
+//! recommended posture is to add it only in dev wiring. The `notify` watcher
+//! stack is the plugin's one non-trivial transitive dependency (kept current
+//! — `notify 8`, gaps3 #28 SC-5); keeping livereload out of prod builds also
+//! keeps that stack out of the release binary.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
