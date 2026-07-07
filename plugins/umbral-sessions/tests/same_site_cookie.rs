@@ -42,6 +42,14 @@ async fn same_site_defaults_to_lax_then_honors_config() {
     // Boot with SameSite=None (the case that also forces Secure).
     boot_with(SameSite::None).await;
 
+    // The sealed policy is readable via the public accessor a dependent plugin
+    // uses to warn about the CSRF-relevant config (audit_2 admin #5).
+    assert_eq!(
+        umbral_sessions::configured_same_site(),
+        SameSite::None,
+        "configured_same_site() must reflect the sealed policy"
+    );
+
     let after = set_cookie_header("tok", None);
     assert!(
         after.contains("SameSite=None"),

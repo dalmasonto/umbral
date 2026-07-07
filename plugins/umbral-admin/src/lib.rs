@@ -978,6 +978,28 @@ impl Plugin for AdminPlugin {
         // Tables are produced by the migration engine off
         // `Self::models()` — same path as every other plugin's models.
         // No bootstrap DDL here.
+
+        // CSRF posture (audit_2 admin #5). The admin's mutating handlers
+        // (create / update / delete / bulk-action / inline-edit / upload /
+        // prefs) do NOT self-verify a CSRF token — only `login_post` does — so
+        // cross-site request forgery is defended by the session cookie's
+        // `SameSite` attribute. `SameSite=Lax` (the default) already blocks the
+        // forged cross-site POST/PUT/DELETE that would carry the session
+        // cookie. If an operator sets `SameSite=None` (e.g. to serve a
+        // cross-origin SPA) that defense is gone, so the admin's mutations are
+        // CSRF-forgeable unless a CSRF middleware is mounted. `on_ready` runs in
+        // topological order and the admin depends on `sessions`, so the sealed
+        // value is readable here. Warn loudly rather than fail (a cross-origin
+        // API with a properly-mounted CSRF layer is a legitimate setup).
+        if umbral_sessions::configured_same_site() == umbral_sessions::SameSite::None {
+            tracing::warn!(
+                "umbral-admin: the session cookie is SameSite=None, which removes the \
+                 cross-site-request CSRF defense the admin's mutating handlers rely on. \
+                 Mount a CSRF middleware (umbral-security's SecurityPlugin) so admin \
+                 create/update/delete/upload/prefs actions can't be forged cross-site, \
+                 or keep the session cookie at SameSite=Lax/Strict for same-origin admin use."
+            );
+        }
         Ok(())
     }
 }

@@ -118,6 +118,17 @@ fn same_site() -> SameSite {
     SAME_SITE.get().copied().unwrap_or_default()
 }
 
+/// The configured `SameSite` policy for the session cookie (sealed at
+/// [`SessionsPlugin`]'s `on_ready`; defaults to [`SameSite::Lax`]). Exposed so
+/// a dependent plugin can react to a CSRF-relevant configuration at boot —
+/// notably `SameSite::None`, which removes the browser's cross-site-request
+/// defense that same-origin cookie-auth surfaces (e.g. the admin) otherwise
+/// lean on. Because `on_ready` fires in topological order, a plugin that
+/// declares `sessions` as a dependency sees the sealed value here.
+pub fn configured_same_site() -> SameSite {
+    same_site()
+}
+
 /// The cookie attribute pair `"{Secure; }SameSite=<policy>"`. `SameSite=None`
 /// is invalid without `Secure` (browsers reject it), so it forces `Secure` even
 /// in Dev; every other policy defers to [`secure_attr`] (Secure everywhere but
