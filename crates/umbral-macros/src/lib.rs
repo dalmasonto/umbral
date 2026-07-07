@@ -274,6 +274,10 @@ struct UmbralFieldAttr {
     /// `#[umbral(lowercase)]` — lowercase on the dynamic write path.
     /// String columns only (gaps3 #34).
     lowercase: bool,
+    /// `#[umbral(case_insensitive)]` — DB-level case-insensitive column
+    /// (Postgres `citext` / SQLite `COLLATE NOCASE`). String columns only
+    /// (gaps3 #35).
+    case_insensitive: bool,
     /// `#[umbral(help = "...")]` — column help text. Flows to
     /// OpenAPI `description` and admin form hints. Closes
     /// playground-openapi-gaps item 5.
@@ -364,6 +368,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         auto_now: false,
         trim: false,
         lowercase: false,
+        case_insensitive: false,
         help: None,
         example: None,
         widget: None,
@@ -506,6 +511,9 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
             } else if meta.path.is_ident("lowercase") {
                 parsed.lowercase = true;
                 Ok(())
+            } else if meta.path.is_ident("case_insensitive") {
+                parsed.case_insensitive = true;
+                Ok(())
             } else if meta.path.is_ident("help") {
                 // `#[umbral(help = "human text")]` — column
                 // description string. Flows to OpenAPI
@@ -589,7 +597,8 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
-                     `auto_now_add`, `trim`, `lowercase`, `help = \"...\"`, \
+                     `auto_now_add`, `trim`, `lowercase`, `case_insensitive`, \
+                     `help = \"...\"`, \
                      `example = \"...\"`, `widget = \"...\"`, \
                      `backend = \"...\"`, \
                      `min = N`, `max = N`, `slug_from = \"...\"`, \
@@ -1350,18 +1359,19 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
-        // `#[umbral(trim)]` / `#[umbral(lowercase)]` only make sense on a plain
-        // string column (`String` / `Option<String>`). On anything else —
-        // choices (would break the CHECK), xml/ltree/bit (format-sensitive),
-        // numbers, timestamps — reject at compile time so the mistake surfaces
-        // at the field, not as a silently-ignored attribute (gaps3 #34).
-        if (field_attr.trim || field_attr.lowercase)
+        // `#[umbral(trim)]` / `#[umbral(lowercase)]` / `#[umbral(case_insensitive)]`
+        // only make sense on a plain string column (`String` / `Option<String>`).
+        // On anything else — choices (would break the CHECK), xml/ltree/bit
+        // (format-sensitive), numbers, timestamps — reject at compile time so the
+        // mistake surfaces at the field, not as a silently-ignored attribute
+        // (gaps3 #34 / #35).
+        if (field_attr.trim || field_attr.lowercase || field_attr.case_insensitive)
             && !matches!(kind, FieldKind::Str | FieldKind::NullableStr)
         {
             return Err(syn::Error::new_spanned(
                 field,
-                "#[umbral(trim)] / #[umbral(lowercase)] are only valid on `String` or \
-                 `Option<String>` fields",
+                "#[umbral(trim)] / #[umbral(lowercase)] / #[umbral(case_insensitive)] are only \
+                 valid on `String` or `Option<String>` fields",
             ));
         }
         let trim_lit = if field_attr.trim {
@@ -1370,6 +1380,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             quote!(false)
         };
         let lowercase_lit = if field_attr.lowercase {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
+        let case_insensitive_lit = if field_attr.case_insensitive {
             quote!(true)
         } else {
             quote!(false)
@@ -1507,6 +1522,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 auto_now: #auto_now_lit,
                 trim: #trim_lit,
                 lowercase: #lowercase_lit,
+                case_insensitive: #case_insensitive_lit,
                 help: #help_tokens,
                 example: #example_tokens,
                 widget: #widget_tokens,

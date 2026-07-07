@@ -723,6 +723,24 @@ pub struct FieldSpec {
     /// whitespace. Same dynamic-path-only scope as [`trim`](Self::trim).
     pub lowercase: bool,
 
+    /// When `true`, the column is **case-insensitive at the database level**:
+    /// comparisons, `UNIQUE`, and lookups treat `Dalmas` and `dalmas` as equal,
+    /// while the *original* casing is preserved in storage. Set via
+    /// `#[umbral(case_insensitive)]`; `String` / `Option<String>` only.
+    ///
+    /// Unlike [`lowercase`](Self::lowercase) (which normalizes the stored value
+    /// and rides a plain UNIQUE), this changes the emitted DDL: Postgres gets a
+    /// `citext` column (the migration auto-creates the `citext` extension),
+    /// SQLite gets `COLLATE NOCASE`. It is schema-affecting, so — like
+    /// [`unique`](Self::unique) — it applies at `CREATE TABLE`; toggling it on an
+    /// existing column needs a hand-written migration.
+    ///
+    /// Caveat: SQLite's `NOCASE` folds ASCII `A–Z` only (not Unicode); a boot
+    /// check warns when this is used on SQLite. Postgres `citext` folds per the
+    /// database collation. Prefer [`lowercase`](Self::lowercase) when you don't
+    /// need to preserve the original casing.
+    pub case_insensitive: bool,
+
     /// Human-readable column description (help text).
     /// Set via `#[umbral(help = "...")]`. Flows
     /// through to:

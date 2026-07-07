@@ -34,6 +34,7 @@ fn text_col(name: &str, choices: &[&str]) -> Column {
         auto_now: false,
         trim: false,
         lowercase: false,
+        case_insensitive: false,
         help: String::new(),
         example: String::new(),
         widget: None,

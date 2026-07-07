@@ -1,8 +1,8 @@
 ---
-title: Normalized fields (trim / lowercase)
-description: Canonicalize a string column on write with #[umbral(trim)] / #[umbral(lowercase)] — e.g. store usernames and emails lowercased so uniqueness is case-insensitive.
+title: Normalized & case-insensitive fields
+description: Canonicalize a string column with #[umbral(trim)] / #[umbral(lowercase)], or make it case-insensitive at the DB level (citext / COLLATE NOCASE) with #[umbral(case_insensitive)].
 sidebar_position: 18
-tags: [orm, normalization, trim, lowercase, uniqueness]
+tags: [orm, normalization, trim, lowercase, case-insensitive, citext, uniqueness]
 ---
 
 # Normalized fields
@@ -40,7 +40,33 @@ This mirrors how the built-in `AuthUser` works: `username` / `email` carry `#[um
 
 Normalization is a write-time transform — it changes what's stored, not what's queried. To match a stored value in a filter, normalize your query term the same way (`email.eq(input.trim().to_lowercase())`).
 
+## `case_insensitive`: preserve the original casing
+
+`lowercase` throws the original casing away. When you need to **keep** it — a `Group.name` displayed as `Editors` but where `editors` mustn't be creatable as a second row — use `#[umbral(case_insensitive)]` instead. It makes the **column itself** case-insensitive at the database level: `=`, `UNIQUE`, and `ORDER BY` all fold case, while storage keeps whatever case was written.
+
+```rust
+#[derive(umbral::orm::Model, /* … */)]
+struct Group {
+    id: i64,
+    #[umbral(case_insensitive, unique)]
+    name: String,   // stores "Editors"; "editors" collides; WHERE name = 'EDITORS' finds it
+}
+```
+
+Unlike `trim` / `lowercase` (write-path transforms), this is **schema-level** and backend-specific:
+
+- **Postgres** → the column is `citext`, and the migration auto-emits `CREATE EXTENSION IF NOT EXISTS citext` (needs a role with `CREATE` privilege — pre-create the extension once if your runtime role is restricted).
+- **SQLite** → the column gets `COLLATE NOCASE`.
+
+<Callout type="warning">
+SQLite's `COLLATE NOCASE` folds **ASCII `A–Z` only** — non-ASCII letters (`Å`, Turkish `İ`) compare case-sensitively. A boot check warns when `case_insensitive` is used on SQLite. Postgres `citext` folds per the database collation. If you need Unicode-correct folding and don't need to preserve casing, `#[umbral(lowercase)]` (Rust's `to_lowercase`) is Unicode-aware.
+</Callout>
+
+Like `#[umbral(unique)]`, it applies at **CREATE TABLE**. Toggling it on a column that already exists needs a hand-written migration (Postgres `ALTER … TYPE citext`, SQLite a table rebuild) — the autodetector doesn't emit it.
+
+**Which to reach for:** `lowercase + unique` when you're happy to canonicalize (simpler, portable, Unicode-correct); `case_insensitive` when the original casing must survive for display.
+
 ## See also
 
 - [Privileged fields](privileged-fields) — the other default-deny write-path guard.
-- `arch.md` and `planning/gaps3.md` #34 for the design rationale (dynamic-path-only, mirroring `auto_now`).
+- `arch.md` and `planning/gaps3.md` #34 / #35 for the design rationale.

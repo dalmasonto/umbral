@@ -1367,6 +1367,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,

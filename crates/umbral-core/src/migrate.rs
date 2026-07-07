@@ -897,6 +897,14 @@ pub struct Column {
     #[serde(default, skip_serializing_if = "is_false")]
     pub lowercase: bool,
 
+    /// Carries `FieldSpec::case_insensitive` into the snapshot. Schema-affecting
+    /// (Postgres `citext` / SQLite `COLLATE NOCASE`), but — like `unique` — the
+    /// diff comparator (`column_shape`) does NOT watch it, so it applies at
+    /// CREATE TABLE and toggling it on a live column needs a hand-written
+    /// migration. Default `false` so existing migration JSON round-trips.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub case_insensitive: bool,
+
     /// Carries `FieldSpec::help` into the migration snapshot.
     /// Default empty string is omitted from JSON so existing
     /// migration files round-trip unchanged.
@@ -1155,6 +1163,7 @@ impl From<&FieldSpec> for Column {
             auto_now: f.auto_now,
             trim: f.trim,
             lowercase: f.lowercase,
+            case_insensitive: f.case_insensitive,
             help: f.help.to_string(),
             example: f.example.to_string(),
             widget: f.widget.map(|s| s.to_string()),
@@ -4741,6 +4750,17 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
                 stmt.col(&mut def);
             }
             let mut stmts = vec![stmt.build(PostgresQueryBuilder)];
+            // gaps3 #35: a `#[umbral(case_insensitive)]` text column renders as
+            // `citext`, which needs its extension. Emit the (idempotent) create
+            // BEFORE the table so the citext type resolves. Requires a role with
+            // CREATE privilege on the database — the operator pre-creates it once
+            // if the runtime role is restricted.
+            if columns
+                .iter()
+                .any(|c| c.case_insensitive && matches!(c.ty, crate::orm::SqlType::Text))
+            {
+                stmts.insert(0, "CREATE EXTENSION IF NOT EXISTS citext".to_string());
+            }
             // `unique_together` as follow-up `CREATE UNIQUE INDEX` (not an
             // inline constraint) so it is droppable by name — see the SQLite
             // render arm for the full rationale.
@@ -5334,6 +5354,14 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
             def.auto_increment();
         }
     }
+    // gaps3 #35: `#[umbral(case_insensitive)]` on SQLite lifts to a column-level
+    // `COLLATE NOCASE`, so `=`, `UNIQUE`, and `ORDER BY` fold case while storage
+    // keeps the original casing. Emitted before UNIQUE so the auto-created
+    // unique index inherits the column's NOCASE collation. NOCASE folds ASCII
+    // A–Z only (a boot check warns about Unicode); Postgres uses `citext`.
+    if col.case_insensitive && matches!(col.ty, SqlType::Text) {
+        def.extra("COLLATE NOCASE".to_string());
+    }
     // `#[umbral(unique)]` lifts to a column-level UNIQUE clause.
     // Skipped on PK columns (already unique) so the DDL stays tidy.
     if col.unique && !col.primary_key {
@@ -5853,6 +5881,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -5886,6 +5915,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -5919,6 +5949,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6022,6 +6053,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6039,6 +6071,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6143,6 +6176,7 @@ mod tests {
                 auto_now: false,
                 trim: false,
                 lowercase: false,
+                case_insensitive: false,
                 help: String::new(),
                 example: String::new(),
                 widget: None,
@@ -6249,6 +6283,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6358,6 +6393,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6443,6 +6479,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6462,6 +6499,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6478,6 +6516,7 @@ mod tests {
             auto_now: false,
             trim: false,
             lowercase: false,
+            case_insensitive: false,
             help: String::new(),
             example: String::new(),
             widget: None,
@@ -6520,6 +6559,104 @@ mod tests {
         }
     }
 
+    /// gaps3 #35: a `#[umbral(case_insensitive)]` text column renders
+    /// per-backend — SQLite `COLLATE NOCASE`, Postgres `citext` with an
+    /// idempotent `CREATE EXTENSION` emitted before the table.
+    #[test]
+    fn case_insensitive_column_renders_per_backend() {
+        let id = Column {
+            name: "id".into(),
+            ty: SqlType::BigInt,
+            primary_key: true,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            privileged: false,
+            db_constraint: true,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec![],
+            choice_labels: vec![],
+            default: String::new(),
+            is_multichoice: false,
+            unique: false,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
+            index: false,
+            auto_now_add: false,
+            auto_now: false,
+            trim: false,
+            lowercase: false,
+            case_insensitive: false,
+            help: String::new(),
+            example: String::new(),
+            widget: None,
+            supported_backends: Vec::new(),
+            min: None,
+            max: None,
+            text_format: None,
+            slug_from: None,
+        };
+        let name = Column {
+            name: "name".into(),
+            ty: SqlType::Text,
+            primary_key: false,
+            unique: true,
+            case_insensitive: true,
+            ..id.clone()
+        };
+        let op = Operation::CreateTable {
+            table: "handle".into(),
+            columns: vec![id, name],
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
+        };
+
+        // SQLite: COLLATE NOCASE on the column; no extension.
+        let sqlite = render_operation_for(&op, "sqlite");
+        let create = sqlite
+            .iter()
+            .find(|s| s.to_uppercase().contains("CREATE TABLE"))
+            .expect("a CREATE TABLE");
+        assert!(
+            create.to_uppercase().contains("COLLATE NOCASE"),
+            "sqlite case_insensitive column must carry COLLATE NOCASE; got: {create}"
+        );
+        assert!(
+            !sqlite
+                .iter()
+                .any(|s| s.to_uppercase().contains("EXTENSION")),
+            "sqlite must not emit a citext extension; got: {sqlite:?}"
+        );
+
+        // Postgres: citext type + CREATE EXTENSION IF NOT EXISTS citext, and the
+        // extension statement precedes the CREATE TABLE.
+        let pg = render_operation_for(&op, "postgres");
+        let ext_idx = pg
+            .iter()
+            .position(|s| s.to_uppercase().contains("CREATE EXTENSION") && s.contains("citext"))
+            .expect("a CREATE EXTENSION citext statement");
+        let create_idx = pg
+            .iter()
+            .position(|s| s.to_uppercase().contains("CREATE TABLE"))
+            .expect("a CREATE TABLE");
+        assert!(
+            ext_idx < create_idx,
+            "the citext extension must be created before the table; got: {pg:?}"
+        );
+        assert!(
+            pg[create_idx].to_lowercase().contains("citext"),
+            "postgres case_insensitive column must render as citext; got: {}",
+            pg[create_idx]
+        );
+        assert!(
+            pg[ext_idx].to_uppercase().contains("IF NOT EXISTS"),
+            "the extension create must be idempotent; got: {}",
+            pg[ext_idx]
+        );
+    }
+
     /// Regression: adding an `auto_now` / `auto_now_add` column to an
     /// existing populated table.
     ///
@@ -6558,6 +6695,7 @@ mod tests {
                 auto_now,
                 trim: false,
                 lowercase: false,
+                case_insensitive: false,
                 help: String::new(),
                 example: String::new(),
                 widget: None,

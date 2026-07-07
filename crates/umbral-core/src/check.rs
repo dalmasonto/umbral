@@ -212,6 +212,10 @@ pub fn framework_checks() -> Vec<SystemCheck> {
             run: field_choices_default,
         },
         SystemCheck {
+            id: "field.case_insensitive.sqlite_ascii",
+            run: field_case_insensitive_sqlite_ascii,
+        },
+        SystemCheck {
             id: "plugin.security_missing",
             run: plugin_security_missing,
         },
@@ -685,6 +689,51 @@ fn field_storage_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
 /// emit a did-you-mean for the stored literal.
 ///
 /// **Error**, not Warning: the DDL is wrong and the table is unusable.
+/// gaps3 #35 — warn when `#[umbral(case_insensitive)]` is used on SQLite.
+///
+/// SQLite's `COLLATE NOCASE` folds only ASCII `A–Z`, so a case-insensitive
+/// UNIQUE / lookup won't treat, say, `Å` and `å` (or Turkish `İ`/`i`) as equal.
+/// Postgres `citext` folds per the database collation, so the check is a no-op
+/// there. A warning (not an error): the column still works for the ASCII names
+/// that are the overwhelming case; the developer just needs to know the limit.
+fn field_case_insensitive_sqlite_ascii(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let mut findings = Vec::new();
+    if ctx.backend.name() != "sqlite" {
+        return findings;
+    }
+    if !crate::migrate::is_initialised() {
+        return findings;
+    }
+    for plugin in crate::migrate::registered_plugins() {
+        for model in crate::migrate::models_for_plugin(&plugin) {
+            for field in &model.fields {
+                if !field.case_insensitive {
+                    continue;
+                }
+                findings.push(SystemCheckFinding {
+                    check_id: "field.case_insensitive.sqlite_ascii",
+                    severity: Severity::Warning,
+                    location: CheckLocation::Settings,
+                    message: format!(
+                        "Field `{plugin}::{}::{}` is `#[umbral(case_insensitive)]`, but the active \
+                         backend is SQLite, whose `COLLATE NOCASE` folds ASCII A–Z only — \
+                         non-ASCII letters are compared case-sensitively.",
+                        model.name, field.name,
+                    ),
+                    hint: Some(
+                        "Fine for ASCII usernames/emails/slugs. If you need Unicode-correct \
+                         case-folding, use Postgres (citext folds per the DB collation), or \
+                         normalize with `#[umbral(lowercase)]` (Rust's to_lowercase is \
+                         Unicode-aware) when preserving the original casing isn't required."
+                            .to_string(),
+                    ),
+                });
+            }
+        }
+    }
+    findings
+}
+
 fn field_choices_default(_ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
     let mut findings = Vec::new();
     // Low-level tests that drive `run_all` without booting an App never

@@ -146,6 +146,15 @@ impl DatabaseBackend for PostgresBackend {
     fn map_column(&self, col: &crate::migrate::Column) -> sea_query::ColumnType {
         use crate::orm::SqlType;
         use sea_query::ColumnType;
+        // gaps3 #35: a `#[umbral(case_insensitive)]` text column becomes
+        // `citext` — the whole-column case-insensitive type (comparisons,
+        // UNIQUE, lookups all fold case while storage preserves the original).
+        // The migration also emits `CREATE EXTENSION IF NOT EXISTS citext`.
+        // Takes precedence over the VARCHAR(n) length mapping: citext is
+        // unbounded (the `max_length` cap is a display hint, not storage).
+        if matches!(col.ty, SqlType::Text) && col.case_insensitive {
+            return ColumnType::custom("citext");
+        }
         if matches!(col.ty, SqlType::Text) && col.max_length > 0 {
             return ColumnType::String(sea_query::StringLen::N(col.max_length));
         }
