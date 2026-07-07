@@ -208,6 +208,18 @@ pub trait UserModel: Model + Send + Sync + 'static {
     /// `authenticate`'s SELECT query.
     fn username(&self) -> &str;
 
+    /// The columns a login identifier is matched against in [`authenticate`],
+    /// OR-combined — so a user can sign in with any of them. Default is
+    /// `["username"]` (username-only, the historical behavior). A model with an
+    /// `email` column overrides this to `["username", "email"]` so either
+    /// works. Every listed column must exist on the table and hold a value the
+    /// identifier is normalized to match (see [`normalize_username`]); the
+    /// built-in `AuthUser` stores both `username` and `email` trimmed +
+    /// lowercased, so a case-insensitive login lands on the right row.
+    fn login_columns() -> &'static [&'static str] {
+        &["username"]
+    }
+
     /// The argon2 PHC-encoded password hash stored in the DB column.
     /// `authenticate` reads this, verifies it, and moves on.
     fn password_hash(&self) -> &str;
@@ -301,6 +313,13 @@ impl UserModel for AuthUser {
 
     fn username(&self) -> &str {
         &self.username
+    }
+
+    /// `AuthUser` accepts either the username or the email as the login
+    /// identifier — both columns are UNIQUE and stored trimmed + lowercased,
+    /// so a case-insensitive match lands on exactly one row.
+    fn login_columns() -> &'static [&'static str] {
+        &["username", "email"]
     }
 
     fn password_hash(&self) -> &str {
@@ -1143,6 +1162,23 @@ pub async fn hash_password_async(plaintext: &str) -> Result<String, AuthError> {
     with_hash_gate(move || hash_password(&p)).await?
 }
 
+/// Argon2 hash of a fresh, random, un-recoverable password.
+///
+/// For accounts created without a user-chosen password — social login, some
+/// admin-provisioned users — so `password_hash` holds a **real, valid PHC
+/// hash** instead of an empty string or a `"!"`-style sentinel. Nobody knows
+/// the plaintext, so [`verify_password`] cleanly returns `false` for any login
+/// attempt (rather than erroring on an unparseable marker), and the account can
+/// still adopt a known password later through the email password-reset flow.
+pub async fn random_password_hash() -> Result<String, AuthError> {
+    use base64::Engine;
+    use rand::RngCore;
+    let mut buf = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    let random = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf);
+    hash_password_async(&random).await
+}
+
 /// Async wrapper around [`verify_password`] that runs the CPU-bound argon2
 /// verification on tokio's blocking pool via `spawn_blocking`, under the same
 /// concurrency gate. See [`hash_password_async`] for the starvation rationale.
@@ -1348,12 +1384,21 @@ where
 {
     // Match the canonical (trimmed + lowercased) form written at signup, so a
     // login typed as `Dalmasonto` finds the row stored as `dalmasonto`.
-    let username = normalize_username(username);
+    let ident = normalize_username(username);
+    // OR-combine every login column (`["username"]` by default; AuthUser adds
+    // `email`) so a user can sign in with any of them, then AND the active-flag
+    // guard. `login_columns()` is never empty.
+    let mut ident_match: Option<umbral::orm::Predicate<U>> = None;
+    for col in U::login_columns() {
+        let p = umbral::orm::Predicate::<U>::col_eq(*col, ident.as_str());
+        ident_match = Some(match ident_match {
+            Some(acc) => acc | p,
+            None => p,
+        });
+    }
+    let ident_match = ident_match.expect("UserModel::login_columns() must be non-empty");
     let user: Option<U> = umbral::orm::Manager::<U>::default()
-        .filter(
-            umbral::orm::Predicate::<U>::col_eq("username", username.as_str())
-                & umbral::orm::Predicate::<U>::col_eq("is_active", true),
-        )
+        .filter(ident_match & umbral::orm::Predicate::<U>::col_eq("is_active", true))
         .first()
         .await?;
 

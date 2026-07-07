@@ -24,8 +24,8 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use umbral_auth::{
-    AuthError, AuthPlugin, AuthUser, authenticate, create_user, hash_password, set_password,
-    verify_password,
+    AuthError, AuthPlugin, AuthUser, authenticate, create_user, hash_password,
+    random_password_hash, set_password, verify_password,
 };
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
@@ -571,4 +571,101 @@ async fn authenticate_is_case_insensitive_on_username() {
         .await
         .expect("authenticate trims the typed username");
     assert_eq!(trimmed.id, created.id);
+}
+
+// =========================================================================
+// Login by email OR username (UserModel::login_columns)
+//
+// AuthUser overrides login_columns() to ["username", "email"], so a user can
+// authenticate with either identifier. The match is case-insensitive (both
+// columns are stored trimmed + lowercased and the identifier is normalized).
+// =========================================================================
+
+#[tokio::test]
+async fn authenticate_accepts_either_username_or_email() {
+    boot().await;
+
+    let created = create_user("loginboth", "loginboth@example.com", "R1ght-Pass-Phrase!")
+        .await
+        .expect("create_user succeeds");
+
+    // By username (historical path).
+    let by_username = authenticate::<AuthUser>("loginboth", "R1ght-Pass-Phrase!")
+        .await
+        .expect("login by username");
+    assert_eq!(by_username.id, created.id);
+
+    // By email — the new path.
+    let by_email = authenticate::<AuthUser>("loginboth@example.com", "R1ght-Pass-Phrase!")
+        .await
+        .expect("login by email must resolve the same row");
+    assert_eq!(
+        by_email.id, created.id,
+        "email identifier finds the same user"
+    );
+
+    // Email match is case-insensitive (stored lowercased, identifier normalized).
+    let by_email_cased = authenticate::<AuthUser>("LoginBoth@Example.COM", "R1ght-Pass-Phrase!")
+        .await
+        .expect("login by email is case-insensitive");
+    assert_eq!(by_email_cased.id, created.id);
+
+    // A wrong identifier that matches neither column still fails.
+    let miss = authenticate::<AuthUser>("nobody@example.com", "R1ght-Pass-Phrase!").await;
+    assert!(matches!(miss, Err(AuthError::InvalidCredentials)));
+}
+
+/// The active-flag guard survives the OR predicate: an inactive user must not
+/// authenticate even when the identifier matches. Guards against a mis-grouped
+/// `(username = X OR email = X) AND is_active` predicate degrading to
+/// `username = X OR (email = X AND is_active)`.
+#[tokio::test]
+async fn authenticate_by_email_still_respects_inactive_flag() {
+    boot().await;
+    let pool = pool();
+
+    create_user(
+        "inactivemail",
+        "inactivemail@example.com",
+        "R1ght-Pass-Phrase!",
+    )
+    .await
+    .expect("create");
+    sqlx::query("UPDATE auth_user SET is_active = 0 WHERE username = 'inactivemail'")
+        .execute(&pool)
+        .await
+        .expect("deactivate");
+
+    // Neither identifier authenticates an inactive account.
+    for ident in ["inactivemail", "inactivemail@example.com"] {
+        let r = authenticate::<AuthUser>(ident, "R1ght-Pass-Phrase!").await;
+        assert!(
+            matches!(r, Err(AuthError::InvalidCredentials)),
+            "inactive user must not authenticate via `{ident}`"
+        );
+    }
+}
+
+// =========================================================================
+// random_password_hash — a valid, unknown PHC hash for passwordless accounts
+// =========================================================================
+
+#[tokio::test]
+async fn random_password_hash_is_valid_unique_and_unguessable() {
+    let a = random_password_hash().await.expect("hash a");
+    let b = random_password_hash().await.expect("hash b");
+
+    assert!(!a.is_empty(), "the hash must not be empty");
+    assert!(
+        a.starts_with("$argon2"),
+        "must be a real argon2 PHC hash: {a}"
+    );
+    assert_ne!(a, b, "each call salts + randomizes independently");
+
+    // It is a PARSEABLE hash: verifying a wrong password returns Ok(false),
+    // NOT an error — the whole point over a `"!"` sentinel that fails to parse.
+    assert!(
+        !verify_password("anything", &a).expect("verify must not error on a valid hash"),
+        "no plaintext should verify against a random hash"
+    );
 }

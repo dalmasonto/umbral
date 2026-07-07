@@ -245,6 +245,16 @@ async fn create_user_with_social(
     // shadowed by a case-variant duplicate.
     let email = umbral_auth::normalize_email(&email);
 
+    // A social account has no user-chosen password. Rather than leave
+    // `password_hash` empty / a sentinel, store a real argon2 hash of a fresh
+    // random password: nobody knows the plaintext (so password login always
+    // fails cleanly, no unparseable-marker error), but the column is a valid
+    // hash and the user can still set a known password via the reset flow.
+    // Computed once here — it's identical across the username-retry attempts.
+    let password_hash = umbral_auth::random_password_hash()
+        .await
+        .map_err(|e| OAuthError::Database(format!("random password hash: {e}")))?;
+
     let base = sanitize_username(
         &identity
             .email
@@ -269,7 +279,7 @@ async fn create_user_with_social(
             id: 0,
             username: candidate,
             email: email.clone(),
-            password_hash: "!".to_string(),
+            password_hash: password_hash.clone(),
             is_active: true,
             is_staff: false,
             is_superuser: false,
@@ -677,8 +687,6 @@ mod tests {
         .await
         .expect("first social signup");
 
-        let count_before = AuthUser::objects().count().await.unwrap();
-
         // Second signup: a *different* email (so the AuthUser insert itself
         // succeeds with base "orphansecond") but the SAME provider_uid, so the
         // social insert trips the unique_together and the tx must roll back.
@@ -695,12 +703,11 @@ mod tests {
             "reusing provider_uid must fail on the social insert"
         );
 
-        let count_after = AuthUser::objects().count().await.unwrap();
-        assert_eq!(
-            count_after, count_before,
-            "the failed social insert must roll back the AuthUser too (no orphan, OAU-4)"
-        );
-
+        // Scope the "no orphan" check to THIS test's username rather than a
+        // global row count: the oauth tests share one DB and run in parallel, so
+        // a global `count()` races other tests' inserts (widened by the argon2
+        // hash now on the create path). The rollback correctness is identical —
+        // if the tx didn't roll back, an `orphansecond` row would survive.
         let orphan = AuthUser::objects()
             .filter(auth_user::USERNAME.eq("orphansecond"))
             .first()
@@ -708,7 +715,7 @@ mod tests {
             .unwrap();
         assert!(
             orphan.is_none(),
-            "no AuthUser should survive a rolled-back social signup"
+            "the failed social insert must roll back the AuthUser too — no orphan (OAU-4)"
         );
     }
 }
