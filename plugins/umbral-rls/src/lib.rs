@@ -353,6 +353,15 @@ impl RlsPlugin {
         )
     }
 
+    /// Apply this plugin's ENABLE/FORCE, the drop-undeclared reconcile, and the
+    /// declared policies to an explicit Postgres pool — the same work `on_ready`
+    /// performs. Exposed (like the `render_*` helpers) so a test or an
+    /// out-of-`on_ready` caller can drive the full application against a known
+    /// pool.
+    pub async fn apply_to(&self, pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+        self.apply_policies(pool).await
+    }
+
     /// Apply every ENABLE and policy to the given Postgres pool.
     /// Async because sqlx execution is async; called from on_ready
     /// via `tokio::runtime::Handle::current().block_on()`.
@@ -372,7 +381,15 @@ impl RlsPlugin {
             tracing::info!(plugin = "umbral-rls", sql = %force, "forcing RLS on owner");
             sqlx::query(&force).execute(pool).await?;
         }
-        // Then apply each policy. DROP IF EXISTS + CREATE is the
+        // Reconcile — DROP any policy on an RLS-managed table that is no longer
+        // declared in the builder (audit_2 R5). Without this the policy set is
+        // append-only: a developer who deletes a `.policy(...)` line leaves the
+        // old policy live in the DB, and because Postgres policies are
+        // PERMISSIVE (OR-combined) that stale policy keeps granting the access
+        // they think they revoked. `RlsPlugin` owns the full policy set on the
+        // tables it manages, so the builder is the source of truth.
+        self.drop_undeclared_policies(pool).await?;
+        // Then apply each declared policy. DROP IF EXISTS + CREATE is the
         // idempotent shape — Postgres has no CREATE OR REPLACE for
         // policies.
         for policy in &self.policies {
@@ -389,6 +406,47 @@ impl RlsPlugin {
                 "creating policy"
             );
             sqlx::query(&create_sql).execute(pool).await?;
+        }
+        Ok(())
+    }
+
+    /// Drop every policy on an RLS-managed table that the builder no longer
+    /// declares (audit_2 R5). Queries `pg_policies` for each managed table and
+    /// drops the names not in the declared set for that table. `RlsPlugin`
+    /// treats itself as the owner of the policy set on the tables it manages,
+    /// so removing a `.policy(...)` line actually revokes it on the next boot.
+    async fn drop_undeclared_policies(&self, pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+        for table in &self.tables {
+            let declared: std::collections::HashSet<&str> = self
+                .policies
+                .iter()
+                .filter(|p| &p.table == table)
+                .map(|p| p.name.as_str())
+                .collect();
+            // `tablename` is unqualified; the DROP below resolves the table in
+            // the active search_path (current schema), matching where the
+            // ENABLE/CREATE above ran.
+            let existing: Vec<String> =
+                sqlx::query_scalar("SELECT policyname FROM pg_policies WHERE tablename = $1")
+                    .bind(table)
+                    .fetch_all(pool)
+                    .await?;
+            for name in existing {
+                if declared.contains(name.as_str()) {
+                    continue;
+                }
+                let drop_sql = format!(
+                    "DROP POLICY IF EXISTS \"{}\" ON \"{}\"",
+                    escape_ident(&name),
+                    escape_ident(table)
+                );
+                tracing::info!(
+                    plugin = "umbral-rls",
+                    sql = %drop_sql,
+                    "dropping undeclared RLS policy (removed from the builder)"
+                );
+                sqlx::query(&drop_sql).execute(pool).await?;
+            }
         }
         Ok(())
     }

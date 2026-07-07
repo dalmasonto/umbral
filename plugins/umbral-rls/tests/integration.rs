@@ -146,3 +146,69 @@ async fn rls_plugin_applies_policies_on_postgres() {
     // run. The test cleans the table on entry, so no further work.
     drop(app);
 }
+
+/// audit_2 R5: a policy removed from the builder is DROPPED on the next apply,
+/// not left live. Postgres policies are PERMISSIVE (OR-combined), so a stale
+/// one a developer thinks they revoked would keep granting access. Uses
+/// `apply_to` twice on one pool (no double `App::build`, which would collide on
+/// the process-wide OnceLocks).
+#[tokio::test]
+#[ignore = "needs UMBRAL_TEST_POSTGRES_URL"]
+async fn undeclared_policy_is_dropped_on_reapply() {
+    let url =
+        std::env::var("UMBRAL_TEST_POSTGRES_URL").expect("UMBRAL_TEST_POSTGRES_URL must be set");
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+
+    sqlx::query("DROP TABLE IF EXISTS umbral_r5_doc")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE umbral_r5_doc ( id BIGSERIAL PRIMARY KEY, owner INTEGER NOT NULL )")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    async fn policy_names(pool: &sqlx::PgPool) -> Vec<String> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT policyname FROM pg_policies WHERE tablename = 'umbral_r5_doc' ORDER BY policyname",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    // First apply: two SELECT policies.
+    RlsPlugin::new()
+        .policy(
+            "umbral_r5_doc",
+            "read_own",
+            Action::Select,
+            "owner = current_setting('app.user_id')::int",
+        )
+        .policy("umbral_r5_doc", "read_all", Action::Select, "true")
+        .apply_to(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        policy_names(&pool).await,
+        vec!["read_all".to_string(), "read_own".to_string()],
+        "both declared policies exist after the first apply"
+    );
+
+    // Second apply: `read_all` is gone from the builder → it must be dropped.
+    RlsPlugin::new()
+        .policy(
+            "umbral_r5_doc",
+            "read_own",
+            Action::Select,
+            "owner = current_setting('app.user_id')::int",
+        )
+        .apply_to(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        policy_names(&pool).await,
+        vec!["read_own".to_string()],
+        "the policy removed from the builder must be dropped (R5), not left permissive"
+    );
+}
