@@ -209,6 +209,13 @@ pub struct AppBuilder {
     /// — sees the context this resolver set. Added via
     /// [`AppBuilder::route_context`].
     route_context_resolver: Option<RouteContextResolver>,
+    /// When `true`, `build()` FAILS (not just warns) if any app-level mutating
+    /// route (POST/PUT/PATCH/DELETE) registered via `.routes(...)` carries no
+    /// recorded permission (gaps3 #28 P1 — enforces the audit_2 H19 audit).
+    /// Opt-in "gated by construction": a forgotten authorization gate becomes a
+    /// boot error instead of a silently-open endpoint. Default `false` (warn
+    /// only). Set via [`AppBuilder::deny_ungated_mutations`].
+    deny_ungated_mutations: bool,
 }
 
 impl Default for AppBuilder {
@@ -231,6 +238,7 @@ impl Default for AppBuilder {
             cors: None,
             cors_scoped: Vec::new(),
             atomic_transactions: None,
+            deny_ungated_mutations: false,
             compress: false,
             // Safe-by-default request hardening (audit_2 core-web H11): a 32
             // MiB body ceiling and a 30s timeout, both opt-out-able.
@@ -611,6 +619,25 @@ impl AppBuilder {
     /// per-call `.atomic()` / `.non_atomic()` overrides still work.
     pub fn atomic_transactions(mut self, enabled: bool) -> Self {
         self.atomic_transactions = Some(enabled);
+        self
+    }
+
+    /// Make a forgotten authorization gate a **boot error** instead of a
+    /// warning (gaps3 #28 P1). With this set, `build()` fails with
+    /// [`BuildError::UngatedMutatingRoutes`] if any app-level mutating route
+    /// (POST/PUT/PATCH/DELETE) registered via [`Self::routes`] carries no
+    /// recorded permission — i.e. it wasn't gated through the umbral-permissions
+    /// `Routes::*_gated(...)` builders (a hand-applied
+    /// `.layer(permission_required(...))` is opaque to the audit, so prefer the
+    /// builder). This is the opt-in "gated by construction" posture: authorization
+    /// on every mutating route is enforced at boot rather than trusted to review.
+    ///
+    /// Default off — `build()` only *warns*. An intentionally-public mutating
+    /// route (a webhook receiver, a health `POST`) must be registered through a
+    /// permission-aware builder anyway (or kept out of `.routes(...)`) once this
+    /// is on, so the decision is explicit.
+    pub fn deny_ungated_mutations(mut self) -> Self {
+        self.deny_ungated_mutations = true;
         self
     }
 
@@ -1019,13 +1046,22 @@ impl AppBuilder {
         // looking up by `Model::NAME`.
         crate::migrate::init_model_aliases(model_aliases);
 
-        // audit_2 H19: warn at boot about the app's own mutating routes
+        // audit_2 H19: surface at boot the app's own mutating routes
         // (POST/PUT/PATCH/DELETE) that carry no RECORDED permission, so a
         // forgotten authorization gate surfaces here instead of as a silently
         // open endpoint. Only `.routes(...)` (the app's hand-written routes)
         // are audited — plugin routes gate via their own conventions and are
         // merged separately. Runs before `self.route_paths` is moved below.
-        audit_ungated_mutating_routes(&self.route_paths);
+        // With `.deny_ungated_mutations()` (gaps3 #28 P1) the same finding is a
+        // hard `BuildError` instead of a warning: authorization on every
+        // mutating route is enforced by construction.
+        let ungated = ungated_mutating_routes(&self.route_paths);
+        if !ungated.is_empty() {
+            if self.deny_ungated_mutations {
+                return Err(BuildError::UngatedMutatingRoutes { routes: ungated });
+            }
+            warn_ungated_mutating_routes(&ungated);
+        }
 
         // Snapshot the declared route paths into the registry so the
         // dev-mode 404 page can surface them. The implicit `"app"`
@@ -1524,8 +1560,10 @@ async fn shutdown_signal() {
 
 /// audit_2 H19 — warn about the app's own mutating routes that carry no
 /// recorded permission. A default-DENY router is a future-major change; this
-/// boot Warning is the non-breaking first step: it makes a forgotten
+/// boot Warning is the non-breaking default: it makes a forgotten
 /// authorization gate visible at boot instead of shipping as an open endpoint.
+/// [`AppBuilder::deny_ungated_mutations`] promotes the same finding to a hard
+/// [`BuildError::UngatedMutatingRoutes`] for apps that want it enforced.
 ///
 /// Scope + honesty: only routes registered through `Routes` (the app's
 /// `.routes(...)`) are checked — plugin routes gate via their own conventions.
@@ -1534,23 +1572,20 @@ async fn shutdown_signal() {
 /// warning says so and points at the `require_permission(...)` builder (which
 /// records the permission). An intentionally-public route is a false positive
 /// the operator ignores.
-fn audit_ungated_mutating_routes(specs: &[crate::routes::RouteSpec]) {
-    let ungated = ungated_mutating_routes(specs);
-    if ungated.is_empty() {
-        return;
-    }
+fn warn_ungated_mutating_routes(ungated: &[String]) {
     tracing::warn!(
         "audit_2 H19: {} app mutating route(s) have no recorded permission: [{}]. \
          Gate them with the umbral-permissions `Routes::require_permission(...)` builder \
          so the framework records the permission (a hand-applied \
          `.layer(permission_required(...))` is NOT visible to this audit — prefer the \
-         builder). If a route is intentionally public, ignore this.",
+         builder). If a route is intentionally public, ignore this. To make this a hard \
+         boot error instead, call `App::builder().deny_ungated_mutations()`.",
         ungated.len(),
         ungated.join(", ")
     );
 }
 
-/// The pure core of [`audit_ungated_mutating_routes`]: the `"METHOD /path"`
+/// The pure core of the H19 audit: the `"METHOD /path"`
 /// labels of every route with a mutating method and no recorded permission.
 /// Split out so the audit's selection logic is unit-testable without a live
 /// `App::build()` / tracing subscriber.
@@ -1774,6 +1809,14 @@ pub enum BuildError {
         first_plugin: &'static str,
         second_plugin: &'static str,
     },
+    /// `.deny_ungated_mutations()` was set and one or more app-level mutating
+    /// routes (POST/PUT/PATCH/DELETE registered via `.routes(...)`) carry no
+    /// recorded permission (gaps3 #28 P1, enforcing the audit_2 H19 audit).
+    /// Carries the `"METHOD /path"` label of each offending route. Fix by gating
+    /// them with the umbral-permissions `Routes::require_permission(...)` builder
+    /// (which records the permission), or drop the strict flag if a route is
+    /// intentionally public.
+    UngatedMutatingRoutes { routes: Vec<String> },
 }
 
 impl std::fmt::Display for BuildError {
@@ -1867,6 +1910,17 @@ impl std::fmt::Display for BuildError {
                  namespace `{namespace}` via static_dirs(); namespaces must be unique \
                  (they key the /static/<namespace>/ URL and the static_root/<namespace>/ \
                  collected-asset dir). Rename one plugin's namespace."
+            ),
+            BuildError::UngatedMutatingRoutes { routes } => write!(
+                f,
+                "umbral: deny_ungated_mutations() is set and {} app mutating route(s) have no \
+                 recorded permission: [{}]. Gate each with the umbral-permissions \
+                 `Routes::require_permission(...)` builder so the framework records the \
+                 permission (a hand-applied `.layer(permission_required(...))` is NOT visible \
+                 to this audit — prefer the builder). If a route is intentionally public, \
+                 register it through a permission-aware builder or drop the strict flag.",
+                routes.len(),
+                routes.join(", ")
             ),
         }
     }
