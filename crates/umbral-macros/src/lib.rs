@@ -4609,15 +4609,27 @@ fn expand_choices(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
 
-        // sqlx Type impls — round-trip as TEXT on both backends.
+        // sqlx Type impls — round-trip as TEXT on both backends. `compatible` is
+        // delegated to `String` so the column may be any string type: a Choices
+        // migration emits `VARCHAR(n)`, and on Postgres sqlx rejects a bare
+        // `TEXT`-typed decoder against a `VARCHAR` column unless `compatible`
+        // accepts the whole text family (TEXT/VARCHAR/BPCHAR/NAME). Without this,
+        // every typed `objects().fetch()` over a row with a Choices column 500s on
+        // Postgres while passing on SQLite (VARCHAR ≡ TEXT affinity). gaps3 #31.
         impl ::umbral::_sqlx::Type<::umbral::_sqlx::Sqlite> for #enum_name {
             fn type_info() -> <::umbral::_sqlx::Sqlite as ::umbral::_sqlx::Database>::TypeInfo {
                 <::std::string::String as ::umbral::_sqlx::Type<::umbral::_sqlx::Sqlite>>::type_info()
+            }
+            fn compatible(ty: &<::umbral::_sqlx::Sqlite as ::umbral::_sqlx::Database>::TypeInfo) -> bool {
+                <::std::string::String as ::umbral::_sqlx::Type<::umbral::_sqlx::Sqlite>>::compatible(ty)
             }
         }
         impl ::umbral::_sqlx::Type<::umbral::_sqlx::Postgres> for #enum_name {
             fn type_info() -> <::umbral::_sqlx::Postgres as ::umbral::_sqlx::Database>::TypeInfo {
                 <::std::string::String as ::umbral::_sqlx::Type<::umbral::_sqlx::Postgres>>::type_info()
+            }
+            fn compatible(ty: &<::umbral::_sqlx::Postgres as ::umbral::_sqlx::Database>::TypeInfo) -> bool {
+                <::std::string::String as ::umbral::_sqlx::Type<::umbral::_sqlx::Postgres>>::compatible(ty)
             }
         }
         impl<'q> ::umbral::_sqlx::Encode<'q, ::umbral::_sqlx::Sqlite> for #enum_name {

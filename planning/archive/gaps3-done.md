@@ -157,3 +157,20 @@ Reported (from web3clubs_fc) as the "sharper, breaking" version of #24: an `Alte
 **What was added:** `crates/umbral-core/tests/alter_inbound_fk_engine.rs`. The pre-existing `alter_column_inbound_fk.rs` (#13) applied the recipe BY HAND — it proved the recipe works but never that the engine *uses* it; this new test closes that gap and guards against a future refactor dropping the FK-off bracket. No production code change was needed.
 
 **Action for the reporter:** upgrade web3clubs_fc from 0.0.4 to 0.0.5+ (or the upcoming 0.0.6) to get the fix; the null-flip migrations it avoided will then apply against a populated local SQLite DB.
+
+31. [x] `#[derive(Choices)]` fields decode as TEXT but pre-0.0.5 migrations made the column VARCHAR → typed reads 500 on Postgres (2026-07-07)
+
+Found in the web3clubs_fc backend (live consumer, umbral 0.0.4). A field `status: FixtureStatus` where `FixtureStatus: Choices` generated a `VARCHAR(20)` column, but the sqlx `Type` impl the `Choices` derive emits reports `TEXT`. On **SQLite** `VARCHAR` and `TEXT` share affinity, so all dev/tests passed. On **Postgres** sqlx is strict:
+
+```
+error occurred while decoding column "status": mismatched types;
+Rust type `FixtureStatus` (as SQL type `TEXT`) is not compatible with SQL type `VARCHAR`
+```
+
+Any **typed** ORM read of a row containing a Choices column 500'd (REST list endpoints escaped — they decode dynamically, not into the typed struct — so the bug hid in custom handlers). In the consumer, `POST /api/fixture/{id}/rsvp` did a typed `Fixture::objects()...` existence check, so **every RSVP 500'd and nothing persisted** — production-down for a core feature, invisible in dev.
+
+**Root cause.** The `Choices` derive (`crates/umbral-macros/src/lib.rs`, `derive_choices`) emitted `Type<Postgres>::type_info()` = `String::type_info()` (TEXT) but never overrode `compatible()`, so it used the trait default (`ty == Self::type_info()`), which rejects any column that isn't exactly TEXT. `String` itself reads from a VARCHAR column precisely because *its* `compatible()` accepts the whole text family (TEXT / VARCHAR / BPCHAR / NAME / citext).
+
+**Shipped:** both `Type<Sqlite>` and `Type<Postgres>` impls the derive emits now override `compatible()` to delegate to `String`, so a Choices enum decodes from any string-family column. This is a **decode-side** fix — existing `VARCHAR` columns (0.0.4 migrations, DR restores) start decoding with **no migration**; the manual `ALTER COLUMN ... TYPE TEXT` prod hotfix is no longer required. (Separately, the current derive already classifies `#[umbral(choices)]` fields as `SqlType::Text`, so *fresh* migrations emit TEXT — the fix rescues the older VARCHAR schemas and makes decode robust to whatever type the column actually is.)
+
+**Test:** `crates/umbral-core/tests/choices_varchar_pg.rs`. The core guard runs with **no database** — `Type::compatible` is pure, and `PgTypeInfo::with_name("varchar")` name-matches the built-in VARCHAR (unlike `with_oid`, which sqlx's `==` soft-eq would mask); it returns `false` before the fix and `true` after (confirmed by reverting the derive change and watching the test fail). A full typed round-trip over a real `VARCHAR` column is behind `#[ignore]` on `UMBRAL_TEST_POSTGRES_URL` — SQLite can't catch this class (VARCHAR ≡ TEXT affinity). Mirrors the "SQLite-only tests miss Postgres type strictness" theme (gaps2 #70, decimal_field).

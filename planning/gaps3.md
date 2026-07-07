@@ -96,3 +96,13 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 29. [ ] We need to start thinking about optimization ie what else can we move to the orm layer that is fully reimplemented everywhere, how can we improve the boilerplate.
 
 30. [x] SQLite `AlterColumn` (inbound FKs + data) → 787 — could NOT reproduce on main; already fixed in 0.0.5 (repro was on 0.0.4); engine-level regression test added — archived
+
+31. [x] `#[derive(Choices)]` fields decode as TEXT but pre-0.0.5 migrations made the column VARCHAR → typed reads 500 on Postgres — fixed: the derive's `Type::compatible` now delegates to `String` (accepts the whole text family), so existing VARCHAR columns decode with no migration. Test `choices_varchar_pg.rs` (no-DB `compatible` guard + `#[ignore]` live-PG round-trip) — archived
+
+32. [ ] OAuth `begin_flow` stores the flow via `set_data(token, …)` which never emits the session `Set-Cookie` → "no oauth flow in progress" for any user without a pre-existing session
+
+    `plugins/umbral-oauth/src/routes.rs::begin_flow` persists the PKCE/`state` `FlowState` with `set_data(token, FLOW_KEY, &flow)` (line ~189) and returns `Redirect::to(authorize_url)`. `token` is the middleware-provided `SessionToken`. But `set_data(token, …)` is the **free function that writes the store directly by token** — it does NOT go through the request's `RequestSession` object, so the `session_layer`'s exit hook never sees the session as `fresh`+`dirty` and **never emits the `Set-Cookie`**. Verified against live prod: `GET /oauth/google/login` on a cookieless client returns only `set-cookie: umbral_csrf_token`, no session cookie.
+
+    Consequence: the flow row is written under a token the client never receives. On the callback `current_session(&headers)` finds no session → flow is `None` → `400 "no oauth flow in progress"`. It "works randomly" only for users who already hold a session cookie (admin login, a prior session-writing request); a fresh browser fails every time. This is the umbral-sessions contract ("first write materialises the row and emits the Set-Cookie") being violated because the free `set_data(token,…)` path bypasses the dirty-tracking that the auto-layer checks.
+
+    **Fix:** in `begin_flow`, after storing the flow, attach the session cookie to the redirect — `resp.headers_mut().append(SET_COOKIE, set_cookie_header(token, None)…)` — OR write the flow through the `RequestSession` extension so the auto-layer emits the cookie. Add a test asserting `GET /oauth/{p}/login` on a cookieless request returns a session `Set-Cookie`. Found in web3clubs_fc (umbral 0.0.4); the bug is still present on umbra HEAD.
