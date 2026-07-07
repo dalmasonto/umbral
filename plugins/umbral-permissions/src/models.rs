@@ -258,3 +258,52 @@ pub struct UserPermission {
     pub user_id: String,
     pub permission_id: ForeignKey<Permission>,
 }
+
+/// A **per-object** (row-level) permission grant — the object-level
+/// analogue of [`UserPermission`] (audit_2 plugin-authz P2 / gaps3 #28).
+///
+/// A model-level grant (`UserPermission` / group-mediated) says "this user
+/// may change *posts*"; an `ObjectPermission` says "this user may change
+/// *post #42*". Together they let authorization be instance-aware instead of
+/// all-or-nothing: an app can withhold the model-level `blog.change_post` and
+/// hand out per-row grants, so a holder can only touch the rows they were
+/// explicitly given — closing the IDOR-by-design gap where any model-level
+/// holder could edit *any* row.
+///
+/// A grant is the triple `(user_id, permission_id, object_pk)`:
+///
+/// - `user_id` — the stringified `UserModel::id()`, same PK-agnostic `String`
+///   shape as [`UserGroup`] / [`UserPermission`].
+/// - `permission_id` — the composite codename (`"blog.change_post"`), FK to
+///   [`Permission`]. The permission's `content_type` fixes *which model* the
+///   object belongs to, so `object_pk` needs no separate model column.
+/// - `object_pk` — the stringified primary key of the target row
+///   (`"42"`, a UUID, a slug). `String` so it round-trips any PK type the
+///   target model uses; capped at 255.
+///
+/// The `unique_together` makes a grant a set element (never granted twice) and
+/// its index — leftmost `(user_id, permission_id)` — serves both the single
+/// `has_object_perm` existence check and the `objects_with_perm` list-filter
+/// scan, so neither needs a separate `#[umbral(index)]`.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(
+    table = "permissions_objectpermission",
+    display = "Object permissions",
+    icon = "shield-check",
+    unique_together = [["user_id", "permission_id", "object_pk"]]
+)]
+pub struct ObjectPermission {
+    pub id: i64,
+    /// The `UserModel::id()` of the grantee, stringified. Same
+    /// `max_length = 64` PK-agnostic shape as the other join tables.
+    #[umbral(max_length = 64)]
+    pub user_id: String,
+    /// The permission being granted on the single object. FK to the
+    /// composite-codename [`Permission`] PK.
+    pub permission_id: ForeignKey<Permission>,
+    /// The stringified primary key of the target row this grant scopes to.
+    /// `String` so any target-model PK type (i64, UUID, slug) round-trips;
+    /// 255 chars covers UUIDs (36) and composite/natural keys comfortably.
+    #[umbral(max_length = 255)]
+    pub object_pk: String,
+}

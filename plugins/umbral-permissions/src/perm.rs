@@ -36,7 +36,10 @@
 
 use std::collections::HashSet;
 
-use crate::models::{Group, UserGroup, UserPermission, user_group, user_permission};
+use crate::models::{
+    Group, ObjectPermission, UserGroup, UserPermission, object_permission, user_group,
+    user_permission,
+};
 
 /// Safety ceiling on the number of direct permission / group rows `user_perms`
 /// loads for a single user (audit_2 P6). Far above any real RBAC assignment;
@@ -178,6 +181,97 @@ pub async fn has_perm_for_superuser(
         return Ok(true);
     }
     has_perm(user_id, perm).await
+}
+
+/// Return `true` if `user_id` holds `perm` on the **single object** identified
+/// by `object_pk` — an explicit per-row grant (audit_2 P2).
+///
+/// This is the instance-aware check. Unlike [`has_perm`] it does **not** fall
+/// back to a model-level grant: a user with the model-wide `"blog.change_post"`
+/// does NOT automatically pass `has_object_perm(.., "blog.change_post", "42")`.
+/// That is the whole point — it lets a handler scope authorization to the row
+/// the request actually targets, closing the IDOR gap where a model-level
+/// holder could act on any row. The caller composes the policy they want:
+///
+/// ```ignore
+/// // Strict per-object (IDOR-safe): only rows explicitly granted.
+/// if !has_object_perm(&uid, "blog.change_post", &post.id().to_string()).await? {
+///     return Err(StatusCode::FORBIDDEN);
+/// }
+///
+/// // Guardian-style additive: a model-wide grant OR a per-object grant.
+/// let ok = has_perm(&uid, "blog.change_post").await?
+///     || has_object_perm(&uid, "blog.change_post", &pk).await?;
+/// ```
+///
+/// `object_pk` is the target row's PK stringified the same way `user_id` is
+/// (`&row.id().to_string()`). Returns `Ok(false)` for a malformed `perm`
+/// (no dot), matching [`has_perm`].
+pub async fn has_object_perm(
+    user_id: &str,
+    perm: &str,
+    object_pk: &str,
+) -> Result<bool, PermError> {
+    if perm.split_once('.').is_none() {
+        return Ok(false);
+    }
+    Ok(ObjectPermission::objects()
+        .filter(
+            object_permission::USER_ID.eq(user_id.to_string())
+                & umbral::orm::Predicate::<ObjectPermission>::col_eq(
+                    "permission_id",
+                    perm.to_string(),
+                )
+                & object_permission::OBJECT_PK.eq(object_pk.to_string()),
+        )
+        .exists()
+        .await?)
+}
+
+/// Convenience wrapper that short-circuits when `is_superuser` is `true`,
+/// otherwise delegates to [`has_object_perm`]. Mirrors
+/// [`has_perm_for_superuser`] for the object-level path.
+pub async fn has_object_perm_for_superuser(
+    user_id: &str,
+    is_superuser: bool,
+    perm: &str,
+    object_pk: &str,
+) -> Result<bool, PermError> {
+    if is_superuser {
+        return Ok(true);
+    }
+    has_object_perm(user_id, perm, object_pk).await
+}
+
+/// Return the set of `object_pk`s that `user_id` holds `perm` on — the
+/// object-level grants for one permission.
+///
+/// The list-view companion to [`has_object_perm`]: fetch the ids once, then
+/// filter a queryset to just the rows the user may act on
+/// (`Post::objects().filter(post::ID.in_(&pks))`), instead of an N+1 of
+/// per-row `has_object_perm` calls. Returns an empty set for a malformed
+/// `perm`.
+pub async fn objects_with_perm(user_id: &str, perm: &str) -> Result<HashSet<String>, PermError> {
+    if perm.split_once('.').is_none() {
+        return Ok(HashSet::new());
+    }
+    Ok(ObjectPermission::objects()
+        .filter(
+            object_permission::USER_ID.eq(user_id.to_string())
+                & umbral::orm::Predicate::<ObjectPermission>::col_eq(
+                    "permission_id",
+                    perm.to_string(),
+                ),
+        )
+        // Same pathological-input ceiling as the model-level fetches: a single
+        // user holding more object grants than this for one permission is a
+        // misconfiguration, not a real shape.
+        .limit(PERM_FETCH_LIMIT)
+        .fetch()
+        .await?
+        .into_iter()
+        .map(|op| op.object_pk)
+        .collect())
 }
 
 /// Return the full permission set for `user_id` as a `HashSet` of

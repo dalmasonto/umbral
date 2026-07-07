@@ -81,8 +81,11 @@ pub mod rest;
 pub use middleware::{
     PermissionRequired, PermissionRequiredLayer, permission_required, permission_required_html,
 };
-pub use models::{ContentType, Group, Permission, UserGroup, UserPermission};
-pub use perm::{PermError, has_perm, has_perm_for_superuser, has_perm_scoped, user_perms};
+pub use models::{ContentType, Group, ObjectPermission, Permission, UserGroup, UserPermission};
+pub use perm::{
+    PermError, has_object_perm, has_object_perm_for_superuser, has_perm, has_perm_for_superuser,
+    has_perm_scoped, objects_with_perm, user_perms,
+};
 pub use routes_ext::RoutesPermExt;
 
 /// gap #61 part 2: typed M2M-shape membership helpers
@@ -92,8 +95,9 @@ pub use routes_ext::RoutesPermExt;
 /// module docstring for the cross-crate dep-arrow reasoning that
 /// keeps those models user-facing.
 pub use membership::{
-    add_user_to_group, direct_permissions_for_user, grant_user_permission, group_ids_for_user,
-    groups_for_user, has_direct_user_permission, is_in_group, remove_user_from_group,
+    add_user_to_group, direct_permissions_for_user, grant_object_permission, grant_user_permission,
+    group_ids_for_user, groups_for_user, has_direct_user_permission, is_in_group,
+    remove_user_from_group, revoke_object_permission, revoke_object_permissions_for,
     revoke_user_permission, set_user_groups,
 };
 
@@ -116,16 +120,18 @@ impl Plugin for PermissionsPlugin {
     }
 
     fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
-        // Five explicit models — the sixth (group ↔ permission join)
-        // is gone; its data lives in the auto-generated
+        // Six explicit models — the group ↔ permission join is NOT
+        // one of them; its data lives in the auto-generated
         // `permissions_group_permissions` junction the migration
         // engine emits from `Group.permissions: M2M<Permission>`.
+        // `ObjectPermission` is the row-level grant table (audit_2 P2).
         vec![
             umbral::migrate::ModelMeta::for_::<ContentType>(),
             umbral::migrate::ModelMeta::for_::<Permission>(),
             umbral::migrate::ModelMeta::for_::<Group>(),
             umbral::migrate::ModelMeta::for_::<UserGroup>(),
             umbral::migrate::ModelMeta::for_::<UserPermission>(),
+            umbral::migrate::ModelMeta::for_::<ObjectPermission>(),
         ]
     }
 

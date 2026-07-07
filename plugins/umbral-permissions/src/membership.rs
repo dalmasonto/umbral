@@ -29,7 +29,10 @@
 //! Same call shape they'd write if `AuthUser { groups: M2M<Group> }`
 //! actually existed; just routed through the visible junction tables.
 
-use crate::models::{Group, Permission, UserGroup, UserPermission, user_group, user_permission};
+use crate::models::{
+    Group, ObjectPermission, Permission, UserGroup, UserPermission, object_permission, user_group,
+    user_permission,
+};
 use crate::perm::PermError;
 
 /// Add `user_id` to `group`. Idempotent — re-adding an existing
@@ -201,6 +204,82 @@ pub async fn has_direct_user_permission(user_id: &str, codename: &str) -> Result
         )
         .exists()
         .await?)
+}
+
+/// Grant `perm` to `user_id` on the single object identified by `object_pk`
+/// — the object-level analogue of [`grant_user_permission`] (audit_2 P2).
+///
+/// Idempotent: re-granting the same `(user_id, perm, object_pk)` triple is a
+/// no-op (the `ObjectPermission` `unique_together` would otherwise reject the
+/// duplicate). `object_pk` is the target row's PK stringified
+/// (`&post.id().to_string()`).
+///
+/// The check side is [`crate::perm::has_object_perm`]; the list-filter side is
+/// [`crate::perm::objects_with_perm`].
+pub async fn grant_object_permission(
+    user_id: &str,
+    perm: &Permission,
+    object_pk: &str,
+) -> Result<(), PermError> {
+    match ObjectPermission::objects()
+        .create(ObjectPermission {
+            id: 0,
+            user_id: user_id.to_string(),
+            permission_id: umbral::orm::ForeignKey::new(perm.codename.clone()),
+            object_pk: object_pk.to_string(),
+        })
+        .await
+    {
+        Ok(_) | Err(umbral::orm::write::WriteError::UniqueViolation { .. }) => {}
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
+/// Revoke `perm` from `user_id` on the object identified by `object_pk`. No
+/// error if the grant didn't exist — same forgive-and-continue posture as
+/// [`revoke_user_permission`].
+pub async fn revoke_object_permission(
+    user_id: &str,
+    perm: &Permission,
+    object_pk: &str,
+) -> Result<(), PermError> {
+    ObjectPermission::objects()
+        .filter(
+            object_permission::USER_ID.eq(user_id.to_string())
+                & umbral::orm::Predicate::<ObjectPermission>::col_eq(
+                    "permission_id",
+                    perm.codename.clone(),
+                )
+                & object_permission::OBJECT_PK.eq(object_pk.to_string()),
+        )
+        .delete()
+        .await?;
+    Ok(())
+}
+
+/// Delete every object-permission grant that targets `object_pk` for
+/// permission `perm`, regardless of grantee.
+///
+/// Call this from a row's delete path: `ObjectPermission` carries a stringified
+/// `object_pk`, not a `ForeignKey<T>` (the plugin can't name every app's target
+/// models), so deleting a row does NOT cascade its grants away. Without this
+/// cleanup the grants dangle — and if a *new* row later reuses the same PK, it
+/// silently inherits them. Pair it with the target model's delete handler.
+pub async fn revoke_object_permissions_for(
+    perm: &Permission,
+    object_pk: &str,
+) -> Result<(), PermError> {
+    ObjectPermission::objects()
+        .filter(
+            umbral::orm::Predicate::<ObjectPermission>::col_eq(
+                "permission_id",
+                perm.codename.clone(),
+            ) & object_permission::OBJECT_PK.eq(object_pk.to_string()),
+        )
+        .delete()
+        .await?;
+    Ok(())
 }
 
 /// Internal helper used by the perm-check hot path

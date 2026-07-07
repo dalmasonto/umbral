@@ -727,3 +727,213 @@ async fn has_perm_uses_membership_helpers_after_refactor() {
         "user → group → permission path must survive the refactor"
     );
 }
+
+// =========================================================================
+// audit_2 plugin-authz P2 / gaps3 #28 — object (row-level) permissions
+//
+// The object-level analogue of the direct/group grants above. These
+// exercise the full public path — grant → check → list-filter → revoke —
+// against real rows, and pin the IDOR-fixing property: a grant on one
+// object does NOT authorize a different object, and a MODEL-level grant
+// does NOT satisfy the object-level check.
+// =========================================================================
+
+use umbral_permissions::{
+    grant_object_permission, has_object_perm, has_object_perm_for_superuser, objects_with_perm,
+    revoke_object_permission, revoke_object_permissions_for,
+};
+
+/// Fetch a real seeded `Permission` row by its composite codename PK so the
+/// object-permission grants reference a permission that actually exists.
+async fn fetch_perm(codename: &str) -> Permission {
+    Permission::objects()
+        .filter(umbral::orm::Predicate::<Permission>::col_eq(
+            "codename", codename,
+        ))
+        .first()
+        .await
+        .expect("fetch permission")
+        .expect("standard permission must be seeded")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn object_perm_scopes_to_the_granted_row_only() {
+    boot().await;
+    let perm = fetch_perm("blog.change_blogpost").await;
+    let user = "obj-1001";
+
+    // No grant yet → false for every object.
+    assert!(
+        !has_object_perm(user, "blog.change_blogpost", "42")
+            .await
+            .unwrap(),
+        "no grant → no object perm"
+    );
+
+    // Grant change on post #42 only.
+    grant_object_permission(user, &perm, "42")
+        .await
+        .expect("grant");
+
+    // Granted object passes; a DIFFERENT object does NOT — this is the
+    // IDOR fix: holding the grant on #42 gives no authority over #99.
+    assert!(
+        has_object_perm(user, "blog.change_blogpost", "42")
+            .await
+            .unwrap(),
+        "granted object #42 must pass"
+    );
+    assert!(
+        !has_object_perm(user, "blog.change_blogpost", "99")
+            .await
+            .unwrap(),
+        "un-granted object #99 must NOT pass — per-row scoping"
+    );
+
+    // A different permission on the same object is also unscoped.
+    assert!(
+        !has_object_perm(user, "blog.delete_blogpost", "42")
+            .await
+            .unwrap(),
+        "grant is per (permission, object) — change ≠ delete"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn model_level_grant_does_not_satisfy_object_check() {
+    boot().await;
+    let user = "obj-1002";
+
+    // Give the user the MODEL-level grant (any blogpost).
+    let perm = fetch_perm("blog.change_blogpost").await;
+    umbral_permissions::grant_user_permission(user, &perm)
+        .await
+        .expect("model-level grant");
+
+    // Model-level check passes...
+    assert!(
+        has_perm(user, "blog.change_blogpost").await.unwrap(),
+        "model-level grant satisfies has_perm"
+    );
+    // ...but the object-level check does NOT fall back to it. Without an
+    // explicit per-object grant the instance-aware check is false — the
+    // whole point of the primitive.
+    assert!(
+        !has_object_perm(user, "blog.change_blogpost", "7")
+            .await
+            .unwrap(),
+        "has_object_perm must NOT inherit the model-level grant"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn objects_with_perm_returns_exactly_the_granted_pks() {
+    boot().await;
+    let perm = fetch_perm("blog.view_blogpost").await;
+    let user = "obj-1003";
+
+    for pk in ["a", "b", "c"] {
+        grant_object_permission(user, &perm, pk).await.unwrap();
+    }
+    // A grant for a DIFFERENT permission must not bleed into this set.
+    let other = fetch_perm("blog.delete_blogpost").await;
+    grant_object_permission(user, &other, "z").await.unwrap();
+
+    let pks = objects_with_perm(user, "blog.view_blogpost").await.unwrap();
+    assert_eq!(
+        pks,
+        ["a", "b", "c"].into_iter().map(String::from).collect(),
+        "objects_with_perm returns exactly the granted pks for that permission"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn grant_is_idempotent_and_revoke_removes() {
+    boot().await;
+    let perm = fetch_perm("blog.change_blogpost").await;
+    let user = "obj-1004";
+
+    grant_object_permission(user, &perm, "55").await.unwrap();
+    // Re-granting the same triple is a no-op, not a UNIQUE-violation error.
+    grant_object_permission(user, &perm, "55")
+        .await
+        .expect("idempotent re-grant");
+    let pks = objects_with_perm(user, "blog.change_blogpost")
+        .await
+        .unwrap();
+    assert_eq!(pks.len(), 1, "re-grant must not duplicate the row");
+
+    // Revoke removes exactly that grant.
+    revoke_object_permission(user, &perm, "55").await.unwrap();
+    assert!(
+        !has_object_perm(user, "blog.change_blogpost", "55")
+            .await
+            .unwrap(),
+        "revoke removes the grant"
+    );
+    // Revoking a non-existent grant is a forgiving no-op.
+    revoke_object_permission(user, &perm, "does-not-exist")
+        .await
+        .expect("revoke of missing grant is a no-op");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_object_permissions_for_clears_every_grantee() {
+    boot().await;
+    let perm = fetch_perm("blog.change_blogpost").await;
+
+    // Two different users both hold the grant on post "shared-77".
+    grant_object_permission("obj-a", &perm, "shared-77")
+        .await
+        .unwrap();
+    grant_object_permission("obj-b", &perm, "shared-77")
+        .await
+        .unwrap();
+    // A grant on a DIFFERENT object must survive the row cleanup.
+    grant_object_permission("obj-a", &perm, "other-88")
+        .await
+        .unwrap();
+
+    // Simulate the target row being deleted: clear all grants for it.
+    revoke_object_permissions_for(&perm, "shared-77")
+        .await
+        .unwrap();
+
+    assert!(
+        !has_object_perm("obj-a", "blog.change_blogpost", "shared-77")
+            .await
+            .unwrap(),
+        "grantee A's grant on the deleted row is gone"
+    );
+    assert!(
+        !has_object_perm("obj-b", "blog.change_blogpost", "shared-77")
+            .await
+            .unwrap(),
+        "grantee B's grant on the deleted row is gone"
+    );
+    assert!(
+        has_object_perm("obj-a", "blog.change_blogpost", "other-88")
+            .await
+            .unwrap(),
+        "grants on a different object are untouched"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn superuser_bypasses_object_perm() {
+    boot().await;
+    // No grant anywhere, but is_superuser short-circuits to true.
+    assert!(
+        has_object_perm_for_superuser("obj-super", true, "blog.change_blogpost", "1")
+            .await
+            .unwrap(),
+        "superuser passes without any object grant"
+    );
+    // Non-superuser with no grant still fails.
+    assert!(
+        !has_object_perm_for_superuser("obj-super", false, "blog.change_blogpost", "1")
+            .await
+            .unwrap(),
+        "non-superuser with no grant fails"
+    );
+}

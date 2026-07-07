@@ -37,6 +37,7 @@ The standard codename is `<app_label>.<verb>_<model>` (e.g. `blog.add_post`). Th
 | `Group` | Named permission bundle. Users in a group inherit every permission the group holds. |
 | `UserGroup` | M2M: which users belong to which groups. `user_id: String` (PK-agnostic). |
 | `UserPermission` | M2M: direct grants that bypass groups. `user_id: String`. Use sparingly. |
+| `ObjectPermission` | Per-row grants: the triple `(user_id, permission_id, object_pk)`. Powers the [object-level permission](#object-level-row-permissions) checks below. |
 
 Plus one framework-managed M2M junction:
 
@@ -117,6 +118,53 @@ Permission::objects().on(&pool).create(Permission {
     name: "Can feature post on homepage".to_string(),
 }).await?;
 ```
+
+## Object-level (row) permissions
+
+Model-level permissions are all-or-nothing: `blog.change_post` lets a holder change *every* post. When you need per-row authorization — "this user may edit *post #42*, not any post" — use an **object permission**. It's the instance-aware layer that closes the IDOR gap where a model-level holder can act on any row.
+
+Grant, check, and revoke go through free functions, mirroring the model-level API but taking the target row's stringified primary key:
+
+```rust
+use umbral_permissions::{
+    grant_object_permission, has_object_perm, objects_with_perm, revoke_object_permission,
+    Permission,
+};
+
+// Grant: this user may change post #42 specifically.
+let perm = Permission::objects()
+    .filter(permission::CODENAME.eq("blog.change_post"))
+    .get().await?;
+grant_object_permission(&user.id().to_string(), &perm, &post.id().to_string()).await?;
+
+// Check inside the edit handler — scoped to the row the request targets.
+if !has_object_perm(&user.id().to_string(), "blog.change_post", &post.id().to_string()).await? {
+    return Err(StatusCode::FORBIDDEN);
+}
+```
+
+<Callout type="note">
+`has_object_perm` does **not** fall back to the model-level grant. A user who holds the model-wide `blog.change_post` does *not* automatically pass the object check — that separation is what makes the check instance-aware. Compose the policy you want:
+
+- **Strict per-object (IDOR-safe):** withhold the model-level perm, hand out only per-object grants, check with `has_object_perm`.
+- **Guardian-style additive:** `has_perm(uid, perm).await? || has_object_perm(uid, perm, pk).await?` — a model-wide grant *or* a per-object grant passes.
+</Callout>
+
+For a list view, fetch the whole granted set once instead of an N+1 of per-row checks, then filter the queryset:
+
+```rust
+let pks = objects_with_perm(&uid, "blog.change_post").await?;   // HashSet<String>
+let editable = Post::objects().filter(post::ID.in_(&pks)).fetch().await?;
+```
+
+Grants carry a stringified `object_pk`, not a `ForeignKey<T>` (the plugin can't name your models), so deleting a row does **not** cascade its grants away. Clear them in the row's delete path:
+
+```rust
+revoke_object_permission(&uid, &perm, &pk).await?;        // one grantee
+revoke_object_permissions_for(&perm, &pk).await?;          // every grantee — call on row delete
+```
+
+The grants live in the `permissions_objectpermission` table; adding the plugin means running `makemigrations` + `migrate` once to create it. `has_object_perm_for_superuser(uid, is_superuser, perm, pk)` short-circuits for superusers, matching `has_perm_for_superuser`.
 
 ## Design notes
 
