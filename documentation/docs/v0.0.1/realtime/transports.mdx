@@ -110,16 +110,11 @@ struct Chat;
 impl MessageHandler for Chat {
     async fn on_message(&self, ctx: &MessageContext, text: String) {
         // Never trust a client-supplied room. Parse defensively (no unwrap on
-        // attacker input) and authorize the publish before fanning it out.
-        let msg: ChatMsg = match serde_json::from_str(&text) {
-            Ok(m) => m,
-            Err(_) => return,
-        };
-        // The sender may only publish to a room its own identity could join.
-        if !Realtime::can_send(ctx.user_id.as_deref(), &msg.room) {
-            return; // drop unauthorized publish
-        }
-        Realtime::to_group(&msg.room).send("message", &msg).await;
+        // attacker input), then publish through `ctx.publish` — it authorizes
+        // the sender (GroupPolicy::can_send) and only then broadcasts, so an
+        // unauthorized room is dropped for you.
+        let Ok(msg) = serde_json::from_str::<ChatMsg>(&text) else { return };
+        ctx.publish(&msg.room, "message", &msg).await;
     }
 }
 
@@ -129,7 +124,7 @@ RealtimePlugin::new().message_handler(Chat);
 <Callout type="warning">
 **Inbound frames carry no automatic send-authorization.** The `GroupPolicy` gate runs at the *handshake* and decides which groups a connection may *join*. It does **not** run on inbound messages. `Realtime::to_group(room)` delivers to whoever is in `room` regardless of who sent the frame — so a client that joined only `public:lobby` can still `send({"room":"chat:secret"})` and inject into a room it never joined.
 
-Always re-check authorization inside `on_message` before publishing to any client-supplied room (as above: `Realtime::can_send(ctx.user_id, &room)`, or your own membership lookup). Treat `text` as untrusted: parse without `unwrap`, and validate every field you route on.
+Publish through `ctx.publish(room, event, &data)` (as above): it runs `GroupPolicy::can_send` for the sender and drops the frame if they may not post to `room`, so the authorization can't be forgotten. If you need the raw broadcast, gate it yourself first with `ctx.can_send(&room)` before `Realtime::to_group(&room).send(...)`. Treat `text` as untrusted: parse without `unwrap`, and validate every field you route on.
 </Callout>
 
 ```js

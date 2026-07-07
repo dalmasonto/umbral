@@ -827,6 +827,39 @@ pub struct MessageContext {
     pub user_id: Option<String>,
 }
 
+impl MessageContext {
+    /// Whether this connection's identity may broadcast to `group`, per the
+    /// installed [`GroupPolicy::can_send`]. Sugar for
+    /// [`Realtime::can_send`]`(self.user_id.as_deref(), group)`.
+    pub fn can_send(&self, group: &str) -> bool {
+        Realtime::can_send(self.user_id.as_deref(), group)
+    }
+
+    /// **Authorized publish** — the safe-by-default way to broadcast from an
+    /// inbound WS handler (audit_2 realtime #2). Broadcasts `data` under
+    /// `event` to `group` **only if** this connection passes
+    /// [`GroupPolicy::can_send`]; otherwise it drops the frame and returns
+    /// `false`. Prefer this over `Realtime::to_group(group).send(...)` for any
+    /// **client-supplied** room: the raw `to_group` does no sender check, so a
+    /// client joined to one room could otherwise inject into any group (IDOR).
+    /// Returns `true` if the message was published.
+    ///
+    /// ```ignore
+    /// async fn on_message(&self, ctx: &MessageContext, text: String) {
+    ///     let Ok(msg) = serde_json::from_str::<ChatMsg>(&text) else { return };
+    ///     // authorized in one call — no way to forget the send check
+    ///     ctx.publish(&msg.room, "message", &msg).await;
+    /// }
+    /// ```
+    pub async fn publish<T: Serialize>(&self, group: &str, event: &str, data: &T) -> bool {
+        if !self.can_send(group) {
+            return false;
+        }
+        Realtime::to_group(group).send(event, data).await;
+        true
+    }
+}
+
 /// Handles text frames a WebSocket client sends to the server. SSE is
 /// push-only, so this only matters for the WS transport. The default
 /// ([`NoopMessageHandler`]) ignores inbound frames; a chat app implements
@@ -834,24 +867,21 @@ pub struct MessageContext {
 ///
 /// **Inbound frames carry no automatic send-authorization.** The
 /// [`GroupPolicy`] gate runs at the *handshake* and decides which groups a
-/// connection may *join*; it does **not** run on inbound messages, and
-/// [`Realtime::to_group`] delivers to whoever is in the target group
-/// regardless of who sent the frame. Treat `text` as untrusted input and
-/// re-check authorization before publishing to any client-supplied room:
+/// connection may *join*; it does **not** run on inbound messages, and the raw
+/// [`Realtime::to_group`] delivers to whoever is in the target group regardless
+/// of who sent the frame. Treat `text` as untrusted input and publish through
+/// [`MessageContext::publish`], which authorizes the sender before it
+/// broadcasts — the safe default for a client-supplied room:
 ///
 /// ```ignore
 /// async fn on_message(&self, ctx: &MessageContext, text: String) {
 ///     // Parse defensively — never unwrap attacker-controlled input.
-///     let msg: ChatMsg = match serde_json::from_str(&text) {
-///         Ok(m) => m,
-///         Err(_) => return,
-///     };
-///     // audit_2 realtime #2: authorize the SEND to a client-supplied room —
-///     // a joined client could otherwise inject into any group (IDOR).
-///     if !Realtime::can_send(ctx.user_id.as_deref(), &msg.room) {
-///         return; // drop the unauthorized publish
-///     }
-///     Realtime::to_group(&msg.room).send("message", &msg).await;
+///     let Ok(msg) = serde_json::from_str::<ChatMsg>(&text) else { return };
+///     // `publish` runs GroupPolicy::can_send first and drops the frame if the
+///     // sender may not post to `msg.room` — no way to forget the check
+///     // (audit_2 realtime #2). For the raw broadcast, gate it yourself with
+///     // `ctx.can_send(&msg.room)` before `Realtime::to_group(...).send(...)`.
+///     ctx.publish(&msg.room, "message", &msg).await;
 /// }
 /// ```
 #[async_trait::async_trait]
