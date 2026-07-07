@@ -1261,9 +1261,12 @@ pub const PRESENCE_LEAVE: &str = "presence:leave";
 
 /// Dispatch the presence transitions a connection's register/deregister caused.
 /// Best-effort and policy-gated by the normal group dispatch: a `presence:join`
-/// / `presence:leave` is sent to the group only when this conn was the user's
-/// FIRST / LAST in it. `sync` additionally delivers the joining conn the current
-/// member list of each newly-entered presence group.
+/// / `presence:leave` delta is sent to the whole group only when this conn was
+/// the user's FIRST / LAST in it. The `sync` snapshot (the full member roster)
+/// is delivered ONLY to the joining user's connection(s) — existing members
+/// track the roster from the join/leave deltas, so the roster is not
+/// re-broadcast to the whole group on every join (audit_2 realtime #5: that was
+/// O(N²) fan-out for no new information).
 ///
 /// Called from the SSE connect path / `ConnGuard` with the transitions the
 /// registry computed under its lock (the lock is already dropped here, so the
@@ -1277,36 +1280,50 @@ pub async fn dispatch_presence(transitions: PresenceTransitions) {
         return;
     };
     let spec = &rt.presence;
-    // First-join broadcasts + sync-to-the-joining-conn.
-    for (group, user_id) in transitions.joined {
-        if !spec.enabled(&group) {
+    // First-join deltas: tell the WHOLE group a new member entered. This is the
+    // O(N)-per-join broadcast every existing member needs to update its roster.
+    for (group, user_id) in &transitions.joined {
+        if !spec.enabled(group) {
             continue;
         }
-        let member = spec.project(&user_id);
+        let member = spec.project(user_id);
         Realtime::to_group(group.clone())
             .send(PRESENCE_JOIN, &member)
             .await;
     }
-    // Sync: deliver the current member list of each newly-entered group to the
-    // whole group (the joining conn included). Sent after the join broadcast so
-    // a freshly-joined member is already counted in the snapshot.
-    for (group, members) in transitions.sync {
-        if !spec.enabled(&group) {
+    // Sync snapshot: the full member roster of each newly-entered group. Deliver
+    // it ONLY to the joining user's connection(s) — the ones that actually need
+    // the initial roster. Every existing member already learned about the
+    // newcomer from the `presence:join` delta above and maintains its roster
+    // incrementally, so re-broadcasting the whole roster to the ENTIRE group on
+    // every single join (the old behavior) was O(N²) fan-out under a join storm
+    // for zero new information (audit_2 realtime #5). The wire messages are
+    // unchanged — only the recipient set of `presence:sync` narrows from the
+    // group to the joiner, which the bundled client (and any client that tracks
+    // join/leave deltas) handles transparently.
+    for (group, members) in &transitions.sync {
+        if !spec.enabled(group) {
             continue;
         }
+        // The user who newly entered this group. `sync` is built 1:1 from
+        // `joined`, so a match always exists; match by group rather than trust
+        // ordering. All entries share this register's single conn/user.
+        let Some((_, joiner)) = transitions.joined.iter().find(|(g, _)| g == group) else {
+            continue;
+        };
         let projected: Vec<serde_json::Value> =
             members.iter().map(|uid| spec.project(uid)).collect();
-        Realtime::to_group(group)
+        Realtime::to_user(joiner.clone())
             .send(PRESENCE_SYNC, &projected)
             .await;
     }
-    // Last-leave broadcasts.
-    for (group, user_id) in transitions.left {
-        if !spec.enabled(&group) {
+    // Last-leave deltas: tell the whole group a member fully left.
+    for (group, user_id) in &transitions.left {
+        if !spec.enabled(group) {
             continue;
         }
-        let member = spec.project(&user_id);
-        Realtime::to_group(group)
+        let member = spec.project(user_id);
+        Realtime::to_group(group.clone())
             .send(PRESENCE_LEAVE, &member)
             .await;
     }

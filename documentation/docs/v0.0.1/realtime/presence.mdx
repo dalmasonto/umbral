@@ -42,6 +42,10 @@ Sugar over [`subscribe`](transports#connecting-the-browser) that routes a group'
 
 `sync` arrives once when you join (the snapshot of who's already there); `join` / `leave` stream the transitions after that.
 
+<Callout type="note">
+The full `sync` roster is sent **only to the connection that just joined** — existing members keep their roster current from the `join` / `leave` deltas instead of being re-sent the whole list every time someone else joins. That keeps a join storm O(N) rather than O(N²) in a large room. Track membership from all three events (as the built-in client does), not by waiting for a fresh `sync`.
+</Callout>
+
 ## Identity projection
 
 The default payload is **id-only** - never the raw user row. The id is the user's PK rendered as a string, so it works for any PK type (`i64`, `String`, `uuid`):
