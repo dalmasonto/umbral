@@ -90,7 +90,7 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
     - [ ] **[admin #5]** Admin handlers have no in-handler CSRF verify (only `login_post` self-verifies); depends on either a boot-breaking `"security"` dep or a broad multi-handler sweep + hinges on the session cookie `SameSite`. Design call.
     - [ ] **[orm #3 / macros #2]** Mass-assignment: no field allowlist on the dynamic write path / no `#[form(fields=[...])]` allowlist API. Framework-wide write-policy design.
     - [ ] **[realtime #2 / #5]** No `authorize_publish` seam for inbound WS messages; presence re-broadcast is O(N²) and changing it alters the shipped wire protocol.
-    - [ ] **[oauth OAU-4]** create-user + create-social aren't transactional (threading a txn through the username-retry loop).
+    - [x] **[oauth OAU-4]** create-user + create-social now atomic — `create_user_with_social` runs both inserts in one tx with a *fresh tx per username-retry attempt* (sidesteps the PG "constraint violation poisons the tx" problem without savepoints). Enabling ORM fix: `QuerySetTx::create` now classifies constraint violations (was opaque `Sqlx`). Test `policy.rs::social_insert_failure_leaves_no_orphan_user`. (2026-07-07)
     - [ ] **[supply-chain SC-3 / SC-5]** `umbral-core` has no `[features]` table (feature-gating touches every consumer); `notify` pinned at 6 (7/8 are API-breaking, dev-only plugin).
 
 29. [ ] We need to start thinking about optimization ie what else can we move to the orm layer that is fully reimplemented everywhere, how can we improve the boilerplate.

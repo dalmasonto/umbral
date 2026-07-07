@@ -98,22 +98,24 @@ pub async fn resolve_user(
         }
     }
 
-    // 4. Auto-create a new user. Only a trusted-verified email seeds the new
-    //    account's email; otherwise it gets a no-reply placeholder (OAU-2).
-    let user_id = create_auth_user(provider_key, identity, trusted_verified_email).await?;
-    create_social_account(user_id, provider_key, identity, tokens).await?;
-    Ok(user_id)
+    // 4. Auto-create a new user AND its social account atomically. A partial
+    //    failure — the `AuthUser` insert succeeds but the `SocialAccount`
+    //    insert doesn't — would otherwise leave an orphan user with an unusable
+    //    password occupying the verified email, blocking a later legitimate link
+    //    and unable to log in (OAU-4). Both writes share one transaction, so a
+    //    failure after the user insert rolls the user back too.
+    create_user_with_social(provider_key, identity, tokens, trusted_verified_email).await
 }
 
-/// Insert a `SocialAccount` linking `user_id` to this identity, with the
-/// tokens sealed into `Masked` columns.
-async fn create_social_account(
+/// Build (but do not persist) the `SocialAccount` row linking `user_id` to
+/// this identity, with the tokens sealed into `Masked` columns.
+fn build_social_account(
     user_id: i64,
     provider_key: &str,
     identity: &Identity,
     tokens: &TokenSet,
-) -> Result<(), OAuthError> {
-    let account = SocialAccount {
+) -> SocialAccount {
+    SocialAccount {
         id: 0,
         user: ForeignKey::new(user_id),
         provider: provider_key.to_string(),
@@ -126,9 +128,26 @@ async fn create_social_account(
         expires_at: tokens.expires_in.map(|s| Utc::now() + Duration::seconds(s)),
         created_at: Utc::now(),
         updated_at: Utc::now(),
-    };
+    }
+}
+
+/// Insert a `SocialAccount` linking `user_id` to this identity. Used by the
+/// connect-mode and verified-email-link paths, where the user already exists
+/// so a single write is enough (the atomic user+social create lives in
+/// [`create_user_with_social`]).
+async fn create_social_account(
+    user_id: i64,
+    provider_key: &str,
+    identity: &Identity,
+    tokens: &TokenSet,
+) -> Result<(), OAuthError> {
     SocialAccount::objects()
-        .create(account)
+        .create(build_social_account(
+            user_id,
+            provider_key,
+            identity,
+            tokens,
+        ))
         .await
         .map_err(db_err)?;
     Ok(())
@@ -182,19 +201,29 @@ fn sanitize_username(raw: &str) -> String {
     }
 }
 
-/// Mint a fresh `AuthUser` for a social signup. The password is set to an
-/// unusable marker (`"!"`) — these accounts authenticate only through the
-/// provider until the user sets a password.
+/// Mint a fresh `AuthUser` for a social signup AND its `SocialAccount`, in
+/// one transaction (OAU-4). The password is set to an unusable marker (`"!"`)
+/// — these accounts authenticate only through the provider until the user
+/// sets a password.
 ///
 /// Username uniqueness is enforced by the DB `UNIQUE` constraint on
-/// `auth_user.username`. Rather than a SELECT-then-INSERT (which has a
-/// TOCTOU race when two OAuth callbacks race for the same base name), we
-/// attempt the INSERT and catch `WriteError::UniqueViolation` on the
-/// `username` column, then retry with the next numeric suffix. Up to
-/// `MAX_USERNAME_RETRIES` attempts are made before giving up.
-async fn create_auth_user(
+/// `auth_user.username`. Rather than a SELECT-then-INSERT (which has a TOCTOU
+/// race when two OAuth callbacks race for the same base name), we attempt the
+/// INSERT and catch `WriteError::UniqueViolation` on the `username` column,
+/// then retry with the next numeric suffix.
+///
+/// The retry runs a **fresh transaction per attempt**, not one long-lived
+/// transaction with a retry loop inside: on Postgres a constraint violation
+/// aborts the surrounding transaction (every later statement errors until
+/// rollback), so an in-place retry would need a SAVEPOINT per attempt. A
+/// per-attempt transaction is simpler and correct on both backends — a
+/// username collision rolls the whole attempt back and the next attempt
+/// starts clean; the winning attempt commits the user and the social account
+/// together. Up to `MAX_USERNAME_RETRIES` attempts are made before giving up.
+async fn create_user_with_social(
     provider_key: &str,
     identity: &Identity,
+    tokens: &TokenSet,
     trusted_verified_email: bool,
 ) -> Result<i64, OAuthError> {
     // A trusted-verified email is safe to use as the account's unique email
@@ -220,10 +249,6 @@ async fn create_auth_user(
             .unwrap_or_else(|| format!("{provider_key}_{}", identity.uid)),
     );
 
-    // Attempt INSERT, retrying on username UNIQUE collision by appending a
-    // numeric suffix (base → base1 → base2 → …). The DB constraint is the
-    // authoritative uniqueness check, eliminating the TOCTOU race that a
-    // SELECT-before-INSERT would carry.
     const MAX_USERNAME_RETRIES: u32 = 20;
     let mut n = 0u32;
     loop {
@@ -246,11 +271,32 @@ async fn create_auth_user(
             email_verified_at: None,
         };
 
-        match AuthUser::objects().create(user).await {
-            Ok(created) => return Ok(created.id),
+        let mut tx = umbral::db::begin().await.map_err(db_err)?;
+        match AuthUser::objects().on_tx(&mut tx).create(user).await {
+            Ok(created) => {
+                // User inserted in this tx; the social account joins it. Any
+                // failure here rolls the user back too — no orphan (OAU-4).
+                let account = build_social_account(created.id, provider_key, identity, tokens);
+                match SocialAccount::objects()
+                    .on_tx(&mut tx)
+                    .create(account)
+                    .await
+                {
+                    Ok(_) => {
+                        tx.commit().await.map_err(db_err)?;
+                        return Ok(created.id);
+                    }
+                    Err(e) => {
+                        let _ = tx.rollback().await;
+                        return Err(db_err(e));
+                    }
+                }
+            }
             Err(WriteError::UniqueViolation { field, .. })
                 if field.as_deref() == Some("username") || field.is_none() =>
             {
+                // Roll the poisoned attempt back before the next INSERT.
+                let _ = tx.rollback().await;
                 n += 1;
                 if n > MAX_USERNAME_RETRIES {
                     return Err(OAuthError::Database(format!(
@@ -260,7 +306,10 @@ async fn create_auth_user(
                 }
                 // Try next suffix.
             }
-            Err(e) => return Err(db_err(e)),
+            Err(e) => {
+                let _ = tx.rollback().await;
+                return Err(db_err(e));
+            }
         }
     }
 }
@@ -542,7 +591,9 @@ mod tests {
             Some("alice@provider.example.com"),
             true,
         );
-        let user_id = create_auth_user("google", &id, true).await.unwrap();
+        let user_id = create_user_with_social("google", &id, &tokens(), true)
+            .await
+            .unwrap();
 
         let user = AuthUser::objects()
             .filter(auth_user::ID.eq(user_id))
@@ -557,7 +608,9 @@ mod tests {
 
         // A third signup with the same base also resolves cleanly (alice1 taken → alice2).
         let id2 = identity("google-uid-retry-02", Some("alice@other.example.com"), true);
-        let user_id2 = create_auth_user("google", &id2, true).await.unwrap();
+        let user_id2 = create_user_with_social("google", &id2, &tokens(), true)
+            .await
+            .unwrap();
 
         let user2 = AuthUser::objects()
             .filter(auth_user::ID.eq(user_id2))
@@ -596,5 +649,59 @@ mod tests {
         )
         .await;
         assert!(result.is_err(), "cannot connect someone else's identity");
+    }
+
+    // OAU-4: if the SocialAccount insert fails after the AuthUser insert, the
+    // whole thing rolls back — no orphan user is left occupying the email.
+    // We force the social-insert failure by reusing a `provider_uid` (the
+    // `(provider, provider_uid)` unique_together), calling the atomic creator
+    // directly so it bypasses resolve_user's rule-1 "already linked" dedupe.
+    #[tokio::test]
+    async fn social_insert_failure_leaves_no_orphan_user() {
+        boot().await;
+
+        // First signup succeeds: user + social (google, orphan-uid-1).
+        create_user_with_social(
+            "google",
+            &identity("orphan-uid-1", Some("orphanfirst@example.com"), true),
+            &tokens(),
+            true,
+        )
+        .await
+        .expect("first social signup");
+
+        let count_before = AuthUser::objects().count().await.unwrap();
+
+        // Second signup: a *different* email (so the AuthUser insert itself
+        // succeeds with base "orphansecond") but the SAME provider_uid, so the
+        // social insert trips the unique_together and the tx must roll back.
+        let result = create_user_with_social(
+            "google",
+            &identity("orphan-uid-1", Some("orphansecond@example.com"), true),
+            &tokens(),
+            true,
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "reusing provider_uid must fail on the social insert"
+        );
+
+        let count_after = AuthUser::objects().count().await.unwrap();
+        assert_eq!(
+            count_after, count_before,
+            "the failed social insert must roll back the AuthUser too (no orphan, OAU-4)"
+        );
+
+        let orphan = AuthUser::objects()
+            .filter(auth_user::USERNAME.eq("orphansecond"))
+            .first()
+            .await
+            .unwrap();
+        assert!(
+            orphan.is_none(),
+            "no AuthUser should survive a rolled-back social signup"
+        );
     }
 }

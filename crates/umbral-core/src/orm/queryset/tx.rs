@@ -261,9 +261,19 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
             "sqlite" => {
                 let tx = self.tx.as_sqlite_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                // Classify UNIQUE / FK / NOT NULL / CHECK violations into the
+                // structured `WriteError` variants, symmetric with the non-tx
+                // `QuerySet::create`. Without this a constraint violation inside
+                // a transaction surfaces as an opaque `Sqlx(_)`, so callers that
+                // branch on `WriteError::UniqueViolation` (e.g. the OAuth
+                // username-retry loop) can't tell a collision from a real error.
                 let mut row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_one(&mut **tx)
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        crate::orm::validation::classify_sql_error(&e, &map)
+                            .unwrap_or(crate::orm::write::WriteError::Sqlx(e))
+                    })?;
                 row.set_m2m_parent_ids();
                 Ok(row)
             }
@@ -272,7 +282,11 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
                 let mut row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_one(&mut **tx)
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        crate::orm::validation::classify_sql_error(&e, &map)
+                            .unwrap_or(crate::orm::write::WriteError::Sqlx(e))
+                    })?;
                 row.set_m2m_parent_ids();
                 Ok(row)
             }
