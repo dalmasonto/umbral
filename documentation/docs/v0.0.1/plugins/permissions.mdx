@@ -176,9 +176,25 @@ let routes = Routes::new()
 
 `get_gated` / `post_gated` / `put_gated` / `patch_gated` / `delete_gated` each apply `permission_required(perm)` to the handler and record `perm` on the route. A future major may flip authorization to default-**deny** by construction; using these builders now makes that transition a no-op for your gated routes.
 
-<Callout type="warning">
-**The `permission_required` / `permission_required_html` tower layers only support `i64` user primary keys.** They resolve the caller through `umbral_auth::current_session_user_id`, which returns `Option<i64>`. The `has_perm` free function is PK-agnostic (it takes `&str`), but the *layer* is not - an app whose user model uses a `Uuid` or `String` PK cannot gate routes with these layers and must call `has_perm(&user.id().to_string(), ...)` inside the handler instead.
-</Callout>
+### Make the audit a hard error: `deny_ungated_mutations()`
+
+The boot warning is easy to scroll past. To turn it into a **build failure** — "gated by construction" — call `deny_ungated_mutations()` on the builder. Any app mutating route with no recorded permission then fails `App::build()` with `BuildError::UngatedMutatingRoutes`, naming the offending `METHOD /path`, instead of booting with an open endpoint:
+
+```rust
+let app = App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .plugin(PermissionsPlugin::default())
+    .routes(
+        Routes::new()
+            .get("/", home)                                     // read — fine
+            .post_gated("/posts", create_post, "blog.add_post"), // gated — fine
+    )
+    .deny_ungated_mutations()   // a forgotten .post(...) gate now fails the build
+    .build()?;
+```
+
+It gates on the *recorded* permission, not the HTTP method, so a route registered through the `*_gated` builders passes. An intentionally public mutating route (a webhook receiver) must go through a recording builder anyway once this is on, so the decision stays explicit. Default is off — `build()` only warns.
 
 <Callout type="warning">
 **The `permission_required` / `permission_required_html` tower layers only support `i64` user primary keys.** They resolve the caller through `umbral_auth::current_session_user_id`, which returns `Option<i64>`. The `has_perm` free function is PK-agnostic (it takes `&str`), but the *layer* is not - an app whose user model uses a `Uuid` or `String` PK cannot gate routes with these layers and must call `has_perm(&user.id().to_string(), ...)` inside the handler instead.
