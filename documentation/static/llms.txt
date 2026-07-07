@@ -1,0 +1,211 @@
+# umbral
+
+> umbral is a batteries-included web framework for Rust. You declare your data as plain structs and get managed migrations, a typed ORM, CRUD, an auto-generated admin, authentication, background tasks, and an optional REST API — with Rust's compile-time guarantees. It rebuilds Django's "declare-your-data-and-get-everything" ergonomics on top of axum + sqlx + sea-query. The design is **thin core, plugin-heavy**: auth, sessions, admin, tasks, and REST are all ordinary plugins, structurally identical to any third-party one. Postgres-first, SQLite for tests. (The crate names use the placeholder `umbral` / `umbral-*`; a project can rename the whole tree with `sed 's/umbral/yourname/g'`.)
+
+This file teaches enough umbral to be productive, then links to the hosted docs (https://dalmasonto.github.io/umbral/) for depth. All links point to `https://dalmasonto.github.io/umbral/docs/v0.0.1/<area>/<page>`.
+
+## The one idea that matters most
+
+Thin core, plugin-heavy — the framework dogfoods its own plugin system. A plugin (the unit of installable app) implements the `Plugin` trait and can contribute any subset of: models (which become migrations), routes/views, middleware, management commands, a typed settings schema, admin registrations, and lifecycle hooks (`on_ready`). The built-in auth/sessions/admin/tasks/REST plugins are wired the exact same way. A REST-free app compiles and runs with zero serializer code. Dependencies point inward toward the core; control flows outward through the trait. Cargo's ban on circular deps enforces the architecture: `umbral-core` never names a concrete plugin, so "serializers are a plugin" is a structural fact, not a convention.
+
+## Crate layout
+
+- `umbral-core` — ORM, migrations, routing, DB backends, the `Plugin` trait. No plugin deps.
+- `umbral-macros` — `#[derive(Model)]`, `#[task]`, `#[derive(Choices)]`, etc.
+- `umbral` — the **facade**: re-exports core + macros as one stable surface. User code and plugins import only this (`use umbral::prelude::*;`).
+- `umbral-cli` — the `umbral` command-line tool.
+- `plugins/*` — built-in plugins, each its own crate depending only on the facade: `umbral-auth`, `umbral-sessions`, `umbral-admin`, `umbral-tasks`, `umbral-permissions`, `umbral-rest`, `umbral-openapi`, `umbral-realtime`, `umbral-oauth`, `umbral-security`, `umbral-storage`, `umbral-email`, `umbral-cache`, `umbral-logs`, `umbral-livereload`, `umbral-health`, `umbral-rls`, and more.
+
+## Hello world
+
+```rust
+use umbral::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let app = App::builder()
+        .settings(Settings::from_env()?)
+        .database("default", umbral::db::connect(&std::env::var("DATABASE_URL")?).await?)
+        .routes(Routes::new().get("/", || async { "hello, umbral" }))
+        .build()?;
+    app.serve("127.0.0.1:8000".parse()?).await?;
+    Ok(())
+}
+```
+
+`App::builder().build()` runs five phases: collect models/plugins, detect the backend from the DB URL, publish ambient state (the pool lives in a `OnceLock` so `Post::objects()` works without threading a pool), run boot-time system checks (field/backend compatibility, security posture), and merge every plugin's router. From the caller's side it's one chain.
+
+## Declaring a model
+
+A model is a plain struct with `#[derive(Model)]`. A nullable column is `Option<T>`; the primary key is the `id` field (`i64`, `String`, or `uuid::Uuid`). Field behavior is declared with `#[umbral(...)]` attributes.
+
+```rust
+use umbral::prelude::*;
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+#[umbral(table = "blog_post")]           // optional; default is the snake_case struct name
+pub struct Post {
+    pub id: i64,
+    #[umbral(unique, max_length = 200)]
+    pub slug: String,
+    #[umbral(index)]
+    pub title: String,
+    pub body: String,
+    pub published: bool,
+    #[umbral(auto_now_add)]              // set to now() at insert
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub author: ForeignKey<User>,       // FK; joins + select_related work
+}
+```
+
+**Field-attribute vocabulary** (all via `#[umbral(...)]`):
+- Constraints/keys: `primary_key`, `unique`, `index`, `unique_together = [["a","b"]]` (a struct-level attr), `max_length = N`, `default = "..."`, `on_delete = "cascade|set_null|restrict|no_action"`, `on_update = "..."`, `db_constraint = false` (logical FK only, e.g. cross-database).
+- Timestamps: `auto_now_add` (insert only), `auto_now` (every write) — applied on the dynamic write path (REST/admin).
+- Choices: `#[derive(Choices)]` enums + `choices`; `MultiChoice<E>` for CSV multi-select.
+- Write-path safety: `noform` (never accepted from a form/JSON body — e.g. `password_hash`), `noedit` (admin renders read-only), `privileged` (default-deny mass-assignment guard: stripped from untrusted create/update unless the caller opts in via `DynQuerySet::allow_privileged` — e.g. `is_superuser`).
+- String normalization: `trim`, `lowercase` (canonicalize on the dynamic write path), `case_insensitive` (DB-level case-insensitive column — Postgres `citext`, SQLite `COLLATE NOCASE`; preserves original casing while `=`/`UNIQUE`/`ORDER BY` fold case).
+- Relations: `ForeignKey<T>`, `M2M<T>` (auto junction table), `OneToOne<T>`, `ReverseSet<Child>` with `reverse_fk = "col"`.
+- Encryption: `Masked<T>` (at-rest field encryption).
+- Postgres-only field types (guarded by a boot check): `cidr`, `inet`, `macaddr`, `xml`, `ltree`, `bit`, fulltext (`tsvector`); `DecimalField`/`rust_decimal` for money.
+- Admin/OpenAPI hints: `string` (the model's display label), `help = "..."`, `example = "..."`, `widget = "..."`, `min = N`, `max = N`, `slug_from = "field"`, `backend = "postgres"`.
+
+## The declare → migrate loop (this IS the product)
+
+1. Declare or change a model.
+2. `cargo run -- makemigrations` autodetects the diff against the last snapshot and writes an ordered, reversible migration file.
+3. `cargo run -- migrate` applies pending migrations to the live database.
+
+**Never wipe the database or delete migration files to bypass a failing migration** — existing rows are the test, not an obstacle (a UNIQUE addition tripping a duplicate, a new NOT NULL needing a default backfill, a cross-plugin FK ordering — these are exactly what the engine exists to surface). `inspectdb` introspects an existing database into models so a legacy schema drops straight into the same managed loop.
+
+## Querying with the ORM
+
+The ORM is the single database interface — plugin and app code never writes raw `sqlx::query(...)`. `T::objects()` returns a QuerySet; chain lazy builders, then `await` a terminal.
+
+```rust
+// Read
+let posts = Post::objects()
+    .filter(post::PUBLISHED.eq(true) & post::TITLE.contains("rust"))
+    .order_by("-created_at")
+    .limit(20)
+    .select_related("author")     // no N+1
+    .fetch().await?;
+
+let one   = Post::objects().filter(post::ID.eq(&id)).first().await?;   // Option<Post>
+let count = Post::objects().filter(post::PUBLISHED.eq(true)).count().await?;
+let exists = Post::objects().filter(post::SLUG.eq("hello")).exists().await?;
+
+// Write
+let saved = Post::objects().create(new_post).await?;
+Post::objects().bulk_create(vec![a, b, c]).await?;
+Post::objects().filter(post::ID.eq(&id)).update_values(map).await?;
+Post::objects().filter(post::PUBLISHED.eq(false)).delete().await?;
+
+// Transactions
+umbral::db::transaction(|tx| Box::pin(async move {
+    Order::objects().on_tx(tx).create(order).await?;
+    Ok::<_, umbral::orm::write::WriteError>(())
+})).await?;
+```
+
+Per-field predicate constants (`post::TITLE`, `post::ID`, …) are generated by the derive; combine with `&` (AND) and `|` (OR). The 80% that ships: `filter`, `order_by`, `limit`, `offset`, `first`, `fetch`, `get`, `count`, `exists`, `delete`, `update_values`, `update_expr`, `create`, `bulk_create`, `get_or_create`, `update_or_create`, `select_related`, aggregates/annotate, `Q` objects, transactions. The late-bound `DynQuerySet::for_meta(&meta)` drives the admin/REST paths generically.
+
+## Routing & handlers
+
+Routes are axum handlers registered on `Routes`. Handlers use umbral extractors (`LoggedIn<User>`, `Identity`, `Form<T>`, `Json<T>`) and return anything `IntoResponse` (including `umbral::ApiError` for `?`-friendly ORM errors). Plugins contribute their own routers via `Plugin::routes()`; the builder merges them.
+
+```rust
+Routes::new()
+    .get("/posts", list_posts)
+    .post_gated("/posts", create_post, "blog.add_post")   // umbral-permissions gate + recorded perm
+```
+
+## Built-in plugins (install with `.plugin(...)`)
+
+- **umbral-auth** — users, password hashing (argon2), login/register/verify/reset flows, `authenticate` (by username OR email), `UserModel` trait (swappable user model, any PK type).
+- **umbral-sessions** — session store + middleware (SameSite/Secure config).
+- **umbral-admin** — auto CRUD UI (Tailwind), custom views, inline children, dashboard widgets, per-model permission gating.
+- **umbral-permissions** — RBAC: groups, permissions, model-level `has_perm` + object/row-level `has_object_perm`, route-gating builders, `deny_ungated_mutations()`.
+- **umbral-tasks** — DB-backed background task queue (`#[task]`), `worker`.
+- **umbral-rest** — serializers, viewsets, routers; safe-by-default (writes 403 without opt-in), owner-scoping, nested writes, bulk, CSV, throttling, versioning.
+- **umbral-openapi** — Swagger UI / schema generation (depends on umbral-rest).
+- **umbral-realtime** — WebSocket/SSE groups, presence, model-change broadcasts, publish authorization.
+- **umbral-oauth** — social login (e.g. Google), atomic user+social-account creation.
+- **umbral-security** — CSRF, HSTS/clickjacking headers, `production_hardened()` preset.
+- **umbral-rls** — Postgres row-level-security policy management.
+- Others: **umbral-storage** (file/image uploads), **umbral-email**, **umbral-cache**, **umbral-logs**, **umbral-livereload**, **umbral-health**, tenancy.
+
+## CLI (`cargo run -- <command>`, or the `umbral` binary)
+
+`makemigrations` · `migrate` · `showmigrations` · `checkmigrations` · `inspectdb` · `serve` (production) · `dev` (autoreload dev server) · `createsuperuser` · `collectstatic` · `clearsessions` · `dumpdata` / `loaddata` · `importcsv` · `maskkeygen` (encryption key for `Masked`) · `tasks-worker` (run the background queue). `startproject` scaffolds a new app.
+
+## Conventions & secure-by-default
+
+Config is a typed `Settings` struct loaded from env (12-factor); `Settings::from_env()`. Secure by default: CSRF, clickjacking/HSTS headers, template autoescaping, always-parameterized SQL, request-body caps, per-request timeouts, mass-assignment guard. Errors are `Result` values with a framework error enum + `From` impls so `?` flows. Backend mismatches are caught at boot, not in prod.
+
+## Getting started
+
+- [Your first app](https://dalmasonto.github.io/umbral/docs/v0.0.1/getting-started/your-first-app): the minimal `App::builder()` app end to end.
+- [Settings and env](https://dalmasonto.github.io/umbral/docs/v0.0.1/getting-started/settings-and-env): the typed 12-factor `Settings` struct.
+- [What umbral is](https://dalmasonto.github.io/umbral/docs/v0.0.1/about): the pitch and mental model.
+- [startproject](https://dalmasonto.github.io/umbral/docs/v0.0.1/cli/startproject): scaffold a new project.
+
+## The ORM
+
+- [Models](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/models): declaring a model and its fields.
+- [Column types](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/column-types): every field type and attribute.
+- [Querying](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/querying): filter/order/limit and the QuerySet terminals.
+- [Relationships](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/relationships): ForeignKey, M2M, OneToOne, ReverseSet.
+- [Joins](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/joins) and [select_related / forms-relations](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/forms-relations): avoiding N+1.
+- [Aggregates](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/aggregates) · [Search](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/search) · [Transactions](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/transactions) · [Signals](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/signals) · [Soft delete](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/soft-delete).
+- [Privileged fields](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/privileged-fields): the mass-assignment guard.
+- [Normalized & case-insensitive fields](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/normalized-fields): trim / lowercase / case_insensitive.
+- [Masked (field encryption)](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/masked) · [File & image fields](https://dalmasonto.github.io/umbral/docs/v0.0.1/orm/file-image-fields).
+
+## Migrations
+
+- [Managed migrations](https://dalmasonto.github.io/umbral/docs/v0.0.1/migrations/managed-migrations): the declare → migrate loop.
+- [inspectdb](https://dalmasonto.github.io/umbral/docs/v0.0.1/migrations/inspectdb): introspect an existing DB into models.
+- [Adding NOT NULL columns](https://dalmasonto.github.io/umbral/docs/v0.0.1/migrations/adding-not-null-columns) · [Data migrations](https://dalmasonto.github.io/umbral/docs/v0.0.1/migrations/data-migrations) · [Renames](https://dalmasonto.github.io/umbral/docs/v0.0.1/migrations/renames) · [Squashing](https://dalmasonto.github.io/umbral/docs/v0.0.1/migrations/squashing) · [Drift](https://dalmasonto.github.io/umbral/docs/v0.0.1/migrations/migration-drift) · [checkmigrations](https://dalmasonto.github.io/umbral/docs/v0.0.1/migrations/checkmigrations).
+
+## Web (routing, handlers, templates, forms)
+
+- [Routes](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/routes) · [Middleware](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/middleware) · [Forms](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/forms) · [Pagination](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/pagination).
+- [Rendering HTML](https://dalmasonto.github.io/umbral/docs/v0.0.1/templates/rendering-html) · [Template helpers](https://dalmasonto.github.io/umbral/docs/v0.0.1/templates/helpers) · [Custom tags](https://dalmasonto.github.io/umbral/docs/v0.0.1/templates/custom-tags).
+- [Auth gating](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/auth-gating) · [Error pages](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/error-pages) · [Streaming](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/streaming) · [Compression](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/compression) · [Request limits](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/request-limits) · [Trailing slash](https://dalmasonto.github.io/umbral/docs/v0.0.1/web/trailing-slash).
+
+## Built-in plugins
+
+- [Plugins are apps](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/plugins-are-apps) · [The Plugin trait](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/the-plugin-trait): how to write one.
+- [Auth](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/auth) · [Sessions](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/sessions) · [Permissions](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/permissions) · [Security](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/security) · [OAuth](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/oauth).
+- [Admin](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/admin) · [REST](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/rest) · [OpenAPI](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/openapi) · [Realtime](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/realtime) · [Tasks](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/tasks).
+- [Storage](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/storage) · [Email](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/email) · [Cache](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/cache) · [Logs](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/logs) · [Live reload](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/live-reload) · [Health](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/health) · [RLS](https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/rls).
+
+## REST API
+
+- [Overview](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/index) · [Exposure](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/exposure) · [Views](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/views) · [Permissions](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/permissions) · [Authentication](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/authentication).
+- [Nested writes](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/nested) · [Bulk](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/bulk) · [Actions](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/actions) · [CSV export](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/csv-export) · [Throttling](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/throttling) · [Versioning](https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/versioning).
+
+## Realtime
+
+- [Getting started](https://dalmasonto.github.io/umbral/docs/v0.0.1/realtime/getting-started) · [Transports](https://dalmasonto.github.io/umbral/docs/v0.0.1/realtime/transports) · [Gating](https://dalmasonto.github.io/umbral/docs/v0.0.1/realtime/gating) · [Presence](https://dalmasonto.github.io/umbral/docs/v0.0.1/realtime/presence) · [Model subscriptions](https://dalmasonto.github.io/umbral/docs/v0.0.1/realtime/model-subscriptions) · [Scaling](https://dalmasonto.github.io/umbral/docs/v0.0.1/realtime/scaling).
+
+## Admin & Auth
+
+- Admin: [Custom views](https://dalmasonto.github.io/umbral/docs/v0.0.1/admin/custom-views) · [Inlines](https://dalmasonto.github.io/umbral/docs/v0.0.1/admin/inlines) · [Widgets](https://dalmasonto.github.io/umbral/docs/v0.0.1/admin/widgets).
+- Auth: [Users & passwords](https://dalmasonto.github.io/umbral/docs/v0.0.1/auth/users-and-passwords) · [Login & request user](https://dalmasonto.github.io/umbral/docs/v0.0.1/auth/login-and-request-user) · [Email verification](https://dalmasonto.github.io/umbral/docs/v0.0.1/auth/email-verification) · [Password reset](https://dalmasonto.github.io/umbral/docs/v0.0.1/auth/password-reset) · [OAuth](https://dalmasonto.github.io/umbral/docs/v0.0.1/auth/oauth) · [User in templates](https://dalmasonto.github.io/umbral/docs/v0.0.1/auth/user-in-templates).
+
+## CLI, backends & testing
+
+- [Management commands](https://dalmasonto.github.io/umbral/docs/v0.0.1/cli/management-commands) · [startproject](https://dalmasonto.github.io/umbral/docs/v0.0.1/cli/startproject).
+- [Postgres](https://dalmasonto.github.io/umbral/docs/v0.0.1/backends/postgres) · [SQLite](https://dalmasonto.github.io/umbral/docs/v0.0.1/backends/sqlite).
+- [Test client](https://dalmasonto.github.io/umbral/docs/v0.0.1/testing/test-client) · [Factories](https://dalmasonto.github.io/umbral/docs/v0.0.1/testing/factories) · [Observability](https://dalmasonto.github.io/umbral/docs/v0.0.1/observability/index).
+
+## Examples
+
+- [Basic app](https://dalmasonto.github.io/umbral/docs/v0.0.1/examples/basic) · [Batteries-included app](https://dalmasonto.github.io/umbral/docs/v0.0.1/examples/batteries-included) · [REST API service](https://dalmasonto.github.io/umbral/docs/v0.0.1/examples/rest-api-service).
+
+## Optional
+
+- [arch.md](https://github.com/dalmasonto/umbral/blob/main/arch.md): the authoritative internal design spec — architectural pillars, the plugin contract, build order, crate shortlist. Read this to understand *why* umbral is built the way it is.
+- [CLAUDE.md](https://github.com/dalmasonto/umbral/blob/main/CLAUDE.md): repo working conventions for AI/contributors (the "ORM is the single DB interface" rule, "never wipe the DB", commit cadence).
+- [GitHub repository](https://github.com/dalmasonto/umbral): source for all crates and the built-in plugins; `examples/` holds runnable consumer apps (`hello`, `shop`, `derive-demo`, `read-replica`).
