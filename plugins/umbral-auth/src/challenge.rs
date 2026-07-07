@@ -262,7 +262,7 @@ pub async fn start_email_verification(user: &AuthUser) -> Result<(), crate::Auth
 /// no account enumeration through the verification surface.
 pub async fn verify_email(email: &str, code: &str) -> Result<(), crate::AuthError> {
     let Some(user) = AuthUser::objects()
-        .filter(crate::auth_user::EMAIL.eq(email.to_string()))
+        .filter(crate::auth_user::EMAIL.eq(crate::normalize_email(email)))
         .first()
         .await?
     else {
@@ -347,7 +347,7 @@ pub async fn start_password_reset(
 ) -> Result<(), crate::AuthError> {
     // Silent on unknown email — never reveal whether an account exists.
     let Some(user) = crate::AuthUser::objects()
-        .filter(crate::auth_user::EMAIL.eq(email.to_string()))
+        .filter(crate::auth_user::EMAIL.eq(crate::normalize_email(email)))
         .first()
         .await?
     else {

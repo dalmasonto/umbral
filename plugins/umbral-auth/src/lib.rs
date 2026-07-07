@@ -1181,6 +1181,43 @@ async fn burn_password_verify() {
 }
 
 // =========================================================================
+// Identifier normalization.
+//
+// Usernames and emails are stored and matched case-insensitively: a user
+// who registered `Dalmasonto` / `Dalmas@Gmail.com` must not be able to
+// register a second account as `dalmasonto` / `dalmas@gmail.com`, and must
+// be able to log in typing either case. We enforce this by normalizing to a
+// canonical (trimmed + lowercased) form at BOTH the write boundary
+// (`insert_user`) and every lookup boundary (`authenticate`, `verify_email`,
+// `start_password_reset`, the resend-verification routes). Because every row
+// is written lowercased, the existing `#[umbral(unique)]` constraint on
+// `username` / `email` then enforces case-insensitive uniqueness for free —
+// no case-insensitive index needed.
+//
+// Custom user models / signup forms that bypass these helpers should call
+// `normalize_username` / `normalize_email` themselves at their own write and
+// lookup sites to stay consistent.
+// =========================================================================
+
+/// Canonicalize a username for storage and lookup: trim surrounding
+/// whitespace, then lowercase. `"  Dalmasonto "` → `"dalmasonto"`.
+///
+/// Applied by [`create_user`] / [`create_user_with_flags`] /
+/// [`create_superuser`] on write and by [`authenticate`] on lookup, so a
+/// username is case-insensitively unique and case-insensitively matched.
+pub fn normalize_username(raw: &str) -> String {
+    raw.trim().to_lowercase()
+}
+
+/// Canonicalize an email for storage and lookup: trim then lowercase.
+/// Emails are treated case-insensitively (the pragmatic standard — no real
+/// deployment relies on a case-sensitive local part), so `Dalmas@Gmail.com`
+/// and `dalmas@gmail.com` are the same account.
+pub fn normalize_email(raw: &str) -> String {
+    raw.trim().to_lowercase()
+}
+
+// =========================================================================
 // AuthUser-specific creation helpers.
 //
 // These functions are intentionally tied to `AuthUser` because they
@@ -1257,11 +1294,15 @@ async fn insert_user(
 ) -> Result<AuthUser, AuthError> {
     let now = chrono::Utc::now();
     let hash = hash_password_async(plaintext).await?;
+    // Canonicalize before insert so the `#[umbral(unique)]` constraint enforces
+    // case-insensitive uniqueness (every stored row is already lowercased).
+    let username = normalize_username(username);
+    let email = normalize_email(email);
     let row = AuthUser::objects()
         .create(AuthUser {
             id: 0,
-            username: username.to_string(),
-            email: email.to_string(),
+            username,
+            email,
             password_hash: hash,
             is_active: true,
             is_staff,
@@ -1299,9 +1340,12 @@ where
         + umbral::orm::HydrateRelated
         + Unpin,
 {
+    // Match the canonical (trimmed + lowercased) form written at signup, so a
+    // login typed as `Dalmasonto` finds the row stored as `dalmasonto`.
+    let username = normalize_username(username);
     let user: Option<U> = umbral::orm::Manager::<U>::default()
         .filter(
-            umbral::orm::Predicate::<U>::col_eq("username", username)
+            umbral::orm::Predicate::<U>::col_eq("username", username.as_str())
                 & umbral::orm::Predicate::<U>::col_eq("is_active", true),
         )
         .first()

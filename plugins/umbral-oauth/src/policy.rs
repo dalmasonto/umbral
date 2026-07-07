@@ -87,8 +87,11 @@ pub async fn resolve_user(
     // 3. Verified-email link to an existing user — only when the provider is
     //    trusted to assert verification (OAU-2).
     if trusted_verified_email && let Some(email) = identity.email.as_deref() {
+        // Match the canonical (lowercased) form AuthUser stores, so a provider
+        // returning `Dalmas@Gmail.com` still links to the `dalmas@gmail.com`
+        // row instead of wrongly auto-creating a duplicate account.
         let matched = AuthUser::objects()
-            .filter(auth_user::EMAIL.eq(email))
+            .filter(auth_user::EMAIL.eq(umbral_auth::normalize_email(email)))
             .first()
             .await
             .map_err(db_err)?;
@@ -237,6 +240,10 @@ async fn create_user_with_social(
     } else {
         placeholder
     };
+    // Store the canonical form — same normalization `create_user` applies — so
+    // the account is found by a later case-insensitive lookup and can't be
+    // shadowed by a case-variant duplicate.
+    let email = umbral_auth::normalize_email(&email);
 
     let base = sanitize_username(
         &identity

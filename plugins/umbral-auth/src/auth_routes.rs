@@ -830,7 +830,10 @@ async fn resend_verification_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -
     // matters. All error arms are silently swallowed — the response is always
     // 202 regardless (no account enumeration through this endpoint).
     if let Ok(Some(u)) = AuthUser::objects()
-        .filter(auth_user::EMAIL.eq(b.email.clone()) & auth_user::EMAIL_VERIFIED_AT.is_null())
+        .filter(
+            auth_user::EMAIL.eq(crate::normalize_email(&b.email))
+                & auth_user::EMAIL_VERIFIED_AT.is_null(),
+        )
         .first()
         .await
     {

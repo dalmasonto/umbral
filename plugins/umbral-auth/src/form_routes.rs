@@ -365,7 +365,7 @@ async fn do_resend(headers: HeaderMap, msgs: Messages, Form(f): Form<ResendForm>
     // swallowed — the response is always the same (no account enumeration).
     if let Ok(Some(u)) = crate::AuthUser::objects()
         .filter(
-            crate::auth_user::EMAIL.eq(f.email.clone())
+            crate::auth_user::EMAIL.eq(crate::normalize_email(&f.email))
                 & crate::auth_user::EMAIL_VERIFIED_AT.is_null(),
         )
         .first()

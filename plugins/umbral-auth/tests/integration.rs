@@ -462,3 +462,113 @@ async fn createsuperuser_noinput_errors_without_password_env() {
         "expected password-missing error; got: {msg}"
     );
 }
+
+// =========================================================================
+// Case-insensitive identifiers: usernames + emails are stored and matched
+// in a canonical (trimmed + lowercased) form, so `Dalmasonto` and
+// `dalmasonto` are the SAME account and either case logs in. Framework fix
+// requested 2026-07-07 — a user could previously register both
+// dalmasogembo@gmail.com/dalmasonto AND Dalmasogembo@gmail.com/Dalmasonto.
+// =========================================================================
+
+/// `create_user` lowercases (and trims) both identifiers on write, so the
+/// returned struct AND the persisted row are canonical.
+#[tokio::test]
+async fn create_user_normalizes_username_and_email_to_lowercase() {
+    boot().await;
+
+    let user = create_user(
+        "  MixedCase_Dave  ",
+        "Dave@Example.COM",
+        "Tr0ub4dour&3xpl-dave",
+    )
+    .await
+    .expect("create_user should succeed");
+
+    assert_eq!(
+        user.username, "mixedcase_dave",
+        "username is trimmed + lowercased on the returned struct"
+    );
+    assert_eq!(
+        user.email, "dave@example.com",
+        "email is trimmed + lowercased on the returned struct"
+    );
+
+    // The persisted row is canonical too — a lookup by the lowercased key finds it.
+    let row: (String, String) =
+        sqlx::query_as("SELECT username, email FROM auth_user WHERE username = ?")
+            .bind("mixedcase_dave")
+            .fetch_one(&pool())
+            .await
+            .expect("row stored under the lowercased username");
+    assert_eq!(row.0, "mixedcase_dave");
+    assert_eq!(row.1, "dave@example.com");
+}
+
+/// A second signup that differs from an existing account only by case is
+/// rejected by the `#[umbral(unique)]` constraint — because both rows
+/// normalize to the same stored value. This is the reported bug.
+#[tokio::test]
+async fn duplicate_signup_differing_only_by_case_is_rejected() {
+    boot().await;
+
+    create_user(
+        "dalmasonto",
+        "dalmasogembo@gmail.com",
+        "Zephyr!Qu14-Knight-1",
+    )
+    .await
+    .expect("first signup succeeds");
+
+    // Same identifiers, different case — must collide, not create a twin account.
+    let dup = create_user(
+        "Dalmasonto",
+        "Dalmasogembo@Gmail.com",
+        "Zephyr!Qu14-Knight-2",
+    )
+    .await;
+
+    assert!(
+        matches!(
+            dup,
+            Err(AuthError::Write(
+                umbral::orm::write::WriteError::UniqueViolation { .. }
+            ))
+        ),
+        "a case-only-different re-signup must be rejected as a uniqueness violation; got {dup:?}"
+    );
+
+    // And there is exactly ONE row, not two.
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM auth_user WHERE username = 'dalmasonto' OR username = 'Dalmasonto'",
+    )
+    .fetch_one(&pool())
+    .await
+    .expect("count query");
+    assert_eq!(count, 1, "only the canonical row exists");
+}
+
+/// Login is case-insensitive on the username: an account stored lowercased
+/// authenticates when the caller types a different case.
+#[tokio::test]
+async fn authenticate_is_case_insensitive_on_username() {
+    boot().await;
+
+    let created = create_user("caseuser", "caseuser@example.com", "R1ght-Pass-Phrase!")
+        .await
+        .expect("create_user succeeds");
+
+    // Type the username in a case that doesn't match the stored form.
+    let found = authenticate::<AuthUser>("CaseUser", "R1ght-Pass-Phrase!")
+        .await
+        .expect("authenticate must match case-insensitively");
+
+    assert_eq!(found.id, created.id, "same row found regardless of case");
+    assert_eq!(found.username, "caseuser");
+
+    // Leading/trailing whitespace in the typed username is also tolerated.
+    let trimmed = authenticate::<AuthUser>("  caseuser ", "R1ght-Pass-Phrase!")
+        .await
+        .expect("authenticate trims the typed username");
+    assert_eq!(trimmed.id, created.id);
+}
