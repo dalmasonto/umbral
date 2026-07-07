@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.5...umbral-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(migrate)* squashmigrations — non-destructive history collapse (gaps2 #100)
+- *(core)* ApiError — a handler-facing error with From<ORM error> + IntoResponse (gaps3 #15)
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.4...umbral-v0.0.5) - 2026-07-05
 
 ### Added

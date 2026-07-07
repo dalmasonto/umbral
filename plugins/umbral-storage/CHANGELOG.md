@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.5...umbral-storage-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(orm)* BEGIN IMMEDIATE for SQLite write transactions — the root-cause flake fix
+
+### Other
+
+- *(workspace)* cargo fmt + save in-flight edits before gaps3 #28
+- pin file-based SQLite test pools to max_connections(1) (the real flake fix)
+- give raw SQLite test pools a busy_timeout to end SQLITE_BUSY flakes
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.4...umbral-storage-v0.0.5) - 2026-07-05
 
 ### Added

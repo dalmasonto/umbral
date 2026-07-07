@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.5...umbral-core-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(orm)* #[umbral(case_insensitive)] — DB-level case-insensitive columns (gaps3 #35)
+- *(orm)* #[umbral(trim)] / #[umbral(lowercase)] field normalization (gaps3 #34)
+- *(authz)* deny_ungated_mutations() makes the H19 audit a build error (gaps3 #28 P1)
+- *(migrate)* rename M2M junction tables on a parent-model rename (gaps.md #93)
+- *(orm)* Model::table_name() accessor for the SQL table name
+- *(migrate)* squashmigrations — non-destructive history collapse (gaps2 #100)
+- *(migrate)* a choices-only column delta no longer rebuilds the table on SQLite (gaps3 #24)
+- *(app)* AppBuilder::auto_migrate_on_serve() — serve-only migrate lifecycle (gaps3 #23)
+- *(core)* ApiError — a handler-facing error with From<ORM error> + IntoResponse (gaps3 #15)
+- *(orm)* BEGIN IMMEDIATE for SQLite write transactions — the root-cause flake fix
+- *(auth)* Identity::user_pk::<T>() — typed access to the stringified PK (gaps3 #17)
+
+### Fixed
+
+- *(oauth)* atomic create-user + create-social (gaps3 #28 OAU-4)
+- *(macros)* Choices decodes from VARCHAR columns on Postgres
+- *(web)* guard open-redirect // paths + skip escaping symlinks in collectstatic (audit_2 core-web #6/#7, gaps3 #27)
+- *(templates)* render_str HTML-autoescapes by default (audit_2 core-templates-forms #3)
+
+### Other
+
+- *(workspace)* cargo fmt + save in-flight edits before gaps3 #28
+- *(migrate)* engine-driven regression for AlterColumn on inbound-FK hub + data (gaps3 #30)
+- pin file-based SQLite test pools to max_connections(1) (the real flake fix)
+- give raw SQLite test pools a busy_timeout to end SQLITE_BUSY flakes
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.4...umbral-core-v0.0.5) - 2026-07-05
 
 ### Added

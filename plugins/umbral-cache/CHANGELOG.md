@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-cache-v0.0.5...umbral-cache-v0.0.6) - 2026-07-07
+
+### Fixed
+
+- *(cache)* bypass shared cache on Proxy-Authorization + Vary identity (audit_2 realtime#1, gaps3 #27)
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-cache-v0.0.4...umbral-cache-v0.0.5) - 2026-07-05
 
 ### Fixed

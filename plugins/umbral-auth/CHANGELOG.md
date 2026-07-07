@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.5...umbral-auth-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(auth)* log in with username OR email; real password hash for social accounts
+- *(orm)* #[umbral(trim)] / #[umbral(lowercase)] field normalization (gaps3 #34)
+- *(auth)* change_password + POST {prefix}/change-password default route (gaps3 #20)
+- *(auth)* RequireStaff extractor — staff-gate any handler, typed uid (gaps3 #18)
+- *(orm)* BEGIN IMMEDIATE for SQLite write transactions — the root-cause flake fix
+
+### Fixed
+
+- *(auth)* store + match usernames and emails case-insensitively (gaps3 #33)
+
+### Other
+
+- *(auth)* lock built-in privileged fields vs mass-assignment (#28 orm #3)
+- *(workspace)* cargo fmt + save in-flight edits before gaps3 #28
+- *(auth)* canonical rustfmt for extractors.rs (RequireStaff)
+- pin file-based SQLite test pools to max_connections(1) (the real flake fix)
+- give raw SQLite test pools a busy_timeout to end SQLITE_BUSY flakes
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.4...umbral-auth-v0.0.5) - 2026-07-05
 
 ### Added
