@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.5...umbral-rest-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(orm)* #[umbral(case_insensitive)] — DB-level case-insensitive columns (gaps3 #35)
+- *(orm)* #[umbral(trim)] / #[umbral(lowercase)] field normalization (gaps3 #34)
+- *(rest)* Permission .and()/.or() combinators + IsAuthenticatedOrReadOnly (gaps3 #22)
+- *(rest)* ResourceConfig::owner_field — inject the owner from identity on create (gaps3 #16)
+- *(orm)* BEGIN IMMEDIATE for SQLite write transactions — the root-cause flake fix
+
+### Other
+
+- *(workspace)* cargo fmt + save in-flight edits before gaps3 #28
+- pin file-based SQLite test pools to max_connections(1) (the real flake fix)
+- give raw SQLite test pools a busy_timeout to end SQLITE_BUSY flakes
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.4...umbral-rest-v0.0.5) - 2026-07-05
 
 ### Added

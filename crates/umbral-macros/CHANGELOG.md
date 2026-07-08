@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.5...umbral-macros-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(orm)* #[umbral(case_insensitive)] — DB-level case-insensitive columns (gaps3 #35)
+- *(orm)* #[umbral(trim)] / #[umbral(lowercase)] field normalization (gaps3 #34)
+
+### Fixed
+
+- *(macros)* Choices decodes from VARCHAR columns on Postgres
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.4...umbral-macros-v0.0.5) - 2026-07-05
 
 ### Added

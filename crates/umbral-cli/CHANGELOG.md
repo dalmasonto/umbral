@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.5...umbral-cli-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(migrate)* squashmigrations — non-destructive history collapse (gaps2 #100)
+- *(app)* AppBuilder::auto_migrate_on_serve() — serve-only migrate lifecycle (gaps3 #23)
+
+### Fixed
+
+- *(cli)* run project-free commands (maskkeygen) directly instead of forwarding
+- *(cli)* scaffold a random per-project dev secret_key (audit_2 macros-cli#7, gaps3 #27)
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.4...umbral-cli-v0.0.5) - 2026-07-05
 
 ### Added

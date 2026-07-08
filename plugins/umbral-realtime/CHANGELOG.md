@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-realtime-v0.0.5...umbral-realtime-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(realtime)* safe-by-default publish authz seam (gaps3 #28 realtime #2)
+
+### Other
+
+- *(realtime)* send presence:sync only to the joining conn (gaps3 #28 realtime #5)
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-realtime-v0.0.4...umbral-realtime-v0.0.5) - 2026-07-05
 
 ### Added

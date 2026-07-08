@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-oauth-v0.0.5...umbral-oauth-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(auth)* log in with username OR email; real password hash for social accounts
+- *(orm)* BEGIN IMMEDIATE for SQLite write transactions — the root-cause flake fix
+
+### Fixed
+
+- *(auth)* store + match usernames and emails case-insensitively (gaps3 #33)
+- *(oauth)* atomic create-user + create-social (gaps3 #28 OAU-4)
+
+### Other
+
+- *(workspace)* cargo fmt + save in-flight edits before gaps3 #28
+- pin file-based SQLite test pools to max_connections(1) (the real flake fix)
+- give raw SQLite test pools a busy_timeout to end SQLITE_BUSY flakes
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-oauth-v0.0.4...umbral-oauth-v0.0.5) - 2026-07-05
 
 ### Fixed

@@ -4636,7 +4636,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "umbral"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "minijinja",
@@ -4649,7 +4649,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-admin"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "axum",
  "chrono",
@@ -4675,7 +4675,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-analytics"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -4690,7 +4690,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-auth"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "argon2",
  "async-trait",
@@ -4718,7 +4718,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-cache"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -4742,11 +4742,11 @@ dependencies = [
 
 [[package]]
 name = "umbral-casing"
-version = "0.0.5"
+version = "0.0.6"
 
 [[package]]
 name = "umbral-cli"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "clap",
@@ -4762,7 +4762,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-core"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "ammonia",
  "async-trait",
@@ -4808,7 +4808,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-email"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "base64",
  "chrono",
@@ -4824,7 +4824,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-health"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -4839,7 +4839,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-livereload"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "axum",
  "futures-util",
@@ -4853,7 +4853,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-logs"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "axum",
  "chrono",
@@ -4876,7 +4876,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-macros"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "chrono",
  "proc-macro2",
@@ -4894,7 +4894,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-oauth"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -4921,7 +4921,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-openapi"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "axum",
  "chrono",
@@ -4942,7 +4942,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-permissions"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -4963,7 +4963,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-playground"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "axum",
  "http-body-util",
@@ -4976,7 +4976,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-realtime"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -4998,7 +4998,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-rest"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -5022,7 +5022,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-rls"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "sqlx",
  "tokio",
@@ -5032,7 +5032,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-security"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "axum",
  "getrandom 0.2.17",
@@ -5053,7 +5053,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-sessions"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -5081,7 +5081,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-signals"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -5095,7 +5095,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-storage"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -5125,7 +5125,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-tasks"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5143,7 +5143,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-tenants"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -5160,7 +5160,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-testing"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
