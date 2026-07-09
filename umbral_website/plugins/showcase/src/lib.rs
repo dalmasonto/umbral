@@ -29,6 +29,11 @@ impl Plugin for ShowcasePlugin {
         "showcase"
     }
 
+    /// FKs into `auth_user`. Held by alphabetical luck before; now declared.
+    fn dependencies(&self) -> &'static [&'static str] {
+        &["auth"]
+    }
+
     fn models(&self) -> Vec<ModelMeta> {
         vec![ModelMeta::for_::<models::ShowcaseEntry>()]
     }

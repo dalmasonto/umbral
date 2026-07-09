@@ -35,6 +35,20 @@ impl Plugin for AccountsPlugin {
         "accounts"
     }
 
+    /// `accounts_git_hub_account.user` is a FK into `auth_user`, so the auth
+    /// plugin's migrations must run first.
+    ///
+    /// Without this the toposort in `App::build()` sees no dependencies, every
+    /// plugin has in-degree 0, and Kahn's tie-break (a `BTreeSet`) resolves the
+    /// order alphabetically — putting "accounts" before "auth". Against an
+    /// existing database nothing happens, because `auth_user` is already there;
+    /// against a FRESH one, `CREATE TABLE accounts_git_hub_account` dies with
+    /// `relation "auth_user" does not exist`. That is exactly what happened on
+    /// the first umbralrs.dev deploy.
+    fn dependencies(&self) -> &'static [&'static str] {
+        &["auth"]
+    }
+
     fn models(&self) -> Vec<ModelMeta> {
         vec![
             ModelMeta::for_::<models::WebsiteProfile>(),

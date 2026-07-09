@@ -55,6 +55,13 @@ impl Plugin for PluginDirectoryPlugin {
         "plugin_directory"
     }
 
+    /// FKs into `auth_user`. "plugin_directory" happens to sort after "auth"
+    /// alphabetically, so this ordering held by luck rather than by contract;
+    /// declaring it makes the toposort enforce what the schema requires.
+    fn dependencies(&self) -> &'static [&'static str] {
+        &["auth"]
+    }
+
     fn models(&self) -> Vec<ModelMeta> {
         vec![
             ModelMeta::for_::<models::Plugin>(),
