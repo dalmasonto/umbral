@@ -5,32 +5,42 @@ edition = "2024"
 
 [dependencies]
 
+# The framework comes from crates.io, NOT from `../crates` / `../plugins`.
+# That is deliberate: it makes this directory self-contained, so `deploy-website.yml`
+# can ship `umbral_website/` on its own and the server's `docker compose build`
+# resolves everything from the registry. A path dep would escape the Docker build
+# context (`COPY ../crates` is illegal) and drag the whole workspace along.
+#
+# The trade-off: the website can only use framework APIs that are RELEASED.
+# When you land a framework change the site needs, cut a release first, then bump
+# these versions. See README.md -> "Why crates.io deps".
+
 # ----- Framework core (always required) ------------------------------------
-umbral         = { path = "../crates/umbral" }
-umbral-cli     = { path = "../crates/umbral-cli" }
+umbral         = "0.0.6"
+umbral-cli     = "0.0.6"
 
 # ----- Active by default ---------------------------------------------------
-# What the generated `src/main.rs` wires in. Comment any of these out only
-# if you also remove the matching `.plugin(...)` line.
-umbral-auth     = { path = "../plugins/umbral-auth" }
-umbral-sessions = { path = "../plugins/umbral-sessions" }
-umbral-admin    = { path = "../plugins/umbral-admin" }
-umbral-rest     = { path = "../plugins/umbral-rest" }
-umbral-openapi  = { path = "../plugins/umbral-openapi" }
-umbral-security = { path = "../plugins/umbral-security" }
-umbral-storage  = { path = "../plugins/umbral-storage" }  # Unified storage: static-file serving + uploaded-file storage (local FS + S3).
-umbral-playground   = { path = "../plugins/umbral-playground" }  # Interactive API playground UI (think mini-Postman) at /playground/.
-umbral-oauth        = { path = "../plugins/umbral-oauth" }  # OAuth / social login (Google, GitHub) + account connection.
-umbral-realtime     = { path = "../plugins/umbral-realtime" }  # SSE + WebSocket real-time push (live note feed).
-umbral-livereload   = { path = "../plugins/umbral-livereload" }  # Dev-only browser live-reload (SSE push + file watcher). Opt-in, inert outside Dev.
+# What `src/main.rs` wires in. Comment any of these out only if you also remove
+# the matching `.plugin(...)` line.
+umbral-auth     = "0.0.6"
+umbral-sessions = "0.0.6"
+umbral-admin    = "0.0.6"
+umbral-rest     = "0.0.6"
+umbral-openapi  = "0.0.6"
+umbral-security = "0.0.6"
+umbral-storage  = "0.0.6"  # Unified storage: static-file serving + uploaded-file storage (local FS + S3).
+umbral-playground   = "0.0.6"  # Interactive API playground UI (think mini-Postman) at /playground/.
+umbral-oauth        = "0.0.6"  # OAuth / social login (Google, GitHub) + account connection.
+umbral-realtime     = "0.0.6"  # SSE + WebSocket real-time push (live note feed).
+umbral-livereload   = "0.0.6"  # Dev-only browser live-reload (SSE push + file watcher). Opt-in, inert outside Dev.
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
-# umbral-tasks        = { path = "../plugins/umbral-tasks" }  # DB-backed background task queue (Celery-equivalent).
-# umbral-permissions  = { path = "../plugins/umbral-permissions" }  # ContentType + Group + Permission model.
-# umbral-rls          = { path = "../plugins/umbral-rls" }  # Postgres row-level security policy registration.
-umbral-cache          = { path = "../plugins/umbral-cache" }  # In-memory/SQLite/Redis cache + cache_page middleware.
-# umbral-email        = { path = "../plugins/umbral-email" }  # SMTP + MIME email composer + sender.
-# umbral-signals      = { path = "../plugins/umbral-signals" }  # Pre/post save/delete signal dispatch.
+# umbral-tasks        = "0.0.6"  # DB-backed background task queue (Celery-equivalent).
+# umbral-permissions  = "0.0.6"  # ContentType + Group + Permission model.
+# umbral-rls          = "0.0.6"  # Postgres row-level security policy registration.
+umbral-cache          = "0.0.6"  # In-memory/SQLite/Redis cache + cache_page middleware.
+# umbral-email        = "0.0.6"  # SMTP + MIME email composer + sender.
+# umbral-signals      = "0.0.6"  # Pre/post save/delete signal dispatch.
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

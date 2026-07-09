@@ -1,0 +1,38 @@
+# Keep the build context small and free of host-local state.
+#
+# What must NOT be excluded, and why:
+#   .prod.env   the Dockerfile bakes it in as /app/.env
+#   Cargo.lock  `cargo build --locked` needs it for a reproducible build
+#   plugins/    per-plugin templates, found at runtime via a baked absolute path
+#   static/     includes the committed, pre-built static/css/umbral.css
+#   templates/ migrations/ src/ build.rs
+
+# Build artefacts.
+/target
+
+# The image builds no CSS (no node), so node_modules is dead weight. The rest of
+# styles/ stays: build.rs declares it via `cargo:rerun-if-changed`.
+/styles/node_modules
+
+# Local SQLite dev database.
+/umbral_website.db*
+
+# Runtime uploads live in the `media` named volume, never in an image layer.
+/media
+
+# The local dev env (SQLite, Dev environment). Baking it would shadow .prod.env.
+/.env
+
+# Secrets that must never enter an image layer: the age private key, and the
+# encrypted form of .prod.env (the image gets the decrypted one).
+/keys.txt
+/secret.env
+
+# Repo + design assets, irrelevant to the running site.
+/.git
+/.github
+/design
+
+# Dev-only settings. It declares `environment = "Dev"`, which would override the
+# release binary's secure `Prod` default. Production reads /app/.env only.
+/umbral.toml

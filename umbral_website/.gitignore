@@ -1,5 +1,18 @@
 /target
 /styles/node_modules
 /umbral_website.db*
+
+# Plaintext secrets. Only their sops-encrypted form (secret.env) is committed.
 .env
-Cargo.lock
+.prod.env
+keys.txt
+
+# The ROOT Cargo.lock IS committed. This is a deployable binary, not a library:
+# the lock is what makes CI and the server's `docker compose build` resolve the
+# exact same dependency versions, and `cargo build --locked` in the Dockerfile
+# fails without it.
+#
+# The per-app lockfiles are not. Each plugins/<app>/ is a path dependency of the
+# root package, so cargo resolves it through the root lock and ignores any lock
+# of its own; these only appear when someone runs cargo inside an app directory.
+/plugins/*/Cargo.lock

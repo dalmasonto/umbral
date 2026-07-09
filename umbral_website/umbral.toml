@@ -1,0 +1,24 @@
+# umbral settings for umbral_website. LOCAL DEVELOPMENT ONLY.
+#
+# The framework loads this file by the exact name `umbral.toml`
+# (umbral-core/src/settings.rs). It was previously named `umbra.toml`, a leftover
+# from the umbra -> umbral rename, and was therefore never read at all.
+#
+# Environment variables (UMBRAL_*) are merged AFTER this file, so they always win.
+# See umbral::settings for the full schema.
+#
+# This file is NOT shipped into the production image: `environment = "Dev"` below
+# would override a release binary's secure `Prod` default. In production the
+# baked /app/.env is the single source of truth. See the Dockerfile.
+
+database_url = "sqlite://umbral_website.db?mode=rwc"
+
+# Bind address for `cargo run -- serve`.
+# Override via UMBRAL_BIND_ADDR or the --addr flag.
+bind_addr = "127.0.0.1:8000"
+
+environment = "Dev"
+
+# CHANGE THIS IN PRODUCTION. The framework errors at boot when this
+# default key is used with environment = "Prod".
+secret_key = "umbral-insecure-dev-key-change-me"

@@ -1,10 +1,22 @@
-# Deploy the umbral marketing/community site (umbral_website/ — an umbral app
-# backed by Postgres).
+# Deploy the Umbral website (umbral_website/ -> umbralrs.dev).
 #
-# PLACEHOLDER: manual-trigger only, no real deploy steps yet. Intentionally NOT
-# on push — wiring the trigger + a home for secrets now so the real build/deploy
-# can drop straight in later. Fill in the TODO step (build, migrate, ship) when
-# the hosting target is decided.
+# Manual-trigger only. It decrypts the sops-encrypted env, stages a clean copy of
+# `umbral_website/` — and ONLY that directory's files — then scp's it to the
+# server. Bringing the stack up stays MANUAL on the server:
+#
+#   cd /home/umbral_website && docker compose build && docker compose up -d
+#
+# Nothing from `crates/`, `plugins/`, `documentation/` or `examples/` is shipped.
+# The site depends on the framework through crates.io (`umbral* = "0.0.6"`), not
+# through path deps, so `umbral_website/` builds standalone on the server.
+#
+# Caddy terminates TLS and reverse-proxies the site:
+#
+#   umbralrs.dev, www.umbralrs.dev {
+#       reverse_proxy localhost:9100
+#   }
+#
+# Required repo secrets: AGE_PRIVATE_KEY, CONTABO_HOST, CONTABO_USER, SSH_PRIVATE_KEY.
 
 name: deploy-website
 
@@ -16,17 +28,82 @@ permissions:
 
 concurrency:
   group: deploy-website
-  cancel-in-progress: true
+  cancel-in-progress: false # never interrupt a transfer mid-flight
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  transfer:
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: TODO — build and deploy umbral_website
+      - name: Install sops
         run: |
-          echo "Placeholder: no deploy configured yet."
-          echo "TODO: build umbral_website (cargo build --release), run migrate,"
-          echo "      and ship to the chosen host. Add deploy secrets as env."
+          curl -fLo sops https://github.com/getsops/sops/releases/download/v3.9.0/sops-v3.9.0.linux.amd64
+          chmod +x sops
+          sudo mv sops /usr/local/bin/sops
+
+      - name: Set up age for decryption
+        run: |
+          mkdir -p ~/.config/sops/age
+          echo "${{ secrets.AGE_PRIVATE_KEY }}" > ~/.config/sops/age/keys.txt
+
+      # Stage exactly what the server needs. scp-action has no --exclude, so the
+      # filtering happens here. Excluding target/ and keys.txt is not cosmetic:
+      # keys.txt is the age PRIVATE key and must never leave CI.
+      - name: Stage the umbral_website payload
+        run: |
+          rsync -a \
+            --exclude='target/' \
+            --exclude='styles/node_modules/' \
+            --exclude='media/' \
+            --exclude='design/' \
+            --exclude='*.db' --exclude='*.db-shm' --exclude='*.db-wal' \
+            --exclude='.env' \
+            --exclude='keys.txt' \
+            --exclude='secret.env' \
+            umbral_website/ payload/
+
+      # secret.env is committed; .prod.env is not. Decrypt into the payload so the
+      # plaintext exists only inside the directory we are about to ship. The
+      # Dockerfile bakes it in as /app/.env, and compose feeds it to postgres.
+      - name: Decrypt the production env
+        run: |
+          test -f umbral_website/secret.env || {
+            echo "::error::umbral_website/secret.env is missing. Run 'bash scripts/encrypt_envs.sh <age-public-key>' and commit it."
+            exit 1
+          }
+          sops --decrypt umbral_website/secret.env > payload/.prod.env
+          # Fail loudly rather than shipping an env that boots into a broken state.
+          grep -q '^UMBRAL_BIND_ADDR=0\.0\.0\.0:' payload/.prod.env || {
+            echo "::error::UMBRAL_BIND_ADDR must bind 0.0.0.0 — a loopback bind is unreachable from outside the container."
+            exit 1
+          }
+
+      - name: Show what will be transferred
+        run: |
+          echo "Payload contents (top level):"
+          ls -A payload/
+          echo "Total size: $(du -sh payload/ | cut -f1)"
+
+      - name: Transfer to Contabo
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.CONTABO_HOST }}
+          username: ${{ secrets.CONTABO_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "payload"
+          strip_components: 1 # drop the leading payload/ path segment
+          target: "/home/umbral_website/"
+          overwrite: true
+
+      - name: Next steps
+        run: |
+          echo "umbral_website synced to /home/umbral_website."
+          echo "SSH in and bring the stack up:"
+          echo "  cd /home/umbral_website"
+          echo "  docker compose build      # builds umbral-website:latest (migrate reuses it)"
+          echo "  docker compose up -d      # postgres -> migrate -> web on :9100"
+          echo "  docker compose run --rm web createsuperuser"
+          echo ""
+          echo "Caddy should reverse_proxy umbralrs.dev -> localhost:9100."

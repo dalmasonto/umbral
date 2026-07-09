@@ -4,12 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umbral = { path = "../../../crates/umbral" }
-umbral-auth = { path = "../../../plugins/umbral-auth" }
+umbral = "0.0.6"
+umbral-auth = "0.0.6"
 # Live note feed: broadcast a posted note to the plugin's SSE watchers.
-umbral-realtime = { path = "../../../plugins/umbral-realtime" }
+umbral-realtime = "0.0.6"
 # The global header search (/search) spans plugins + blog posts.
-site_content = { path = "../../../umbral_website/plugins/site_content" }
+# Sibling-relative: `../../../umbral_website/plugins/site_content` escaped the
+# Docker build context (up out of umbral_website, then back in) and broke
+# `docker compose build`.
+site_content = { path = "../site_content" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio", "chrono", "uuid", "json"] }

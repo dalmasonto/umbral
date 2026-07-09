@@ -1,0 +1,93 @@
+# Production stack for the Umbral website.
+#
+# - postgres : PostgreSQL 16, INTERNAL ONLY (no published ports).
+# - migrate  : one-shot, applies migrations then exits (web waits for it).
+# - web      : the Umbral app on :9100 — server-rendered pages, admin, REST, media.
+#
+# There is no separate frontend. Umbral renders HTML server-side and serves
+# /static and /media itself via StoragePlugin, so Caddy only has to reverse-proxy
+# the site domain to :9100:
+#
+#     umbralrs.dev, www.umbralrs.dev {
+#         reverse_proxy localhost:9100
+#     }
+#
+# The `web` image bakes .prod.env at BUILD time (the Dockerfile copies it to
+# /app/.env), so `web` needs no `env_file`. Postgres does — it reads its init
+# credentials from the same decrypted .prod.env, which keeps ONE secret file
+# instead of two that can drift apart.
+#
+# .prod.env (decrypted from secret.env on deploy) must define:
+#   POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB      # postgres init + healthcheck
+#   UMBRAL_DATABASE_URL=postgres://USER:PASSWORD@postgres:5432/DB   # host = service name
+#   UMBRAL_BIND_ADDR=0.0.0.0:9100                      # NOT 127.0.0.1 — see Dockerfile
+#   UMBRAL_ENVIRONMENT=prod
+#   UMBRAL_SECRET_KEY, UMBRAL_OAUTH_*, UMBRAL_MASK_*
+# NB: UMBRAL_DATABASE_URL's USER/PASSWORD must match POSTGRES_USER/POSTGRES_PASSWORD.
+
+services:
+  postgres:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    env_file: .prod.env # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No `ports:` — postgres is reachable only inside the compose network.
+    healthcheck:
+      # `$$` -> a literal `$`, so the var expands inside the container, not here.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: apply pending migrations, then exit 0. `web` waits for it, so it
+  # never races an unmigrated schema. Idempotent — safe on every deploy.
+  #
+  # Reuses the image `web` builds rather than building its own. `docker compose
+  # up -d` alone would try to PULL umbral-website:latest, so the deploy runs
+  # `docker compose build` first (see README -> Deploy).
+  migrate:
+    image: umbral-website:latest
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build:
+      context: .
+      args:
+        ENV_FILE: .prod.env
+    image: umbral-website:latest
+    command: ["serve"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "9100:9100" # UMBRAL_BIND_ADDR=0.0.0.0:9100
+    volumes:
+      # Uploaded plugin logos / cover images live here. A named volume, not a
+      # bind mount or an image layer: without it, every `docker compose build`
+      # would silently discard everything users uploaded.
+      - media:/app/media
+    healthcheck:
+      # The Host header is NOT incidental. In `prod`, App::build() mounts a host
+      # guard that 400s any request whose Host is absent from UMBRAL_ALLOWED_HOSTS
+      # (see crates/umbral-core/src/hosts.rs). A plain `curl localhost:9100` sends
+      # `Host: localhost:9100`, gets a 400, and marks the container permanently
+      # unhealthy while it is in fact serving real traffic correctly. Sending the
+      # real host both fixes that and exercises the production path.
+      test:
+        ["CMD", "curl", "-fsS", "-H", "Host: umbralrs.dev", "http://127.0.0.1:9100/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s # first boot runs migrations + the idempotent seed
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  media:
