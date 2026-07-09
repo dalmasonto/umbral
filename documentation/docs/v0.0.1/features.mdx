@@ -1,0 +1,79 @@
+---
+title: Feature matrix
+description: Every official Umbral plugin and core capability in one table - auth, admin, REST, OpenAPI, realtime, OAuth, background tasks, multitenancy, row-level security, field encryption, and more.
+sidebar_position: 2
+icon: table
+tags: [features, plugins, comparison, batteries-included, overview]
+---
+
+# Everything Umbral ships
+
+Umbral is batteries-included: declare your data and you get migrations, CRUD, an admin, and an optional REST API almost for free. This page lists the whole surface in one place - the **21 official plugins** and the capabilities that live in the core.
+
+<Callout type="info">
+Every official plugin implements the same [`Plugin`](/docs/v0.0.1/plugins/the-plugin-trait) trait you would implement yourself. There is no privileged built-in: `AuthPlugin` and a plugin you write are both `Box<dyn Plugin>`, registered with the same `.plugin(...)` call. If a built-in cannot be expressed as a plugin, the plugin contract is wrong. See [Plugins are apps](/docs/v0.0.1/plugins/plugins-are-apps).
+</Callout>
+
+## Official plugins
+
+All 21 are published on crates.io alongside the [`umbral`](https://crates.io/crates/umbral) facade. The **Scaffolded** column marks the ones `umbral startproject` wires into `main.rs` for you; the rest are one line in `Cargo.toml` plus one `.plugin(...)` call away.
+
+| Plugin | What you get | Mounts | Scaffolded |
+|---|---|---|---|
+| [`umbral-auth`](/docs/v0.0.1/plugins/auth) | User model, argon2 password hashing, login/signup/logout, email verification, password reset. Swappable user model via the `UserModel` trait. | `/auth/*` (opt-in) | Yes |
+| [`umbral-sessions`](/docs/v0.0.1/plugins/sessions) | DB-backed sessions + signed cookies, linked to auth users. | middleware | Yes |
+| [`umbral-admin`](/docs/v0.0.1/plugins/admin) | Auto-generated CRUD admin UI, dashboard widgets, inlines, custom views. | `/admin` | Yes |
+| [`umbral-rest`](/docs/v0.0.1/plugins/rest) | Auto-generated JSON REST API: serializers, viewsets, routers, filtering, pagination, throttling, CSV export. Safe-by-default permissions. | `/api` | Yes |
+| [`umbral-openapi`](/docs/v0.0.1/plugins/openapi) | OpenAPI 3.0 schema + Swagger UI over your REST endpoints. | `/openapi` | Yes |
+| [`umbral-security`](/docs/v0.0.1/plugins/security) | CSRF middleware, security headers (HSTS, CSP, frame options, nosniff, referrer policy). | middleware | Yes |
+| [`umbral-logs`](/docs/v0.0.1/plugins/logs) | Non-blocking request logging into a `RequestLog` model, browsable in the admin. Optional OTel export. | layer + admin | Yes |
+| [`umbral-permissions`](/docs/v0.0.1/plugins/permissions) | Role-based access control: `ContentType`, `Permission`, `Group`, user↔group and user↔permission M2M, `has_perm` query layer. | — | Opt-in |
+| [`umbral-oauth`](/docs/v0.0.1/plugins/oauth) | Social login + account connection (Google, GitHub). Provider tokens stored encrypted with `Masked<T>`. | `/oauth/{provider}/callback` | Opt-in |
+| [`umbral-tasks`](/docs/v0.0.1/plugins/tasks) | DB-backed background task queue: define, enqueue, run with a worker process. | worker command | Opt-in |
+| [`umbral-realtime`](/docs/v0.0.1/plugins/realtime) | SSE + WebSocket push, user- and room-targeted, over a pluggable broker. Model subscriptions and presence. | `/realtime` | Opt-in |
+| [`umbral-storage`](/docs/v0.0.1/plugins/storage) | One `Storage` trait for static-file serving and media uploads. Local FS + optional S3 backend. | `/static`, `/media` | Opt-in |
+| [`umbral-cache`](/docs/v0.0.1/plugins/cache) | One `Cache` handle over a swappable backend (memory, SQLite, Redis) plus `cache_page` middleware. | middleware | Opt-in |
+| [`umbral-email`](/docs/v0.0.1/plugins/email) | SMTP + template-driven transactional email. | — | Opt-in |
+| [`umbral-signals`](/docs/v0.0.1/plugins/signals) | In-process pub/sub: pre/post save and delete. Plugins emit, other plugins subscribe. | — | Opt-in |
+| [`umbral-tenants`](/docs/v0.0.1/plugins/tenancy) | Schema-per-tenant multitenancy: one Postgres database, one schema per tenant, shared `public` schema. | middleware | Opt-in |
+| [`umbral-rls`](/docs/v0.0.1/plugins/rls) | Postgres row-level security. Declare policies at `App::build`; `on_ready` applies them. | — | Opt-in |
+| [`umbral-playground`](/docs/v0.0.1/plugins/playground) | Interactive, browsable API console for your REST endpoints. Refuses to mount in `Prod`. | `/api/playground` | Opt-in |
+| [`umbral-health`](/docs/v0.0.1/plugins/health) | Liveness + readiness probes. | `/healthz`, `/ready` | Opt-in |
+| [`umbral-analytics`](/docs/v0.0.1/plugins/analytics) | Product-analytics event capture (PostHog backend), ambient client, opt-in per-request middleware. | middleware | Opt-in |
+| [`umbral-livereload`](/docs/v0.0.1/plugins/live-reload) | Dev-only browser live-reload: file watcher pushes reload / CSS-swap over SSE, client script auto-injected. Inert outside `Dev`. | SSE (dev only) | Opt-in |
+
+## Core capabilities
+
+These need no plugin. They live in `umbral-core` and reach you through the `umbral` facade.
+
+| Area | What you get |
+|---|---|
+| [ORM](/docs/v0.0.1/orm/querying) | Typed `QuerySet`: filter, exclude, `order_by`, limit/offset, `first`, `get`, `count`, `exists`, `delete`, `update_values`, `bulk_create`, `select_related`, aggregates, [joins](/docs/v0.0.1/orm/joins), [transactions](/docs/v0.0.1/orm/transactions). |
+| [Relationships](/docs/v0.0.1/orm/relationships) | `ForeignKey<T>`, `OneToOne<T>`, `M2M<T>`, reverse relations, `in_bulk`. `i64`, `String` and `Uuid` primary keys. |
+| [Managed migrations](/docs/v0.0.1/migrations/managed-migrations) | Autodetected from your models: create/alter/drop table and column, [renames](/docs/v0.0.1/migrations/renames), [data migrations](/docs/v0.0.1/migrations/data-migrations), [squashing](/docs/v0.0.1/migrations/squashing), [drift detection](/docs/v0.0.1/migrations/migration-drift). |
+| [`inspectdb`](/docs/v0.0.1/migrations/inspectdb) | Introspect an existing database into models, straight into the managed-migration loop. |
+| [Templates](/docs/v0.0.1/templates/rendering-html) | Server-rendered HTML with autoescaping, custom tags, filters, [markdown + syntax highlighting](/docs/v0.0.1/web/markdown-syntax-highlighting). |
+| [Web](/docs/v0.0.1/web/routes) | Routing, middleware, forms, pagination, streaming, compression, request limits, error pages. |
+| [Backends](/docs/v0.0.1/backends/postgres) | Postgres-first, SQLite for tests. Boot-time system checks catch field/backend mismatches before prod. |
+| [CLI](/docs/v0.0.1/cli/startproject) | `startproject`, `startapp`, `migrate`, `makemigrations`, `showmigrations`, `checkmigrations`, `inspectdb`, `createsuperuser`, `worker`, plus [per-plugin commands](/docs/v0.0.1/cli/management-commands). |
+| [Testing](/docs/v0.0.1/testing/test-client) | Test client + model factories. |
+
+## Field types and attributes
+
+Declared on the model, enforced by the schema. `#[derive(Model)]` turns each of these into migrations, admin form widgets, and REST serializers.
+
+| Feature | Spelling | What it does |
+|---|---|---|
+| [Field encryption](/docs/v0.0.1/orm/masked) | `Masked<String>` | **Encrypts the column at rest** with public-key crypto. A write-only key can seal; only a process holding the secret key can reveal. GDPR-style PII protection with no app code. |
+| [Case-insensitive columns](/docs/v0.0.1/orm/normalized-fields) | `#[umbral(case_insensitive)]` | `=`, `UNIQUE` and `ORDER BY` fold case while **preserving the original casing** (Postgres `citext`, SQLite `COLLATE NOCASE`). |
+| [Normalized fields](/docs/v0.0.1/orm/normalized-fields) | `#[umbral(trim, lowercase)]` | Canonicalizes on every write surface - typed, admin form, and REST. |
+| [Soft delete](/docs/v0.0.1/orm/soft-delete) | `#[umbral(soft_delete)]` | `deleted_at` column, excluded from queries by default. |
+| [File / image fields](/docs/v0.0.1/orm/file-image-fields) | `FileField`, `ImageField` | Uploads through the `Storage` backend, with an admin widget. |
+| [Privileged fields](/docs/v0.0.1/orm/privileged-fields) | `#[umbral(noform, noedit)]` | Keeps a column out of generated forms, or read-only in them. |
+| Constraints | `#[umbral(unique, index, unique_together, indexes)]` | Emitted into migrations and autodetected on change. |
+| Choices | `#[umbral(choices = ...)]` | Rust enum ↔ DB `CHECK` constraint ↔ OpenAPI enum ↔ admin `<select>`. |
+| Timestamps | `#[umbral(auto_now, auto_now_add)]` | Set on write without touching your handler. |
+
+<Callout type="warning">
+Umbral is `0.0.x`. The surface above is real and tested, but APIs still move before 1.0. Not shipped today: GraphQL, gRPC, i18n, and a first-party WASM frontend - Umbral renders HTML server-side and exposes an optional REST API, and expects you to bring your own client if you want one.
+</Callout>
