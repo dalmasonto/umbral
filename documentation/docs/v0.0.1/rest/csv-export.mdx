@@ -35,7 +35,7 @@ GET /api/order/?status=paid&search=ada&fields=id,customer&format=csv
 - **Capped at 1 000 rows.** CSV export is subject to the same `MAX_LIST_ROWS` (1 000) ceiling as the JSON list. This prevents full-table buffering on large datasets. Pair it with filters to stay under the cap, or add a paginator with a higher limit if you need bigger exports.
 
 <Callout type="info">
-The inverse, **CSV import**, ships as the [`importcsv` management command](/docs/v0.0.1/cli/management-commands#importcsv-load-a-csv-into-one-table). An admin "export selected rows" bulk action (waiting on the bulk-action UI) and Excel (`.xlsx`) are not in this slice yet; see `planning/features.md` #61.
+The inverse, **CSV import**, ships as the [`importcsv` management command](/docs/v0.0.1/cli/management-commands#importcsv---load-a-csv-into-one-table). An admin "export selected rows" bulk action (waiting on the bulk-action UI) and Excel (`.xlsx`) are not in this slice yet; see `planning/features.md` #61.
 </Callout>
 
 ## See also

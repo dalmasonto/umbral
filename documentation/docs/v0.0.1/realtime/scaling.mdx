@@ -29,7 +29,7 @@ Three design choices make that hold:
 - **Snapshot-then-send** resolves a target to a list of cloned senders under the registry read lock, then *drops the lock* before sending - so a broadcast never makes a concurrent `register`/`deregister` wait behind it.
 - **Bounded per-connection channels** give correct back-pressure: a connection that can't keep up drops its own messages rather than stalling the broadcaster.
 
-Cap the total with [`max_connections`](transports#connection-limits-maxconnections) so a runaway client can't exhaust file descriptors.
+Cap the total with [`max_connections`](transports#connection-limits-max_connections) so a runaway client can't exhaust file descriptors.
 
 ## How it works (multi-instance)
 
