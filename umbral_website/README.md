@@ -74,6 +74,14 @@ cd styles && npm install && npm run build
 
 Three services: **postgres** (internal only), a one-shot **migrate**, and the **web** app on `:9100`. The `web` service builds `umbral-website:latest`; `migrate` reuses that same image rather than building its own, which is why `docker compose build` has to run before `up -d`.
 
+**The server compiles nothing.** CI builds the release binary and ships it as `dist/umbral_website`; the Dockerfile only copies it in alongside the templates, static files and migrations. `docker compose build` is therefore a few `COPY` layers — seconds, not the ~28 minutes a cold compile of 468 registry crates takes on a VPS. No image is published anywhere: only the binary crosses the wire, and `.prod.env` never leaves the server, so production secrets are still baked in on the box.
+
+To produce a binary locally (for a from-scratch `docker compose build` without CI):
+
+```bash
+bash scripts/build_binary.sh   # compiles in rust:1-bookworm at /app, strips, writes dist/
+```
+
 ```bash
 docker compose build                          # build umbral-website:latest
 docker compose up -d                          # postgres -> migrate -> web
@@ -101,7 +109,7 @@ Three things about this stack are load-bearing and easy to break:
 - **The published port is bound to `127.0.0.1`.** Writing `- "9100:9100"` instead publishes on `0.0.0.0`, putting the entire site on the public internet over plaintext HTTP, bypassing Caddy and TLS — `curl -H 'Host: umbralrs.dev' http://<server-ip>:9100/` returns the full page. The app's host guard rejects a raw-IP `Host` with a 400, but a spoofed header walks straight past it. Note the asymmetry: the *published* port binds loopback, while the *container* still binds `0.0.0.0` via `UMBRAL_BIND_ADDR`, because a container that binds loopback is unreachable even from its own host.
 
 - **Uploads live in the `media` named volume**, never in an image layer. Plugin logos and cover images are written to `/app/media` by `StoragePlugin`. Without the volume, every `docker compose build` would silently discard everything users uploaded.
-- **The Dockerfile builds and runs in the same `WORKDIR` (`/app`).** Every website app resolves its templates with `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")`, and `env!` bakes the builder's absolute path into the binary at compile time. Build in one directory and run in another and the image builds perfectly, then every plugin-rendered page returns 500 on the first request.
+- **The binary must be compiled at `/app`, in `rust:1-bookworm`.** Every website app resolves its templates with `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")`, and `env!` freezes the *builder's* absolute path into the binary's `.rodata` at compile time. Compile it in a GitHub runner's checkout and the binary hunts for its templates at `/__w/umbral/umbral/...` forever — the image builds perfectly and every plugin-rendered page returns 500 on the first request. (`--remap-path-prefix` does not help: it rewrites debug info and `file!()`, not a cargo environment variable.) `rust:1-bookworm` and `debian:bookworm-slim` are both Debian 12, so glibc 2.36 and OpenSSL 3 match exactly; building on a bare `ubuntu-22.04` runner would link glibc 2.35 and merely *happen* to run. Both the CI job and the Dockerfile assert this by grepping the binary for `/app/plugins/public`, so a wrongly-built binary fails the build instead of production.
 
 ## Secrets (sops + age)
 

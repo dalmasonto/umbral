@@ -2,6 +2,11 @@
 /styles/node_modules
 /umbral_website.db*
 
+# The compiled release binary. CI builds it and ships it straight to the server;
+# it is a build artefact, never committed. Produce one locally with
+# `bash scripts/build_binary.sh`.
+/dist
+
 # Plaintext secrets. Only their sops-encrypted form (secret.env) is committed.
 .env
 .prod.env

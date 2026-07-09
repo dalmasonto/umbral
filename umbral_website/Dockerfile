@@ -1,46 +1,28 @@
 # syntax=docker/dockerfile:1
 #
-# The Umbral website (crates/umbral from crates.io, not from the local workspace).
+# Runtime image for the Umbral website. It COMPILES NOTHING.
 #
-# Build context is `umbral_website/` and nothing outside it — that is why
-# Cargo.toml pins `umbral* = "0.0.6"` from the registry instead of path-depping
-# `../crates`. A path dep would reach outside the context and the build would fail.
+# CI builds the release binary (see .github/workflows/deploy-website.yml) and
+# ships it as `dist/umbral_website`. The server then assembles this image in
+# seconds -- a handful of COPY layers -- instead of compiling 468 registry
+# crates, which took ~28 minutes on a cold VPS.
 #
-# BuildKit cache mounts persist the cargo registry + target/ between builds, so a
-# plain `docker compose build` only recompiles what actually changed.
+# The binary MUST be built inside `rust:1-bookworm` with the source at /app:
 #
-# WORKDIR IS LOAD-BEARING AND MUST MATCH ACROSS BOTH STAGES.
-# Every website plugin resolves its templates with
-#     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")
-# and `env!` bakes the builder's ABSOLUTE path into the binary at compile time.
-# Build in /app and run in /app, and `/app/plugins/<name>/templates` is still
-# valid at runtime. Build in /build and run in /app, and the image builds fine
-# but every plugin-rendered page 500s on the first request. Do not "tidy" these.
-
-FROM rust:1-bookworm AS builder
-
-RUN apt-get update \
- && apt-get install -y --no-install-recommends pkg-config libssl-dev \
- && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY . .
-
-# build.rs shells out to Tailwind only when styles/node_modules exists. The image
-# never ships node, so it takes the lenient branch and uses the committed
-# static/css/umbral.css. That is intentional: CSS is a build-time artefact of the
-# repo, not of the image.
+#   * SAME DISTRO. rust:1-bookworm and debian:bookworm-slim are both Debian 12:
+#     glibc 2.36, OpenSSL 3. Building on a plain ubuntu-22.04 runner would link
+#     glibc 2.35 and merely *happen* to run here. That is luck, not a contract.
 #
-# target/ and the cargo caches are mounts, not layers — copy the binary OUT
-# before the mount detaches at the end of this RUN.
-RUN --mount=type=cache,target=/app/target \
-    --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --release --locked \
- && cp target/release/umbral_website /usr/local/bin/umbral_website
+#   * SAME PATH. Every website plugin resolves its templates with
+#         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")
+#     and `env!` freezes the BUILDER's absolute path into the binary's .rodata at
+#     compile time. Build at /__w/umbral/umbral/... (a GitHub runner's checkout)
+#     and the binary looks for its templates there forever. `--remap-path-prefix`
+#     does not help: it rewrites debug info and file!(), not a cargo env var.
+#
+# To build the binary locally with the same guarantees: bash scripts/build_binary.sh
 
-# --- slim runtime ---------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim
 
 # ca-certificates: outbound TLS to the OAuth providers (Google, GitHub).
 # libssl3: the OpenSSL runtime the binary links against.
@@ -51,20 +33,25 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=builder /usr/local/bin/umbral_website /usr/local/bin/umbral_website
+COPY dist/umbral_website /usr/local/bin/umbral_website
+
+# Fail the BUILD, not the first request. If the binary was compiled anywhere
+# other than /app, its baked CARGO_MANIFEST_DIR paths point at the build machine
+# and every plugin-rendered page returns 500 while the image builds perfectly.
+# The literal lives in .rodata and survives `strip`.
+RUN chmod +x /usr/local/bin/umbral_website; \
+    if ! grep -qa '/app/plugins/public' /usr/local/bin/umbral_website; then \
+      echo "FATAL: dist/umbral_website was not compiled with its source at /app."; \
+      echo "       Its templates would resolve to the build machine's paths."; \
+      echo "       Rebuild with scripts/build_binary.sh (or the CI build job)."; \
+      exit 1; \
+    fi
 
 # Site-level templates, resolved RELATIVE to WORKDIR.
 COPY templates ./templates
 
-# umbral.toml is deliberately NOT shipped. Settings merge as
-# `Toml::file("umbral.toml")` THEN `Env::prefixed("UMBRAL_")`, so env wins — but
-# the file declares `environment = "Dev"`, which would override a release
-# binary's secure `Prod` default. Baking it in means one forgotten env var
-# silently disables Host-header validation and re-permits the dev secret key.
-# In the image, /app/.env is the single source of truth.
-
 # Per-plugin templates, resolved via the ABSOLUTE baked CARGO_MANIFEST_DIR.
-# This must land at /app/plugins/<name>/templates — see the note at the top.
+# These must land at /app/plugins/<name>/templates -- see the note at the top.
 COPY plugins ./plugins
 
 # `migrate` reads ./migrations/<plugin>/ relative to WORKDIR.
@@ -73,15 +60,16 @@ COPY migrations ./migrations
 # StoragePlugin::static_files("/static", "./static").
 COPY static ./static
 
-# StoragePlugin::media("/media", "./media") — user uploads. Created empty here and
-# mounted over by the `media` named volume in compose, so uploads survive a
-# rebuild. Without the volume, every deploy would silently drop uploaded images.
+# StoragePlugin::media("/media", "./media") -- user uploads. Created empty and
+# mounted over by the `media` named volume, so uploads survive a rebuild.
 RUN mkdir -p ./media
 
-# Bake the environment: umbral auto-loads /app/.env. ENV_FILE is the decrypted
-# production env (sops -> .prod.env on deploy). It must set
-# UMBRAL_BIND_ADDR=0.0.0.0:9100 — binding 127.0.0.1 inside a container makes the
-# published port unreachable from the host.
+# umbral.toml is deliberately NOT shipped: it declares `environment = "Dev"`,
+# which would override a release binary's secure Prod default. In the image,
+# /app/.env is the single source of truth.
+#
+# .prod.env never leaves the server -- CI builds only the binary, so production
+# secrets are baked here, on the box, exactly as before.
 ARG ENV_FILE=.prod.env
 COPY ${ENV_FILE} ./.env
 

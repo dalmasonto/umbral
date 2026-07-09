@@ -1,20 +1,25 @@
 # Deploy the Umbral website (umbral_website/ -> umbralrs.dev).
 #
-# Manual-trigger only. It decrypts the sops-encrypted env, stages a clean copy of
-# `umbral_website/` — and ONLY that directory's files — then scp's it to the
-# server. Bringing the stack up stays MANUAL on the server:
+# Manual-trigger only. Two jobs:
 #
+#   build     compiles the release binary in rust:1-bookworm AT /app.
+#   transfer  decrypts the env, stages a payload of umbral_website's files plus
+#             that binary, and scp's it to the server.
+#
+# The server COMPILES NOTHING. Its `docker compose build` is a handful of COPY
+# layers (~10s) instead of 468 registry crates (~28 min cold). No image is
+# published anywhere: only the binary crosses the wire, and .prod.env never
+# leaves the box -- the image is assembled on the server, where the secret
+# already lives.
+#
+# GitHub Actions is free and unlimited for public repos on standard runners, so
+# the build minutes cost nothing.
+#
+# Bringing the stack up stays MANUAL on the server:
 #   cd /home/umbral_website && docker compose build && docker compose up -d
 #
-# Nothing from `crates/`, `plugins/`, `documentation/` or `examples/` is shipped.
-# The site depends on the framework through crates.io (`umbral* = "0.0.6"`), not
-# through path deps, so `umbral_website/` builds standalone on the server.
-#
-# Caddy terminates TLS and reverse-proxies the site:
-#
-#   umbralrs.dev, www.umbralrs.dev {
-#       reverse_proxy localhost:9100
-#   }
+# Caddy terminates TLS and proxies umbralrs.dev -> 127.0.0.1:9100 (the compose
+# port is published on loopback only, so Caddy is the sole way in).
 #
 # Required repo secrets: AGE_PRIVATE_KEY, CONTABO_HOST, CONTABO_USER, SSH_PRIVATE_KEY.
 
@@ -31,7 +36,80 @@ concurrency:
   cancel-in-progress: false # never interrupt a transfer mid-flight
 
 jobs:
+  build:
+    runs-on: ubuntu-22.04
+    # Same base image as the runtime's debian:bookworm-slim -- both are Debian 12
+    # (glibc 2.36, OpenSSL 3). Compiling on the bare ubuntu-22.04 runner would
+    # link glibc 2.35 and only happen to run on the server.
+    container: rust:1-bookworm
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends pkg-config libssl-dev
+
+      # THE SOURCE MUST BE COMPILED AT /app.
+      # Every website plugin resolves its templates with
+      #   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")
+      # and env! freezes the builder's ABSOLUTE path into the binary. Building in
+      # the runner's checkout (/__w/umbral/umbral/...) would make the binary look
+      # for templates there at runtime, and every plugin page would 500 in prod
+      # while the image built perfectly. The runtime image runs at /app.
+      - name: Stage the source at /app
+        run: |
+          mkdir -p /app
+          cp -a umbral_website/. /app/
+          rm -rf /app/styles/node_modules   # build.rs falls back to the committed CSS
+          rm -rf /app/target
+
+      # Keyed on Cargo.lock: the 468 registry deps only recompile when a
+      # dependency actually changes. 11 first-party crates rebuild every run.
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+            /app/target
+          key: umbral-website-${{ runner.os }}-${{ hashFiles('umbral_website/Cargo.lock') }}
+          restore-keys: |
+            umbral-website-${{ runner.os }}-
+
+      - name: Build release binary
+        working-directory: /app
+        run: |
+          cargo build --release --locked
+          strip target/release/umbral_website
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp target/release/umbral_website "$GITHUB_WORKSPACE/dist/umbral_website"
+
+      # Fail here rather than at the first HTTP request in production. The
+      # Dockerfile repeats this assertion when it assembles the image.
+      - name: Verify the binary baked /app paths
+        run: |
+          found=$(grep -a -o -E "/app/plugins/[a-z_]+" dist/umbral_website | sort -u | wc -l)
+          echo "plugin manifest dirs resolving under /app: $found"
+          grep -a -o -E "/app/plugins/[a-z_]+" dist/umbral_website | sort -u | sed 's/^/  /'
+          if [ "$found" -lt 10 ]; then
+            echo "::error::Binary was not compiled at /app — its templates would resolve to the build machine's paths."
+            exit 1
+          fi
+          ls -lh dist/umbral_website
+          file dist/umbral_website || true
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: umbral_website-binary
+          path: dist/umbral_website
+          retention-days: 3
+          if-no-files-found: error
+
   transfer:
+    needs: build
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
@@ -64,9 +142,26 @@ jobs:
             --exclude='secret.env' \
             umbral_website/ payload/
 
+      - name: Download the CI-built binary
+        uses: actions/download-artifact@v4
+        with:
+          name: umbral_website-binary
+          path: payload/dist
+
+      - name: Re-verify the binary before shipping it
+        run: |
+          chmod +x payload/dist/umbral_website
+          found=$(grep -a -o -E "/app/plugins/[a-z_]+" payload/dist/umbral_website | sort -u | wc -l)
+          if [ "$found" -lt 10 ]; then
+            echo "::error::Artifact does not carry /app-rooted plugin paths; refusing to deploy."
+            exit 1
+          fi
+          echo "binary OK ($found /app plugin dirs, $(du -h payload/dist/umbral_website | cut -f1))"
+
       # secret.env is committed; .prod.env is not. Decrypt into the payload so the
       # plaintext exists only inside the directory we are about to ship. The
-      # Dockerfile bakes it in as /app/.env, and compose feeds it to postgres.
+      # Dockerfile bakes it in as /app/.env ON THE SERVER, and compose feeds the
+      # same file to postgres. CI never sees a production secret in an image.
       - name: Decrypt the production env
         run: |
           test -f umbral_website/secret.env || {
@@ -76,7 +171,7 @@ jobs:
           sops --decrypt umbral_website/secret.env > payload/.prod.env
           # Fail loudly rather than shipping an env that boots into a broken state.
           grep -q '^UMBRAL_BIND_ADDR=0\.0\.0\.0:' payload/.prod.env || {
-            echo "::error::UMBRAL_BIND_ADDR must bind 0.0.0.0 — a loopback bind is unreachable from outside the container."
+            echo "::error::UMBRAL_BIND_ADDR must bind 0.0.0.0 — a loopback bind inside the container is unreachable even from its own host."
             exit 1
           }
 
@@ -99,11 +194,10 @@ jobs:
 
       - name: Next steps
         run: |
-          echo "umbral_website synced to /home/umbral_website."
-          echo "SSH in and bring the stack up:"
+          echo "umbral_website + the prebuilt binary synced to /home/umbral_website."
+          echo "SSH in and bring the stack up (the build now takes seconds, not minutes):"
           echo "  cd /home/umbral_website"
-          echo "  docker compose build      # builds umbral-website:latest (migrate reuses it)"
-          echo "  docker compose up -d      # postgres -> migrate -> web on :9100"
-          echo "  docker compose run --rm web createsuperuser"
+          echo "  docker compose build      # COPY layers only — no compilation"
+          echo "  docker compose up -d      # postgres -> migrate -> web on 127.0.0.1:9100"
           echo ""
-          echo "Caddy should reverse_proxy umbralrs.dev -> localhost:9100."
+          echo "Caddy proxies umbralrs.dev -> localhost:9100."
