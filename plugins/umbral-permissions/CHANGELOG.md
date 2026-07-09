@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-permissions-v0.0.5...umbral-permissions-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(permissions)* object (row-level) permission primitive (gaps3 #28 P2)
+- *(orm)* BEGIN IMMEDIATE for SQLite write transactions — the root-cause flake fix
+
+### Fixed
+
+- *(permissions)* log the discarded has_perm DB error before denying (audit_2 P5, gaps3 #27)
+
+### Other
+
+- *(workspace)* cargo fmt + save in-flight edits before gaps3 #28
+- pin file-based SQLite test pools to max_connections(1) (the real flake fix)
+- give raw SQLite test pools a busy_timeout to end SQLITE_BUSY flakes
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-permissions-v0.0.4...umbral-permissions-v0.0.5) - 2026-07-05
 
 ### Added

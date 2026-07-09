@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-security-v0.0.5...umbral-security-v0.0.6) - 2026-07-07
+
+### Added
+
+- *(security)* SecurityConfig::production_hardened() one-call prod preset (audit_2 S1)
+
+### Fixed
+
+- *(security)* resolve the CSRF secret per request, not at wrap_router (audit_2 S3, gaps3 #27)
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-security-v0.0.4...umbral-security-v0.0.5) - 2026-07-05
 
 ### Other
