@@ -67,7 +67,17 @@ services:
       migrate:
         condition: service_completed_successfully
     ports:
-      - "9100:9100" # UMBRAL_BIND_ADDR=0.0.0.0:9100
+      # Loopback ONLY. `- "9100:9100"` publishes on 0.0.0.0, which put the whole
+      # site on the public internet over PLAINTEXT http, bypassing Caddy and TLS:
+      #
+      #     curl -H 'Host: umbralrs.dev' http://<server-ip>:9100/   ->  200, full page
+      #
+      # The app's own host guard 400s a raw-IP Host, but a spoofed header walks
+      # straight past it. Caddy runs on the host and dials localhost:9100, so
+      # binding the published port to 127.0.0.1 costs nothing and closes it.
+      # The CONTAINER still binds 0.0.0.0 (see UMBRAL_BIND_ADDR) — a container
+      # that binds loopback is unreachable even from its own host.
+      - "127.0.0.1:9100:9100"
     volumes:
       # Uploaded plugin logos / cover images live here. A named volume, not a
       # bind mount or an image layer: without it, every `docker compose build`

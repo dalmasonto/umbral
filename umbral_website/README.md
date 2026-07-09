@@ -86,7 +86,7 @@ docker compose down                           # stop everything
 |---|---|---|
 | `postgres` | – | PostgreSQL 16, data in the `pgdata` volume. **Not published** — reachable only inside the compose network. |
 | `migrate` | `migrate` | One-shot: applies migrations, then exits. `web` waits for it to succeed. |
-| `web` | `serve` | The site on `:9100`. Env is baked from `.prod.env` at build time. |
+| `web` | `serve` | The site on `:9100`, published to **127.0.0.1 only** so Caddy is the sole way in. Env is baked from `.prod.env` at build time. |
 
 Caddy terminates TLS and proxies the domain to the published port:
 
@@ -96,7 +96,9 @@ umbralrs.dev, www.umbralrs.dev {
 }
 ```
 
-Two things about this stack are load-bearing and easy to break:
+Three things about this stack are load-bearing and easy to break:
+
+- **The published port is bound to `127.0.0.1`.** Writing `- "9100:9100"` instead publishes on `0.0.0.0`, putting the entire site on the public internet over plaintext HTTP, bypassing Caddy and TLS — `curl -H 'Host: umbralrs.dev' http://<server-ip>:9100/` returns the full page. The app's host guard rejects a raw-IP `Host` with a 400, but a spoofed header walks straight past it. Note the asymmetry: the *published* port binds loopback, while the *container* still binds `0.0.0.0` via `UMBRAL_BIND_ADDR`, because a container that binds loopback is unreachable even from its own host.
 
 - **Uploads live in the `media` named volume**, never in an image layer. Plugin logos and cover images are written to `/app/media` by `StoragePlugin`. Without the volume, every `docker compose build` would silently discard everything users uploaded.
 - **The Dockerfile builds and runs in the same `WORKDIR` (`/app`).** Every website app resolves its templates with `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")`, and `env!` bakes the builder's absolute path into the binary at compile time. Build in one directory and run in another and the image builds perfectly, then every plugin-rendered page returns 500 on the first request.

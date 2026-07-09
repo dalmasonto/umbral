@@ -41,6 +41,7 @@ The website's own sub-plugins (`plugins/<app>/`) stay path deps, but must use **
 
 - sops's dotenv parser **rejects blank lines** — `.prod.env` uses `#` separators.
 - `UMBRAL_BIND_ADDR` must be `0.0.0.0:9100`; a container binding loopback is unreachable even when the port is published. The workflow greps for this and fails the deploy otherwise.
+- **Compose must publish to `127.0.0.1:9100:9100`, not `9100:9100`.** These two settings look contradictory but are not: the container binds `0.0.0.0` *inside* its netns, and Docker publishes that port on the host's loopback only. Publishing on `0.0.0.0` served the whole site over plaintext HTTP straight from the public internet, bypassing Caddy and TLS — the host guard 400s a raw-IP `Host`, but `curl -H 'Host: umbralrs.dev' http://<ip>:9100/` returned 200 with the full page. Caddy runs on the host, so it reaches loopback fine.
 - `UMBRAL_DATABASE_URL`'s host must be `postgres` (the compose service name), and its user/password must match the `POSTGRES_*` triple in the same file.
 - **Never rotate `UMBRAL_MASK_PUBLIC_KEY` / `UMBRAL_MASK_PRIVATE_KEY`** — a new keypair makes every existing `Masked<T>` column permanently unreadable.
 
