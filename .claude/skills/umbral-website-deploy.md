@@ -65,7 +65,7 @@ The site serves HTML, SSE (`/realtime/sse`) and WebSockets (`/realtime/ws`) on *
 
 ## Pitfalls
 
-- `docker compose up -d` alone tries to **pull** `umbral-website:latest`; `migrate` reuses the image `web` builds. Always `docker compose build` first.
+- `docker compose up -d` alone tries to **pull** `umbral-website:latest`; `migrate` reuses the image `web` builds. Always `docker compose build` first. The workflow's `release` job does both, then polls `docker inspect --format '{{.State.Health.Status}}'` on the `web` container and fails the run (dumping `migrate` + `web` logs) if it never reaches `healthy`. `docker compose up -d` returns as soon as containers are *created*, so a deploy that doesn't poll health will go green over a crashlooping site.
 - `build.rs` shells out to Tailwind only when `styles/node_modules` exists. The image ships no node, so it takes the lenient branch and uses the committed `static/css/umbral.css`. CSS is a build-time artefact of the repo, not the image.
 - `main`'s workspace `Cargo.toml` drifted once: it read `0.0.5` while `0.0.6` was published and tagged, because release-plz's release commit lands on the tag, not on `main`. If the website's crates.io pins ever fail to resolve, check that drift first.
 

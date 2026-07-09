@@ -1,10 +1,14 @@
 # Deploy the Umbral website (umbral_website/ -> umbralrs.dev).
 #
-# Manual-trigger only. Two jobs:
+# Manual-trigger only. Three jobs:
 #
 #   build     compiles the release binary in rust:1-bookworm AT /app.
 #   transfer  decrypts the env, stages a payload of umbral_website's files plus
 #             that binary, and scp's it to the server.
+#   release   ssh's in, rebuilds the image (COPY layers only) and restarts the
+#             stack, then waits for the healthcheck. Fails the run if `migrate`
+#             errors or `web` never turns healthy -- a deploy that silently
+#             leaves a broken site is worse than one that goes red.
 #
 # The server COMPILES NOTHING. Its `docker compose build` is a handful of COPY
 # layers (~10s) instead of 468 registry crates (~28 min cold). No image is
@@ -15,8 +19,8 @@
 # GitHub Actions is free and unlimited for public repos on standard runners, so
 # the build minutes cost nothing.
 #
-# Bringing the stack up stays MANUAL on the server:
-#   cd /home/umbral_website && docker compose build && docker compose up -d
+# The `release` job brings the stack up for you. Dispatch with bring_up=false to
+# transfer the files and stop there (e.g. to inspect the box before restarting).
 #
 # Caddy terminates TLS and proxies umbralrs.dev -> 127.0.0.1:9100 (the compose
 # port is published on loopback only, so Caddy is the sole way in).
@@ -27,6 +31,11 @@ name: deploy-website
 
 on:
   workflow_dispatch:
+    inputs:
+      bring_up:
+        description: "Rebuild the image and restart the stack on the server"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -192,12 +201,65 @@ jobs:
           target: "/home/umbral_website/"
           overwrite: true
 
-      - name: Next steps
+      - name: Transferred
         run: |
           echo "umbral_website + the prebuilt binary synced to /home/umbral_website."
-          echo "SSH in and bring the stack up (the build now takes seconds, not minutes):"
-          echo "  cd /home/umbral_website"
-          echo "  docker compose build      # COPY layers only — no compilation"
-          echo "  docker compose up -d      # postgres -> migrate -> web on 127.0.0.1:9100"
-          echo ""
+
+  release:
+    needs: transfer
+    if: ${{ inputs.bring_up }}
+    runs-on: ubuntu-22.04
+    steps:
+      # `docker compose build` here is only COPY layers -- the binary arrived
+      # prebuilt. `up -d` runs postgres -> migrate -> web; compose fails the
+      # command if `migrate` exits non-zero (service_completed_successfully),
+      # which is how a bad migration turns this run red instead of quietly
+      # leaving the old container serving.
+      - name: Build the image and restart the stack
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.CONTABO_HOST }}
+          username: ${{ secrets.CONTABO_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 15m
+          script_stop: true # abort on the first failing command
+          script: |
+            set -euo pipefail
+            cd /home/umbral_website
+
+            echo "::group::docker compose build"
+            docker compose build
+            echo "::endgroup::"
+
+            echo "::group::docker compose up -d"
+            docker compose up -d
+            echo "::endgroup::"
+
+            # `up -d` returns as soon as the containers are created; the web
+            # healthcheck (curl -H 'Host: umbralrs.dev' 127.0.0.1:9100) needs a
+            # moment. Poll it rather than sleeping a guessed interval.
+            cid=$(docker compose ps -q web)
+            for i in $(seq 1 40); do
+              status=$(docker inspect --format '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo unknown)
+              [ "$status" = "healthy" ] && break
+              if [ "$status" = "unhealthy" ]; then break; fi
+              sleep 5
+            done
+
+            echo "web health: ${status:-unknown}"
+            docker compose ps
+
+            if [ "${status:-unknown}" != "healthy" ]; then
+              echo "----- migrate logs -----"; docker compose logs --no-color --tail=40 migrate || true
+              echo "----- web logs -----";     docker compose logs --no-color --tail=60 web || true
+              echo "web did not become healthy"
+              exit 1
+            fi
+
+            echo "----- migrations applied -----"
+            docker compose logs --no-color migrate 2>/dev/null | grep -iE "applied [0-9]+ migration|no pending" | tail -3 || true
+
+      - name: Deployed
+        run: |
+          echo "Stack is up and healthy on 127.0.0.1:9100."
           echo "Caddy proxies umbralrs.dev -> localhost:9100."

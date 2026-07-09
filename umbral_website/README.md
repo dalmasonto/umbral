@@ -128,7 +128,9 @@ sops's dotenv parser rejects blank lines, so `.prod.env` uses `#` comment lines 
 
 `.github/workflows/deploy-website.yml` is manual (`workflow_dispatch`). It decrypts `secret.env`, stages a clean copy of `umbral_website/` — excluding `target/`, `styles/node_modules/`, `media/`, the local `.env`, and `keys.txt` — and `scp`s only that directory's files to `/home/umbral_website` on the server. Nothing from `crates/`, `plugins/`, `documentation/`, or `examples/` is transferred.
 
-Bringing the stack up is deliberately manual:
+A third `release` job then SSHes in, rebuilds the image (`COPY` layers only — the binary arrives prebuilt), restarts the stack, and **polls the healthcheck**. It fails the run if `migrate` exits non-zero or `web` never turns healthy, dumping the `migrate` and `web` logs first; a deploy that silently leaves a broken site is worse than one that goes red. Dispatch with `bring_up=false` to transfer the files and stop there.
+
+So a normal deploy is one click. To do it by hand anyway:
 
 ```bash
 cd /home/umbral_website && docker compose build && docker compose up -d
