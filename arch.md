@@ -355,4 +355,17 @@ Each milestone is independently demoable. Build the primitives by hand first, th
 | Dev reload         | cargo-watch, listenfd                     |
 | Testing            | axum-test                                 |
 
-> Worth studying for seams (even while building your own): **SeaORM** (ORM on sea-query), **Loco** (full-stack app framework on SeaORM), and **Cot** (a batteries-included Rust framework that builds its own ORM on sea-query and sits on axum, the closest prior art to this project).
+## 9a. Prior art
+
+**Reinhardt** ([kent8192/reinhardt-web](https://github.com/kent8192/reinhardt-web), BSD-3-Clause) is the nearest neighbour in design space and should be read before any of the others. It is a Django/DRF-inspired, batteries-included Rust framework — the same thesis as umbral, down to the joke in the name (Django is named after Django Reinhardt). It began 2025-10-06, ships ~53 crates published in lockstep at 0.3.1, and has an ORM with a QuerySet API, migrations autodetected from `#[model(...)]` definitions, an auto-generated Django-style admin, DRF-style serializers/ViewSets/pagination/throttling, multi-strategy auth, signals, and `startproject`/`startapp` scaffolding. It also has things umbral does not: FastAPI-style compile-time **dependency injection** (via `inventory`), a **WASM frontend with SSR** (`reinhardt-pages`), **GraphQL and gRPC**, i18n, mail, and a `reinhardt-cloud-*` line suggesting a hosted offering. Its ORM targets four backends (Postgres, SQLite, MySQL, CockroachDB) to umbral's two. Its author states it is not production-ready.
+
+It shares umbral's core structural discipline: `reinhardt-core` names no battery (its only intra-family dependency is `reinhardt-macros`), so the dependency inversion holds there too.
+
+**The distinction that matters is how the batteries attach.** Reinhardt composes with **Cargo feature presets** — `minimal` / `standard` / `full`, with `admin`, `graphql`, `websockets` as feature flags on the facade. umbral composes with a **runtime `Plugin` trait** (19 methods: models, routes, middleware, migrations, templates, static files, system checks, commands, `on_ready`, …) registered through an explicit builder. A feature flag turns code on; it does not give a third-party crate the same standing as a built-in. Under umbral's contract `AuthPlugin` and a stranger's plugin are the same `Box<dyn Plugin>` — that is the property to defend, and it is where the two designs genuinely diverge. Reinhardt's `reinhardt-apps` provides a Django-style app registry (`AppLabel`, `AppReadyHook`), but the framework's own batteries are installed as features, not as apps.
+
+Two places to read Reinhardt for concrete lessons rather than philosophy:
+
+- `reinhardt-db/src/migrations/dependency.rs` — migration dependencies are a first-class enum: `Required { app_label, migration_name }`, plus **`Swappable`** (Django's `AUTH_USER_MODEL` pattern) and **`Optional`** (conditional on whether another app is installed). umbral defines `Migration::depends_on` and never reads it for ordering (see `planning/gaps3.md` #40); this is what the type should probably grow into.
+- `reinhardt-db/src/migrations/autodetector.rs` — carries a `model_dependencies` map and topologically orders operations within a migration. Worth comparing against our snapshot-diff autodetector, especially for the destructive cases (drop vs. rename). The author's own 0.1 announcement asks the community how much explicit control users want over destructive migrations, which is the same wall we hit.
+
+Also worth studying for seams: **SeaORM** (ORM on sea-query), **Loco** (full-stack app framework on SeaORM), and **Cot** (batteries-included, builds its own ORM on sea-query, sits on axum).
