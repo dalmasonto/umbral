@@ -235,21 +235,41 @@ jobs:
             docker compose up -d
             echo "::endgroup::"
 
-            # `up -d` returns as soon as the containers are created; the web
+            # `up -d` returns as soon as the containers are CREATED; the web
             # healthcheck (curl -H 'Host: umbralrs.dev' 127.0.0.1:9100) needs a
-            # moment. Poll it rather than sleeping a guessed interval.
-            cid=$(docker compose ps -q web)
+            # moment, and start_period is 30s. Poll rather than sleep a guess.
+            #
+            # Every command here is `|| true`-guarded and the result checked
+            # explicitly. `set -e` aborts on a failed command substitution in an
+            # assignment (`cid=$(cmd)`), which is exactly how the first version of
+            # this step died silently right after `up -d` -- reporting a failed
+            # release for a site that was in fact serving correctly.
+            echo "resolving the web container id..."
+            cid=$(docker compose ps -q web 2>/dev/null || true)
+            if [ -z "$cid" ]; then
+              cid=$(docker ps -q --filter "name=umbral_website-web" | head -1 || true)
+            fi
+            echo "cid=${cid:-<empty>}"
+            if [ -z "$cid" ]; then
+              docker compose ps || true
+              echo "could not resolve the web container"
+              exit 1
+            fi
+
+            status=unknown
             for i in $(seq 1 40); do
               status=$(docker inspect --format '{{.State.Health.Status}}' "$cid" 2>/dev/null || echo unknown)
-              [ "$status" = "healthy" ] && break
-              if [ "$status" = "unhealthy" ]; then break; fi
+              echo "  [$i] web health: $status"
+              if [ "$status" = "healthy" ] || [ "$status" = "unhealthy" ]; then
+                break
+              fi
               sleep 5
             done
 
-            echo "web health: ${status:-unknown}"
-            docker compose ps
+            echo "web health: $status"
+            docker compose ps || true
 
-            if [ "${status:-unknown}" != "healthy" ]; then
+            if [ "$status" != "healthy" ]; then
               echo "----- migrate logs -----"; docker compose logs --no-color --tail=40 migrate || true
               echo "----- web logs -----";     docker compose logs --no-color --tail=60 web || true
               echo "web did not become healthy"
