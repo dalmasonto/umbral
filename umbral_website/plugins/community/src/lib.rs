@@ -2,8 +2,8 @@
 //!
 //! DB-driven: channels come from `SocialLink`, the subscribe URL from the
 //! active `NewsletterConfig`, and the newsletter list blurbs from
-//! `CommunityResource` rows (`kind = newsletter`). Seeded idempotently in
-//! `on_ready` and via the `seed_orm_data` command.
+//! `CommunityResource` rows (`kind = newsletter`). Seeded explicitly via the
+//! website `seed_orm_data` / `seed_channels` commands.
 
 pub mod models;
 pub mod seed;
@@ -48,17 +48,8 @@ impl Plugin for CommunityPlugin {
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        // Seed the hub's content on first boot. Idempotent; failures log
-        // but never crash startup (the page falls back to empty sections).
-        tokio::spawn(async move {
-            match seed::seed().await {
-                Ok((0, 0, 0)) => {}
-                Ok((c, n, l)) => {
-                    tracing::info!("community: seeded {c} channels, {n} newsletter, {l} lists")
-                }
-                Err(e) => tracing::warn!("community: seed failed: {e}"),
-            }
-        });
+        // Content seed writes are command-driven; normal server startup and
+        // other CLI commands should not mutate the database.
         Ok(())
     }
 }

@@ -67,6 +67,7 @@ cd styles && npm install && npm run build
 | `createsuperuser` | Create an admin (no default admin is seeded). |
 | `showmigrations` | List applied vs pending migrations. |
 | `seed_orm_data` | Run every website app's idempotent seed. |
+| `seed_plugins` | Refresh only the plugin directory catalog, feature tracker, self-review status, and demo notes. |
 
 > A bare `cargo run` with no subcommand auto-migrates, seeds, and serves — handy for a throwaway dev database. An explicit subcommand (`serve`, `migrate`, …) does **not** auto-migrate.
 

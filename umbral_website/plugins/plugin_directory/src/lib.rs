@@ -133,60 +133,9 @@ impl Plugin for PluginDirectoryPlugin {
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        // Seed the first-party plugin rows the first time the
-        // server starts. The seed is idempotent (short-circuits
-        // when the table is non-empty), so this is safe on every
-        // boot. Failures log a warning but do not crash startup —
-        // the home page falls back to its static table when the
-        // DB is empty.
-        let plugin_name = self.name();
-        tokio::spawn(async move {
-            match seed::seed_official_plugins().await {
-                Ok(0) => tracing::debug!(
-                    "{}: official plugin table already populated, seed skipped",
-                    plugin_name
-                ),
-                Ok(n) => tracing::info!("{}: seeded {} official plugin rows", plugin_name, n),
-                Err(e) => tracing::warn!(
-                    "{}: official plugin seed failed: {e}. \
-                     Home page will fall back to the static plugin table.",
-                    plugin_name
-                ),
-            }
-            // Back-fill the editorial audit status on existing rows (the
-            // row insert above short-circuits once populated, so these
-            // updates are how already-seeded directories gain their audit
-            // values). Idempotent — only rows still at the default move.
-            match seed::backfill_audit_status().await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!("{}: back-filled audit status on {} rows", plugin_name, n),
-                Err(e) => tracing::warn!("{}: audit-status back-fill failed: {e}", plugin_name),
-            }
-            // Re-assert the curated Markdown `full_content` / `setup_notes` on
-            // already-seeded rows. The row insert short-circuits on a present
-            // slug, so a copy edit to the seed reaches the live rows only
-            // through this back-fill. Only writes rows whose content differs.
-            match seed::backfill_plugin_content().await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!("{}: refreshed content on {} plugin rows", plugin_name, n),
-                Err(e) => tracing::warn!("{}: plugin-content back-fill failed: {e}", plugin_name),
-            }
-            // Seed each official plugin's feature tracker rows so the
-            // /prebuilt grid and the /plugins/{slug} tracker render real
-            // data. Idempotent per plugin (back-fills already-seeded rows).
-            match seed::seed_plugin_features().await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!("{}: seeded {} plugin feature rows", plugin_name, n),
-                Err(e) => tracing::warn!("{}: plugin-feature seed failed: {e}", plugin_name),
-            }
-            // Seed demo discussion notes so the admin dashboard's
-            // engagement widgets have real data. Idempotent.
-            match seed::seed_demo_comments().await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!("{}: seeded {} demo discussion notes", plugin_name, n),
-                Err(e) => tracing::warn!("{}: demo comment seed failed: {e}", plugin_name),
-            }
-        });
+        // Plugin-directory seed data is intentionally command-driven:
+        // `cargo run -- seed_plugins` refreshes the catalog without making
+        // normal web-server startup perform database writes.
         Ok(())
     }
 }

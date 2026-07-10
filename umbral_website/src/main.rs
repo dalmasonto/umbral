@@ -36,8 +36,8 @@ use umbral_storage::StoragePlugin;
 // widgets module.
 mod widgets;
 
-// The `seed_orm_data` management command (orchestrates every website
-// plugin's idempotent seed).
+// Seed management commands: `seed_orm_data` for all website content and
+// `seed_plugins` for the plugin-directory catalog only.
 mod seed_command;
 
 #[tokio::main]
@@ -192,7 +192,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                 }),
         )
-        // Contributes the `seed_orm_data` management command.
+        // Contributes website seed management commands.
         .plugin(seed_command::SeedDataPlugin::default())
         // --- Admin/API/security --------------------------------------------
         .plugin(

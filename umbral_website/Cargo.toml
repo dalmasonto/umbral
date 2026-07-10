@@ -50,7 +50,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"  # dashboard Table widget rows are `Vec<serde_json::Value>`.
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }
-clap = "4"          # the `seed_orm_data` management command.
+clap = "4"          # website seed management commands.
 async-trait = "0.1" # `PluginCommand` is an async trait.
 
 # Once you `umbral startapp <plugin>` or `umbral startplugin <plugin>`, add

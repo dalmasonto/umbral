@@ -32,9 +32,8 @@ use umbral::plugin::{Plugin as PluginTrait, PluginError};
 
 /// A minimal test plugin that only contributes the directory's template
 /// directory — we deliberately do NOT register the real
-/// `PluginDirectoryPlugin` because its `on_ready` seeds eight official
-/// rows asynchronously, which would race the test's own deterministic
-/// seed and make the row counts non-reproducible.
+/// `PluginDirectoryPlugin` so the test owns all route/model fixture data and
+/// keeps row counts reproducible.
 #[derive(Debug, Default, Clone)]
 struct TemplatesOnly;
 

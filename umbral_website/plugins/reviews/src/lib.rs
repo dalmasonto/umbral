@@ -44,13 +44,7 @@ impl Plugin for ReviewsPlugin {
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        tokio::spawn(async move {
-            match seed::seed().await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!("reviews: seeded {n} reviews"),
-                Err(e) => tracing::warn!("reviews: seed failed: {e}"),
-            }
-        });
+        // Review seed writes are command-driven via `seed_orm_data`.
         Ok(())
     }
 }

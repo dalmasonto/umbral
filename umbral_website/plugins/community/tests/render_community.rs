@@ -14,7 +14,7 @@ use umbral::orm::Model;
 use umbral::plugin::{Plugin as PluginTrait, PluginError};
 
 /// Contributes only the template dirs — we seed deterministically rather
-/// than relying on the real plugin's async `on_ready` seed.
+/// than relying on command-driven seed data.
 #[derive(Debug, Default, Clone)]
 struct TemplatesOnly;
 

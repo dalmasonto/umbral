@@ -47,13 +47,7 @@ impl Plugin for FeaturesPlugin {
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        tokio::spawn(async move {
-            match seed::seed().await {
-                Ok((0, 0)) => {}
-                Ok((c, f)) => tracing::info!("features: seeded {c} categories, {f} features"),
-                Err(e) => tracing::warn!("features: seed failed: {e}"),
-            }
-        });
+        // Feature catalog seed writes are command-driven via `seed_orm_data`.
         Ok(())
     }
 }

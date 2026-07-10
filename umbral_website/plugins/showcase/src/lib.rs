@@ -47,13 +47,7 @@ impl Plugin for ShowcasePlugin {
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        tokio::spawn(async move {
-            match seed::seed().await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!("showcase: seeded {n} entries"),
-                Err(e) => tracing::warn!("showcase: seed failed: {e}"),
-            }
-        });
+        // Showcase seed writes are command-driven via `seed_orm_data`.
         Ok(())
     }
 }

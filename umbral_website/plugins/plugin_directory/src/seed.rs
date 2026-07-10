@@ -1,15 +1,13 @@
 //! Seed data for the plugin directory.
 //!
-//! Populates the first-party Umbral plugin rows so the public
-//! landing page (`plugins/public`) can render the plugin map from
-//! the database instead of falling back to the static table in
-//! `home.html`.
+//! Populates the first-party Umbral plugin rows so the public site can render
+//! the plugin map, detail pages, and per-plugin capability tracker from the
+//! database.
 //!
 //! Idempotent AND self-healing: `seed_official_plugins` get-or-creates each
 //! row by slug (never re-inserting), and `backfill_plugin_content` re-asserts
-//! the curated `full_content` / `setup_notes` on already-seeded rows so a
-//! copy edit ships on the next boot without a DB wipe. Manual full re-seed:
-//! `DELETE FROM plugin_directory_plugin;` then trigger `on_ready` again.
+//! curated official-row copy and metadata on already-seeded rows. Run from the
+//! website binary with `cargo run -- seed_plugins`.
 
 use crate::models::{
     plugin, plugin_feature, CommentKind, CommentModeration, Plugin, PluginComment, PluginFeature,
@@ -41,6 +39,33 @@ struct OfficialRow {
     maturity: PluginMaturity,
     featured: bool,
     display_order: i32,
+}
+
+/// Summary returned by `cargo run -- seed_plugins`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PluginSeedSummary {
+    pub plugins: usize,
+    pub content: u64,
+    pub audit: u64,
+    pub features: usize,
+    pub notes: usize,
+}
+
+/// Run every plugin-directory seed step in the order required for a clean or
+/// already-populated database.
+pub async fn seed_plugins() -> Result<PluginSeedSummary, Box<dyn std::error::Error + Send + Sync>> {
+    let plugins = seed_official_plugins().await?;
+    let content = backfill_plugin_content().await?;
+    let audit = backfill_audit_status().await?;
+    let features = seed_plugin_features().await?;
+    let notes = seed_demo_comments().await?;
+    Ok(PluginSeedSummary {
+        plugins,
+        content,
+        audit,
+        features,
+        notes,
+    })
 }
 
 const OFFICIAL: &[OfficialRow] = &[

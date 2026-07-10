@@ -1,10 +1,12 @@
-//! The `seed_orm_data` management command.
+//! Website seed management commands.
 //!
 //! `cargo run -- seed_orm_data` idempotently populates every page's
 //! content from the ORM: the official plugins, each plugin's feature
 //! tracker, the editorial audit status, demo discussion notes, the
 //! community channels / resources / newsletter, the site navigation, and
 //! the orphan-model content pages (showcase, blog, framework features).
+//! `cargo run -- seed_plugins` runs only the plugin-directory seed, which is
+//! no longer tied to web-server startup.
 //!
 //! It lives in the binary crate because it orchestrates seeds across
 //! several website plugins — only the binary depends on all of them. Each
@@ -18,7 +20,7 @@ use umbral::cli::{CliError, PluginCommand};
 use umbral::plugin::Plugin;
 
 /// A model-less, route-less plugin whose only job is to contribute the
-/// `seed_orm_data` CLI command. Registered in `main.rs`.
+/// website seed CLI commands. Registered in `main.rs`.
 #[derive(Debug, Default, Clone)]
 pub struct SeedDataPlugin;
 
@@ -28,7 +30,11 @@ impl Plugin for SeedDataPlugin {
     }
 
     fn commands(&self) -> Vec<Box<dyn PluginCommand>> {
-        vec![Box::new(SeedOrmData), Box::new(SeedChannels)]
+        vec![
+            Box::new(SeedOrmData),
+            Box::new(SeedPlugins),
+            Box::new(SeedChannels),
+        ]
     }
 }
 
@@ -48,13 +54,15 @@ impl PluginCommand for SeedOrmData {
         println!("Seeding ORM data...");
 
         // --- plugin_directory: plugins + features + audit + demo notes -----
-        let plugins = plugin_directory::seed::seed_official_plugins().await?;
-        let audit = plugin_directory::seed::backfill_audit_status().await?;
-        let features = plugin_directory::seed::seed_plugin_features().await?;
-        let notes = plugin_directory::seed::seed_demo_comments().await?;
+        let plugin_seed = plugin_directory::seed::seed_plugins().await?;
         println!(
-            "  plugin_directory: {plugins} plugins · {audit} audit back-fills · \
-             {features} features · {notes} notes"
+            "  plugin_directory: {} plugins · {} content refreshes · {} audit syncs · \
+             {} features · {} notes",
+            plugin_seed.plugins,
+            plugin_seed.content,
+            plugin_seed.audit,
+            plugin_seed.features,
+            plugin_seed.notes
         );
 
         // --- community: channels + newsletter + list blurbs ----------------
@@ -76,6 +84,33 @@ impl PluginCommand for SeedOrmData {
         // Further plugin seeds (navigation, blog, changelog) are wired in
         // as each page lands.
 
+        println!("Done.");
+        Ok(())
+    }
+}
+
+/// `cargo run -- seed_plugins` — seed only the plugin directory. This is the
+/// safe path for refreshing the official catalog without tying seed writes to
+/// normal web-server startup.
+struct SeedPlugins;
+
+#[async_trait]
+impl PluginCommand for SeedPlugins {
+    fn command(&self) -> Command {
+        Command::new("seed_plugins").about(
+            "Idempotently seed the plugin directory: official rows, self-review status, \
+             rich content, per-plugin feature trackers, and demo notes.",
+        )
+    }
+
+    async fn run(&self, _matches: &ArgMatches) -> Result<(), CliError> {
+        println!("Seeding plugin directory...");
+        let summary = plugin_directory::seed::seed_plugins().await?;
+        println!(
+            "  plugin_directory: {} plugins · {} content refreshes · {} audit syncs · \
+             {} features · {} notes",
+            summary.plugins, summary.content, summary.audit, summary.features, summary.notes
+        );
         println!("Done.");
         Ok(())
     }

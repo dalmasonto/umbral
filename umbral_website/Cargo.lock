@@ -3053,7 +3053,6 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
- "tracing",
  "umbral",
  "umbral-auth",
  "uuid",

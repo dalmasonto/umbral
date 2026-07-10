@@ -6,7 +6,7 @@
 //! .plugin(site_content::SiteContentPlugin::default())
 //! ```
 //!
-//! Declare models, routes, and `on_ready` work in the impl below.
+//! Declare models and routes in the impl below.
 //! See `documentation/docs/v0.0.1/plugins/the-plugin-trait.mdx` for
 //! what each method does.
 
@@ -69,21 +69,7 @@ impl Plugin for SiteContentPlugin {
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        // Seed the blog on boot (idempotent). Mirrors the reviews plugin:
-        // a spawned task so a seed failure logs rather than aborting boot,
-        // and the user's dev server picks up the posts on its next reload.
-        tokio::spawn(async move {
-            match seed::seed().await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!("site_content: seeded {n} blog posts"),
-                Err(e) => tracing::warn!("site_content: blog seed failed: {e}"),
-            }
-            match seed::seed_changelog().await {
-                Ok(0) => {}
-                Ok(n) => tracing::info!("site_content: seeded {n} changelog entries"),
-                Err(e) => tracing::warn!("site_content: changelog seed failed: {e}"),
-            }
-        });
+        // Blog and changelog seed writes are command-driven via `seed_orm_data`.
         Ok(())
     }
 }
