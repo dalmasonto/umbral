@@ -82,8 +82,14 @@ async fn site_content_pages_render() {
 
     let changelog = umbral::templates::render("site_content/changelog.html", &context! {})
         .expect("changelog renders");
-    assert!(changelog.contains("v0.0.1"), "the current release renders");
-    assert!(changelog.contains("Roadmap"), "the roadmap section renders");
+    assert!(
+        changelog.contains("No changelog entries yet"),
+        "the changelog empty state renders"
+    );
+    assert!(
+        changelog.contains("Release notes will appear here"),
+        "the changelog empty-state copy renders"
+    );
 
     // /blog with no published posts → the honest empty state.
     let blog = render_blog().await.expect("blog renders");

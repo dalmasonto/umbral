@@ -85,7 +85,7 @@ async fn boot() {
     .expect("CREATE TABLE");
 
     let n = site_content::seed::seed().await.expect("seed blog");
-    assert_eq!(n, 5, "five posts seeded");
+    assert_eq!(n, 8, "eight posts seeded");
 }
 
 #[tokio::test]
