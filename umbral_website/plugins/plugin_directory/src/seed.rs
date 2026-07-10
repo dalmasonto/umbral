@@ -10,8 +10,8 @@
 //! website binary with `cargo run -- seed_plugins`.
 
 use crate::models::{
-    plugin, plugin_feature, CommentKind, CommentModeration, Plugin, PluginComment, PluginFeature,
-    PluginMaturity, PluginModeration, PluginSource, PluginStatus,
+    AuditStatus, CommentKind, CommentModeration, Plugin, PluginComment, PluginFeature,
+    PluginMaturity, PluginModeration, PluginSource, PluginStatus, plugin, plugin_feature,
 };
 use chrono::Utc;
 use umbral::prelude::*;
@@ -74,7 +74,7 @@ const OFFICIAL: &[OfficialRow] = &[
         name: "Umbral Admin",
         slug: "umbral-admin",
         author: "Umbral contributors",
-        short_description: "auto CRUD, dashboards, audit, filters",
+        short_description: "model-aware CRUD, dashboards, audit trail, relation pickers",
         full_content: r#"You declared your models to get a database. The admin is the receipt: mount one plugin and every model in every plugin you've installed grows a full back office — list views, search, combinable filters, relation pickers, bulk actions, an audit trail, and a dashboard you can shape with your own widgets. No scaffolding command, no generated files to maintain. It reads the same model metadata the ORM and migrations already use, so the admin is never out of sync with your schema.
 
 ## Install
@@ -131,8 +131,8 @@ AdminPlugin::default()
 - Soft-delete + trash, bulk actions, and a per-row audit log
 "#,
         setup_notes: "Mount `AdminPlugin` after the plugins whose models you want to manage — it discovers every model registered before it and builds the CRUD UI. Give it a title, and optionally dashboard widgets and custom views.",
-        installation_commands: "umbral-admin = { path = \"../plugins/umbral-admin\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-admin = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: true,
@@ -143,7 +143,7 @@ AdminPlugin::default()
         name: "Umbral Auth",
         slug: "umbral-auth",
         author: "Umbral contributors",
-        short_description: "users, groups, argon2, password reset",
+        short_description: "users, groups, login routes, argon2, reset flows",
         full_content: r#"Every app hits the same wall on day two: who is this request, and are they allowed? Umbral Auth answers it out of the box — a battle-tested `AuthUser` model, groups, argon2 password hashing with sane defaults, opaque DB-backed API tokens, and password-reset flows. Its `LoggedIn<T>` extractor turns "is the caller authenticated?" into a function argument the compiler enforces: a handler that takes `LoggedIn<AuthUser>` simply cannot run for an anonymous request.
 
 ## Install
@@ -193,8 +193,8 @@ async fn dashboard(user: LoggedIn<AuthUser>) -> Html<String> {
 - Pairs with umbral-oauth for Google / GitHub social login
 "#,
         setup_notes: "Pair with `SessionsPlugin` (auth stores its session there). `with_default_routes()` mounts /login, /logout and /signup; `with_user_in_templates()` injects `user` into every template so your base layout's nav can branch on `user.is_authenticated`.",
-        installation_commands: "umbral-auth = { path = \"../plugins/umbral-auth\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-auth = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: true,
@@ -205,7 +205,7 @@ async fn dashboard(user: LoggedIn<AuthUser>) -> Html<String> {
         name: "Umbral Sessions",
         slug: "umbral-sessions",
         author: "Umbral contributors",
-        short_description: "session store, middleware",
+        short_description: "signed cookies, DB/Redis stores, lazy session data",
         full_content: r#"HTTP forgets you the moment the response is sent. Sessions are how your app remembers — the signed-in user, a half-filled cart, a flash message that should survive one redirect. Umbral Sessions gives you a server-side store (persisted through the ORM, so no extra infrastructure to stand up) plus the cookie middleware that ties each browser to its row, with secure defaults already switched on.
 
 ## Install
@@ -251,8 +251,8 @@ async fn add_to_cart(session: Session) {
 - Redis-backed store on the roadmap for horizontal scaling
 "#,
         setup_notes: "Register `SessionsPlugin` before any plugin that reads the session (auth reads it on every request). The default store persists sessions through the ORM, so there's nothing extra to deploy.",
-        installation_commands: "umbral-sessions = { path = \"../plugins/umbral-sessions\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-sessions = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -263,7 +263,7 @@ async fn add_to_cart(session: Session) {
         name: "Umbral REST",
         slug: "umbral-rest",
         author: "Umbral contributors",
-        short_description: "serializers, viewsets, pagination",
+        short_description: "model resources, filters, search, pagination, safe writes",
         full_content: r#"The same models that power your admin can become a JSON API without a second data layer. Umbral REST is the DRF-equivalent: register a resource and get list / create / retrieve / update / delete, pagination, filtering, search, and an auth + permission chain — all wired to the model you already declared. And it's safe by default: a resource with no explicit permission is read-only, so a stray `POST` returns 403 until you opt writes in.
 
 ## Install
@@ -314,8 +314,8 @@ RestPlugin::default()
 - Safe by default: writes 403 until a permission opts them in; list capped
 "#,
         setup_notes: "Register a `ResourceConfig::for_::<Model>()` per model you want on the wire. Resources are read-only until you attach a write permission via `.default_permission(...)`, so a bare `POST` is a 403, not an open door.",
-        installation_commands: "umbral-rest = { path = \"../plugins/umbral-rest\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-rest = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: true,
@@ -326,7 +326,7 @@ RestPlugin::default()
         name: "Umbral OpenAPI",
         slug: "umbral-openapi",
         author: "Umbral contributors",
-        short_description: "schema gen, swagger UI",
+        short_description: "OpenAPI schema, Swagger UI, auth metadata, playground feed",
         full_content: r#"An API nobody can read is an API nobody adopts. Umbral OpenAPI reads your registered REST resources and emits an OpenAPI 3 schema — FK targets, enums, nullable and read-only fields and all — then mounts an interactive explorer so a frontend teammate can try endpoints in the browser instead of guessing from a wiki page. The docs are generated from the resources themselves, so they can't drift from the API.
 
 ## Install
@@ -366,8 +366,8 @@ Point them at the explorer — they get every route, its parameters, and a "try 
 - Pairs with umbral-playground for an in-app request console
 "#,
         setup_notes: "Add `OpenApiPlugin::new()` after `RestPlugin` — it introspects the resources REST already registered, so there's nothing to annotate by hand. The schema and Swagger UI update themselves as you add resources.",
-        installation_commands: "umbral-openapi = { path = \"../plugins/umbral-openapi\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-openapi = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -378,7 +378,7 @@ Point them at the explorer — they get every route, its parameters, and a "try 
         name: "Umbral Tasks",
         slug: "umbral-tasks",
         author: "Umbral contributors",
-        short_description: "DB-backed job queue, retries, schedules",
+        short_description: "durable jobs, workers, retries, priorities, periodic beat",
         full_content: r#"Some work shouldn't happen inside the request — sending the welcome email, resizing the upload, calling the flaky third-party webhook. Umbral Tasks is the Celery-equivalent: annotate an async function with `#[task]`, enqueue it from a handler, and a separate worker drains the queue durably. The queue is a DB table, so a crash doesn't lose jobs, and retries back off exponentially instead of hammering a service that's already down.
 
 ## Install
@@ -433,8 +433,8 @@ enqueue("send_welcome", &WelcomePayload { user_id }, EnqueueOptions::default()).
 - Read-only queue browser in the admin, with "Retry selected"
 "#,
         setup_notes: "Register `TasksPlugin` in the app, annotate handlers with `#[umbral::task]`, and call `register_<fn>()` at startup so the worker knows them. Enqueue with `enqueue(...)` from any handler, then run `cargo run -- worker` (and `tasks-beat` for schedules) beside the web process.",
-        installation_commands: "umbral-tasks = { path = \"../plugins/umbral-tasks\" }",
-        version: "0.0.1",
+        installation_commands: "umbral-tasks = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Experimental,
         maturity: PluginMaturity::Alpha,
         featured: false,
@@ -445,7 +445,7 @@ enqueue("send_welcome", &WelcomePayload { user_id }, EnqueueOptions::default()).
         name: "Umbral Security",
         slug: "umbral-security",
         author: "Umbral contributors",
-        short_description: "CSRF, HSTS, headers, escape hatches",
+        short_description: "CSRF, HSTS, secure headers, template escaping",
         full_content: r#"The security features you forget to add are the ones that bite you. Umbral Security ships them on by default — CSRF protection on every POST, HSTS, clickjacking headers, and template auto-escaping — so a fresh app is hardened before you write a line of security code. When a default is genuinely too tight (a JSON API that authenticates by bearer token, say), the escape hatches are explicit and narrow, not a global off switch.
 
 ## Install
@@ -491,8 +491,8 @@ SecurityPlugin::with_config(SecurityConfig {
 - Per-path escape hatches instead of a global kill switch
 "#,
         setup_notes: "Mount `SecurityPlugin::new()` for hardened defaults, or `SecurityPlugin::with_config(...)` to narrow a single default — e.g. `csrf_exempt_paths` for a bearer-token API. Exemptions are per-path, never a global off switch.",
-        installation_commands: "umbral-security = { path = \"../plugins/umbral-security\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-security = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -503,7 +503,7 @@ SecurityPlugin::with_config(SecurityConfig {
         name: "Umbral Storage",
         slug: "umbral-storage",
         author: "Umbral contributors",
-        short_description: "static assets + user uploads, one trait",
+        short_description: "static files, media uploads, S3/local backends, processing",
         full_content: r#"One plugin, two jobs that every app needs and nobody wants to hand-roll: serving your compiled static assets, and storing user uploads. Both go through a single pluggable `Storage` trait — the local filesystem in dev, S3 in prod, the *same handler code* either way. Declare an `ImageField` or `FileField` on a model and you get multipart upload, streaming size caps, background processing behind a concurrency gate, and an access-control hook so private files aren't world-readable by guessing the URL.
 
 ## Install
@@ -551,8 +551,8 @@ struct Profile {
 - Static-asset serving in production (no nginx required to start)
 "#,
         setup_notes: "One `StoragePlugin` serves both sides: `.static_files(url, dir)` for compiled assets and `.media(url, dir)` for user uploads. The same `File`/`Image` model fields work against the filesystem in dev and S3 in prod — no handler change.",
-        installation_commands: "umbral-storage = { path = \"../plugins/umbral-storage\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-storage = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -563,7 +563,7 @@ struct Profile {
         name: "Umbral Permissions",
         slug: "umbral-permissions",
         author: "Umbral contributors",
-        short_description: "RBAC, groups, per-object checks",
+        short_description: "RBAC, object checks, REST/admin permission gates",
         full_content: r#""Can this user do this?" is a question the admin and REST both ask on every request — so answer it once, in a language they already speak. Umbral Permissions is role-based access control wired straight into the framework: groups, per-model `view / add / change / delete` permissions, and per-object ownership checks for "you may edit *your* posts, not everyone's". A deactivated account is denied at the permission layer, not just bounced from the login form, so disabling someone actually disables them.
 
 ## Install
@@ -600,8 +600,8 @@ Put users in groups, grant the group the model permissions it needs, and both th
 - Auto-provisioned permissions for every registered model
 "#,
         setup_notes: "Mount `PermissionsPlugin::default()` after your model plugins — on boot it provisions the four standard permissions (view/add/change/delete) for every registered model. The admin and umbral-rest consult these checks automatically.",
-        installation_commands: "umbral-permissions = { path = \"../plugins/umbral-permissions\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-permissions = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -612,7 +612,7 @@ Put users in groups, grant the group the model permissions it needs, and both th
         name: "Umbral OAuth",
         slug: "umbral-oauth",
         author: "Umbral contributors",
-        short_description: "Google / GitHub social login",
+        short_description: "Google/GitHub login, PKCE, state checks, account linking",
         full_content: r#""Sign in with Google" removes the single biggest signup drop-off: the password. Umbral OAuth drops social login in without the callback-URL-and-token-exchange boilerplate — register a provider, and the login route, the redirect dance, and account linking are handled. Credentials come from the environment, so a provider with no keys simply isn't registered: you can leave the wiring in place with nothing configured and it stays inert until you add the keys.
 
 ## Install
@@ -654,8 +654,8 @@ Beyond first-time login, a signed-in user can link a provider to their existing 
 - Builds on umbral-auth's user model and session
 "#,
         setup_notes: "Give `OAuthPlugin::new(base)` your public origin (for callback URLs), then `.provider(...)` each provider. Read client id/secret from the environment and register a provider only when both are present — an unconfigured provider is simply skipped.",
-        installation_commands: "umbral-oauth = { path = \"../plugins/umbral-oauth\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-oauth = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Beta,
         featured: true,
@@ -666,7 +666,7 @@ Beyond first-time login, a signed-in user can link a provider to their existing 
         name: "Umbral Realtime",
         slug: "umbral-realtime",
         author: "Umbral contributors",
-        short_description: "SSE / WebSocket push, user- and room-targeted",
+        short_description: "SSE/WebSocket push, rooms, user targets, presence",
         full_content: r#"Polling is the sound of a UI that doesn't trust the server to tell it anything. Umbral Realtime pushes instead: target a single user or a whole room, and let an ORM `post_save` signal fan a change out to everyone watching — a new comment appears, a dashboard counter ticks, a moderation queue lights up — without the browser asking "anything yet?" every two seconds. A default connection cap and per-connection message-rate cap keep one client from flooding the server.
 
 ## Install
@@ -718,8 +718,8 @@ Realtime::to_user(admin_id.to_string())
 - User-targeted events = private channels with no group to guess
 "#,
         setup_notes: "Register `RealtimePlugin::default()` and hang `.on_model::<T, _, _>(...)` handlers off the models whose changes should push. Browsers connect at `/realtime/sse`; send to a room or to a specific user id with `Realtime::to_user(...)`.",
-        installation_commands: "umbral-realtime = { path = \"../plugins/umbral-realtime\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-realtime = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -730,7 +730,7 @@ Realtime::to_user(admin_id.to_string())
         name: "Umbral Cache",
         slug: "umbral-cache",
         author: "Umbral contributors",
-        short_description: "process-wide cache + page caching",
+        short_description: "ambient cache, response caching, Redis/in-memory backends",
         full_content: r#"The fastest query is the one you don't run twice. Umbral Cache installs a process-wide in-memory cache as an ambient handle — reach for it from any handler to memoise an expensive aggregate, a rendered fragment, or a third-party API response. When a whole page is safe to share, an opt-in `cache_page` layer caches the entire response. No client to configure, no keys to manage in dev.
 
 ## Install
@@ -776,8 +776,8 @@ async fn stats() -> Stats {
 - A pluggable backend so a shared store can slot in later
 "#,
         setup_notes: "Install `CachePlugin::new(Cache::memory())` to register the ambient cache handle, then reach it from any handler with `umbral_cache::ambient()`. Layer `cache_page` only on responses that are safe to share (anonymous, non-per-user).",
-        installation_commands: "umbral-cache = { path = \"../plugins/umbral-cache\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-cache = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -788,7 +788,7 @@ async fn stats() -> Stats {
         name: "Umbral Health",
         slug: "umbral-health",
         author: "Umbral contributors",
-        short_description: "/healthz + /ready probes",
+        short_description: "liveness/readiness probes, DB checks, custom dependencies",
         full_content: r#"Every load balancer and orchestrator asks the same two questions: are you alive, and are you ready for traffic? Umbral Health answers both with zero config — a liveness probe and a readiness probe that actually checks the database is reachable, not just that the process is running. Mount the plugin and your deploy target stops guessing whether to route to this instance.
 
 ## Install
@@ -831,8 +831,8 @@ HealthPlugin::default()
 - Zero config to start — mount and deploy
 "#,
         setup_notes: "Mount `HealthPlugin::default()` for `/healthz` (liveness) and `/ready` (readiness, which verifies the DB). Add `.check(...)` for extra dependencies and `.check_timeout(...)` so a hung dependency fails the probe fast instead of hanging it.",
-        installation_commands: "umbral-health = { path = \"../plugins/umbral-health\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-health = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -843,7 +843,7 @@ HealthPlugin::default()
         name: "Umbral Live Reload",
         slug: "umbral-livereload",
         author: "Umbral contributors",
-        short_description: "dev browser reload over SSE",
+        short_description: "dev file watcher, SSE reloads, CSS hot-swap",
         full_content: r#"The edit-save-alt-tab-refresh loop is a tax you pay hundreds of times a day. Umbral Live Reload deletes it: save a template, some CSS, or an asset and the browser refreshes itself — and CSS hot-swaps in place without even a full reload. A file watcher pushes events over SSE and the client script injects itself into HTML responses. It's completely inert in production, so there's nothing to strip before you ship.
 
 ## Install
@@ -879,8 +879,8 @@ let app = App::builder()
 - Fully inert outside dev mode — nothing to remove for prod
 "#,
         setup_notes: "Add `LiveReloadPlugin::new()` and chain `.watch(dir)` for each extra directory to watch (the site templates + static are watched by default). It's automatically inert outside dev mode, so it's safe to leave wired in.",
-        installation_commands: "umbral-livereload = { path = \"../plugins/umbral-livereload\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-livereload = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -891,7 +891,7 @@ let app = App::builder()
         name: "Umbral Analytics",
         slug: "umbral-analytics",
         author: "Umbral contributors",
-        short_description: "product analytics (PostHog)",
+        short_description: "PostHog capture, pageviews, custom events, bounded sends",
         full_content: r#"You can't improve what you can't see. Umbral Analytics auto-captures pageviews and lets you fire custom product events to PostHog, so "which features do people actually use?" stops being a guess. The outbound sends are bounded — an analytics burst can't fan out unbounded connections and take the request path down with it — so instrumenting your app never becomes the reason it falls over.
 
 ## Install
@@ -930,8 +930,8 @@ Auto-capture gives you traffic; a custom event gives you the funnel step that ma
 - Key from env via `from_env()`, or explicit with `new(api_key)`
 "#,
         setup_notes: "Configure with `AnalyticsPlugin::from_env()` (reads the PostHog key from the environment) or `AnalyticsPlugin::new(api_key)`, and `.with_exclude_prefixes(...)` to skip assets and probes. Outbound sends are bounded so instrumentation can't overwhelm the request path.",
-        installation_commands: "umbral-analytics = { path = \"../plugins/umbral-analytics\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-analytics = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -942,7 +942,7 @@ Auto-capture gives you traffic; a custom event gives you the funnel step that ma
         name: "Umbral Email",
         slug: "umbral-email",
         author: "Umbral contributors",
-        short_description: "transactional email, SMTP / API",
+        short_description: "SMTP/API/console mail, HTML text, attachments, auth flows",
         full_content: r#"Password resets, email verification, receipts — half your flows dead-end without somewhere to send mail. Umbral Email gives them that destination behind one interface: compose a message, call send, and whether it goes out over SMTP or a provider API is a config choice, not a rewrite. In dev it falls back to a console backend that prints to stderr, so you can build the whole flow before you own a single API key.
 
 ## Install
@@ -986,8 +986,8 @@ msg.send().await?;   // SMTP, API, or console — same call
 - The delivery layer umbral-auth's password reset plugs into
 "#,
         setup_notes: "Register `EmailPlugin`; the backend (SMTP, provider API, or the dev console) is chosen from the environment. Compose with `EmailMessage::new(subject, recipients)` and `.send().await` — swapping providers is a config change, never a code change.",
-        installation_commands: "umbral-email = { path = \"../plugins/umbral-email\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-email = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -998,7 +998,7 @@ msg.send().await?;   // SMTP, API, or console — same call
         name: "Umbral Logs",
         slug: "umbral-logs",
         author: "Umbral contributors",
-        short_description: "structured request logging",
+        short_description: "request logs, trusted proxy IPs, sampling, OpenTelemetry",
         full_content: r#"When something breaks at 3am, the difference between a five-minute fix and a two-hour hunt is the log line. Umbral Logs gives you structured, per-request logging with the *real* client IP resolved from your trusted-proxy setup — so behind nginx you log the caller, not the proxy, and never a header an attacker can forge to poison your logs. Sampling and status filters keep the volume sane on a busy service.
 
 ## Install
@@ -1040,8 +1040,8 @@ LogsPlugin::default().sample_rate(0.05);  // log 5% of requests
 - Pairs with the framework's trusted-proxy client-IP resolution
 "#,
         setup_notes: "Mount `LogsPlugin::default()` and tune it: `.exclude_prefix(...)` to drop asset noise, `.min_status(n)` to capture only errors, and `.sample_rate(f)` to thin a high-traffic route. The client IP comes from your trusted-proxy config, so it's the caller — never a forgeable header.",
-        installation_commands: "umbral-logs = { path = \"../plugins/umbral-logs\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-logs = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -1052,7 +1052,7 @@ LogsPlugin::default().sample_rate(0.05);  // log 5% of requests
         name: "Umbral Signals",
         slug: "umbral-signals",
         author: "Umbral contributors",
-        short_description: "pub/sub lifecycle hooks",
+        short_description: "model lifecycle hooks, named events, async subscribers",
         full_content: r#"Some reactions don't belong in the code that triggers them. When an order is placed you might want to bust a cache, write an audit line, and ping a channel — but none of that should clutter the "save the order" path. Umbral Signals lets you hang behaviour off events without touching the write code: subscribe to pre/post save/update/delete, or emit your own named events, and react elsewhere. Handlers run outside the registry lock, so a slow subscriber can't throttle every write.
 
 ## Install
@@ -1101,8 +1101,8 @@ For work that must survive a crash, have the handler enqueue an `umbral-tasks` j
 - Pair with umbral-tasks for durable, crash-safe reactions
 "#,
         setup_notes: "Register `SignalsPlugin` and, at startup, `subscribe_async(\"event\", handler)`; emit with `emit(\"event\", json).await` or let the ORM's post_save/update/delete signals fire automatically. Signals are in-process — pair with umbral-tasks when a reaction must survive a crash.",
-        installation_commands: "umbral-signals = { path = \"../plugins/umbral-signals\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-signals = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -1113,7 +1113,7 @@ For work that must survive a crash, have the handler enqueue an `umbral-tasks` j
         name: "Umbral RLS",
         slug: "umbral-rls",
         author: "Umbral contributors",
-        short_description: "Postgres row-level security",
+        short_description: "Postgres RLS, policies, FORCE isolation, request context",
         full_content: r#"The safest tenant isolation is the kind your application code can't accidentally forget. Umbral RLS pushes it down into Postgres itself: `FORCE` row-level security with a per-request GUC set through the connection pool, so one request's tenant context can never leak into another's — even a buggy handler that omits a `WHERE tenant_id = ...` is caught by the database. It's the last line of defence, below your code, where a forgotten filter turns into zero rows instead of someone else's data.
 
 ## Install
@@ -1154,8 +1154,8 @@ Pair it with umbral-tenants: tenants routes and scopes the request; RLS makes th
 - Pairs with umbral-tenants for layered multi-tenancy
 "#,
         setup_notes: "Postgres only. Declare `.policy(table, sql_predicate)` per protected table on `RlsPlugin::new()`; the plugin sets a per-request GUC through the pool so a tenant's context can't leak across requests. On SQLite it skips with a warning rather than diverging.",
-        installation_commands: "umbral-rls = { path = \"../plugins/umbral-rls\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-rls = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -1166,7 +1166,7 @@ Pair it with umbral-tenants: tenants routes and scopes the request; RLS makes th
         name: "Umbral Tenants",
         slug: "umbral-tenants",
         author: "Umbral contributors",
-        short_description: "multi-tenancy (schema- or row-per-tenant)",
+        short_description: "schema/shared-table tenancy, request resolution, membership",
         full_content: r#"Turn one app into a multi-tenant SaaS without forking it per customer. Umbral Tenants routes each tenant to its own Postgres schema (or scopes them by a tenant column), resolves the active tenant from the request, and binds it to the caller through a membership check so nobody reads across the wall. Pick the isolation strategy that fits — a schema per tenant for hard separation, a shared table for density — and the framework handles the routing.
 
 ## Install
@@ -1207,8 +1207,8 @@ Run `TenantStrategy::Schema` for separation and layer umbral-rls underneath, so 
 - Pairs with umbral-rls for database-enforced defence in depth
 "#,
         setup_notes: "On `TenantsPlugin::new()` pick a `.strategy(...)` (schema-per-tenant or shared-column), list the `.tenant_apps([...])` that are scoped, and set how the tenant is resolved (`.tenant_header(...)` or a membership guard). Layer umbral-rls for database-enforced isolation.",
-        installation_commands: "umbral-tenants = { path = \"../plugins/umbral-tenants\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-tenants = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -1219,7 +1219,7 @@ Run `TenantStrategy::Schema` for separation and layer umbral-rls underneath, so 
         name: "Umbral Playground",
         slug: "umbral-playground",
         author: "Umbral contributors",
-        short_description: "in-app API playground",
+        short_description: "in-app API console, OpenAPI discovery, auth, history",
         full_content: r#"A mini-Postman baked right into your app. Umbral Playground lets anyone browse your REST resources, build a request, send it, and read the response — no external tool, no copy-pasting curl commands into a terminal. It's the fastest way to hand an API to a frontend teammate: point them at a URL and they're exploring live endpoints in seconds, against the real running server.
 
 ## Install
@@ -1257,8 +1257,8 @@ Instead of maintaining a Postman collection, send the playground URL — it disc
 - Zero external tooling to install or keep in sync
 "#,
         setup_notes: "Mount `PlaygroundPlugin::new(title).at(\"/path/\")` alongside umbral-rest and umbral-openapi — it discovers resources from the running server and auto-detects auth from the published securitySchemes, so the console is never out of date.",
-        installation_commands: "umbral-playground = { path = \"../plugins/umbral-playground\" }",
-        version: "0.1.0",
+        installation_commands: "umbral-playground = \"0.0.6\"",
+        version: "0.0.6",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -1299,6 +1299,7 @@ pub async fn seed_official_plugins() -> Result<usize, Box<dyn std::error::Error 
         p.license = Some("MIT OR Apache-2.0".to_string());
         p.status = row.status;
         p.maturity = row.maturity;
+        p.audit_status = AuditStatus::SelfReviewed;
         // source + moderation are populated by `Default` (community,
         // pending) — override for official/approved rows.
         p.source = PluginSource::Official;
@@ -1327,16 +1328,15 @@ pub async fn seed_official_plugins() -> Result<usize, Box<dyn std::error::Error 
     Ok(inserted)
 }
 
-/// Re-assert the curated Markdown `full_content` and `setup_notes` on
-/// already-seeded official rows. The row insert in [`seed_official_plugins`]
-/// short-circuits once a slug exists, so a copy edit to `OFFICIAL` would never
-/// reach the live rows without this — same pattern as [`backfill_audit_status`].
+/// Re-assert curated copy and seed-owned metadata on already-seeded official
+/// rows. The row insert in [`seed_official_plugins`] short-circuits once a slug
+/// exists, so a copy edit to `OFFICIAL` would never reach the live rows without
+/// this — same pattern as [`backfill_audit_status`].
 ///
-/// Only writes a row whose stored content actually differs, so this is a no-op
-/// once the DB matches the seed (no write amplification, quiet logs on a normal
-/// boot). `full_content` / `setup_notes` are seed-owned editorial copy for the
-/// first-party plugins; re-asserting them is intentional. Returns the number of
-/// rows updated.
+/// Only writes a row whose stored values actually differ, so this is a no-op
+/// once the DB matches the seed. These first-party plugin rows are curated by
+/// this seed; re-asserting them from `cargo run -- seed_plugins` is intentional.
+/// Returns the number of rows updated.
 pub async fn backfill_plugin_content() -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
     let mut updated = 0;
     for row in OFFICIAL {
@@ -1347,12 +1347,25 @@ pub async fn backfill_plugin_content() -> Result<u64, Box<dyn std::error::Error 
         else {
             continue;
         };
-        let content_matches = existing.full_content == row.full_content;
-        let notes_match = existing.setup_notes.as_deref() == Some(row.setup_notes);
-        if content_matches && notes_match {
+        let license = "MIT OR Apache-2.0";
+        let matches_seed = existing.short_description == row.short_description
+            && existing.full_content == row.full_content
+            && existing.setup_notes.as_deref() == Some(row.setup_notes)
+            && existing.installation_commands == row.installation_commands
+            && existing.version.as_deref() == Some(row.version)
+            && existing.license.as_deref() == Some(license)
+            && existing.status == row.status
+            && existing.maturity == row.maturity
+            && existing.featured == row.featured
+            && existing.display_order == row.display_order;
+        if matches_seed {
             continue;
         }
         let mut values = serde_json::Map::new();
+        values.insert(
+            "short_description".to_string(),
+            serde_json::Value::String(row.short_description.to_string()),
+        );
         values.insert(
             "full_content".to_string(),
             serde_json::Value::String(row.full_content.to_string()),
@@ -1360,6 +1373,28 @@ pub async fn backfill_plugin_content() -> Result<u64, Box<dyn std::error::Error 
         values.insert(
             "setup_notes".to_string(),
             serde_json::Value::String(row.setup_notes.to_string()),
+        );
+        values.insert(
+            "installation_commands".to_string(),
+            serde_json::Value::String(row.installation_commands.to_string()),
+        );
+        values.insert(
+            "version".to_string(),
+            serde_json::Value::String(row.version.to_string()),
+        );
+        values.insert(
+            "license".to_string(),
+            serde_json::Value::String(license.to_string()),
+        );
+        values.insert("status".to_string(), serde_json::to_value(row.status)?);
+        values.insert("maturity".to_string(), serde_json::to_value(row.maturity)?);
+        values.insert(
+            "featured".to_string(),
+            serde_json::Value::Bool(row.featured),
+        );
+        values.insert(
+            "display_order".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(i64::from(row.display_order))),
         );
         updated += Plugin::objects()
             .filter(plugin::SLUG.eq(row.slug))
@@ -1369,42 +1404,38 @@ pub async fn backfill_plugin_content() -> Result<u64, Box<dyn std::error::Error 
     Ok(updated)
 }
 
-/// Editorial audit assessment for each first-party plugin, keyed by
-/// crate name. `audit_status` is a curated editorial field (like
-/// `status` / `maturity`), NOT an externally-synced metric — so unlike
-/// `github_stars` / `downloads` it's legitimate to seed. The values
-/// drive the admin "Audit coverage" gauge and the per-plugin audit
-/// badge on the public site.
+/// Editorial audit assessment for each first-party plugin, keyed by crate
+/// name. The v0.0.6 directory marks every official plugin as self-reviewed:
+/// maintainers have checked the claims in the public copy, but this is not a
+/// third-party security audit.
 const AUDIT: &[(&str, &str)] = &[
-    ("umbral-admin", "umbral_reviewed"),
-    ("umbral-auth", "umbral_reviewed"),
-    ("umbral-sessions", "umbral_reviewed"),
-    ("umbral-permissions", "umbral_reviewed"),
-    ("umbral-rest", "umbral_reviewed"),
+    ("umbral-admin", "self_reviewed"),
+    ("umbral-auth", "self_reviewed"),
+    ("umbral-sessions", "self_reviewed"),
+    ("umbral-permissions", "self_reviewed"),
+    ("umbral-rest", "self_reviewed"),
     ("umbral-openapi", "self_reviewed"),
     ("umbral-tasks", "self_reviewed"),
-    ("umbral-security", "third_party_reviewed"),
-    ("umbral-storage", "umbral_reviewed"),
+    ("umbral-security", "self_reviewed"),
+    ("umbral-storage", "self_reviewed"),
     ("umbral-oauth", "self_reviewed"),
-    ("umbral-realtime", "umbral_reviewed"),
+    ("umbral-realtime", "self_reviewed"),
     ("umbral-cache", "self_reviewed"),
     ("umbral-health", "self_reviewed"),
     ("umbral-livereload", "self_reviewed"),
-    ("umbral-analytics", "umbral_reviewed"),
-    ("umbral-email", "needs_review"),
-    ("umbral-logs", "umbral_reviewed"),
-    ("umbral-signals", "umbral_reviewed"),
-    ("umbral-rls", "umbral_reviewed"),
-    ("umbral-tenants", "umbral_reviewed"),
+    ("umbral-analytics", "self_reviewed"),
+    ("umbral-email", "self_reviewed"),
+    ("umbral-logs", "self_reviewed"),
+    ("umbral-signals", "self_reviewed"),
+    ("umbral-rls", "self_reviewed"),
+    ("umbral-tenants", "self_reviewed"),
     ("umbral-playground", "self_reviewed"),
 ];
 
-/// Back-fill `audit_status` on already-seeded rows. Idempotent: only
-/// touches rows still at the `not_reviewed` default, so an admin's
-/// later hand-edit is never clobbered, and re-running is a no-op once
-/// every row has its curated value. This runs every boot (the row
-/// insert short-circuits once the table is populated, so without this
-/// the existing rows would never gain their audit status).
+/// Back-fill `audit_status` on already-seeded official rows. Idempotent: only
+/// writes rows whose current value differs from the curated seed value. Because
+/// seeding is now command-driven, `seed_plugins` intentionally refreshes these
+/// official rows rather than preserving older mixed review states.
 pub async fn backfill_audit_status() -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
     let mut updated = 0;
     for (crate_name, audit) in AUDIT {
@@ -1415,7 +1446,7 @@ pub async fn backfill_audit_status() -> Result<u64, Box<dyn std::error::Error + 
         );
         updated += Plugin::objects()
             .filter(plugin::CRATE_NAME.eq(*crate_name))
-            .filter(plugin::AUDIT_STATUS.eq("not_reviewed"))
+            .filter(plugin::AUDIT_STATUS.ne(*audit))
             .update_values(values)
             .await?;
     }
@@ -1469,7 +1500,7 @@ const DEMO_NOTES: &[DemoNote] = &[
         kind: CommentKind::General,
     },
     DemoNote {
-        crate_name: "umbral-static",
+        crate_name: "umbral-storage",
         body: "Serves compiled CSS + uploaded media in prod without reaching for nginx.",
         kind: CommentKind::General,
     },
@@ -1542,8 +1573,9 @@ const BETA: PluginMaturity = PluginMaturity::Beta;
 const ALPHA: PluginMaturity = PluginMaturity::Alpha;
 const DES: PluginMaturity = PluginMaturity::Design;
 
-/// Hand-curated feature tracker per official plugin. Mirrors the real
-/// status of each capability in the framework (see `planning/features.md`).
+/// Hand-curated feature tracker per official plugin. Mirrors the real v0.0.6
+/// capability surface so the `/prebuilt` grid and detail tracker show useful
+/// content for all 21 official plugins.
 const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
     PluginFeatureSet {
         crate_name: "umbral-admin",
@@ -1587,20 +1619,32 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
             FeatureSeed {
                 name: "Dashboard widgets",
                 description: "KPI cards, charts, and recent-activity panels on the index.",
-                status: IP,
+                status: S,
                 maturity: BETA,
             },
             FeatureSeed {
                 name: "Bulk actions",
-                description: "Select rows then act — delete, publish, export.",
-                status: PL,
-                maturity: DES,
+                description: "Select rows then act: delete, publish, retry, or export.",
+                status: S,
+                maturity: BETA,
             },
             FeatureSeed {
                 name: "Inline editing",
-                description: "Edit related rows on the parent form (tabular / stacked).",
-                status: PL,
-                maturity: DES,
+                description: "Edit related rows on the parent form with tabular or stacked inlines.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Audit history",
+                description: "Per-row history pages and audit timeline rendering.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Theme and palette controls",
+                description: "Single-source theme tokens plus user palette preferences.",
+                status: S,
+                maturity: BETA,
             },
         ],
     },
@@ -1620,32 +1664,44 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
                 maturity: STA,
             },
             FeatureSeed {
-                name: "Permissions and RBAC",
-                description: "Group/permission M2M checks via umbral-permissions.",
-                status: S,
-                maturity: STA,
-            },
-            FeatureSeed {
                 name: "Bearer tokens",
                 description: "Opaque DB-backed API tokens, hashed at rest.",
                 status: S,
                 maturity: STA,
             },
             FeatureSeed {
-                name: "OAuth / social login",
-                description: "Sign in with Google/GitHub and connect accounts (umbral-oauth).",
+                name: "Default auth routes",
+                description: "Login, logout, signup, and route guards for HTML apps.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Password reset",
+                description: "Token-based reset flow with email action throttling.",
                 status: S,
                 maturity: BETA,
             },
             FeatureSeed {
-                name: "Password reset",
-                description: "Token-based reset flow (email delivery pending umbral-email).",
-                status: IP,
+                name: "Email verification",
+                description: "Verification-code lifecycle and require-verified route guards.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Form and JSON surfaces",
+                description: "HTML auth forms and JSON-friendly handlers for API clients.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Custom user models",
+                description: "Typed plugin support for swapping the auth user model.",
+                status: U,
                 maturity: BETA,
             },
             FeatureSeed {
                 name: "SSO / OIDC",
-                description: "Enterprise single sign-on.",
+                description: "Enterprise single sign-on provider support.",
                 status: PL,
                 maturity: DES,
             },
@@ -1661,22 +1717,81 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
                 maturity: STA,
             },
             FeatureSeed {
+                name: "Cookie session store",
+                description: "Signed cookie store for lightweight deployments.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
                 name: "Session middleware",
                 description: "Cookie handling with secure defaults.",
                 status: S,
                 maturity: STA,
             },
             FeatureSeed {
-                name: "Login / logout flow",
-                description: "Establish and tear down the authenticated session.",
+                name: "Redis-backed sessions",
+                description: "Shared session store for horizontal scaling.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Lazy session writes",
+                description: "Read without creating rows; persist only when data changes.",
                 status: S,
                 maturity: STA,
             },
             FeatureSeed {
-                name: "Redis-backed sessions",
-                description: "Shared session store for horizontal scaling.",
-                status: PL,
-                maturity: DES,
+                name: "Sliding expiry",
+                description: "Optional renewal window plus max-session-age enforcement.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Revocation and cleanup",
+                description: "User-session revocation and expired-session cleanup command.",
+                status: S,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-permissions",
+        features: &[
+            FeatureSeed {
+                name: "Permission model provisioning",
+                description: "Creates view/add/change/delete permissions for registered models.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Groups and memberships",
+                description: "Group-based RBAC wired to the auth user model.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Route middleware",
+                description: "HTML and API permission-required layers for protected handlers.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "REST permission adapter",
+                description: "Codename checks that plug into umbral-rest resources.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Object permission queries",
+                description: "Helpers for filtering objects visible to a given identity.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Inactive-user denial",
+                description: "Deactivated users are denied even when a codename matches.",
+                status: S,
+                maturity: STA,
             },
         ],
     },
@@ -1696,8 +1811,8 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
                 maturity: BETA,
             },
             FeatureSeed {
-                name: "Filtering and search",
-                description: "Query-string filters and free-text search per resource.",
+                name: "Filtering, search, ordering",
+                description: "Query-string filters, free-text search, and sortable collections.",
                 status: S,
                 maturity: BETA,
             },
@@ -1722,8 +1837,32 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
             FeatureSeed {
                 name: "Nested writable serializers",
                 description: "Create a parent and its children in one request.",
-                status: PL,
-                maturity: DES,
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Bulk endpoints",
+                description: "Bulk create/update/delete routes with safety guards.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "CSV export",
+                description: "Export collection results for spreadsheet workflows.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "File and image URLs",
+                description: "File/Image fields serialize as usable media URLs.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Throttle hooks",
+                description: "Per-resource throttling support for noisy clients.",
+                status: S,
+                maturity: BETA,
             },
         ],
     },
@@ -1737,21 +1876,33 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
                 maturity: BETA,
             },
             FeatureSeed {
-                name: "Playground UI",
-                description: "Mini-Postman request/response surface (umbral-playground).",
+                name: "Swagger UI",
+                description: "Interactive browser documentation for the generated schema.",
                 status: S,
                 maturity: BETA,
             },
             FeatureSeed {
                 name: "Vendor extensions",
-                description: "FK targets, enums, nullable/readOnly surfaced in the schema.",
+                description: "FK targets, enums, nullable/readOnly fields surfaced in the schema.",
                 status: S,
                 maturity: BETA,
             },
             FeatureSeed {
                 name: "securitySchemes publishing",
                 description: "Auth requirements per endpoint for auto-detect in the playground.",
-                status: IP,
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Action schemas",
+                description: "Custom REST actions appear with request and response shapes.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Production gating",
+                description: "Docs UI can stay disabled in production unless explicitly allowed.",
+                status: S,
                 maturity: BETA,
             },
         ],
@@ -1768,26 +1919,44 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
             FeatureSeed {
                 name: "DB-backed queue",
                 description: "Jobs persisted to a table and drained by a worker.",
-                status: E,
+                status: U,
                 maturity: ALPHA,
             },
             FeatureSeed {
                 name: "Worker process",
                 description: "`cargo run -- worker` consumes and executes jobs.",
-                status: E,
+                status: U,
                 maturity: ALPHA,
             },
             FeatureSeed {
                 name: "Retries and backoff",
                 description: "Failed jobs retry with exponential backoff.",
-                status: E,
+                status: U,
                 maturity: ALPHA,
             },
             FeatureSeed {
-                name: "Scheduled tasks",
-                description: "Run a job at a future `eta`.",
-                status: PL,
-                maturity: DES,
+                name: "Priority queues",
+                description: "Higher-priority jobs are claimed before lower-priority work.",
+                status: U,
+                maturity: ALPHA,
+            },
+            FeatureSeed {
+                name: "Beat schedules",
+                description: "`tasks-beat` fires periodic jobs on interval schedules.",
+                status: U,
+                maturity: ALPHA,
+            },
+            FeatureSeed {
+                name: "Result records",
+                description: "Stores task outcomes for inspection and retry decisions.",
+                status: U,
+                maturity: ALPHA,
+            },
+            FeatureSeed {
+                name: "Admin queue browser",
+                description: "Admin-facing task rows for monitoring and manual retry.",
+                status: E,
+                maturity: ALPHA,
             },
         ],
     },
@@ -1796,19 +1965,25 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
         features: &[
             FeatureSeed {
                 name: "CSRF protection",
-                description: "Double-submit token enforced on every POST.",
+                description: "Signed double-submit token enforced on unsafe methods.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Template CSRF helpers",
+                description: "`csrf_token` and hidden input helpers are injected into templates.",
                 status: S,
                 maturity: STA,
             },
             FeatureSeed {
                 name: "HSTS and secure headers",
-                description: "Strict-Transport-Security and friends by default.",
+                description: "Strict-Transport-Security and modern security headers.",
                 status: S,
                 maturity: STA,
             },
             FeatureSeed {
                 name: "Clickjacking protection",
-                description: "X-Frame-Options / frame-ancestors headers.",
+                description: "X-Frame-Options and frame-ancestors headers.",
                 status: S,
                 maturity: STA,
             },
@@ -1818,14 +1993,26 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
                 status: S,
                 maturity: STA,
             },
+            FeatureSeed {
+                name: "Production hardening preset",
+                description: "One preset flips HSTS, secure CSRF cookies, and stricter headers.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Request body limit",
+                description: "Optional request body cap for DoS hardening.",
+                status: S,
+                maturity: BETA,
+            },
         ],
     },
     PluginFeatureSet {
-        crate_name: "umbral-static",
+        crate_name: "umbral-storage",
         features: &[
             FeatureSeed {
                 name: "Production static serving",
-                description: "Serve compiled assets and uploaded media in prod.",
+                description: "Serve compiled assets with cache headers and ETags.",
                 status: S,
                 maturity: STA,
             },
@@ -1836,10 +2023,520 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
                 maturity: STA,
             },
             FeatureSeed {
-                name: "gzip / brotli compression",
-                description: "Compressed responses for static assets.",
-                status: PL,
-                maturity: DES,
+                name: "Embedded static assets",
+                description: "Serve include_dir bundles for plugin-owned assets.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "File and image fields",
+                description: "Model fields for uploaded files with admin/form widgets.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Media access control",
+                description: "Optional access hooks before serving private uploads.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Background media processing",
+                description: "Image processing runs behind a concurrency gate.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "S3-compatible backend",
+                description: "Feature-gated backend for AWS S3, MinIO, R2, and Spaces.",
+                status: U,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-oauth",
+        features: &[
+            FeatureSeed {
+                name: "Google provider",
+                description: "Ready-made Google OAuth provider integration.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "GitHub provider",
+                description: "Ready-made GitHub OAuth provider integration.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "PKCE and state checks",
+                description: "Verifier/challenge generation and state CSRF protection.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Account linking",
+                description: "Connect a provider to an already signed-in user.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Return URL allow-list",
+                description: "Constrain post-login redirects to trusted prefixes.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Provider discovery",
+                description: "Expose registered providers for login UI rendering.",
+                status: S,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-realtime",
+        features: &[
+            FeatureSeed {
+                name: "SSE transport",
+                description: "Server-sent events endpoint for browser push.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "WebSocket transport",
+                description: "Bidirectional socket endpoint with origin checks.",
+                status: E,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "User and room targets",
+                description: "Send to one user or a named public/private group.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Model-event hooks",
+                description: "Broadcast from ORM create/update/delete lifecycle events.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Presence",
+                description: "Track and publish join/leave state for rooms.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Connection and rate limits",
+                description: "Default caps protect the server from noisy clients.",
+                status: S,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-cache",
+        features: &[
+            FeatureSeed {
+                name: "Ambient cache handle",
+                description: "Install one cache and read it from any handler.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Typed get/set helpers",
+                description: "Serde-backed values with per-key TTL support.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Memory backend",
+                description: "In-process cache for development and single-process apps.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "SQLite backend",
+                description: "Persistent local cache backed by an explicit SQLite pool.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Redis backend",
+                description: "Feature-gated Redis backend with connection-manager reconnects.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "cache_page layer",
+                description: "Caches eligible GET/HEAD responses and skips private/no-store.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Response headers",
+                description: "Optional compression, Cache-Control, and Vary headers.",
+                status: S,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-health",
+        features: &[
+            FeatureSeed {
+                name: "Liveness probe",
+                description: "`/healthz` reports whether the process is alive.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Readiness probe",
+                description: "`/ready` checks the database and custom dependencies.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Custom health checks",
+                description: "Implement `HealthCheck` for Redis, queues, or third parties.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Per-check timeout",
+                description: "Hung dependencies fail fast instead of hanging readiness.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Structured failure reasons",
+                description: "Readiness failures carry a reason for operators.",
+                status: S,
+                maturity: STA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-livereload",
+        features: &[
+            FeatureSeed {
+                name: "File watcher",
+                description: "Watches templates, static assets, and custom roots.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "SSE reload stream",
+                description: "Pushes reload events to connected browsers.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "CSS hot-swap",
+                description: "Stylesheets refresh in place without a full page reload.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Client auto-injection",
+                description: "HTML responses receive the live-reload script in dev mode.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "SharedWorker fallback",
+                description: "SharedWorker path falls back to EventSource when needed.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Production inertness",
+                description: "No watcher or client injection outside development.",
+                status: S,
+                maturity: STA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-analytics",
+        features: &[
+            FeatureSeed {
+                name: "PostHog client",
+                description: "Captures events to a configurable PostHog host.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Pageview capture",
+                description: "Optional request capture for product traffic.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Custom events",
+                description: "Fire product events with typed JSON properties.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Exclude prefixes",
+                description: "Skip assets, probes, and sensitive paths by prefix.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Bounded outbound sends",
+                description: "Fire-and-forget delivery is capped so bursts do not fan out unbounded.",
+                status: U,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-email",
+        features: &[
+            FeatureSeed {
+                name: "Message builder",
+                description: "Compose subject, recipients, sender, text, HTML, and reply-to.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "SMTP backend",
+                description: "STARTTLS SMTP transport with optional credentials and timeout.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "HTTP API backends",
+                description: "Feature-gated Resend and SendGrid JSON delivery.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Console backend",
+                description: "Dev/test backend prints rendered messages safely.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Attachments",
+                description: "Multipart attachments with content-type validation.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Template rendering",
+                description: "Render template bodies and map template errors into EmailError.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Production safety",
+                description: "Console backend refuses non-dev delivery unless explicitly forced.",
+                status: U,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-logs",
+        features: &[
+            FeatureSeed {
+                name: "Structured request logs",
+                description: "Per-request records with method, path, status, and latency.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Trusted-proxy client IP",
+                description: "Logs the real caller from trusted proxy configuration.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Exclude prefixes",
+                description: "Drop noisy paths such as assets and health probes.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Sampling",
+                description: "Capture a fraction of high-volume traffic.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Minimum status filter",
+                description: "Only log responses at or above a configured status code.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "OpenTelemetry bootstrap",
+                description: "Optional OTLP tracing setup with service-name configuration.",
+                status: IP,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-signals",
+        features: &[
+            FeatureSeed {
+                name: "Model lifecycle signals",
+                description: "Pre/post save, update, and delete hooks from the ORM.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Named events",
+                description: "Emit custom domain events from any handler.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Async subscribers",
+                description: "Register async handlers without blocking the registry lock.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Payload redaction",
+                description: "`#[umbral(signal_skip)]` keeps secrets out of emitted payloads.",
+                status: S,
+                maturity: STA,
+            },
+            FeatureSeed {
+                name: "Bulk M2M safety",
+                description: "Bulk relation paths avoid panics during signal dispatch.",
+                status: S,
+                maturity: STA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-rls",
+        features: &[
+            FeatureSeed {
+                name: "Enable RLS",
+                description: "Turns row-level security on for selected Postgres tables.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "FORCE RLS",
+                description: "Applies FORCE ROW LEVEL SECURITY so table owners are not exempt.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Policy definitions",
+                description: "Declare SQL `USING` policies per table and action.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "WITH CHECK policies",
+                description: "Separate write checks for insert/update paths.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Request context GUCs",
+                description: "Bind per-request values through the connection pool.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "SQLite production guard",
+                description: "Warns or fails clearly when RLS is requested outside Postgres.",
+                status: U,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-tenants",
+        features: &[
+            FeatureSeed {
+                name: "Schema-per-tenant strategy",
+                description: "Route tenant-scoped apps into isolated Postgres schemas.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Shared-column strategy",
+                description: "Scope rows by tenant key when density matters more than schemas.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Tenant resolution",
+                description: "Resolve tenants from headers, subdomains, or custom policy.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Membership guard",
+                description: "Bind resolved tenants to callers through a membership check.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Scoped app lists",
+                description: "Choose tenant-scoped apps and shared apps explicitly.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Current tenant context",
+                description: "Handlers can read the active tenant from request-local context.",
+                status: U,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-playground",
+        features: &[
+            FeatureSeed {
+                name: "OpenAPI discovery",
+                description: "Reads the running app schema to list resources and operations.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Request builder",
+                description: "Edit method, path, headers, query params, and JSON body.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Response viewer",
+                description: "Formatted status, headers, body, and timing for live calls.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Auth helpers",
+                description: "Bearer-token input informed by OpenAPI security schemes.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Request history",
+                description: "Local browser history for replaying recent API calls.",
+                status: U,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Import and export",
+                description: "Persist and restore playground settings and request state.",
+                status: U,
+                maturity: BETA,
             },
         ],
     },
@@ -1865,13 +2562,12 @@ fn feature_slug(crate_name: &str, name: &str) -> String {
     format!("{crate_name}-{tail}")
 }
 
-/// Seed each official plugin's feature tracker rows. Idempotent per plugin:
-/// a plugin that already has features is skipped, so this runs every boot
-/// (the plugin rows seed first, then this back-fills their features) and a
-/// re-run after adding a new plugin's feature list only inserts the new
-/// rows. Returns the number of feature rows inserted.
+/// Seed each official plugin's feature tracker rows. Idempotent per feature:
+/// each seeded slug is created when absent and refreshed when the curated copy,
+/// status, maturity, or display order changes. Returns the number of feature
+/// rows inserted or refreshed.
 pub async fn seed_plugin_features() -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    let mut inserted = 0;
+    let mut changed = 0;
     for set in PLUGIN_FEATURES {
         let Some(plugin) = Plugin::objects()
             .filter(plugin::CRATE_NAME.eq(set.crate_name))
@@ -1880,36 +2576,67 @@ pub async fn seed_plugin_features() -> Result<usize, Box<dyn std::error::Error +
         else {
             continue;
         };
-        if PluginFeature::objects()
-            .filter(plugin_feature::PLUGIN.eq(plugin.id))
-            .count()
-            .await?
-            > 0
-        {
-            continue;
-        }
         for (i, f) in set.features.iter().enumerate() {
+            let slug = feature_slug(set.crate_name, f.name);
+            let display_order = (i as i32) * 10;
+            if let Some(existing) = PluginFeature::objects()
+                .filter(plugin_feature::SLUG.eq(slug.as_str()))
+                .first()
+                .await?
+            {
+                let matches_seed = existing.name == f.name
+                    && existing.description == f.description
+                    && existing.status == f.status
+                    && existing.maturity == f.maturity
+                    && existing.display_order == display_order
+                    && existing.visible;
+                if matches_seed {
+                    continue;
+                }
+                let mut values = serde_json::Map::new();
+                values.insert(
+                    "name".to_string(),
+                    serde_json::Value::String(f.name.to_string()),
+                );
+                values.insert(
+                    "description".to_string(),
+                    serde_json::Value::String(f.description.to_string()),
+                );
+                values.insert("status".to_string(), serde_json::to_value(f.status)?);
+                values.insert("maturity".to_string(), serde_json::to_value(f.maturity)?);
+                values.insert(
+                    "display_order".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(i64::from(display_order))),
+                );
+                values.insert("visible".to_string(), serde_json::Value::Bool(true));
+                changed += PluginFeature::objects()
+                    .filter(plugin_feature::SLUG.eq(slug.as_str()))
+                    .update_values(values)
+                    .await? as usize;
+                continue;
+            }
+
             let now = Utc::now();
             let row = PluginFeature {
                 id: 0,
                 plugin: ForeignKey::new(plugin.id),
                 name: f.name.to_string(),
-                slug: feature_slug(set.crate_name, f.name),
+                slug,
                 description: f.description.to_string(),
                 status: f.status,
                 maturity: f.maturity,
                 release_target: None,
                 docs_url: None,
                 example_url: None,
-                display_order: (i as i32) * 10,
+                display_order,
                 visible: true,
                 created_at: now,
                 updated_at: now,
                 deleted_at: None,
             };
             PluginFeature::objects().create(row).await?;
-            inserted += 1;
+            changed += 1;
         }
     }
-    Ok(inserted)
+    Ok(changed)
 }

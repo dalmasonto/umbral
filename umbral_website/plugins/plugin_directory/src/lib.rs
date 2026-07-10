@@ -282,12 +282,14 @@ fn search_predicate(q: &str) -> umbral::orm::Predicate<PluginModel> {
 /// Cards per listing page.
 const PAGE_SIZE: i64 = 12;
 
-/// Predicate for the "Audited" facet: a plugin counts as audited when an
-/// Umbral or third-party reviewer has signed off. The string column has no
-/// `in_`, so this ORs the two `eq` predicates (`Predicate: BitOr`) — the
-/// same definition the `PluginCard.audited` badge uses.
+/// Predicate for the "Audited" facet: a plugin counts as reviewed when an
+/// Umbral, third-party, or maintainer self-review has signed off. The string
+/// column has no `in_`, so this ORs the `eq` predicates (`Predicate: BitOr`)
+/// — the same definition the `PluginCard.audited` badge uses.
 fn audited_predicate() -> umbral::orm::Predicate<PluginModel> {
-    plugin::AUDIT_STATUS.eq("umbral_reviewed") | plugin::AUDIT_STATUS.eq("third_party_reviewed")
+    plugin::AUDIT_STATUS.eq("self_reviewed")
+        | plugin::AUDIT_STATUS.eq("umbral_reviewed")
+        | plugin::AUDIT_STATUS.eq("third_party_reviewed")
 }
 
 async fn plugin_directory(
@@ -484,7 +486,7 @@ struct FacetCounts {
     experimental: i64,
     deprecated: i64,
     flagged: i64,
-    /// Plugins whose audit_status is umbral- or third-party-reviewed.
+    /// Plugins whose audit_status is self-, umbral-, or third-party-reviewed.
     /// Drives the clickable "Audited" facet (`?audited=1`).
     audited: i64,
     total: i64,
@@ -577,7 +579,9 @@ impl PluginCard {
             flagged,
             audited: matches!(
                 p.audit_status,
-                AuditStatus::UmbralReviewed | AuditStatus::ThirdPartyReviewed
+                AuditStatus::SelfReviewed
+                    | AuditStatus::UmbralReviewed
+                    | AuditStatus::ThirdPartyReviewed
             ),
             audit_kind: if flagged { "bad" } else { audit_kind },
             audit_label: if flagged { "Flagged" } else { audit_label },
