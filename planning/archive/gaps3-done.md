@@ -297,3 +297,57 @@ Storage is UTC everywhere (`TIMESTAMPTZ` on Postgres, ISO-8601 text on SQLite); 
 **Tests:** `crates/umbral-core/tests/column_comments.rs` — 10 cases over the real `render_operation_for` and the real `diff`: one comment per documented column and none for undocumented ones; comment ordered after the CREATE; quote escaping; SQLite emits nothing but still creates the table; `AddColumn` carries its comment; a help edit emits exactly one `SetColumnComment` and never an `AlterColumn`; removal emits `IS NULL`; unchanged help emits no migration at all (without which every `makemigrations` after the upgrade would re-emit comments forever); and the op classifies SAFE. Whole workspace green (2604).
 
 **Note for existing projects.** Snapshots written before this change carry no `help`, so the first `makemigrations` after upgrading emits one `SetColumnComment` per documented column. That is correct and cheap — the comments genuinely aren't in the database yet.
+
+---
+
+45. [x] **Can we have read/write permissions enforced at query time — if a user is in group X, they can read but not write? "Framework-enforced permissions." Controversial, since the ORM does not / should not rely on a plugin.**
+
+**Answer: yes, and the entry's instinct was right — the ORM is the wrong layer. The right one already existed and was unusable. It works now.**
+
+## Why not the ORM
+
+Three findings, each independently fatal to a `QuerySet` guard:
+
+1. **It would recurse.** `umbral_permissions::has_perm()` answers "may this user write `post`?" by running `UserPermission::objects()…exists()` and `Group::permissions_contains_any(…)` — *ORM queries*. A guard on the ORM terminals that consulted `has_perm` would re-enter itself on every check. Escaping that needs a "system" bypass scope the permissions plugin must remember to enter, which is a footgun sitting directly on the security boundary.
+2. **A denial has no honest home.** `fetch`, `first`, `count`, `exists`, `delete` and `update_values` all return `Result<_, sqlx::Error>`; `create` returns `WriteError`; `get` returns `GetError`; `DynQuerySet` returns `DynError`. There is no umbrella ORM error. A `Forbidden` would have to be smuggled through `sqlx::Error` (a 500, not a 403, and indistinguishable from a real DB fault) or the read terminals' signatures would have to change — a breaking refactor across every consumer. Enforcing only the terminals whose error type happens to be rich enough (`create`, `DynQuerySet`) is worse than enforcing nothing: `delete()` would stay wide open behind a guard that looks total.
+3. **It needs a second process-wide global.** An ambient "current user" the ORM reads. `arch.md` allows exactly one intentional global (the `DbPool` `OnceLock`) and says not to let others creep in.
+
+Django reaches the same conclusion: its ORM enforces no permissions; views, admin and DRF do. The `Identity` contract already lives in `umbral-core` (`auth_contract.rs`) so plugins depend inward, and it is deliberately not consulted by any query.
+
+## The layer that *can* do it, and the hole in it
+
+Postgres row-level security. `umbral-rls` already declared policies whose `USING` / `WITH CHECK` expressions read `current_setting('app.user_id')`; `RouteContext::session_vars` already existed; and the Postgres pool's `before_acquire` hook already ran `RESET ALL` followed by `set_config(name, value, false)` per entry (audit_2 C2/R2), so a value cannot leak to the next request on a pooled connection.
+
+**Nothing ever populated the list.** `RouteContext::add_session_var` — whose doc comment reads "used by middleware that augments an already-scoped context" — had **zero callers**, and no such middleware existed. The only other hook, `AppBuilder::route_context`, takes a **synchronous** resolver (`Fn(&Request) -> RouteContext`), while finding the session user requires an async DB read. The wiring the `umbral-rls` docs called "REQUIRED" was therefore not expressible, and the doc's example called a `current_session_user_id(req.headers())` that does not exist.
+
+This was not a soft failure. Verified against a live Postgres: a `SELECT` on an RLS-enabled table whose policy reads an unset `app.user_id` fails with `ERROR: unrecognized configuration parameter "app.user_id"`. Every request 500s.
+
+## Shipped
+
+`AuthPlugin::with_db_session_var("app.user_id")` mounts `db_session_var_layer::<U>`, which resolves the user with `resolve_user::<U>` (session-derived, never a client header, and filtered on `is_active` so a deactivated account carries no identity), clones the ambient `RouteContext`, calls the until-now-dead `add_session_var`, and re-scopes for the rest of the request. Augment, not replace: an outer resolver's tenant and variables survive.
+
+The variable is set on **every** request, to the empty string when anonymous — precisely because an unset GUC is a 500 rather than an empty result. Policies read `NULLIF(current_setting('app.user_id'), '')`. Opt-in, because it costs one session + one user read per request and, unlike `with_user_in_templates`, cannot be lazy: the value must reach the connection before the handler's first query.
+
+`impl Plugin for AuthPlugin<U>` gained the bounds `resolve_user::<U>` needs (`FromRow` on both backends, `HydrateRelated`, `PrimaryKey: FromStr`). Any user model that could not satisfy them was already unusable with the `LoggedIn<U>` extractor; the whole workspace compiles unchanged.
+
+## The recipe, proven on a live Postgres
+
+```sql
+CREATE POLICY post_read  ON post FOR SELECT USING (NULLIF(current_setting('app.user_id'), '') IS NOT NULL);
+CREATE POLICY post_write ON post FOR INSERT WITH CHECK (
+  EXISTS (SELECT 1 FROM permissions_usergroup ug JOIN permissions_group g ON g.id = ug.group_id
+          WHERE g.name = 'editors' AND ug.user_id = NULLIF(current_setting('app.user_id'), '')));
+```
+
+Executed against the real `permissions_group` / `permissions_usergroup` shapes in a scratch schema: **anonymous** → 0 rows, no error; **a member of `viewers`** → reads 2 rows, and `INSERT` fails with `new row violates row-level security policy`; **a member of `editors`** → reads and writes. Exactly "group X can read but not write", enforced by the database, with the ORM untouched and no plugin dependency added to `umbral-core`. Scratch schema dropped afterwards.
+
+## Docs corrected
+
+Two claims on `documentation/docs/v0.0.1/plugins/rls.mdx` were false and dangerous:
+
+- A `danger` callout said the plugin "does not emit `FORCE ROW LEVEL SECURITY`" and that every policy is therefore silently bypassed. It **does** emit it (audit_2 C2/R1). Rewritten to warn about `BYPASSRLS`/superuser, which `FORCE` genuinely does not cover.
+- A second `danger` callout prescribed a hand-rolled `set_config` middleware, called it unsound, and told readers umbral "does not expose per-request connection pinning". The `before_acquire` hook makes pinning unnecessary. Replaced with the one-line builder wiring.
+
+Every `current_setting('app.user_id')` example on that page and in the plugin's rustdoc now uses the `NULLIF` form.
+
+**Tests:** `plugins/umbral-auth/tests/db_session_var.rs` — a logged-in request publishes its id; an anonymous request and an anonymous *session row* both publish the empty string; a deactivated user publishes nothing; without the builder no variable is set at all; and the ambient tenant + an outer resolver's variables survive the layer. Whole workspace green (2609).

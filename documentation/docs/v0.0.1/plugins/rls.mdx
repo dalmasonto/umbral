@@ -26,13 +26,13 @@ let app = App::builder()
     .plugin(
         RlsPlugin::new()
             .policy("post", "user_can_read", Action::Select,
-                "user_id = current_setting('app.user_id')::int")
+                "user_id = NULLIF(current_setting('app.user_id'), '')::int")
             .policy_with_check(
                 "post",
                 "user_can_insert",
                 Action::Insert,
-                "user_id = current_setting('app.user_id')::int",
-                "user_id = current_setting('app.user_id')::int AND status <> 'banned'",
+                "user_id = NULLIF(current_setting('app.user_id'), '')::int",
+                "user_id = NULLIF(current_setting('app.user_id'), '')::int AND status <> 'banned'",
             ),
     )
     .build()?;
@@ -57,7 +57,7 @@ ALTER TABLE "post" ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "user_can_read" ON "post";
 CREATE POLICY "user_can_read" ON "post"
     FOR SELECT
-    USING (user_id = current_setting('app.user_id')::int);
+    USING (user_id = NULLIF(current_setting('app.user_id'), '')::int);
 ```
 
 The `DROP IF EXISTS` + `CREATE` pair is the idempotency mechanism. Postgres
@@ -67,85 +67,102 @@ error. Policy names and table names are double-quote escaped; the `USING` and
 `WITH CHECK` expressions are passed through verbatim - they are SQL you wrote
 and are responsible for.
 
-<Callout type="danger">
-**The plugin does not emit `FORCE ROW LEVEL SECURITY`, and this is the single
-biggest footgun.** Plain `ENABLE ROW LEVEL SECURITY` (all this plugin runs)
-**does not apply to the role that owns the table**, nor to `BYPASSRLS` /
-superuser roles. In the default umbral setup there is one `DATABASE_URL` and one
-connection pool: `cargo run -- migrate` creates and therefore *owns* the tables,
-and your app connects at runtime with the **same role**. That role is the table
-owner, so **every policy on this page is silently bypassed and your app sees all
-rows regardless of `app.user_id`** - RLS is effectively off while `pg_policies`
-still shows the policies, which is exactly the state that passes a superficial
-check.
+<Callout type="warning">
+Plain `ENABLE ROW LEVEL SECURITY` **does not apply to the role that owns the
+table**. In the default umbral setup there is one `DATABASE_URL`:
+`cargo run -- migrate` creates and therefore *owns* the tables, and the app
+connects at runtime with the same role - so `ENABLE` alone would leave every
+policy silently bypassed while `pg_policies` still listed them.
 
-To actually enforce RLS you must both:
+The plugin therefore also emits `ALTER TABLE <t> FORCE ROW LEVEL SECURITY` for
+every registered table, so the owner is subject to its own policies.
 
-1. Run the app under a **dedicated, non-owner, non-superuser role** without
-   `BYPASSRLS` (grant it only `SELECT/INSERT/UPDATE/DELETE` on the tables), and
-2. Consider `ALTER TABLE <t> FORCE ROW LEVEL SECURITY;` so the owner is subject
-   to policies too (needed if migrations and runtime share a role).
-
-Neither is done for you today - the plugin runs `ENABLE` only. Verify isolation
-with a two-tenant test (insert rows as user 1 and user 2, set `app.user_id`, and
-assert each session sees only its own rows) before trusting RLS in production.
+`FORCE` does **not** cover `BYPASSRLS` or superuser roles, which ignore RLS
+entirely. Do not run the app as a superuser. Verify isolation with a two-user
+test (insert rows as user 1 and user 2, set `app.user_id`, assert each sees only
+its own) before trusting RLS in production.
 </Callout>
 
 ## Setting user context per request
 
-Policies referencing `current_setting('app.user_id')` only work when the GUC
-is set for the session or transaction. Postgres does not inherit that value
-from application code automatically. You set it per request in axum middleware:
+Policies referencing `current_setting('app.user_id')` only work when that
+variable is set on the connection the query runs on. Postgres will not infer it.
+One builder call does the wiring:
 
 ```rust
-use axum::{extract::State, middleware::Next, response::Response};
-use axum::http::Request;
-use sqlx::PgPool;
-
-async fn rls_user_context<B>(
-    State(pool): State<PgPool>,
-    // replace with whatever auth extractor your app uses
-    auth: AuthSession,
-    req: Request<B>,
-    next: Next<B>,
-) -> Response {
-    sqlx::query("SELECT set_config('app.user_id', $1, true)")
-        .bind(auth.user_id.to_string())
-        .execute(&pool)
-        .await
-        .ok();
-    next.run(req).await
-}
+App::builder()
+    .plugin(SessionsPlugin::default())
+    .plugin(AuthPlugin::<AuthUser>::default().with_db_session_var("app.user_id"))
+    .plugin(RlsPlugin::new().policy(
+        "post", "own", Action::All,
+        "author_id = NULLIF(current_setting('app.user_id'), '')",
+    ))
 ```
 
-The third argument to `set_config` is `is_local`. `true` scopes the GUC to
-the current transaction; `false` scopes it to the session. For most pooled
-setups you want `true` so the value doesn't bleed across requests that reuse
-the same connection.
+`with_db_session_var` resolves the user from the **authenticated session** — never
+a client-supplied header — and a deactivated account resolves to anonymous. It
+puts the id on the request's `RouteContext`, and the Postgres pool applies it in
+its `before_acquire` hook: `RESET ALL` to clear whatever a previous request left
+on the pooled connection, then `set_config` for this request's variables. So
+every connection your handler touches has the right value, and none of it leaks
+to the next request. You do not need to pin a connection or wrap the request in a
+transaction.
 
-<Callout type="danger">
-**Connection pinning is not automatic and the naive middleware above is
-unsound.** `umbral-rls` provides *no* runtime plumbing to set, scope, or reset
-`app.user_id` - it only emits the policy DDL at boot. The snippet above runs
-`set_config(..., true)` on **one connection checked out of the pool**, but your
-subsequent ORM query (`Post::objects()...`) checks out a **potentially different
-connection** where the GUC was never set. With `is_local = true` (transaction
-scope) the value is gone the moment that first connection returns to the pool;
-with `is_local = false` (session scope) it is *worse* - it persists on the
-pooled connection and **leaks to the next unrelated request's user**, a
-cross-tenant data-exposure bug.
-
-The only correct shape is to pin one connection/transaction for the whole
-request and run both the `set_config` and every ORM query on it. umbral does not
-expose per-request connection pinning through the ambient pool today, so a
-correct RLS deployment needs application-level transaction management around
-each request. Do not ship the middleware above as written.
+<Callout type="warning">
+  Write `NULLIF(current_setting('app.user_id'), '')`, not the bare
+  `current_setting(...)`. The variable is set on **every** request, to the empty
+  string when nobody is logged in — because `current_setting` on a variable that
+  was never set raises `unrecognized configuration parameter`, which would turn
+  every logged-out request into a 500 instead of an empty result set. `NULLIF`
+  turns the anonymous case into `NULL`, and `NULL` compares false, so anonymous
+  callers see no rows.
 </Callout>
 
+<Callout type="danger">
+  Do **not** enable RLS on `auth_user` or `session`. The layer reads those tables
+  to discover who the caller is, which necessarily happens before any variable
+  has been set.
+</Callout>
+
+It costs one session read plus one user read per request, so it is off by default.
+Unlike `with_user_in_templates` it cannot be lazy — the value must be on the
+connection before your handler's first query, not after something asks for it.
+
+## Group X can read but not write
+
+This is the framework-enforced permission the ORM deliberately does not
+implement. One `SELECT` policy, and a write policy gated on group membership.
+Application code cannot bypass it: the database refuses the row.
+
+```rust
+RlsPlugin::new()
+    .policy(
+        "post", "read_signed_in", Action::Select,
+        "NULLIF(current_setting('app.user_id'), '') IS NOT NULL",
+    )
+    .policy_with_check(
+        "post", "write_editors_only", Action::Insert,
+        "true",
+        "EXISTS (SELECT 1 FROM permissions_usergroup ug \
+                 JOIN permissions_group g ON g.id = ug.group_id \
+                 WHERE g.name = 'editors' \
+                   AND ug.user_id = NULLIF(current_setting('app.user_id'), ''))",
+    )
+```
+
+`permissions_usergroup` / `permissions_group` are the tables `umbral-permissions`
+migrates, so the policy reads the same group membership the admin UI edits. A
+member of `viewers` gets rows on `SELECT` and
+`new row violates row-level security policy` on `INSERT` — from Postgres, not
+from a middleware someone can forget to mount.
+
 <Callout type="info">
-The auth integration is your responsibility today. `umbral-rls` sets up the
-policy DDL; wiring your auth layer to the GUC (correctly, per the warning above)
-is application code, not framework code.
+  Why not enforce this in the ORM? Because `has_perm()` is itself an ORM query,
+  so a QuerySet guard that consulted it would recurse; because the read terminals
+  return `sqlx::Error` and a denial has no honest home there; and because the
+  ambient "current user" it needs would be a second process-wide global. RLS puts
+  the check in the one place no application code can route around. See
+  `planning/archive/gaps3-done.md` #45.
 </Callout>
 
 ## SQLite story

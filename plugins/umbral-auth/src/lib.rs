@@ -91,8 +91,8 @@ pub use login_required::{
     login_required, login_required_html, resolve_user as current_user_as,
 };
 pub use session_user::{
-    OptionalUser, SessionAuthentication, User, current_user, login, login_with_request,
-    user_context_layer,
+    OptionalUser, SessionAuthentication, User, current_user, db_session_var_layer, login,
+    login_with_request, user_context_layer,
 };
 pub use throttle::{
     Throttle, ThrottleConfig, email_action_throttle_check, login_throttle_check,
@@ -402,6 +402,12 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// REST-only service has nothing to gain from it. Set via
     /// [`AuthPlugin::with_user_in_templates`].
     pub user_in_templates: bool,
+    /// When `Some(name)`, publish the authenticated user's id to the database
+    /// connection as the Postgres session variable `name` on every request, so
+    /// a row-level-security policy can read it via `current_setting(name)`.
+    /// `None` (the default) mounts no layer at all. Set via
+    /// [`AuthPlugin::with_db_session_var`]. gaps3 #45.
+    pub db_session_var: Option<String>,
     /// The password-strength policy this plugin installs at boot. `None`
     /// here is NOT "no validation" — `on_ready` installs
     /// [`PasswordPolicy::default`] (the full secure set) when this is left
@@ -447,6 +453,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
             default_routes_prefix: None,
             form_routes_prefix: None,
             user_in_templates: false,
+            db_session_var: None,
             // SECURE BY DEFAULT: an unconfigured AuthPlugin enforces the
             // full validator set. `None` defers to PasswordPolicy::default()
             // (the secure set) at install time; it does NOT mean "off".
@@ -495,6 +502,47 @@ impl<U: UserModel> AuthPlugin<U> {
     /// populated context with one builder call.
     pub fn with_user_in_templates(mut self) -> Self {
         self.user_in_templates = true;
+        self
+    }
+
+    /// Publish the authenticated user's id to the database connection as a
+    /// Postgres session variable, so a row-level-security policy can read it.
+    ///
+    /// This is the wiring that makes `umbral-rls` usable. RLS is the only
+    /// permission layer in umbral that cannot be bypassed by application code —
+    /// the database itself refuses the row — and a policy expresses "who is
+    /// asking?" as `current_setting('app.user_id')`. Something has to set that.
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .plugin(SessionsPlugin::default())
+    ///     .plugin(AuthPlugin::<AuthUser>::default().with_db_session_var("app.user_id"))
+    ///     .plugin(RlsPlugin::new().policy(
+    ///         "post", "own_rows", Action::All,
+    ///         "user_id = NULLIF(current_setting('app.user_id'), '')::bigint",
+    ///     ))
+    /// ```
+    ///
+    /// The variable is set on **every** request, to the empty string when the
+    /// caller is anonymous. That is deliberate: Postgres raises
+    /// `unrecognized configuration parameter` when `current_setting` names a GUC
+    /// that was never set on the connection, so skipping it for logged-out users
+    /// would turn each of their requests into a 500 instead of a clean "you see
+    /// no rows". Write policies against `NULLIF(current_setting(...), '')`.
+    ///
+    /// Identity comes from the session, never from a client-supplied header, and
+    /// a deactivated account resolves to anonymous (the lookup filters on
+    /// `is_active`).
+    ///
+    /// **Costs one session + one user read per request**, and unlike
+    /// [`Self::with_user_in_templates`] it cannot be lazy: the value has to be on
+    /// the connection before the handler's first query, not after something asks
+    /// for it. Off by default for that reason.
+    ///
+    /// **Do not enable RLS on `auth_user` or `session`.** This layer reads them
+    /// to discover who the caller is, before any variable has been set.
+    pub fn with_db_session_var(mut self, name: impl Into<String>) -> Self {
+        self.db_session_var = Some(name.into());
         self
     }
 
@@ -762,7 +810,20 @@ impl AuthPlugin<AuthUser> {
     }
 }
 
-impl<U: UserModel> Plugin for AuthPlugin<U> {
+// The extra bounds beyond `UserModel` are what `resolve_user::<U>` needs to load
+// the row — the same set `LoggedIn<U>` already requires. They are stated here so
+// `wrap_router` can mount `db_session_var_layer::<U>` (gaps3 #45). Any user model
+// that couldn't satisfy them was already unusable with the `LoggedIn` extractor.
+impl<U> Plugin for AuthPlugin<U>
+where
+    U: UserModel
+        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+        + umbral::orm::HydrateRelated
+        + Unpin
+        + Send,
+    <U as umbral::orm::Model>::PrimaryKey: std::str::FromStr,
+{
     fn name(&self) -> &'static str {
         "auth"
     }
@@ -844,11 +905,21 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
     /// Off by default — see the builder method's docstring for the
     /// "why" (one DB read per request, pointless for REST-only apps).
     fn wrap_router(&self, router: umbral::web::Router) -> umbral::web::Router {
+        let mut router = router;
         if self.user_in_templates {
-            router.layer(axum::middleware::from_fn(user_context_layer))
-        } else {
-            router
+            router = router.layer(axum::middleware::from_fn(user_context_layer));
         }
+        if let Some(name) = &self.db_session_var {
+            // Applied last, so it is the OUTERMOST of this plugin's layers: the
+            // session variable has to be on the RouteContext before any inner
+            // layer or handler acquires a connection (gaps3 #45).
+            let name: std::sync::Arc<str> = std::sync::Arc::from(name.as_str());
+            router = router.layer(axum::middleware::from_fn_with_state(
+                name,
+                db_session_var_layer::<U>,
+            ));
+        }
+        router
     }
 
     /// Seal the password-strength policy into the ambient `OnceLock` so the

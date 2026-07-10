@@ -130,24 +130,49 @@ impl Action {
 /// like `current_setting('app.user_id')::int` needs that variable SET on the
 /// connection each request uses — otherwise every RLS-enabled query errors.
 ///
-/// Set it per request through the framework's route-context resolver, which
-/// flows into the `RouteContext` the Postgres pool reads in its `before_acquire`
-/// hook. The pool runs `set_config(name, value, false)` on acquire and resets
-/// it on the next acquire, so a value never leaks to another request's
-/// connection (audit_2 C2/R2):
+/// The variable lives on the `RouteContext` that the Postgres pool reads in its
+/// acquire hook: the pool runs `set_config(name, value, false)` per entry and
+/// resets it on the next acquire, so a value never leaks to another request's
+/// connection (audit_2 C2/R2).
+///
+/// Fill it with `AuthPlugin::with_db_session_var` (gaps3 #45). It resolves the
+/// user from the **authenticated session** — never a client-supplied header —
+/// and sets the variable on every request, to the empty string when nobody is
+/// logged in. Hence the `NULLIF`: `current_setting` on a GUC that was never set
+/// raises `unrecognized configuration parameter`, so an always-set-possibly-empty
+/// variable is what keeps anonymous requests a clean empty result rather than a
+/// 500.
 ///
 /// ```ignore
-/// use umbral::db::RouteContext;
-///
 /// App::builder()
-///     .route_context(|req| {
-///         // Resolve the user id from the AUTHENTICATED session — never a
-///         // client-supplied header.
-///         let uid = current_session_user_id(req.headers());
-///         RouteContext::new().with_session_var("app.user_id", uid.to_string())
-///     })
+///     .plugin(SessionsPlugin::default())
+///     .plugin(AuthPlugin::<AuthUser>::default().with_db_session_var("app.user_id"))
 ///     .plugin(RlsPlugin::new().policy("post", "own", Action::All,
-///         "user_id = current_setting('app.user_id')::int"))
+///         "author_id = NULLIF(current_setting('app.user_id'), '')"))
+/// ```
+///
+/// Do NOT enable RLS on `auth_user` / `session`: the layer reads them to learn
+/// who the caller is, before any variable has been set.
+///
+/// `AppBuilder::route_context` can also set session variables, but its resolver
+/// is synchronous (`Fn(&Request) -> RouteContext`) — enough for a tenant key
+/// parsed from the host header, not enough to look a session up in the database.
+///
+/// ## "Group X can read but not write"
+///
+/// One `SELECT` policy, and a write policy that requires membership. Nobody
+/// outside `editors` can write, no matter what the application code does:
+///
+/// ```ignore
+/// RlsPlugin::new()
+///     .policy("post", "read_signed_in", Action::Select,
+///         "NULLIF(current_setting('app.user_id'), '') IS NOT NULL")
+///     .policy_with_check("post", "write_editors_only", Action::Insert,
+///         "true",
+///         "EXISTS (SELECT 1 FROM permissions_usergroup ug \
+///                  JOIN permissions_group g ON g.id = ug.group_id \
+///                  WHERE g.name = 'editors' \
+///                    AND ug.user_id = NULLIF(current_setting('app.user_id'), ''))")
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct RlsPlugin {

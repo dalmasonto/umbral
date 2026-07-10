@@ -283,6 +283,55 @@ pub async fn user_context_layer(
     umbral::templates::with_current_user_lazy(lazy, next.run(req)).await
 }
 
+/// Middleware that publishes the authenticated user's id to this request's
+/// database connection as a Postgres session variable (gaps3 #45).
+///
+/// The Postgres pool's acquire hook already ran `set_config(name, value, false)`
+/// for every entry in `RouteContext::session_vars`, and `umbral-rls` policies
+/// already read `current_setting('app.user_id')`. What was missing was anything
+/// that *filled* that list: the only hook that could, `AppBuilder::route_context`,
+/// takes a **synchronous** resolver, and finding the session user needs an async
+/// DB read.
+///
+/// So this layer augments the context rather than building it — it clones
+/// whatever the outer resolver produced (tenant, other variables), adds one
+/// entry, and re-scopes for the rest of the request. `RouteContext::add_session_var`
+/// was written for exactly this and had no callers until now.
+///
+/// The variable is always set, to the empty string for an anonymous caller.
+/// Postgres raises `unrecognized configuration parameter` when `current_setting`
+/// names a GUC that was never set on the connection, so leaving it unset would
+/// make every logged-out request a 500 rather than an empty result set. Policies
+/// should read `NULLIF(current_setting('app.user_id'), '')`.
+///
+/// Generic over the user model, and `resolve_user` filters on `is_active`, so a
+/// deactivated account publishes no identity.
+///
+/// Opt in via [`crate::AuthPlugin::with_db_session_var`].
+pub async fn db_session_var_layer<U>(
+    axum::extract::State(var_name): axum::extract::State<std::sync::Arc<str>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response
+where
+    U: crate::UserModel
+        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+        + umbral::orm::HydrateRelated
+        + Unpin
+        + Send,
+    <U as umbral::orm::Model>::PrimaryKey: std::str::FromStr,
+{
+    let user_id = crate::login_required::resolve_user::<U>(req.headers())
+        .await
+        .map(|u| u.id_string())
+        .unwrap_or_default();
+
+    let mut ctx = (*umbral::db::route_context::current()).clone();
+    ctx.add_session_var(var_name.as_ref(), user_id);
+    umbral::db::route_context_scope(ctx, next.run(req)).await
+}
+
 /// Depth cap for the recursive relation expansion in
 /// [`serialize_authenticated_with_relations`]. Closes gap2 #14:
 /// templates can write `user.customer.loyalty_points` and get the
