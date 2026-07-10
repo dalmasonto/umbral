@@ -104,7 +104,7 @@ pub use umbral_core::_sea_query;
 #[doc(hidden)]
 pub use sqlx as _sqlx;
 
-pub use umbral_core::app::{App, AppBuilder, BuildError};
+pub use umbral_core::app::{App, AppBuilder, BuildError, FkEdge};
 pub use umbral_core::settings::{Environment, Settings};
 
 /// The authentication identity contract (gaps2 #76).

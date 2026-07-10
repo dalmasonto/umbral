@@ -1623,18 +1623,146 @@ async fn default_security_headers_layer(
     resp
 }
 
+/// One cross-plugin foreign-key edge derived from the model registry.
+///
+/// `plugin`'s table `table` carries a physical `REFERENCES "<fk_target>"`, and
+/// `fk_target` is owned by `depends_on`. Reported on
+/// [`BuildError::ForeignKeyCycle`] so the operator sees the *column* that
+/// forced the ordering, not just two plugin names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FkEdge {
+    /// The plugin whose table holds the foreign key.
+    pub plugin: &'static str,
+    /// The plugin that owns the referenced table, and so must migrate first.
+    pub depends_on: &'static str,
+    /// The referencing table (`Model::TABLE` of the model holding the FK).
+    pub table: String,
+    /// The referenced table (`fk_target` of the FK column).
+    pub fk_target: String,
+}
+
+/// Derive the cross-plugin ordering edges the *schema already states*.
+///
+/// `Plugin::dependencies()` is the edge set an author declares by hand. This is
+/// the edge set the models spell out: a `ForeignKey<T>` field renders
+/// `REFERENCES "<T::TABLE>"` inside `CREATE TABLE`, so the plugin owning
+/// `T::TABLE` must create it first. Postgres enforces the target's existence at
+/// `CREATE TABLE` time; SQLite silently accepts the dangling reference, which is
+/// why omitting the edge only ever failed on a fresh Postgres (gaps3 #40).
+///
+/// Two exclusions, both deliberate:
+///
+/// - **Same-plugin FKs** impose no *plugin* ordering. Column order inside one
+///   plugin's migration is the diff engine's problem, not the sort's.
+/// - **`#[umbral(db_constraint = false)]`** renders no `REFERENCES` clause (the
+///   only valid shape for a cross-database FK, gaps2 #22), so it creates no DDL
+///   ordering obligation.
+///
+/// An FK whose target table belongs to no registered plugin — an app-owned model
+/// from `.model::<T>()` — yields no edge: the implicit `"app"` plugin is pinned
+/// last by `App::build()` precisely because app models FK *into* plugin tables.
+fn fk_plugin_edges(plugins: &[Box<dyn Plugin>]) -> Vec<FkEdge> {
+    use std::collections::BTreeMap;
+
+    // table -> owning plugin. Built across every registered plugin first so a
+    // forward reference (a plugin FK-ing a table owned by a plugin registered
+    // later) still resolves.
+    let mut owner_of_table: BTreeMap<String, &'static str> = BTreeMap::new();
+    for plugin in plugins {
+        for model in plugin.models() {
+            owner_of_table.insert(model.table, plugin.name());
+        }
+    }
+
+    let mut edges: Vec<FkEdge> = Vec::new();
+    for plugin in plugins {
+        let name = plugin.name();
+        for model in plugin.models() {
+            for column in &model.fields {
+                let Some(target) = column.fk_target.as_deref() else {
+                    continue;
+                };
+                if !column.db_constraint {
+                    continue;
+                }
+                let Some(&owner) = owner_of_table.get(target) else {
+                    continue;
+                };
+                if owner == name {
+                    continue;
+                }
+                edges.push(FkEdge {
+                    plugin: name,
+                    depends_on: owner,
+                    table: model.table.clone(),
+                    fk_target: target.to_string(),
+                });
+            }
+        }
+    }
+    edges
+}
+
+/// Kahn's algorithm over `deps` (plugin -> the set it waits on), with a
+/// name-sorted ready queue so ties resolve deterministically. Returns the
+/// topological order, or the still-unsorted names when the graph has a cycle.
+fn toposort(
+    mut remaining_deps: std::collections::BTreeMap<
+        &'static str,
+        std::collections::BTreeSet<&'static str>,
+    >,
+) -> Result<Vec<&'static str>, Vec<&'static str>> {
+    use std::collections::BTreeSet;
+
+    let mut ready: BTreeSet<&'static str> = remaining_deps
+        .iter()
+        .filter_map(|(name, deps)| if deps.is_empty() { Some(*name) } else { None })
+        .collect();
+
+    let mut order: Vec<&'static str> = Vec::with_capacity(remaining_deps.len());
+    while let Some(name) = ready.iter().next().copied() {
+        ready.remove(&name);
+        remaining_deps.remove(&name);
+        order.push(name);
+        for (other_name, deps) in remaining_deps.iter_mut() {
+            if deps.remove(&name) && deps.is_empty() {
+                ready.insert(*other_name);
+            }
+        }
+    }
+
+    if remaining_deps.is_empty() {
+        Ok(order)
+    } else {
+        Err(remaining_deps.keys().copied().collect())
+    }
+}
+
 /// Validate the registered plugins and return them in a stable
-/// topological order keyed by `Plugin::dependencies()`. Standard Kahn's
-/// algorithm with a name-sorted ready queue so ties resolve
-/// deterministically.
+/// topological order. Standard Kahn's algorithm with a name-sorted ready queue
+/// so ties resolve deterministically.
+///
+/// The edge set is the union of two sources:
+///
+/// 1. `Plugin::dependencies()` — what the author declared.
+/// 2. Cross-plugin foreign keys read off the models ([`fk_plugin_edges`]) — what
+///    the schema already states.
+///
+/// Before gaps3 #40 only (1) fed the sort, so an app where *no* plugin declared
+/// a dependency had every plugin at in-degree 0 and the "topological" order
+/// collapsed to alphabetical. `"accounts"` sorts before `"auth"`, and its
+/// `CREATE TABLE ... REFERENCES "auth_user"` ran against a database with no
+/// `auth_user`. Declaring your own dependencies is still the plugin author's job;
+/// the framework just no longer lets the omission reach production silently.
 ///
 /// Rejects:
 ///
 /// - A plugin claiming the reserved `"app"` name.
 /// - Two plugins reporting the same `name()`.
 /// - A `dependencies()` entry that doesn't name a registered plugin.
-/// - A dependency cycle (the remaining-unsorted set surfaces as
-///   `BuildError::PluginCycle`).
+/// - A declared dependency cycle (`BuildError::PluginCycle`).
+/// - A cycle introduced by the foreign keys themselves
+///   (`BuildError::ForeignKeyCycle`, which names the offending columns).
 fn sort_plugins(plugins: Vec<Box<dyn Plugin>>) -> Result<Vec<Box<dyn Plugin>>, BuildError> {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1674,36 +1802,44 @@ fn sort_plugins(plugins: Vec<Box<dyn Plugin>>) -> Result<Vec<Box<dyn Plugin>>, B
         }
     }
 
-    // Kahn's algorithm against the index table. `remaining_deps[name]`
-    // is the set of names this plugin still waits on; once it empties,
-    // the plugin joins the ready queue. The queue is a sorted set so
-    // ties resolve by name.
-    let mut remaining_deps: BTreeMap<&'static str, BTreeSet<&'static str>> = plugins
+    let declared: BTreeMap<&'static str, BTreeSet<&'static str>> = plugins
         .iter()
         .map(|p| (p.name(), p.dependencies().iter().copied().collect()))
         .collect();
 
-    let mut ready: BTreeSet<&'static str> = remaining_deps
-        .iter()
-        .filter_map(|(name, deps)| if deps.is_empty() { Some(*name) } else { None })
-        .collect();
+    let fk_edges = fk_plugin_edges(&plugins);
+    let mut combined = declared.clone();
+    for edge in &fk_edges {
+        combined
+            .get_mut(edge.plugin)
+            .expect("every FK edge names a registered plugin")
+            .insert(edge.depends_on);
+    }
 
-    let mut order: Vec<&'static str> = Vec::with_capacity(plugins.len());
-    while let Some(name) = ready.iter().next().copied() {
-        ready.remove(&name);
-        remaining_deps.remove(&name);
-        order.push(name);
-        for (other_name, deps) in remaining_deps.iter_mut() {
-            if deps.remove(&name) && deps.is_empty() {
-                ready.insert(*other_name);
+    let order = match toposort(combined) {
+        Ok(order) => order,
+        Err(stuck) => {
+            // The combined graph cycles. Re-run on the declared edges alone to
+            // find out who is to blame. If the declared graph is acyclic, the
+            // foreign keys introduced the cycle — report the columns that did
+            // it rather than a bare `PluginCycle` the author never wrote.
+            //
+            // Across crates this is unreachable: `ForeignKey<T>` needs `T` in
+            // scope, so mutually-referencing plugin crates would be a circular
+            // Cargo dependency. Two plugins defined in ONE crate can still do
+            // it, and a cross-plugin FK cycle has no valid `CREATE TABLE` order
+            // on a fresh database either way.
+            if toposort(declared).is_ok() {
+                let stuck: BTreeSet<&'static str> = stuck.into_iter().collect();
+                let edges: Vec<FkEdge> = fk_edges
+                    .into_iter()
+                    .filter(|e| stuck.contains(e.plugin) && stuck.contains(e.depends_on))
+                    .collect();
+                return Err(BuildError::ForeignKeyCycle { edges });
             }
+            return Err(BuildError::PluginCycle { names: stuck });
         }
-    }
-
-    if !remaining_deps.is_empty() {
-        let names: Vec<&'static str> = remaining_deps.keys().copied().collect();
-        return Err(BuildError::PluginCycle { names });
-    }
+    };
 
     // Reorder the owned boxes into topological order. We pull each
     // plugin out of an `Option` slot so the move is statically
@@ -1748,6 +1884,13 @@ pub enum BuildError {
     /// form it (in any cyclic order; the diagnostic is "these N plugins
     /// reference each other").
     PluginCycle { names: Vec<&'static str> },
+    /// The plugins' *foreign keys* form a cycle, so no `CREATE TABLE` order
+    /// satisfies every `REFERENCES` clause on a fresh database. Distinct from
+    /// [`BuildError::PluginCycle`], which reports a cycle the author declared
+    /// via `dependencies()`; here nothing was declared and the cycle is implied
+    /// by the models. Carries the FK edges that close the loop so the message
+    /// can name the columns, not just the plugins.
+    ForeignKeyCycle { edges: Vec<FkEdge> },
     /// Two registered plugins share a `name()`. Plugin names are keys
     /// in the migration tracking table and the dependency graph; a
     /// collision would break both.
@@ -1849,6 +1992,26 @@ impl std::fmt::Display for BuildError {
             ),
             BuildError::PluginCycle { names } => {
                 write!(f, "umbral: plugin dependency cycle: {}", names.join(" -> "))
+            }
+            BuildError::ForeignKeyCycle { edges } => {
+                writeln!(
+                    f,
+                    "umbral: the plugins' foreign keys form a cycle, so no CREATE TABLE order \
+                     satisfies every REFERENCES clause on a fresh database:"
+                )?;
+                for edge in edges {
+                    writeln!(
+                        f,
+                        "  `{}`.\"{}\" REFERENCES \"{}\", owned by `{}`",
+                        edge.plugin, edge.table, edge.fk_target, edge.depends_on
+                    )?;
+                }
+                write!(
+                    f,
+                    "break the cycle by making one side a nullable FK added in a later \
+                     migration, or by opting that column out of the physical constraint with \
+                     #[umbral(db_constraint = false)]"
+                )
             }
             BuildError::DuplicatePluginName { name } => write!(
                 f,

@@ -44,10 +44,17 @@ App::builder()
     .build()?;
 ```
 
-`App::build()` topologically sorts the registered plugins by their
-`dependencies()`, runs each plugin's `system_checks()` alongside the
+`App::build()` topologically sorts the registered plugins, runs each plugin's `system_checks()` alongside the
 framework's, merges every plugin's `routes()` into the app router, and
 fires `on_ready` in dependency order.
+
+The sort reads two edge sets: the `dependencies()` you declare, and the cross-plugin foreign keys it finds on your models. A `ForeignKey<T>` renders `REFERENCES "<T::TABLE>"` inside `CREATE TABLE`, so the plugin owning that table is migrated first whether or not you declared the edge.
+
+<Callout type="info">
+  You still want to declare `dependencies()` — it documents intent, and it orders plugins that depend on each other for reasons the schema can't see (an `on_ready` hook that reads another plugin's registry, say). The FK derivation only guarantees that a missing declaration can't silently produce a `relation "auth_user" does not exist` on the first deploy to a fresh database.
+</Callout>
+
+A `#[umbral(db_constraint = false)]` column renders no `REFERENCES` clause, so it imposes no ordering. And if the foreign keys themselves form a cycle, the build fails with `BuildError::ForeignKeyCycle`, naming the columns that close the loop rather than a bare `PluginCycle` you never wrote.
 
 ## What plugins contribute
 
@@ -55,7 +62,7 @@ Every method except `name()` has a default that returns the empty contribution, 
 
 <CardGrid cols={3}>
   <Card icon="alert-triangle" title="name (required)" description="&'static str. Unique within the binary; the migration tracking key. The reserved name 'app' belongs to the implicit plugin that owns .model::<T>() registrations." />
-  <Card icon="git-branch" title="dependencies" description="&'static [&'static str]. Plugins that must load first. The topological sort uses this; cycles surface as BuildError::PluginCycle." />
+  <Card icon="git-branch" title="dependencies" description="&'static [&'static str]. Plugins that must load first. The topological sort unions this with the cross-plugin foreign keys read off your models; declared cycles surface as BuildError::PluginCycle, FK-implied ones as BuildError::ForeignKeyCycle." />
   <Card icon="database" title="models" description="Vec<ModelMeta>. Per-plugin model list, in declaration order. The migration engine diffs these for makemigrations." />
   <Card icon="route" title="routes" description="An axum Router. Plugins choose their own path prefixes; the App merges them all flat." />
   <Card icon="shield" title="system_checks" description="Vec<SystemCheck>. Boot-time invariants run in phase 4. Severity::Error blocks boot; Severity::Warning logs and continues." />
