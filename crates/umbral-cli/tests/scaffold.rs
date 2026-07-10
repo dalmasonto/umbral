@@ -130,6 +130,9 @@ fn scaffold_project_main_rs_references_all_plugins() {
         "ResourceConfig",
         "ResourceConfig::new(\"post\")",
         "umbral_cli::dispatch(app).await",
+        // gaps3 #41: the generated main must NOT fire `on_ready` before dispatch
+        // has read argv, or `migrate` seeds tables it hasn't created yet.
+        ".build_deferred()?",
         "#[tokio::main]",
         "auto_migrate",
     ];
@@ -297,6 +300,10 @@ fn scaffold_project_main_rs_wires_dispatch() {
     assert!(
         main_rs.contains("umbral_cli::dispatch(app).await"),
         "generated main.rs should call umbral_cli::dispatch; got:\n{main_rs}"
+    );
+    assert!(
+        main_rs.contains(".build_deferred()?"),
+        "generated main.rs must defer on_ready to dispatch (gaps3 #41); got:\n{main_rs}"
     );
     assert!(
         main_rs.contains("#[tokio::main]"),

@@ -27,7 +27,7 @@
 //!         .settings(settings)
 //!         .database("default", pool)
 //!         .model::<Article>()
-//!         .build()?;
+//!         .build_deferred()?;
 //!
 //!     umbral_cli::dispatch(app).await
 //! }
@@ -42,8 +42,13 @@
 //! ```
 //!
 //! The subcommands run against the published ambient state (pool,
-//! model registry) that `App::build` set up, so they see every model
+//! model registry) that the builder set up, so they see every model
 //! and plugin the user wired into the builder.
+//!
+//! Note `build_deferred()`, not `build()`. It wires everything but leaves each
+//! plugin's `on_ready` hook unfired, so [`dispatch`] can fire it once it knows
+//! what argv asked for — never for `migrate`, which exists precisely because the
+//! tables those hooks want to seed do not exist yet (gaps3 #41).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -243,17 +248,76 @@ enum Command {
 
 /// Parse argv and run the requested management subcommand against the
 /// passed-in App. The user binary's `main.rs` calls this after
-/// building its App — see the module-level docs for the pattern.
+/// wiring its App — see the module-level docs for the pattern.
 ///
-/// The App must already be built (`App::builder()...build()?`) — the
-/// builder phases publish the ambient pool and model registry, which
-/// every management command reads. Passing a built `App` instead of
-/// an `AppBuilder` keeps the boot order in the user's hands and lets
-/// them register plugins / models / databases freely before
-/// dispatching.
+/// # Build the app with [`AppBuilder::build_deferred`]
+///
+/// ```rust,ignore
+/// let app = App::builder()
+///     .settings(settings)
+///     .database("default", pool)
+///     .plugin(AuthPlugin::default())
+///     .build_deferred()?;          // wire, but don't fire `on_ready` yet
+///
+/// umbral_cli::dispatch(app).await  // fires it iff argv warrants it
+/// ```
+///
+/// `on_ready` is where plugins seed content, backfill rows, and create the
+/// standard permissions — all of which need a migrated schema. `dispatch` is the
+/// first place that knows what argv asked for, so it is the only place that can
+/// decide whether the app is really "ready": it fires the hooks for `serve`
+/// (after any auto-migrate) and for every command that runs against live data,
+/// and skips them for the schema commands. See [`command_needs_ready`].
+///
+/// `App::build()` still fires `on_ready` itself, which is right for a test or an
+/// embedder holding an `App` directly. Handing *that* app to `dispatch` leaves
+/// the hooks already fired, which is the gaps3 #41 bug: `migrate` against a fresh
+/// database ran every seed before the first table existed. `dispatch` warns when
+/// it sees that combination.
 pub async fn dispatch(app: App) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
     dispatch_with_argv(app, argv).await
+}
+
+/// The first non-flag token after the program name: the subcommand, or `None`
+/// for a bare `umbral` (which defaults to `serve`) or a flag-only invocation
+/// like `umbral --version`.
+fn subcommand_name(argv: &[std::ffi::OsString]) -> Option<String> {
+    argv.iter()
+        .skip(1)
+        .find(|a| !a.to_string_lossy().starts_with('-'))
+        .map(|a| a.to_string_lossy().into_owned())
+}
+
+/// Whether this subcommand runs against a *live* application, and so should
+/// fire every plugin's `on_ready` before it runs (gaps3 #41).
+///
+/// The `false` arm is the interesting one. Three groups:
+///
+/// - **Schema commands.** `migrate` and friends exist to bring the database up
+///   to the models. Firing hooks that write rows first is backwards: on a fresh
+///   database they run before a single table exists.
+/// - **Offline utilities.** `typegen` reads the model registry, `maskkeygen`
+///   generates a key, `dev` re-execs the binary under a file watcher (the child
+///   process fires its own hooks). None of them touch application rows.
+/// - **`serve`**, and the bare `umbral` that defaults to it. Handled separately
+///   so the hooks fire *after* `auto_migrate_on_serve` has applied migrations,
+///   not before. [`umbral_core::app::App::serve`] calls `ready()` itself.
+///
+/// Everything else — `dumpdata`, `loaddata`, `importcsv`, and every
+/// plugin-contributed command (`createsuperuser`, `worker`, an app's own
+/// `seed_orm_data`) — runs against a database that is expected to be migrated
+/// already, so the hooks fire first, exactly as they did before the split.
+fn command_needs_ready(subcommand: Option<&str>) -> bool {
+    match subcommand {
+        // Bare `umbral` / `umbral --addr …` defaults to serve.
+        None => false,
+        Some(
+            "serve" | "migrate" | "makemigrations" | "showmigrations" | "checkmigrations"
+            | "squashmigrations" | "inspectdb" | "typegen" | "maskkeygen" | "dev" | "help",
+        ) => false,
+        Some(_) => true,
+    }
 }
 
 /// Same as [`dispatch`] but argv is passed explicitly instead of read
@@ -277,6 +341,30 @@ pub async fn dispatch_with_argv(
     if wants_top_level_help(&argv) {
         print!("{}", render_full_help(&app));
         return Ok(());
+    }
+
+    // Step 0.5: decide whether this command runs against a live application.
+    // If it does, fire every plugin's `on_ready` before either dispatch layer
+    // runs. If it doesn't — a schema command, an offline utility — the hooks
+    // must not run at all: they seed content into tables `migrate` has not
+    // created yet (gaps3 #41). `serve` is deferred rather than skipped; it fires
+    // them from `App::serve`, after `auto_migrate_on_serve` has applied
+    // migrations. `App::ready` is idempotent, so this is a no-op if the caller
+    // used `App::build()`.
+    let subcommand = subcommand_name(&argv);
+    if command_needs_ready(subcommand.as_deref()) {
+        app.ready()?;
+    } else if app.ready_already_fired() && !matches!(subcommand.as_deref(), None | Some("serve")) {
+        // The caller built with `App::build()`, so the hooks fired before argv
+        // was ever read — the exact shape of gaps3 #41. Nothing we can do about
+        // it here (they've already run), but say so at the moment it bites.
+        eprintln!(
+            "warning: plugin `on_ready` hooks already fired before `{}` ran. They seed \n\
+             content and backfill rows, which is wrong for a schema command against a \n\
+             fresh database. In main.rs, build with `.build_deferred()?` instead of \n\
+             `.build()?` and let `dispatch` decide when the app is ready.",
+            subcommand.as_deref().unwrap_or("<none>"),
+        );
     }
 
     // Step 1: try plugin-contributed subcommands first. Each registered

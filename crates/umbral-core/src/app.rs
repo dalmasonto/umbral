@@ -27,6 +27,10 @@ pub struct App {
     /// "just works" WITHOUT running migrate during `makemigrations`/`migrate`
     /// or any other subcommand. Opt in via [`AppBuilder::auto_migrate_on_serve`].
     auto_migrate_on_serve: bool,
+    /// Set the first time [`App::ready`] fires the `on_ready` hooks, so the
+    /// second call is a no-op. `serve()` and `into_router()` both call it, and
+    /// `umbral_cli::dispatch` may have called it already.
+    ready_fired: std::sync::atomic::AtomicBool,
 }
 
 impl App {
@@ -34,6 +38,63 @@ impl App {
     /// `umbral_cli`'s serve path; see [`AppBuilder::auto_migrate_on_serve`].
     pub fn auto_migrate_on_serve_enabled(&self) -> bool {
         self.auto_migrate_on_serve
+    }
+
+    /// Fire every plugin's [`Plugin::on_ready`] hook, in topological order.
+    /// Idempotent: the second and later calls do nothing.
+    ///
+    /// # Why this is not part of `build()`
+    ///
+    /// `on_ready` means *the application is up*. Plugins use it to seed content,
+    /// backfill rows, install RLS policies, and (in `umbral-permissions`) create
+    /// the standard permission rows for every registered model. All of that
+    /// needs a migrated schema.
+    ///
+    /// [`AppBuilder::build`] still calls this for you, so a test or an embedder
+    /// that holds an `App` sees no change. What changed is `umbral_cli::dispatch`:
+    /// it takes the *builder*, calls [`AppBuilder::build_deferred`], resolves
+    /// argv, and only then calls `ready()` — skipping it entirely for the schema
+    /// commands (`migrate`, `makemigrations`, `inspectdb`, …).
+    ///
+    /// Before that, the generated `main.rs` was
+    /// `let app = App::builder()…build()?; umbral_cli::dispatch(app)`, so the
+    /// hooks ran before `dispatch` had even parsed argv — including when argv
+    /// said `migrate`. Against a fresh database that produced a wall of
+    /// `relation "…" does not exist` before the migration engine had created a
+    /// single table (gaps3 #41, seen on the first umbralrs.dev deploy). Nothing
+    /// crashed only because those seeds log-and-swallow; a plugin that propagated
+    /// the error made `migrate` unrunnable, and one that wrote rows silently
+    /// skipped the write.
+    ///
+    /// [`App::serve`] calls this too, so a hand-rolled `main` that builds with
+    /// `build_deferred()` and serves directly still gets its hooks.
+    /// Whether [`App::ready`] has already run the `on_ready` hooks.
+    ///
+    /// `umbral_cli::dispatch` reads this to warn when a binary still builds with
+    /// `App::build()` — the hooks fired before argv was parsed, so a schema
+    /// command has already run every plugin's seed (gaps3 #41).
+    pub fn ready_already_fired(&self) -> bool {
+        self.ready_fired.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn ready(&self) -> Result<(), BuildError> {
+        use std::sync::atomic::Ordering;
+        if self.ready_fired.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let ctx = crate::plugin::AppContext {
+            pool: crate::db::pool_dispatched().clone(),
+            settings: crate::settings::get().clone(),
+        };
+        for plugin in &self.plugins {
+            plugin
+                .on_ready(&ctx)
+                .map_err(|source| BuildError::PluginOnReady {
+                    plugin: plugin.name(),
+                    source,
+                })?;
+        }
+        Ok(())
     }
 
     /// Create a new [`AppBuilder`].
@@ -66,10 +127,20 @@ impl App {
 
     /// Bind the axum listener and serve requests.
     ///
+    /// Fires [`App::ready`] first (idempotent, so `umbral_cli::dispatch` having
+    /// already called it is fine): a server that is about to accept requests is
+    /// by definition ready, and a plugin's `on_ready` may install the ambient
+    /// state its handlers read. A hook that fails surfaces as an
+    /// [`std::io::ErrorKind::Other`] carrying the `BuildError`'s message —
+    /// `serve` has always returned `io::Error`, and a plugin that can't start is
+    /// as fatal as a port that won't bind.
+    ///
     /// This call blocks until the server stops. At M0 there is no graceful
     /// shutdown hook; that lands with the signal-handling work in a later
     /// milestone.
     pub async fn serve(self, addr: impl Into<SocketAddr>) -> Result<(), std::io::Error> {
+        self.ready().map_err(std::io::Error::other)?;
+
         let listener = tokio::net::TcpListener::bind(addr.into()).await?;
 
         tracing::info!("umbral serving on {}", listener.local_addr()?);
@@ -760,7 +831,10 @@ impl AppBuilder {
     ///    duplicate routes with a clear message.
     /// 7. **Fire `on_ready`.** Call each plugin's `on_ready(&AppContext)`
     ///    in topological order. A failure here surfaces as
-    ///    `BuildError::PluginOnReady`.
+    ///    `BuildError::PluginOnReady`. Phases 1-6 are
+    ///    [`AppBuilder::build_deferred`]; this last phase is [`App::ready`],
+    ///    and a CLI binary lets `umbral_cli::dispatch` decide when it fires
+    ///    (gaps3 #41).
     ///
     /// `build()` is intentionally sync. Earlier iterations auto-opened
     /// the default pool from `settings.database_url` by spinning up a
@@ -769,7 +843,25 @@ impl AppBuilder {
     /// runtime ("Cannot start a runtime from within a runtime"), which
     /// is every realistic case. Requiring an explicit `.database(...)`
     /// is both spec-correct and avoids the trap.
-    pub fn build(mut self) -> Result<App, BuildError> {
+    pub fn build(self) -> Result<App, BuildError> {
+        let app = self.build_deferred()?;
+        app.ready()?;
+        Ok(app)
+    }
+
+    /// Everything [`AppBuilder::build`] does *except* firing `on_ready`.
+    ///
+    /// The app is fully wired — pools open, registry published, router merged,
+    /// system checks passed — but no plugin has been told the app is up. Call
+    /// [`App::ready`] when it actually is.
+    ///
+    /// This exists for `umbral_cli::dispatch`, which has to build the app in
+    /// order to read its plugins' `commands()` and *then* decide what argv asked
+    /// for. A schema command (`migrate`, `makemigrations`, `inspectdb`) must not
+    /// fire hooks that seed content into a schema that doesn't exist yet
+    /// (gaps3 #41). Reach for it directly only if you are writing your own
+    /// dispatcher; otherwise `build()` is the one you want.
+    pub fn build_deferred(mut self) -> Result<App, BuildError> {
         // Phase 1 — collect
         let settings = self.settings.take().ok_or(BuildError::SettingsMissing)?;
 
@@ -1489,27 +1581,17 @@ impl AppBuilder {
             ),
         );
 
-        // Phase 6 — fire each plugin's `on_ready` in topological order.
-        // Runs after the system check passes and after the router is
-        // built, so a plugin can rely on ambient state being live and on
-        // any earlier dependency's `on_ready` having already run.
-        let ctx = crate::plugin::AppContext {
-            pool: crate::db::pool_dispatched().clone(),
-            settings: crate::settings::get().clone(),
-        };
-        for plugin in &sorted_plugins {
-            plugin
-                .on_ready(&ctx)
-                .map_err(|source| BuildError::PluginOnReady {
-                    plugin: plugin.name(),
-                    source,
-                })?;
-        }
-
+        // Phase 6 — `on_ready` USED to fire here. It doesn't any more: the hooks
+        // seed content and backfill rows, and `build()` runs before the CLI has
+        // parsed argv, so `migrate` against a fresh database ran every seed
+        // before a single table existed (gaps3 #41). The caller now decides when
+        // the app is ready; see [`App::ready`], which `serve()` and
+        // `umbral_cli::dispatch` call at the right moment.
         Ok(App {
             router,
             plugins: sorted_plugins,
             auto_migrate_on_serve: self.auto_migrate_on_serve,
+            ready_fired: std::sync::atomic::AtomicBool::new(false),
         })
     }
 }

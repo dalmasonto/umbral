@@ -520,7 +520,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
                     get(views::public::dashboard).layer(login_required_html("/login")),
                 ),
         )
-        .build()?;
+        // `build_deferred`, not `build`: it wires everything (pools, model
+        // registry, router, system checks) but leaves each plugin's `on_ready`
+        // hook unfired. Those hooks seed content and backfill rows, so they must
+        // not run during `migrate` — the command whose whole job is to create the
+        // tables they write to. `dispatch` fires them once it has read argv.
+        .build_deferred()?;
 
     // Auto-migrate + seed on boot so `cargo run -- serve` Just Works
     // against a fresh database — but only when we're actually starting

@@ -66,7 +66,7 @@ Every method except `name()` has a default that returns the empty contribution, 
   <Card icon="database" title="models" description="Vec<ModelMeta>. Per-plugin model list, in declaration order. The migration engine diffs these for makemigrations." />
   <Card icon="route" title="routes" description="An axum Router. Plugins choose their own path prefixes; the App merges them all flat." />
   <Card icon="shield" title="system_checks" description="Vec<SystemCheck>. Boot-time invariants run in phase 4. Severity::Error blocks boot; Severity::Warning logs and continues." />
-  <Card icon="zap" title="on_ready" description="Sync hook fired after system checks pass, in dependency order. Spawn background work, wire signals, seal late registrations." />
+  <Card icon="zap" title="on_ready" description="Sync hook fired in dependency order once the app is actually up — never during migrate/makemigrations. Seed content, spawn background work, wire signals, seal late registrations." />
 </CardGrid>
 
 ### The full method surface
@@ -104,6 +104,28 @@ Every method below is a real trait method with a default impl (only `name()` is 
 - `static_files()` - embedded assets baked into the binary; each entry becomes one `GET <url_path>` route serving a `&'static [u8]` body (typically `include_bytes!`). `umbral-admin` ships its precompiled CSS this way. `static_dirs()` / `static_root_dirs()` instead serve assets *off disk* through the unified static pipeline (live in dev); `umbral-playground` ships its Vite bundle via `static_dirs()`.
 
 `on_ready` receives an [`AppContext`](#the-on_ready-context) carrying the default `DbPool` and a `Settings` clone. The hook is **sync** (the trait must be object-safe for `Vec<Box<dyn Plugin>>`); bridge to async work with `umbral::plugin::block_on_ready(fut)`, which is safe under multi-thread, current-thread (`#[tokio::test]`), and no-runtime callers.
+
+### When `on_ready` fires
+
+`on_ready` means *the application is up*, and a hook that seeds content or backfills rows needs a migrated schema. So a CLI binary builds with `build_deferred()` and lets `dispatch` decide:
+
+```rust
+let app = App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .plugin(AuthPlugin::default())
+    .build_deferred()?;      // wire everything, fire nothing
+
+umbral_cli::dispatch(app).await
+```
+
+`dispatch` fires the hooks for `serve` — after `auto_migrate_on_serve()` has applied migrations — and for every command that runs against live data (`createsuperuser`, `worker`, your own management commands). It **skips them entirely** for the schema commands (`migrate`, `makemigrations`, `showmigrations`, `inspectdb`, `typegen`, …).
+
+<Callout type="warning">
+  `App::build()` still fires `on_ready` itself, which is what you want in a test or when embedding umbral under your own axum tree. Handing *that* app to `dispatch` means the hooks ran before argv was even parsed — so `cargo run -- migrate` against a fresh database seeds tables it hasn't created yet. `dispatch` prints a warning when it sees this; the fix is one word, `build()` → `build_deferred()`.
+</Callout>
+
+Driving the app yourself? `App::serve()` calls `App::ready()` for you. Call `ready()` by hand only if you hold an `App` and neither serve nor dispatch it.
 
 ## What's deferred
 

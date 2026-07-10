@@ -78,12 +78,15 @@ async fn dispatch_routes_argv_to_plugin_contributed_commands() {
         fired: fired.clone(),
     };
 
+    // `build_deferred` wires without firing `on_ready`; `dispatch_with_argv`
+    // fires it iff argv warrants it (gaps3 #41). `smoke-cmd` runs against a live
+    // app, so the hooks DO fire here.
     let app = App::builder()
         .settings(settings)
         .database("default", pool)
         .plugin(plugin)
-        .build()
-        .expect("App::build should succeed with figment defaults");
+        .build_deferred()
+        .expect("App::build_deferred should succeed with figment defaults");
 
     // 2. Synthetic argv as if the user ran `bin smoke-cmd`.
     let argv: Vec<std::ffi::OsString> = vec!["test-binary".into(), "smoke-cmd".into()];

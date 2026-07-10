@@ -40,11 +40,13 @@ async fn migrate_refuses_a_pending_drop_table_without_allow_destructive() {
     let pool = umbral::db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory sqlite");
+    // `build_deferred`: `migrate` must not fire plugin `on_ready` hooks against a
+    // schema that doesn't exist yet (gaps3 #41).
     let app = App::builder()
         .settings(settings)
         .database("default", pool)
-        .build()
-        .expect("App::build");
+        .build_deferred()
+        .expect("App::build_deferred");
 
     // `umbral migrate` — no --allow-destructive. The gate must refuse BEFORE any
     // SQL runs, so nothing is dropped and the command errors.
