@@ -85,15 +85,55 @@ pub fn tz_or_utc(name: &str) -> Tz {
 /// In `Tz::UTC` mode (`time_zone = None`), this is a straight
 /// `naive.and_utc()` — no DST ambiguity is possible so it always
 /// returns `Some`.
+///
+/// Prefer [`naive_local_to_utc_checked`] on any path that can report an error:
+/// this signature throws away *why* the conversion failed, and the two reasons
+/// need different messages.
 pub fn naive_local_to_utc(naive: NaiveDateTime) -> Option<DateTime<Utc>> {
+    naive_local_to_utc_checked(naive).ok()
+}
+
+/// Why a naive local datetime has no single UTC instant.
+///
+/// A wall-clock reading is not a moment in time until you say where the clock
+/// is, and twice a year even that isn't enough.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalTimeError {
+    /// The clocks went back, so this reading happens twice. Carries both
+    /// candidate instants, earlier first, so an error message can offer them.
+    Ambiguous {
+        earlier: DateTime<Utc>,
+        later: DateTime<Utc>,
+    },
+    /// The clocks went forward, so this reading never happens at all.
+    Nonexistent,
+}
+
+/// Interpret `naive` as wall-clock time in the active timezone and convert it to
+/// UTC, reporting *why* when there is no single answer.
+///
+/// The two failures are the DST transitions, and neither has a defensible
+/// fallback:
+///
+/// - **Ambiguous** — `2026-11-01T01:30` in `America/New_York` is both `05:30Z`
+///   (EDT) and `06:30Z` (EST). Picking one silently corrupts half the rows.
+/// - **Nonexistent** — `2026-03-08T02:30` in the same zone never occurs; the
+///   local clock jumps `02:00 → 03:00`.
+///
+/// In `Tz::UTC` mode (`time_zone = None`) neither can happen, so this always
+/// succeeds.
+pub fn naive_local_to_utc_checked(naive: NaiveDateTime) -> Result<DateTime<Utc>, LocalTimeError> {
     let tz = active_tz();
     if tz == Tz::UTC {
-        return Some(naive.and_utc());
+        return Ok(naive.and_utc());
     }
     match tz.from_local_datetime(&naive) {
-        chrono::LocalResult::Single(dt) => Some(dt.with_timezone(&Utc)),
-        chrono::LocalResult::Ambiguous(_, _) => None,
-        chrono::LocalResult::None => None,
+        chrono::LocalResult::Single(dt) => Ok(dt.with_timezone(&Utc)),
+        chrono::LocalResult::Ambiguous(a, b) => Err(LocalTimeError::Ambiguous {
+            earlier: a.with_timezone(&Utc),
+            later: b.with_timezone(&Utc),
+        }),
+        chrono::LocalResult::None => Err(LocalTimeError::Nonexistent),
     }
 }
 

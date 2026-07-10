@@ -1,0 +1,87 @@
+---
+title: Datetimes and timezones
+description: Storage is UTC everywhere. What happens to an input that carries an offset, and to one that carries none.
+sidebar_position: 20
+icon: clock
+tags: [orm, datetime, timezone, utc, dst]
+---
+
+# Datetimes and timezones
+
+Declare the field as `chrono::DateTime<Utc>` and umbral stores UTC — `TIMESTAMP WITH TIME ZONE` on Postgres, ISO-8601 text on SQLite. There is no "local" column type, and a timezone exists in exactly one place: the boundary where a value arrives from a form, a JSON body, or a fixture.
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+pub struct Event {
+    pub id: i64,
+    pub starts_at: DateTime<Utc>,
+}
+```
+
+## An offset in the input is ground truth
+
+If the value carries an offset, umbral converts it to the same instant in UTC and stores that. The project timezone never re-interprets it.
+
+```json
+{ "starts_at": "2026-07-10T12:00:00+03:00" }   // stored as 2026-07-10T09:00:00Z
+{ "starts_at": "2026-07-10T04:00:00-05:00" }   // the same instant
+{ "starts_at": "2026-07-10T09:00:00Z" }        // and the same instant
+```
+
+Because normalisation happens on write, comparison is comparison of instants. `.filter(event::STARTS_AT.gt(t))` and `.order_by(event::STARTS_AT.asc())` are correct across rows that arrived in different zones — nothing sorts by the text it was typed in.
+
+## An input with no offset is wall-clock time in your project timezone
+
+A naive value — `2026-07-10T12:00:00`, or the `2026-07-10T12:00` that `<input type="datetime-local">` posts — has no offset, so it means wall-clock time where the project lives:
+
+```toml
+# umbral.toml
+time_zone = "America/New_York"
+```
+
+Noon on 10 July then stores as `16:00Z` (EDT), while noon on 10 January stores as `17:00Z` (EST). The offset comes from the zone's rules on that date, not from a fixed number.
+
+With `time_zone` unset (the default), a naive input is UTC.
+
+<Callout type="info">
+  Reading back is symmetric. The admin renders stored UTC as wall-clock time in the project timezone, so a user edits the time they typed. REST output stays RFC-3339 UTC by design — machines want instants.
+</Callout>
+
+## Twice a year, a wall-clock reading is not a moment in time
+
+Naive input has two failure modes, and umbral refuses both rather than guessing:
+
+<CardGrid cols={2}>
+  <Card icon="copy" title="Ambiguous" description="When the clocks go back, 2026-11-01T01:30 happens twice in New York — 05:30Z and again 06:30Z. Rejected." />
+  <Card icon="ban" title="Nonexistent" description="When the clocks go forward, 2026-03-08T02:30 never happens at all — the clock jumps 02:00 to 03:00. Rejected." />
+</CardGrid>
+
+Both surface as a per-field validation error (a `400` from REST, an inline form error in the admin), with the machine-readable codes `ambiguous_local_time` and `nonexistent_local_time`:
+
+```
+field `starts_at`: local time '2026-11-01T01:30:00' is ambiguous in
+`America/New_York` — the clocks go back, so it occurs twice
+(2026-11-01T05:30:00+00:00 and 2026-11-01T06:30:00+00:00).
+Send an explicit UTC offset to say which you mean.
+```
+
+The fix on the client is to send the offset — `2026-11-01T01:30:00-04:00` picks the first, `-05:00` the second.
+
+<Callout type="warning">
+  Before this was enforced, an ambiguous reading was stored as though it were UTC: `01:30Z`, four hours from *either* instant the user could have meant. If you have rows written on a DST-overlap hour by an older version, they are wrong by the zone's offset and no migration can recover the intent.
+</Callout>
+
+If you need the resolution yourself, `umbral::timezone::naive_local_to_utc_checked` returns `Result<DateTime<Utc>, LocalTimeError>` and hands you both candidate instants for the ambiguous case.
+
+## Auto-managed timestamps
+
+`#[umbral(auto_now_add)]` and `#[umbral(auto_now)]` stamp `Utc::now()` on insert and on every save. They never touch the project timezone — there is no wall clock involved, only an instant.
+
+```rust
+#[umbral(auto_now_add)]
+pub created_at: DateTime<Utc>,
+#[umbral(auto_now)]
+pub updated_at: DateTime<Utc>,
+```
+
+Design rationale: `planning/gaps3.md` #42 in the repository.

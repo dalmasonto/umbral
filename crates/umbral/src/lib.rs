@@ -143,7 +143,10 @@ pub mod fixtures {
 /// comes from [`Settings::time_zone`]; `None` falls back to UTC
 /// (the historical behaviour).
 pub mod timezone {
-    pub use umbral_core::timezone::{active_tz, naive_local_to_utc, tz_or_utc, utc_to_naive_local};
+    pub use umbral_core::timezone::{
+        LocalTimeError, active_tz, naive_local_to_utc, naive_local_to_utc_checked, tz_or_utc,
+        utc_to_naive_local,
+    };
 }
 
 /// gaps3 #38: TypeScript types generated from the model registry.

@@ -74,6 +74,26 @@ pub enum WriteError {
     /// DB-side NOT NULL constraint failure (caller bypassed pre-
     /// validation, e.g. via a raw transaction).
     NotNullViolation { field: Option<String> },
+    /// A naive datetime (no offset) landed on the DST overlap hour, where the
+    /// clocks go back and the same wall-clock reading happens twice. There is no
+    /// way to know which instant the caller meant, so the write is refused —
+    /// silently picking one corrupts half the rows, and picking neither (storing
+    /// the reading as if it were UTC) invents a third. Carries both candidates so
+    /// the message can offer them. gaps3 #42.
+    AmbiguousLocalTime {
+        field: String,
+        value: String,
+        tz: String,
+        earlier: String,
+        later: String,
+    },
+    /// A naive datetime landed in the DST spring-forward gap, where the local
+    /// clock jumps (`02:00 → 03:00`) and the reading never occurs. gaps3 #42.
+    NonexistentLocalTime {
+        field: String,
+        value: String,
+        tz: String,
+    },
     /// DB-side CHECK constraint failure. Carries the constraint
     /// name when the engine surfaces it (Postgres does; SQLite
     /// gives just a generic message).
@@ -136,6 +156,23 @@ impl WriteError {
                 out.entry(field.clone())
                     .or_default()
                     .push("This field cannot be blank.".to_string());
+            }
+            AmbiguousLocalTime {
+                field,
+                tz,
+                earlier,
+                later,
+                ..
+            } => {
+                out.entry(field.clone()).or_default().push(format!(
+                    "This time happens twice in {tz} (the clocks go back): {earlier} or \
+                     {later}. Add a UTC offset to say which you mean."
+                ));
+            }
+            NonexistentLocalTime { field, tz, .. } => {
+                out.entry(field.clone()).or_default().push(format!(
+                    "This time does not exist in {tz} — the clocks go forward across it."
+                ));
             }
             ForeignKeyNotFound {
                 field,
@@ -266,6 +303,11 @@ impl WriteError {
             UniqueViolation { .. } => "unique_constraint",
             CheckViolation { .. } => "check_constraint",
             TypeMismatch { .. } => "type_mismatch",
+            // Distinct from `type_mismatch`: the value parsed fine, it just
+            // doesn't name one instant in the project timezone. A client can act
+            // on that by resending with an offset.
+            AmbiguousLocalTime { .. } => "ambiguous_local_time",
+            NonexistentLocalTime { .. } => "nonexistent_local_time",
             Validator { .. } => "validator_failed",
             Multiple { .. } => "validation_error",
             UnknownColumn { .. } => "unknown_column",
@@ -308,6 +350,24 @@ impl std::fmt::Display for WriteError {
             WriteError::BlankNotAllowed { field } => {
                 write!(f, "umbral::orm::write: field `{field}` cannot be blank")
             }
+            WriteError::AmbiguousLocalTime {
+                field,
+                value,
+                tz,
+                earlier,
+                later,
+            } => write!(
+                f,
+                "umbral::orm::write: field `{field}`: local time '{value}' is ambiguous in \
+                 `{tz}` — the clocks go back, so it occurs twice ({earlier} and {later}). \
+                 Send an explicit UTC offset to say which you mean."
+            ),
+            WriteError::NonexistentLocalTime { field, value, tz } => write!(
+                f,
+                "umbral::orm::write: field `{field}`: local time '{value}' does not exist in \
+                 `{tz}` — the clocks go forward across it. Send an explicit UTC offset, or a \
+                 time outside the gap."
+            ),
             WriteError::ForeignKeyNotFound {
                 field,
                 target_table,
@@ -539,21 +599,42 @@ pub fn json_to_sea_value(
             // for storage. Tz-bearing RFC3339 inputs win regardless
             // of the project tz — the offset they carry is the
             // ground truth.
-            let dt = chrono::DateTime::parse_from_rfc3339(&s)
-                .map(|d| d.with_timezone(&chrono::Utc))
-                .or_else(|_| {
-                    chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
-                        .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M"))
-                        .map(|naive| {
-                            crate::timezone::naive_local_to_utc(naive)
-                                .unwrap_or_else(|| naive.and_utc())
-                        })
-                })
+            if let Ok(offset_bearing) = chrono::DateTime::parse_from_rfc3339(&s) {
+                let utc = offset_bearing.with_timezone(&chrono::Utc);
+                return Ok(SeaValue::ChronoDateTimeUtc(Some(Box::new(utc))));
+            }
+
+            let naive = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M"))
                 .map_err(|_| WriteError::TypeMismatch {
                     field: field_name.to_string(),
                     expected: sql_type,
                     got: format!("{value:?}"),
                 })?;
+
+            // gaps3 #42: a wall-clock reading is not a moment in time. Twice a
+            // year the project timezone maps one reading to two instants, or to
+            // none. This used to `unwrap_or_else(|| naive.and_utc())`, storing
+            // the reading as if it were UTC — not one of the two candidates but
+            // a third instant, hours from what the user meant. Refuse instead,
+            // and tell them to send an offset.
+            let tz = crate::timezone::active_tz();
+            let dt = crate::timezone::naive_local_to_utc_checked(naive).map_err(|e| match e {
+                crate::timezone::LocalTimeError::Ambiguous { earlier, later } => {
+                    WriteError::AmbiguousLocalTime {
+                        field: field_name.to_string(),
+                        value: s.clone(),
+                        tz: tz.name().to_string(),
+                        earlier: earlier.to_rfc3339(),
+                        later: later.to_rfc3339(),
+                    }
+                }
+                crate::timezone::LocalTimeError::Nonexistent => WriteError::NonexistentLocalTime {
+                    field: field_name.to_string(),
+                    value: s.clone(),
+                    tz: tz.name().to_string(),
+                },
+            })?;
             Ok(SeaValue::ChronoDateTimeUtc(Some(Box::new(dt))))
         }
         SqlType::Uuid => {

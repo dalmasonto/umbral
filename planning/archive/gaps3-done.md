@@ -248,3 +248,25 @@ Two exclusions, both deliberate: same-plugin FKs impose no *plugin* ordering (th
 **Tests:** three separate binaries under `crates/umbral-cli/tests/` (one `App` build per process — `db::init` is a `OnceLock` that panics on the second): `on_ready_deferred.rs` (build_deferred defers; `ready()` fires once; a second `ready()` does not re-seed), `on_ready_skips_migrate.rs` (the reported bug), `on_ready_fires_for_live_command.rs` (`dumpdata` still fires them). Mutation-checked: forcing `command_needs_ready` to `true` makes the migrate test fail with `left: 1, right: 0`. Whole workspace green (2586).
 
 **Follow-up, not done here:** `umbral-permissions`'s `CREATE TABLE IF NOT EXISTS` workaround can now be reconsidered — its `on_ready` no longer races `migrate` — but removing it would change what its tests rely on. Left in place deliberately.
+
+---
+
+42. [x] **Do we have proper handling of datetime fields, and does timezone work when a dev declares `DateTime<Utc>`? If a non-UTC datetime is passed in, does it convert?**
+
+**Answer: yes, and there was one real bug underneath the question.**
+
+Storage is UTC everywhere (`TIMESTAMPTZ` on Postgres, ISO-8601 text on SQLite); a timezone exists only at the marshalling boundary. `json_to_sea_value` (`crates/umbral-core/src/orm/write.rs`) is the single JSON→SQL coercion, and the dynamic write path (`DynQuerySet::insert_json`) is what both the admin form-submit and umbral-rest's create handler go through.
+
+**Offset-bearing input already worked.** `2026-07-10T12:00:00+03:00`, `...T04:00:00-05:00`, `...T09:00:00Z` and `...+00:00` all normalise to the same UTC instant, and the project timezone never re-interprets them. Because normalisation happens on write, `filter(AT.gt(t))` and `order_by(AT.asc())` compare *instants*, not the text a value arrived as. Now pinned by `crates/umbral-core/tests/datetime_utc_offsets.rs` (four spellings of one instant; a filter that a lexicographic text compare would get backwards; garbage rejected rather than defaulted).
+
+**Naive input already worked for the ordinary case.** `2026-07-10T12:00:00` with `time_zone = "America/New_York"` stores `16:00Z` (EDT), and the same wall-clock in January stores `17:00Z` (EST) — the offset comes from the zone's rules on that date. `<input type="datetime-local">`'s `YYYY-MM-DDTHH:MM` shape is accepted too.
+
+**The bug: DST transitions were silently corrupted.** `timezone::naive_local_to_utc` returns `None` for an ambiguous local time (clocks back — `2026-11-01T01:30` in New York is *both* `05:30Z` and `06:30Z`) and for a nonexistent one (clocks forward — `2026-03-08T02:30` never occurs). Its own doc said the caller "should surface a validation error rather than silently pick one of the two possible UTC instants." The caller instead did `.unwrap_or_else(|| naive.and_utc())`, storing `01:30Z` — **not one of the two candidates but a third instant, four hours from either**. Textbook `unwrap_or_default()` on a value that is never legitimately absent.
+
+**Shipped.** New `timezone::naive_local_to_utc_checked() -> Result<DateTime<Utc>, LocalTimeError>` preserves *why* there is no single instant (`Ambiguous { earlier, later }` / `Nonexistent`); `naive_local_to_utc` is now `.ok()` of it, so existing callers are unchanged. `json_to_sea_value` maps the two cases to new `WriteError::AmbiguousLocalTime` / `WriteError::NonexistentLocalTime`, carrying the field, the offending value, the tz name and (for ambiguous) both candidate instants. They land in `field_errors()` as an inline admin form error and, because `is_validation()` is a negative match (`!matches!(Sqlx | SerializeFailed | NotAnObject)`), as a REST `400` rather than a `500` — with the machine-readable codes `ambiguous_local_time` / `nonexistent_local_time` so a client can prompt for an explicit offset. Nothing is written on rejection.
+
+**Tests:** two binaries, because `Settings` is published through a process-global `OnceLock` and each needs a different `time_zone`. `datetime_utc_offsets.rs` (tz = UTC): offset normalisation, naive-is-UTC, instant-ordered filter/order_by, garbage rejected. `datetime_project_timezone.rs` (tz = `America/New_York`): naive interpreted per the zone's summer/winter rules, an explicit offset beating the project tz, and the two DST cases rejected with a message naming the field and both candidates. The DST tests were written first and observed failing (the values were silently accepted) before the fix. Whole workspace green (2594).
+
+**Not changed:** the typed path (`Post::objects().create(post)`) binds a `DateTime<Utc>` that is already an instant, so no ambiguity can arise. `Date` and `Time` columns carry no zone. `auto_now` / `auto_now_add` stamp `Utc::now()` (`now_for_column`) and never consult the project timezone.
+
+**Doc:** `documentation/docs/v0.0.1/orm/datetimes-and-timezones.mdx`, including a warning that rows written on a DST-overlap hour by an older version are wrong by the zone's offset and no migration can recover the intent.
