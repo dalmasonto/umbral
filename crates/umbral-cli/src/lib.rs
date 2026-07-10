@@ -155,6 +155,24 @@ enum Command {
         #[arg(long, default_value_t = false)]
         strict: bool,
     },
+    /// Generate TypeScript types for every registered model.
+    ///
+    /// The frontend stops hand-maintaining a copy of your schema: an FK
+    /// types as the target's primary key, `Option<T>` as `T | null`, and
+    /// `#[umbral(choices)]` as a string-literal union, so a typo'd status
+    /// fails at `tsc` instead of in production.
+    ///
+    /// Writes to stdout unless `--out` names a file.
+    Typegen {
+        /// File the generated TypeScript is written to. Omit for stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Don't write. Exit non-zero if `--out` differs from what the
+        /// models would generate now. A CI gate against a checked-in
+        /// types file drifting from the schema.
+        #[arg(long, default_value_t = false, requires = "out")]
+        check: bool,
+    },
     /// Introspect the ambient database into a `models.rs` plus an
     /// initial migration. Used to onboard an existing schema.
     Inspectdb {
@@ -327,6 +345,7 @@ pub async fn dispatch_with_argv(
         } => migrate(fake, fake_initial, allow_drift, allow_destructive).await,
         Command::Showmigrations => showmigrations().await,
         Command::Checkmigrations { strict } => checkmigrations(strict).await,
+        Command::Typegen { out, check } => typegen(out, check),
         Command::Inspectdb {
             output,
             mark_applied,
@@ -717,6 +736,51 @@ async fn showmigrations() -> Result<(), Box<dyn std::error::Error + Send + Sync>
     if pending > 0 {
         println!("\n{pending} migration(s) not yet applied.");
     }
+    Ok(())
+}
+
+/// `umbral typegen` — emit TypeScript types for every registered model
+/// (gaps3 #38).
+///
+/// Reads the model registry, which `App::build()` has already populated by the
+/// time `dispatch` runs, so this touches no database.
+///
+/// `--check` is the CI gate: it compares the file `--out` names against what
+/// the models would generate now and exits non-zero on any difference. Run it
+/// beside `cargo test` and a schema change can never merge with a stale types
+/// file next to it.
+fn typegen(
+    out: Option<PathBuf>,
+    check: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let generated = umbral::typegen::typescript();
+
+    let Some(path) = out else {
+        print!("{generated}");
+        return Ok(());
+    };
+
+    if check {
+        // A missing file is drift, not an IO error the operator has to decode.
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        if existing == generated {
+            println!("{} is up to date.", path.display());
+            return Ok(());
+        }
+        return Err(format!(
+            "{} is out of date with the models. Regenerate it:\n    \
+             cargo run -- typegen --out {}",
+            path.display(),
+            path.display(),
+        )
+        .into());
+    }
+
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, &generated)?;
+    println!("Wrote {}.", path.display());
     Ok(())
 }
 

@@ -23,6 +23,7 @@ manage your database because it doesn't know about your models.
   <Card icon="play-circle" title="migrate" description="Apply every pending migration against the ambient pool. Each migration runs in its own transaction." />
   <Card icon="list" title="showmigrations" description="Print applied/pending state per plugin. [X] applied, [ ] pending." />
   <Card icon="shield-check" title="checkmigrations" description="Classify pending operations SAFE/WARNING/UNSAFE for zero-downtime deploys. Exits non-zero on unsafe ops, a CI gate before migrate." />
+  <Card icon="file-code" title="typegen" description="Emit TypeScript interfaces and unions for every registered model. --out writes a file; --check exits non-zero when it has drifted from the models." />
   <Card icon="download" title="inspectdb" description="Introspect an existing database into models.rs + a 0001_initial migration. The porting on-ramp." />
   <Card icon="archive" title="dumpdata / loaddata" description="Snapshot every model's rows to JSON; replay them into a fresh schema." />
   <Card icon="table" title="importcsv" description="Load a CSV file into one table, coercing each cell to its column type through the validated write path. Inverse of the ?format=csv export." />

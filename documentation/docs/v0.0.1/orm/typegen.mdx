@@ -1,0 +1,92 @@
+---
+title: TypeScript types from your models
+description: Generate a .ts file of interfaces and unions straight from the model registry, so the frontend stops hand-maintaining a copy of your schema.
+sidebar_position: 19
+icon: file-code
+tags: [orm, typescript, codegen, frontend, client]
+---
+
+# TypeScript types from your models
+
+You declare your data once. Then the frontend declares it again — a `Post` interface, a `PostStatus` union, an `author` that someone typed as `number` because they remembered it was a foreign key. That second copy drifts on every field change, and neither compiler can see the drift.
+
+`umbral typegen` reads the model registry — the same one the ORM, the migration engine, the admin and umbral-rest read — and emits the types.
+
+```bash
+cargo run -- typegen --out web/src/api/models.ts
+```
+
+## What you get
+
+Given this model:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+pub struct Post {
+    pub id: i64,
+    #[umbral(help = "Shown in the browser tab.")]
+    pub title: String,
+    pub body: Option<String>,
+    pub author: ForeignKey<Author>,
+    #[umbral(choices)]
+    pub status: PostStatus,
+    #[umbral(m2m = "tag")]
+    pub tags: M2M<Tag>,
+}
+```
+
+you get this:
+
+```ts
+export type PostStatus = "draft" | "published" | "archived";
+
+/** Table `post`, from the `blog` plugin. */
+export interface Post {
+  id: number;
+  /** Shown in the browser tab. */
+  title: string;
+  body: string | null;
+  /** Foreign key: the `id` of a Author (`author`). */
+  author: number;
+  status: PostStatus;
+  /** Many-to-many. The related rows when the query used `.prefetch_related(...)`; `[]` otherwise. */
+  tags: Tag[];
+}
+```
+
+The types describe the JSON umbral puts on the wire — the model struct as serde serialises it.
+
+<CardGrid cols={2}>
+  <Card icon="key" title="A foreign key is its target's primary key" description="Not a nested object. If Author is keyed by a String slug, Post.author is a string, not a number. This is the one everybody hand-writes wrong." />
+  <Card icon="circle-slash" title="Option<T> becomes T | null" description="Option is the only route to SQL NULL in umbral, so it's the only route to null here. A non-null column never gains it." />
+  <Card icon="list-checks" title="choices becomes a string-literal union" description="A typo'd status fails at tsc instead of round-tripping to a 400." />
+  <Card icon="hash" title="Field names stay snake_case" description="The wire is snake_case. A generated type that quietly renames fields is a lie." />
+</CardGrid>
+
+A few types are less obvious, and match what `umbral-openapi` already publishes for the same column:
+
+| Rust / SQL | TypeScript | Why |
+|---|---|---|
+| `Decimal` | `string` | A JSON number loses precision. |
+| `DateTime<Utc>`, `Date`, `Uuid` | `string` | RFC 3339 / ISO 8601 / hyphenated UUID. |
+| `Json` | `unknown` | Not `any` — you have to narrow it, which is the point. |
+| `Vec<u8>` (BYTEA) | `number[]` | umbral-rest serialises bytes as a JSON array. |
+| `#[umbral(multichoice)]` | `string` | It carries a comma-separated *subset*, so `"a" \| "b"` would reject the legal `"a,b"`. |
+
+## Keep it honest in CI
+
+`--check` regenerates in memory and compares, writing nothing. It exits non-zero when the checked-in file no longer matches the models, so a schema change can't merge next to stale types.
+
+```bash
+cargo run -- typegen --out web/src/api/models.ts --check
+```
+
+<Callout type="info">
+  Commit the generated file. Your frontend build shouldn't need a Rust toolchain to typecheck, and a reviewer should see the shape change in the diff next to the migration that caused it.
+</Callout>
+
+## Scope
+
+Types, not a client. This is the ORM's half: it's true for every umbral app whether or not it mounts `umbral-rest`. Request functions, URL builders and the auth plumbing need to know your *routes*, which is `umbral-openapi`'s job — and these types are what such a client would import.
+
+Design rationale: `planning/gaps3.md` #38 in the repository.

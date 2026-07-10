@@ -146,6 +146,15 @@ pub mod timezone {
     pub use umbral_core::timezone::{active_tz, naive_local_to_utc, tz_or_utc, utc_to_naive_local};
 }
 
+/// gaps3 #38: TypeScript types generated from the model registry.
+///
+/// Power-user surface, not in the prelude — most apps reach this through the
+/// `umbral typegen` CLI subcommand rather than by calling it. [`typescript`]
+/// reads the live registry; [`typescript_for`] is the pure function behind it.
+pub mod typegen {
+    pub use umbral_core::typegen::{typescript, typescript_for};
+}
+
 /// Settings accessors — `get()` returns the live `Settings` published
 /// at `App::build` time. Used by plugin code that needs to branch on
 /// `environment` / `bind_addr` etc. (e.g. umbral-email checking whether

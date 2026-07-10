@@ -417,6 +417,53 @@ impl Default for ModelMeta {
     }
 }
 
+impl Default for Column {
+    /// A nullable-free `BigInt` column with every optional marker off, so a
+    /// hand-built fixture can name the two or three fields it cares about and
+    /// `..Column::default()` the rest.
+    ///
+    /// `db_constraint` defaults to `true`, matching the serde default: an FK
+    /// emits a physical `REFERENCES` clause unless the field opts out. Getting
+    /// this backwards would silently drop constraints AND the plugin ordering
+    /// edges derived from them (see `app::fk_plugin_edges`).
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            ty: crate::orm::SqlType::BigInt,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            privileged: false,
+            db_constraint: true,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: Vec::new(),
+            choice_labels: Vec::new(),
+            default: String::new(),
+            is_multichoice: false,
+            unique: false,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
+            index: false,
+            auto_now_add: false,
+            auto_now: false,
+            trim: false,
+            lowercase: false,
+            case_insensitive: false,
+            help: String::new(),
+            example: String::new(),
+            widget: None,
+            supported_backends: Vec::new(),
+            min: None,
+            max: None,
+            text_format: None,
+            slug_from: None,
+        }
+    }
+}
+
 /// Owned mirror of `orm::M2MRelationSpec` so `ModelMeta` can be
 /// serialised into migration JSON without lifetimes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
