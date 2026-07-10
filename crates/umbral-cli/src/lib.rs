@@ -960,6 +960,7 @@ fn op_kind(op: &umbral::migrate::Operation) -> &'static str {
         Operation::AlterColumn { .. } => "ALTER COL",
         Operation::RenameTable { .. } => "RENAME TABLE",
         Operation::RenameColumn { .. } => "RENAME COL",
+        Operation::SetColumnComment { .. } => "COMMENT COL",
         Operation::CreateM2MTable { .. } => "CREATE M2M",
         Operation::DropM2MTable { .. } => "DROP M2M",
         Operation::RunSql { .. } => "RUN SQL",

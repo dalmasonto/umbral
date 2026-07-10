@@ -745,16 +745,21 @@ pub struct FieldSpec {
     /// Set via `#[umbral(help = "...")]`. Flows
     /// through to:
     ///
+    /// - The **database itself**, as a Postgres `COMMENT ON COLUMN`
+    ///   (gaps3 #43). SQLite has no comment facility, so it is
+    ///   omitted there. This is the one place `help` is not
+    ///   purely presentational: editing it produces a
+    ///   `SetColumnComment` migration.
     /// - OpenAPI `description` on the property schema (closes
     ///   playground-openapi-gaps item 5).
     /// - Admin form field hint (the small line below the
     ///   input).
-    /// - Doc-comment-style introspection for any future code
-    ///   generator.
+    /// - TSDoc on the generated TypeScript interface
+    ///   (`umbral typegen`).
     ///
     /// Empty string means "no description" — the OpenAPI
     /// emitter and admin form skip the surrounding markup
-    /// when this is unset.
+    /// when this is unset, and no comment is emitted.
     pub help: &'static str,
 
     /// Presentation hint for form-rendering surfaces. Set via
@@ -768,7 +773,8 @@ pub struct FieldSpec {
     /// form) to render a markdown editor instead of a bare
     /// `<textarea>`, and pairs with the `{{ value | markdown }}`
     /// filter on the display side. Excluded from the migration diff
-    /// for the same reason `help` / `example` are: no DB effect.
+    /// for the same reason `example` is: no DB effect. (`help` used to
+    /// be in that list; it now renders as a Postgres column comment.)
     ///
     /// Renderers fall back to the `SqlType`-derived input for any
     /// widget name they don't recognise, so an unknown widget is a

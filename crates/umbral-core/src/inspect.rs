@@ -789,6 +789,7 @@ pub async fn write_outputs(
                 | Operation::AlterColumn { .. }
                 | Operation::RenameTable { .. }
                 | Operation::RenameColumn { .. }
+                | Operation::SetColumnComment { .. }
                 | Operation::AddIndex { .. }
                 | Operation::DropIndex { .. }
                 | Operation::RunSql { .. } => (t, c),

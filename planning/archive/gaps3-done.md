@@ -270,3 +270,30 @@ Storage is UTC everywhere (`TIMESTAMPTZ` on Postgres, ISO-8601 text on SQLite); 
 **Not changed:** the typed path (`Post::objects().create(post)`) binds a `DateTime<Utc>` that is already an instant, so no ambiguity can arise. `Date` and `Time` columns carry no zone. `auto_now` / `auto_now_add` stamp `Utc::now()` (`now_for_column`) and never consult the project timezone.
 
 **Doc:** `documentation/docs/v0.0.1/orm/datetimes-and-timezones.mdx`, including a warning that rows written on a DST-overlap hour by an older version are wrong by the zone's offset and no migration can recover the intent.
+
+---
+
+43. [x] **Do we have proper field data emission — does help text translate to a comment on the field, for something like Postgres or MySQL?**
+
+**Answer: it didn't. Now it does, on Postgres.**
+
+`#[umbral(help = "...")]` already reached the OpenAPI `description`, the admin form hint, and (since #38) the TSDoc on the generated TypeScript. The one audience that never saw it was the person at a `psql` prompt — which is exactly where people go to ask "what is this column for?". `FieldSpec::help`'s own doc comment called it presentational, and `diff_columns` deliberately excluded it as "no DB effect".
+
+**Shipped.** `help` now renders as `COMMENT ON COLUMN "<table>"."<column>" IS '<text>'` on Postgres:
+
+- `CreateTable` appends one comment per documented column, *after* the `CREATE` (Postgres has no inline column-comment syntax, and commenting a column that doesn't exist yet is an error). `AddColumn` appends its own.
+- Editing help text on an existing column emits the new `Operation::SetColumnComment { table, column, comment }`. It is a **separate op, not an `AlterColumn`** — an alter is a full table-recreation dance on SQLite and a column rewrite on Postgres, and a docstring edit deserves neither. Emitted after any `AlterColumn` on the same column, since that op replaces the column.
+- Clearing the help text emits `IS NULL`, not `IS ''`. Postgres distinguishes "no comment" from "the empty comment", and `\d+` prints the latter as a blank line.
+- `classify_operation` returns `OpSafety::Safe`, so a docstring edit can never gate a zero-downtime deploy. `checkmigrations` labels it `COMMENT COL`; a comment-only migration files as `NNNN_comment_<table>_<column>.json` rather than `NNNN_auto.json`.
+
+**Escaping.** `comment_on_column_stmt` doubles single quotes. Help text is prose, prose has apostrophes, and `help = "the note's body"` would otherwise close the SQL string literal. The value originates in a compile-time attribute rather than user input, but migration files are hand-editable, and an unescaped quote would surface as a syntax error at apply time instead of a diagnostic at generate time.
+
+**SQLite renders zero statements.** It has no `COMMENT` facility of any kind. This is *not* the silent-divergence the raw-SQL rule warns about: columns, types, constraints and rows are identical on both backends; only the annotation is absent, because SQLite has nowhere to put it.
+
+**MySQL** — the entry's other example — is not a backend umbral ships. `render_operation_for` panics on any name other than `sqlite` / `postgres`. If MySQL ever lands, its inline `COMMENT '...'` column clause is a different shape from Postgres's separate statement, and `Operation::SetColumnComment` is where that would be handled.
+
+**Verified against a real Postgres**, not just asserted as a string: the rendered DDL was executed in a scratch schema on the local instance, and `col_description()` read back `Don't 'quote' me` and `The note's contents, as Markdown.` intact, with `IS NULL` genuinely clearing the comment. Scratch schema dropped afterwards.
+
+**Tests:** `crates/umbral-core/tests/column_comments.rs` — 10 cases over the real `render_operation_for` and the real `diff`: one comment per documented column and none for undocumented ones; comment ordered after the CREATE; quote escaping; SQLite emits nothing but still creates the table; `AddColumn` carries its comment; a help edit emits exactly one `SetColumnComment` and never an `AlterColumn`; removal emits `IS NULL`; unchanged help emits no migration at all (without which every `makemigrations` after the upgrade would re-emit comments forever); and the op classifies SAFE. Whole workspace green (2604).
+
+**Note for existing projects.** Snapshots written before this change carry no `help`, so the first `makemigrations` after upgrading emits one `SetColumnComment` per documented column. That is correct and cheap — the comments genuinely aren't in the database yet.

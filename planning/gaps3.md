@@ -124,7 +124,7 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 41. [x] `on_ready` fires for every CLI subcommand, so seeds run against an unmigrated schema during `migrate` — archived
 
 42. [x] Datetime/timezone handling: offsets convert correctly; DST-ambiguous and nonexistent local times were silently stored as a third instant — now rejected — archived
-43. [ ] Do we have proper field data emission ie help text, does it translate to comment on field for something like postgres or mysql?
+43. [x] Field help text now emits a Postgres `COMMENT ON COLUMN` (SQLite has no comment facility; MySQL is not a backend) — archived
 44. [x] CSRF token visible in the admin `hx-headers` attribute — by design (double-submit); the real fix was `Cache-Control: no-store, private` on personalised responses — archived
 45. [ ] Can we have read/write permissions enabled at read time ie if a user is in group X, they can read but not write? Its like framework enforced permissions - This is controversial abit since the orm does not/should not rely on a plugin
 46. [ ] How can we detect models instead of doing a .models and a vec in it?

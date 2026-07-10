@@ -719,6 +719,22 @@ pub enum Operation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         column: Option<Column>,
     },
+    /// gaps3 #43: set (or clear) a column's database comment from
+    /// `#[umbral(help = "...")]`. Renders as `COMMENT ON COLUMN "<t>"."<c>" IS
+    /// '<comment>'` on Postgres, and to *nothing* on SQLite, which has no
+    /// comment facility. An empty `comment` clears it with `IS NULL` — Postgres
+    /// distinguishes "no comment" from "the empty comment".
+    ///
+    /// `CreateTable` and `AddColumn` emit their own comments inline, so this op
+    /// exists for the case they can't cover: the help text on an *existing*
+    /// column changed. It touches no rows and takes no lock worth naming, so it
+    /// classifies as `OpSafety::Safe`.
+    SetColumnComment {
+        table: String,
+        column: String,
+        /// Empty string means "remove the comment".
+        comment: String,
+    },
     /// Gap #69: a raw-SQL **data** migration. Unlike every other
     /// variant it changes *rows*, not the schema model — so the
     /// autodetector NEVER emits it (it has no model-state effect), and
@@ -795,6 +811,7 @@ impl Operation {
             | Operation::DropColumn { table, .. }
             | Operation::AlterColumn { table, .. }
             | Operation::RenameColumn { table, .. }
+            | Operation::SetColumnComment { table, .. }
             | Operation::AddIndex { table, .. }
             | Operation::DropIndex { table, .. } => table,
             Operation::RenameTable { from, .. } => from,
@@ -1019,6 +1036,27 @@ fn is_no_action(a: &crate::orm::FkAction) -> bool {
 /// applies. Used by [`render_operation_sqlite`] / `_postgres`
 /// after a `CreateTable` or `AddColumn` op whose column carries
 /// the `#[umbral(index)]` flag. Closes BUG-4.
+/// Postgres `COMMENT ON COLUMN` for one column (gaps3 #43).
+///
+/// An empty `comment` renders `IS NULL`, which is Postgres's "this column has no
+/// comment" — distinct from `IS ''`, an empty comment that `\d+` would print as
+/// a blank line.
+///
+/// Help text is prose, and prose has apostrophes, so the literal is escaped by
+/// doubling single quotes. The value originates in a `#[umbral(help = "...")]`
+/// attribute (a compile-time literal, not user input), but a migration file is
+/// hand-editable and an unescaped quote would produce a syntax error at apply
+/// time rather than a diagnostic at generate time.
+fn comment_on_column_stmt(table: &str, column: &str, comment: &str) -> String {
+    let t = table.replace('"', "\"\"");
+    let c = column.replace('"', "\"\"");
+    if comment.is_empty() {
+        return format!("COMMENT ON COLUMN \"{t}\".\"{c}\" IS NULL");
+    }
+    let body = comment.replace('\'', "''");
+    format!("COMMENT ON COLUMN \"{t}\".\"{c}\" IS '{body}'")
+}
+
 fn create_index_stmt(table: &str, column: &str) -> String {
     let t = table.replace('"', "\"\"");
     let c = column.replace('"', "\"\"");
@@ -3355,6 +3393,11 @@ pub fn classify_operation(op: &Operation) -> OpSafety {
         // them yet.
         Operation::CreateTable { .. } | Operation::CreateM2MTable { .. } => OpSafety::Safe,
 
+        // A column comment is metadata: no rows read or written, no lock worth
+        // naming, and no code path — old or new — reads it. A docstring edit
+        // must never gate a zero-downtime deploy.
+        Operation::SetColumnComment { .. } => OpSafety::Safe,
+
         // Adding a column is additive — unless it's NOT NULL with no
         // default, in which case old code inserting a row without the
         // column fails. (The engine refuses such an add against a
@@ -4184,6 +4227,8 @@ fn diff_columns(
     // Primary-key changes still UnsafeAlter (a PK rebuild is its own
     // dance and isn't shipped yet).
     let mut alter_columns: Vec<&str> = Vec::new();
+    // Columns whose `#[umbral(help = "...")]` changed (gaps3 #43).
+    let mut comment_columns: Vec<&str> = Vec::new();
     for (name, prev_col) in &prev_cols {
         if let Some(curr_col) = curr_cols.get(name) {
             if prev_col.primary_key != curr_col.primary_key {
@@ -4219,6 +4264,14 @@ fn diff_columns(
                     reason: "adding UNIQUE to an existing column requires a duplicate pre-check/backfill migration; otherwise existing duplicate values abort the migration".to_string(),
                 });
             }
+            // gaps3 #43: `help` DOES have a DB effect now — it renders as a
+            // Postgres `COMMENT ON COLUMN` — but it is not a column rewrite.
+            // It gets its own cheap op rather than dragging the column through
+            // an `AlterColumn` (a full table-recreation dance on SQLite).
+            if prev_col.help != curr_col.help {
+                comment_columns.push(*name);
+            }
+
             // Any schema-meaningful field change triggers AlterColumn.
             // UI-only flags (`noform`, `noedit`, `max_length`,
             // `is_string_repr`, `is_multichoice`) are intentionally
@@ -4294,6 +4347,21 @@ fn diff_columns(
             // SQLite recreation dance re-creates them instead of dropping them.
             unique_together: current.unique_together.clone(),
             indexes: current.indexes.clone(),
+        });
+    }
+
+    // gaps3 #43: comment ops, in name order. After any `AlterColumn` on the same
+    // column, because SQLite's alter recreates the table and Postgres's rewrites
+    // the column — a comment set first would be describing a column that is
+    // about to be replaced.
+    for name in comment_columns {
+        ops.push(Operation::SetColumnComment {
+            table: current.table.clone(),
+            column: name.to_string(),
+            comment: curr_cols
+                .get(name)
+                .map(|c| c.help.clone())
+                .unwrap_or_default(),
         });
     }
 
@@ -4442,6 +4510,9 @@ fn suffix_for(ops: &[Operation]) -> String {
                 table, from, to, ..
             },
         ] => format!("rename_{table}_{from}_to_{to}"),
+        [Operation::SetColumnComment { table, column, .. }] => {
+            format!("comment_{table}_{column}")
+        }
         [Operation::RunSql { .. }] => "run_sql".to_string(),
         [Operation::AddIndex { table, columns, .. }] => {
             format!("add_index_{table}_{}", columns.join("_"))
@@ -4673,6 +4744,13 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 .drop_column(Alias::new(column))
                 .build(SqliteQueryBuilder),
         ],
+        // gaps3 #43: SQLite has no `COMMENT` statement — no column comments, no
+        // table comments, nothing. Rendering zero statements is the whole
+        // implementation. This is not a silent divergence of the kind the raw-SQL
+        // rule warns about: the columns, types, constraints and rows are
+        // identical on both backends. Only the `psql \d+` annotation is absent,
+        // because SQLite has nowhere to put it.
+        Operation::SetColumnComment { .. } => Vec::new(),
         Operation::AlterColumn {
             table,
             column,
@@ -4827,6 +4905,14 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             for group in indexes {
                 stmts.push(create_multi_index_stmt(table, group));
             }
+            // gaps3 #43: `#[umbral(help = "...")]` as a column comment. Postgres
+            // has no inline column-comment syntax, so these follow the CREATE —
+            // commenting a column that doesn't exist yet is an error.
+            for col in columns {
+                if !col.help.is_empty() {
+                    stmts.push(comment_on_column_stmt(table, &col.name, &col.help));
+                }
+            }
             stmts
         }
         Operation::DropTable { table } => vec![
@@ -4846,8 +4932,16 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             } else if should_emit_btree_index(column) {
                 stmts.push(create_index_stmt(table, &column.name));
             }
+            if !column.help.is_empty() {
+                stmts.push(comment_on_column_stmt(table, &column.name, &column.help));
+            }
             stmts
         }
+        Operation::SetColumnComment {
+            table,
+            column,
+            comment,
+        } => vec![comment_on_column_stmt(table, column, comment)],
         Operation::DropColumn { table, column } => vec![
             Table::alter()
                 .table(Alias::new(table))

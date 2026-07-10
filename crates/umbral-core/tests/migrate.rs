@@ -376,6 +376,7 @@ fn create_table_names(ops: &[Operation]) -> Vec<String> {
             | Operation::AlterColumn { .. }
             | Operation::RenameTable { .. }
             | Operation::RenameColumn { .. }
+            | Operation::SetColumnComment { .. }
             | Operation::CreateM2MTable { .. }
             | Operation::AddIndex { .. }
             | Operation::DropIndex { .. }
