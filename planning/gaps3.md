@@ -123,5 +123,5 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
 42. [ ] Do we have proper handling of datetime fields ie if the datetime field is utc and a date passed in non-utc. does it convert to UTC field?
 43. [ ] Do we have proper field data emission ie help text, does it translate to comment on field for something like postgres or mysql?
-44. [ ] This does not look secure (![csrf token in header and visible in html](image.png)) - Admin dashboard page showing this
+44. [x] CSRF token visible in the admin `hx-headers` attribute — by design (double-submit); the real fix was `Cache-Control: no-store, private` on personalised responses — archived
 45. [ ] Can we have read/write permissions enabled at read time ie if a user is in group X, they can read but not write? Its like framework enforced permissions - This is controversial abit since the orm does not/should not rely on a plugin

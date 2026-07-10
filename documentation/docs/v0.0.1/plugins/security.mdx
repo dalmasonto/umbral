@@ -33,7 +33,27 @@ For JavaScript or htmx writes, send the raw token as a header instead. One attri
 Token-authenticated APIs carry no session cookie, so their writes would 403. Exempt them with `csrf_exempt_paths: vec!["/api".into()]` on `SecurityConfig`.
 </Callout>
 
-Tokens are HMAC-signed with your app's `secret_key` by default (`signed_csrf: true`); a cookie planted by a sibling subdomain can't forge a valid signature. Stale or unsigned cookies rotate automatically on the next safe request. Configuration is a struct, not a builder chain; flip exactly what you need:
+### Seeing the token in your page source is expected
+
+The CSRF token is not a secret. umbral uses **double-submit**: the same value lives in a non-`HttpOnly` cookie and in the page, and a write is accepted only when the two match. JavaScript has to be able to read it, which means anyone viewing source can too. What stops an attacker is the same-origin policy — a page on `evil.example` can neither read your cookie nor read the body of a response from your origin, so it cannot produce a matching pair. Tokens are also HMAC-signed with your app's `secret_key` by default (`signed_csrf: true`), so a cookie planted by a sibling subdomain can't forge a valid signature, and stale or unsigned cookies rotate automatically on the next safe request.
+
+What *would* be a leak is a **cache** handing your rendered page — token, data and all — to somebody else. So any response to a personalised request (one carrying a session cookie, an `Authorization`, or a `Proxy-Authorization` header) ships `Cache-Control: no-store, private`. `private` bars shared caches like a CDN or a corporate proxy; `no-store` bars the browser's own disk and back/forward caches, which is what stops a logged-out user pressing Back into a rendered admin page.
+
+Anonymous requests are left alone, so public pages stay CDN-cacheable, and a handler that sets its own `Cache-Control` always wins:
+
+```rust
+SecurityPlugin::with_config(SecurityConfig {
+    // Only if a cache you control already keys on the session cookie.
+    private_cache: false,
+    ..Default::default()
+})
+```
+
+<Callout type="warning">
+Turning `private_cache` off without a cache that keys on the session cookie means a shared cache may store one user's authenticated page and serve it to the next.
+</Callout>
+
+Configuration is a struct, not a builder chain; flip exactly what you need:
 
 ```rust
 SecurityPlugin::with_config(SecurityConfig {

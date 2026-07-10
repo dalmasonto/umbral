@@ -108,7 +108,9 @@ use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use http::header::{AUTHORIZATION, COOKIE, HeaderName, HeaderValue, SERVER, SET_COOKIE};
+use http::header::{
+    AUTHORIZATION, COOKIE, HeaderName, HeaderValue, PROXY_AUTHORIZATION, SERVER, SET_COOKIE,
+};
 use http::{Method, StatusCode};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::sensitive_headers::SetSensitiveHeadersLayer;
@@ -116,6 +118,11 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use umbral::prelude::*;
 
 const CSRF_COOKIE: &str = "umbral_csrf_token";
+/// The session cookie name. Matches `umbral_sessions::COOKIE_NAME`, mirrored
+/// here rather than depended upon: `umbral-security` sits below `umbral-sessions`
+/// in the plugin graph and must not import it. `umbral-cache`'s `cache_page`
+/// mirrors the same literal for the same reason.
+const SESSION_COOKIE: &str = "umbral_session";
 const CSRF_HEADER: &str = "x-csrf-token";
 /// Form field name that carries the CSRF token for HTML `<form>` submissions.
 /// Two shapes are accepted — `csrf_token` and `__csrf` — so existing form code
@@ -202,6 +209,22 @@ pub struct SecurityConfig {
     /// Mark `authorization` / `cookie` / `set-cookie` sensitive so tracing
     /// redacts them. Default `true`.
     pub redact_sensitive_headers: bool,
+
+    /// Send `Cache-Control: no-store, private` on responses to *personalised*
+    /// requests — those carrying a session cookie or an `Authorization` /
+    /// `Proxy-Authorization` header. Default `true`.
+    ///
+    /// An authenticated page holds the viewer's data and their CSRF token
+    /// (double-submit, so the token is deliberately readable — see the module
+    /// docs). Without this header nothing tells a CDN, a corporate proxy, or
+    /// the browser's back/forward cache that the page belongs to one person.
+    /// `private` stops shared caches; `no-store` stops the local disk cache
+    /// replaying an admin page after logout.
+    ///
+    /// Anonymous requests are untouched, so public pages stay cacheable, and a
+    /// handler that sets its own `Cache-Control` always wins. Turn this off
+    /// only if a cache you control already keys on the session cookie.
+    pub private_cache: bool,
 }
 
 impl Default for SecurityConfig {
@@ -234,6 +257,9 @@ impl Default for SecurityConfig {
             hide_server_header: false,
             request_body_limit: None,
             redact_sensitive_headers: true,
+            // Secure by default: an authenticated page is never storable by a
+            // cache umbral doesn't control.
+            private_cache: true,
         }
     }
 }
@@ -335,6 +361,14 @@ impl Plugin for SecurityPlugin {
         if cfg.csrf {
             let state = CsrfState::from_config(cfg);
             router = router.layer(middleware::from_fn_with_state(state, csrf_middleware));
+        }
+
+        // Mark personalised responses uncacheable (gaps3 #44). Sits beside the
+        // CSRF layer because it protects the same thing: the token the CSRF
+        // middleware puts on the page is only safe while that page reaches one
+        // browser.
+        if cfg.private_cache {
+            router = router.layer(middleware::from_fn(private_cache_middleware));
         }
 
         // Response-header setters. Order among them is irrelevant.
@@ -624,6 +658,54 @@ fn cookie_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
 
 fn is_safe_method(method: &Method) -> bool {
     matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+/// `Cache-Control` for a response that belongs to exactly one person.
+///
+/// `private` bars shared caches (CDN, corporate proxy) from storing it at all;
+/// `no-store` additionally bars the browser's own disk and back/forward caches,
+/// which is what stops a logged-out user pressing Back into a rendered admin
+/// page. Both, because they address different caches.
+const PRIVATE_CACHE_CONTROL: &str = "no-store, private";
+
+/// Return `true` when the request is tied to one identity, and its response
+/// therefore must not be stored by a cache shared with anyone else.
+///
+/// Three signals, matching the personalisation predicate `umbral-cache`'s
+/// `cache_page` uses to bypass its own store (`request_is_personalised`):
+///
+/// - a `umbral_session` cookie (the canonical `umbral_sessions::COOKIE_NAME`),
+/// - an `Authorization` header (bearer / basic / API token),
+/// - a `Proxy-Authorization` header.
+///
+/// Deliberately NOT a signal: the `umbral_csrf_token` cookie. Every first-time
+/// anonymous visitor is minted one on their first safe request, so keying on it
+/// would mark the entire public site `no-store`.
+fn request_is_personalised(headers: &http::HeaderMap) -> bool {
+    if headers.contains_key(AUTHORIZATION) || headers.contains_key(PROXY_AUTHORIZATION) {
+        return true;
+    }
+    headers
+        .get_all(COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|h| cookie_value(h, SESSION_COOKIE).is_some())
+}
+
+/// Attach [`PRIVATE_CACHE_CONTROL`] to responses for personalised requests.
+///
+/// `if_not_present` semantics: a handler that already declared its own caching
+/// policy keeps it, so an authenticated request for a fingerprinted static asset
+/// still serves `public, max-age=…`.
+async fn private_cache_middleware(req: Request, next: Next) -> Response {
+    let personalised = request_is_personalised(req.headers());
+    let mut resp = next.run(req).await;
+    if personalised {
+        resp.headers_mut()
+            .entry(http::header::CACHE_CONTROL)
+            .or_insert_with(|| HeaderValue::from_static(PRIVATE_CACHE_CONTROL));
+    }
+    resp
 }
 
 async fn csrf_middleware(

@@ -105,7 +105,10 @@
             {%- endif %}
 
             <form method="post" action="{{ admin_base }}/login" class="space-y-md">
-                <!-- CSRF token — per-session, verified on POST -->
+                <!-- CSRF token — double-submit: matched against the
+                     umbral_csrf_token cookie on POST. Per-browser, not
+                     per-session, unless SecurityConfig.session_bind_cookie
+                     binds it to the session id. -->
                 <input
                     type="hidden"
                     name="csrf_token"
