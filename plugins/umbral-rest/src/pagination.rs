@@ -80,6 +80,74 @@ pub enum PaginationStyle {
     Custom,
 }
 
+/// A JSON scalar a pagination envelope field / query param carries.
+/// Framework-neutral so both codegen consumers (the OpenAPI spec and
+/// the TypeScript client) can map it to their own type system —
+/// `number`/`string`/`boolean` in TS, `integer`/`string`/`boolean` in
+/// JSON Schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaginationScalar {
+    /// A JSON string.
+    String,
+    /// A JSON number.
+    Number,
+    /// A JSON boolean.
+    Boolean,
+}
+
+/// One field a custom paginator declares — an envelope key it returns,
+/// or a query parameter it reads. Named so codegen can emit it typed.
+#[derive(Debug, Clone)]
+pub struct PaginationField {
+    /// The wire name — the JSON key (`"next_cursor"`) or query param
+    /// (`"cursor"`).
+    pub name: String,
+    /// The scalar type the value carries.
+    pub ty: PaginationScalar,
+    /// Whether the value can be `null` (envelope fields) / omitted.
+    pub nullable: bool,
+}
+
+impl PaginationField {
+    /// A non-nullable field of the given scalar.
+    pub fn new(name: impl Into<String>, ty: PaginationScalar) -> Self {
+        Self {
+            name: name.into(),
+            ty,
+            nullable: false,
+        }
+    }
+
+    /// A nullable field (envelope keys that can come back `null`, like a
+    /// `next_cursor` at the end of the stream).
+    pub fn nullable(name: impl Into<String>, ty: PaginationScalar) -> Self {
+        Self {
+            name: name.into(),
+            ty,
+            nullable: true,
+        }
+    }
+}
+
+/// A custom paginator's wire shape, declared to codegen. The framework
+/// knows the shape of the three built-in styles from [`PaginationStyle`];
+/// this is how a [`PaginationStyle::Custom`] implementor tells the OpenAPI
+/// plugin and the generated TypeScript client what its envelope and query
+/// params actually are, so they can be emitted *typed* instead of as an
+/// opaque escape hatch.
+///
+/// `results: T[]` is implicit and always present; `envelope` lists the
+/// keys *beyond* `results`. `params` lists the query parameters the
+/// paginator reads (each becomes a typed builder method on the client's
+/// query, e.g. `.cursor(...)`).
+#[derive(Debug, Clone, Default)]
+pub struct PaginationSchema {
+    /// Envelope keys beyond `results` — e.g. `next_cursor`, `count`.
+    pub envelope: Vec<PaginationField>,
+    /// Query params the paginator reads — e.g. `cursor`, `page_size`.
+    pub params: Vec<PaginationField>,
+}
+
 /// The pagination contract. Implementors are stored on the plugin as
 /// `Arc<dyn Pagination>` so the list handler can dispatch through a
 /// trait object — register custom shapes per-app at builder time.
@@ -120,6 +188,20 @@ pub trait Pagination: Send + Sync + 'static {
     /// doesn't accidentally advertise wrong parameters.
     fn style(&self) -> PaginationStyle {
         PaginationStyle::Custom
+    }
+
+    /// Declare the paginator's wire shape to codegen (the OpenAPI spec
+    /// and the generated TypeScript client). Return `Some` from a
+    /// [`PaginationStyle::Custom`] implementor to have its envelope keys
+    /// and query params emitted *typed*; the default `None` leaves a
+    /// custom paginator as an opaque shape (permissive envelope + a
+    /// generic `.param(...)` escape hatch on the client).
+    ///
+    /// The three built-in styles return `None` here — their shape is
+    /// already known to codegen from [`Self::style`], so they don't need
+    /// to restate it.
+    fn schema(&self) -> Option<PaginationSchema> {
+        None
     }
 }
 

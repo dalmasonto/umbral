@@ -84,7 +84,26 @@ The generator reads the same model registry and per-resource config that renders
 - A field you `hide(...)` isn't a filter key.
 - A resource with filtering disabled gets an empty `Filters` type.
 - Your configured base path (`/api`, `/v1`, …) is baked into the request URLs.
-- The list envelope matches your paginator — `{results, count}` for none, plus `total_pages`/`current_page`/`next`/… for page-number, `limit`/`offset`/… for limit-offset.
+- The list envelope matches your paginator — `{results, count}` for none, plus `total_pages`/`current_page`/`next`/… for page-number, `limit`/`offset`/… for limit-offset. A **custom paginator** that declares its shape (`Pagination::schema()`) is emitted fully typed — its own envelope keys (e.g. `next_cursor: string | null`) and one builder method per query param (e.g. `.cursor(...)`). One that doesn't declare a shape gets an honest open envelope (`results?`, `count?`, plus an index signature) and the generic `.param(key, value)` escape hatch — which every query has, for any param the typed methods don't cover.
+
+## Authentication
+
+The client's auth surface is **read from your API's declared OpenAPI security scheme** — nothing is hardcoded, so a nonstandard token prefix or a custom header name both come out right:
+
+```ts
+new Umbral(url, { token });                          // Authorization: <prefix> <token>
+new Umbral(url, { token, tokenPrefix: "Token" });    // override the prefix
+new Umbral(url, { apiKey });                          // <declared-header>: <apiKey>
+new Umbral(url, { apiKey, apiKeyHeader: "x-key" });   // override the header
+new Umbral(url, { getAuthHeaders: async () => ({ Authorization: `Bearer ${await fresh()}` }) });
+```
+
+- A `http` / **bearer**-style scheme sets the `Authorization` prefix from the scheme's `scheme` field — `bearer` → `Bearer`, `token` → `Token`. That's the default for `token`; override per-request with `tokenPrefix`.
+- An `apiKey` / **header** scheme bakes its declared `name` as the default header for `apiKey` (`X-API-Key`, `X-Umbral-Api-Key`, whatever you declared); override with `apiKeyHeader`.
+- An `apiKey` / **cookie** (session) scheme makes the client send credentials by default (`fetch` `credentials: "include"`).
+- `getAuthHeaders()` is always available and merged **last** (it wins) — for a rotating JWT, a refresh flow, or request signing.
+
+With no scheme declared, the client still offers a sensible generic surface (Bearer `token`, `X-API-Key` `apiKey`, and the dynamic hook).
 
 It runs offline as a CLI step — no server, no database — because that config is published when your app's routes are built.
 

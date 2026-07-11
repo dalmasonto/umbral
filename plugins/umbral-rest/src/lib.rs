@@ -50,7 +50,7 @@ pub(crate) use filtering::{FilterClause, parse_filters, parse_ordering, parse_se
 pub mod pagination;
 pub use pagination::{
     LimitOffsetPagination, NoPagination, PageNumberPagination, PageRequest, Pagination,
-    PaginationStyle,
+    PaginationField, PaginationScalar, PaginationSchema, PaginationStyle,
 };
 
 pub mod resource;
@@ -1611,6 +1611,16 @@ pub fn registered_pagination_style() -> PaginationStyle {
         .get()
         .map(|cfg| cfg.pagination.style())
         .unwrap_or(PaginationStyle::None)
+}
+
+/// The configured paginator's declared wire shape, if it is a custom
+/// paginator that overrides [`Pagination::schema`]. Read by `umbral-openapi`
+/// to emit a *typed* envelope + query params for a custom paginator (in the
+/// OpenAPI spec and the generated TypeScript client) instead of the opaque
+/// fallback. `None` for the built-in styles (their shape is known from
+/// [`registered_pagination_style`]) and when CONFIG isn't populated.
+pub fn registered_pagination_schema() -> Option<PaginationSchema> {
+    CONFIG.get().and_then(|cfg| cfg.pagination.schema())
 }
 
 /// One custom `@action`'s OpenAPI-facing schema info — read by
