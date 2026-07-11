@@ -117,9 +117,11 @@ async fn readiness_surfaces_registered_check_results() {
 }
 
 #[tokio::test]
-async fn route_paths_announces_both_endpoints() {
+async fn route_paths_announces_every_endpoint() {
     let paths = HealthPlugin::default().route_paths();
-    assert_eq!(paths.len(), 2);
+    // /healthz (liveness), /ready + its /readyz k8s-convention alias.
+    assert_eq!(paths.len(), 3);
     assert!(paths.iter().any(|p| p.path == "/healthz"));
     assert!(paths.iter().any(|p| p.path == "/ready"));
+    assert!(paths.iter().any(|p| p.path == "/readyz"));
 }

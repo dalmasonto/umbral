@@ -1,6 +1,6 @@
 ---
 title: Health checks
-description: Liveness and readiness probes for umbral. Mounts GET /healthz (liveness) and GET /ready (readiness), with pluggable readiness checks for your dependencies.
+description: Liveness and readiness probes for umbral. Mounts GET /healthz plus GET /ready (alias /readyz), with a built-in DB probe, pluggable dependency checks, and an opt-in migration gate for zero-downtime deploys.
 sidebar_position: 24
 tags: [health, liveness, readiness, probes, kubernetes, plugin]
 ---
@@ -10,7 +10,7 @@ tags: [health, liveness, readiness, probes, kubernetes, plugin]
 `umbral-health` mounts two probe endpoints so an orchestrator (Kubernetes, a load balancer, an uptime monitor) can tell whether your app is alive and whether it is ready to serve traffic:
 
 - **`GET /healthz`** - *liveness*. Always returns `200` as long as the process is answering. Use it to decide whether to **restart** the container. It never touches a dependency, so a slow database can't trigger a restart loop.
-- **`GET /ready`** - *readiness*. Runs every registered check and returns `200` with a JSON body when they all pass, or `503` (with the failing check's reason in the body) when one fails. Use it to decide whether to **route traffic** to this instance.
+- **`GET /ready`** (alias **`GET /readyz`**) - *readiness*. Probes the default DB pool (`SELECT 1`), runs every registered check, and — when opted in — checks the migration state. Returns `200` with a JSON body when everything passes, or `503` (with the failing check's reason in the body) when one fails. Use it to decide whether to **route traffic** to this instance. `/readyz` is the same handler under the k8s-convention name (`/livez`/`/readyz`); use whichever your tooling expects.
 
 <Callout type="info">
 Liveness and readiness are split on purpose: a failed dependency (DB down) should pull the instance **out of rotation** (readiness `503`), not **kill the process** (liveness stays `200`) - restarting won't fix a downstream outage.
@@ -66,6 +66,45 @@ App::builder()
 ```
 
 Each check's `name` is surfaced in the `/ready` JSON body, so a `503` tells operators exactly which dependency is down. `check_timeout` bounds every check so a hung dependency can't make the probe itself hang.
+
+<Callout type="info">
+The default DB connectivity probe (`SELECT 1` via `umbral::db::ping()`) is built in — it appears in the body as the `"database"` check with no registration. Register `HealthCheck`s only for your *other* dependencies (Redis, an upstream API, S3).
+</Callout>
+
+## Gate readiness on migrations
+
+Turn on `require_migrations()` and `/ready` (and `/readyz`) additionally returns `503` while the database is **behind** the migrations this binary carries — i.e. while any migration on disk is unapplied — and flips to `200` the moment the schema catches up:
+
+```rust
+App::builder()
+    .plugin(HealthPlugin::default().require_migrations())
+    .build()?;
+```
+
+```json
+// GET /readyz while the one-shot `migrate` job is still running:
+{ "status": "fail", "checks": {
+    "database":   { "status": "ok" },
+    "migrations": { "status": "fail", "reason": "2 migrations pending" }
+} }
+```
+
+This fixes the classic rolling-deploy race. Your compose/k8s stack runs `postgres → migrate → web`, but a new `web` container can come up and connect **before** `migrate` finishes — to a database still on the old schema. With a DB-only readiness check it reports ready and starts `500`ing against columns that don't exist yet. Gating on migrations holds the pod out of the load balancer until `migrate` lands, then lets it in.
+
+Point your container `HEALTHCHECK` (or k8s `readinessProbe`) at `/readyz`:
+
+```dockerfile
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s \
+  CMD curl -fsS http://127.0.0.1:8000/readyz || exit 1
+```
+
+<Callout type="info">
+A **rollback** stays ready. Deploying an older binary against a newer schema shows the database's extra migrations as "applied but missing on disk" — the database is *ahead*, which is a valid backward-compatible state — so only genuinely-unapplied migrations block. You never get a rollback stuck out of rotation.
+</Callout>
+
+<Callout type="warning">
+It's opt-in because the check reads the on-disk `migrations/` tree. An app that ships its schema another way (a baked image, an external migration tool) would see spurious `503`s, so umbral won't assume it. When you do run migrations from the same tree, this is the recommended production setting.
+</Callout>
 
 ## See also
 

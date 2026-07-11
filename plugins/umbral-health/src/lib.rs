@@ -10,14 +10,14 @@
 //!   touch, no plugin walk — anything more would risk flapping
 //!   pods on transient downstream blips.
 //!
-//! - **`GET /ready`** — *readiness*. Returns 200 + JSON when the
-//!   process is ready to accept traffic; 503 + JSON when it isn't.
-//!   "Ready" means: (a) the default DB pool answers `SELECT 1`,
-//!   (b) every [`HealthCheck`] the developer registered via
-//!   `HealthPlugin::default().check(...)` returns `Ok(())`.
-//!   Kubernetes uses this to decide whether to send traffic to the
-//!   pod; load balancers use the same signal during rolling
-//!   deploys.
+//! - **`GET /ready`** (alias **`GET /readyz`**) — *readiness*. Returns
+//!   200 + JSON when the process is ready to accept traffic; 503 + JSON
+//!   when it isn't. "Ready" means: (a) the default DB pool answers
+//!   `SELECT 1`, (b) every [`HealthCheck`] the developer registered via
+//!   `HealthPlugin::default().check(...)` returns `Ok(())`, and (c) — when
+//!   [`HealthPlugin::require_migrations`] is on — no on-disk migration is
+//!   unapplied. Kubernetes uses this to decide whether to send traffic to
+//!   the pod; load balancers use the same signal during rolling deploys.
 //!
 //! The split mirrors what every production-grade framework
 //! eventually settles on (Spring, Rails ActionCable). Without it,
@@ -112,6 +112,31 @@ struct HealthState {
     /// Per-check timeout. On elapsed the check is recorded as unhealthy
     /// with a `"timed out"` detail instead of hanging the probe.
     check_timeout: Duration,
+    /// When true, readiness also gates on the migration state: a pod whose
+    /// database has not applied the migrations this binary carries is reported
+    /// not-ready. Opt in via [`HealthPlugin::require_migrations`]. Kikosi #5.
+    require_migrations: bool,
+}
+
+/// Map a migration [`umbral::migrate::DriftReport`] to a readiness verdict.
+///
+/// `Ok(())` when the schema is at least as new as this binary — nothing on disk
+/// is unapplied. `Err(reason)` — hold traffic off the pod — when the database is
+/// behind the code. Pure, so the exact gating rule is unit-tested against
+/// hand-built reports rather than requiring a live database and a temp
+/// migrations tree at the health layer.
+///
+/// Only `Pending` blocks. `DriftReport::pending` deliberately excludes
+/// `AppliedButMissing` (the database is *ahead* — a valid rollback where an
+/// older binary should keep serving) and `OutOfOrder` (a stray file the migrate
+/// engine only warns about), so this reports a rollback as ready, not stuck.
+fn evaluate_migrations(report: &umbral::migrate::DriftReport) -> Result<(), String> {
+    let pending = report.pending();
+    match pending.len() {
+        0 => Ok(()),
+        1 => Err("1 migration pending".to_string()),
+        n => Err(format!("{n} migrations pending")),
+    }
 }
 
 /// Mounts `/healthz` (liveness) and `/ready` (readiness) plus
@@ -127,6 +152,8 @@ pub struct HealthPlugin {
     /// Per-check timeout applied to every check in the readiness runner
     /// (including the built-in DB probe). Defaults to 5 s.
     check_timeout: Duration,
+    /// See [`HealthPlugin::require_migrations`]. Default `false`.
+    require_migrations: bool,
 }
 
 impl std::fmt::Debug for HealthPlugin {
@@ -134,6 +161,7 @@ impl std::fmt::Debug for HealthPlugin {
         f.debug_struct("HealthPlugin")
             .field("checks_count", &self.checks.len())
             .field("check_timeout", &self.check_timeout)
+            .field("require_migrations", &self.require_migrations)
             .finish()
     }
 }
@@ -143,6 +171,7 @@ impl Default for HealthPlugin {
         Self {
             checks: Vec::new(),
             check_timeout: DEFAULT_CHECK_TIMEOUT,
+            require_migrations: false,
         }
     }
 }
@@ -164,6 +193,33 @@ impl HealthPlugin {
         self.check_timeout = timeout;
         self
     }
+
+    /// Also gate readiness on the migration state (Kikosi #5 / gaps3 #38).
+    ///
+    /// With this on, `/ready` (and `/readyz`) additionally reports a
+    /// `"migrations"` check and returns 503 while the database is behind this
+    /// binary's code — i.e. while any migration on disk is unapplied. It becomes
+    /// ready the moment the schema catches up.
+    ///
+    /// This is the fix for the classic rolling-deploy race: a new web container
+    /// boots before the one-shot `migrate` job finishes, connects to a database
+    /// on the *old* schema, and — with a DB-only readiness check — reports ready
+    /// and starts 500ing against columns that don't exist yet. Gating on
+    /// migrations holds the pod out of the load balancer until `migrate` lands,
+    /// then lets it in.
+    ///
+    /// Opt-in, not default: the check reads the on-disk `migrations/` tree, and
+    /// an app that ships its schema some other way (baked image, external
+    /// migration tool) would otherwise see spurious 503s. It is the recommended
+    /// production setting — point your container `HEALTHCHECK` / k8s
+    /// `readinessProbe` at `/readyz` with this enabled.
+    ///
+    /// A rollback (an older binary against a newer schema) stays ready: only
+    /// unapplied-on-disk migrations block, never a database that is ahead.
+    pub fn require_migrations(mut self) -> Self {
+        self.require_migrations = true;
+        self
+    }
 }
 
 impl Plugin for HealthPlugin {
@@ -175,10 +231,14 @@ impl Plugin for HealthPlugin {
         let state = HealthState {
             checks: Arc::new(self.checks.clone()),
             check_timeout: self.check_timeout,
+            require_migrations: self.require_migrations,
         };
         Router::new()
             .route("/healthz", get(liveness))
+            // `/ready` is the original path; `/readyz` is the k8s-convention
+            // alias (matching `/healthz`/`/livez`/`/readyz`). Same handler.
             .route("/ready", get(readiness))
+            .route("/readyz", get(readiness))
             .with_state(state)
     }
 
@@ -186,6 +246,7 @@ impl Plugin for HealthPlugin {
         vec![
             RouteSpec::new("/healthz", vec!["GET"]),
             RouteSpec::new("/ready", vec!["GET"]),
+            RouteSpec::new("/readyz", vec!["GET"]),
         ]
     }
 }
@@ -240,6 +301,49 @@ async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
         }
     }
 
+    // Migration readiness (Kikosi #5). Opt-in: a pod whose database is behind
+    // the migrations this binary carries is not ready to serve. `drift_report`
+    // reads the tracking table + on-disk tree and prints nothing, so it is safe
+    // on every probe; the timeout guards a stuck pool the same way the DB probe
+    // does.
+    if state.require_migrations {
+        match tokio::time::timeout(timeout, umbral::migrate::drift_report()).await {
+            Ok(Ok(report)) => match evaluate_migrations(&report) {
+                Ok(()) => {
+                    checks.insert(
+                        "migrations".to_string(),
+                        serde_json::json!({"status": "ok"}),
+                    );
+                }
+                Err(reason) => {
+                    all_ok = false;
+                    checks.insert(
+                        "migrations".to_string(),
+                        serde_json::json!({"status": "fail", "reason": reason}),
+                    );
+                }
+            },
+            Ok(Err(e)) => {
+                // The real error (which can name the DSN / a migration path) is
+                // logged; the unauthenticated body carries a generic reason.
+                tracing::warn!(error = %e, "health: migration probe failed");
+                all_ok = false;
+                checks.insert(
+                    "migrations".to_string(),
+                    serde_json::json!({"status": "fail", "reason": "unavailable"}),
+                );
+            }
+            Err(_elapsed) => {
+                tracing::warn!("health: migration probe timed out");
+                all_ok = false;
+                checks.insert(
+                    "migrations".to_string(),
+                    serde_json::json!({"status": "fail", "reason": "timed out"}),
+                );
+            }
+        }
+    }
+
     // Developer-registered checks. Run sequentially rather than
     // concurrently — concurrency would multiply tail latencies
     // and amplify the cost of one slow check across every probe.
@@ -279,4 +383,87 @@ async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
         checks,
     };
     (status_code, Json(body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::evaluate_migrations;
+    use umbral::migrate::{DriftReport, MigrationEntry, MigrationStatus};
+
+    fn entry(name: &str, status: MigrationStatus) -> MigrationEntry {
+        MigrationEntry {
+            plugin: "app".to_string(),
+            name: name.to_string(),
+            status,
+        }
+    }
+
+    fn report(entries: Vec<MigrationEntry>) -> DriftReport {
+        DriftReport { entries }
+    }
+
+    /// The schema is caught up — nothing on disk is unapplied — so the pod is
+    /// ready.
+    #[test]
+    fn no_pending_is_ready() {
+        assert!(evaluate_migrations(&report(vec![])).is_ok());
+        assert!(
+            evaluate_migrations(&report(vec![entry("0001", MigrationStatus::Applied)])).is_ok()
+        );
+    }
+
+    /// Pending migrations hold the pod out of the load balancer, and the reason
+    /// carries a count operators can read.
+    #[test]
+    fn pending_is_not_ready_with_a_count() {
+        assert_eq!(
+            evaluate_migrations(&report(vec![entry("0002", MigrationStatus::Pending)])),
+            Err("1 migration pending".to_string()),
+        );
+        assert_eq!(
+            evaluate_migrations(&report(vec![
+                entry("0002", MigrationStatus::Pending),
+                entry("0003", MigrationStatus::Pending),
+            ])),
+            Err("2 migrations pending".to_string()),
+        );
+    }
+
+    /// A rollback — an older binary against a newer schema — reports the
+    /// database's extra migrations as `AppliedButMissing`, NOT `Pending`. The
+    /// pod must stay ready: blocking here would make every rollback fail its
+    /// readiness probe and get pulled from rotation.
+    #[test]
+    fn a_database_ahead_of_the_code_stays_ready() {
+        assert!(
+            evaluate_migrations(&report(vec![entry(
+                "0009",
+                MigrationStatus::AppliedButMissing
+            )]))
+            .is_ok(),
+            "AppliedButMissing means the DB is ahead — a valid rollback, not a blocker",
+        );
+    }
+
+    /// An out-of-order file is a warn-only state in the migrate engine; it must
+    /// not hold traffic.
+    #[test]
+    fn an_out_of_order_file_stays_ready() {
+        assert!(
+            evaluate_migrations(&report(vec![entry("0004", MigrationStatus::OutOfOrder)])).is_ok()
+        );
+    }
+
+    /// A real pending migration blocks even when mixed with a DB-ahead entry:
+    /// the code is genuinely newer than the schema in at least one place.
+    #[test]
+    fn one_pending_among_others_still_blocks() {
+        assert_eq!(
+            evaluate_migrations(&report(vec![
+                entry("0009", MigrationStatus::AppliedButMissing),
+                entry("0010", MigrationStatus::Pending),
+            ])),
+            Err("1 migration pending".to_string()),
+        );
+    }
 }

@@ -121,6 +121,22 @@ migrate-on-boot vs. one-shot-migrate policy, and a reference deploy recipe
 (compose + reverse proxy + zero-downtime rollout) so apps inherit it instead of
 hand-rolling.
 
+**Progress (2026-07-10).** The readiness-gates-on-migrations piece shipped.
+`umbral-health` already had `/healthz` + `/ready` + a `HealthCheck` trait + a
+built-in DB probe; it now also has `HealthPlugin::require_migrations()` (opt-in),
+which makes `/ready` (and the new `/readyz` alias) return 503 while any on-disk
+migration is unapplied — closing the rolling-deploy race where a `web` container
+boots before the one-shot `migrate` finishes and serves 500s against the old
+schema. A rollback (DB ahead of code) stays ready. Backed by a read-only
+`umbral::migrate::drift_report()` (the no-print sibling of `show()`) +
+`DriftReport::pending()`. Graceful shutdown already exists (`App::serve` →
+`with_graceful_shutdown`, audit_2 core-app-config #13). Still open in #5: the
+migrate-on-boot-vs-one-shot policy write-up and a blessed zero-downtime deploy
+recipe. The false-alarm healthcheck this item named was the website's, whose
+`docker-compose.yml` curls the home page rather than `/readyz`; the framework
+fix is now available for consumers (including Kikosi and umbral_website) to
+adopt.
+
 **Why heavy.** It's cross-cutting (health, lifecycle, migrations, deploy) and it's
 where "works on my machine" meets real uptime.
 

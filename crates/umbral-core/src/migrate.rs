@@ -1499,6 +1499,22 @@ impl DriftReport {
             .filter(|e| e.status == MigrationStatus::AppliedButMissing)
             .collect()
     }
+
+    /// Migrations on disk this binary knows about that the database has NOT
+    /// applied yet — the readiness blocker (Kikosi #5 / gaps3 #38). Empty means
+    /// the schema is at least as new as this binary's code.
+    ///
+    /// Deliberately excludes `AppliedButMissing` (the database is *ahead*: a
+    /// valid rollback / backward-compatible-migration state where an older
+    /// binary should keep serving) and `OutOfOrder` (a stray file the migrate
+    /// engine only warns about). Only `Pending` — "the schema is behind the
+    /// code" — should hold traffic off a freshly-booted pod.
+    pub fn pending(&self) -> Vec<&MigrationEntry> {
+        self.entries
+            .iter()
+            .filter(|e| e.status == MigrationStatus::Pending)
+            .collect()
+    }
 }
 
 /// Errors the migration engine can produce.
@@ -3276,6 +3292,34 @@ pub async fn show() -> Result<u64, MigrateError> {
     show_in(Path::new(MIGRATIONS_DIR)).await
 }
 
+/// Read-only migration status for a health / readiness probe (Kikosi #5,
+/// gaps3 #38).
+///
+/// Returns the same [`DriftReport`] `showmigrations` computes — one entry per
+/// migration, categorised into the four [`MigrationStatus`] states — but prints
+/// nothing, so it is safe to call on every `/readyz` hit. Reads the
+/// `umbral_migrations` tracking table (ensuring it exists) and the on-disk
+/// `migrations/` tree. Use [`DriftReport::pending`] to gate readiness.
+pub async fn drift_report() -> Result<DriftReport, MigrateError> {
+    drift_report_in(Path::new(MIGRATIONS_DIR)).await
+}
+
+/// [`drift_report`] against an explicit migrations directory. The entry tests
+/// drive this so they can point at a temp tree.
+pub async fn drift_report_in(dir: &Path) -> Result<DriftReport, MigrateError> {
+    let applied = match crate::db::pool_dispatched() {
+        crate::db::DbPool::Sqlite(pool) => {
+            ensure_tracking_table_sqlite(pool).await?;
+            applied_names_sqlite(pool).await?
+        }
+        crate::db::DbPool::Postgres(pool) => {
+            ensure_tracking_table_postgres(pool).await?;
+            applied_names_postgres(pool).await?
+        }
+    };
+    detect_all_drift(&applied, dir)
+}
+
 /// Same as [`show`] but takes an explicit base directory. Walks every
 /// registered plugin in sorted-by-name order, printing one section per
 /// plugin that owns at least one migration file; empty plugins are
@@ -3288,18 +3332,7 @@ pub async fn show() -> Result<u64, MigrateError> {
 /// - `[!]` applied but missing on disk (drift — tracking table ahead of VCS)
 /// - `[?]` on disk but out of order (sequence before last applied, not in DB)
 pub async fn show_in(dir: &Path) -> Result<u64, MigrateError> {
-    let applied = match crate::db::pool_dispatched() {
-        crate::db::DbPool::Sqlite(pool) => {
-            ensure_tracking_table_sqlite(pool).await?;
-            applied_names_sqlite(pool).await?
-        }
-        crate::db::DbPool::Postgres(pool) => {
-            ensure_tracking_table_postgres(pool).await?;
-            applied_names_postgres(pool).await?
-        }
-    };
-
-    let report = detect_all_drift(&applied, dir)?;
+    let report = drift_report_in(dir).await?;
 
     // Group by plugin for display.
     let mut by_plugin: std::collections::BTreeMap<&str, Vec<&MigrationEntry>> =
