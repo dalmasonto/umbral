@@ -130,11 +130,13 @@ fn client_ts(all: &[ModelMeta], exposed: &[ModelMeta]) -> String {
         out.push_str("export * from \"./models\";\n");
     }
 
-    // Per-model Filters + Ordering types.
+    // Per-model Filters + Ordering + write DTOs.
     for model in exposed {
         out.push('\n');
         push_filters_type(&mut out, all, model);
         push_ordering_type(&mut out, model);
+        push_create_type(&mut out, all, model);
+        push_update_type(&mut out, all, model);
     }
 
     // The list envelope (paginator-specific) + the resource map + runtime.
@@ -212,6 +214,91 @@ fn push_ordering_type(out: &mut String, model: &ModelMeta) {
     }
 }
 
+/// Whether a column can appear in a *create* request body.
+///
+/// Excludes the server-managed columns the REST write path fills or refuses:
+/// the primary key (assigned on insert), `#[umbral(noform)]` (stripped from
+/// every write body), `#[umbral(privileged)]` (the mass-assignment guard strips
+/// it by default), and `auto_now`/`auto_now_add` (stamped by the server).
+/// A `#[umbral(noedit)]` column IS creatable — you can set a username on create,
+/// you just can't change it later (see [`in_update`]).
+fn in_create(col: &Column) -> bool {
+    !(col.primary_key || col.noform || col.privileged || col.auto_now || col.auto_now_add)
+}
+
+/// Whether a column can appear in an *update* body: everything creatable, minus
+/// `#[umbral(noedit)]` — the "set once, then read-only" fields.
+fn in_update(col: &Column) -> bool {
+    in_create(col) && !col.noedit
+}
+
+/// The TS type of a writable field's value: the same base type as the row (FK →
+/// target PK, choices → union, scalar otherwise), plus `| null` for a nullable
+/// column (you may write null to it).
+fn write_field_type(all: &[ModelMeta], model: &ModelMeta, col: &Column) -> String {
+    let base = umbral::typegen::ts_base_type(all, model, col);
+    if col.nullable {
+        format!("{base} | null")
+    } else {
+        base
+    }
+}
+
+/// `export interface PostCreate {{ title: string; author: string; body?: string | null; ... }}`
+///
+/// A field is required (no `?`) only when it is non-nullable and has no server
+/// default — otherwise the server can fill it, so the client may omit it.
+fn push_create_type(out: &mut String, all: &[ModelMeta], model: &ModelMeta) {
+    let name = format!("{}Create", model.name);
+    let _ = writeln!(
+        out,
+        "/** Body for creating a `{}`. Server-managed columns (id, auto-timestamps, \
+         privileged, no-form) are omitted. */",
+        model.table,
+    );
+    let _ = writeln!(out, "export interface {name} {{");
+    for col in &model.fields {
+        if !in_create(col) {
+            continue;
+        }
+        let optional = col.nullable || !col.default.is_empty();
+        let q = if optional { "?" } else { "" };
+        let _ = writeln!(
+            out,
+            "  {}{q}: {};",
+            col.name,
+            write_field_type(all, model, col)
+        );
+    }
+    out.push_str("}\n");
+}
+
+/// `export interface PostUpdate {{ title?: string; ... }}` — a PATCH body. Every
+/// field is optional (partial update), and `#[umbral(noedit)]` columns are gone:
+/// the type won't let you change a set-once field.
+fn push_update_type(out: &mut String, all: &[ModelMeta], model: &ModelMeta) {
+    let name = format!("{}Update", model.name);
+    let _ = writeln!(
+        out,
+        "/** Body for updating a `{}` (PATCH; all fields optional). `noedit` \
+         columns are excluded — they can be set on create but not changed. */",
+        model.table,
+    );
+    let _ = writeln!(out, "export interface {name} {{");
+    for col in &model.fields {
+        if !in_update(col) {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "  {}?: {};",
+            col.name,
+            write_field_type(all, model, col)
+        );
+    }
+    out.push_str("}\n");
+}
+
 /// The list-response wrapper, shaped to the configured paginator.
 fn envelope_type(style: PaginationStyle) -> String {
     let extra = match style {
@@ -242,7 +329,8 @@ fn push_resource_map(out: &mut String, exposed: &[ModelMeta]) {
     for model in exposed {
         let _ = writeln!(
             out,
-            "  \"{table}\": {{ row: {name}; filters: {name}Filters; ordering: {name}Ordering }};",
+            "  \"{table}\": {{ row: {name}; filters: {name}Filters; ordering: {name}Ordering; \
+             create: {name}Create; update: {name}Update }};",
             table = model.table,
             name = model.name,
         );
@@ -368,15 +456,43 @@ export class Umbral {{
     return this._request(`GET`, `{base_path}/${{table as string}}/${{id}}/`);
   }}
 
+  /** Create a row. The body type omits server-managed fields; `noedit` fields
+      are allowed here (settable on create). */
+  create<K extends keyof UmbralResources>(
+    table: K,
+    data: UmbralResources[K]["create"],
+  ): Promise<UmbralResources[K]["row"]> {{
+    return this._request(`POST`, `{base_path}/${{table as string}}/`, data);
+  }}
+
+  /** Partially update a row (PATCH). The body type excludes `noedit` fields. */
+  update<K extends keyof UmbralResources>(
+    table: K,
+    id: UmbralId,
+    data: UmbralResources[K]["update"],
+  ): Promise<UmbralResources[K]["row"]> {{
+    return this._request(`PATCH`, `{base_path}/${{table as string}}/${{id}}/`, data);
+  }}
+
+  /** Delete a row by primary key. */
+  async delete<K extends keyof UmbralResources>(table: K, id: UmbralId): Promise<void> {{
+    await this._request(`DELETE`, `{base_path}/${{table as string}}/${{id}}/`);
+  }}
+
   /** @internal */
-  async _request<T>(method: string, path: string): Promise<T> {{
+  async _request<T>(method: string, path: string, body?: unknown): Promise<T> {{
     const doFetch = this.opts.fetch ?? fetch;
     const headers: Record<string, string> = {{ "Accept": "application/json", ...this.opts.headers }};
     if (this.opts.token) headers["Authorization"] = `Bearer ${{this.opts.token}}`;
-    const res = await doFetch(this.baseUrl + path, {{ method, headers }});
-    const body = res.status === 204 ? null : await res.json().catch(() => null);
-    if (!res.ok) throw new UmbralError(res.status, body);
-    return body as T;
+    const init: RequestInit = {{ method, headers }};
+    if (body !== undefined) {{
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }}
+    const res = await doFetch(this.baseUrl + path, init);
+    const parsed = res.status === 204 ? null : await res.json().catch(() => null);
+    if (!res.ok) throw new UmbralError(res.status, parsed);
+    return parsed as T;
   }}
 }}
 "#

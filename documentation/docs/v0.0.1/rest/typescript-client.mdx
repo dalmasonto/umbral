@@ -54,6 +54,27 @@ Everything the REST list endpoint accepts is encoded in the types, so the mistak
 
 The lookups per field follow the REST contract: comparisons (`__gte`, `__lt`) on numeric and temporal fields, `__contains` / `__icontains` / `__startswith` on text, `__in` everywhere, `__isnull` on nullable fields.
 
+## Writing data
+
+`create`, `update`, and `delete` are typed too, with **separate create and update bodies** that reflect what the server actually accepts:
+
+```ts
+const post = await api.create("post", {
+  title: "Hello",
+  status: "draft",
+  slug: "hello-world",   // set once, here
+});
+
+await api.update("post", post.id, { title: "Hello, world" });  // PATCH, partial
+await api.delete("post", post.id);
+```
+
+The body types drop the columns the server manages, so you can't send them by accident:
+
+- The **primary key**, `auto_now` / `auto_now_add` timestamps, `#[umbral(privileged)]` (the mass-assignment guard), and `#[umbral(noform)]` fields are omitted from **both** create and update.
+- A `#[umbral(noedit)]` field is in the **create** body but not the **update** body — the set-once pattern. You can create a `slug` or a `username`; you can't change it. `api.update("post", id, { slug })` is a compile error.
+- On create, a field is required unless it is nullable or has a server default. On update every field is optional (it's a PATCH).
+
 ## It matches *your* API, exactly
 
 The generator reads the same model registry and per-resource config that renders your OpenAPI document — so it reflects the surface you actually serve:

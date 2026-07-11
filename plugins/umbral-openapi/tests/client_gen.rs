@@ -50,6 +50,15 @@ pub struct CgPost {
     pub views: i32,
     #[umbral(no_reverse)]
     pub author: umbral::orm::ForeignKey<CgAuthor>,
+    /// Set on create, never editable — must be in Create but not Update.
+    #[umbral(noedit)]
+    pub slug: String,
+    /// Never on any form — must be in neither Create nor Update.
+    #[umbral(noform)]
+    pub internal: String,
+    /// Server-stamped — must be in neither write DTO.
+    #[umbral(auto_now_add)]
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 fn client() -> String {
@@ -146,7 +155,7 @@ fn resource_map_and_client_are_present() {
     let c = client();
     assert_has(
         &c,
-        r#"  "cg_post": { row: CgPost; filters: CgPostFilters; ordering: CgPostOrdering };"#,
+        r#""cg_post": { row: CgPost; filters: CgPostFilters; ordering: CgPostOrdering; create: CgPostCreate; update: CgPostUpdate };"#,
     );
     assert_has(&c, "export class Umbral {");
     assert_has(&c, "from<K extends keyof UmbralResources>");
@@ -163,4 +172,80 @@ fn ordering_type_covers_columns_both_directions() {
     assert_has(&c, "export type CgPostOrdering =");
     assert_has(&c, r#""title""#);
     assert_has(&c, r#""-title""#);
+}
+
+/// Extract the body of one interface (between its `{` and the closing `}\n`).
+fn block<'a>(client: &'a str, decl: &str) -> &'a str {
+    client
+        .split(decl)
+        .nth(1)
+        .and_then(|s| s.split("}\n").next())
+        .unwrap_or_else(|| panic!("no `{decl}` block in:\n{client}"))
+}
+
+/// The Create DTO includes creatable fields — including `noedit` (you can set a
+/// slug on create) — with required vs optional per nullability/defaults, and
+/// omits every server-managed column.
+#[test]
+fn create_dto_includes_noedit_and_omits_server_managed() {
+    let c = client();
+    let create = block(&c, "export interface CgPostCreate {");
+
+    // required (non-null, no default) — no `?`.
+    assert!(create.contains("title: string;"), "got:\n{create}");
+    assert!(
+        create.contains("author: string;"),
+        "FK required; got:\n{create}"
+    );
+    // noedit IS creatable — the "set a username on create" case.
+    assert!(
+        create.contains("slug: string;"),
+        "noedit must be creatable; got:\n{create}"
+    );
+    // nullable → optional.
+    assert!(create.contains("body?: string | null;"), "got:\n{create}");
+
+    // server-managed / stripped columns are absent.
+    for gone in ["id", "internal", "created_at"] {
+        assert!(
+            !create.contains(&format!("{gone}:")) && !create.contains(&format!("{gone}?:")),
+            "`{gone}` must be omitted from Create; got:\n{create}",
+        );
+    }
+}
+
+/// The Update DTO is a partial (every field optional) and — the headline — drops
+/// `noedit`: a slug set on create cannot be changed.
+#[test]
+fn update_dto_is_partial_and_drops_noedit() {
+    let c = client();
+    let update = block(&c, "export interface CgPostUpdate {");
+
+    assert!(
+        update.contains("title?: string;"),
+        "partial; got:\n{update}"
+    );
+    assert!(update.contains("author?: string;"), "got:\n{update}");
+    assert!(
+        !update.contains("slug"),
+        "a noedit column must not be updatable; got:\n{update}",
+    );
+    // Same server-managed exclusions as Create.
+    for gone in ["id", "internal", "created_at"] {
+        assert!(
+            !update.contains(gone),
+            "`{gone}` must be omitted from Update; got:\n{update}"
+        );
+    }
+}
+
+/// `.create` / `.update` / `.delete` exist on the client and the resource map
+/// carries the write types.
+#[test]
+fn client_exposes_write_operations() {
+    let c = client();
+    assert_has(&c, "create: CgPostCreate; update: CgPostUpdate");
+    assert_has(&c, "create<K extends keyof UmbralResources>");
+    assert_has(&c, "update<K extends keyof UmbralResources>");
+    assert_has(&c, "delete<K extends keyof UmbralResources>");
 }
