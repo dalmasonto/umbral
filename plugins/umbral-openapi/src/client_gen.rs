@@ -54,9 +54,31 @@ pub fn generate_for(all: &[ModelMeta]) -> (String, String) {
         .collect();
     exposed.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let models_ts = umbral::typegen::typescript_for(&exposed);
+    // Row types describe RESPONSES, and `hide(...)` is response-only — a hidden
+    // column (a `password_hash`, an internal `cost`) is never in the JSON the API
+    // returns. So strip hidden columns from the row interfaces. They stay
+    // settable in the create/update DTOs (a hidden field can be write-only), and
+    // FK value types still resolve against the full, unstripped model set.
+    let row_models = strip_hidden(&exposed);
+    let models_ts = umbral::typegen::typescript_for(&row_models);
     let client_ts = client_ts(all, &exposed);
     (models_ts, client_ts)
+}
+
+/// Return `models` with every `hide(...)`-ed column removed from each model's
+/// field list — the response shape, since hide is response-only.
+fn strip_hidden(models: &[ModelMeta]) -> Vec<ModelMeta> {
+    models
+        .iter()
+        .map(|m| {
+            let table = m.table.clone();
+            let mut stripped = m.clone();
+            stripped
+                .fields
+                .retain(|c| !umbral_rest::is_hidden(&table, &c.name));
+            stripped
+        })
+        .collect()
 }
 
 /// The TypeScript type of a filter key's value for one (column, lookup) pair.

@@ -61,6 +61,30 @@ async fn gen_client_writes_typed_files_and_respects_hide() {
         models.contains("export interface GcWidget {"),
         "got:\n{models}"
     );
+    // `hide` is response-only: the hidden column is NOT in the row type...
+    let row = models
+        .split("export interface GcWidget {")
+        .nth(1)
+        .and_then(|s| s.split('}').next())
+        .expect("GcWidget interface");
+    assert!(
+        !row.contains("secret_token"),
+        "a hidden column must not appear in the response row type; got:\n{row}",
+    );
+    assert!(
+        row.contains("name"),
+        "a visible column must be in the row; got:\n{row}"
+    );
+    // ...but it stays settable (a hidden field can be write-only).
+    let create = client
+        .split("export interface GcWidgetCreate {")
+        .nth(1)
+        .and_then(|s| s.split("}\n").next())
+        .expect("GcWidgetCreate block");
+    assert!(
+        create.contains("secret_token"),
+        "a hidden-but-writable column stays in the create DTO; got:\n{create}",
+    );
     assert!(
         client.contains(r#"  "gc_widget": { row: GcWidget;"#),
         "the client must map the exposed table; got:\n{client}",

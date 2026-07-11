@@ -127,9 +127,13 @@ RealtimePlugin::new()
   `group` is required and must match the group you `expose(...)`-d to. The realtime base path defaults to `/realtime`; override it with `new Umbral(url, { realtimePath: "/rt" })` if you remounted the plugin. Subscriptions authenticate with the session cookie (`withCredentials`), matching `with_auth_sessions()`.
 </Callout>
 
-## Scope
+## Hidden fields are write-only
 
-Row types come from `typegen`, so a field you `hide()` from responses is still present in the row interface today; that alignment is a known follow-up.
+`hide(...)` is response-only, and the client mirrors that precisely:
+
+- A hidden column (a `password_hash`, an internal `cost`) is **not** in the row type — the API never returns it, so the type never claims it.
+- It's **not** a filter or ordering key.
+- It **is** in the create/update body — a hidden field can be write-only: you set it, you just don't read it back.
 
 Design rationale: `planning/gaps3.md` #38 and `planning/building/kikosi.md` #1.
 
