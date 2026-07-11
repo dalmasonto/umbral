@@ -1,6 +1,6 @@
 ---
 title: TypeScript client
-description: Generate a typed TS client for your REST API — new Umbral(url).from("post").filter({...}) where the filter map autocompletes to the model's filterable fields.
+description: Generate a typed TS client for your REST API — typed queries with autocompleting filters, create/update DTOs that respect noform/noedit, and typed realtime subscriptions.
 sidebar_position: 12
 icon: braces
 tags: [rest, typescript, client, sdk, codegen, frontend]
@@ -98,9 +98,38 @@ cargo run -- gen-client --out web/src/api/ --check
   Commit the generated files. Your frontend build shouldn't need a Rust toolchain to typecheck, and a reviewer should see the client change in the same diff as the model change that caused it.
 </Callout>
 
+## Realtime
+
+The same client subscribes to live model-change events. `client.on(table, handlers, { group })` opens the [realtime plugin](../realtime/index)'s SSE stream and routes `created` / `updated` / `deleted` to typed handlers:
+
+```ts
+const sub = api.on("post", {
+  created(row) { cache.add(row); },
+  updated(row) { cache.update(row.id, row); },
+  deleted(row) { cache.remove(row.id); },
+}, { group: "public:posts" });
+
+// later
+sub.close();
+```
+
+`"post"` autocompletes to your exposed tables, and each handler's `row` is typed. It reflects your server-side `expose(...)` projection — the id by default (`Partial<Post>`), the whole row if you `all_fields()` — so the common pattern is "row N changed, refetch it through the typed query client above."
+
+Wire the backend once with the realtime plugin:
+
+```rust
+RealtimePlugin::new()
+    .with_auth_sessions()
+    .expose::<Post>(Expose::to_group("public:posts"))
+```
+
+<Callout type="info">
+  `group` is required and must match the group you `expose(...)`-d to. The realtime base path defaults to `/realtime`; override it with `new Umbral(url, { realtimePath: "/rt" })` if you remounted the plugin. Subscriptions authenticate with the session cookie (`withCredentials`), matching `with_auth_sessions()`.
+</Callout>
+
 ## Scope
 
-This is the query client. Realtime — a typed `client.on("post", { created, updated, deleted })` over the [realtime plugin](../realtime/index)'s existing model-change stream — is the next slice. Row types come from `typegen`, so a field you `hide()` from responses is still present in the row interface today; that alignment is a known follow-up.
+Row types come from `typegen`, so a field you `hide()` from responses is still present in the row interface today; that alignment is a known follow-up.
 
 Design rationale: `planning/gaps3.md` #38 and `planning/building/kikosi.md` #1.
 

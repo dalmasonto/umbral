@@ -87,10 +87,16 @@ this note is stale: the ORM auto-emits `post_save`/`post_delete` signals, and
 `RealtimePlugin::expose::<T>(...)` bridges them to the realtime stream with default-
 deny, field-projected safety, consumed by the served `client.js`'s
 `umbral.realtime.model('post', {created,updated,deleted}, {group})`. So `notify_change`
-is redundant — a consumer replaces it with one `.expose::<T>(...)` call. What's left
-for #2 is the *typed, generated* wrapper: `client.on("post", {created,updated,deleted})`
-where the model name autocompletes and the callback receives a typed row — a Slice 2
-on top of the shipped `gen-client` (#1). No new backend broadcast needed.
+is redundant — a consumer replaces it with one `.expose::<T>(...)` call.
+
+**Update (2026-07-11) — the typed realtime client shipped too.** `gen-client` now
+emits `client.on("post", {created,updated,deleted}, {group})` over the existing SSE
+stream: `"post"` autocompletes to exposed tables, each handler gets a typed
+`Partial<Row>` (the `expose` projection), returns a `Subscription` with `.close()`.
+tsc-verified. So the realtime-cache-invalidation half of #2 is done — the developer
+writes `expose::<Post>(...)` once server-side and gets a typed client subscription,
+replacing Kikosi's hand-rolled `notify_change` + client `switch`. Still open in #2:
+the auth/session client helper + a documented optimistic-update-then-reconcile pattern.
 
 ## 3. Multi-tenancy as a posture, not a pile of parts
 

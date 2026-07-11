@@ -394,6 +394,21 @@ fn runtime(base_path: &str, style: PaginationStyle) -> String {
   headers?: Record<string, string>;
   /** Custom fetch (SSR / tests). Defaults to the global `fetch`. */
   fetch?: typeof fetch;
+  /** Base path of the realtime plugin, for `.on(...)`. Defaults to "/realtime". */
+  realtimePath?: string;
+}}
+
+/** A live subscription started by `Umbral.on`. Call `close()` to stop it. */
+export interface Subscription {{
+  close(): void;
+}}
+
+/** Handlers for model-change events. Each receives the row your `expose(...)`
+    projection carries (the id by default), so you know which row to refetch. */
+export interface ModelEvents<Row> {{
+  created?(row: Row): void;
+  updated?(row: Row): void;
+  deleted?(row: Row): void;
 }}
 
 /** Thrown when the API returns a non-2xx response. `body` is the parsed error. */
@@ -440,8 +455,34 @@ class Query<Row, Filters, Ordering> {{
 
 /** A typed client for this app's REST API. `new Umbral("https://api.example.com")`. */
 export class Umbral {{
+  private realtimePath: string;
   constructor(private baseUrl: string, private opts: UmbralOptions = {{}}) {{
     this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.realtimePath = (opts.realtimePath ?? "/realtime").replace(/\/+$/, "");
+  }}
+
+  /** Subscribe to `created` / `updated` / `deleted` events for a model over the
+      realtime stream. The model must be `expose(...)`-d to `group` on the server.
+      `"post"` autocompletes to exposed tables; each handler gets a typed row.
+      Returns a {{@link Subscription}} — call `close()` to unsubscribe. */
+  on<K extends keyof UmbralResources>(
+    table: K,
+    handlers: ModelEvents<Partial<UmbralResources[K]["row"]>>,
+    opts: {{ group: string }},
+  ): Subscription {{
+    void table; // present for the type layer; the group carries the model's events
+    const url =
+      `${{this.baseUrl}}${{this.realtimePath}}/sse?groups=` + encodeURIComponent(opts.group);
+    const es = new EventSource(url, {{ withCredentials: true }});
+    const onEvent = (ev: MessageEvent) => {{
+      let env: {{ c?: string; e?: string; d?: unknown }};
+      try {{ env = JSON.parse(ev.data); }} catch {{ return; }}
+      if (env.c !== opts.group) return;
+      const cb = (handlers as Record<string, ((row: unknown) => void) | undefined>)[env.e ?? ""];
+      if (cb) cb(env.d);
+    }};
+    es.addEventListener("u", onEvent as EventListener);
+    return {{ close: () => es.close() }};
   }}
 
   /** Start a query against a REST-exposed table. */

@@ -249,3 +249,18 @@ fn client_exposes_write_operations() {
     assert_has(&c, "update<K extends keyof UmbralResources>");
     assert_has(&c, "delete<K extends keyof UmbralResources>");
 }
+
+/// The realtime subscription surface — a typed `.on(table, {created,updated,
+/// deleted}, {group})` over the SSE stream the realtime plugin already serves.
+#[test]
+fn client_exposes_typed_realtime_on() {
+    let c = client();
+    assert_has(&c, "export interface Subscription {");
+    assert_has(&c, "export interface ModelEvents<Row> {");
+    assert_has(&c, "on<K extends keyof UmbralResources>");
+    assert_has(&c, "ModelEvents<Partial<UmbralResources[K][\"row\"]>>");
+    // Subscribes to the realtime plugin's SSE stream.
+    assert_has(&c, "new EventSource(");
+    assert_has(&c, "/sse?groups=");
+    assert_has(&c, "realtimePath?: string;");
+}
