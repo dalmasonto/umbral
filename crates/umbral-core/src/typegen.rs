@@ -198,6 +198,27 @@ fn enum_name(model: &ModelMeta, column: &Column) -> Option<String> {
     ))
 }
 
+fn base_type_with_resolver(resolver: &Resolver<'_>, model: &ModelMeta, column: &Column) -> String {
+    match enum_name(model, column) {
+        Some(name) => name,
+        None => ts_type(resolver.fk_value_type(column)),
+    }
+}
+
+/// The TypeScript type for a column's value, **without** the `| null` a nullable
+/// field adds: the enum union for a `#[umbral(choices)]` column, the resolved
+/// target-PK type for a foreign key, or the scalar for everything else.
+///
+/// Public so a generator layered on top of typegen — the `gen-client` client
+/// generator in `umbral-openapi` — emits type references identical to the row
+/// interfaces this module produces. A generated `filter({ status })` value and
+/// the `Post.status` field must both be exactly `PostStatus`, so they share this
+/// one function rather than a re-implemented SqlType→TS mapping. `all_models`
+/// supplies the FK-target resolution; `owning_model` names the enum.
+pub fn ts_base_type(all_models: &[ModelMeta], owning_model: &ModelMeta, column: &Column) -> String {
+    base_type_with_resolver(&Resolver::new(all_models), owning_model, column)
+}
+
 fn push_field(out: &mut String, model: &ModelMeta, column: &Column, resolver: &Resolver<'_>) {
     let mut docs: Vec<String> = Vec::new();
     if !column.help.is_empty() {
@@ -225,10 +246,7 @@ fn push_field(out: &mut String, model: &ModelMeta, column: &Column, resolver: &R
     }
     push_docs(out, &docs, "  ");
 
-    let base = match enum_name(model, column) {
-        Some(name) => name,
-        None => ts_type(resolver.fk_value_type(column)),
-    };
+    let base = base_type_with_resolver(resolver, model, column);
     let ty = if column.nullable {
         format!("{base} | null")
     } else {

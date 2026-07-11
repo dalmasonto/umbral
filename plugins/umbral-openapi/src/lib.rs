@@ -27,6 +27,8 @@
 
 use std::sync::OnceLock;
 
+pub mod client_gen;
+
 use serde_json::{Map, Value, json};
 use umbral::migrate::{Column, ModelMeta};
 use umbral::orm::SqlType;
@@ -216,6 +218,10 @@ impl Plugin for OpenApiPlugin {
 
     fn dependencies(&self) -> &'static [&'static str] {
         &["rest"]
+    }
+
+    fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>> {
+        vec![Box::new(GenClientCommand)]
     }
 
     fn routes(&self) -> Router {
@@ -1313,6 +1319,97 @@ pub fn test_ui_route(p: &OpenApiPlugin) -> String {
 
 // `pascal_case` replaced by `umbral_casing::pascal_case_from_ident` (imported
 // above) in the gaps2 #77 consolidation refactor.
+
+/// `umbral gen-client` — write the typed TypeScript client (gaps3 #38).
+///
+/// Emits `models.ts` + `client.ts` into `--out <dir>`. Offline: reads the model
+/// registry + the REST config that `routes()` already published at build time,
+/// so it needs no database and no running server. `--check` writes nothing and
+/// exits non-zero when the files on disk have drifted from the current
+/// registry — the CI gate.
+#[derive(Debug, Default)]
+struct GenClientCommand;
+
+#[async_trait::async_trait]
+impl umbral::cli::PluginCommand for GenClientCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("gen-client")
+            .about("Generate a typed TypeScript client (models.ts + client.ts) for the REST API")
+            .arg(
+                clap::Arg::new("out")
+                    .long("out")
+                    .value_name("DIR")
+                    .required(true)
+                    .help("Directory to write models.ts and client.ts into"),
+            )
+            .arg(
+                clap::Arg::new("lang")
+                    .long("lang")
+                    .value_name("LANG")
+                    .default_value("ts")
+                    .help("Target language (only `ts` is supported)"),
+            )
+            .arg(
+                clap::Arg::new("check")
+                    .long("check")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Write nothing; exit non-zero if the files have drifted from the models"),
+            )
+    }
+
+    async fn run(&self, matches: &clap::ArgMatches) -> Result<(), umbral::cli::CliError> {
+        let lang = matches
+            .get_one::<String>("lang")
+            .map(String::as_str)
+            .unwrap_or("ts");
+        if lang != "ts" {
+            return Err(format!("gen-client: unsupported --lang `{lang}` (only `ts`)").into());
+        }
+        let dir = std::path::PathBuf::from(
+            matches
+                .get_one::<String>("out")
+                .expect("--out is required by clap"),
+        );
+        let check = matches.get_flag("check");
+
+        let (models_ts, client_ts) = client_gen::generate();
+        let files = [("models.ts", models_ts), ("client.ts", client_ts)];
+
+        if check {
+            let mut stale = Vec::new();
+            for (name, want) in &files {
+                let path = dir.join(name);
+                // A missing file is drift, not an error to decode.
+                let have = std::fs::read_to_string(&path).unwrap_or_default();
+                if &have != want {
+                    stale.push(path.display().to_string());
+                }
+            }
+            if stale.is_empty() {
+                println!("{} is up to date.", dir.display());
+                return Ok(());
+            }
+            return Err(format!(
+                "gen-client: out of date with the models: {}. Regenerate:\n    \
+                 cargo run -- gen-client --out {}",
+                stale.join(", "),
+                dir.display(),
+            )
+            .into());
+        }
+
+        std::fs::create_dir_all(&dir)?;
+        for (name, contents) in &files {
+            std::fs::write(dir.join(name), contents)?;
+        }
+        println!(
+            "Wrote {} and {}.",
+            dir.join("models.ts").display(),
+            dir.join("client.ts").display(),
+        );
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {

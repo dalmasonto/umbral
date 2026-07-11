@@ -4923,8 +4923,10 @@ dependencies = [
 name = "umbral-openapi"
 version = "0.0.6"
 dependencies = [
+ "async-trait",
  "axum",
  "chrono",
+ "clap",
  "http",
  "http-body-util",
  "serde",
@@ -4937,6 +4939,7 @@ dependencies = [
  "umbral",
  "umbral-auth",
  "umbral-casing",
+ "umbral-cli",
  "umbral-rest",
 ]
 

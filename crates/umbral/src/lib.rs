@@ -155,7 +155,7 @@ pub mod timezone {
 /// `umbral typegen` CLI subcommand rather than by calling it. [`typescript`]
 /// reads the live registry; [`typescript_for`] is the pure function behind it.
 pub mod typegen {
-    pub use umbral_core::typegen::{typescript, typescript_for};
+    pub use umbral_core::typegen::{ts_base_type, typescript, typescript_for};
 }
 
 /// Kikosi #5 — graceful-shutdown drain coordination.

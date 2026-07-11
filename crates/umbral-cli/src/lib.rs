@@ -314,7 +314,8 @@ fn command_needs_ready(subcommand: Option<&str>) -> bool {
         None => false,
         Some(
             "serve" | "migrate" | "makemigrations" | "showmigrations" | "checkmigrations"
-            | "squashmigrations" | "inspectdb" | "typegen" | "maskkeygen" | "dev" | "help",
+            | "squashmigrations" | "inspectdb" | "typegen" | "gen-client" | "maskkeygen" | "dev"
+            | "help",
         ) => false,
         Some(_) => true,
     }

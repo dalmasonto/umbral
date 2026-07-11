@@ -21,6 +21,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `tracing::warn!` when skipping the prod mount (audit_2 #1).
 tracing = "0.1"
+# The `gen-client` management command (gaps3 #38).
+clap = { version = "4" }
+async-trait = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
@@ -32,3 +35,5 @@ http = "1"
 http-body-util = "0.1"
 umbral-auth = { path = "../umbral-auth" }
 chrono = { version = "0.4", features = ["serde"] }
+# End-to-end test of the `gen-client` command through the real dispatcher.
+umbral-cli = { path = "../../crates/umbral-cli" }

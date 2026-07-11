@@ -49,6 +49,18 @@ schema → codegen → client-runtime boundary; and it's the difference between 
 backend framework and a full-stack one. Highest leverage because *every* umbral app
 with a real frontend pays this tax forever.
 
+**Progress (2026-07-11) — the query client shipped.** `umbral typegen` (types)
+landed earlier; now `umbral gen-client --out <dir>` (`plugins/umbral-openapi/src/client_gen.rs`)
+emits the typed query client Kikosi hand-maintained: `new Umbral(url).from("post").filter({...})`
+where the filter map autocompletes to the model's filterable fields with correct
+value types (FK → target PK type, choices → union, `__gte`/`__in`/`__contains`/`__isnull`
+per the REST contract). Offline CLI step, `--check` CI gate, `tsc --strict`-verified
+(rejects typo'd choices, unknown fields, wrong value types, FK-as-number). This is
+exactly the `total_amount`→`match_no`→`username` drift class eliminated. Still open
+here: the auth/session client + optimistic-update patterns (small); the bulk of #2
+is the realtime cache-invalidation client — but see below, the realtime *backend* is
+already done.
+
 ## 2. An official client SDK / SPA-integration story
 
 Same theme, one level up. umbral gives you an excellent backend, but the *entire*
@@ -69,6 +81,16 @@ Phoenix LiveView / Rails-Hotwire / tRPC feel "batteries included."
 **Why heavy.** It's an entire product surface (a client library + a realtime cache
 protocol), and it's where correctness bugs concentrate — every app reinvents it,
 slightly wrong.
+
+**Correction (2026-07-11).** The realtime *backend* half is already shipped and
+this note is stale: the ORM auto-emits `post_save`/`post_delete` signals, and
+`RealtimePlugin::expose::<T>(...)` bridges them to the realtime stream with default-
+deny, field-projected safety, consumed by the served `client.js`'s
+`umbral.realtime.model('post', {created,updated,deleted}, {group})`. So `notify_change`
+is redundant — a consumer replaces it with one `.expose::<T>(...)` call. What's left
+for #2 is the *typed, generated* wrapper: `client.on("post", {created,updated,deleted})`
+where the model name autocompletes and the callback receives a typed row — a Slice 2
+on top of the shipped `gen-client` (#1). No new backend broadcast needed.
 
 ## 3. Multi-tenancy as a posture, not a pile of parts
 

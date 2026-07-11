@@ -1,0 +1,90 @@
+---
+title: TypeScript client
+description: Generate a typed TS client for your REST API — new Umbral(url).from("post").filter({...}) where the filter map autocompletes to the model's filterable fields.
+sidebar_position: 12
+icon: braces
+tags: [rest, typescript, client, sdk, codegen, frontend]
+badge: new
+---
+
+# TypeScript client
+
+`umbral typegen` gives your frontend the *shapes*. `umbral gen-client` gives it the *client*: a small, dependency-free TypeScript SDK where querying your API is typed end to end — and a filter map autocompletes to exactly the fields this model lets you filter on, with the right value types.
+
+```bash
+cargo run -- gen-client --out web/src/api/
+```
+
+That writes two files:
+
+- `models.ts` — the row interfaces + choice unions (the `umbral typegen` output, scoped to your REST-exposed models).
+- `client.ts` — a `Filters`/`Ordering` type per model, the list envelope matching your paginator, and the `Umbral` runtime. Re-exports everything from `models.ts`, so your app imports from one place.
+
+## Using it
+
+```ts
+import { Umbral } from "./api/client";
+
+const api = new Umbral("https://api.example.com", { token: authToken });
+
+// `"post"` autocompletes to your exposed tables. The filter object autocompletes
+// to the fields `post` actually lets you filter on, each with its real type.
+const page = await api
+  .from("post")
+  .filter({ status: "published", views__gte: 100, title__contains: "rust" })
+  .orderBy("-published_at")
+  .list();
+
+page.results;   // Post[]
+page.count;     // number
+
+const post = await api.get("post", 42);   // Post
+```
+
+## What the types guarantee
+
+Everything the REST list endpoint accepts is encoded in the types, so the mistakes a hand-written client makes become compile errors:
+
+<CardGrid cols={2}>
+  <Card icon="filter" title="Only real filters" description="filter({ status, views__gte, title__contains, ... }) — the keys are exactly the (field, lookup) pairs this model accepts. An unknown field is a compile error. The primary key isn't filterable, matching the backend." />
+  <Card icon="key" title="FK values are the target's PK" description="An FK filter takes the referenced model's primary-key type. If Author is keyed by a String slug, filter({ author: 'ada' }) — passing a number is a type error. The case hand-written clients always get wrong." />
+  <Card icon="list-checks" title="Choices are unions" description="filter({ status: 'publshed' }) fails at tsc and suggests 'published'. status__in takes PostStatus[]." />
+  <Card icon="arrow-down-up" title="Typed ordering" description="orderBy('-views', 'title') — each field is checked; a typo is rejected. Prefix - for descending." />
+</CardGrid>
+
+The lookups per field follow the REST contract: comparisons (`__gte`, `__lt`) on numeric and temporal fields, `__contains` / `__icontains` / `__startswith` on text, `__in` everywhere, `__isnull` on nullable fields.
+
+## It matches *your* API, exactly
+
+The generator reads the same model registry and per-resource config that renders your OpenAPI document — so it reflects the surface you actually serve:
+
+- A field you `hide(...)` isn't a filter key.
+- A resource with filtering disabled gets an empty `Filters` type.
+- Your configured base path (`/api`, `/v1`, …) is baked into the request URLs.
+- The list envelope matches your paginator — `{results, count}` for none, plus `total_pages`/`current_page`/`next`/… for page-number, `limit`/`offset`/… for limit-offset.
+
+It runs offline as a CLI step — no server, no database — because that config is published when your app's routes are built.
+
+## Keep it honest in CI
+
+`--check` regenerates in memory and compares, writing nothing. It exits non-zero when the checked-in files have drifted from the models, so a schema or resource change can't merge next to a stale client:
+
+```bash
+cargo run -- gen-client --out web/src/api/ --check
+```
+
+<Callout type="info">
+  Commit the generated files. Your frontend build shouldn't need a Rust toolchain to typecheck, and a reviewer should see the client change in the same diff as the model change that caused it.
+</Callout>
+
+## Scope
+
+This is the query client. Realtime — a typed `client.on("post", { created, updated, deleted })` over the [realtime plugin](../realtime/index)'s existing model-change stream — is the next slice. Row types come from `typegen`, so a field you `hide()` from responses is still present in the row interface today; that alignment is a known follow-up.
+
+Design rationale: `planning/gaps3.md` #38 and `planning/building/kikosi.md` #1.
+
+## See also
+
+- [TypeScript types](../orm/typegen) — the `models.ts` half, usable on its own.
+- [Exposure](./exposure) — which models and fields the REST layer serves.
+- [Filtering & search](./index) — the query params the client wraps.

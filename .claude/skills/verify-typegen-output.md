@@ -1,9 +1,32 @@
 ---
 name: verify-typegen-output
-description: Use when changing `umbral typegen` (crates/umbral-core/src/typegen.rs) or any SqlType→wire-format mapping, to prove the emitted TypeScript actually compiles and actually rejects the bugs it exists to catch.
+description: Use when changing `umbral typegen` (crates/umbral-core/src/typegen.rs), the `gen-client` generator (plugins/umbral-openapi/src/client_gen.rs), or any SqlType→wire-format / filter mapping, to prove the emitted TypeScript actually compiles and actually rejects the bugs it exists to catch.
 ---
 
 # Verifying generated TypeScript
+
+## Also covers `gen-client`
+
+The same procedure verifies `plugins/umbral-openapi/src/client_gen.rs` (the typed
+query client, gaps3 #38). Drive `client_gen::generate_for(&[ModelMeta])` (no
+`App::build` needed — the umbral-rest readers default gracefully), dump
+`models.ts` + `client.ts`, and run the **negative** consumer that commits the
+drift bugs the filter types exist to catch — each must be a distinct `tsc` error:
+
+- `filter({ status: "publshed" })` — typo'd enum value (TS2820, suggests the fix)
+- `filter({ nope: 1 })` — unknown field (TS2353)
+- `filter({ views__gte: "ten" })` — wrong value type (TS2322)
+- `filter({ author: 5 })` — FK to a **String-PK** model typed `number` (TS2322) ← the headline case; the FK test model MUST key on a `String`/`Uuid` slug or both right/wrong answers are `number`
+- `from("no_such_table")` — unknown table (TS2345)
+- `orderBy("noncol")` — unknown ordering field (TS2345)
+
+The filter value types must stay in lockstep with `umbral_rest::filtering::applicable_lookups`
+(which lookups per SqlType) — that's the third leg of the same "same bytes"
+agreement typegen/openapi already share. Client type names reference `models.ts`
+by bare name via an explicit `import type { … }`, not a `* as models` namespace
+(tsc catches the mismatch: bare `CgPostStatus` vs `models.CgPostStatus`).
+
+# Verifying `typegen` output
 
 ## Context
 
