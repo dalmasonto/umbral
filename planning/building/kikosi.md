@@ -121,21 +121,38 @@ migrate-on-boot vs. one-shot-migrate policy, and a reference deploy recipe
 (compose + reverse proxy + zero-downtime rollout) so apps inherit it instead of
 hand-rolling.
 
-**Progress (2026-07-10).** The readiness-gates-on-migrations piece shipped.
-`umbral-health` already had `/healthz` + `/ready` + a `HealthCheck` trait + a
-built-in DB probe; it now also has `HealthPlugin::require_migrations()` (opt-in),
-which makes `/ready` (and the new `/readyz` alias) return 503 while any on-disk
-migration is unapplied — closing the rolling-deploy race where a `web` container
-boots before the one-shot `migrate` finishes and serves 500s against the old
-schema. A rollback (DB ahead of code) stays ready. Backed by a read-only
-`umbral::migrate::drift_report()` (the no-print sibling of `show()`) +
-`DriftReport::pending()`. Graceful shutdown already exists (`App::serve` →
-`with_graceful_shutdown`, audit_2 core-app-config #13). Still open in #5: the
-migrate-on-boot-vs-one-shot policy write-up and a blessed zero-downtime deploy
-recipe. The false-alarm healthcheck this item named was the website's, whose
-`docker-compose.yml` curls the home page rather than `/readyz`; the framework
-fix is now available for consumers (including Kikosi and umbral_website) to
-adopt.
+**DONE (2026-07-10) — framework side fully closed.** All four sub-parts landed:
+
+1. **Correct `/healthz` + `/readyz`, readiness gates on DB + migrations.**
+   `umbral-health` gained `HealthPlugin::require_migrations()` (opt-in): `/ready`
+   (and the new `/readyz` alias) returns 503 while any on-disk migration is
+   unapplied — closing the rolling-deploy race where a `web` container boots
+   before the one-shot `migrate` finishes and 500s against the old schema. A
+   rollback (DB ahead) stays ready. Backed by a read-only
+   `umbral::migrate::drift_report()` (no-print sibling of `show()`) +
+   `DriftReport::pending()`.
+2. **Graceful shutdown + zero-downtime drain.** Graceful in-flight drain already
+   existed (`App::serve` → `with_graceful_shutdown`, audit_2 core-app-config
+   #13). Added `AppBuilder::shutdown_drain(Duration)` + `umbral::shutdown`
+   (`is_draining`/`begin_drain`): on SIGTERM the process flips `/readyz` to 503
+   immediately, keeps serving for the delay so the LB drains it, THEN stops
+   accepting. This is the actual zero-downtime mechanism. Default `ZERO` (no
+   drain) preserves instant Ctrl-C for dev/single-instance.
+3. **Migrate-on-boot vs one-shot policy** — documented in
+   `deployment/migrations-in-production.mdx`, grounded in the existing Postgres
+   advisory lock (`pg_try_advisory_lock`, per-alias key, 300s timeout,
+   auto-release on crash) that makes concurrent migrate-on-boot across replicas
+   safe.
+4. **Reference deploy recipe** — `deployment/going-to-production.mdx`: compose
+   (db → migrate → web) + reverse proxy + the full zero-downtime rollout
+   sequence tying readyz + drain + graceful shutdown together.
+
+The false-alarm healthcheck this item named (a container curling the *home page*
+instead of a probe endpoint) is now called out explicitly in the deploy docs;
+the framework fix is available. **Remaining is consumer adoption, not a framework
+gap:** umbral_website's `docker-compose.yml` still curls `/`, and Kikosi
+inlines its FCM push — both fixed by pointing HEALTHCHECK at `/readyz` +
+`.shutdown_drain(...)` once they take the release that carries these APIs.
 
 **Why heavy.** It's cross-cutting (health, lifecycle, migrations, deploy) and it's
 where "works on my machine" meets real uptime.

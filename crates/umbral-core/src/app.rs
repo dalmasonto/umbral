@@ -27,6 +27,11 @@ pub struct App {
     /// "just works" WITHOUT running migrate during `makemigrations`/`migrate`
     /// or any other subcommand. Opt in via [`AppBuilder::auto_migrate_on_serve`].
     auto_migrate_on_serve: bool,
+    /// Kikosi #5 — how long [`App::serve`] keeps serving after a shutdown signal
+    /// before it stops accepting, so a load balancer observes `/readyz` flip to
+    /// 503 and drains this instance. `Duration::ZERO` (the default) skips the
+    /// drain — the historical behaviour. Set via [`AppBuilder::shutdown_drain`].
+    drain_delay: std::time::Duration,
     /// Set the first time [`App::ready`] fires the `on_ready` hooks, so the
     /// second call is a no-op. `serve()` and `into_router()` both call it, and
     /// `umbral_cli::dispatch` may have called it already.
@@ -167,8 +172,14 @@ impl App {
         // `with_graceful_shutdown` stops accepting new connections on the
         // signal and waits for in-flight requests to finish; then we close the
         // pools so connections shut down cleanly.
+        // Kikosi #5: when a drain delay is configured, the shutdown future flips
+        // readiness to draining and holds for the delay BEFORE resolving, so the
+        // server keeps accepting during the window the load balancer needs to
+        // notice `/readyz` = 503 and stop routing here. With ZERO delay this is
+        // the plain signal wait — the historical behaviour.
+        let drain_delay = self.drain_delay;
         axum::serve(listener, self.router.into_make_service())
-            .with_graceful_shutdown(shutdown_signal())
+            .with_graceful_shutdown(drain_after(shutdown_signal(), drain_delay))
             .await?;
         tracing::info!("umbral: server stopped accepting; draining DB pools");
         crate::db::close().await;
@@ -226,6 +237,8 @@ pub struct AppBuilder {
     default_error_pages: bool,
     /// gaps3 #23: apply pending migrations on `serve` (opt-in).
     auto_migrate_on_serve: bool,
+    /// Kikosi #5: shutdown drain delay. `Duration::ZERO` = no drain.
+    drain_delay: std::time::Duration,
     /// Path-scoped cross-origin policies (prefix → config), applied via
     /// [`AppBuilder::cors_for`]. Each is layered only onto requests whose
     /// path starts with the prefix (e.g. `"/api"`).
@@ -306,6 +319,7 @@ impl Default for AppBuilder {
             server_error_hook: None,
             default_error_pages: true,
             auto_migrate_on_serve: false,
+            drain_delay: std::time::Duration::ZERO,
             cors: None,
             cors_scoped: Vec::new(),
             atomic_transactions: None,
@@ -611,6 +625,31 @@ impl AppBuilder {
     /// plugin's `on_ready` or an explicit call).
     pub fn auto_migrate_on_serve(mut self) -> Self {
         self.auto_migrate_on_serve = true;
+        self
+    }
+
+    /// Drain for `delay` on shutdown before the server stops accepting
+    /// connections (Kikosi #5 — the zero-downtime rollout piece).
+    ///
+    /// On `SIGTERM` / Ctrl-C, [`App::serve`] marks the process draining
+    /// ([`crate::shutdown::is_draining`]) so `umbral-health`'s `/readyz` returns
+    /// 503 at once, keeps serving for `delay`, and only then lets the graceful
+    /// shutdown proceed (stop accepting, finish in-flight, close pools). The
+    /// delay is the window in which a load balancer polls `/readyz`, sees the
+    /// 503, and pulls this instance out of rotation — so the requests it *would*
+    /// have routed here go elsewhere instead of hitting a socket that is about
+    /// to close.
+    ///
+    /// Pick a delay a little longer than your LB's readiness probe interval
+    /// (k8s default 10s; a `HEALTHCHECK --interval=10s` the same). `5`–`15s` is
+    /// typical. `Duration::ZERO` (the default) skips the drain entirely — right
+    /// for a single-instance app or local dev, where there is no LB to notify
+    /// and an instant Ctrl-C is what you want.
+    ///
+    /// Only meaningful alongside a readiness probe (mount `HealthPlugin`); with
+    /// no `/readyz` for the LB to poll, the delay is dead time on shutdown.
+    pub fn shutdown_drain(mut self, delay: std::time::Duration) -> Self {
+        self.drain_delay = delay;
         self
     }
 
@@ -1591,6 +1630,7 @@ impl AppBuilder {
             router,
             plugins: sorted_plugins,
             auto_migrate_on_serve: self.auto_migrate_on_serve,
+            drain_delay: self.drain_delay,
             ready_fired: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -1638,6 +1678,27 @@ async fn shutdown_signal() {
         _ = terminate => {}
     }
     tracing::info!("umbral: shutdown signal received; finishing in-flight requests");
+}
+
+/// The future `serve` hands to axum's `with_graceful_shutdown` (Kikosi #5).
+///
+/// Awaits `signal`, marks the process draining so readiness probes go 503, then
+/// — if `drain_delay` is non-zero — keeps serving for that long before resolving,
+/// which is when axum stops accepting new connections. The delay is the window a
+/// load balancer uses to observe the 503 and route new traffic elsewhere.
+///
+/// Generic over the signal future so the drain sequencing is testable without
+/// actually delivering a `SIGTERM`.
+async fn drain_after<F: std::future::Future>(signal: F, drain_delay: std::time::Duration) {
+    signal.await;
+    crate::shutdown::begin_drain();
+    if !drain_delay.is_zero() {
+        tracing::info!(
+            drain_secs = drain_delay.as_secs_f64(),
+            "umbral: draining — readiness now reports 503; holding before stop"
+        );
+        tokio::time::sleep(drain_delay).await;
+    }
 }
 
 /// audit_2 H19 — warn about the app's own mutating routes that carry no
@@ -2213,5 +2274,51 @@ mod audit_tests {
             spec(vec!["POST"], "/posts", Some("blog.add")),
         ];
         assert!(ungated_mutating_routes(&specs).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::drain_after;
+    use std::time::{Duration, Instant};
+
+    /// `drain_after` awaits its signal, flips the process to draining, then holds
+    /// for the delay before resolving — the sequence that lets `/readyz` report
+    /// 503 while the server keeps accepting during the drain window (Kikosi #5).
+    ///
+    /// One test, walked in sequence: the draining flag is a process-global that
+    /// `begin_drain` only ever sets, so splitting the zero-delay and with-delay
+    /// cases into separate concurrent tests would race on it. A ready signal
+    /// (`async {}`) exercises the drain logic without delivering a real SIGTERM.
+    #[tokio::test]
+    async fn signals_draining_and_holds_for_the_delay() {
+        assert!(
+            !crate::shutdown::is_draining(),
+            "draining must start false — nothing has signalled shutdown yet",
+        );
+
+        // Zero delay: marks draining, does not sleep (the historical
+        // instant-shutdown behaviour).
+        let started = Instant::now();
+        drain_after(async {}, Duration::ZERO).await;
+        assert!(
+            crate::shutdown::is_draining(),
+            "the signal must mark the process draining so /readyz goes 503",
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(50),
+            "zero delay must not sleep; took {:?}",
+            started.elapsed(),
+        );
+
+        // A non-zero delay holds before resolving, even though the process is
+        // already draining (begin_drain is idempotent; the hold still applies).
+        let started = Instant::now();
+        drain_after(async {}, Duration::from_millis(120)).await;
+        assert!(
+            started.elapsed() >= Duration::from_millis(100),
+            "must hold for ~the drain delay before resolving; held {:?}",
+            started.elapsed(),
+        );
     }
 }

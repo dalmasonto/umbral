@@ -158,6 +158,15 @@ pub mod typegen {
     pub use umbral_core::typegen::{typescript, typescript_for};
 }
 
+/// Kikosi #5 — graceful-shutdown drain coordination.
+///
+/// [`is_draining`] is what a readiness probe reads to report 503 the moment a
+/// shutdown signal arrives (see `AppBuilder::shutdown_drain`); [`begin_drain`]
+/// lets an app driving its own shutdown flip the flag itself.
+pub mod shutdown {
+    pub use umbral_core::shutdown::{begin_drain, is_draining};
+}
+
 /// Settings accessors — `get()` returns the live `Settings` published
 /// at `App::build` time. Used by plugin code that needs to branch on
 /// `environment` / `bind_addr` etc. (e.g. umbral-email checking whether

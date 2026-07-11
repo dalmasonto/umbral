@@ -106,7 +106,19 @@ A **rollback** stays ready. Deploying an older binary against a newer schema sho
 It's opt-in because the check reads the on-disk `migrations/` tree. An app that ships its schema another way (a baked image, an external migration tool) would see spurious `503`s, so umbral won't assume it. When you do run migrations from the same tree, this is the recommended production setting.
 </Callout>
 
+## Draining on shutdown
+
+`/ready` and `/readyz` also report `503` while the process is **draining** — the moment it receives a shutdown signal, before it stops accepting connections. That's what lets a load balancer pull the instance out of rotation during a rollout so no in-flight request is dropped. You don't configure anything on the plugin for this; it reads `umbral::shutdown::is_draining()`, which `App::serve` sets. Turn on the drain window with `AppBuilder::shutdown_drain(...)`.
+
+```json
+// GET /readyz after SIGTERM, during the drain window:
+{ "status": "draining", "checks": { "shutdown": { "status": "draining" } } }
+```
+
+See [Going to production → Zero-downtime rollout](../deployment/going-to-production#zero-downtime-rollout) for how readiness, the drain, and graceful shutdown compose into a no-dropped-request deploy.
+
 ## See also
 
+- [Going to production](../deployment/going-to-production) - the full deploy recipe these probes plug into.
 - [The Plugin trait](./the-plugin-trait) - how a plugin contributes routes like these.
 - [Logging and tracing](../observability/index) - the other half of operating an umbral app.

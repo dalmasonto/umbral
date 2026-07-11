@@ -1,0 +1,130 @@
+---
+title: Going to production
+description: A reference deploy — compose + reverse proxy + one-shot migrate — and the two settings that make a rollout zero-downtime.
+sidebar_position: 2
+tags: [deployment, production, zero-downtime, health, graceful-shutdown]
+---
+
+# Going to production
+
+umbral gives you the pieces to run a real deployment without hand-rolling the ops layer. This page wires them into one reference recipe: a container stack behind a reverse proxy, migrations applied as a release step, and a rollout that drops no requests.
+
+## The shape
+
+```
+              TLS
+  internet ──────▶  reverse proxy (Caddy / nginx)  ──▶  app :8000
+                    terminates HTTPS, proxies              (published on loopback)
+                                                          ▲
+                                                          │  postgres → migrate → web
+                                                       compose stack
+```
+
+The app binds a plain HTTP port on loopback; the proxy is the only thing exposed publicly and owns TLS. Nothing about umbral requires this exact split, but it's the one most single-VPS deploys land on.
+
+## The compose stack
+
+```yaml
+services:
+  db:
+    image: postgres:16
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+    # ...
+
+  # One-shot: applies migrations to completion, then exits. See
+  # "Migrations in production" for the migrate-on-boot alternative.
+  migrate:
+    image: myapp
+    command: ["migrate"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  web:
+    image: myapp
+    command: ["serve"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    ports:
+      - "127.0.0.1:8000:8000"   # loopback only — the proxy dials this
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/readyz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+```
+
+`web` starts only after `migrate` has completed successfully, so the schema is current before the first request. Because `up` fails when `migrate` exits non-zero, a bad migration turns the deploy red instead of leaving the previous container serving.
+
+<Callout type="warning">
+Health-check a **dedicated probe endpoint, not your home page.** Curling `/` ties the container's health to templates, seed data, and every query the landing page runs — so a slow dashboard widget or an empty table marks the whole container unhealthy while the API and admin serve fine. That is the "unhealthy while it serves 200s" false alarm. `/readyz` reports one thing — *is this instance fit to receive traffic* — and nothing else.
+</Callout>
+
+## Health and readiness
+
+Mount `HealthPlugin` and gate readiness on migrations:
+
+```rust
+use umbral_health::HealthPlugin;
+
+App::builder()
+    .plugin(HealthPlugin::default().require_migrations())
+    // ...
+    .build()?;
+```
+
+- **`GET /healthz`** — liveness. Always 200 while the process runs. Point a *restart* policy here; a downstream outage shouldn't restart-loop the pod.
+- **`GET /readyz`** — readiness. 200 only when the DB answers **and** no migration is pending. Point the load balancer / container health-check here. During a rolling deploy a new instance that comes up against a not-yet-migrated schema reports 503 and stays out of rotation until the schema catches up, instead of 500ing live traffic.
+
+Full detail: [the health plugin](../plugins/health).
+
+## Zero-downtime rollout
+
+A rollout replaces old instances with new ones. Two settings turn "the old process exits" into "no request is dropped."
+
+### 1. Readiness drives routing
+
+Because the load balancer routes on `/readyz`, a new instance is sent traffic only once it reports ready — DB reachable, migrations applied. Nothing hits it early.
+
+### 2. Drain on shutdown
+
+`App::serve` already finishes in-flight requests on `SIGTERM` (graceful shutdown). The gap is the *load balancer*: when the old instance gets the signal, the LB is still routing to it — its last readiness probe said 200 — so requests keep arriving at a process that's about to stop accepting connections.
+
+`AppBuilder::shutdown_drain` closes that gap:
+
+```rust
+use std::time::Duration;
+
+App::builder()
+    .plugin(HealthPlugin::default().require_migrations())
+    .shutdown_drain(Duration::from_secs(10))   // ← a little longer than the LB probe interval
+    .build()?;
+```
+
+On `SIGTERM`, the instance now:
+
+1. **flips `/readyz` to 503 immediately** (it's draining),
+2. **keeps serving** for the drain delay — long enough for the LB to poll `/readyz`, see the 503, and stop routing here,
+3. **then** lets the graceful shutdown proceed: stop accepting, finish in-flight requests, close the DB pools.
+
+So the window where the LB would have sent new traffic to a closing socket is exactly the window in which the instance is still up and serving. Set the delay a little longer than your probe interval (a `HEALTHCHECK --interval=10s` or the k8s default 10s → a 10–15s drain).
+
+<Callout type="info">
+`shutdown_drain` defaults to `Duration::ZERO` (no drain, instant shutdown) — right for a single instance or local dev, where there's no load balancer to notify and you want Ctrl-C to be immediate. Turn it on when a load balancer sits in front of more than one instance.
+</Callout>
+
+### The rollout, start to finish
+
+1. New instance boots. `/readyz` = 503 (migrations pending, or DB not yet reachable). LB doesn't route to it.
+2. Migrations land (one-shot `migrate`, or its own boot). `/readyz` = 200. LB starts routing.
+3. Old instance gets `SIGTERM`. `/readyz` = 503; it keeps serving for the drain delay.
+4. LB observes the 503, stops routing to the old instance. Its in-flight requests finish.
+5. Drain delay elapses; the old instance stops accepting, drains, closes pools, exits.
+
+No request is sent to an instance that isn't ready to take it, and none is dropped on the way out.
+
+## See also
+
+- [Migrations in production](./migrations-in-production) — one-shot vs. migrate-on-boot, and the advisory lock.
+- [The health plugin](../plugins/health) — `/healthz`, `/readyz`, custom checks, the migration gate.
+- [Management commands](../cli/management-commands) — `serve`, `migrate`, and friends.

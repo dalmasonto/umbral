@@ -273,6 +273,26 @@ async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
     let mut all_ok = true;
     let timeout = state.check_timeout;
 
+    // Shutdown drain (Kikosi #5). Checked first and short-circuits every other
+    // probe: a process that has received its shutdown signal is not ready, full
+    // stop — even if the DB is up and migrations are current. This is what makes
+    // `AppBuilder::shutdown_drain` a zero-downtime rollout: `/readyz` flips to
+    // 503 the instant the signal lands, so the load balancer drains this
+    // instance during the window before it stops accepting connections.
+    if umbral::shutdown::is_draining() {
+        checks.insert(
+            "shutdown".to_string(),
+            serde_json::json!({"status": "draining"}),
+        );
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ReadinessBody {
+                status: "draining",
+                checks,
+            }),
+        );
+    }
+
     // DB connectivity via the framework's `umbral::db::ping()` — backend-
     // appropriate `SELECT 1`, no raw sqlx in the plugin. Wrapped in the
     // configured timeout so a stuck pool doesn't hang the probe.

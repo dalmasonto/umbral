@@ -1,0 +1,78 @@
+---
+title: Migrations in production
+description: When to migrate on boot vs. as a one-shot release step, and why umbral's Postgres advisory lock makes concurrent migrate safe.
+sidebar_position: 1
+tags: [deployment, migrations, production, zero-downtime]
+---
+
+# Migrations in production
+
+There are two ways to apply migrations when you deploy. umbral supports both; which you want depends on how many instances you run.
+
+## The two policies
+
+### One-shot migrate (the default for real deployments)
+
+Run `migrate` once as a discrete release step, before the app instances start — a dedicated container in your compose stack, an init job in k8s, a step in your pipeline:
+
+```yaml
+# docker-compose.yml — migrate runs to completion before web starts
+services:
+  migrate:
+    image: myapp
+    command: ["migrate"]
+    depends_on:
+      db: { condition: service_healthy }
+  web:
+    image: myapp
+    command: ["serve"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+```
+
+The schema is fully migrated before a single request is served. `compose` fails the deploy if `migrate` exits non-zero, so a bad migration turns the release red instead of quietly leaving the old container running.
+
+### Migrate on boot
+
+`AppBuilder::auto_migrate_on_serve()` applies pending migrations when the `serve` command starts — and only `serve`, never during `makemigrations` / `migrate` / any other subcommand:
+
+```rust
+App::builder()
+    .auto_migrate_on_serve()
+    .plugin(/* ... */)
+    .build()?;
+```
+
+A fresh database "just works" on `cargo run` with no separate step. Good for demos, single-instance apps, and local dev.
+
+## Running many instances? It's still safe.
+
+The worry with migrate-on-boot across replicas is a race: three pods start, all see pending migrations, all try to apply them, and the DDL collides.
+
+On **Postgres, umbral takes a session-level advisory lock** before applying anything. The lock key is derived from the pool alias (or tenant schema), so:
+
+- The first migrator to boot wins the lock and applies the migrations.
+- The others block on the lock, and when they get it the migrations are already applied — so they find nothing pending and proceed to serve.
+- A migrator that **crashes** mid-run drops its lock automatically (session locks die with the backend connection), so a dead pod can't wedge the deploy.
+- Unrelated logical databases (different aliases / tenant schemas) get different keys and migrate concurrently.
+
+A migrator that can't get the lock within `UMBRAL_MIGRATION_LOCK_TIMEOUT_SECS` (default 300) fails with a clear `MigrationLockTimeout` naming the target, rather than hanging forever.
+
+<Callout type="info">
+So migrate-on-boot is safe with any number of Postgres instances. **SQLite** has no advisory lock and is a single-file, single-node store — if you run SQLite in production (small single-instance apps), you are single-writer by construction and the race doesn't arise.
+</Callout>
+
+## Which should I use?
+
+<CardGrid cols={2}>
+  <Card icon="package" title="One-shot migrate" description="Multi-instance, or any deploy where you want the schema provably current before ANY instance serves — and a failed migration to fail the release. The conventional production choice." />
+  <Card icon="rocket" title="Migrate on boot" description="Single instance, demos, local dev — or multi-instance where you're happy for the first pod up to migrate (the advisory lock makes it safe). Fewer moving parts." />
+</CardGrid>
+
+Either way, gate readiness on migrations so an instance that comes up against a not-yet-migrated schema stays out of the load balancer until the schema catches up — see [Going to production](./going-to-production) and the [health plugin](../plugins/health#gate-readiness-on-migrations).
+
+## See also
+
+- [Managed migrations](../migrations/managed-migrations) — the declare → migrate loop.
+- [`checkmigrations`](../migrations/checkmigrations) — gate a deploy on migration safety in CI.
+- [Going to production](./going-to-production) — the full deploy recipe.

@@ -26,6 +26,7 @@ pub mod plugin;
 pub mod ratelimit;
 pub mod routes;
 pub mod settings;
+pub mod shutdown;
 pub mod signals;
 pub mod slash;
 pub mod static_files;
