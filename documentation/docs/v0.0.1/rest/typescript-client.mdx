@@ -20,6 +20,46 @@ That writes two files:
 - `models.ts` — the row interfaces + choice unions (the `umbral typegen` output, scoped to your REST-exposed models).
 - `client.ts` — a `Filters`/`Ordering` type per model, the list envelope matching your paginator, and the `Umbral` runtime. Re-exports everything from `models.ts`, so your app imports from one place.
 
+## Generate and use
+
+<Steps>
+  <Step title="Register the plugins">
+    `gen-client` reads the config that `RestPlugin` + `OpenApiPlugin` publish when your routes are built — so both must be on the app. No server or database is needed at generate time; it's an offline step.
+
+    ```rust
+    App::builder()
+        .plugin(RestPlugin::default())
+        .plugin(OpenApiPlugin::default())
+        // ... your models
+        .build()
+    ```
+  </Step>
+  <Step title="Generate into your frontend">
+    Point `--out` at a folder in your frontend and run it from your app crate. Commit the two files it writes.
+
+    ```bash
+    cargo run -- gen-client --out web/src/api/
+    ```
+  </Step>
+  <Step title="Import and call">
+    `client.ts` is dependency-free and re-exports the row types, so you import everything from one place.
+
+    ```ts
+    import { Umbral, type Post } from "./api/client";
+
+    const api = new Umbral("https://api.example.com");
+    const post = await api.get("post", 42);   // typed: Post
+    ```
+  </Step>
+  <Step title="Keep it in sync">
+    Re-run after any model or REST-resource change, and add `--check` to CI (below) so a stale client can't merge.
+  </Step>
+</Steps>
+
+<Callout type="warning">
+  The generated files carry a `// DO NOT EDIT` header — never hand-edit them; your changes are lost on the next generate. Extend the client by wrapping it, not by editing it.
+</Callout>
+
 ## Using it
 
 ```ts
@@ -76,6 +116,58 @@ The body types drop the columns the server manages, so you can't send them by ac
 - On create, a field is required unless it is nullable or has a server default. On update every field is optional (it's a PATCH).
 
 The `id` in `get` / `update` / `delete` is **the model's own primary-key type** — `number` for an `i64` PK, `string` for a `Uuid` or `String`-slug PK. `api.get("ticket", 5)` where `ticket` is Uuid-keyed is a compile error; it wants a string. Each resource carries its own id type, so this is checked per model, not against a global union.
+
+## Paging through results
+
+The list builder exposes exactly the paging controls your paginator reads, and `list()` returns the envelope your paginator emits — both typed:
+
+<Tabs>
+  <Tab title="Page number">
+    ```ts
+    const page = await api.from("post").page(2).pageSize(50).list();
+    page.results;        // Post[]
+    page.total_pages;    // number
+    page.next;           // number | null  — next page, or null on the last
+    ```
+  </Tab>
+  <Tab title="Limit / offset">
+    ```ts
+    const page = await api.from("post").limit(50).offset(100).list();
+    page.results;
+    page.count;          // total matching rows
+    ```
+  </Tab>
+  <Tab title="Custom (cursor)">
+    ```ts
+    // A custom paginator that declared its shape emits its own methods + keys.
+    const page = await api.from("post").cursor(token).pageSize(50).list();
+    page.results;
+    page.next_cursor;    // string | null  — feed back into .cursor(...)
+
+    // A custom paginator that did NOT declare a shape: set params by hand.
+    await api.from("post").param("cursor", token).list();
+    ```
+  </Tab>
+</Tabs>
+
+## Handling errors
+
+Any non-2xx response throws `UmbralError` with the status and the parsed body, so failures surface loudly instead of returning a half-typed object. A `204 No Content` (what `delete` returns) resolves to `null`.
+
+```ts
+import { Umbral, UmbralError } from "./api/client";
+
+try {
+  const post = await api.get("post", 42);
+} catch (err) {
+  if (err instanceof UmbralError) {
+    if (err.status === 404) { /* not found */ }
+    console.error(err.status, err.body);   // body is the API's error JSON
+  } else {
+    throw err;   // network / unexpected
+  }
+}
+```
 
 ## It matches *your* API, exactly
 
