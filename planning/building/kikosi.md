@@ -61,6 +61,8 @@ here: the auth/session client + optimistic-update patterns (small); the bulk of 
 is the realtime cache-invalidation client — but see below, the realtime *backend* is
 already done.
 
+**Update (2026-07-11) — write DTOs, per-model ids, configurable pagination + adaptive auth.** Follow-on passes hardened the client so it matches *any* umbral app, not just the all-i64/all-bearer happy path: (a) typed `create`/`update` DTOs respecting `noform`/`noedit`/`auto_now*` + hidden-as-write-only; (b) `get`/`update`/`delete` id typed per model (`number` for i64, `string` for Uuid/String-slug PKs — the old global `UmbralId` union was a lie), tsc-proven across all three PK shapes; (c) the list envelope + query-builder now adapt to the paginator — page-number/limit-offset known, and a custom paginator that declares `Pagination::schema()` is emitted fully typed (its own `next_cursor`/`has_more` + `.cursor()`), else an honest open envelope + generic `.param()`; (d) auth is read from `registered_security_schemes()` — the `Authorization` prefix from the scheme (`Bearer`/`Token`), the api-key header from the scheme's `name` (`x-umbral-api-key`), cookie→credentials, plus `getAuthHeaders()` for JWT refresh. So the two things that were hardcoded (Bearer, `{results,count}`) now follow what the app declares. Remaining under #1: the auth/session *login* client (token acquisition/refresh flow) + optimistic-update helpers. Two logged follow-ups: OpenAPI *spec* should emit custom-pagination params from the same `schema().params`; a standalone pagination doc page.
+
 ## 2. An official client SDK / SPA-integration story
 
 Same theme, one level up. umbral gives you an excellent backend, but the *entire*
