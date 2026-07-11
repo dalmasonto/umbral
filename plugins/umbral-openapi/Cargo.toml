@@ -37,3 +37,5 @@ umbral-auth = { path = "../umbral-auth" }
 chrono = { version = "0.4", features = ["serde"] }
 # End-to-end test of the `gen-client` command through the real dispatcher.
 umbral-cli = { path = "../../crates/umbral-cli" }
+# A Uuid-PK model in the client-gen test (per-model id typing).
+uuid = { version = "1", features = ["v4", "serde"] }

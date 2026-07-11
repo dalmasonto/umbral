@@ -4941,6 +4941,7 @@ dependencies = [
  "umbral-casing",
  "umbral-cli",
  "umbral-rest",
+ "uuid",
 ]
 
 [[package]]

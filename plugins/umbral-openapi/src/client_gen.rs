@@ -349,26 +349,22 @@ fn push_resource_map(out: &mut String, exposed: &[ModelMeta]) {
     );
     out.push_str("export interface UmbralResources {\n");
     for model in exposed {
+        // Each resource carries its OWN primary-key type — `number` for an i64
+        // PK, `string` for a Uuid or String PK — so `.get`/`.update`/`.delete`
+        // take exactly that model's id, not a union across every model.
+        let id = model
+            .pk_column()
+            .map(ts_scalar_for_pk)
+            .unwrap_or_else(|| "string | number".to_string());
         let _ = writeln!(
             out,
             "  \"{table}\": {{ row: {name}; filters: {name}Filters; ordering: {name}Ordering; \
-             create: {name}Create; update: {name}Update }};",
+             create: {name}Create; update: {name}Update; id: {id} }};",
             table = model.table,
             name = model.name,
         );
     }
     out.push_str("}\n");
-    // The PK type union, for `.get(table, id)`.
-    let pk_types: BTreeSet<String> = exposed
-        .iter()
-        .filter_map(|m| m.pk_column().map(|c| ts_scalar_for_pk(c)))
-        .collect();
-    let union = if pk_types.is_empty() {
-        "string | number".to_string()
-    } else {
-        pk_types.into_iter().collect::<Vec<_>>().join(" | ")
-    };
-    let _ = writeln!(out, "export type UmbralId = {union};");
 }
 
 /// The PK's TS scalar. A PK is never an FK or a choices column, so the plain
@@ -515,7 +511,7 @@ export class Umbral {{
   }}
 
   /** Retrieve one row by primary key. */
-  get<K extends keyof UmbralResources>(table: K, id: UmbralId): Promise<UmbralResources[K]["row"]> {{
+  get<K extends keyof UmbralResources>(table: K, id: UmbralResources[K]["id"]): Promise<UmbralResources[K]["row"]> {{
     return this._request(`GET`, `{base_path}/${{table as string}}/${{id}}/`);
   }}
 
@@ -531,14 +527,14 @@ export class Umbral {{
   /** Partially update a row (PATCH). The body type excludes `noedit` fields. */
   update<K extends keyof UmbralResources>(
     table: K,
-    id: UmbralId,
+    id: UmbralResources[K]["id"],
     data: UmbralResources[K]["update"],
   ): Promise<UmbralResources[K]["row"]> {{
     return this._request(`PATCH`, `{base_path}/${{table as string}}/${{id}}/`, data);
   }}
 
   /** Delete a row by primary key. */
-  async delete<K extends keyof UmbralResources>(table: K, id: UmbralId): Promise<void> {{
+  async delete<K extends keyof UmbralResources>(table: K, id: UmbralResources[K]["id"]): Promise<void> {{
     await this._request(`DELETE`, `{base_path}/${{table as string}}/${{id}}/`);
   }}
 

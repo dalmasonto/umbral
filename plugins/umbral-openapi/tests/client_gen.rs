@@ -61,10 +61,21 @@ pub struct CgPost {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Uuid primary key — its `.get`/`.update`/`.delete` id must type as `string`,
+/// distinct from the i64-PK `CgPost` (`number`) and the String-slug-PK
+/// `CgAuthor` (`string`). Proves the id type is per-model, not a global union.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "cg_ticket")]
+pub struct CgTicket {
+    pub id: uuid::Uuid,
+    pub subject: String,
+}
+
 fn client() -> String {
     let (_models, client) = umbral_openapi::client_gen::generate_for(&[
         ModelMeta::for_::<CgAuthor>(),
         ModelMeta::for_::<CgPost>(),
+        ModelMeta::for_::<CgTicket>(),
     ]);
     client
 }
@@ -155,7 +166,7 @@ fn resource_map_and_client_are_present() {
     let c = client();
     assert_has(
         &c,
-        r#""cg_post": { row: CgPost; filters: CgPostFilters; ordering: CgPostOrdering; create: CgPostCreate; update: CgPostUpdate };"#,
+        r#""cg_post": { row: CgPost; filters: CgPostFilters; ordering: CgPostOrdering; create: CgPostCreate; update: CgPostUpdate; id: number };"#,
     );
     assert_has(&c, "export class Umbral {");
     assert_has(&c, "from<K extends keyof UmbralResources>");
@@ -248,6 +259,40 @@ fn client_exposes_write_operations() {
     assert_has(&c, "create<K extends keyof UmbralResources>");
     assert_has(&c, "update<K extends keyof UmbralResources>");
     assert_has(&c, "delete<K extends keyof UmbralResources>");
+}
+
+/// Each resource carries its OWN primary-key type, not a global union: the i64
+/// PK is `number`, the Uuid and String-slug PKs are `string`. This is what makes
+/// `.get`/`.update`/`.delete` reject the wrong id type per model.
+#[test]
+fn each_resource_has_its_own_id_type() {
+    let c = client();
+    // i64 PK → number.
+    assert_has(&c, "\"cg_post\": { row: CgPost;");
+    assert!(
+        c.lines()
+            .any(|l| l.contains("\"cg_post\":") && l.contains("id: number }")),
+        "an i64 PK must type as number; got:\n{c}",
+    );
+    // Uuid PK → string.
+    assert!(
+        c.lines()
+            .any(|l| l.contains("\"cg_ticket\":") && l.contains("id: string }")),
+        "a Uuid PK must type as string; got:\n{c}",
+    );
+    // String-slug PK → string.
+    assert!(
+        c.lines()
+            .any(|l| l.contains("\"cg_author\":") && l.contains("id: string }")),
+        "a String PK must type as string; got:\n{c}",
+    );
+    // The old global union is gone.
+    assert!(
+        !c.contains("UmbralId"),
+        "the global id union must be gone; got:\n{c}"
+    );
+    // The methods key off the per-resource id.
+    assert_has(&c, "id: UmbralResources[K][\"id\"]");
 }
 
 /// The realtime subscription surface — a typed `.on(table, {created,updated,

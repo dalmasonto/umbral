@@ -75,6 +75,8 @@ The body types drop the columns the server manages, so you can't send them by ac
 - A `#[umbral(noedit)]` field is in the **create** body but not the **update** body — the set-once pattern. You can create a `slug` or a `username`; you can't change it. `api.update("post", id, { slug })` is a compile error.
 - On create, a field is required unless it is nullable or has a server default. On update every field is optional (it's a PATCH).
 
+The `id` in `get` / `update` / `delete` is **the model's own primary-key type** — `number` for an `i64` PK, `string` for a `Uuid` or `String`-slug PK. `api.get("ticket", 5)` where `ticket` is Uuid-keyed is a compile error; it wants a string. Each resource carries its own id type, so this is checked per model, not against a global union.
+
 ## It matches *your* API, exactly
 
 The generator reads the same model registry and per-resource config that renders your OpenAPI document — so it reflects the surface you actually serve:
