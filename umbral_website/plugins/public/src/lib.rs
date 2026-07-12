@@ -19,7 +19,7 @@ use site_content::models::{self as sc, contact_message};
 use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::routes::RouteSpec;
 use umbral::templates::context;
-use umbral::web::{Html, Router, StatusCode, get};
+use umbral::web::{ApiError, Html, Router, get};
 
 #[derive(Debug, Default, Clone)]
 pub struct PublicPlugin;
@@ -55,7 +55,7 @@ impl Plugin for PublicPlugin {
     }
 }
 
-async fn home() -> Result<Html<String>, (StatusCode, String)> {
+async fn home() -> Result<Html<String>, ApiError> {
     // Plugin list (filtered to first-party + approved community).
     // An empty result renders the static fallback in the template.
     // The whole story, one query: filter DB-side, count the related
@@ -176,7 +176,7 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
     Ok(Html(body))
 }
 
-async fn roadmap() -> Result<Html<String>, (StatusCode, String)> {
+async fn roadmap() -> Result<Html<String>, ApiError> {
     let body = umbral::templates::render("public/roadmap.html", &context! {})
         .map_err(internal_error)?;
     Ok(Html(body))
@@ -287,6 +287,10 @@ fn humanize_count(n: i64) -> String {
     }
 }
 
-fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+fn internal_error<E: std::fmt::Display>(err: E) -> ApiError {
+    // gaps3 #58: this used to be `(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())`,
+    // which sent the database's own error text to the browser — a missing table, a column
+    // name, a SQL fragment, shown to whoever asked for the page. `ApiError::internal` logs
+    // the cause server-side and returns an opaque 500.
+    ApiError::internal(err.to_string())
 }

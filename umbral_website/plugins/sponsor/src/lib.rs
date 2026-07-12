@@ -17,7 +17,7 @@ use umbral::forms::{FormValidate, ValidationErrors};
 use umbral::migrate::ModelMeta;
 use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::templates::context;
-use umbral::web::{Form, Html, IntoResponse, Query, Redirect, Response, Router, StatusCode, get, post};
+use umbral::web::{ApiError, Form, Html, IntoResponse, Query, Redirect, Response, Router, StatusCode, get, post};
 
 use models::partner;
 
@@ -97,12 +97,12 @@ struct SponsorQuery {
 
 async fn sponsor_page(
     Query(q): Query<SponsorQuery>,
-) -> Result<Html<String>, (StatusCode, String)> {
+) -> Result<Html<String>, ApiError> {
     let submitted = q.submitted.as_deref() == Some("1");
     render_sponsor(submitted, None, &HashMap::new())
         .await
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(ApiError::internal)
 }
 
 /// Handle a posted sponsor inquiry (`POST /sponsor`). On success persists a
@@ -110,13 +110,13 @@ async fn sponsor_page(
 /// form re-renders with per-field errors and the typed values kept.
 async fn post_inquiry(
     Form(form): Form<HashMap<String, String>>,
-) -> Result<Response, (StatusCode, String)> {
+) -> Result<Response, ApiError> {
     match create_inquiry(&form).await {
         Ok(_id) => Ok(Redirect::to("/sponsor?submitted=1").into_response()),
         Err(errs) => {
             let html = render_sponsor(false, Some(&errs), &form)
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                .map_err(ApiError::internal)?;
             Ok((StatusCode::UNPROCESSABLE_ENTITY, Html(html)).into_response())
         }
     }

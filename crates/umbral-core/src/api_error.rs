@@ -35,6 +35,18 @@ pub enum ApiError {
     NotFound(String),
     /// `400` with a single message — [`ApiError::bad_request`].
     BadRequest(String),
+    /// `401` — no credentials, or credentials that resolved to nobody (gaps3 #62).
+    ///
+    /// Its absence is why real handlers kept hand-rolling `(StatusCode, String)`: a
+    /// login-gated page needs a 401, `ApiError` could not express one, so the whole
+    /// handler fell back to the tuple — and the tuple's 500 arm is `err.to_string()`,
+    /// which puts the database's own error text on the page. A missing variant is not a
+    /// cosmetic gap; it pushes people onto the leaky path.
+    Unauthorized(String),
+    /// `403` — authenticated, but not allowed.
+    Forbidden(String),
+    /// `429` — rate-limited.
+    TooManyRequests(String),
     /// `400` carrying a structured validation failure (per-field + non-field).
     Validation(WriteError),
     /// `500` — a database error. Logged server-side; the client sees an opaque
@@ -48,6 +60,18 @@ impl ApiError {
     /// A `404 Not Found` with a client-visible message.
     pub fn not_found(msg: impl Into<String>) -> Self {
         Self::NotFound(msg.into())
+    }
+    /// A `401 Unauthorized` with a client-visible message.
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self::Unauthorized(msg.into())
+    }
+    /// A `403 Forbidden` with a client-visible message.
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self::Forbidden(msg.into())
+    }
+    /// A `429 Too Many Requests` with a client-visible message.
+    pub fn too_many_requests(msg: impl Into<String>) -> Self {
+        Self::TooManyRequests(msg.into())
     }
     /// A `400 Bad Request` with a client-visible message.
     pub fn bad_request(msg: impl Into<String>) -> Self {
@@ -108,7 +132,12 @@ impl From<DynError> for ApiError {
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApiError::NotFound(m) | ApiError::BadRequest(m) | ApiError::Internal(m) => {
+            ApiError::NotFound(m)
+            | ApiError::BadRequest(m)
+            | ApiError::Unauthorized(m)
+            | ApiError::Forbidden(m)
+            | ApiError::TooManyRequests(m)
+            | ApiError::Internal(m) => {
                 write!(f, "{m}")
             }
             ApiError::Validation(e) => write!(f, "{e}"),
@@ -133,6 +162,17 @@ impl IntoResponse for ApiError {
         match self {
             ApiError::NotFound(msg) => json_error(StatusCode::NOT_FOUND, "not_found", &msg),
             ApiError::BadRequest(msg) => json_error(StatusCode::BAD_REQUEST, "bad_request", &msg),
+            // These three carry a message the DEVELOPER wrote ("Please log in to post a
+            // note."), not text an error type produced — so they are safe to send. That is
+            // the line that matters: Database/Internal have their cause logged and never
+            // surfaced, precisely because that text comes from the database.
+            ApiError::Unauthorized(msg) => {
+                json_error(StatusCode::UNAUTHORIZED, "unauthorized", &msg)
+            }
+            ApiError::Forbidden(msg) => json_error(StatusCode::FORBIDDEN, "forbidden", &msg),
+            ApiError::TooManyRequests(msg) => {
+                json_error(StatusCode::TOO_MANY_REQUESTS, "too_many_requests", &msg)
+            }
             ApiError::Validation(e) => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({

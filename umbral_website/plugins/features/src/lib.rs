@@ -18,7 +18,7 @@ use serde::Serialize;
 use umbral::migrate::ModelMeta;
 use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::templates::context;
-use umbral::web::{Html, Router, StatusCode, get};
+use umbral::web::{ApiError, Html, Router, get};
 
 use models::{feature_category, framework_feature};
 
@@ -85,11 +85,11 @@ fn status_badge(s: FeatureStatus) -> (&'static str, &'static str) {
     }
 }
 
-async fn features_page() -> Result<Html<String>, (StatusCode, String)> {
+async fn features_page() -> Result<Html<String>, ApiError> {
     render_features()
         .await
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(ApiError::internal)
 }
 
 /// Load + render `/features`. One categories query + one batched features

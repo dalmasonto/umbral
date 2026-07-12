@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::templates::context;
-use umbral::web::{Html, Router, StatusCode, get};
+use umbral::web::{ApiError, Html, Router, get};
 
 #[derive(Debug, Default, Clone)]
 pub struct SecurityReportsPlugin;
@@ -36,8 +36,8 @@ impl Plugin for SecurityReportsPlugin {
     }
 }
 
-async fn security_page() -> Result<Html<String>, (StatusCode, String)> {
+async fn security_page() -> Result<Html<String>, ApiError> {
     umbral::templates::render("security_reports/security.html", &context! {})
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| ApiError::internal(e.to_string()))
 }

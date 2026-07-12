@@ -19,7 +19,7 @@ use serde::Serialize;
 use umbral::migrate::ModelMeta;
 use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::templates::context;
-use umbral::web::{Html, Router, StatusCode, get};
+use umbral::web::{ApiError, Html, Router, get};
 
 use models::{community_resource, social_link};
 
@@ -123,11 +123,11 @@ pub async fn newsletter_url() -> String {
         })
 }
 
-async fn community_page() -> Result<Html<String>, (StatusCode, String)> {
+async fn community_page() -> Result<Html<String>, ApiError> {
     render_community()
         .await
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(ApiError::internal)
 }
 
 /// Load + render `/community`. Public so a render smoke-test can drive the

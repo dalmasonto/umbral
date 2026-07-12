@@ -17,7 +17,7 @@ use serde::Serialize;
 use umbral::migrate::ModelMeta;
 use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::templates::context;
-use umbral::web::{Html, Router, StatusCode, get};
+use umbral::web::{ApiError, Html, Router, get};
 
 use models::showcase_entry;
 
@@ -99,11 +99,11 @@ fn initials(s: &str) -> String {
     out.to_uppercase()
 }
 
-async fn showcase_page() -> Result<Html<String>, (StatusCode, String)> {
+async fn showcase_page() -> Result<Html<String>, ApiError> {
     render_showcase()
         .await
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(ApiError::internal)
 }
 
 /// Load + render `/showcase`: verified/featured entries, featured first.

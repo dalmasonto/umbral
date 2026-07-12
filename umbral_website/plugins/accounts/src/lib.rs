@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use umbral::migrate::ModelMeta;
 use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::templates::context;
-use umbral::web::{
-    Form, HeaderMap, Html, IntoResponse, Query, Redirect, Response, Router, StatusCode, get, post,
+use umbral::web::{ApiError, 
+    Form, HeaderMap, Html, IntoResponse, Query, Redirect, Response, Router, get, post,
 };
 use umbral_auth::{AuthUser, authenticate, create_user, current_session_user_id};
 use umbral_oauth::models::{SocialAccount, social_account};
@@ -74,8 +74,11 @@ impl Plugin for AccountsPlugin {
     }
 }
 
-fn internal_error(e: impl std::fmt::Display) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+fn internal_error(e: impl std::fmt::Display) -> ApiError {
+    // gaps3 #58: this used to be `(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())`,
+    // which sent the raw error to the browser. `ApiError::internal` logs the cause
+    // server-side and returns an opaque 500.
+    ApiError::internal(e.to_string())
 }
 
 /// Only allow site-relative redirect targets (no open redirect): a path

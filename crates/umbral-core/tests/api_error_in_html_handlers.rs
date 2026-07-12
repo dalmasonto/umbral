@@ -78,3 +78,42 @@ fn identity_hands_back_a_typed_primary_key() {
     let msg = bad.pk::<i64>().expect_err("must fail").to_string();
     assert!(msg.contains("not-a-number") && msg.contains("i64"), "{msg}");
 }
+
+/// gaps3 #62 — the variants whose ABSENCE kept people on the leaky tuple.
+///
+/// `umbral_website` had eight handlers stuck on `(StatusCode, String)` for one reason: a
+/// login-gated page needs a 401, `ApiError` could not express one, so the whole handler
+/// fell back to the tuple — whose 500 arm was `err.to_string()`, i.e. the database's text
+/// on the page. The missing variant was not cosmetic; it pushed authors onto the leak.
+#[tokio::test]
+async fn api_error_can_express_401_403_and_429() {
+    use umbral::web::IntoResponse;
+
+    for (err, expect) in [
+        (
+            ApiError::unauthorized("Please log in to post a note."),
+            http::StatusCode::UNAUTHORIZED,
+        ),
+        (
+            ApiError::forbidden("You are not a moderator of this plugin."),
+            http::StatusCode::FORBIDDEN,
+        ),
+        (
+            ApiError::too_many_requests("You're posting too fast."),
+            http::StatusCode::TOO_MANY_REQUESTS,
+        ),
+    ] {
+        let resp = err.into_response();
+        assert_eq!(resp.status(), expect);
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body = String::from_utf8_lossy(&bytes);
+        // These carry a message the DEVELOPER wrote, so it IS sent — unlike Database /
+        // Internal, whose cause is logged and never surfaced.
+        assert!(
+            body.contains("log in") || body.contains("moderator") || body.contains("too fast"),
+            "the developer's message must reach the client: {body}"
+        );
+    }
+}

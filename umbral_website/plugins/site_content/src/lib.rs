@@ -25,7 +25,7 @@ use serde::Serialize;
 use umbral::migrate::ModelMeta;
 use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::templates::context;
-use umbral::web::{Html, Router, StatusCode, get};
+use umbral::web::{ApiError, Html, Router, get};
 
 use models::{blog_post, changelog_entry};
 
@@ -76,19 +76,19 @@ impl Plugin for SiteContentPlugin {
 
 /// The `/docs` landing page — a map into the documentation site. Static
 /// editorial content (the doc topics), so no DB query.
-async fn docs_page() -> Result<Html<String>, (StatusCode, String)> {
+async fn docs_page() -> Result<Html<String>, ApiError> {
     umbral::templates::render("site_content/docs.html", &context! {})
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| ApiError::internal(e.to_string()))
 }
 
 /// The `/changelog` page — release notes + roadmap, now its own DB table
 /// (`ChangelogEntry`) rendered as a table and managed from the admin.
-async fn changelog_page() -> Result<Html<String>, (StatusCode, String)> {
+async fn changelog_page() -> Result<Html<String>, ApiError> {
     render_changelog()
         .await
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(ApiError::internal)
 }
 
 /// One changelog row handed to `changelog.html`.
@@ -146,11 +146,11 @@ struct PostCard {
     reading_minutes: i32,
 }
 
-async fn blog_page() -> Result<Html<String>, (StatusCode, String)> {
+async fn blog_page() -> Result<Html<String>, ApiError> {
     render_blog()
         .await
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(ApiError::internal)
 }
 
 /// Load + render `/blog`: published posts, newest first. Honest empty
@@ -201,14 +201,13 @@ struct PostDetail {
 
 async fn blog_detail_page(
     umbral::web::Path(slug): umbral::web::Path<String>,
-) -> Result<Html<String>, (StatusCode, String)> {
+) -> Result<Html<String>, ApiError> {
     match render_blog_detail(&slug).await {
         Ok(Some(html)) => Ok(Html(html)),
-        Ok(None) => Err((
-            StatusCode::NOT_FOUND,
-            format!("No published blog post exists at `/blog/{slug}`."),
-        )),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+        Ok(None) => Err(ApiError::not_found(format!(
+            "No published blog post exists at `/blog/{slug}`."
+        ))),
+        Err(e) => Err(ApiError::internal(e)),
     }
 }
 

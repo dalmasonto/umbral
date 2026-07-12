@@ -36,7 +36,7 @@ use umbral::plugin::{AppContext, Plugin, PluginError};
 use umbral::prelude::*;
 use umbral::routes::RouteSpec;
 use umbral::templates::context;
-use umbral::web::{
+use umbral::web::{ApiError, 
     get, post, Form, HeaderMap, Html, IntoResponse, Path, Query, Redirect, Response, Router,
     StatusCode,
 };
@@ -140,7 +140,7 @@ impl Plugin for PluginDirectoryPlugin {
     }
 }
 
-async fn prebuilt_plugins() -> Result<Html<String>, (StatusCode, String)> {
+async fn prebuilt_plugins() -> Result<Html<String>, ApiError> {
     render_prebuilt().await.map(Html).map_err(internal_error)
 }
 
@@ -294,7 +294,7 @@ fn audited_predicate() -> umbral::orm::Predicate<PluginModel> {
 
 async fn plugin_directory(
     Query(q): Query<ListingQuery>,
-) -> Result<Html<String>, (StatusCode, String)> {
+) -> Result<Html<String>, ApiError> {
     render_listing(
         q.source.as_deref(),
         truthy(q.audited.as_deref()),
@@ -303,7 +303,7 @@ async fn plugin_directory(
     )
     .await
     .map(Html)
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+    .map_err(ApiError::internal)
 }
 
 /// Pagination view-model handed to `plugins.html`.
@@ -609,11 +609,11 @@ struct SearchQuery {
 
 async fn plugin_search(
     Query(sq): Query<SearchQuery>,
-) -> Result<Html<String>, (StatusCode, String)> {
+) -> Result<Html<String>, ApiError> {
     render_search(sq.q.as_deref().unwrap_or(""))
         .await
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(ApiError::internal)
 }
 
 /// A single search hit — the shape `search_results.html` iterates. The global
@@ -743,7 +743,7 @@ async fn plugin_detail(
     Path(slug): Path<String>,
     Query(q): Query<DetailQuery>,
     OptionalUser(maybe_user): OptionalUser,
-) -> Result<Html<String>, (StatusCode, String)> {
+) -> Result<Html<String>, ApiError> {
     // `/plugins/submit` is served by its own static route (registered
     // before this `/plugins/{slug}` matcher), so the submit page never
     // reaches here — this is the canonical plugin-detail path only.
@@ -751,13 +751,12 @@ async fn plugin_detail(
     let viewer = maybe_user.map(|u| u.id);
     match render_detail_for(&slug, submitted, viewer)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(ApiError::internal)?
     {
         Some(html) => Ok(Html(html)),
-        None => Err((
-            StatusCode::NOT_FOUND,
-            format!("No plugin directory entry exists for `{slug}` yet."),
-        )),
+        None => Err(ApiError::not_found(format!(
+            "No plugin directory entry exists for `{slug}` yet."
+        ))),
     }
 }
 
@@ -841,7 +840,7 @@ async fn post_plugin_note(
 
     let Some(payload) = create_note(&slug, body, kind, author, parent_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+        .map_err(internal_tuple)?
     else {
         return Err((
             StatusCode::NOT_FOUND,
@@ -1058,7 +1057,7 @@ fn report_categories() -> Vec<ReportCategory> {
         .collect()
 }
 
-async fn report_page(Query(q): Query<ReportQuery>) -> Result<Html<String>, (StatusCode, String)> {
+async fn report_page(Query(q): Query<ReportQuery>) -> Result<Html<String>, ApiError> {
     let submitted = q.submitted.as_deref() == Some("1");
     render_report(q.plugin.as_deref(), submitted, None, &HashMap::new())
         .await
@@ -1073,7 +1072,7 @@ async fn report_page(Query(q): Query<ReportQuery>) -> Result<Html<String>, (Stat
 /// error instead of crashing.
 async fn post_report(
     Form(form): Form<HashMap<String, String>>,
-) -> Result<Response, (StatusCode, String)> {
+) -> Result<Response, ApiError> {
     let slug = form
         .get("plugin")
         .map(|s| s.trim().to_string())
@@ -1249,7 +1248,7 @@ struct SubmitQuery {
     submitted: Option<String>,
 }
 
-async fn submit_page(Query(q): Query<SubmitQuery>) -> Result<Html<String>, (StatusCode, String)> {
+async fn submit_page(Query(q): Query<SubmitQuery>) -> Result<Html<String>, ApiError> {
     let submitted = q.submitted.as_deref() == Some("1");
     render_submit(submitted, None, &HashMap::new())
         .await
@@ -1265,7 +1264,7 @@ async fn submit_page(Query(q): Query<SubmitQuery>) -> Result<Html<String>, (Stat
 async fn post_submission(
     OptionalUser(maybe_user): OptionalUser,
     Form(form): Form<HashMap<String, String>>,
-) -> Result<Response, (StatusCode, String)> {
+) -> Result<Response, ApiError> {
     // A logged-in submitter OWNS the plugin (`created_by`); an anonymous
     // submission stays unowned (`None`) exactly as before.
     let owner_id = maybe_user.map(|u| u.id);
@@ -1580,7 +1579,7 @@ async fn post_add_moderator(
     };
     let Some(plugin) = load_plugin_for_moderation(&slug)
         .await
-        .map_err(internal_error)?
+        .map_err(internal_tuple)?
     else {
         return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
     };
@@ -1605,7 +1604,7 @@ async fn post_add_moderator(
 
     match add_moderator_logic(&plugin, target, user.id)
         .await
-        .map_err(internal_error)?
+        .map_err(internal_tuple)?
     {
         AddModeratorOutcome::Added => Ok(Redirect::to(&format!("/plugins/{slug}")).into_response()),
         AddModeratorOutcome::AlreadyModerator => Ok((
@@ -1631,7 +1630,7 @@ async fn post_remove_moderator(
     };
     let Some(plugin) = load_plugin_for_moderation(&slug)
         .await
-        .map_err(internal_error)?
+        .map_err(internal_tuple)?
     else {
         return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
     };
@@ -1644,7 +1643,7 @@ async fn post_remove_moderator(
 
     remove_moderator_logic(&plugin, user_id)
         .await
-        .map_err(internal_error)?;
+        .map_err(internal_tuple)?;
     Ok(Redirect::to(&format!("/plugins/{slug}")).into_response())
 }
 
@@ -1660,7 +1659,7 @@ async fn post_moderate_comment(
     };
     let Some(plugin) = load_plugin_for_moderation(&slug)
         .await
-        .map_err(internal_error)?
+        .map_err(internal_tuple)?
     else {
         return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
     };
@@ -1719,7 +1718,7 @@ async fn moderate_issue_resolution(
     };
     let Some(plugin) = load_plugin_for_moderation(&slug)
         .await
-        .map_err(internal_error)?
+        .map_err(internal_tuple)?
     else {
         return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
     };
@@ -1732,7 +1731,7 @@ async fn moderate_issue_resolution(
 
     match resolve_issue_logic(&plugin, comment_id, resolved)
         .await
-        .map_err(internal_error)?
+        .map_err(internal_tuple)?
     {
         true => Ok(Redirect::to(&redirect_after_moderation(form, &slug)).into_response()),
         false => Err((
@@ -1811,7 +1810,7 @@ async fn account_plugin_counts(plugin_id: i64) -> Result<(i64, i64, i64), String
 /// each with the counts that tell them whether anything needs attention.
 async fn account_plugins_page(
     OptionalUser(maybe_user): OptionalUser,
-) -> Result<Response, (StatusCode, String)> {
+) -> Result<Response, ApiError> {
     let Some(user) = maybe_user else {
         return Ok(Redirect::to("/login?next=/account/plugins").into_response());
     };
@@ -1943,7 +1942,7 @@ async fn account_plugin_manage_page(
     };
     let Some(plugin) = load_plugin_for_moderation(&slug)
         .await
-        .map_err(internal_error)?
+        .map_err(internal_tuple)?
     else {
         return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
     };
@@ -1965,7 +1964,7 @@ async fn account_plugin_manage_page(
         .order_by(plugin_comment::CREATED_AT.desc())
         .fetch()
         .await
-        .map_err(internal_error)?;
+        .map_err(internal_tuple)?;
 
     let mut open_issues = Vec::new();
     let mut resolved_issues = Vec::new();
@@ -1997,7 +1996,7 @@ async fn account_plugin_manage_page(
 
     let body =
         umbral::templates::render("account/plugin_manage.html", &context! { plugin => view })
-            .map_err(internal_error)?;
+            .map_err(internal_tuple)?;
     Ok(Html(body).into_response())
 }
 
@@ -2925,8 +2924,27 @@ fn title_case(s: &str) -> String {
     }
 }
 
-fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+/// Opaque 500 as a `(StatusCode, String)` tuple, for the handlers that ALSO return 401 /
+/// 429 and therefore cannot use `ApiError` — core's `ApiError` has no variant for either
+/// (gaps3 #62).
+///
+/// The point is the same as `internal_error`'s: the cause is LOGGED, never sent. What
+/// used to sit here was a helper returning the error's own text, which put the database's
+/// error message on the page.
+fn internal_tuple<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
+    tracing::error!(error = %err, "plugin_directory: internal error");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal server error".to_string(),
+    )
+}
+
+fn internal_error<E: std::fmt::Display>(err: E) -> ApiError {
+    // gaps3 #58: this used to be `(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())`,
+    // which sent the database's own error text to the browser — a missing table, a column
+    // name, a SQL fragment, shown to whoever asked for the page. `ApiError::internal` logs
+    // the cause server-side and returns an opaque 500.
+    ApiError::internal(err.to_string())
 }
 
 trait AuditDateLabel {
