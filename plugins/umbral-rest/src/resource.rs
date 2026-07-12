@@ -312,6 +312,9 @@ pub struct ResourceConfig {
     /// CRUD action to the rows the caller may access. Declared via
     /// [`Self::scope`] / [`Self::owned_by`].
     pub(crate) scope: Option<ObjectScopeFn>,
+    /// Per-resource `Cache-Control` override (gaps3 #36). `None` → the plugin
+    /// default (`no-store`). Set this on a genuinely cacheable read endpoint.
+    pub(crate) cache_control: Option<String>,
     /// gaps3 #16: owner-field injection on create. `Some(col)` fills `col` from
     /// the authenticated identity's user id when a row is created, and rejects a
     /// body-supplied value — so a client can't create a row owned by someone
@@ -349,6 +352,7 @@ impl ResourceConfig {
             nested: Vec::new(),
             bulk: false,
             scope: None,
+            cache_control: None,
             owner_field: None,
         }
     }
@@ -432,6 +436,20 @@ impl ResourceConfig {
     /// ```ignore
     /// ResourceConfig::new("order").owned_by("owner_id")
     /// ```
+    /// Override `Cache-Control` for this resource only (gaps3 #36).
+    ///
+    /// The framework defaults every REST response to `no-store` because a
+    /// mutable API served stale is a data-loss bug. A genuinely cacheable read
+    /// endpoint — a public, slow-changing list — can opt back in here.
+    ///
+    /// ```ignore
+    /// ResourceConfig::new("country").cache_control("public, max-age=3600")
+    /// ```
+    pub fn cache_control(mut self, value: impl Into<String>) -> Self {
+        self.cache_control = Some(value.into());
+        self
+    }
+
     pub fn owned_by(self, owner_column: impl Into<String>) -> Self {
         let col = owner_column.into();
         self.scope(move |identity| match identity {

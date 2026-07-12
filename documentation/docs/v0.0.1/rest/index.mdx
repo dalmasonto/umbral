@@ -43,3 +43,20 @@ Authentication defaults to `NoAuthentication` (every request anonymous). Permiss
 - **Field scoping.** `ResourceConfig::hide("password_hash")` strips a column from responses, and a hidden field can't be written back either (the write body is scrubbed of it). `hide` accepts a single field or many: `.hide(["password_hash", "ssn"])`. Key a config off the model instead of a literal table with `ResourceConfig::for_::<AuthUser>().hide(["password_hash", "email"])`, or hide on the plugin builder with `RestPlugin::hide_model::<AuthUser>(["password_hash"])` (uses `AuthUser::TABLE`, so a typo is a compile error). `noform` / `noedit` field attributes control write-side behaviour.
 
 The plugin contract itself is documented in `arch.md`; this folder covers the everyday consumer surface.
+
+
+## Caching
+
+REST responses ship `Cache-Control: no-store` by default.
+
+This is not a performance tweak — it's a correctness one. A `200 application/json` carrying **no** cache directive is *heuristically cacheable* by browsers and shared proxies (RFC 9111 §4.2.2). On a mutable API that becomes a data-loss bug: a refetch immediately after a write can be served the **pre-write snapshot** out of cache, and the client then overwrites fresh state with stale data. Leaving the decision to a heuristic is the footgun; stating it is the fix.
+
+Soften it globally, or opt a genuinely cacheable read endpoint back in:
+
+```rust
+RestPlugin::default()
+    .cache_control("private, no-cache")   // revalidate instead of never storing
+    .resource(ResourceConfig::new("country").cache_control("public, max-age=3600"))
+```
+
+A handler that sets `Cache-Control` itself always wins — the framework only fills in the header when nothing else has.

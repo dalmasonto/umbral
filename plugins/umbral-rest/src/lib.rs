@@ -217,6 +217,16 @@ enum ObjectScopeOutcome {
 
 #[derive(Clone)]
 pub struct RestPlugin {
+    /// `Cache-Control` for every REST JSON response (gaps3 #36).
+    ///
+    /// Defaults to `no-store`. A `200 application/json` carrying NO cache
+    /// directive is *heuristically cacheable* by browsers and shared proxies
+    /// (RFC 9111 §4.2.2) — so a mutable API served with no header can be replayed
+    /// stale: a refetch right after a mutation can return the pre-mutation
+    /// snapshot. An opinionated framework should not ship that by default.
+    cache_control: String,
+    /// Per-resource `Cache-Control` overrides (gaps3 #36).
+    cache_controls: HashMap<String, String>,
     include_only: Option<Vec<String>>,
     extra_exclude: Vec<String>,
     /// Tables that override the `DEFAULT_BLOCKED_TABLES` security
@@ -649,6 +659,8 @@ fn throttle_client_ip(headers: &umbral::web::HeaderMap) -> Option<String> {
 impl RestPlugin {
     pub fn new() -> Self {
         Self {
+            cache_control: "no-store".to_string(),
+            cache_controls: HashMap::new(),
             include_only: None,
             extra_exclude: Vec::new(),
             expose: std::collections::HashSet::new(),
@@ -875,6 +887,24 @@ impl RestPlugin {
     /// RestPlugin::default()
     ///     .paginate(PageNumberPagination::new(20).with_max_page_size(100))
     /// ```
+    /// Override the `Cache-Control` sent on every REST JSON response.
+    ///
+    /// The default is `no-store`, because a JSON `200` with no directive is
+    /// heuristically cacheable (RFC 9111 §4.2.2) and a mutable API served stale
+    /// is a data-loss bug: a refetch right after a write can return the
+    /// pre-write snapshot and clobber fresh state. Soften it globally with
+    /// `private, no-cache` if you want revalidation instead of no storage, or
+    /// override per-resource with [`ResourceConfig::cache_control`] for a
+    /// genuinely cacheable read endpoint.
+    ///
+    /// ```ignore
+    /// RestPlugin::default().cache_control("private, no-cache")
+    /// ```
+    pub fn cache_control(mut self, value: impl Into<String>) -> Self {
+        self.cache_control = value.into();
+        self
+    }
+
     pub fn paginate<P: Pagination>(mut self, p: P) -> Self {
         self.pagination = Arc::new(p);
         self
@@ -1016,7 +1046,11 @@ impl RestPlugin {
             bulk,
             scope,
             owner_field,
+            cache_control,
         } = config;
+        if let Some(cc) = cache_control {
+            self.cache_controls.insert(table.clone(), cc);
+        }
         for field in hidden {
             self.hidden.push((table.clone(), field));
         }
@@ -1976,7 +2010,11 @@ impl Plugin for RestPlugin {
             }
         }
 
-        router
+        // gaps3 #36: one layer, so EVERY REST response is covered — list, detail,
+        // the write verbs, and the custom `@action` handlers apps mount by hand.
+        // Doing it per-handler would have missed the ones added later, which is
+        // exactly how a header like this rots.
+        router.layer(axum::middleware::from_fn(cache_control_layer))
     }
 
     fn route_paths(&self) -> Vec<umbral::routes::RouteSpec> {
@@ -4819,4 +4857,39 @@ mod csv_writer_unit {
             "error message identifies a write or flush stage: {msg:?}",
         );
     }
+}
+
+/// Stamp `Cache-Control` on REST responses (gaps3 #36).
+///
+/// A `200 application/json` with NO cache directive is *heuristically cacheable*
+/// by browsers and shared proxies (RFC 9111 §4.2.2). On a mutable API that is a
+/// data-loss bug, not a perf nit: a refetch immediately after a write can be
+/// served the pre-write snapshot from cache and silently clobber fresh state.
+///
+/// Never overwrites a header a handler set on purpose — an explicit directive
+/// from a custom action wins over the default.
+async fn cache_control_layer(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = req.uri().path().to_string();
+    let mut res = next.run(req).await;
+
+    if res.headers().contains_key(http::header::CACHE_CONTROL) {
+        return res;
+    }
+    let Some(cfg) = CONFIG.get() else {
+        return res;
+    };
+    // `<base>/<table>/...` — the table is the segment after the base path.
+    let table = path
+        .strip_prefix(cfg.base_path.as_str())
+        .map(|rest| rest.trim_start_matches('/'))
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("");
+    let value = cfg.cache_controls.get(table).unwrap_or(&cfg.cache_control);
+    if let Ok(v) = http::HeaderValue::from_str(value) {
+        res.headers_mut().insert(http::header::CACHE_CONTROL, v);
+    }
+    res
 }
