@@ -561,7 +561,17 @@ App::builder()
     .build()?;
 ```
 
-The list shows the columns an operator wants at a glance - `id`, `name`, `status`, `priority`, `attempts` / `max_attempts`, `run_at`, `completed_at`, `created_at` - with `status` / `priority` filters and a `name` / `status` search box. Every column is read-only: rows are written by `enqueue` and the worker, never hand-authored.
+Register `periodic_admin_model()` alongside it to see the **schedules** — the queue tells you what *ran*, not what is *scheduled*:
+
+```rust
+AdminPlugin::default()
+    .register(umbral_tasks::admin_model())           // the queue
+    .register(umbral_tasks::periodic_admin_model())  // the schedules
+```
+
+It lists each periodic task's cron expression, `next_run`, `last_run`, and whether it's enabled — with an **Enable / disable** bulk action, so pausing a runaway schedule at 3am doesn't need a `psql` session. `enabled` is the only editable column: everything else is declared in code and re-synced at boot, so hand-editing it here would be silently reverted on the next deploy.
+
+The queue list shows the columns an operator wants at a glance - `id`, `name`, `status`, `priority`, `attempts` / `max_attempts`, `run_at`, `completed_at`, `created_at` - with `status` / `priority` filters and a `name` / `status` search box. Every column is read-only: rows are written by `enqueue` and the worker, never hand-authored.
 
 ### Retrying a failed task
 

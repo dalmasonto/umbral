@@ -1853,3 +1853,91 @@ pub fn admin_model() -> umbral_admin::AdminModel {
             "created_at",
         ])
 }
+
+/// A read-mostly `AdminModel` for the **schedules** — the periodic tasks beat
+/// fires (gaps3 #49).
+///
+/// [`admin_model`] shows the *queue*: what ran, what failed, what's pending. It
+/// says nothing about *what is scheduled*, so an operator could see a task firing
+/// hourly and have no way to look up its cron expression, when it next runs, or
+/// turn it off. That is the one thing you actually want to do to a schedule at
+/// 3am, and it needed a `psql` session.
+///
+/// Register it alongside the queue:
+///
+/// ```ignore
+/// AdminPlugin::default()
+///     .register(umbral_tasks::admin_model())           // the queue
+///     .register(umbral_tasks::periodic_admin_model())  // the schedules
+/// ```
+///
+/// `enabled` is the only editable column: everything else (`schedule`, `task`,
+/// `payload`) is declared in code via [`TasksPlugin::periodic`] and re-synced at
+/// boot, so hand-editing it in the admin would be silently reverted on the next
+/// deploy — a worse experience than not offering the field at all. Pausing a
+/// schedule, by contrast, is a genuine operator action and survives.
+pub fn periodic_admin_model() -> umbral_admin::AdminModel {
+    use umbral_admin::{Action, ActionResult, ActionScope, AdminModel, ToastLevel};
+
+    let toggle = Action::new(
+        "toggle_enabled",
+        "Enable / disable selected",
+        "power",
+        |inv: umbral_admin::ActionInvocation| async move {
+            let mut flipped = 0u64;
+            for raw in &inv.ids {
+                let Ok(id) = raw.parse::<i64>() else {
+                    continue;
+                };
+                let Ok(Some(row)) = PeriodicTask::objects()
+                    .filter(periodic_task::ID.eq(id))
+                    .first()
+                    .await
+                else {
+                    continue;
+                };
+                let mut values = serde_json::Map::new();
+                values.insert("enabled".into(), serde_json::json!(!row.enabled));
+                match PeriodicTask::objects()
+                    .filter(periodic_task::ID.eq(id))
+                    .update_values(values)
+                    .await
+                {
+                    Ok(_) => flipped += 1,
+                    Err(e) => {
+                        tracing::error!(error = %e, periodic_task_id = id, "admin: toggle failed");
+                        return Err("database error while toggling the schedule".to_string());
+                    }
+                }
+            }
+            Ok(ActionResult::Toast {
+                message: format!("Toggled {flipped} schedule(s)."),
+                level: ToastLevel::Success,
+            })
+        },
+    )
+    .scope(ActionScope::Bulk)
+    .confirm("Flip `enabled` on the selected schedule(s)? A disabled schedule is skipped by beat.");
+
+    AdminModel::new("periodic_task")
+        .label("Schedules")
+        .list_display(&[
+            "id", "name", "task", "schedule", "next_run", "last_run", "enabled",
+        ])
+        .list_filter(&["enabled"])
+        .search_fields(&["name", "task"])
+        .ordering(&["next_run"])
+        .actions(vec![toggle])
+        // Everything but `enabled` is declared in code and re-synced at boot;
+        // editing it here would be reverted on the next deploy.
+        .readonly_fields(&[
+            "id",
+            "name",
+            "task",
+            "payload",
+            "schedule",
+            "next_run",
+            "last_run",
+            "created_at",
+        ])
+}
