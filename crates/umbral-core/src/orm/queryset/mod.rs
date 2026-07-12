@@ -3064,6 +3064,24 @@ impl<T: Model> QuerySet<T> {
         let count = ids.len() as u64;
         if !ids.is_empty() {
             Self::audit_post(audit_before, &ids, crate::orm::audit::DELETE).await;
+
+            // gaps3 #29: also emit the PER-ROW `post_delete:<table>`, not only the
+            // bulk signal. `save()` and `update_or_create()` emit per-row signals;
+            // `delete()` emitted only the bulk one, so `RealtimePlugin::on_model`
+            // — which subscribes per-row — never saw a delete. A live consumer
+            // hand-pushed a realtime event after every delete because of this.
+            //
+            // The payload is the primary key, not the whole row: the row is gone
+            // by now, and re-reading it beforehand would cost a SELECT on every
+            // delete in the app whether or not anything is listening. The id is
+            // what a delete event is *for* — invalidate that row — and it is
+            // exactly what realtime's default projection carries anyway.
+            if let Some(pk) = pk_field::<T>() {
+                for id in &ids {
+                    let payload = serde_json::json!({ pk.name: id });
+                    crate::signals::emit_post_delete_by_table(T::TABLE, payload).await;
+                }
+            }
             crate::signals::emit_bulk_post_delete::<T>(ids).await;
         }
         Ok(count)
@@ -3900,6 +3918,12 @@ impl<T: Model> Manager<T> {
                 // seeded on the readback row.
                 instance.take_pending_m2m_into(&mut row);
                 row.write_pending_m2m().await?;
+                // gaps3 #29: `create()` emitted NOTHING, while `save()` and
+                // `update_or_create()` both emit per-row `post_save`. So every
+                // `.create()` was invisible to signals — and therefore to
+                // `RealtimePlugin::on_model`, which is why a live consumer
+                // hand-pushed a realtime event after all 13 of its writes.
+                crate::signals::emit_post_save::<T>(&row, true).await;
                 // gaps3 #54: the created row IS the after-image.
                 crate::orm::audit::record(
                     &crate::migrate::ModelMeta::for_::<T>(),
@@ -3950,6 +3974,12 @@ impl<T: Model> Manager<T> {
                 row.set_m2m_parent_ids();
                 instance.take_pending_m2m_into(&mut row);
                 row.write_pending_m2m().await?;
+                // gaps3 #29: `create()` emitted NOTHING, while `save()` and
+                // `update_or_create()` both emit per-row `post_save`. So every
+                // `.create()` was invisible to signals — and therefore to
+                // `RealtimePlugin::on_model`, which is why a live consumer
+                // hand-pushed a realtime event after all 13 of its writes.
+                crate::signals::emit_post_save::<T>(&row, true).await;
                 // gaps3 #54: the created row IS the after-image.
                 crate::orm::audit::record(
                     &crate::migrate::ModelMeta::for_::<T>(),
@@ -4323,30 +4353,11 @@ impl<T: Model> Manager<T> {
         // as get_or_create but with an extra UPDATE step.
         match self.create(defaults.clone()).await {
             Ok(created) => {
-                // `create()` is deliberately signal-free (only `save()` fires
-                // per-row signals), so emit `post_save` here — otherwise the
-                // CREATE branch would be silent to on_model / realtime
-                // consumers while the UPDATE branch (above) fires it, an
-                // inconsistency across the two halves of one API (gaps3 #14).
-                crate::orm::audit::record(
-                    &crate::migrate::ModelMeta::for_::<T>(),
-                    &serde_json::to_value(&created)
-                        .ok()
-                        .and_then(|v| {
-                            v.as_object().map(|o| {
-                                crate::orm::audit::pk_of(&crate::migrate::ModelMeta::for_::<T>(), o)
-                            })
-                        })
-                        .unwrap_or_default(),
-                    crate::orm::audit::CREATE,
-                    None,
-                    serde_json::to_value(&created)
-                        .ok()
-                        .and_then(|v| v.as_object().cloned())
-                        .as_ref(),
-                )
-                .await;
-                crate::signals::emit_post_save::<T>(&created, true).await;
+                // `create()` now fires `post_save` and records the audit row
+                // itself (gaps3 #29), so this branch must NOT do either again —
+                // it delegates to `create()` above. Before #29, `create()` was
+                // signal-free and gaps3 #14 patched the gap here; that patch is
+                // now a double-emit (and, since gaps3 #54, a double audit row).
                 Ok((created, true))
             }
             Err(WriteError::UniqueViolation { .. }) => {
