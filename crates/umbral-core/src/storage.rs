@@ -290,6 +290,20 @@ pub enum StorageError {
         /// The actual size that was rejected, in bytes.
         actual: u64,
     },
+    /// The upload's type isn't on the configured allow-list, or its declared
+    /// type doesn't match its actual bytes (gaps3 #51).
+    ///
+    /// A client-declared `Content-Type` is trivially spoofed, so a policy that
+    /// only checks the declaration doesn't stop anything: renaming `evil.exe` to
+    /// `avatar.png` and claiming `image/png` would sail through. The bytes are
+    /// sniffed too.
+    UnsupportedType {
+        /// What the upload claimed to be (or what its bytes actually are, when
+        /// the two disagree).
+        content_type: String,
+        /// What this storage accepts.
+        allowed: Vec<String>,
+    },
     /// An underlying I/O error (filesystem read/write, etc.).
     Io(std::io::Error),
     /// A backend-specific failure that doesn't map to the variants above
@@ -312,6 +326,14 @@ impl std::fmt::Display for StorageError {
             StorageError::TooLarge { limit, actual } => write!(
                 f,
                 "storage: object {actual}B exceeds configured cap of {limit}B"
+            ),
+            StorageError::UnsupportedType {
+                content_type,
+                allowed,
+            } => write!(
+                f,
+                "storage: `{content_type}` is not an accepted upload type (accepted: {})",
+                allowed.join(", ")
             ),
             StorageError::Io(e) => write!(f, "storage: io: {e}"),
             StorageError::Backend(s) => write!(f, "storage: backend: {s}"),

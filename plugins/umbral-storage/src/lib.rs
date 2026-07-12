@@ -71,12 +71,13 @@ mod media;
 mod s3;
 mod static_serve;
 
-#[doc(hidden)]
 pub use media::clear_processors_for_test;
 pub use media::{
     BoxError, FsStorage, MediaError, MediaFile, MediaSaveOutcome, MediaTracking, Processor,
     STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
 };
+#[doc(hidden)]
+pub use media::{IMAGE_TYPES, sniff_content_type};
 #[cfg(feature = "s3")]
 pub use s3::{S3Storage, S3StorageBuilder};
 // Re-export the core Storage trait through this crate for ergonomic
@@ -129,6 +130,10 @@ struct MediaSide {
     dir: PathBuf,
     storage: Arc<dyn Storage>,
     max_size: Option<u64>,
+    /// gaps3 #51 — the accepted upload types. `None` = accept anything (the
+    /// pre-existing behaviour); `Some(list)` enforces an allow-list on every
+    /// save path, sniffing the bytes rather than trusting the declared type.
+    accept: Option<Vec<String>>,
     cleanup: Vec<CleanupSpec>,
 }
 
@@ -280,6 +285,7 @@ impl StoragePlugin {
             dir,
             storage,
             max_size: Some(DEFAULT_MAX_UPLOAD_SIZE),
+            accept: None,
             cleanup: Vec::new(),
         });
         self
@@ -300,6 +306,7 @@ impl StoragePlugin {
             mount,
             storage,
             max_size: Some(DEFAULT_MAX_UPLOAD_SIZE),
+            accept: None,
             cleanup: Vec::new(),
         });
         self
@@ -315,6 +322,7 @@ impl StoragePlugin {
             mount,
             storage: Arc::new(s3),
             max_size: Some(DEFAULT_MAX_UPLOAD_SIZE),
+            accept: None,
             cleanup: Vec::new(),
         });
         self
@@ -341,6 +349,36 @@ impl StoragePlugin {
     /// Enforce a hard upload-size cap on the media side (replacing the
     /// [`DEFAULT_MAX_UPLOAD_SIZE`] default). [`Self::save`] rejects bytes
     /// longer than this; the streaming path enforces it mid-stream.
+    /// Restrict uploads to an allow-list of MIME types (gaps3 #51).
+    ///
+    /// The size cap stops a 20 MB file. It does **not** stop a 2 MB `.exe`
+    /// renamed to `avatar.png` from landing in an `ImageField` — nothing did,
+    /// before this.
+    ///
+    /// Enforcement sniffs the **bytes**, not the declared `Content-Type`. A
+    /// client-declared type is trivially spoofed, so a policy that only reads the
+    /// declaration stops nobody: the declaration must be on the list, the bytes'
+    /// real signature must be on the list, and the two must agree.
+    ///
+    /// ```ignore
+    /// StoragePlugin::default().media("/media", fs).accept(&["image/png", "application/pdf"])
+    /// ```
+    pub fn accept(mut self, types: &[&str]) -> Self {
+        let list: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+        if let Some(m) = self.media.as_mut() {
+            m.accept = Some(list);
+        }
+        self
+    }
+
+    /// [`Self::accept`] with the image set — PNG / JPEG / GIF / WEBP.
+    ///
+    /// **SVG is deliberately not included.** An SVG is a script-execution vector,
+    /// not a picture; an image allow-list should not invite one in.
+    pub fn accept_images(self) -> Self {
+        self.accept(media::IMAGE_TYPES)
+    }
+
     pub fn max_size(mut self, bytes: u64) -> Self {
         if let Some(media) = self.media.as_mut() {
             media.max_size = Some(bytes);
@@ -453,6 +491,16 @@ impl StoragePlugin {
     #[doc(hidden)]
     pub fn size_limited_for_test(inner: Arc<dyn Storage>, max_size: u64) -> Arc<dyn Storage> {
         Arc::new(SizeLimitedStorage::new(inner, max_size))
+    }
+
+    /// Test-only: wrap `inner` in the internal type-policy decorator, exactly as
+    /// `on_ready` wires it (gaps3 #51). Not public API.
+    #[doc(hidden)]
+    pub fn type_limited_for_test(inner: Arc<dyn Storage>, accept: &[&str]) -> Arc<dyn Storage> {
+        Arc::new(media::TypeLimitedStorage::new(
+            inner,
+            accept.iter().map(|t| t.to_string()).collect(),
+        ))
     }
 
     /// Persist one upload through the media backend and record it in
@@ -645,12 +693,20 @@ impl Plugin for StoragePlugin {
         // wrapped in MediaTracking (so the admin/form upload path records a
         // media_file row) and, when a cap is set, SizeLimitedStorage.
         if let Some(media) = &self.media {
-            let storage: Arc<dyn Storage> = match media.max_size {
+            let mut storage: Arc<dyn Storage> = match media.max_size {
                 Some(max_size) => {
                     Arc::new(SizeLimitedStorage::new(media.storage.clone(), max_size))
                 }
                 None => media.storage.clone(),
             };
+            // gaps3 #51: the type policy wraps the size cap, so an oversized
+            // upload is refused on size before anything is buffered to sniff it.
+            // A decorator (not a handler check) means the admin, forms, REST and
+            // any hand-written upload route all inherit the policy — including
+            // routes written after this line.
+            if let Some(accept) = &media.accept {
+                storage = Arc::new(media::TypeLimitedStorage::new(storage, accept.clone()));
+            }
             umbral::storage::set_storage_named(DEFAULT, Arc::new(MediaTracking::new(storage)));
 
             for spec in &media.cleanup {

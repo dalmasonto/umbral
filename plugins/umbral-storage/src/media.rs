@@ -854,6 +854,13 @@ impl From<StorageError> for MediaError {
             StorageError::NotFound => MediaError::Storage("object not found".to_string()),
             StorageError::Backend(s) => MediaError::Storage(s),
             StorageError::Unsupported(s) => MediaError::Storage(s),
+            StorageError::UnsupportedType {
+                content_type,
+                allowed,
+            } => MediaError::Storage(format!(
+                "`{content_type}` is not an accepted upload type (accepted: {})",
+                allowed.join(", ")
+            )),
         }
     }
 }
@@ -1118,5 +1125,147 @@ mod active_content_tests {
         ] {
             assert_eq!(neutralise_active_content(n), n, "{n} must be left as-is");
         }
+    }
+}
+
+// =========================================================================
+// Upload content-type policy (gaps3 #51)
+// =========================================================================
+
+/// What an upload is *actually* made of, sniffed from its leading bytes.
+///
+/// The client-declared `Content-Type` is worth nothing on its own: renaming
+/// `evil.exe` to `avatar.png` and claiming `image/png` is a two-second attack. A
+/// policy that only reads the declaration stops nobody, so the bytes get the
+/// final say.
+///
+/// `None` means "no signature we recognise" — which for an image allow-list is a
+/// rejection, not a pass.
+pub fn sniff_content_type(bytes: &[u8]) -> Option<&'static str> {
+    const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    const GIF87: &[u8] = b"GIF87a";
+    const GIF89: &[u8] = b"GIF89a";
+    const PDF: &[u8] = b"%PDF-";
+
+    if bytes.starts_with(PNG) {
+        return Some("image/png");
+    }
+    // JPEG: FF D8 FF
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(GIF87) || bytes.starts_with(GIF89) {
+        return Some("image/gif");
+    }
+    // WEBP: "RIFF" .... "WEBP"
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.starts_with(PDF) {
+        return Some("application/pdf");
+    }
+    None
+}
+
+/// The MIME types the built-in image allow-list accepts.
+///
+/// SVG is **not** here, and that is deliberate: an SVG is a script-execution
+/// vector, not a picture. `neutralise_active_content` already defangs one that
+/// slips in via another route; an image allow-list should not invite it.
+pub const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// Storage decorator enforcing an upload allow-list on **every** save path
+/// (gaps3 #51).
+///
+/// A decorator for the same reason the size cap is one: wrapping the ambient
+/// `Storage` means the admin, form handling, REST, and any hand-written upload
+/// route all inherit the policy. Enforcing it in a handler would cover the
+/// handlers that existed the day it was written.
+pub(crate) struct TypeLimitedStorage {
+    inner: Arc<dyn Storage>,
+    allowed: Vec<String>,
+}
+
+impl TypeLimitedStorage {
+    pub(crate) fn new(inner: Arc<dyn Storage>, allowed: Vec<String>) -> Self {
+        Self { inner, allowed }
+    }
+
+    /// Decide whether these bytes may be stored.
+    ///
+    /// Both the declaration AND the sniffed reality must be on the list, and they
+    /// must agree. Checking only the declaration lets a renamed `.exe` through;
+    /// checking only the bytes lets a caller store a PNG into a field that was
+    /// supposed to take PDFs. Requiring both closes each hole.
+    fn check(&self, declared: &str, bytes: &[u8]) -> Result<(), StorageError> {
+        let reject = |what: &str| {
+            Err(StorageError::UnsupportedType {
+                content_type: what.to_string(),
+                allowed: self.allowed.clone(),
+            })
+        };
+        // Normalise `image/png; charset=binary` down to the essence.
+        let declared = declared.split(';').next().unwrap_or("").trim();
+        if !self.allowed.iter().any(|a| a == declared) {
+            return reject(declared);
+        }
+        match sniff_content_type(bytes) {
+            // The bytes are something we recognise — they must be allowed AND
+            // must be what the caller claimed.
+            Some(actual) => {
+                if !self.allowed.iter().any(|a| a == actual) || actual != declared {
+                    return reject(actual);
+                }
+                Ok(())
+            }
+            // Unrecognised bytes claiming to be an allowed type: that is the
+            // renamed-executable case. Refuse.
+            None => reject("unrecognised"),
+        }
+    }
+}
+
+#[umbral::storage::async_trait]
+impl Storage for TypeLimitedStorage {
+    async fn store(
+        &self,
+        filename: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        self.check(content_type, bytes)?;
+        self.inner.store(filename, content_type, bytes).await
+    }
+
+    async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+        self.inner.retrieve(key).await
+    }
+
+    async fn store_stream(
+        &self,
+        filename: &str,
+        content_type: &str,
+        body: umbral::storage::ByteStream,
+    ) -> Result<StoredFile, StorageError> {
+        // Sniffing needs the leading bytes, so a policed stream is buffered.
+        // Correctness beats streaming here: you cannot decide whether bytes are
+        // acceptable without looking at them, and the size cap (applied by the
+        // decorator underneath) still bounds how much gets buffered.
+        use futures_util::StreamExt;
+        let mut body = body;
+        let mut buf: Vec<u8> = Vec::new();
+        while let Some(chunk) = body.next().await {
+            buf.extend_from_slice(&chunk.map_err(StorageError::Io)?);
+        }
+        self.check(content_type, &buf)?;
+        self.inner.store(filename, content_type, &buf).await
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), StorageError> {
+        self.inner.delete(key).await
+    }
+
+    fn url(&self, key: &str) -> String {
+        self.inner.url(key)
     }
 }

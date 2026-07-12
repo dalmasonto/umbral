@@ -665,3 +665,24 @@ Design rationale and the migration plan live in `docs/decisions/2026-06-02-media
 | Files that change between deploys but are dev-owned (favicon, marketing PDFs)  | the **static** side         |
 | User-uploaded avatars, documents, reports                                     | the **media** side          |
 | Anything the admin should list / delete                                       | the **media** side          |
+
+
+## Restricting what can be uploaded
+
+The size cap stops a 20 MB file. It does **not** stop a 2 MB `.exe` renamed to `avatar.png` from landing in an `ImageField`. `accept(...)` does:
+
+```rust
+StoragePlugin::default()
+    .media("/media", fs)
+    .accept_images()                                   // png / jpeg / gif / webp
+    // or an explicit list:
+    .accept(&["image/png", "application/pdf"])
+```
+
+<Callout type="warning">
+  **It sniffs the bytes, not the header.** A client-declared `Content-Type` is trivially spoofed, so a policy that only reads the declaration stops nobody. Three things must hold: the declared type is on the list, the bytes' real signature is on the list, and **the two agree**. An executable claiming `image/png` fails the second check; a JPEG declared as a PNG fails the third.
+</Callout>
+
+Enforcement is a **storage decorator**, the same shape as the size cap — so the admin, form handling, REST, and any upload route you write yourself all inherit it, *including routes added after you set the policy*. A check in a handler only ever covers the handlers that existed the day it was written.
+
+`accept_images()` deliberately **excludes SVG**. An SVG is a script-execution vector, not a picture; an image allow-list shouldn't invite one in. (Active content that arrives some other way is still defanged on write — see above.)
