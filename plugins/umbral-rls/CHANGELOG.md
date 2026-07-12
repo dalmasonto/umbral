@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-rls-v0.0.6...umbral-rls-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(auth)* publish the session user id to the DB connection for RLS
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-rls-v0.0.5...umbral-rls-v0.0.6) - 2026-07-07
 
 ### Fixed

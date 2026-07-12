@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.6...umbral-auth-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(rest)* generated session client — login/logout/me, discovered from the spec
+- *(auth)* publish the session user id to the DB connection for RLS
+
+### Other
+
+- *(auth)* reject gaps3 #63 — the framework must not design your login page
+- *(auth)* rescue an orphaned TDD spec for server-rendered auth pages (gaps3 #63)
+- *(auth)* idioms page, and the RequireAuth extractor it needed (gaps3 #37)
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.5...umbral-auth-v0.0.6) - 2026-07-07
 
 ### Added

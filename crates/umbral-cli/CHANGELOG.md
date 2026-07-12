@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.6...umbral-cli-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(scaffold)* a real design — compiled Tailwind, the umbral palette, docs links
+- *(orm)* database views, regular and materialized (features #73)
+- *(rest)* generate a typed TypeScript query client (umbral gen-client)
+- *(migrate)* emit help text as a Postgres column comment
+- *(orm)* generate TypeScript types from the model registry
+
+### Fixed
+
+- *(settings)* `umbral startproject` emitted a project that would not compile (gaps3 #64)
+- *(migrate)* a bad env prefix made `migrate` succeed against nothing (gaps3 #59/#60/#61)
+- *(examples)* the scaffold generated an information leak into every new app (gaps3 #57)
+- *(app)* fire on_ready when the app is up, not when it is built
+
+### Other
+
+- *(scaffold)* a new project talks about itself, not about the generator
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.5...umbral-cli-v0.0.6) - 2026-07-07
 
 ### Added

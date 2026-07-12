@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.6...umbral-macros-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(typegen)* #[derive(Dto)] — custom response types in the client (gaps3 #29.5)
+- *(web)* Valid<T> + #[derive(Validate)] for request bodies (gaps3 #29.4)
+- *(orm)* database views, regular and materialized (features #73)
+- *(orm)* AppBuilder::auto_models() — models register themselves (gaps3 #46)
+- *(tasks)* type-safe enqueue — #[task] generates a typed handle (gaps3 #48)
+- *(orm)* model-level audit trail — #[umbral(audited)] (gaps3 #54)
+- *(orm)* auto_user_add / auto_user — stamp who wrote the row (gaps3 #55)
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.5...umbral-macros-v0.0.6) - 2026-07-07
 
 ### Added

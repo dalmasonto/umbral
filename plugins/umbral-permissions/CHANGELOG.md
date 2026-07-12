@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-permissions-v0.0.6...umbral-permissions-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(orm)* database views, regular and materialized (features #73)
+
+### Fixed
+
+- *(permissions)* a UUID-keyed user was silently forbidden from everything (gaps3 #59)
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-permissions-v0.0.5...umbral-permissions-v0.0.6) - 2026-07-07
 
 ### Added

@@ -12,25 +12,25 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.6" }
+umbral = { path = "../../crates/umbral", version = "0.0.7" }
 # axum is needed for State + Query extractors used by the new AdminConfig
 # routing surface. umbral's web re-exports don't include State.
 axum = "0.8"
 # Required for the auth gate. The admin uses umbral-auth's
 # `authenticate` helper to verify credentials on login.
-umbral-auth = { path = "../umbral-auth", version = "0.0.6" }
+umbral-auth = { path = "../umbral-auth", version = "0.0.7" }
 # Feature #75: per-model permission checks. The admin calls
 # `umbral_permissions::has_perm_for_superuser` at the top of every
 # CRUD handler. When PermissionsPlugin is NOT installed, all checks
 # short-circuit to allow (preserves pre-#75 staff-only gating).
-umbral-permissions = { path = "../umbral-permissions", version = "0.0.6" }
+umbral-permissions = { path = "../umbral-permissions", version = "0.0.7" }
 # Session management: create_session, login, logout, current_user.
 # Used by the HTML login flow to replace the old Basic Auth challenge.
-umbral-sessions = { path = "../umbral-sessions", version = "0.0.6" }
+umbral-sessions = { path = "../umbral-sessions", version = "0.0.7" }
 # CSRF token generation for the login form. The admin embeds a
 # hidden csrf_token field and verifies it on POST /admin/login.
 # We reuse umbral-security's generate_token() rather than rolling our own.
-umbral-security = { path = "../umbral-security", version = "0.0.6" }
+umbral-security = { path = "../umbral-security", version = "0.0.7" }
 # Form decoding + row marshalling. The admin parses POST bodies
 # through `serde_urlencoded` (axum's `Form` extractor under the
 # hood) and writes them back through dynamic sqlx::query calls.

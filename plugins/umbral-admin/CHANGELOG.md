@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.6...umbral-admin-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(orm)* database views, regular and materialized (features #73)
+- *(tasks)* type-safe enqueue — #[task] generates a typed handle (gaps3 #48)
+- *(orm)* auto_user_add / auto_user — stamp who wrote the row (gaps3 #55)
+- *(security)* mark personalised responses no-store, private
+
+### Fixed
+
+- *(admin)* the version label was a hardcoded lie; make it real and make it yours (gaps3 #67)
+- *(templates)* static() emitted &#x2f; instead of / — and it worked anyway (gaps3 #66)
+- *(migrate)* a bad env prefix made `migrate` succeed against nothing (gaps3 #59/#60/#61)
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.5...umbral-admin-v0.0.6) - 2026-07-07
 
 ### Added

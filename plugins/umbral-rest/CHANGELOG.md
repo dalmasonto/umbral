@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.6...umbral-rest-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(rest)* ResourceConfig::under — parent-scoped sub-resources (gaps3 #29.2)
+- *(orm)* auto_user_add / auto_user — stamp who wrote the row (gaps3 #55)
+- *(rest)* membership scoping — scope_async + ScopeDecision::RestrictIn
+- *(rest)* configurable pagination + scheme-driven auth in the generated client
+
+### Fixed
+
+- *(permissions)* a UUID-keyed user was silently forbidden from everything (gaps3 #59)
+- *(rest)* default JSON responses to Cache-Control: no-store (gaps3 #36)
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.5...umbral-rest-v0.0.6) - 2026-07-07
 
 ### Added

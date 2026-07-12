@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.6...umbral-openapi-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(typegen)* #[derive(Dto)] — custom response types in the client (gaps3 #29.5)
+- *(orm)* database views, regular and materialized (features #73)
+- *(tasks)* type-safe enqueue — #[task] generates a typed handle (gaps3 #48)
+- *(orm)* auto_user_add / auto_user — stamp who wrote the row (gaps3 #55)
+- *(rest)* generated session client — login/logout/me, discovered from the spec
+- *(rest)* gen-client emits one JS runtime + d.ts, and delegates realtime
+- *(rest)* configurable pagination + scheme-driven auth in the generated client
+- *(rest)* typed realtime subscriptions in the generated client
+- *(rest)* typed create/update DTOs for the generated client
+- *(rest)* generate a typed TypeScript query client (umbral gen-client)
+
+### Fixed
+
+- *(rest)* generated client 404'd on every get/update/delete
+- *(rest)* type get/update/delete id per model, not a global union
+- *(rest)* exclude hidden fields from generated row types
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.5...umbral-openapi-v0.0.6) - 2026-07-07
 
 ### Added
