@@ -335,7 +335,7 @@ RealtimePlugin::new()
     .expose::<Post>(Expose::to_group("public:posts"))
 ```
 
-Under the hood `.on(...)` **does not open its own connection**. It loads the [realtime plugin](../realtime/index)'s already-served `/realtime/client.js` and routes through `umbral.realtime.model(...)` — so it inherits the hard parts for free:
+Under the hood `.on(...)` **does not open its own connection**. It loads the [realtime plugin](../realtime/getting-started)'s already-served `/realtime/client.js` and routes through `umbral.realtime.model(...)` — so it inherits the hard parts for free:
 
 - **One SSE connection shared across every tab** (via `SharedWorker`, union-routed). A client that opened an `EventSource` per subscription would use one connection per model and exhaust the browser's ~6-connections-per-origin cap at six subscriptions.
 - Presence, `@broadcast` / `@user:` channel routing, and graceful degradation (`SharedWorker → EventSource → no-op` under CSP).

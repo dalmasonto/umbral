@@ -962,7 +962,7 @@ first thing a `default-src 'self'` Content-Security-Policy blocks.
 - Models & the ORM: {docs}/orm/models
 - Migrations: {docs}/migrations/managed-migrations
 - Admin: {docs}/plugins/admin
-- REST: {docs}/rest/pagination
+- REST: {docs}/rest/index
 - Login & signup pages: {docs}/auth/login-and-signup-pages
 - The Plugin trait: {docs}/plugins/the-plugin-trait
 "#,
