@@ -1,0 +1,76 @@
+---
+title: Parent-scoped sub-resources
+description: ResourceConfig::under — mount a resource under its parent's URL and scope every operation to it.
+sidebar_position: 9
+icon: folder-tree
+tags: [rest, routing, security]
+badge: new
+---
+
+# Parent-scoped sub-resources
+
+Children usually only make sense underneath their parent: a selection belongs to a fixture, a comment to a post, a line item to an order. Writing that by hand means the same four steps in every handler — check the parent exists, 404 if not, filter the children by the parent's key, and remember the key on create.
+
+```rust
+RestPlugin::default()
+    .resource(ResourceConfig::new("selection").under("fixture", "fixture_id"))
+```
+
+That's it. You get:
+
+```
+GET    /api/fixture/{fixture_id}/selection
+POST   /api/fixture/{fixture_id}/selection
+GET    /api/fixture/{fixture_id}/selection/{id}
+PATCH  /api/fixture/{fixture_id}/selection/{id}
+DELETE /api/fixture/{fixture_id}/selection/{id}
+```
+
+The second argument is the child's column pointing at the parent — the same column you'd filter on by hand.
+
+## What it guarantees
+
+**A missing parent is a 404, not an empty list.** `/api/fixture/999/selection` where fixture 999 doesn't exist is a *wrong URL*. Answering `200 []` would tell the client it asked a valid question about a real fixture — and then a typo'd id, a deleted fixture and a genuinely childless one all look identical.
+
+**Every operation is scoped, not just list.** Retrieve, update and delete are filtered to the parent too. If only `list` were scoped, a child's id would be a skeleton key into every other parent's rows.
+
+**Create takes the parent from the URL.** A body that supplies the FK is *rejected*, not silently overwritten — a client that sent `{"fixture_id": 1}` to `/api/fixture/3/selection` believes something false about what it just created, and a `201` would confirm the belief.
+
+**Bulk create is scoped too.** `.bulk()` injects the parent per item. A hole that exists only in the bulk path is still a hole.
+
+## The flat route stops existing
+
+Once a resource declares a parent, `/api/selection` and `/api/selection/{id}` return **404**.
+
+<Callout type="warning">
+  This is the point, not a side effect. A resource reachable *both* nested and flat is **not scoped** — it merely has a scoped-looking URL. `/api/selection/3` would hand back another fixture's row to anyone who guessed the id, and the nested path would be decoration you'd trust.
+</Callout>
+
+If you genuinely need a flat, unscoped listing as well, that's a separate resource with its own permission — make the decision explicitly rather than inheriting it.
+
+## Composing with permissions
+
+The parent scope is ANDed into the *same* query as [`scope` / `owned_by`](./permissions), so they compose rather than race:
+
+```rust
+ResourceConfig::new("selection")
+    .under("fixture", "fixture_id")
+    .owned_by("created_by")     // AND: your rows, under this fixture
+```
+
+## For custom handlers: `exists_or_404`
+
+`under` covers the CRUD routes. When you're writing a handler yourself, the standalone check is:
+
+```rust
+use umbral_rest::exists_or_404;
+
+async fn custom(Path(fixture_id): Path<String>) -> Result<Json<Value>, ApiError> {
+    exists_or_404::<Fixture>(&fixture_id).await?;
+    // ...
+}
+```
+
+An `id` that can't even be coerced to the model's primary-key type is a 404, not a query — worth knowing, because a filter whose value won't coerce gets *dropped* by the query builder, and the naive version of this check ends up asking "does any row exist at all?" and cheerfully answering yes.
+
+Design notes: `planning/gaps3.md` #29 item 2.

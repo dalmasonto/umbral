@@ -638,7 +638,7 @@ pub mod orm {
         ReverseSet, Search, SearchHit, Searchable, Slug, SqlType, TryForEachError, TsVector, Url,
         ValidatorError, column, decode_to_string, escape_like_literal, import_table_rows,
         load_junction_selection, pk_key, set_junction_dynamic, set_mask_keyring,
-        validate_text_format, write,
+        typed_eq_condition, validate_text_format, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the

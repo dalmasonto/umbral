@@ -316,6 +316,11 @@ pub struct RestPlugin {
     object_scopes: HashMap<String, crate::resource::ObjectScopeFn>,
     /// gaps3 #16: per-table owner column filled from the identity on create.
     owner_fields: HashMap<String, String>,
+    /// gaps3 #29 item 2 — child table -> (parent table, fk column). A table listed
+    /// here is reachable ONLY at `/api/{parent}/{parent_id}/{table}`; its flat route
+    /// 404s, because a nested resource that is also reachable flat is not scoped, it
+    /// merely has a scoped-looking URL.
+    unders: HashMap<String, (String, String)>,
     /// Gap 107: base URL prefix for all REST endpoints. Default
     /// `/api`. Set via `RestPlugin::at("/v1")`. Always normalised
     /// to one leading slash, no trailing slash.
@@ -554,7 +559,44 @@ impl RestPlugin {
     /// turns the [`ScopeDecision`] into an [`ObjectScopeOutcome`] the CRUD
     /// handlers apply: `Unconstrained` (no hook / `All`), a `Filter` condition
     /// ANDed into every query, or `DenyAll` (list → empty, detail → 404).
-    async fn object_scope(&self, table: &str, identity: Option<&Identity>) -> ObjectScopeOutcome {
+    async fn object_scope(
+        &self,
+        table: &str,
+        identity: Option<&Identity>,
+        parent: Option<&(String, String)>,
+    ) -> ObjectScopeOutcome {
+        // gaps3 #29 item 2: the parent scope rides the SAME seam as the row-level
+        // `scope`/`owned_by` hook, so the two AND together instead of racing. A
+        // separate filter applied somewhere else in each handler is how one of the five
+        // ends up missing it.
+        let own = self.object_scope_hook(table, identity).await;
+        let Some((fk_column, parent_id)) = parent else {
+            return own;
+        };
+        let Some(meta) = model_meta(table) else {
+            return own;
+        };
+        // An id that cannot be coerced to the FK's type (`/api/fixture/abc/selection`
+        // where the pk is a BigInt) matches nothing — and must not fall through to
+        // "unscoped", which would hand back every child row in the table.
+        let Some(parent_cond) = umbral::orm::typed_eq_condition(&meta, fk_column, parent_id) else {
+            return ObjectScopeOutcome::DenyAll;
+        };
+        match own {
+            ObjectScopeOutcome::DenyAll => ObjectScopeOutcome::DenyAll,
+            ObjectScopeOutcome::Unconstrained => ObjectScopeOutcome::Filter(parent_cond),
+            ObjectScopeOutcome::Filter(cond) => {
+                ObjectScopeOutcome::Filter(sea_query::Condition::all().add(cond).add(parent_cond))
+            }
+        }
+    }
+
+    /// The resource's own `scope` / `owned_by` decision, before parent scoping.
+    async fn object_scope_hook(
+        &self,
+        table: &str,
+        identity: Option<&Identity>,
+    ) -> ObjectScopeOutcome {
         let Some(hook) = self.object_scopes.get(table) else {
             return ObjectScopeOutcome::Unconstrained;
         };
@@ -682,6 +724,7 @@ impl RestPlugin {
             bulk: std::collections::HashSet::new(),
             object_scopes: HashMap::new(),
             owner_fields: HashMap::new(),
+            unders: HashMap::new(),
             base_path: "/api".to_string(),
             versioning: None,
         }
@@ -1047,6 +1090,7 @@ impl RestPlugin {
             scope,
             owner_field,
             cache_control,
+            under,
         } = config;
         if let Some(cc) = cache_control {
             self.cache_controls.insert(table.clone(), cc);
@@ -1108,6 +1152,10 @@ impl RestPlugin {
         if let Some(col) = owner_field {
             // gaps3 #16: last `.resource(...)` wins (as with permission/scope).
             self.owner_fields.insert(table.clone(), col);
+        }
+        if let Some(parent) = under {
+            // gaps3 #29 item 2. Last `.resource(...)` wins, as everywhere else here.
+            self.unders.insert(table.clone(), parent);
         }
         self
     }
@@ -1957,6 +2005,29 @@ impl Plugin for RestPlugin {
                         .patch(update)
                         .delete(destroy)
                         .options(detail_options),
+                )
+                // gaps3 #29 item 2 — parent-scoped sub-resources. Generic, exactly like
+                // the flat routes above: the handlers dispatch on `{table}` and 404 unless
+                // that resource declared `.under(parent, fk)` naming THIS parent.
+                //
+                // These do not collide with the registered custom actions
+                // (`/api/order/{id}/approve`, same segment count): matchit ranks static
+                // segments above parameters, so a concrete action route wins, and only
+                // what it does not claim reaches here.
+                .route(
+                    &format!("{base}/{{parent}}/{{parent_id}}/{{table}}"),
+                    get(nested_list).post(nested_create),
+                )
+                .route(
+                    &format!("{base}/{{parent}}/{{parent_id}}/{{table}}/"),
+                    get(nested_list).post(nested_create),
+                )
+                .route(
+                    &format!("{base}/{{parent}}/{{parent_id}}/{{table}}/{{id}}"),
+                    get(nested_retrieve)
+                        .put(nested_update)
+                        .patch(nested_update)
+                        .delete(nested_destroy),
                 );
 
             // API root index: lists the exposed resources + every plugin's
@@ -2575,6 +2646,149 @@ fn request_origin(headers: &umbral::web::HeaderMap) -> Option<String> {
     Some(format!("{scheme}://{host}"))
 }
 
+/// 404 unless a row with this primary key exists (gaps3 #29 item 2).
+///
+/// `ResourceConfig::under` does this for you on a nested route. This is the same check,
+/// standalone, for the custom handler that still needs it — the audit found seven
+/// hand-written copies of `.filter(pk.eq(id)).exists()` + a 404.
+///
+/// ```ignore
+/// exists_or_404::<Fixture>(&fixture_id).await?;
+/// ```
+///
+/// An `id` that cannot even be coerced to the model's PK type is a 404, not a query.
+/// That matters: a filter whose value will not coerce is DROPPED by the query builder,
+/// so the naive spelling of this check asks "does any row exist at all?" and cheerfully
+/// answers yes. (See gaps3 #56.)
+///
+/// Returns the PUBLIC `umbral::web::ApiError` — the one a hand-written handler already
+/// returns and the prelude already exports — not this crate's internal viewset error.
+pub async fn exists_or_404<M: umbral::orm::Model>(id: &str) -> Result<(), umbral::web::ApiError> {
+    use umbral::web::ApiError as PublicApiError;
+
+    let meta = umbral::migrate::ModelMeta::for_::<M>();
+    let pk = meta
+        .pk_column()
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| "id".to_string());
+    let not_found = || PublicApiError::not_found(format!("no {} with id `{id}`", M::NAME));
+
+    let Some(cond) = umbral::orm::typed_eq_condition(&meta, &pk, id) else {
+        return Err(not_found());
+    };
+    let found = umbral::orm::DynQuerySet::for_meta(&meta)
+        .filter_condition(cond)
+        .exists()
+        .await
+        .map_err(|e| PublicApiError::internal(e.to_string()))?;
+    if found { Ok(()) } else { Err(not_found()) }
+}
+
+/// The parent segment of a nested URL: `/api/{parent.table}/{parent.id}/{child}`.
+#[derive(Clone, Debug)]
+struct ParentRef {
+    table: String,
+    id: String,
+}
+
+/// Resolve a request's parent scoping (gaps3 #29 item 2), or 404.
+///
+/// Returns `Some((fk_column, parent_id))` when the resource is nested — the caller ANDs
+/// that into its query and injects it on create.
+///
+/// Every arm below that returns 404 is a URL that does not name a real thing, and the
+/// distinction it protects is the one hand-written nested handlers get wrong: a child
+/// collection under a parent that does not exist is a **wrong URL**, not an empty
+/// result. Answering `200 []` tells the client it asked a valid question about a real
+/// parent — so a typo'd id, a deleted fixture and a genuinely childless one all look
+/// identical, and the bug hides in the one case you cannot see.
+async fn resolve_parent(
+    cfg: &RestPlugin,
+    table: &str,
+    parent: Option<&ParentRef>,
+) -> Result<Option<(String, String)>, ApiError> {
+    match (cfg.unders.get(table), parent) {
+        (None, None) => Ok(None),
+
+        // A nested URL for a resource that never declared a parent.
+        (None, Some(p)) => Err(ApiError::NotFound(format!(
+            "no resource at /api/{}/{}/{table}",
+            p.table, p.id
+        ))),
+
+        // Declared nested, reached FLAT. The flat route must not work: a resource that
+        // is reachable both nested and flat is not scoped, it merely has a
+        // scoped-looking URL — which is worse than no scoping, because you would trust
+        // it. This is the arm that makes `under()` a guarantee rather than a decoration.
+        (Some((parent_table, _)), None) => Err(ApiError::NotFound(format!(
+            "`{table}` is nested under `{parent_table}` — use \
+             /api/{parent_table}/{{{parent_table}_id}}/{table}"
+        ))),
+
+        // Nested under the WRONG parent.
+        (Some((parent_table, _)), Some(p)) if &p.table != parent_table => {
+            Err(ApiError::NotFound(format!(
+                "`{table}` is nested under `{parent_table}`, not `{}`",
+                p.table
+            )))
+        }
+
+        (Some((parent_table, fk_column)), Some(p)) => {
+            // The parent row must EXIST. `exists()` stops at the first hit rather than
+            // counting every match — this runs on every request to a nested endpoint.
+            let parent_meta = model_meta(parent_table).ok_or_else(|| {
+                ApiError::NotFound(format!("no model `{parent_table}` to nest `{table}` under"))
+            })?;
+            let parent_pk = parent_meta
+                .pk_column()
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| "id".to_string());
+
+            // Coerce the URL segment to the parent PK's real type FIRST, and 404 when it
+            // cannot be. This is not a nicety. `filter_eq_string` DROPS a predicate whose
+            // value will not coerce, so `/api/fixture/not-a-number/selection` would ask
+            // the unfiltered question "does any fixture exist at all?" — get back `true`
+            // — and sail on. An id that cannot name a row must not degrade into a query
+            // that matches every row.
+            let Some(pk_cond) = umbral::orm::typed_eq_condition(&parent_meta, &parent_pk, &p.id)
+            else {
+                return Err(ApiError::NotFound(format!(
+                    "no `{parent_table}` with id `{}`",
+                    p.id
+                )));
+            };
+            let found = umbral::orm::DynQuerySet::for_meta(&parent_meta)
+                .filter_condition(pk_cond)
+                .exists()
+                .await
+                .map_err(ApiError::from)?;
+            if !found {
+                return Err(ApiError::NotFound(format!(
+                    "no `{parent_table}` with id `{}`",
+                    p.id
+                )));
+            }
+            Ok(Some((fk_column.clone(), p.id.clone())))
+        }
+    }
+}
+
+/// The registered `ModelMeta` for a table, WITHOUT the REST exposure check.
+///
+/// `allowed_model` refuses a table that is not an exposed REST resource — right for a
+/// resource being served, wrong for a parent being nested under, which is a perfectly
+/// ordinary thing to want without also publishing a flat CRUD endpoint for it.
+fn model_meta(table: &str) -> Option<ModelMeta> {
+    for plugin in umbral::migrate::registered_plugins() {
+        for m in umbral::migrate::models_for_plugin(&plugin) {
+            if m.table == table {
+                return Some(m);
+            }
+        }
+    }
+    None
+}
+
 fn allowed_model(table: &str) -> Result<ModelMeta, ApiError> {
     let config = CONFIG.get().expect("RestPlugin::routes was called");
     if !config.allow(table) {
@@ -2609,6 +2823,30 @@ async fn list(
     Path(table): Path<String>,
     uri: axum::http::Uri,
     Query(params): Query<HashMap<String, String>>,
+    headers: umbral::web::HeaderMap,
+) -> Result<Response, ApiError> {
+    list_impl(table, None, uri, params, headers).await
+}
+
+/// `GET /api/{parent}/{parent_id}/{table}` (gaps3 #29 item 2).
+async fn nested_list(
+    Path((parent_table, parent_id, table)): Path<(String, String, String)>,
+    uri: axum::http::Uri,
+    Query(params): Query<HashMap<String, String>>,
+    headers: umbral::web::HeaderMap,
+) -> Result<Response, ApiError> {
+    let parent = ParentRef {
+        table: parent_table,
+        id: parent_id,
+    };
+    list_impl(table, Some(parent), uri, params, headers).await
+}
+
+async fn list_impl(
+    table: String,
+    parent: Option<ParentRef>,
+    uri: axum::http::Uri,
+    params: HashMap<String, String>,
     headers: umbral::web::HeaderMap,
 ) -> Result<Response, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
@@ -2656,7 +2894,14 @@ async fn list(
     // in-scope rows are returned. `DenyAll` becomes an always-false predicate,
     // so the normal pagination/response path yields an empty page (no special
     // early-return, no oracle).
-    match cfg.object_scope(&table, identity.as_ref()).await {
+    // gaps3 #29 item 2. Deliberately AFTER the permission gate: whether a parent row
+    // exists is information, and a caller who may not read this resource must not
+    // learn it from the difference between a 403 and a 404.
+    let parent_scope = resolve_parent(cfg, &table, parent.as_ref()).await?;
+    match cfg
+        .object_scope(&table, identity.as_ref(), parent_scope.as_ref())
+        .await
+    {
         ObjectScopeOutcome::Unconstrained => {}
         ObjectScopeOutcome::Filter(cond) => filter = filter.and(cond),
         ObjectScopeOutcome::DenyAll => {
@@ -2822,6 +3067,31 @@ async fn retrieve(
     Query(params): Query<HashMap<String, String>>,
     headers: umbral::web::HeaderMap,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
+    retrieve_impl(table, id, None, uri, params, headers).await
+}
+
+/// `GET /api/{parent}/{parent_id}/{table}/{id}` (gaps3 #29 item 2).
+async fn nested_retrieve(
+    Path((parent_table, parent_id, table, id)): Path<(String, String, String, String)>,
+    uri: axum::http::Uri,
+    Query(params): Query<HashMap<String, String>>,
+    headers: umbral::web::HeaderMap,
+) -> Result<Json<Map<String, Value>>, ApiError> {
+    let parent = ParentRef {
+        table: parent_table,
+        id: parent_id,
+    };
+    retrieve_impl(table, id, Some(parent), uri, params, headers).await
+}
+
+async fn retrieve_impl(
+    table: String,
+    id: String,
+    parent: Option<ParentRef>,
+    uri: axum::http::Uri,
+    params: HashMap<String, String>,
+    headers: umbral::web::HeaderMap,
+) -> Result<Json<Map<String, Value>>, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let _ctx = RequestContext {
@@ -2846,7 +3116,14 @@ async fn retrieve(
     // audit_2 H1/P2: object-level scope. A DenyAll (e.g. anonymous on an
     // owner-scoped resource) is a 404 — never reveal the row exists; a Filter
     // is ANDed into the by-id lookup so a non-owned row is Not Found.
-    let scope_filter = match cfg.object_scope(&table, identity.as_ref()).await {
+    // gaps3 #29 item 2. Deliberately AFTER the permission gate: whether a parent row
+    // exists is information, and a caller who may not read this resource must not
+    // learn it from the difference between a 403 and a 404.
+    let parent_scope = resolve_parent(cfg, &table, parent.as_ref()).await?;
+    let scope_filter = match cfg
+        .object_scope(&table, identity.as_ref(), parent_scope.as_ref())
+        .await
+    {
         ObjectScopeOutcome::DenyAll => {
             return Err(ApiError::NotFound(format!(
                 "no row with {} = {} in {}",
@@ -2890,6 +3167,36 @@ async fn retrieve(
 /// The value is written as an integer when `user_id` parses as one (an `i64`
 /// FK) and as a string otherwise (a `String`/UUID key), so the ORM's insert
 /// type-coercion accepts it either way.
+/// Write the parent id from the URL into the child's FK column (gaps3 #29 item 2).
+///
+/// A body-supplied value is REJECTED rather than silently overwritten. Silently winning
+/// would be defensible, but a client that sent `{"fixture_id": 9}` to
+/// `/api/fixture/3/selection` believes something false about what it just created, and
+/// the 201 it gets back would confirm it. Better to say no.
+fn inject_parent(
+    table: &str,
+    parent_scope: Option<&(String, String)>,
+    body: &mut serde_json::Map<String, Value>,
+) -> Result<(), ApiError> {
+    let Some((fk_column, parent_id)) = parent_scope else {
+        return Ok(());
+    };
+    if body.contains_key(fk_column) {
+        return Err(ApiError::BadInput(format!(
+            "`{fk_column}` is taken from the URL and must not be supplied in the request \
+             body when creating a `{table}` under its parent"
+        )));
+    }
+    // Match the FK's real type: an i64 FK bound as a JSON string is a row that inserts
+    // on SQLite (affinity) and errors on Postgres.
+    let value = match parent_id.parse::<i64>() {
+        Ok(n) => Value::from(n),
+        Err(_) => Value::String(parent_id.clone()),
+    };
+    body.insert(fk_column.clone(), value);
+    Ok(())
+}
+
 fn inject_owner_field(
     cfg: &RestPlugin,
     table: &str,
@@ -2921,6 +3228,30 @@ async fn create(
     headers: umbral::web::HeaderMap,
     Json(raw): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
+    create_impl(table, None, uri, headers, raw).await
+}
+
+/// `POST /api/{parent}/{parent_id}/{table}` (gaps3 #29 item 2).
+async fn nested_create(
+    Path((parent_table, parent_id, table)): Path<(String, String, String)>,
+    uri: axum::http::Uri,
+    headers: umbral::web::HeaderMap,
+    Json(raw): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let parent = ParentRef {
+        table: parent_table,
+        id: parent_id,
+    };
+    create_impl(table, Some(parent), uri, headers, raw).await
+}
+
+async fn create_impl(
+    table: String,
+    parent: Option<ParentRef>,
+    uri: axum::http::Uri,
+    headers: umbral::web::HeaderMap,
+    raw: Value,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let _ctx = RequestContext {
@@ -2942,6 +3273,11 @@ async fn create(
         throttle_client_ip(&headers).as_deref(),
     )?;
 
+    // gaps3 #29 item 2. Resolved BEFORE the bulk dispatch below, because bulk must not
+    // become the way around parent scoping — the same reason owner-field injection runs
+    // per item down there. A hole that only exists in the bulk path is still a hole.
+    let parent_scope = resolve_parent(cfg, &table, parent.as_ref()).await?;
+
     // gaps2 #82: when this resource opted into bulk, a JSON ARRAY body is a
     // bulk create — every item in ONE transaction. A JSON object falls
     // through to the unchanged single-create path. Without `.bulk()` an
@@ -2955,7 +3291,15 @@ async fn create(
                     .into(),
             ));
         }
-        return bulk_create(cfg, &table, model, items, identity.as_ref()).await;
+        return bulk_create(
+            cfg,
+            &table,
+            model,
+            items,
+            identity.as_ref(),
+            parent_scope.as_ref(),
+        )
+        .await;
     }
 
     let Value::Object(mut body) = raw else {
@@ -2975,6 +3319,11 @@ async fn create(
     // declared. Runs before the nested split so both flat and nested creates
     // inject the parent's owner.
     inject_owner_field(cfg, &table, identity.as_ref(), &mut body)?;
+
+    // gaps3 #29 item 2: the parent id comes from the URL, and OVERRIDES whatever the
+    // body claimed. The URL is the authority here — a body that disagrees with it is at
+    // best confused and at worst an attempt to plant a row under someone else's parent.
+    inject_parent(&table, parent_scope.as_ref(), &mut body)?;
 
     // Flat path (the common case) — unchanged, zero overhead. The ORM owns
     // pre-validation + constraint classification + noform-stripping;
@@ -3030,6 +3379,7 @@ async fn bulk_create(
     model: ModelMeta,
     items: Vec<Value>,
     identity: Option<&Identity>,
+    parent_scope: Option<&(String, String)>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     check_bulk_size(items.len())?;
 
@@ -3046,6 +3396,9 @@ async fn bulk_create(
         // gaps3 #16: owner-field injection per item — same rule as single create,
         // so bulk can't be used to forge ownership on any row.
         inject_owner_field(cfg, table, identity, &mut body)?;
+        // gaps3 #29 item 2: per item, same rule as single create — bulk can't be used
+        // to plant a child under a different parent than the URL names.
+        inject_parent(table, parent_scope, &mut body)?;
         let mut row = as_user(
             identity,
             umbral::orm::DynQuerySet::for_meta(&model).insert_json_in_tx(&body, &mut tx),
@@ -3786,7 +4139,32 @@ async fn update(
     Path((table, id)): Path<(String, String)>,
     uri: axum::http::Uri,
     headers: umbral::web::HeaderMap,
-    Json(mut body): Json<Map<String, Value>>,
+    Json(body): Json<Map<String, Value>>,
+) -> Result<Json<Map<String, Value>>, ApiError> {
+    update_impl(table, id, None, uri, headers, body).await
+}
+
+/// `PUT`/`PATCH /api/{parent}/{parent_id}/{table}/{id}` (gaps3 #29 item 2).
+async fn nested_update(
+    Path((parent_table, parent_id, table, id)): Path<(String, String, String, String)>,
+    uri: axum::http::Uri,
+    headers: umbral::web::HeaderMap,
+    Json(body): Json<Map<String, Value>>,
+) -> Result<Json<Map<String, Value>>, ApiError> {
+    let parent = ParentRef {
+        table: parent_table,
+        id: parent_id,
+    };
+    update_impl(table, id, Some(parent), uri, headers, body).await
+}
+
+async fn update_impl(
+    table: String,
+    id: String,
+    parent: Option<ParentRef>,
+    uri: axum::http::Uri,
+    headers: umbral::web::HeaderMap,
+    mut body: Map<String, Value>,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
@@ -3816,7 +4194,14 @@ async fn update(
     // audit_2 H1/P2: object-level scope. DenyAll → 404; a Filter is ANDed into
     // the existence check, the UPDATE's WHERE, and the read-back, so a caller
     // can't update a row outside their scope by id (the row is Not Found).
-    let scope_cond = match cfg.object_scope(&table, identity.as_ref()).await {
+    // gaps3 #29 item 2. Deliberately AFTER the permission gate: whether a parent row
+    // exists is information, and a caller who may not read this resource must not
+    // learn it from the difference between a 403 and a 404.
+    let parent_scope = resolve_parent(cfg, &table, parent.as_ref()).await?;
+    let scope_cond = match cfg
+        .object_scope(&table, identity.as_ref(), parent_scope.as_ref())
+        .await
+    {
         ObjectScopeOutcome::DenyAll => {
             return Err(ApiError::NotFound(format!(
                 "no row with {pk_name} = {id} in {table}"
@@ -3890,6 +4275,29 @@ async fn destroy(
     uri: axum::http::Uri,
     headers: umbral::web::HeaderMap,
 ) -> Result<StatusCode, ApiError> {
+    destroy_impl(table, id, None, uri, headers).await
+}
+
+/// `DELETE /api/{parent}/{parent_id}/{table}/{id}` (gaps3 #29 item 2).
+async fn nested_destroy(
+    Path((parent_table, parent_id, table, id)): Path<(String, String, String, String)>,
+    uri: axum::http::Uri,
+    headers: umbral::web::HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let parent = ParentRef {
+        table: parent_table,
+        id: parent_id,
+    };
+    destroy_impl(table, id, Some(parent), uri, headers).await
+}
+
+async fn destroy_impl(
+    table: String,
+    id: String,
+    parent: Option<ParentRef>,
+    uri: axum::http::Uri,
+    headers: umbral::web::HeaderMap,
+) -> Result<StatusCode, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let _ctx = RequestContext {
@@ -3914,7 +4322,14 @@ async fn destroy(
     // audit_2 H1/P2: scope the DELETE. DenyAll → 404; a Filter is ANDed into
     // the WHERE, so deleting an out-of-scope row affects 0 rows → 404 (a caller
     // can't delete another owner's/tenant's row by id).
-    let scope_cond = match cfg.object_scope(&table, identity.as_ref()).await {
+    // gaps3 #29 item 2. Deliberately AFTER the permission gate: whether a parent row
+    // exists is information, and a caller who may not read this resource must not
+    // learn it from the difference between a 403 and a 404.
+    let parent_scope = resolve_parent(cfg, &table, parent.as_ref()).await?;
+    let scope_cond = match cfg
+        .object_scope(&table, identity.as_ref(), parent_scope.as_ref())
+        .await
+    {
         ObjectScopeOutcome::DenyAll => {
             return Err(ApiError::NotFound(format!(
                 "no row with {} = {} in {}",

@@ -120,7 +120,9 @@ impl Subquery {
     }
 }
 pub use choices::ChoiceField;
-pub use dynamic::{CsvImportReport, DynError, DynQuerySet, decode_to_string, import_table_rows};
+pub use dynamic::{
+    CsvImportReport, DynError, DynQuerySet, decode_to_string, import_table_rows, typed_eq_condition,
+};
 pub use expr::{F, FColExt, FExpr, Q};
 pub use file_field::{FileField, ImageField};
 pub use foreign_key::ForeignKey;

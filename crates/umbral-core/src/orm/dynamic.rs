@@ -153,6 +153,39 @@ pub struct DynQuerySet<'a> {
     allow_privileged: Vec<String>,
 }
 
+/// Build a typed `col = value` predicate from a **string** value, coercing it to the
+/// column's declared type.
+///
+/// Every value that arrives from a URL, a query string or a form is a string, and the
+/// column it is compared against usually is not. Binding the raw string against an
+/// `INTEGER` column is the quiet failure mode here: SQLite applies column affinity and
+/// silently makes it work, while Postgres has no `integer = text` operator and errors —
+/// so the bug ships green and detonates on the backend that matters. Coerce once, here,
+/// and let every caller share it.
+///
+/// Returns `None` for an unknown column, or a value that cannot be coerced (e.g. `"abc"`
+/// for a BigInt) — the caller decides whether that is an empty result or a 404.
+pub fn typed_eq_condition(meta: &ModelMeta, col: &str, value: &str) -> Option<Condition> {
+    let meta_col = meta.fields.iter().find(|c| c.name == col)?;
+    let expr = Expr::col(Alias::new(col));
+    // FK-to-non-i64-target columns resolve to their target PK type, so a String/Uuid FK
+    // matches the `_` arm and binds the raw string.
+    let predicate = match crate::migrate::fk_effective_type(meta_col) {
+        SqlType::SmallInt | SqlType::Integer => value.parse::<i32>().ok().map(|v| expr.eq(v)),
+        SqlType::BigInt | SqlType::ForeignKey => value.parse::<i64>().ok().map(|v| expr.eq(v)),
+        SqlType::Real | SqlType::Double => value.parse::<f64>().ok().map(|v| expr.eq(v)),
+        SqlType::Boolean => {
+            let v = matches!(value, "true" | "on" | "1");
+            Some(expr.eq(v))
+        }
+        // UUIDs stored as BLOB in SQLite — parse the string into a typed Uuid so
+        // sea-query-binder emits a blob bind that matches the row.
+        SqlType::Uuid => uuid::Uuid::parse_str(value).ok().map(|u| expr.eq(u)),
+        _ => Some(expr.eq(value.to_string())),
+    };
+    predicate.map(|p| Condition::all().add(p))
+}
+
 impl<'a> DynQuerySet<'a> {
     /// Start a `SELECT` against the model's table. The column list
     /// defaults to every field in declaration order; restrict it with
@@ -593,27 +626,8 @@ impl<'a> DynQuerySet<'a> {
     /// the column's `SqlType` so SQLite's affinity rules see the right
     /// operand type.
     pub fn filter_eq_string(mut self, col: &str, value: &str) -> Self {
-        let Some(meta_col) = self.meta.fields.iter().find(|c| c.name == col) else {
-            return self;
-        };
-        let expr = Expr::col(Alias::new(col));
-        // FK-to-non-i64-target columns resolve to their target PK type, so
-        // a String/Uuid FK matches the `_` arm and binds the raw string.
-        let predicate = match crate::migrate::fk_effective_type(meta_col) {
-            SqlType::SmallInt | SqlType::Integer => value.parse::<i32>().ok().map(|v| expr.eq(v)),
-            SqlType::BigInt | SqlType::ForeignKey => value.parse::<i64>().ok().map(|v| expr.eq(v)),
-            SqlType::Real | SqlType::Double => value.parse::<f64>().ok().map(|v| expr.eq(v)),
-            SqlType::Boolean => {
-                let v = matches!(value, "true" | "on" | "1");
-                Some(expr.eq(v))
-            }
-            // UUIDs stored as BLOB in SQLite — parse the string into a typed
-            // Uuid so sea-query-binder emits a blob bind that matches the row.
-            SqlType::Uuid => uuid::Uuid::parse_str(value).ok().map(|u| expr.eq(u)),
-            _ => Some(expr.eq(value.to_string())),
-        };
-        if let Some(p) = predicate {
-            self.where_clauses.push(Condition::all().add(p));
+        if let Some(cond) = typed_eq_condition(self.meta, col, value) {
+            self.where_clauses.push(cond);
         }
         self
     }
@@ -642,6 +656,38 @@ impl<'a> DynQuerySet<'a> {
     /// Terminal: `SELECT COUNT(*)` with the accumulated WHERE
     /// clauses. ORDER BY / LIMIT / OFFSET are dropped (irrelevant
     /// to a count).
+    /// Terminal: does *any* row match the accumulated WHERE?
+    ///
+    /// `SELECT 1 ... LIMIT 1` — it stops at the first hit rather than counting every
+    /// match. The typed `QuerySet` has had this since M1; the dynamic path (which is
+    /// what the admin and REST run on) did not, so callers reached for `count() > 0`
+    /// and paid for a full aggregate to answer a yes/no question. The commonest caller
+    /// is "does the parent row exist" on a nested route, which runs on every single
+    /// request to that endpoint.
+    pub async fn exists(self) -> Result<bool, DynError> {
+        let mut q = Query::select();
+        q.from(crate::db::router::schema_qualified_table(&self.meta.table));
+        q.expr(Expr::val(1));
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
+            q.cond_where(cond.clone());
+        }
+        q.limit(1);
+
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Read) {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let row = sqlx::query_with(&sql, values).fetch_optional(&pool).await?;
+                Ok(row.is_some())
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let row = sqlx::query_with(&sql, values).fetch_optional(&pool).await?;
+                Ok(row.is_some())
+            }
+        }
+    }
+
     pub async fn count(self) -> Result<i64, DynError> {
         let mut q = Query::select();
         q.from(crate::db::router::schema_qualified_table(&self.meta.table));

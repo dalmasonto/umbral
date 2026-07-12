@@ -320,6 +320,9 @@ pub struct ResourceConfig {
     /// body-supplied value — so a client can't create a row owned by someone
     /// else. Declared via [`ResourceConfig::owner_field`].
     pub(crate) owner_field: Option<String>,
+    /// gaps3 #29 item 2 — `(parent_table, fk_column)`. The resource is mounted under
+    /// its parent's URL and scoped to it.
+    pub(crate) under: Option<(String, String)>,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -354,6 +357,7 @@ impl ResourceConfig {
             scope: None,
             cache_control: None,
             owner_field: None,
+            under: None,
         }
     }
 
@@ -475,6 +479,36 @@ impl ResourceConfig {
     /// (a `String`/UUID key).
     pub fn owner_field(mut self, owner_column: impl Into<String>) -> Self {
         self.owner_field = Some(owner_column.into());
+        self
+    }
+
+    /// Mount this resource UNDER a parent, scoped to it (gaps3 #29 item 2).
+    ///
+    /// ```ignore
+    /// ResourceConfig::new("selection").under("fixture", "fixture_id")
+    /// ```
+    ///
+    /// gives you `/api/fixture/{fixture_id}/selection[/{id}]`, and with it, for free,
+    /// the four things every hand-written nested handler writes out longhand:
+    ///
+    /// - **404 if the parent row does not exist.** Not "empty list" — a child
+    ///   collection under a fixture that was never created is a wrong URL, and saying
+    ///   `200 []` tells the client it asked a valid question.
+    /// - **List, retrieve, update and delete are FILTERED to the parent.** The scope is
+    ///   ANDed into the same query the row-level `scope`/`owned_by` hook feeds, so it
+    ///   composes with them instead of racing them.
+    /// - **Create INJECTS the parent id** from the URL, overriding whatever the body
+    ///   claimed. The URL is the authority; a body that disagrees with it is at best
+    ///   confused and at worst an attempt to plant a row under someone else's parent.
+    /// - **The flat route stops existing.** `/api/selection/{id}` returns 404 once the
+    ///   resource declares a parent. A nested resource that is *also* reachable flat is
+    ///   not scoped — it just has a scoped-looking URL, which is worse than no scoping,
+    ///   because you would trust it.
+    ///
+    /// `fk_column` is the child's column pointing at the parent — the same column you
+    /// would filter on by hand.
+    pub fn under(mut self, parent_table: impl Into<String>, fk_column: impl Into<String>) -> Self {
+        self.under = Some((parent_table.into(), fk_column.into()));
         self
     }
 
