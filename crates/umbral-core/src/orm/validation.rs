@@ -777,6 +777,8 @@ mod tests {
 
     fn meta_with(cols: Vec<Column>) -> ModelMeta {
         ModelMeta {
+            view: None,
+            materialized: false,
             name: "Test".into(),
             table: "test".into(),
             fields: cols,

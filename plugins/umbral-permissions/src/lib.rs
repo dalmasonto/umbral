@@ -285,6 +285,8 @@ mod tests {
         // A plugin-tagged model: table is namespaced `blog_post`, but the
         // authoritative app_label is the plugin name "blog".
         let plugin_model = ModelMeta {
+            view: None,
+            materialized: false,
             name: "Post".to_string(),
             table: "blog_post".to_string(),
             app_label: "blog".to_string(),
@@ -294,6 +296,8 @@ mod tests {
         // OLD table-split heuristic would have read "blog" here too, but the
         // model never set a plugin, so its app_label is the default "app".
         let bare_model = ModelMeta {
+            view: None,
+            materialized: false,
             name: "BlogEntry".to_string(),
             table: "blog_entry".to_string(),
             app_label: "app".to_string(),
@@ -326,6 +330,8 @@ mod tests {
     #[test]
     fn previously_colliding_models_now_diverge() {
         let bare = ModelMeta {
+            view: None,
+            materialized: false,
             name: "Post".to_string(),
             table: "post".to_string(),
             app_label: "app".to_string(),
@@ -336,6 +342,8 @@ mod tests {
         // same as the bare `post` → both `app.add_post`. New code: the
         // plugin sets `#[umbral(plugin = "shop")]`, so app_label == "shop".
         let plugin = ModelMeta {
+            view: None,
+            materialized: false,
             name: "Post".to_string(),
             table: "app_post".to_string(),
             app_label: "shop".to_string(),

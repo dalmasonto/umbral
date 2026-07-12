@@ -111,6 +111,8 @@ fn float_col(name: &str, ty: SqlType, min: Option<i64>, max: Option<i64>) -> Col
 
 fn make_meta(name: &str, table: &str, cols: Vec<Column>) -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: name.to_string(),
         table: table.to_string(),
         fields: cols,

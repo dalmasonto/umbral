@@ -167,6 +167,8 @@ fn default_router_allow_migrate_is_permissive_for_assigned_alias() {
     use umbral::migrate::ModelMeta;
 
     let meta = ModelMeta {
+        view: None,
+        materialized: false,
         name: "MigGated".to_string(),
         table: "mig_gated".to_string(),
         database: None, // → resolves to "default"

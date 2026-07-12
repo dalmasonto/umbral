@@ -63,6 +63,8 @@ fn col(name: &str, ty: SqlType, primary_key: bool, nullable: bool) -> Column {
 
 fn meta(cols: Vec<Column>) -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: "Account".to_string(),
         table: "acct".to_string(),
         fields: cols,

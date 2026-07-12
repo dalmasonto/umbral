@@ -364,6 +364,8 @@ mod readonly_set_tests {
 
     fn meta(fields: Vec<Column>) -> ModelMeta {
         ModelMeta {
+            view: None,
+            materialized: false,
             name: "M".into(),
             table: "m".into(),
             fields,

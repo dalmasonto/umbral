@@ -125,6 +125,8 @@ impl Plugin for FkPlugin {
             fields.push(fk);
         }
         vec![ModelMeta {
+            view: None,
+            materialized: false,
             name: format!("{}Model", self.name),
             table: self.table.to_string(),
             fields,

@@ -1637,6 +1637,8 @@ mod tests {
         let mut published_at = base_col("published_at", SqlType::Timestamptz);
         published_at.nullable = true;
         ModelMeta {
+            view: None,
+            materialized: false,
             name: "Note".to_string(),
             table: "note".to_string(),
             fields: vec![

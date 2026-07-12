@@ -1087,6 +1087,8 @@ mod tests {
 
     fn meta(table: &str, fields: Vec<Column>) -> ModelMeta {
         ModelMeta {
+            view: None,
+            materialized: false,
             name: table.to_string(),
             table: table.to_string(),
             fields,

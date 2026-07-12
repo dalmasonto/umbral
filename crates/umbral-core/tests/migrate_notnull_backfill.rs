@@ -54,6 +54,8 @@ fn col(name: &str, ty: SqlType, nullable: bool, default: &str) -> Column {
 /// NOT NULL with `default = "active"` in `curr` (the tightening).
 fn meta(status_nullable: bool, status_default: &str) -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: "Widget".to_string(),
         table: "widget".to_string(),
         fields: vec![

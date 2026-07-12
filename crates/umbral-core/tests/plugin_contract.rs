@@ -102,6 +102,8 @@ impl Plugin for TestPlugin {
         // per-plugin registry under `self.name`.
         let model_name = format!("{}__Model", self.name);
         vec![ModelMeta {
+            view: None,
+            materialized: false,
             display: model_name.clone(),
             icon: "database".to_string(),
             database: None,

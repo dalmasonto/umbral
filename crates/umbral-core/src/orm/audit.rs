@@ -61,6 +61,8 @@ pub fn audit_meta() -> ModelMeta {
         ..Column::default()
     };
     ModelMeta {
+        view: None,
+        materialized: false,
         name: "UmbralAudit".to_string(),
         table: AUDIT_TABLE.to_string(),
         fields: vec![

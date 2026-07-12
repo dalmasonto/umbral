@@ -56,6 +56,8 @@ fn col(name: &str, ty: SqlType, nullable: bool) -> Column {
 
 fn meta(status_nullable: bool) -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: "Membership".to_string(),
         table: "membership".to_string(),
         fields: vec![

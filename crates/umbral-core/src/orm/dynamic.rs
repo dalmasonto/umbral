@@ -715,7 +715,23 @@ impl<'a> DynQuerySet<'a> {
     /// with the actual row ids. Subscribers that need to invalidate
     /// caches / write audit-log rows / sync a search index get the
     /// list of PKs that just left the table, not just a row count.
+    /// features #73 — refuse a write against a model backed by a database VIEW.
+    ///
+    /// This is the DYNAMIC path, which is what the admin and REST actually run on.
+    /// Guarding only the typed path would leave the framework's own surfaces able to
+    /// POST to a view and get back a driver-level error that names neither the model
+    /// nor the reason — a hole in exactly the place a user is most likely to find it.
+    fn ensure_writable(&self) -> Result<(), crate::orm::write::WriteError> {
+        if self.meta.view.is_some() {
+            return Err(crate::orm::write::WriteError::ReadOnlyView {
+                table: self.meta.table.clone(),
+            });
+        }
+        Ok(())
+    }
+
     pub async fn delete(self) -> Result<u64, DynError> {
+        self.ensure_writable()?;
         if self.meta.soft_delete && !self.hard_delete {
             return self.soft_delete_update().await;
         }
@@ -946,6 +962,7 @@ impl<'a> DynQuerySet<'a> {
     /// `SqlType` so SQLite affinity sees the right operand. Returns
     /// the number of rows affected. Unknown column → 0 rows.
     pub async fn update_one(self, col: &str, value: &str) -> Result<u64, DynError> {
+        self.ensure_writable()?;
         let Some(col_meta) = self.meta.fields.iter().find(|c| c.name == col) else {
             return Ok(0);
         };
@@ -993,6 +1010,7 @@ impl<'a> DynQuerySet<'a> {
         form: &HashMap<String, String>,
         skip: &[String],
     ) -> Result<u64, DynError> {
+        self.ensure_writable()?;
         let Some(q) = self.build_update_form_query(form, skip)? else {
             return Ok(0);
         };
@@ -1106,6 +1124,7 @@ impl<'a> DynQuerySet<'a> {
         form: &HashMap<String, String>,
         skip: &[String],
     ) -> Result<u64, DynError> {
+        self.ensure_writable()?;
         let Some(q) = self.build_update_form_query(form, skip)? else {
             return Ok(0);
         };
@@ -1136,6 +1155,7 @@ impl<'a> DynQuerySet<'a> {
         form: &HashMap<String, String>,
         skip: &[String],
     ) -> Result<i64, DynError> {
+        self.ensure_writable()?;
         let Some(mut q) = self.build_insert_form_query(form, skip)? else {
             return Ok(0);
         };
@@ -1271,6 +1291,7 @@ impl<'a> DynQuerySet<'a> {
         form: &HashMap<String, String>,
         skip: &[String],
     ) -> Result<i64, DynError> {
+        self.ensure_writable()?;
         let Some(mut q) = self.build_insert_form_query(form, skip)? else {
             return Ok(0);
         };
@@ -1563,6 +1584,7 @@ impl<'a> DynQuerySet<'a> {
         self,
         body: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
+        self.ensure_writable()?;
         use crate::orm::write::WriteError;
 
         // Phase -1 — normalise the body (strip `noform`, derive
@@ -1756,6 +1778,7 @@ impl<'a> DynQuerySet<'a> {
         body: &serde_json::Map<String, serde_json::Value>,
         tx: &mut crate::db::Transaction,
     ) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
+        self.ensure_writable()?;
         use crate::orm::write::WriteError;
 
         // Phase -1 — normalise (shared with the pool path).
@@ -1873,6 +1896,7 @@ impl<'a> DynQuerySet<'a> {
         body: &serde_json::Map<String, serde_json::Value>,
         tx: &mut crate::db::Transaction,
     ) -> Result<u64, crate::orm::write::WriteError> {
+        self.ensure_writable()?;
         use crate::orm::write::WriteError;
 
         // Phase -1 — strip `noform` + unauthorized-`privileged` columns and
@@ -2011,6 +2035,7 @@ impl<'a> DynQuerySet<'a> {
     /// Soft-delete models stamp `deleted_at = now()` (consistent with the
     /// pool path / gaps #35) unless [`Self::hard_delete`] was set.
     pub async fn delete_in_tx(self, tx: &mut crate::db::Transaction) -> Result<u64, DynError> {
+        self.ensure_writable()?;
         let soft = self.meta.soft_delete && !self.hard_delete;
         let where_clauses = if soft {
             self.live_where_clauses()
@@ -2080,6 +2105,7 @@ impl<'a> DynQuerySet<'a> {
         self,
         body: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
+        self.ensure_writable()?;
         use crate::orm::write::WriteError;
 
         // Phase -1 — strip `noform` + unauthorized-`privileged` columns

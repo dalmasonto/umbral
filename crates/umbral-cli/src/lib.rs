@@ -956,6 +956,14 @@ fn op_kind(op: &umbral::migrate::Operation) -> &'static str {
     match op {
         Operation::CreateTable { .. } => "CREATE TABLE",
         Operation::DropTable { .. } => "DROP TABLE",
+        Operation::CreateView {
+            materialized: true, ..
+        } => "CREATE MATVIEW",
+        Operation::CreateView { .. } => "CREATE VIEW",
+        Operation::DropView {
+            materialized: true, ..
+        } => "DROP MATVIEW",
+        Operation::DropView { .. } => "DROP VIEW",
         Operation::AddColumn { .. } => "ADD COL",
         Operation::DropColumn { .. } => "DROP COL",
         Operation::AlterColumn { .. } => "ALTER COL",

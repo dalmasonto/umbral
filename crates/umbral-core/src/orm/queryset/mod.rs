@@ -3118,6 +3118,17 @@ impl<T: Model> QuerySet<T> {
     /// auto `WHERE deleted_at IS NULL`). Call `.hard_delete()`
     /// beforehand for a real DELETE (GDPR purge, test cleanup).
     pub async fn delete(self) -> Result<u64, sqlx::Error> {
+        // features #73: a view is read-only. Refuse before any SQL is built, so the
+        // error names the model instead of surfacing as the driver's opaque
+        // "cannot modify a view".
+        if T::VIEW.is_some() {
+            return Err(sqlx::Error::Protocol(
+                crate::orm::write::WriteError::ReadOnlyView {
+                    table: T::TABLE.to_string(),
+                }
+                .to_string(),
+            ));
+        }
         // Feature #72 — soft-delete redirect. The whole `delete()`
         // contract collapses to an UPDATE setting `deleted_at`. We
         // keep the bulk_post_delete signal so subscribers see the
@@ -3251,6 +3262,14 @@ impl<T: Model> QuerySet<T> {
         expr: FExpr,
     ) -> Result<u64, crate::orm::write::WriteError> {
         use crate::orm::write::WriteError;
+        // features #73: a view is read-only. Refuse before any SQL is built, so the
+        // error names the model instead of surfacing as the driver's opaque
+        // "cannot modify a view".
+        if T::VIEW.is_some() {
+            return Err(crate::orm::write::WriteError::ReadOnlyView {
+                table: T::TABLE.to_string(),
+            });
+        }
         // Validate the column exists on the model.
         let field = T::FIELDS
             .iter()
@@ -3343,6 +3362,14 @@ impl<T: Model> QuerySet<T> {
         self,
         values: serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
+        // features #73: a view is read-only. Refuse before any SQL is built, so the
+        // error names the model instead of surfacing as the driver's opaque
+        // "cannot modify a view".
+        if T::VIEW.is_some() {
+            return Err(crate::orm::write::WriteError::ReadOnlyView {
+                table: T::TABLE.to_string(),
+            });
+        }
         let atomic = self.should_atomic_wrap();
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
@@ -4009,6 +4036,14 @@ impl<T: Model> Manager<T> {
             + HydrateRelated,
     {
         use crate::orm::write::WriteError;
+        // features #73: a view is read-only. Refuse before any SQL is built, so the
+        // error names the model instead of surfacing as the driver's opaque
+        // "cannot modify a view".
+        if T::VIEW.is_some() {
+            return Err(crate::orm::write::WriteError::ReadOnlyView {
+                table: T::TABLE.to_string(),
+            });
+        }
         let map = serialize_to_map(&instance)?;
 
         // Same pre-DB validation pipeline the dynamic
@@ -4179,6 +4214,14 @@ impl<T: Model> Manager<T> {
         T: serde::Serialize,
     {
         use crate::orm::write::WriteError;
+        // features #73: a view is read-only. Refuse before any SQL is built, so the
+        // error names the model instead of surfacing as the driver's opaque
+        // "cannot modify a view".
+        if T::VIEW.is_some() {
+            return Err(crate::orm::write::WriteError::ReadOnlyView {
+                table: T::TABLE.to_string(),
+            });
+        }
         if instances.is_empty() {
             return Ok(0);
         }

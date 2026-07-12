@@ -25,6 +25,8 @@ use umbral_core::orm::SqlType;
 
 fn make_meta(name: &str, table: &str, cols: Vec<Column>) -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: name.to_string(),
         table: table.to_string(),
         fields: cols,

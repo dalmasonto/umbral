@@ -128,6 +128,14 @@ pub enum WriteError {
     /// `update_values` received a column name that doesn't exist on
     /// the model. Caught early before SQL is built.
     UnknownColumn { field: String },
+    /// features #73 — a write was attempted against a model backed by a database
+    /// VIEW (`#[umbral(view = "...")]`).
+    ///
+    /// The database would reject this too, but only after the ORM had built and sent
+    /// the statement, and what comes back is a driver-level "cannot insert into view"
+    /// that names neither the model nor the reason. Refusing it here means the error
+    /// says which model, and why.
+    ReadOnlyView { table: String },
 }
 
 impl WriteError {
@@ -234,6 +242,9 @@ impl WriteError {
                     .or_default()
                     .push(format!("Unknown column `{field}` on this model."));
             }
+            // Not a field problem — no single field is at fault — so it belongs in
+            // the non-field bucket rather than being dropped on the floor.
+            ReadOnlyView { .. } => {}
             Multiple { errors } => {
                 for e in errors {
                     e.collect_field_errors(out);
@@ -281,6 +292,11 @@ impl WriteError {
             Validator { field, message } if field.is_empty() => {
                 out.push(message.clone());
             }
+            ReadOnlyView { table } => {
+                out.push(format!(
+                    "`{table}` is a database view and cannot be written to."
+                ));
+            }
             Multiple { errors } => {
                 for e in errors {
                     e.collect_non_field_errors(out);
@@ -299,6 +315,7 @@ impl WriteError {
             RequiredFieldMissing { .. } | BlankNotAllowed { .. } | NotNullViolation { .. } => {
                 "required_field"
             }
+            ReadOnlyView { .. } => "read_only_view",
             ForeignKeyNotFound { .. } | ForeignKeyViolation { .. } => "fk_constraint",
             UniqueViolation { .. } => "unique_constraint",
             CheckViolation { .. } => "check_constraint",
@@ -346,6 +363,12 @@ impl std::fmt::Display for WriteError {
             WriteError::RequiredFieldMissing { field } => write!(
                 f,
                 "umbral::orm::write: required field `{field}` is missing or null"
+            ),
+            WriteError::ReadOnlyView { table } => write!(
+                f,
+                "umbral::orm::write: `{table}` is backed by a database view \
+                 (#[umbral(view = \"...\")]) and is read-only — no insert, update or \
+                 delete can run against it. Write to the underlying table instead."
             ),
             WriteError::BlankNotAllowed { field } => {
                 write!(f, "umbral::orm::write: field `{field}` cannot be blank")

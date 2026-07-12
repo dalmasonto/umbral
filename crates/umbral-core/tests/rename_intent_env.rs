@@ -59,6 +59,8 @@ fn col(name: &str, ty: SqlType, primary_key: bool) -> Column {
 
 fn meta(name: &str, table: &str) -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: name.to_string(),
         table: table.to_string(),
         fields: vec![

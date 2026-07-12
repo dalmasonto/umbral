@@ -180,6 +180,10 @@ pub fn framework_checks() -> Vec<SystemCheck> {
             run: auto_user_columns_nullable,
         },
         SystemCheck {
+            id: "model.materialized_view",
+            run: materialized_view_backend,
+        },
+        SystemCheck {
             id: "settings.required",
             run: settings_required,
         },
@@ -667,6 +671,54 @@ fn field_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
                     });
                 }
             }
+        }
+    }
+    findings
+}
+
+/// features #73 — fail at boot when a `#[umbral(materialized_view = "...")]` model
+/// is running against a backend that has no materialized views (i.e. SQLite).
+///
+/// **Error**, not Warning, and specifically NOT "render it as a plain view on
+/// SQLite". A plain view recomputes its SELECT on every read; a materialized one
+/// computes once and serves stored rows. Silently swapping them gives you a
+/// dev/test backend whose results are always correct and whose *performance
+/// contract is the opposite* of production's — which is precisely the bug you
+/// reached for a materialized view to avoid, now invisible until it is under load.
+/// The design principles call this out by name: never let the SQLite branch quietly
+/// diverge.
+fn materialized_view_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let mut findings = Vec::new();
+    if ctx.backend.name() == "postgres" {
+        return findings;
+    }
+    if !crate::migrate::is_initialised() {
+        return findings;
+    }
+    let active = ctx.backend.name();
+    for plugin in crate::migrate::registered_plugins() {
+        for model in crate::migrate::models_for_plugin(&plugin) {
+            if !model.materialized {
+                continue;
+            }
+            findings.push(SystemCheckFinding {
+                check_id: "model.materialized_view",
+                severity: Severity::Error,
+                location: CheckLocation::Settings,
+                message: format!(
+                    "Model `{plugin}::{}` declares `#[umbral(materialized_view = ...)]`, \
+                     but the active backend is `{active}`, which has no materialized views.",
+                    model.name,
+                ),
+                hint: Some(
+                    "switch UMBRAL_DATABASE_URL to a `postgres://...` URL, or change the \
+                     attribute to `#[umbral(view = ...)]` — a plain view is portable. Note \
+                     that a plain view recomputes on every read, which is the cost a \
+                     materialized view exists to avoid: make that trade deliberately, do \
+                     not let the backend make it for you."
+                        .to_string(),
+                ),
+            });
         }
     }
     findings

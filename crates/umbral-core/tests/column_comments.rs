@@ -30,6 +30,8 @@ fn col(name: &str, ty: SqlType, help: &str) -> Column {
 
 fn model(fields: Vec<Column>) -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: "Note".to_string(),
         table: "note".to_string(),
         app_label: "app".to_string(),

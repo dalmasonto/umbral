@@ -375,7 +375,9 @@ fn create_table_names(ops: &[Operation]) -> Vec<String> {
         .iter()
         .filter_map(|op| match op {
             Operation::CreateTable { table, .. } => Some(table.clone()),
-            Operation::DropTable { .. }
+            Operation::CreateView { .. }
+            | Operation::DropView { .. }
+            | Operation::DropTable { .. }
             | Operation::DropM2MTable { .. }
             | Operation::AddColumn { .. }
             | Operation::DropColumn { .. }
@@ -752,6 +754,8 @@ fn snapshot_of(model: ModelMeta) -> Snapshot {
 /// table name and the model name stable across the M8 scenarios.
 fn post_model(fields: Vec<Column>) -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: "Post".to_string(),
         table: "post".to_string(),
         fields,
@@ -1502,6 +1506,8 @@ use umbral_core::migrate::M2MRelation;
 
 fn tag_model() -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: "Tag".to_string(),
         table: "tag".to_string(),
         fields: vec![id_column(), text_column("name")],

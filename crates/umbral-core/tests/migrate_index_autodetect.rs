@@ -59,6 +59,8 @@ fn col(name: &str, ty: SqlType) -> Column {
 /// only the table-level `unique_together` / `indexes` vary.
 fn meta(unique_together: Vec<Vec<String>>, indexes: Vec<Vec<String>>) -> ModelMeta {
     ModelMeta {
+        view: None,
+        materialized: false,
         name: "Membership".to_string(),
         table: "membership".to_string(),
         fields: vec![

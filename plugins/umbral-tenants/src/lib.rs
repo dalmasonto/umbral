@@ -1221,6 +1221,8 @@ mod tests {
     fn meta_for_table(table: &str) -> ModelMeta {
         // A minimal late-bound model meta; db_for only reads `name` + `table`.
         ModelMeta {
+            view: None,
+            materialized: false,
             name: format!("Model_{table}"),
             table: table.to_string(),
             ..ModelMeta::default()

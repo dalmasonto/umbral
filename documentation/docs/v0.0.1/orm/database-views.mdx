@@ -1,0 +1,104 @@
+---
+title: Database views
+description: Back a model with a SQL view instead of a table — for reports too expensive to compute per request.
+sidebar_position: 17
+icon: eye
+tags: [orm, migrations, postgres, performance]
+badge: new
+---
+
+# Database views
+
+Some queries are too expensive to run on every request. A view lets you push the query into the database once and read it back as an ordinary model.
+
+```rust
+#[derive(Model, FromRow, Serialize, Deserialize)]
+#[umbral(
+    table = "customer_total",
+    view = "SELECT MIN(id) AS id, customer, CAST(SUM(amount) AS BIGINT) AS total \
+            FROM orders GROUP BY customer"
+)]
+struct CustomerTotal {
+    id: i64,
+    customer: String,
+    total: i64,
+}
+```
+
+`makemigrations` emits `CREATE VIEW customer_total AS ...` instead of `CREATE TABLE`, and from then on it is just a model:
+
+```rust
+let top = CustomerTotal::objects()
+    .filter(customer_total::TOTAL.gt(1_000))
+    .order_by(customer_total::TOTAL.desc())
+    .limit(10)
+    .fetch()
+    .await?;
+```
+
+Filters, ordering, pagination, REST, the admin — all of it works, because none of them ever knew the difference.
+
+## Views are read-only
+
+Every write path rejects a view model before it builds any SQL:
+
+```rust
+CustomerTotal::objects().create(...).await
+// Err(WriteError::ReadOnlyView { table: "customer_total" })
+```
+
+The database would refuse it too, but only after the statement was built and sent, and what comes back is a driver-level *"cannot insert into a view"* that names neither the model nor the reason. REST surfaces this as a 400 with an explanatory message; the admin shows it inline. Write to the underlying table.
+
+## What the framework will not check
+
+**The SELECT list is an opaque string.** Nothing parses it, so nothing can tell you that your struct's fields don't line up with the columns your SQL returns. A mismatch shows up the first time you query the view.
+
+<Callout type="warning">
+  **Cast your aggregates.** On Postgres, `SUM(bigint)` returns `NUMERIC`, which will *not* decode into an `i64` field — you get a type error at query time, not at boot. `CAST(SUM(amount) AS BIGINT)` is standard SQL that both Postgres and SQLite accept, which makes it both the correct spelling and the portable one. Your view's SQL is passed through verbatim: it is as portable as you make it.
+</Callout>
+
+## Changing a view
+
+Edit the SQL and run `makemigrations`. You get a `DROP VIEW` and a `CREATE VIEW` — there is no `ALTER VIEW` and there never will be, because a view stores nothing. Nothing is lost, nothing is migrated, nothing needs a backup.
+
+The engine also recreates a view when a **table it reads** changes, even if you never touched the view. That is not tidiness: Postgres refuses to drop or retype a column that a live view selects from, so the view has to move out of the way first and come back after. It works this out by scanning your view's SQL for the names of tables it knows about — which is also how it knows to create the view *after* the tables it depends on.
+
+## Materialized views (Postgres)
+
+A plain view recomputes its query on every read. A **materialized** one computes it once and stores the rows:
+
+```rust
+#[umbral(materialized_view = "SELECT ... FROM huge_table GROUP BY ...")]
+```
+
+That staleness is the feature — and the thing you have to manage. The rows do not move when the underlying tables do, until you say so:
+
+```rust
+umbral::db::refresh_view::<TeamStandings>().await?;
+```
+
+<Callout type="info">
+  **Postgres only.** SQLite has no materialized views, and umbral will not quietly downgrade one to a plain view for you: the boot fails with a `model.materialized_view` check error. A silent downgrade would give you a dev backend whose answers are all correct and whose performance contract is inverted — the expensive query you added a materialized view to *avoid*, now running on every request, invisible until production is under load.
+</Callout>
+
+### Refreshing on a schedule
+
+There is no `refresh = "1h"` attribute, deliberately. `umbral-core` cannot depend on `umbral-tasks` — that dependency arrow points the wrong way, and the crate graph exists to make it impossible. But you don't need one, because the scheduler is already a plugin and `refresh_view` is just a function:
+
+```rust
+#[task]
+async fn refresh_standings() -> Result<(), TaskError> {
+    umbral::db::refresh_view::<TeamStandings>().await?;
+    Ok(())
+}
+
+TasksPlugin::new().periodic_task::<RefreshStandings>(Schedule::every_hours(1))
+```
+
+The two compose without either crate knowing the other exists. An attribute would have bought nothing but a dependency edge pointing inward. See [Background tasks](../plugins/tasks).
+
+## When not to use one
+
+A view is not an index. If a query is slow because it scans a table, the fix is an index on the column you filter by, not a view over the same scan — a plain view would run the identical slow query on every read, and a materialized one would just move the cost somewhere you notice it less. Reach for a view when the *shape* of the query is expensive (aggregations across joins, a report over many tables), not when a single lookup is.
+
+Design notes: `planning/features.md` #73.

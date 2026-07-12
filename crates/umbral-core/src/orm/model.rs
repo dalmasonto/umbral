@@ -301,6 +301,32 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// row (who / when / which row / which fields changed).
     const AUDITED: bool = false;
 
+    /// features #73 — `#[umbral(view = "SELECT ...")]`. When set, this model is
+    /// backed by a database VIEW rather than a table: the migration engine emits
+    /// `CREATE VIEW <table> AS <this SQL>` and never a `CREATE TABLE`.
+    ///
+    /// The struct's fields must line up with the SELECT list — the framework
+    /// cannot check that at compile time (the SQL is an opaque string), so a
+    /// mismatch surfaces as a "no such column" the first time you query it.
+    ///
+    /// A view is **read-only**. Every write path rejects a view model with
+    /// [`WriteError::ReadOnlyView`](crate::orm::write::WriteError::ReadOnlyView)
+    /// before it reaches the database, because the alternative — a driver-level
+    /// error from deep inside the insert — tells you nothing about *why*.
+    const VIEW: Option<&'static str> = None;
+
+    /// features #73 — `#[umbral(materialized_view = "SELECT ...")]`. Implies
+    /// [`VIEW`](Self::VIEW); additionally emits `CREATE MATERIALIZED VIEW`, whose
+    /// rows are computed once and stored until you call
+    /// [`refresh_view`](crate::db::refresh_view).
+    ///
+    /// Postgres-only. SQLite has no materialized views, and rendering one as a
+    /// plain view there would give you a backend that silently recomputes on every
+    /// read — the same query, a different performance contract, and a "works on my
+    /// machine" that only shows up under production load. The `model.materialized_view`
+    /// system check fails the boot instead.
+    const MATERIALIZED: bool = false;
+
     /// Composite-UNIQUE constraints. Each inner slice names a
     /// constraint over the listed column names. Set via
     /// `#[umbral(unique_together = [["a", "b"]])]`. Closes BUG-6 in

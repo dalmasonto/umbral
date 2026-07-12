@@ -1056,6 +1056,8 @@ fn ts_scalar_for_pk(col: &Column) -> String {
     umbral::typegen::ts_base_type(
         &[],
         &ModelMeta {
+            view: None,
+            materialized: false,
             name: String::new(),
             table: String::new(),
             fields: vec![col.clone()],

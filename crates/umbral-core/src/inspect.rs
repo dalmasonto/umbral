@@ -725,6 +725,10 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             m2m_relations: Vec::new(),
             soft_delete: false,
             audited: false,
+            // inspectdb introspects TABLES; a view it finds becomes a plain model
+            // with `view: None`, i.e. the framework will not try to manage it.
+            view: None,
+            materialized: false,
             // inspectdb has no plugin attribute to read; default to "app".
             app_label: "app".to_string(),
         })
@@ -783,7 +787,9 @@ pub async fn write_outputs(
             .fold((0usize, 0usize), |(t, c), op| match op {
                 Operation::CreateTable { columns, .. } => (t + 1, c + columns.len()),
                 Operation::CreateM2MTable { .. } => (t + 1, c + 2),
-                Operation::DropTable { .. }
+                Operation::CreateView { .. }
+                | Operation::DropView { .. }
+                | Operation::DropTable { .. }
                 | Operation::DropM2MTable { .. }
                 | Operation::AddColumn { .. }
                 | Operation::DropColumn { .. }

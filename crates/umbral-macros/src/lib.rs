@@ -149,6 +149,12 @@ struct UmbralStructAttr {
     /// gaps3 #54 — `#[umbral(audited)]`. Every write to this model records an
     /// `umbral_audit` row: who, when, which row, and which fields changed.
     audited: bool,
+    /// features #73 — `#[umbral(view = "SELECT ...")]` /
+    /// `#[umbral(materialized_view = "SELECT ...")]`. The model is backed by a
+    /// database VIEW: the migration engine emits `CREATE [MATERIALIZED] VIEW` and
+    /// every write path rejects it as read-only.
+    view: Option<String>,
+    materialized: bool,
     /// `#[umbral(unique_together = [["a", "b"], ["c"]])]` — composite
     /// UNIQUE constraints. Each inner array names a constraint over the
     /// listed column names. Closes BUG-6.
@@ -734,6 +740,8 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
         unique_together: Vec::new(),
         indexes: Vec::new(),
         ordering: Vec::new(),
+        view: None,
+        materialized: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbral") {
@@ -778,6 +786,21 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
                 Ok(())
             } else if meta.path.is_ident("audited") {
                 parsed.audited = true;
+                Ok(())
+            } else if meta.path.is_ident("view") {
+                // features #73 — `#[umbral(view = "SELECT ...")]`. The body is an
+                // opaque string; the framework never parses it. What it DOES do is
+                // scan it for the names of tables it knows about, to order the
+                // CREATE VIEW after them.
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.view = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("materialized_view") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.view = Some(lit.value());
+                parsed.materialized = true;
                 Ok(())
             } else if meta.path.is_ident("soft_delete") {
                 // Feature #72 — soft-delete marker. The user MUST
@@ -829,6 +852,7 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
                 Err(meta.error(
                     "umbral::Model derive accepts struct-level `table = \"...\"`, `plugin = \"...\"`, \
                      `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`, `soft_delete`, `audited`, \
+                     `view = \"SELECT ...\"`, `materialized_view = \"SELECT ...\"`, \
                      `unique_together = [[...]]`, `indexes = [[...]]`, `ordering = [\"-col\", \"col\"]`; \
                      and field-level `noform` and `noedit`. \
                      Other attributes (max_length, db_index, default, choices, on_delete) land as \
@@ -985,6 +1009,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         None => quote! { ::core::option::Option::None },
     };
     let audited_lit = struct_attr.audited;
+    let view_tokens = match &struct_attr.view {
+        Some(sql) => quote! { ::core::option::Option::Some(#sql) },
+        None => quote! { ::core::option::Option::None },
+    };
+    let materialized_lit = struct_attr.materialized;
     let soft_delete_lit = if struct_attr.soft_delete {
         quote!(true)
     } else {
@@ -2144,6 +2173,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const SINGLETON: bool = #singleton_lit;
             const SOFT_DELETE: bool = #soft_delete_lit;
             const AUDITED: bool = #audited_lit;
+            const VIEW: ::core::option::Option<&'static str> = #view_tokens;
+            const MATERIALIZED: bool = #materialized_lit;
             const UNIQUE_TOGETHER: &'static [&'static [&'static str]] = #unique_together_tokens;
             const INDEXES: &'static [&'static [&'static str]] = #indexes_tokens;
             const ORDERING: &'static [(&'static str, bool)] = #ordering_tokens;

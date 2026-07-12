@@ -313,6 +313,67 @@ pub async fn ping() -> Result<(), sqlx::Error> {
     }
 }
 
+/// features #73 — recompute a materialized view's stored rows.
+///
+/// A `#[umbral(materialized_view = "...")]` model serves rows that were computed
+/// once, at `CREATE MATERIALIZED VIEW` time. They do not update when the underlying
+/// tables change: that staleness IS the feature, and this is the call that ends it.
+///
+/// ```ignore
+/// umbral::db::refresh_view::<TeamStandings>().await?;
+/// ```
+///
+/// # Scheduling it
+///
+/// There is deliberately no `#[umbral(materialized_view = "...", refresh = "1h")]`.
+/// `umbral-core` cannot depend on `umbral-tasks` — that arrow points outward, and
+/// the whole crate graph exists to make that impossible. But you do not need it to:
+/// the scheduler is already a plugin, and this is a function, so
+///
+/// ```ignore
+/// #[task]
+/// async fn refresh_standings() -> Result<(), TaskError> {
+///     umbral::db::refresh_view::<TeamStandings>().await?;
+///     Ok(())
+/// }
+///
+/// TasksPlugin::new().periodic_task::<RefreshStandings>(Schedule::every_hours(1))
+/// ```
+///
+/// composes the two without either crate knowing the other exists. An attribute
+/// would have bought you nothing but a dependency edge pointing the wrong way.
+///
+/// # Errors
+///
+/// Returns an error on SQLite, which has no materialized views. In practice you
+/// cannot get here — the `model.materialized_view` system check fails the boot first
+/// — but a caller that reaches it should be told why rather than silently no-op.
+///
+/// # Panics
+///
+/// Panics if `App::build()` hasn't run (same contract as [`pool_dispatched`]).
+pub async fn refresh_view<M: crate::orm::Model>() -> Result<(), sqlx::Error> {
+    if !M::MATERIALIZED {
+        return Err(sqlx::Error::Protocol(format!(
+            "umbral::db::refresh_view::<{}>: only a `#[umbral(materialized_view = ...)]` \
+             model can be refreshed. A plain view recomputes on every read, so there is \
+             nothing to refresh; a table is not a view at all.",
+            M::NAME,
+        )));
+    }
+    match pool_dispatched() {
+        DbPool::Postgres(p) => sqlx::query(&format!("REFRESH MATERIALIZED VIEW \"{}\"", M::TABLE))
+            .execute(p)
+            .await
+            .map(|_| ()),
+        DbPool::Sqlite(_) => Err(sqlx::Error::Protocol(format!(
+            "umbral::db::refresh_view::<{}>: SQLite has no materialized views. The \
+             `model.materialized_view` system check should have failed this boot.",
+            M::NAME,
+        ))),
+    }
+}
+
 /// List every registered pool alias, sorted alphabetically.
 ///
 /// Used by the migration engine to walk each DB in deterministic

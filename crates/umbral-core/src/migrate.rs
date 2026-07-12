@@ -395,6 +395,17 @@ pub struct ModelMeta {
     /// same source of truth the typed one does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub audited: bool,
+    /// features #73 — `#[umbral(view = "...")]`. `Some(sql)` means this model is
+    /// backed by a database VIEW whose body is `sql`; the migration engine emits
+    /// `CREATE VIEW` for it and never `CREATE TABLE`. Carried on `ModelMeta` (not
+    /// just the trait) because the *snapshot* is what `makemigrations` diffs — a
+    /// view whose SQL changed has to be detectable without the model being in scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// features #73 — the view is MATERIALIZED (Postgres-only). Meaningless unless
+    /// `view` is `Some`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub materialized: bool,
     /// The app label (the owning plugin's name), mirrors `Model::APP_LABEL`.
     /// Sourced from `#[umbral(plugin = "...")]`; `"app"` when absent.
     /// Authoritative for permission codenames (gaps2 #80g): replaces the
@@ -424,6 +435,8 @@ impl Default for ModelMeta {
             m2m_relations: Vec::new(),
             soft_delete: false,
             audited: false,
+            view: None,
+            materialized: false,
             app_label: default_app_label(),
         }
     }
@@ -542,6 +555,8 @@ impl ModelMeta {
                 .collect(),
             soft_delete: T::SOFT_DELETE,
             audited: T::AUDITED,
+            view: T::VIEW.map(|s| s.to_string()),
+            materialized: T::MATERIALIZED,
             app_label: T::APP_LABEL.to_string(),
         }
     }
@@ -628,6 +643,29 @@ pub enum Operation {
     },
     /// Drop an existing table.
     DropTable { table: String },
+    /// features #73 — create a database VIEW from `#[umbral(view = "...")]`.
+    ///
+    /// There is no `AlterView`, and there never will be: a view holds no rows, so
+    /// changing one is a drop and a recreate. That is why views escape every hard
+    /// problem the table side of this engine spent its life on — no data-preserving
+    /// ALTER, no rename-vs-drop disambiguation, nothing to back up.
+    CreateView {
+        /// The view's name in the database (the model's `TABLE`).
+        name: String,
+        /// The SELECT body, verbatim from the attribute. Opaque to the engine.
+        sql: String,
+        /// `CREATE MATERIALIZED VIEW` (Postgres-only) rather than `CREATE VIEW`.
+        #[serde(default, skip_serializing_if = "is_false")]
+        materialized: bool,
+    },
+    /// features #73 — drop a database VIEW.
+    DropView {
+        /// The view's name in the database.
+        name: String,
+        /// Whether it was created as MATERIALIZED — the DROP statement differs.
+        #[serde(default, skip_serializing_if = "is_false")]
+        materialized: bool,
+    },
     /// Add a new column to an existing table. Rendered as
     /// `ALTER TABLE x ADD COLUMN y TYPE [NOT NULL]`. SQLite refuses a
     /// non-nullable add against a populated table without a default;
@@ -820,6 +858,7 @@ impl Operation {
     /// pool where its table actually lives.
     pub fn table_name(&self) -> &str {
         match self {
+            Operation::CreateView { name, .. } | Operation::DropView { name, .. } => name,
             Operation::CreateTable { table, .. }
             | Operation::DropTable { table }
             | Operation::AddColumn { table, .. }
@@ -3472,6 +3511,18 @@ pub fn classify_operation(op: &Operation) -> OpSafety {
             }
         }
 
+        // A view holds no rows of its own (a materialized one holds only derived,
+        // recomputable rows), so creating one is free and dropping one destroys
+        // nothing. What a DropView CAN break is old code still selecting from it —
+        // and since every view edit lowers to drop+create, classifying this Unsafe
+        // would trip the zero-downtime gate on a routine SQL tweak. Warning is the
+        // honest severity: worth reading, not worth blocking.
+        Operation::CreateView { .. } => OpSafety::Safe,
+        Operation::DropView { name, .. } => OpSafety::Warning(format!(
+            "drops view `{name}` — no rows are lost (a view stores none), but old code \
+             still selecting from it breaks until the recreate lands in the same migration"
+        )),
+
         // Destructive / irreversible: data loss the moment it runs.
         Operation::DropTable { table } => OpSafety::Unsafe(format!(
             "drops table `{table}` and every row in it — irreversible, and old code still reading it breaks. Stop using it, deploy, then drop in a later migration"
@@ -3745,6 +3796,37 @@ fn diff_indexes(previous: &ModelMeta, current: &ModelMeta) -> Vec<Operation> {
 
 pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, MigrateError> {
     use std::collections::{BTreeMap, HashSet};
+
+    // features #73 — views are diffed on a separate track, for a reason that runs
+    // deeper than tidiness: every pass below exists to AVOID destroying data (the
+    // rename heuristic, the safe-cast table, the data-preserving ALTER). A view
+    // stores nothing, so none of that machinery applies to it, and letting a view
+    // through it would be actively wrong — Pass 1 could "detect a rename" between a
+    // dropped table and a created view and emit an ALTER against a relation that has
+    // no rows to alter.
+    //
+    // So: hide the views from the table passes entirely, then handle them in Pass 5
+    // with the only two operations a view can ever need.
+    let view_prev = previous;
+    let view_curr = current;
+    let prev_tables = Snapshot {
+        models: previous
+            .models
+            .iter()
+            .filter(|m| m.view.is_none())
+            .cloned()
+            .collect(),
+    };
+    let curr_tables = Snapshot {
+        models: current
+            .models
+            .iter()
+            .filter(|m| m.view.is_none())
+            .cloned()
+            .collect(),
+    };
+    let previous = &prev_tables;
+    let current = &curr_tables;
 
     let prev_by_name: BTreeMap<&str, &ModelMeta> = previous
         .models
@@ -4028,7 +4110,224 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
         });
     }
 
-    Ok(ops)
+    // ---- Pass 5: views (features #73). ----
+    //
+    // Ordering is the whole feature. Drops go BEFORE the table ops and creates go
+    // AFTER, because Postgres refuses to drop or retype a column that a live view
+    // selects from — so a migration that alters `matchday.score` while a view reads
+    // it fails unless the view is out of the way first, and is only whole again once
+    // the view is back.
+    let (view_drops, view_creates) = diff_views(view_prev, view_curr, &ops)?;
+    let mut all = view_drops;
+    all.extend(ops);
+    all.extend(view_creates);
+    Ok(all)
+}
+
+/// The relations a view's SQL selects from, recovered by scanning its body for the
+/// names of relations we know about.
+///
+/// The SELECT body is an opaque string — nobody is writing a SQL parser here. But
+/// the engine already knows every table and view name in the snapshot, so it can ask
+/// the cheaper question: *does this view's SQL mention `matchday`?* A whole-word
+/// match (so `matchday` does not match `matchday_team`) recovers the dependency edge
+/// that ordering needs.
+///
+/// The failure modes are asymmetric, which is why this is worth doing:
+/// - A **false positive** (the name appears in a string literal or a comment) costs
+///   one needless `DROP VIEW` + `CREATE VIEW`. A view stores nothing. Nobody notices.
+/// - A **false negative** would order a view before the table it reads, and the
+///   migration fails at apply time with a clear "relation does not exist".
+///
+/// Both are safe. Neither can corrupt data. That asymmetry is what makes a heuristic
+/// acceptable here and unacceptable in the table passes next door.
+fn view_dependencies(sql: &str, known: &[String], self_table: &str) -> Vec<String> {
+    let haystack = sql.to_ascii_lowercase();
+    let bytes = haystack.as_bytes();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+
+    let mut deps = Vec::new();
+    for name in known {
+        if name == self_table {
+            continue;
+        }
+        let needle = name.to_ascii_lowercase();
+        if needle.is_empty() {
+            continue;
+        }
+        let mut from = 0usize;
+        while let Some(hit) = haystack[from..].find(&needle) {
+            let start = from + hit;
+            let end = start + needle.len();
+            let before_ok = start == 0 || !is_word(bytes[start - 1]);
+            let after_ok = end == bytes.len() || !is_word(bytes[end]);
+            if before_ok && after_ok {
+                deps.push(name.clone());
+                break;
+            }
+            from = end;
+        }
+    }
+    deps
+}
+
+/// Diff the view models of two snapshots into (drops, creates).
+///
+/// `table_ops` is what the table passes decided; a view that reads from a table
+/// those ops touch is recreated even if its own SQL never changed.
+fn diff_views(
+    previous: &Snapshot,
+    current: &Snapshot,
+    table_ops: &[Operation],
+) -> Result<(Vec<Operation>, Vec<Operation>), MigrateError> {
+    use std::collections::{BTreeMap, HashSet};
+
+    let view_models = |snap: &Snapshot| -> Vec<ModelMeta> {
+        snap.models
+            .iter()
+            .filter(|m| m.view.is_some())
+            .cloned()
+            .collect()
+    };
+    let prev_views = view_models(previous);
+    let curr_views = view_models(current);
+    if prev_views.is_empty() && curr_views.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let touched: HashSet<&str> = table_ops.iter().map(|o| o.table_name()).collect();
+    let known: Vec<String> = current.models.iter().map(|m| m.table.clone()).collect();
+
+    let deps: BTreeMap<&str, Vec<String>> = curr_views
+        .iter()
+        .map(|m| {
+            (
+                m.name.as_str(),
+                view_dependencies(m.view.as_deref().unwrap_or(""), &known, &m.table),
+            )
+        })
+        .collect();
+
+    let prev_by_name: BTreeMap<&str, &ModelMeta> =
+        prev_views.iter().map(|m| (m.name.as_str(), m)).collect();
+
+    // Which views are stale? Either their own definition moved, or something they
+    // read did.
+    let mut recreate: HashSet<&str> = HashSet::new();
+    for m in &curr_views {
+        let definition_changed = match prev_by_name.get(m.name.as_str()) {
+            None => true, // brand new, or was a table until this change
+            Some(prev) => {
+                prev.view != m.view || prev.materialized != m.materialized || prev.table != m.table
+            }
+        };
+        let reads_a_touched_table = deps[m.name.as_str()]
+            .iter()
+            .any(|d| touched.contains(d.as_str()));
+        if definition_changed || reads_a_touched_table {
+            recreate.insert(m.name.as_str());
+        }
+    }
+
+    // A view built on a view that is being recreated is itself stale. Iterate to a
+    // fixpoint rather than assuming one level of nesting.
+    loop {
+        let mut grew = false;
+        for m in &curr_views {
+            if recreate.contains(m.name.as_str()) {
+                continue;
+            }
+            let reads_a_stale_view = deps[m.name.as_str()].iter().any(|d| {
+                curr_views
+                    .iter()
+                    .any(|v| &v.table == d && recreate.contains(v.name.as_str()))
+            });
+            if reads_a_stale_view {
+                recreate.insert(m.name.as_str());
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+
+    // ---- Creates, in dependency order (a view after the views it reads). ----
+    let mut to_create: Vec<&ModelMeta> = curr_views
+        .iter()
+        .filter(|m| recreate.contains(m.name.as_str()))
+        .collect();
+    to_create.sort_by(|a, b| a.name.cmp(&b.name)); // deterministic before topo
+
+    let mut creates: Vec<Operation> = Vec::new();
+    let mut placed: HashSet<&str> = HashSet::new();
+    while placed.len() < to_create.len() {
+        let before = placed.len();
+        for m in &to_create {
+            if placed.contains(m.table.as_str()) {
+                continue;
+            }
+            let blocked = deps[m.name.as_str()].iter().any(|d| {
+                to_create
+                    .iter()
+                    .any(|other| &other.table == d && !placed.contains(other.table.as_str()))
+            });
+            if blocked {
+                continue;
+            }
+            placed.insert(m.table.as_str());
+            creates.push(Operation::CreateView {
+                name: m.table.clone(),
+                sql: m.view.clone().unwrap_or_default(),
+                materialized: m.materialized,
+            });
+        }
+        if placed.len() == before {
+            // A cycle. Two views cannot select from each other, so this means the
+            // SQL scan found a self-referential edge we cannot honour. Name the
+            // views rather than looping forever.
+            let stuck: Vec<&str> = to_create
+                .iter()
+                .filter(|m| !placed.contains(m.table.as_str()))
+                .map(|m| m.table.as_str())
+                .collect();
+            return Err(MigrateError::UnsupportedChange(format!(
+                "views {stuck:?} form a dependency cycle — each one's SQL selects from \
+                 another in the set, so there is no order in which they can be created. \
+                 Break the cycle by inlining one of the definitions."
+            )));
+        }
+    }
+
+    // ---- Drops: every view we are about to recreate, plus every view that is gone
+    // (removed, or converted back into a table). Emitted in reverse create order so
+    // a dependant view is dropped before the view it reads.
+    let mut drops: Vec<Operation> = Vec::new();
+    let curr_view_names: HashSet<&str> = curr_views.iter().map(|m| m.name.as_str()).collect();
+    let mut to_drop: Vec<&ModelMeta> = prev_views
+        .iter()
+        .filter(|m| {
+            !curr_view_names.contains(m.name.as_str()) || recreate.contains(m.name.as_str())
+        })
+        .collect();
+    // Reverse-topological by the CREATE order we just computed; anything not in it
+    // (a removed view) sorts first, since nothing we keep can depend on it.
+    let create_pos = |table: &str| -> usize {
+        creates
+            .iter()
+            .position(|op| matches!(op, Operation::CreateView { name, .. } if name == table))
+            .map(|i| usize::MAX - i)
+            .unwrap_or(0)
+    };
+    to_drop.sort_by_key(|m| (create_pos(&m.table), m.table.clone()));
+    for m in to_drop {
+        drops.push(Operation::DropView {
+            name: m.table.clone(),
+            materialized: m.materialized,
+        });
+    }
+
+    Ok((drops, creates))
 }
 
 /// A flat-resolved M2M descriptor used by [`diff`] to compare snapshots.
@@ -4559,6 +4858,15 @@ fn suffix_for(ops: &[Operation]) -> String {
     match ops {
         [Operation::CreateTable { table, .. }] => format!("create_{table}"),
         [Operation::DropTable { table }] => format!("drop_{table}"),
+        // features #73. The drop+create pair is what an EDIT to a view's SQL looks
+        // like — by far the commonest view migration — so name it for what the user
+        // did, not for the two statements it lowers to.
+        [Operation::CreateView { name, .. }] => format!("create_view_{name}"),
+        [Operation::DropView { name, .. }] => format!("drop_view_{name}"),
+        [
+            Operation::DropView { name: dropped, .. },
+            Operation::CreateView { name: created, .. },
+        ] if dropped == created => format!("update_view_{created}"),
         [Operation::AddColumn { table, column }] => format!("add_{}_{}", table, column.name),
         [Operation::DropColumn { table, column }] => format!("drop_{table}_{column}"),
         [Operation::AlterColumn { table, column, .. }] => format!("alter_{table}_{column}"),
@@ -4695,6 +5003,28 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
     use sea_query::{Alias, SqliteQueryBuilder, Table};
 
     match op {
+        // features #73. A view is DDL the ORM cannot express as a sea-query
+        // statement (there is no ViewCreateStatement), and the SELECT body is an
+        // opaque string the user wrote. This is exception (1) in CLAUDE.md's raw-SQL
+        // rule: schema DDL, owned by the migration engine.
+        //
+        // A MATERIALIZED view never reaches here — the `model.materialized_view`
+        // system check fails the boot on SQLite. Rendering it as a plain view would
+        // be the exact "SQLite branch that quietly diverges" the design principles
+        // forbid: the same query, silently recomputed on every read.
+        Operation::CreateView {
+            name,
+            sql,
+            materialized,
+        } => {
+            debug_assert!(
+                !materialized,
+                "materialized views are Postgres-only; the model.materialized_view \
+                 system check should have failed the boot before reaching the renderer"
+            );
+            vec![format!("CREATE VIEW \"{name}\" AS {sql}")]
+        }
+        Operation::DropView { name, .. } => vec![format!("DROP VIEW IF EXISTS \"{name}\"")],
         Operation::CreateTable {
             table,
             columns,
@@ -4920,6 +5250,30 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
     use sea_query::{Alias, PostgresQueryBuilder, Table};
 
     match op {
+        // features #73 — see the SQLite renderer for why this is raw DDL.
+        Operation::CreateView {
+            name,
+            sql,
+            materialized,
+        } => {
+            let kind = if *materialized {
+                "MATERIALIZED VIEW"
+            } else {
+                "VIEW"
+            };
+            vec![format!("CREATE {kind} \"{name}\" AS {sql}")]
+        }
+        Operation::DropView { name, materialized } => {
+            let kind = if *materialized {
+                "MATERIALIZED VIEW"
+            } else {
+                "VIEW"
+            };
+            // No CASCADE. A view another view depends on should fail loudly rather
+            // than silently take its dependants down with it — the engine emits the
+            // dependants' drops itself, in order, when it knows about them.
+            vec![format!("DROP {kind} IF EXISTS \"{name}\"")]
+        }
         Operation::CreateTable {
             table,
             columns,
@@ -5997,6 +6351,8 @@ mod tests {
         per_plugin.insert(
             "zeta".to_string(),
             vec![ModelMeta {
+                view: None,
+                materialized: false,
                 name: "ZetaModel".to_string(),
                 table: "zeta".to_string(),
                 fields: Vec::new(),
@@ -6016,6 +6372,8 @@ mod tests {
         per_plugin.insert(
             "alpha".to_string(),
             vec![ModelMeta {
+                view: None,
+                materialized: false,
                 name: "AlphaModel".to_string(),
                 table: "alpha".to_string(),
                 fields: Vec::new(),
@@ -6400,6 +6758,8 @@ mod tests {
         }
         fn meta_with(col: Column) -> ModelMeta {
             ModelMeta {
+                view: None,
+                materialized: false,
                 name: "M".into(),
                 table: "m".into(),
                 fields: vec![col],

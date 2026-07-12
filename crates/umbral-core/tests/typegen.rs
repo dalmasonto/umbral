@@ -206,6 +206,8 @@ fn column(name: &str, ty: SqlType) -> Column {
 
 fn exotic() -> String {
     typescript_for(&[ModelMeta {
+        view: None,
+        materialized: false,
         name: "Exotic".to_string(),
         table: "exotic".to_string(),
         app_label: "app".to_string(),
@@ -265,6 +267,8 @@ fn multichoice_stays_a_plain_string() {
     col.is_multichoice = true;
 
     let ts = typescript_for(&[ModelMeta {
+        view: None,
+        materialized: false,
         name: "Grant".to_string(),
         table: "grant".to_string(),
         app_label: "app".to_string(),
@@ -286,6 +290,8 @@ fn choice_values_are_escaped() {
     col.choices = vec![r#"say"hi"#.to_string(), r"back\slash".to_string()];
 
     let ts = typescript_for(&[ModelMeta {
+        view: None,
+        materialized: false,
         name: "Quoted".to_string(),
         table: "quoted".to_string(),
         app_label: "app".to_string(),
