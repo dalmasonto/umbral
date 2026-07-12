@@ -523,6 +523,35 @@ impl<T> QuerySet<T> {
     /// picking the dialect-appropriate `SimpleExpr` for each one. The
     /// `backend_name` is `"sqlite"` or `"postgres"`; any other value
     /// behaves like Postgres (the default).
+    /// Predicates the ORM adds on its own, independent of what the caller
+    /// filtered on — today the soft-delete visibility guard.
+    ///
+    /// **This is the single seam for implicit filtering, and it exists so a
+    /// write path cannot silently diverge from the read path.** Both
+    /// [`Self::build_query_for`] (SELECT) and [`Self::build_update_for`]
+    /// (UPDATE) call it, so a row hidden from reads cannot be updated through a
+    /// predicate that forgot the same guard. It was duplicated in both before;
+    /// two copies of a security-relevant filter is a drift bug waiting to
+    /// happen, and the next filter to land here — the row-level tenant scope —
+    /// must reach *every* builder or it is a cross-tenant leak
+    /// (`docs/specs/row-level-tenancy.md`).
+    ///
+    /// Note `build_delete_for` deliberately does NOT call this: a hard delete
+    /// may legitimately target already-trashed rows. A tenant predicate, by
+    /// contrast, will have to apply there too.
+    fn implicit_predicates(&self) -> Vec<sea_query::SimpleExpr> {
+        let mut out = Vec::new();
+        if self.soft_delete_active {
+            use sea_query::Expr;
+            if self.only_deleted {
+                out.push(Expr::col(Alias::new("deleted_at")).is_not_null());
+            } else if !self.with_deleted {
+                out.push(Expr::col(Alias::new("deleted_at")).is_null());
+            }
+        }
+        out
+    }
+
     pub(crate) fn build_query_for(&self, backend_name: &str) -> sea_query::SelectStatement {
         let mut q = self.query.clone();
         for p in &self.predicates {
@@ -534,13 +563,8 @@ impl<T> QuerySet<T> {
         // `.only_deleted()`, inject `WHERE deleted_at IS NULL`.
         // `.with_deleted()` shows everything; `.only_deleted()`
         // shows just the soft-deleted rows.
-        if self.soft_delete_active {
-            use sea_query::Expr;
-            if self.only_deleted {
-                q.and_where(Expr::col(Alias::new("deleted_at")).is_not_null());
-            } else if !self.with_deleted {
-                q.and_where(Expr::col(Alias::new("deleted_at")).is_null());
-            }
+        for implicit in self.implicit_predicates() {
+            q.and_where(implicit);
         }
         // Related-aggregate annotations: one correlated scalar
         // subquery per entry, aliased onto the SELECT list. Living
@@ -3340,12 +3364,8 @@ impl<T: Model> QuerySet<T> {
         for p in &self.predicates {
             stmt.and_where(p.cond_for(backend_name));
         }
-        if self.soft_delete_active {
-            if self.only_deleted {
-                stmt.and_where(Expr::col(Alias::new("deleted_at")).is_not_null());
-            } else if !self.with_deleted {
-                stmt.and_where(Expr::col(Alias::new("deleted_at")).is_null());
-            }
+        for implicit in self.implicit_predicates() {
+            stmt.and_where(implicit);
         }
         Ok(stmt)
     }

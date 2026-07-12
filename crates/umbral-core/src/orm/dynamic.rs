@@ -217,25 +217,52 @@ impl<'a> DynQuerySet<'a> {
         self
     }
 
-    fn effective_where_clauses(&self) -> Vec<Condition> {
+    /// The caller's predicates plus whatever the ORM adds implicitly.
+    ///
+    /// **The single clause-composition seam for the dynamic path**, and the twin
+    /// of `QuerySet::implicit_predicates` on the typed path. Everything that
+    /// builds a statement here goes through this (or one of the two wrappers
+    /// below) so admin and REST — which run *entirely* on `DynQuerySet` — cannot
+    /// end up with weaker filtering than the typed API. The row-level tenant
+    /// scope lands here (`docs/specs/row-level-tenancy.md`); scoping only the
+    /// typed QuerySet would be a silent, complete bypass of the admin surface.
+    ///
+    /// `trashed` selects which soft-delete guard to add:
+    /// `None` → follow the queryset's own `with_deleted`/`only_deleted` flags;
+    /// `Some(false)` → force "live rows only"; `Some(true)` → force "trashed only".
+    fn where_clauses_with(&self, trashed: Option<bool>) -> Vec<Condition> {
         let mut clauses = self.where_clauses.clone();
         if self.meta.soft_delete {
-            if self.only_deleted {
-                clauses
-                    .push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_not_null()));
-            } else if !self.with_deleted {
-                clauses.push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_null()));
+            let want_trashed = match trashed {
+                Some(t) => Some(t),
+                None if self.only_deleted => Some(true),
+                None if !self.with_deleted => Some(false),
+                None => None,
+            };
+            match want_trashed {
+                Some(true) => clauses
+                    .push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_not_null())),
+                Some(false) => clauses
+                    .push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_null())),
+                None => {}
             }
         }
         clauses
     }
 
+    fn effective_where_clauses(&self) -> Vec<Condition> {
+        self.where_clauses_with(None)
+    }
+
     fn live_where_clauses(&self) -> Vec<Condition> {
-        let mut clauses = self.where_clauses.clone();
-        if self.meta.soft_delete {
-            clauses.push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_null()));
-        }
-        clauses
+        self.where_clauses_with(Some(false))
+    }
+
+    /// Only the trashed rows the caller selected — the restore path. Went
+    /// through a raw `self.where_clauses.clone()` before, the one site that
+    /// bypassed the seam above.
+    fn trashed_where_clauses(&self) -> Vec<Condition> {
+        self.where_clauses_with(Some(true))
     }
 
     /// Restrict the SELECT list to the supplied column names. Names
@@ -783,8 +810,7 @@ impl<'a> DynQuerySet<'a> {
         // Restrict to the rows the caller selected AND that are
         // actually trashed — restoring a live row is a no-op but
         // narrowing here keeps the affected-count honest.
-        let mut where_clauses = self.where_clauses.clone();
-        where_clauses.push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_not_null()));
+        let where_clauses = self.trashed_where_clauses();
 
         let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
             Some(pk_col) => collect_parent_pks(self.meta, pk_col, &where_clauses)
