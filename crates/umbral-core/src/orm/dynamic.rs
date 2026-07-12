@@ -153,6 +153,15 @@ pub struct DynQuerySet<'a> {
     allow_privileged: Vec<String>,
 }
 
+/// A predicate no row can satisfy (`1 = 0`).
+///
+/// The safe answer whenever a filter cannot be expressed. See gaps3 #56: the unsafe
+/// answer — adding no predicate — silently promotes "match this one row" into "match
+/// every row", which on a DELETE is the whole table.
+pub fn never_matches() -> Condition {
+    Condition::all().add(Expr::val(1).eq(0))
+}
+
 /// Build a typed `col = value` predicate from a **string** value, coercing it to the
 /// column's declared type.
 ///
@@ -164,7 +173,9 @@ pub struct DynQuerySet<'a> {
 /// and let every caller share it.
 ///
 /// Returns `None` for an unknown column, or a value that cannot be coerced (e.g. `"abc"`
-/// for a BigInt) — the caller decides whether that is an empty result or a 404.
+/// for a BigInt). A `None` obliges the caller to produce NO ROWS — either
+/// [`never_matches`] or a 404. Treating it as "no filter" is the gaps3 #56 bug: it turns
+/// a by-id lookup into a whole-table scan, and a by-id DELETE into a whole-table DELETE.
 pub fn typed_eq_condition(meta: &ModelMeta, col: &str, value: &str) -> Option<Condition> {
     let meta_col = meta.fields.iter().find(|c| c.name == col)?;
     let expr = Expr::col(Alias::new(col));
@@ -626,8 +637,24 @@ impl<'a> DynQuerySet<'a> {
     /// the column's `SqlType` so SQLite's affinity rules see the right
     /// operand type.
     pub fn filter_eq_string(mut self, col: &str, value: &str) -> Self {
-        if let Some(cond) = typed_eq_condition(self.meta, col, value) {
-            self.where_clauses.push(cond);
+        // gaps3 #56 — FAIL CLOSED. When the value cannot be coerced to the column's type
+        // (`"abc"` against a BigInt pk) or the column does not exist, this adds a
+        // predicate that matches NOTHING.
+        //
+        // It used to add nothing at all, which is not the same thing and is not even
+        // close: a dropped predicate does not narrow the query, it WIDENS it to the whole
+        // table. The commonest caller is a by-primary-key lookup, so
+        //
+        //     DynQuerySet::for_meta(&model).filter_eq_string("id", "abc").delete()
+        //
+        // lowered to `DELETE FROM widget` with no WHERE — reachable from a plain
+        // `DELETE /api/widget/abc` against any model with an integer pk. Reads returned
+        // an arbitrary row instead of none; updates rewrote every row.
+        //
+        // A filter that cannot be honoured means NO ROWS. Never all of them.
+        match typed_eq_condition(self.meta, col, value) {
+            Some(cond) => self.where_clauses.push(cond),
+            None => self.where_clauses.push(never_matches()),
         }
         self
     }
