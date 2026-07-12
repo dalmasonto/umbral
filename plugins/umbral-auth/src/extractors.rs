@@ -216,6 +216,51 @@ where
     }
 }
 
+/// Extractor requiring *any* authenticated user; yields their primary key parsed
+/// into `T` (default `i64`) — the sibling of [`RequireStaff`], and the one most
+/// handlers actually want.
+///
+/// ```ignore
+/// async fn my_profile(RequireAuth(uid): RequireAuth) -> impl IntoResponse {
+///     // `uid: i64` — the caller's id, already typed. An anonymous request
+///     // never reaches this body; the extractor 401s.
+/// }
+/// ```
+///
+/// Prefer this over a hand-written `fn require_auth(&identity) -> Result<i64, _>`
+/// helper: a helper is a gate you have to remember to call, and a handler that
+/// forgets it still compiles, still routes and still runs. This is a gate you
+/// cannot write the handler without (gaps3 #37).
+pub struct RequireAuth<T = i64>(pub T);
+
+impl<T, S> FromRequestParts<S> for RequireAuth<T>
+where
+    T: std::str::FromStr + Send,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let identity = resolve_identity(&parts.headers).await;
+        let Some(identity) = identity else {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                axum_core::body::Body::from(
+                    r#"{"error":"authentication required","code":"unauthenticated"}"#,
+                ),
+            )
+                .into_response());
+        };
+        identity.user_id.parse::<T>().map(Self).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                axum_core::body::Body::from(r#"{"error":"invalid user id","code":"bad_identity"}"#),
+            )
+                .into_response()
+        })
+    }
+}
+
 #[cfg(test)]
 mod require_staff_tests {
     use super::{StaffReject, require_staff_decision};

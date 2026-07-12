@@ -1,0 +1,109 @@
+---
+title: Idioms — stop hand-rolling these
+description: Things capable umbral developers keep re-implementing that the framework already does. Each one is a real example from a production app.
+sidebar_position: 4
+icon: lightbulb
+tags: [idioms, dx, patterns]
+---
+
+# Idioms — stop hand-rolling these
+
+Every item below was found in a **real production umbral app**, written by a competent developer, where the framework already shipped the thing being re-implemented. None of them are bugs — the hand-rolled version usually works. They're here because *"it works"* and *"it's right"* diverge in exactly these three places, and because if one good developer missed them, so will you.
+
+## 1. Gating on staff: use the extractor
+
+**Hand-rolled** — this appeared *three times*, once per plugin:
+
+```rust
+fn require_staff(identity: &Identity) -> Result<i64, (StatusCode, Json<Value>)> {
+    if !identity.is_staff {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "forbidden"}))));
+    }
+    identity.user_id.parse().map_err(|_| /* ... */)
+}
+
+async fn delete_team(identity: Identity, ...) -> Result<...> {
+    let user_id = require_staff(&identity)?;
+    // ...
+}
+```
+
+**The framework** ships it as an extractor, so the gate is in the *signature* — a handler that forgot it doesn't compile into existence:
+
+```rust
+use umbral_auth::RequireStaff;
+
+async fn delete_team(RequireStaff(user_id): RequireStaff, ...) -> Result<...> {
+    // if we're here, the caller is staff. There is no path where we aren't.
+}
+```
+
+The difference that matters isn't the line count. A helper you must *remember to call* is a gate you can forget; an extractor is a gate you cannot express a handler without.
+
+## 2. Multi-model writes: use a transaction
+
+**Hand-rolled** — deleting a match across three models:
+
+```rust
+MatchdayTeam::objects().filter(...).delete().await?;
+Selection::objects().filter(...).delete().await?;   // ← if this fails...
+Goal::objects().filter(...).delete().await?;        // ← ...these never run
+```
+
+Three sequential awaits, no transaction. A failure in the middle leaves the first delete committed and the rest not — **orphaned rows, silently**, and the request returns a 500 that tells you nothing about the half-applied state you're now in.
+
+**The framework**:
+
+```rust
+umbral::db::transaction(|tx| Box::pin(async move {
+    MatchdayTeam::objects().filter(...).on_tx(tx).delete().await?;
+    Selection::objects().filter(...).on_tx(tx).delete().await?;
+    Goal::objects().filter(...).on_tx(tx).delete().await?;
+    Ok(())
+})).await?;
+```
+
+All three commit, or none do. See [Transactions](./orm/transactions).
+
+<Callout type="warning">
+  The tell for this bug is **two or more writes in one handler**. If a handler writes to more than one table and there's no `transaction(...)` in it, you have a partial-failure state that nobody has thought about.
+</Callout>
+
+## 3. Normalising fields: declare it on the model
+
+**Hand-rolled** at the app's create-member boundary:
+
+```rust
+let email = payload.email.trim().to_lowercase();
+```
+
+**The framework** — declare it once, on the field, and *every* write path normalises: REST, the admin, forms, your own code:
+
+```rust
+#[derive(Model)]
+struct AuthUser {
+    #[umbral(trim, lowercase)]
+    email: String,
+}
+```
+
+The hand-rolled version normalises at *the boundary you remembered*. A second endpoint, an admin edit, or a data import writes `" Ada@Example.COM "` straight through — and now `alice@x.com` and `Alice@X.com` are two different users, which is a support ticket and possibly a security one. See [Normalized fields](./orm/normalized-fields).
+
+## The pattern behind all three
+
+Each hand-rolled version is *correct at the call site that wrote it* and wrong at the next one. The framework version moves the guarantee from **"a developer remembered"** to **"the type system / the schema / the transaction enforced it"** — which is the entire reason to use a framework rather than a pile of libraries.
+
+If you're writing something that feels like plumbing, check whether it's already here. It usually is:
+
+| You're about to write | Reach for |
+|---|---|
+| A permission check at the top of a handler | [`RequireStaff` / `RequireAuth`](./auth/login-and-request-user), or [REST permissions](./rest/permissions) |
+| Two or more writes in one handler | [`db::transaction`](./orm/transactions) |
+| `.trim()` / `.to_lowercase()` on input | [`#[umbral(trim, lowercase)]`](./orm/normalized-fields) |
+| "who created this row" | [`#[umbral(auto_user_add)]`](./orm/auto-user) |
+| "keep the row but hide it" | [`#[umbral(soft_delete)]`](./orm/soft-delete) |
+| A change log | [`#[umbral(audited)]`](./orm/audit-trail) |
+| Fetching a related model in a loop | [`select_related` / `prefetch_related`](./orm/joins) |
+| A hand-written TypeScript API client | [`umbral gen-client`](./rest/typescript-client) |
+| A cron-ish "run this every hour" | [`Schedule::cron`](./plugins/tasks) |
+| Resizing an uploaded image | [`thumbnails(...)`](./plugins/storage) |

@@ -85,7 +85,9 @@ pub use challenge::{
     AuthChallenge, change_password, reset_password, start_email_verification, start_password_reset,
     verify_email,
 };
-pub use extractors::{CurrentIdentity, OptionalIdentity, RequireStaff, resolve_identity};
+pub use extractors::{
+    CurrentIdentity, OptionalIdentity, RequireAuth, RequireStaff, resolve_identity,
+};
 pub use login_required::{
     LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, current_session_user_pk,
     login_required, login_required_html, resolve_user as current_user_as,

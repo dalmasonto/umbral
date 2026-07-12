@@ -143,6 +143,26 @@ reading the middleware stack. The cost (a DB round-trip per request
 that needs `request.user`) is the same either way.
 </Callout>
 
+## Gating a handler: `RequireStaff` / `RequireAuth`
+
+Don't write a `require_staff(&identity)` helper. Put the gate in the **signature**:
+
+```rust
+use umbral_auth::{RequireAuth, RequireStaff};
+
+// Any authenticated user. `uid` is their primary key, already typed.
+async fn my_profile(RequireAuth(uid): RequireAuth) -> impl IntoResponse { /* ... */ }
+
+// Staff only. A non-staff caller never reaches the body — 403 from the extractor.
+async fn delete_team(RequireStaff(uid): RequireStaff) -> impl IntoResponse { /* ... */ }
+```
+
+The extractor yields the user's primary key parsed into `T` (default `i64`), so `RequireStaff<Uuid>` works for a Uuid-keyed user model.
+
+<Callout type="info">
+  A hand-written `require_staff(&identity)?` helper is a gate you have to **remember to call** — and a handler that forgets it still compiles, still routes, and still runs. `RequireStaff` is a gate you cannot write the handler without. That difference is the whole point, and it's why this is worth changing even when the helper "works".
+</Callout>
+
 ## Flash messages
 
 `umbral_sessions::Messages` is an extractor that lets any handler
