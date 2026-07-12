@@ -297,6 +297,10 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// Default false so existing models compile unchanged.
     const SOFT_DELETE: bool = false;
 
+    /// gaps3 #54 — `#[umbral(audited)]`. Every write records an `umbral_audit`
+    /// row (who / when / which row / which fields changed).
+    const AUDITED: bool = false;
+
     /// Composite-UNIQUE constraints. Each inner slice names a
     /// constraint over the listed column names. Set via
     /// `#[umbral(unique_together = [["a", "b"]])]`. Closes BUG-6 in

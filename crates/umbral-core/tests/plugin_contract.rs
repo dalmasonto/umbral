@@ -111,6 +111,7 @@ impl Plugin for TestPlugin {
             ordering: Vec::new(),
             m2m_relations: Vec::new(),
             soft_delete: false,
+            audited: false,
             app_label: "app".to_string(),
             name: model_name,
             table: self.model_table.to_string(),

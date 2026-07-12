@@ -1,0 +1,68 @@
+---
+title: Audit trail
+description: "#[umbral(audited)] records every write to a model — who changed which row, when, and which fields changed from what to what."
+sidebar_position: 15
+icon: scroll-text
+tags: [orm, audit, history, compliance]
+badge: new
+---
+
+# Audit trail
+
+Add one word to a model and every write to it is recorded — **who** changed **which row**, **when**, and **which fields changed, from what to what**.
+
+```rust
+#[derive(Model)]
+#[umbral(table = "invoice", audited)]
+struct Invoice {
+    id: i64,
+    label: String,
+    amount: i64,
+}
+```
+
+Change an invoice's amount and a row lands in `umbral_audit`:
+
+```json
+{
+  "table_name": "invoice",
+  "row_pk": "42",
+  "action": "update",
+  "actor": "7",
+  "at": "2026-07-12T10:31:05Z",
+  "changes": { "amount": { "from": 100, "to": 250 } }
+}
+```
+
+The table is created for you: declaring any model `audited` registers `umbral_audit` automatically, so `makemigrations` picks it up through the normal [migration loop](../migrations/index). No setup.
+
+## Every write path, not just the convenient ones
+
+An audit log that quietly misses writes is worse than no log, because it's the one you'd testify from. So this hooks the **ORM**, not a plugin or a UI layer:
+
+- `Model::objects().create/save/update_values/delete`
+- REST — `POST` / `PATCH` / `DELETE`
+- the admin, including bulk actions
+- background tasks and CLI commands
+
+<Callout type="warning">
+  **`AdminAuditLog` is not this.** The admin has a Django-style `LogEntry` that looks similar and isn't: it records only writes made *through the admin UI*, stores a free-text summary rather than a field-level diff, and produces **no row at all** for a write from REST, a task, or `objects().save()`. If you need a real history, use `#[umbral(audited)]`.
+</Callout>
+
+## What gets recorded
+
+- **Only the fields that changed.** An update that touches one column of forty records one entry, not forty. A diff full of unchanged columns buries the one that moved.
+- **An update that changed nothing writes no row.** It isn't an event.
+- **A soft delete records as `delete`.** On the wire it's an `UPDATE` of `deleted_at`, but that's not what a human means by "deleted", and the log should say what happened.
+- **`actor` is NULL when nobody was authenticated** — a background job, the CLI, a data migration, an anonymous request. We record that there was no caller rather than inventing one. The actor comes from the same request context that powers [`auto_user`](./auto-user).
+
+## What it costs
+
+The ORM keeps no pre-image, so an audited **update or delete reads the affected rows first** — one extra `SELECT`. A model without `#[umbral(audited)]` pays nothing at all: the flag is checked before any work happens.
+
+Writing the audit row is **best-effort**: if it fails, it's logged loudly but your write still commits. Losing a log entry is bad; rolling back a legitimate business write because the log table was full is worse. This is a history, not a compliance-grade WORM store.
+
+## See also
+
+- [Who wrote this row](./auto-user) — `auto_user` stamps the author *on the row itself*, which is cheaper when all you need is "who last touched this".
+- [Soft delete](./soft-delete) — keep the row; the audit trail tells you who removed it.

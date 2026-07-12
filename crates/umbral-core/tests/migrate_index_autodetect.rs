@@ -76,6 +76,7 @@ fn meta(unique_together: Vec<Vec<String>>, indexes: Vec<Vec<String>>) -> ModelMe
         ordering: Vec::new(),
         m2m_relations: Vec::new(),
         soft_delete: false,
+        audited: false,
         app_label: "app".to_string(),
     }
 }

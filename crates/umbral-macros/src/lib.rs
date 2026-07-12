@@ -146,6 +146,9 @@ struct UmbralStructAttr {
     /// user must declare `pub deleted_at: Option<DateTime<Utc>>`
     /// on the struct themselves (derive macros can't add fields).
     soft_delete: bool,
+    /// gaps3 #54 — `#[umbral(audited)]`. Every write to this model records an
+    /// `umbral_audit` row: who, when, which row, and which fields changed.
+    audited: bool,
     /// `#[umbral(unique_together = [["a", "b"], ["c"]])]` — composite
     /// UNIQUE constraints. Each inner array names a constraint over the
     /// listed column names. Closes BUG-6.
@@ -727,6 +730,7 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
         database: None,
         singleton: false,
         soft_delete: false,
+        audited: false,
         unique_together: Vec::new(),
         indexes: Vec::new(),
         ordering: Vec::new(),
@@ -771,6 +775,9 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
                 // redirect list view to the row's edit page and to
                 // hide the "+ New" button.
                 parsed.singleton = true;
+                Ok(())
+            } else if meta.path.is_ident("audited") {
+                parsed.audited = true;
                 Ok(())
             } else if meta.path.is_ident("soft_delete") {
                 // Feature #72 — soft-delete marker. The user MUST
@@ -821,7 +828,7 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
             } else {
                 Err(meta.error(
                     "umbral::Model derive accepts struct-level `table = \"...\"`, `plugin = \"...\"`, \
-                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`, `soft_delete`, \
+                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`, `soft_delete`, `audited`, \
                      `unique_together = [[...]]`, `indexes = [[...]]`, `ordering = [\"-col\", \"col\"]`; \
                      and field-level `noform` and `noedit`. \
                      Other attributes (max_length, db_index, default, choices, on_delete) land as \
@@ -977,6 +984,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         Some(alias) => quote! { ::core::option::Option::Some(#alias) },
         None => quote! { ::core::option::Option::None },
     };
+    let audited_lit = struct_attr.audited;
     let soft_delete_lit = if struct_attr.soft_delete {
         quote!(true)
     } else {
@@ -2125,6 +2133,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const DATABASE: ::core::option::Option<&'static str> = #database_tokens;
             const SINGLETON: bool = #singleton_lit;
             const SOFT_DELETE: bool = #soft_delete_lit;
+            const AUDITED: bool = #audited_lit;
             const UNIQUE_TOGETHER: &'static [&'static [&'static str]] = #unique_together_tokens;
             const INDEXES: &'static [&'static [&'static str]] = #indexes_tokens;
             const ORDERING: &'static [(&'static str, bool)] = #ordering_tokens;

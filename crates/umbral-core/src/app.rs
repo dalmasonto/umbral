@@ -1067,6 +1067,23 @@ impl AppBuilder {
         // for everything and silently disable the #22 guard. A CUSTOM router
         // is asked directly via `allow_relation`.
         //
+        // gaps3 #54: an `#[umbral(audited)]` model implies the audit table. Register
+        // it automatically so `makemigrations` creates it through the normal
+        // declare→migrate loop — no special-cased DDL, and no ceremony for the app.
+        let any_audited = sorted_plugins
+            .iter()
+            .flat_map(|p| p.models())
+            .chain(self.models.iter().cloned())
+            .any(|m| m.audited);
+        if any_audited
+            && !self
+                .models
+                .iter()
+                .any(|m| m.table == crate::orm::audit::AUDIT_TABLE)
+        {
+            self.models.push(crate::orm::audit::audit_meta());
+        }
+
         // Materialize the models into a Vec so we can both build a
         // table→meta lookup AND iterate them.
         let all_models: Vec<ModelMeta> = sorted_plugins

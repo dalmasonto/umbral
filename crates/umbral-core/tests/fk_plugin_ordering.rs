@@ -137,6 +137,7 @@ impl Plugin for FkPlugin {
             ordering: Vec::new(),
             m2m_relations: Vec::new(),
             soft_delete: false,
+            audited: false,
             app_label: self.name.to_string(),
         }]
     }

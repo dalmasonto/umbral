@@ -20,6 +20,7 @@
 //! crossing each other.
 
 pub mod aggregate;
+pub mod audit;
 pub mod choices;
 pub mod column;
 pub mod dynamic;

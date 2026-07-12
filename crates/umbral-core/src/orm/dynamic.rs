@@ -720,6 +720,13 @@ impl<'a> DynQuerySet<'a> {
             return self.soft_delete_update().await;
         }
         let where_clauses = self.effective_where_clauses();
+        // gaps3 #54: once the DELETE runs the row is gone — the pre-image IS the
+        // record. Snapshot before, not after.
+        let audit_before = if self.meta.audited {
+            audit_snapshot(self.meta, &where_clauses).await
+        } else {
+            Vec::new()
+        };
         // Pre-collect the affected PKs only when the model has a PK
         // column (every Model does in practice; the guard handles
         // the hypothetical PK-less ModelMeta).
@@ -754,11 +761,23 @@ impl<'a> DynQuerySet<'a> {
         // matches the typed bulk-delete convention (subscribers that
         // want to skip empty events filter in their handler).
         crate::signals::emit_bulk_post_delete_by_table(&self.meta.table, parent_pks).await;
+        if self.meta.audited {
+            let pairs = audit_pairs(self.meta, audit_before, Vec::new());
+            crate::orm::audit::record_many(self.meta, crate::orm::audit::DELETE, pairs).await;
+        }
         Ok(rows_affected)
     }
 
     async fn soft_delete_update(self) -> Result<u64, DynError> {
         let where_clauses = self.live_where_clauses();
+        // gaps3 #54: a soft delete is an UPDATE on the wire, but it is a DELETE to
+        // anyone reading the log. Record it as one, or the audit trail will not
+        // say what a human means by "deleted".
+        let audit_before = if self.meta.audited {
+            audit_snapshot(self.meta, &where_clauses).await
+        } else {
+            Vec::new()
+        };
         let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
             Some(pk_col) => collect_parent_pks(self.meta, pk_col, &where_clauses)
                 .await
@@ -824,6 +843,10 @@ impl<'a> DynQuerySet<'a> {
         .await?;
 
         crate::signals::emit_bulk_post_delete_by_table(&self.meta.table, parent_pks).await;
+        if self.meta.audited {
+            let pairs = audit_pairs(self.meta, audit_before, Vec::new());
+            crate::orm::audit::record_many(self.meta, crate::orm::audit::DELETE, pairs).await;
+        }
         Ok(rows_affected)
     }
 
@@ -1690,6 +1713,18 @@ impl<'a> DynQuerySet<'a> {
             true,
         )
         .await;
+        // gaps3 #54: the inserted row IS the after-image; there is no before.
+        // Boxed because the audit row is itself written through `insert_json` —
+        // a real cycle. It terminates: the audit table is not `audited`, so
+        // `record` returns before writing another.
+        Box::pin(crate::orm::audit::record(
+            self.meta,
+            &crate::orm::audit::pk_of(self.meta, &out),
+            crate::orm::audit::CREATE,
+            None,
+            Some(&out),
+        ))
+        .await;
         Ok(out)
     }
 
@@ -2064,6 +2099,14 @@ impl<'a> DynQuerySet<'a> {
         // (preserving the partial-update contract); FK existence
         // + choices + M2M shape apply to whatever the body
         // carries.
+        // gaps3 #54: the ORM keeps no pre-image, so an audited update reads the
+        // rows it is about to change. Paid only by `#[umbral(audited)]` models.
+        let audit_before = if self.meta.audited {
+            audit_snapshot(self.meta, &self.live_where_clauses()).await
+        } else {
+            Vec::new()
+        };
+
         let validation_errors = crate::orm::validation::validate_on_update(&self.meta, body).await;
         if !validation_errors.is_empty() {
             return Err(WriteError::Multiple {
@@ -2218,6 +2261,20 @@ impl<'a> DynQuerySet<'a> {
         // is whatever the effective WHERE matched.
         crate::signals::emit_bulk_post_save_by_table(&self.meta.table, parent_pks.clone(), false)
             .await;
+
+        // gaps3 #54: re-read by PK, not by the caller's filter — an update that
+        // changed a column the filter matched on (`SET title='b' WHERE
+        // title='a'`) would find nothing the second time, and the audit row would
+        // claim the update wiped the data.
+        if self.meta.audited && !audit_before.is_empty() {
+            let pks: Vec<serde_json::Value> = parent_pks.clone();
+            let after = match crate::orm::audit::pk_in_condition(self.meta, &pks) {
+                Some(cond) => audit_snapshot(self.meta, &[cond]).await,
+                None => Vec::new(),
+            };
+            let pairs = audit_pairs(self.meta, audit_before, after);
+            crate::orm::audit::record_many(self.meta, crate::orm::audit::UPDATE, pairs).await;
+        }
 
         // audit_2 core-orm #4 — report the UPDATE's real affected-row
         // count. For an M2M-only update (no scalar columns changed)
@@ -3354,6 +3411,46 @@ fn read_junction_id_pg(
 /// integer PKs, string for UUID / String PKs. Used by
 /// `update_json` so we know which junction-table parent_ids
 /// to write to even when the body has no regular column changes.
+/// Snapshot the rows `clauses` selects — the before/after image an audited write
+/// records (gaps3 #54). Best-effort: a failed snapshot must not fail the write.
+pub(crate) async fn audit_snapshot(
+    meta: &crate::migrate::ModelMeta,
+    clauses: &[Condition],
+) -> Vec<serde_json::Map<String, serde_json::Value>> {
+    let mut qs = DynQuerySet::for_meta(meta);
+    for c in clauses {
+        qs = qs.filter_condition(c.clone());
+    }
+    qs.fetch_as_json().await.unwrap_or_default()
+}
+
+/// Pair each before-row with its after-row by primary key, for `record_many`.
+#[allow(clippy::type_complexity)]
+pub(crate) fn audit_pairs(
+    meta: &crate::migrate::ModelMeta,
+    before: Vec<serde_json::Map<String, serde_json::Value>>,
+    after: Vec<serde_json::Map<String, serde_json::Value>>,
+) -> Vec<(
+    String,
+    Option<serde_json::Map<String, serde_json::Value>>,
+    Option<serde_json::Map<String, serde_json::Value>>,
+)> {
+    use crate::orm::audit;
+    let mut by_pk: std::collections::HashMap<String, serde_json::Map<String, serde_json::Value>> =
+        after
+            .into_iter()
+            .map(|r| (audit::pk_of(meta, &r), r))
+            .collect();
+    before
+        .into_iter()
+        .map(|b| {
+            let pk = audit::pk_of(meta, &b);
+            let a = by_pk.remove(&pk);
+            (pk, Some(b), a)
+        })
+        .collect()
+}
+
 async fn collect_parent_pks(
     meta: &crate::migrate::ModelMeta,
     pk_col: &crate::migrate::Column,

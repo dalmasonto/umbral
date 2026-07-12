@@ -390,6 +390,11 @@ pub struct ModelMeta {
     /// typed trait. Shared enabler for gaps2 #35 + #39a.
     #[serde(default, skip_serializing_if = "is_false")]
     pub soft_delete: bool,
+    /// `#[umbral(audited)]`. Lives on `ModelMeta` (not re-derived per path) so
+    /// the DYNAMIC write path — which is what admin and REST run on — reads the
+    /// same source of truth the typed one does.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audited: bool,
     /// The app label (the owning plugin's name), mirrors `Model::APP_LABEL`.
     /// Sourced from `#[umbral(plugin = "...")]`; `"app"` when absent.
     /// Authoritative for permission codenames (gaps2 #80g): replaces the
@@ -418,6 +423,7 @@ impl Default for ModelMeta {
             ordering: Vec::new(),
             m2m_relations: Vec::new(),
             soft_delete: false,
+            audited: false,
             app_label: default_app_label(),
         }
     }
@@ -535,6 +541,7 @@ impl ModelMeta {
                 })
                 .collect(),
             soft_delete: T::SOFT_DELETE,
+            audited: T::AUDITED,
             app_label: T::APP_LABEL.to_string(),
         }
     }
@@ -6002,6 +6009,7 @@ mod tests {
                 ordering: Vec::new(),
                 m2m_relations: Vec::new(),
                 soft_delete: false,
+                audited: false,
                 app_label: "app".to_string(),
             }],
         );
@@ -6020,6 +6028,7 @@ mod tests {
                 ordering: Vec::new(),
                 m2m_relations: Vec::new(),
                 soft_delete: false,
+                audited: false,
                 app_label: "app".to_string(),
             }],
         );
@@ -6403,6 +6412,7 @@ mod tests {
                 ordering: Vec::new(),
                 m2m_relations: Vec::new(),
                 soft_delete: false,
+                audited: false,
                 app_label: "app".into(),
             }
         }

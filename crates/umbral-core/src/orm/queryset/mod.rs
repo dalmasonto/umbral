@@ -539,6 +539,59 @@ impl<T> QuerySet<T> {
     /// Note `build_delete_for` deliberately does NOT call this: a hard delete
     /// may legitimately target already-trashed rows. A tenant predicate, by
     /// contrast, will have to apply there too.
+    /// Snapshot the rows this queryset selects — the pre-image an audited write
+    /// records (gaps3 #54). Empty (and free) unless the model is `audited`.
+    async fn audit_pre(&self, backend: &str) -> Vec<serde_json::Map<String, JsonValue>>
+    where
+        T: crate::orm::Model,
+    {
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        if !meta.audited {
+            return Vec::new();
+        }
+        let mut conds: Vec<sea_query::Condition> = Vec::new();
+        for p in &self.predicates {
+            conds.push(sea_query::Condition::all().add(p.cond_for(backend)));
+        }
+        for e in self.implicit_predicates() {
+            conds.push(sea_query::Condition::all().add(e));
+        }
+        crate::orm::dynamic::audit_snapshot(&meta, &conds).await
+    }
+
+    /// Record an audited write against the rows `ids` names.
+    async fn audit_post(
+        before: Vec<serde_json::Map<String, JsonValue>>,
+        ids: &[JsonValue],
+        action: &str,
+    ) where
+        T: crate::orm::Model,
+    {
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        if !meta.audited {
+            return;
+        }
+        // DELETE has no after-image; for CREATE/UPDATE re-read BY PK — re-running
+        // the caller's filter would miss a row whose filtered column just changed.
+        let after = if action == crate::orm::audit::DELETE {
+            Vec::new()
+        } else {
+            match crate::orm::audit::pk_in_condition(&meta, ids) {
+                Some(c) => crate::orm::dynamic::audit_snapshot(&meta, &[c]).await,
+                None => Vec::new(),
+            }
+        };
+        let pairs = if action == crate::orm::audit::CREATE {
+            after
+                .into_iter()
+                .map(|a| (crate::orm::audit::pk_of(&meta, &a), None, Some(a)))
+                .collect()
+        } else {
+            crate::orm::dynamic::audit_pairs(&meta, before, after)
+        };
+        crate::orm::audit::record_many(&meta, action, pairs).await;
+    }
+
     fn implicit_predicates(&self) -> Vec<sea_query::SimpleExpr> {
         let mut out = Vec::new();
         if self.soft_delete_active {
@@ -2939,6 +2992,8 @@ impl<T: Model> QuerySet<T> {
         let atomic = self.should_atomic_wrap();
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
+        // gaps3 #54: the pre-image, read before the write lands. Free unless audited.
+        let audit_before = self.audit_pre(backend).await;
         let mut stmt = self.build_delete_for(backend);
         let pk = pk_field::<T>();
         if let Some(field) = pk {
@@ -3008,6 +3063,7 @@ impl<T: Model> QuerySet<T> {
         };
         let count = ids.len() as u64;
         if !ids.is_empty() {
+            Self::audit_post(audit_before, &ids, crate::orm::audit::DELETE).await;
             crate::signals::emit_bulk_post_delete::<T>(ids).await;
         }
         Ok(count)
@@ -3054,6 +3110,8 @@ impl<T: Model> QuerySet<T> {
         }
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
+        // gaps3 #54: the pre-image, read before the write lands. Free unless audited.
+        let audit_before = self.audit_pre(backend).await;
 
         let mut stmt = sea_query::Query::update();
         stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
@@ -3105,6 +3163,7 @@ impl<T: Model> QuerySet<T> {
         };
         let count = ids.len() as u64;
         if !ids.is_empty() {
+            Self::audit_post(audit_before, &ids, crate::orm::audit::UPDATE).await;
             crate::signals::emit_bulk_post_save::<T>(ids, false).await;
         }
         Ok(count)
@@ -3133,6 +3192,8 @@ impl<T: Model> QuerySet<T> {
         let atomic = self.should_atomic_wrap();
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
+        // gaps3 #54: the pre-image, read before the write lands. Free unless audited.
+        let audit_before = self.audit_pre(backend).await;
         let mut stmt = self.build_update_for(backend, &values)?;
         // RETURNING <pk> so bulk_post_save can include the matched ids.
         let pk = pk_field::<T>();
@@ -3215,6 +3276,7 @@ impl<T: Model> QuerySet<T> {
         };
         let count = ids.len() as u64;
         if !ids.is_empty() {
+            Self::audit_post(audit_before, &ids, crate::orm::audit::UPDATE).await;
             crate::signals::emit_bulk_post_save::<T>(ids, false).await;
         }
         Ok(count)
@@ -3242,6 +3304,8 @@ impl<T: Model> QuerySet<T> {
     async fn soft_delete_update(self) -> Result<u64, sqlx::Error> {
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
+        // gaps3 #54: the pre-image, read before the write lands. Free unless audited.
+        let audit_before = self.audit_pre(backend).await;
         let now = chrono::Utc::now();
         let mut stmt = sea_query::Query::update();
         stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
@@ -3324,6 +3388,7 @@ impl<T: Model> QuerySet<T> {
         };
         let count = ids.len() as u64;
         if !ids.is_empty() {
+            Self::audit_post(audit_before, &ids, crate::orm::audit::DELETE).await;
             crate::signals::emit_bulk_post_delete::<T>(ids).await;
         }
         Ok(count)
@@ -3835,6 +3900,25 @@ impl<T: Model> Manager<T> {
                 // seeded on the readback row.
                 instance.take_pending_m2m_into(&mut row);
                 row.write_pending_m2m().await?;
+                // gaps3 #54: the created row IS the after-image.
+                crate::orm::audit::record(
+                    &crate::migrate::ModelMeta::for_::<T>(),
+                    &serde_json::to_value(&row)
+                        .ok()
+                        .and_then(|v| {
+                            v.as_object().map(|o| {
+                                crate::orm::audit::pk_of(&crate::migrate::ModelMeta::for_::<T>(), o)
+                            })
+                        })
+                        .unwrap_or_default(),
+                    crate::orm::audit::CREATE,
+                    None,
+                    serde_json::to_value(&row)
+                        .ok()
+                        .and_then(|v| v.as_object().cloned())
+                        .as_ref(),
+                )
+                .await;
                 Ok(row)
             }
             DbPool::Postgres(pool) => {
@@ -3866,6 +3950,25 @@ impl<T: Model> Manager<T> {
                 row.set_m2m_parent_ids();
                 instance.take_pending_m2m_into(&mut row);
                 row.write_pending_m2m().await?;
+                // gaps3 #54: the created row IS the after-image.
+                crate::orm::audit::record(
+                    &crate::migrate::ModelMeta::for_::<T>(),
+                    &serde_json::to_value(&row)
+                        .ok()
+                        .and_then(|v| {
+                            v.as_object().map(|o| {
+                                crate::orm::audit::pk_of(&crate::migrate::ModelMeta::for_::<T>(), o)
+                            })
+                        })
+                        .unwrap_or_default(),
+                    crate::orm::audit::CREATE,
+                    None,
+                    serde_json::to_value(&row)
+                        .ok()
+                        .and_then(|v| v.as_object().cloned())
+                        .as_ref(),
+                )
+                .await;
                 Ok(row)
             }
         }
@@ -4002,6 +4105,7 @@ impl<T: Model> Manager<T> {
         };
         let count = ids.len() as u64;
         if !ids.is_empty() {
+            QuerySet::<T>::audit_post(Vec::new(), &ids, crate::orm::audit::CREATE).await;
             crate::signals::emit_bulk_post_save::<T>(ids, true).await;
         }
         Ok(count)
@@ -4224,6 +4328,24 @@ impl<T: Model> Manager<T> {
                 // CREATE branch would be silent to on_model / realtime
                 // consumers while the UPDATE branch (above) fires it, an
                 // inconsistency across the two halves of one API (gaps3 #14).
+                crate::orm::audit::record(
+                    &crate::migrate::ModelMeta::for_::<T>(),
+                    &serde_json::to_value(&created)
+                        .ok()
+                        .and_then(|v| {
+                            v.as_object().map(|o| {
+                                crate::orm::audit::pk_of(&crate::migrate::ModelMeta::for_::<T>(), o)
+                            })
+                        })
+                        .unwrap_or_default(),
+                    crate::orm::audit::CREATE,
+                    None,
+                    serde_json::to_value(&created)
+                        .ok()
+                        .and_then(|v| v.as_object().cloned())
+                        .as_ref(),
+                )
+                .await;
                 crate::signals::emit_post_save::<T>(&created, true).await;
                 Ok((created, true))
             }
@@ -4712,6 +4834,24 @@ impl<T: Model> Manager<T> {
                 }
             };
             // Fire post_save with the DB-populated row.
+            crate::orm::audit::record(
+                &crate::migrate::ModelMeta::for_::<T>(),
+                &serde_json::to_value(&row)
+                    .ok()
+                    .and_then(|v| {
+                        v.as_object().map(|o| {
+                            crate::orm::audit::pk_of(&crate::migrate::ModelMeta::for_::<T>(), o)
+                        })
+                    })
+                    .unwrap_or_default(),
+                crate::orm::audit::CREATE,
+                None,
+                serde_json::to_value(&row)
+                    .ok()
+                    .and_then(|v| v.as_object().cloned())
+                    .as_ref(),
+            )
+            .await;
             crate::signals::emit_post_save::<T>(&row, true).await;
             Ok(row)
         } else {

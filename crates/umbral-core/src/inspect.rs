@@ -724,6 +724,7 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             ordering: Vec::new(),
             m2m_relations: Vec::new(),
             soft_delete: false,
+            audited: false,
             // inspectdb has no plugin attribute to read; default to "app".
             app_label: "app".to_string(),
         })

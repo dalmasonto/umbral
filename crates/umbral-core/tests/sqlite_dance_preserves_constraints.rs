@@ -75,6 +75,7 @@ fn meta(status_nullable: bool) -> ModelMeta {
         ordering: Vec::new(),
         m2m_relations: Vec::new(),
         soft_delete: false,
+        audited: false,
         app_label: "app".to_string(),
     }
 }
