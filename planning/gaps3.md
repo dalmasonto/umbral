@@ -150,11 +150,21 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     Shipped: `internal_error` deleted from `examples/shop`, `examples/derive-demo` **and the scaffold** (whose test now asserts the helper is NOT generated — the assertion is inverted from what it was, because the old one pinned the bug). `Identity::pk::<T>()` + `IdentityPkError` replace the `.parse::<i64>()` that `Identity.user_id`'s **doc-comment used to instruct** — documentation that hands you a snippet decides your code, and that one was dictating the boilerplate it should have replaced. New idioms section (#4) leads with the leak. 3 tests; whole suite green (2742); both examples build clean.
 
-58. [x] **`umbral_website` leaked raw errors to visitors on every 500 — and it is deployed** — archived.
+58. [x] **`umbral_website`'s `internal_error` pattern — CORRECTED: it was NOT a live production leak.** Archived, with the original claim retracted.
 
-    Every one of the site's **10 plugins** did `(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())`, so any 500 handed the visitor the database's own error text: a missing table, a column name, a SQL fragment. Fixed on the pinned **0.0.6** — no release needed, because `ApiError::internal` already logs the cause server-side and returns an opaque body there (verified against the published crate source, not assumed). The three `internal_error` helpers keep their NAME and change their BODY, so all 34 call sites compile unchanged.
+    **What I said:** "every 500 on the deployed site hands the visitor the database's own error text." **What is actually true:** it did not, and I should have verified that before calling it an information disclosure. Two independent guards were already in place, and I checked neither:
 
-    **The fix uncovered why the leak existed at all**, which is #62 below: 8 handlers *could not* use `ApiError`, because a login-gated page needs a **401** and `ApiError` had no such variant. So the whole handler fell back to the tuple — and the tuple's 500 arm is `err.to_string()`. The missing variant was not cosmetic; it pushed authors onto the leaky path. Those 8 keep `(StatusCode, String)` for now (their 401/429 messages are developer-written literals and never leaked) but now use an `internal_tuple` helper that logs and returns an opaque 500. Once 0.0.7 ships they can drop to plain `ApiError` + a bare `?`.
+    1. `AppBuilder::default_error_pages` defaults to **`true`**, so `render_500_middleware` is always mounted (unless an app calls `disable_default_error_pages()`), and it re-renders any plain-text 500 through the 500 template.
+    2. `build_500_context` **blanks `error_display` outside dev mode** — so even a template that printed the message would show an empty string in production. `umbral_website/templates/500.html` does not print it in any case.
+
+    Verified end to end, not by grep: booted the site in `Prod` against an EMPTY Postgres so every DB-touching handler 500s, and hit `/`, `/plugins`, `/community`, `/features`, `/showcase`, `/blog`. All six returned 500 with **no table name, no SQL, no driver text** on the wire — the visitor gets "Something went wrong / We've been notified", while the server log carries the real cause (`relation "plugin_directory_plugin" does not exist`). That is the correct shape, and the pre-fix code would have produced it too.
+
+    **What the change is actually worth** (kept, and still right):
+    - The `(StatusCode, String)` + `err.to_string()` pattern is **one config change away from leaking**: `disable_default_error_pages()`, or a custom `error_template(status, ...)` page for a non-500 status (that path renders the body text and is NOT dev-gated). `ApiError` cannot leak regardless of how the app is configured, because it never puts the cause in the body at all. Defence in depth, not a live fix.
+    - It leaks in **dev mode** (intended there, but it is the same code path).
+    - It removes the pattern from the teaching surface, alongside #57.
+
+    Framed honestly: this is a **hardening + consistency** change, not a security fix. The security framing was mine and it was wrong.
 
 62. [x] **`ApiError` could not express 401 / 403 / 429, which is what pushed handlers onto the leaky tuple** — archived. Core's `ApiError` had `NotFound` / `BadRequest` / `Validation` / `Database` / `Internal` and nothing else. A handler needing any other status had to abandon `ApiError` entirely and hand-roll `(StatusCode, String)` — whose 500 arm is `err.to_string()`, i.e. the leak in #57 and #58. **A missing variant is not a cosmetic gap; it decides which path people take.** Added `Unauthorized` / `Forbidden` / `TooManyRequests` + constructors. These three DO send their message (a developer wrote "Please log in to post a note."), unlike `Database`/`Internal` whose cause is logged and never surfaced — the test pins both halves.
 
