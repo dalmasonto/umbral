@@ -269,17 +269,7 @@
         <h3 class="text-[18px] font-bold tracking-[-0.01em]">Declare a model</h3>
       </div>
       <p class="mb-4 text-[14.5px] leading-[1.55] text-muted">One Rust struct. The attributes carry the rules - length, timestamps, who wrote the row - so every write path enforces them, not just the one you remembered.</p>
-      <pre class="overflow-x-auto rounded-[10px] border border-hairline bg-surface p-3.5 text-[12.5px] leading-[1.6]"><code>#[derive(Model)]
-#[umbral(table = "post", audited)]
-struct Post {
-    id: i64,
-    #[umbral(max_length = 200)]
-    title: String,
-    #[umbral(auto_user_add)]
-    author: Option&lt;FK&lt;AuthUser&gt;&gt;,
-    #[umbral(auto_now_add)]
-    created_at: DateTime&lt;Utc&gt;,
-}</code></pre>
+      <pre class="overflow-x-auto rounded-[10px] border border-hairline bg-surface p-3.5 text-[12.5px] leading-[1.6]">{{ code | markdown }}</pre>
     </div>
 
     <div class="card p-[26px]">

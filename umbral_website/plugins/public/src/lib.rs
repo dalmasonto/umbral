@@ -157,9 +157,24 @@ async fn home() -> Result<Html<String>, ApiError> {
     let channels = community::home_channels().await.map_err(internal_error)?;
     let newsletter_url = community::newsletter_url().await;
 
+    let code = "```rust
+#[derive(Model)]
+#[umbral(table = \"post\", audited)]
+struct Post {
+  id: i64,
+  #[umbral(max_length = 200)]
+  title: String,
+  #[umbral(auto_user_add)]
+  author: Option<FK<AuthUser>>,
+  #[umbral(auto_now_add)]
+  created_at: DateTime&lt;Utc&gt;,
+}
+```";
+
     let body = umbral::templates::render(
         "public/home.html",
         &context! {
+            code => code,
             plugins => plugins,
             plugin_count => plugin_count,
             model_count => model_count,

@@ -234,3 +234,11 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
     - `AdminPlugin::version(concat!("MyShop v", env!("CARGO_PKG_VERSION")))` — show YOUR version instead of ours. The operator of a shop is not shipping umbral; they are shipping their shop.
 
     `.version(...)` implies showing it, so it wins after a `show_version(false)` — the caller said what they wanted second. 5 tests, including a source-level guard that fails if any admin template hardcodes a version literal again (a builder test cannot see a template, and the bug was *in* a template).
+
+68. [x] **`umbral_website` had NO mobile navigation at all** — archived. The header's `<nav>` is `hidden lg:flex`, and no hamburger existed anywhere in the markup. So below `lg` (every phone, every tablet) the entire navigation — Product, Resources, Docs, Plugins, Sponsor, Log in — was **unreachable**. Not cramped, not ugly: gone. A visitor on a phone could reach the page they landed on and nothing else.
+
+    Shipped: a hamburger (`lg:hidden`, morphing to an X while open) and a full mobile panel mirroring every desktop link, with `aria-expanded` / `aria-controls`, Escape-to-close, close-on-link-click (needed under `hx-boost`, where no full navigation occurs), and close-on-resize-past-`lg` so an orphaned open panel cannot reappear when the user resizes back down.
+
+    Also fixed the cramping the hamburger exposed: the header's inner `gap: 2.6rem` was a desktop measurement applied at every width, which squeezed the CTA until **"Sign up" wrapped onto two lines** on a 390px phone.
+
+    Verified in a real browser at 390px and 768px: hamburger visible, panel opens with 11 links, Escape closes it, and it is hidden again at 1280px.

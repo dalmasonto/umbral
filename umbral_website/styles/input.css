@@ -248,3 +248,78 @@
     text-transform: uppercase;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Mobile navigation (gaps3 #68).
+ *
+ * The desktop <nav> is `hidden lg:flex`, so below `lg` the entire navigation —
+ * Product, Resources, Docs, Plugins — was simply unreachable: there was no
+ * hamburger at all. This is the toggle and the panel it opens.
+ * ------------------------------------------------------------------------- */
+@layer components {
+  .mobile-nav__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 9px;
+    border: 1px solid var(--hairline-2);
+    background: var(--surface);
+    color: var(--ink-2);
+    transition: background-color 0.15s, border-color 0.15s;
+  }
+  .mobile-nav__btn:hover {
+    background: var(--surface-2);
+    border-color: var(--accent-line);
+  }
+  /* One button, two icons: the hamburger becomes an X while the panel is open. */
+  .mobile-nav__btn .mobile-nav__ico-close { display: none; }
+  .mobile-nav__btn[aria-expanded="true"] .mobile-nav__ico-open { display: none; }
+  .mobile-nav__btn[aria-expanded="true"] .mobile-nav__ico-close { display: block; }
+
+  .mobile-nav {
+    display: none;
+    border-top: 1px solid var(--hairline);
+    background: var(--paper);
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
+  }
+  .mobile-nav[data-open] { display: block; }
+
+  .mobile-nav__inner {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 14px 20px 22px;
+  }
+  .mobile-nav__label {
+    margin: 12px 0 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  .mobile-nav__label:first-child { margin-top: 2px; }
+  .mobile-nav__link {
+    display: block;
+    padding: 10px 10px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--ink-2);
+    text-decoration: none;
+    transition: background-color 0.12s, color 0.12s;
+  }
+  .mobile-nav__link:hover,
+  .mobile-nav__link:focus-visible {
+    background: var(--accent-soft);
+    color: var(--accent-2);
+  }
+  .mobile-nav__rule {
+    height: 1px;
+    margin: 10px 0;
+    background: var(--hairline);
+  }
+}

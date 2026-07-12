@@ -163,7 +163,7 @@
 
   {# ===== NAV ===== #}
   <header class="sticky top-0 z-50 border-b border-hairline bg-paper/80 backdrop-blur-md">
-    <div class="mx-auto flex max-w-[1200px] items-center px-7 py-3.5" style="gap:2.6rem">
+    <div class="mx-auto flex max-w-[1200px] items-center gap-4 px-5 py-3.5 lg:px-7 lg:[gap:2.6rem]">
       <a href="/" class="flex shrink-0 items-center gap-[11px]">
         <span class="logo-mark" aria-hidden="true"></span>
         <span class="text-[18px] font-bold tracking-tight">Umbral</span>
@@ -223,7 +223,7 @@
         <a href="/docs" class="nav-dd__btn" style="text-decoration:none">Docs</a>
         <a href="/plugins" class="nav-dd__btn" style="text-decoration:none">Plugins</a>
       </nav>
-      <div class="ml-auto flex items-center gap-3">
+      <div class="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
         <button type="button" class="search-trigger" data-search-open aria-label="Open search" aria-keyshortcuts="/ Control+K Meta+K">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
           <span class="hidden sm:inline">Search</span>
@@ -253,6 +253,14 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
           <span>GitHub</span>
         </a>
+        {# Mobile menu toggle. The <nav> above is `hidden lg:flex`, so below `lg` the
+           ENTIRE navigation — Product, Resources, Docs, Plugins — was unreachable: no
+           hamburger existed at all. #}
+        <button type="button" class="mobile-nav__btn lg:hidden" aria-label="Open menu"
+                aria-expanded="false" aria-controls="mobile-nav" data-mobile-btn>
+          <svg class="mobile-nav__ico-open" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+          <svg class="mobile-nav__ico-close" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
         {# Auth-aware CTA. `user` is injected globally by
            AuthPlugin::with_user_in_templates(); anonymous visitors get
            `user.is_authenticated == false`. Signed-in users get a popover
@@ -291,9 +299,48 @@
         </div>
         {% else %}
         <a href="/login" class="hidden text-[14px] font-semibold text-ink-2 transition-colors hover:text-ink sm:inline" style="text-decoration:none">Log in</a>
-        <a href="/signup" class="rounded-[9px] bg-accent px-4 py-[9px] text-[14px] font-semibold text-white transition-colors hover:bg-accent-2">Sign up</a>
+        <a href="/signup" class="whitespace-nowrap rounded-[9px] bg-accent px-3.5 py-[9px] text-[14px] font-semibold text-white transition-colors hover:bg-accent-2 sm:px-4">Sign up</a>
         {% endif %}
       </div>
+    </div>
+
+    {# Mobile navigation panel. Mirrors the desktop <nav> — every link that is otherwise
+       unreachable below `lg`. Closed by default; `[data-open]` reveals it (see input.css). #}
+    <div id="mobile-nav" class="mobile-nav lg:hidden" data-mobile-panel>
+      <nav class="mobile-nav__inner" aria-label="Mobile navigation">
+
+        <p class="mobile-nav__label">Product</p>
+        <a href="/features"  class="mobile-nav__link">Features</a>
+        <a href="/prebuilt"  class="mobile-nav__link">Prebuilt Plugins</a>
+        <a href="/plugins"   class="mobile-nav__link">Plugin Directory</a>
+        <a href="/changelog" class="mobile-nav__link">Changelog</a>
+
+        <p class="mobile-nav__label">Resources</p>
+        <a href="/docs"      class="mobile-nav__link">Docs</a>
+        <a href="/blog"      class="mobile-nav__link">Blog</a>
+        <a href="/showcase"  class="mobile-nav__link">Showcase</a>
+        <a href="/community" class="mobile-nav__link">Community</a>
+
+        <div class="mobile-nav__rule"></div>
+
+        <a href="https://github.com/dalmasonto/umbral" target="_blank" rel="noopener" class="mobile-nav__link">GitHub</a>
+        <a href="/sponsor" class="mobile-nav__link">Sponsor</a>
+
+        {% if user.is_authenticated %}
+          <div class="mobile-nav__rule"></div>
+          <a href="/account/plugins" class="mobile-nav__link">Your plugins</a>
+          <a href="/account" class="mobile-nav__link">Account settings</a>
+          {% if user.is_superuser %}<a href="/admin" class="mobile-nav__link">Admin</a>{% endif %}
+          <form method="post" action="/logout" style="margin:0">
+            {{ csrf_input }}
+            <button type="submit" class="mobile-nav__link" style="width:100%;background:none;border:0;cursor:pointer;text-align:left;font:inherit">Log out</button>
+          </form>
+        {% else %}
+          <div class="mobile-nav__rule"></div>
+          <a href="/login" class="mobile-nav__link">Log in</a>
+        {% endif %}
+
+      </nav>
     </div>
   </header>
 
@@ -388,6 +435,46 @@
   <script>
   (function () {
     "use strict";
+
+    /* ---------- Mobile menu (gaps3 #68) ----------
+       Below `lg` the desktop <nav> is display:none and there was no hamburger, so the
+       whole navigation was unreachable on a phone. */
+    var mobBtn = document.querySelector("[data-mobile-btn]");
+    var mobPanel = document.querySelector("[data-mobile-panel]");
+
+    function setMobileMenu(open) {
+      if (!mobBtn || !mobPanel) return;
+      mobBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      mobBtn.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+      if (open) {
+        mobPanel.setAttribute("data-open", "");
+      } else {
+        mobPanel.removeAttribute("data-open");
+      }
+    }
+
+    if (mobBtn && mobPanel) {
+      mobBtn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        setMobileMenu(mobBtn.getAttribute("aria-expanded") !== "true");
+      });
+
+      // Following a link should not leave the menu hanging open behind the new page
+      // (it will not, on a full navigation — but it does under hx-boost).
+      mobPanel.addEventListener("click", function (e) {
+        if (e.target.closest("a")) setMobileMenu(false);
+      });
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") setMobileMenu(false);
+      });
+
+      // Resizing up to the desktop breakpoint must not leave an orphaned open panel
+      // that reappears when the user resizes back down.
+      window.addEventListener("resize", function () {
+        if (window.innerWidth >= 1024) setMobileMenu(false);
+      });
+    }
 
     /* ---------- Nav dropdowns ---------- */
     var dropdowns = Array.prototype.slice.call(document.querySelectorAll("[data-dd]"));
