@@ -100,6 +100,9 @@ If you're writing something that feels like plumbing, check whether it's already
 | A permission check at the top of a handler | [`RequireStaff` / `RequireAuth`](./auth/login-and-request-user), or [REST permissions](./rest/permissions) |
 | Two or more writes in one handler | [`db::transaction`](./orm/transactions) |
 | `.trim()` / `.to_lowercase()` on input | [`#[umbral(trim, lowercase)]`](./orm/normalized-fields) |
+| Checking a JSON request body by hand | [`Valid<T>` + `#[derive(Validate)]`](./web/request-validation) |
+| A rule only your app knows (banned words, reserved names) | [`register_cleaner`](./orm/field-hooks) |
+| A report too slow to compute per request | [`#[umbral(view = "...")]`](./orm/database-views) |
 | "who created this row" | [`#[umbral(auto_user_add)]`](./orm/auto-user) |
 | "keep the row but hide it" | [`#[umbral(soft_delete)]`](./orm/soft-delete) |
 | A change log | [`#[umbral(audited)]`](./orm/audit-trail) |

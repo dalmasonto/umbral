@@ -194,6 +194,11 @@ async fn every_write_path_refuses_a_view() {
         "expected ReadOnlyView, got {err:?}"
     );
     assert_eq!(err.code(), "read_only_view");
+    // ...and REST renders it as a 400, not a 500. `ApiError::from(WriteError)` sends
+    // anything that is NOT `is_validation()` down the 500 path — writing to a view is
+    // a caller mistake, so classing it as server error would be a lie to the client
+    // and a page for whoever is on call.
+    assert!(err.is_validation(), "a write to a view is a 4xx, not a 500");
 
     let err = DvCustomerTotal::objects()
         .filter(dv_customer_total::CUSTOMER.eq("ada"))

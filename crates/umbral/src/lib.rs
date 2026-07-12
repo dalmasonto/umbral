@@ -30,6 +30,9 @@ pub mod prelude {
     };
     pub use crate::plugin::{AppContext, Plugin, StaticDir};
     pub use crate::routes::Routes;
+    // `Valid<T>` + the derive: a request body that is checked in the signature rather
+    // than by a helper the handler must remember to call.
+    pub use crate::validate::{Valid, Validate};
     // The `Storage` trait so plugin authors can implement a custom
     // file-bytes backend via `use umbral::prelude::*`. The ambient
     // accessors (`storage`/`try_storage`/`set_storage`/`storage_opt`) stay on the
@@ -452,6 +455,45 @@ pub mod forms {
     /// `impl FormValidate for <Struct>`; the `Form<T>` extractor
     /// then calls into that impl via `FromRequest`.
     pub use umbral_macros::Form;
+}
+
+pub mod validate {
+    //! Request-body validation for DTOs that are not models (gaps3 #29 item 4).
+    //!
+    //! `#[derive(Validate)]` uses the SAME field attributes as `#[derive(Model)]` —
+    //! `trim`, `lowercase`, `min_length`, `max_length`, `email`, `url`, `slug`,
+    //! `choices`, `min`, `max` — and `email`/`url`/`slug` call the very same validator
+    //! the ORM's write path calls. Two definitions of "a valid email" is how an API
+    //! ends up accepting a value its own database rejects.
+    //!
+    //! `Valid<T>` is an extractor, so the check lives in the handler's signature: a
+    //! handler that forgot to validate does not compile into existence.
+    //!
+    //! ```ignore
+    //! #[derive(serde::Deserialize, Validate)]
+    //! struct CreateGoal {
+    //!     #[umbral(trim, min_length = 1, max_length = 80)]
+    //!     scorer: String,
+    //!     #[umbral(choices = ["home", "away"])]
+    //!     side: String,
+    //! }
+    //!
+    //! async fn create_goal(Valid(body): Valid<CreateGoal>) -> impl IntoResponse { ... }
+    //! ```
+    pub use umbral_core::validate::{
+        Valid, ValidRejection, Validate, ValidationErrors, check_choices, check_max,
+        check_max_length, check_min, check_min_length, check_text_format,
+    };
+
+    /// The ORM's own email / url / slug validator — the single definition that BOTH a
+    /// `#[umbral(email)]` DTO field and a `#[umbral(email)]` model field are checked
+    /// against. Re-exported so the shared rule is nameable, and so nobody is tempted to
+    /// write a second one.
+    pub use umbral_core::orm::validators::validate_text_format;
+
+    /// The `#[derive(Validate)]` proc macro. Shares its name with the trait — Rust's
+    /// type and macro namespaces are separate, so one import brings both.
+    pub use umbral_macros::Validate;
 }
 
 pub mod backup {

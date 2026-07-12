@@ -4880,3 +4880,269 @@ fn expand_choices(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     })
 }
+
+// =========================================================================
+// #[derive(Validate)] — request-body DTO validation (gaps3 #29 item 4).
+//
+// The attribute vocabulary is DELIBERATELY identical to `#[derive(Model)]`'s.
+// A second spelling for "this field is an email" is how a DTO and the model it
+// feeds drift apart until the API accepts a value its own database rejects.
+// =========================================================================
+
+/// Field rules for a `#[derive(Validate)]` DTO.
+#[derive(Default)]
+struct ValidateFieldAttrs {
+    trim: bool,
+    lowercase: bool,
+    min_length: Option<usize>,
+    max_length: Option<usize>,
+    text_format: Option<String>,
+    choices: Vec<String>,
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+impl ValidateFieldAttrs {
+    /// True when nothing on this field needs checking — the derive then emits no code
+    /// for it at all, rather than a no-op block.
+    fn is_empty(&self) -> bool {
+        !self.trim
+            && !self.lowercase
+            && self.min_length.is_none()
+            && self.max_length.is_none()
+            && self.text_format.is_none()
+            && self.choices.is_empty()
+            && self.min.is_none()
+            && self.max.is_none()
+    }
+
+    /// True when the rules operate on a string (so the generated code derefs to `&str`).
+    fn is_string_rule(&self) -> bool {
+        self.trim
+            || self.lowercase
+            || self.min_length.is_some()
+            || self.max_length.is_some()
+            || self.text_format.is_some()
+            || !self.choices.is_empty()
+    }
+}
+
+fn parse_validate_field_attrs(attrs: &[syn::Attribute]) -> syn::Result<ValidateFieldAttrs> {
+    let mut parsed = ValidateFieldAttrs::default();
+    for attr in attrs {
+        if !attr.path().is_ident("umbral") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("trim") {
+                parsed.trim = true;
+            } else if meta.path.is_ident("lowercase") {
+                parsed.lowercase = true;
+            } else if meta.path.is_ident("min_length") {
+                let lit: syn::LitInt = meta.value()?.parse()?;
+                parsed.min_length = Some(lit.base10_parse()?);
+            } else if meta.path.is_ident("max_length") {
+                let lit: syn::LitInt = meta.value()?.parse()?;
+                parsed.max_length = Some(lit.base10_parse()?);
+            } else if meta.path.is_ident("email") {
+                parsed.text_format = Some("email".to_string());
+            } else if meta.path.is_ident("url") {
+                parsed.text_format = Some("url".to_string());
+            } else if meta.path.is_ident("slug") {
+                parsed.text_format = Some("slug".to_string());
+            } else if meta.path.is_ident("choices") {
+                let arr: syn::ExprArray = meta.value()?.parse()?;
+                for elem in arr.elems {
+                    match elem {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) => parsed.choices.push(s.value()),
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                other,
+                                "umbral(choices = [...]) takes string literals",
+                            ));
+                        }
+                    }
+                }
+            } else if meta.path.is_ident("min") {
+                parsed.min = Some(parse_numeric_lit(meta.value()?.parse()?)?);
+            } else if meta.path.is_ident("max") {
+                parsed.max = Some(parse_numeric_lit(meta.value()?.parse()?)?);
+            } else {
+                return Err(meta.error(
+                    "umbral::Validate accepts: trim, lowercase, min_length = N, \
+                     max_length = N, email, url, slug, choices = [\"a\", \"b\"], \
+                     min = N, max = N",
+                ));
+            }
+            Ok(())
+        })?;
+    }
+    Ok(parsed)
+}
+
+/// `min`/`max` accept an int or a float, so the DTO can bound a price as easily as an age.
+fn parse_numeric_lit(lit: syn::Lit) -> syn::Result<f64> {
+    match lit {
+        syn::Lit::Int(i) => i.base10_parse::<f64>(),
+        syn::Lit::Float(f) => f.base10_parse::<f64>(),
+        other => Err(syn::Error::new_spanned(
+            other,
+            "umbral(min/max) takes a numeric literal",
+        )),
+    }
+}
+
+fn expand_validate(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let name = &input.ident;
+    let syn::Data::Struct(data) = &input.data else {
+        return Err(syn::Error::new_spanned(
+            &input,
+            "#[derive(Validate)] only works on structs with named fields",
+        ));
+    };
+    let syn::Fields::Named(fields) = &data.fields else {
+        return Err(syn::Error::new_spanned(
+            &input,
+            "#[derive(Validate)] only works on structs with named fields",
+        ));
+    };
+
+    let mut checks = Vec::new();
+    for field in &fields.named {
+        let rules = parse_validate_field_attrs(&field.attrs)?;
+        if rules.is_empty() {
+            continue;
+        }
+        let ident = field.ident.as_ref().expect("named field");
+        let fname = ident.to_string();
+        let optional = is_option_type(&field.ty);
+
+        // Normalisers run FIRST and rewrite in place, so the checks below see the
+        // value as it will actually be stored. A `min_length = 1` on an untrimmed
+        // "   " would otherwise pass — a blank the framework promised to catch.
+        let mut body = Vec::new();
+        if rules.trim {
+            body.push(quote! { *__v = __v.trim().to_string(); });
+        }
+        if rules.lowercase {
+            body.push(quote! { *__v = __v.to_lowercase(); });
+        }
+        if let Some(n) = rules.min_length {
+            body.push(quote! {
+                ::umbral::validate::check_min_length(&mut __errs, #fname, __v, #n);
+            });
+        }
+        if let Some(n) = rules.max_length {
+            body.push(quote! {
+                ::umbral::validate::check_max_length(&mut __errs, #fname, __v, #n);
+            });
+        }
+        if let Some(fmt) = &rules.text_format {
+            body.push(quote! {
+                ::umbral::validate::check_text_format(&mut __errs, #fname, __v, #fmt);
+            });
+        }
+        if !rules.choices.is_empty() {
+            let allowed = &rules.choices;
+            body.push(quote! {
+                ::umbral::validate::check_choices(
+                    &mut __errs, #fname, __v, &[#(#allowed),*],
+                );
+            });
+        }
+
+        if rules.is_string_rule() {
+            // `__v: &mut String`. An `#[umbral(trim)]` on a non-string field fails to
+            // compile here, which is the right outcome and a readable message.
+            checks.push(if optional {
+                quote! {
+                    if let ::core::option::Option::Some(__v) = self.#ident.as_mut() {
+                        #(#body)*
+                    }
+                }
+            } else {
+                quote! {
+                    {
+                        let __v = &mut self.#ident;
+                        #(#body)*
+                    }
+                }
+            });
+        }
+
+        // Numeric bounds read the value by copy; nothing to rewrite.
+        let mut num = Vec::new();
+        if let Some(n) = rules.min {
+            num.push(quote! {
+                ::umbral::validate::check_min(&mut __errs, #fname, __n as f64, #n);
+            });
+        }
+        if let Some(n) = rules.max {
+            num.push(quote! {
+                ::umbral::validate::check_max(&mut __errs, #fname, __n as f64, #n);
+            });
+        }
+        if !num.is_empty() {
+            checks.push(if optional {
+                quote! {
+                    if let ::core::option::Option::Some(__n) = self.#ident {
+                        #(#num)*
+                    }
+                }
+            } else {
+                quote! {
+                    {
+                        let __n = self.#ident;
+                        #(#num)*
+                    }
+                }
+            });
+        }
+    }
+
+    Ok(quote! {
+        impl ::umbral::validate::Validate for #name {
+            fn validate(
+                &mut self,
+            ) -> ::core::result::Result<(), ::umbral::validate::ValidationErrors> {
+                let mut __errs = ::umbral::validate::ValidationErrors::new();
+                #(#checks)*
+                if __errs.is_empty() {
+                    ::core::result::Result::Ok(())
+                } else {
+                    // Every broken rule, not just the first. Making a user fix one
+                    // mistake per round-trip is its own kind of bug.
+                    ::core::result::Result::Err(__errs)
+                }
+            }
+        }
+    })
+}
+
+/// Derive [`Validate`] for a request-body DTO.
+///
+/// Uses the SAME field attributes as `#[derive(Model)]` — `trim`, `lowercase`,
+/// `min_length`, `max_length`, `email`, `url`, `slug`, `choices`, `min`, `max` — so
+/// there is no second vocabulary to learn and no second definition of "a valid email".
+///
+/// ```ignore
+/// #[derive(serde::Deserialize, Validate)]
+/// struct CreateGoal {
+///     #[umbral(trim, min_length = 1, max_length = 80)]
+///     scorer: String,
+///     #[umbral(choices = ["home", "away"])]
+///     side: String,
+///     #[umbral(min = 0, max = 120)]
+///     minute: i64,
+/// }
+/// ```
+#[proc_macro_derive(Validate, attributes(umbral))]
+pub fn derive_validate(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_validate(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}

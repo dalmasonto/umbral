@@ -19,6 +19,7 @@ pub mod forms;
 pub(crate) mod hosts;
 pub mod inspect;
 pub mod middleware;
+pub mod validate;
 pub use inventory;
 
 pub mod migrate;

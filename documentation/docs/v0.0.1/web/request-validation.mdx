@@ -1,0 +1,98 @@
+---
+title: Validating request bodies
+description: Valid<T> — check and normalise a JSON body in the handler's signature, using the same attributes you already know from models.
+sidebar_position: 6
+icon: shield-check
+tags: [web, validation, extractors]
+badge: new
+---
+
+# Validating request bodies
+
+`#[umbral(trim, lowercase, max_length)]` has always worked on a [model](../orm/normalized-fields). But plenty of request bodies aren't models — they're DTOs: a `Deserialize` struct you check, then turn into something else. Those had no story, so handlers re-implemented the same four rules by hand.
+
+```rust
+use umbral::prelude::*;
+
+#[derive(Deserialize, Validate)]
+struct CreateGoal {
+    #[umbral(trim, min_length = 1, max_length = 80)]
+    scorer: String,
+
+    #[umbral(choices = ["home", "away"])]
+    side: String,
+
+    #[umbral(min = 0, max = 120)]
+    minute: i64,
+
+    #[umbral(trim, lowercase, email)]
+    notify: Option<String>,
+}
+
+async fn create_goal(Valid(body): Valid<CreateGoal>) -> impl IntoResponse {
+    // `body` is normalised AND checked.
+}
+```
+
+## The gate is in the signature
+
+`Valid<T>` is an extractor, so a handler that forgot to validate **doesn't compile into existence**. That's the difference that matters — not the line count. A `validate()` helper you have to remember to call is a gate you can forget, and the one handler that forgets is the one that gets exploited.
+
+## It normalises, not just rejects
+
+`trim` and `lowercase` **rewrite** the value before your handler sees it. A validator that could only say *no* would leave every caller to normalise by hand, which is most of the boilerplate this replaces.
+
+Normalisers run first, then the checks — so `"   "` is caught as blank rather than sailing through as a five-character name.
+
+## Same attributes, same meanings, same validator
+
+The vocabulary is deliberately identical to `#[derive(Model)]`'s, and it isn't just the *spelling* that's shared: `email`, `url` and `slug` call the very same validator the ORM's write path calls.
+
+<Callout type="warning">
+  Two validators that both "check emails" is how an API ends up accepting a value its own database rejects. There is one definition, and both paths use it.
+</Callout>
+
+| Attribute | Applies to | Effect |
+|---|---|---|
+| `trim`, `lowercase` | `String` | rewrites the value in place |
+| `min_length = N` / `max_length = N` | `String` | counts **characters**, not bytes; rejects rather than truncating |
+| `email` / `url` / `slug` | `String` | the ORM's validator |
+| `choices = ["a", "b"]` | `String` | an enum-of-strings, without the enum |
+| `min = N` / `max = N` | any numeric | inclusive bounds |
+
+On an `Option<T>`, the rules apply to the value when it's present. An absent optional isn't a failure — the rules describe a value, and there is no value.
+
+## The rejection
+
+A failing body gets a **400** in the same shape [REST](../rest/errors) already returns for a model write: field errors flattened to the top level, `non_field_errors` alongside, a stable `code`.
+
+```json
+{
+  "code": "validation_error",
+  "scorer": ["This field cannot be blank."],
+  "side": ["Must be one of: home, away."],
+  "minute": ["Must be at most 120."]
+}
+```
+
+Every broken rule is reported, not just the first — making someone fix one mistake per round-trip is its own kind of bug. A body that doesn't parse at all gets `code: "malformed_body"` instead, because there's no "which field" when the JSON itself is broken.
+
+## When the rules don't fit
+
+Implement the trait directly. The derive is a convenience over a plain method:
+
+```rust
+impl Validate for TransferRequest {
+    fn validate(&mut self) -> Result<(), ValidationErrors> {
+        let mut errs = ValidationErrors::new();
+        if self.from == self.to {
+            errs.add_non_field("Cannot transfer to the same account.");
+        }
+        if errs.is_empty() { Ok(()) } else { Err(errs) }
+    }
+}
+```
+
+`Valid<T>` only needs `Validate`; it does not care where the impl came from.
+
+Design notes: `planning/gaps3.md` #29 item 4.
