@@ -5146,3 +5146,301 @@ pub fn derive_validate(input: TokenStream) -> TokenStream {
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
+
+// =========================================================================
+// #[derive(Dto)] — put a hand-shaped response struct into the generated
+// TypeScript client (gaps3 #29 item 5).
+// =========================================================================
+
+/// Map a Rust type to TypeScript, at expansion time.
+///
+/// Returns `(ts_type, optional)`. An unrecognised path type maps to its own
+/// identifier — which is exactly the interface name `#[derive(Dto)]` emits, so a
+/// nested DTO resolves for free without a registry lookup.
+fn dto_ts_type(ty: &syn::Type) -> (String, bool) {
+    if let Some(inner) = option_inner(ty) {
+        let (t, _) = dto_ts_type(inner);
+        return (t, true);
+    }
+    (dto_ts_inner(ty), false)
+}
+
+fn dto_ts_inner(ty: &syn::Type) -> String {
+    let syn::Type::Path(syn::TypePath { path, .. }) = ty else {
+        // A reference, tuple, slice... nothing sane maps here.
+        return "unknown".to_string();
+    };
+    let Some(last) = path.segments.last() else {
+        return "unknown".to_string();
+    };
+    let ident = last.ident.to_string();
+
+    // Generic containers first — their element type recurses.
+    if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
+        let type_args: Vec<&syn::Type> = args
+            .args
+            .iter()
+            .filter_map(|a| match a {
+                syn::GenericArgument::Type(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        match ident.as_str() {
+            "Vec" | "VecDeque" | "HashSet" | "BTreeSet" => {
+                if let Some(el) = type_args.first() {
+                    let (t, opt) = dto_ts_type(el);
+                    // `Vec<Option<T>>` is `(T | null)[]`, not `T[] | null`.
+                    return if opt {
+                        format!("({t} | null)[]")
+                    } else {
+                        format!("{t}[]")
+                    };
+                }
+                return "unknown[]".to_string();
+            }
+            // JSON object keys are always strings on the wire, whatever the Rust key type.
+            "HashMap" | "BTreeMap" => {
+                if let Some(v) = type_args.get(1) {
+                    let (t, opt) = dto_ts_type(v);
+                    let t = if opt { format!("{t} | null") } else { t };
+                    return format!("Record<string, {t}>");
+                }
+                return "Record<string, unknown>".to_string();
+            }
+            _ => {}
+        }
+    }
+
+    match ident.as_str() {
+        "String" | "str" | "char" | "Uuid" | "Decimal" => "string".to_string(),
+        // Dates and times cross the wire as RFC 3339 / ISO 8601 strings — the same
+        // choice `ts_type` makes for the model side, so a DTO and a model agree.
+        "DateTime" | "NaiveDate" | "NaiveDateTime" | "NaiveTime" | "Date" | "Time" => {
+            "string".to_string()
+        }
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
+        | "usize" | "f32" | "f64" => "number".to_string(),
+        "bool" => "boolean".to_string(),
+        // `unknown`, not `any`: the consumer must narrow it, which is the entire point
+        // of generating types.
+        "Value" | "JsonValue" => "unknown".to_string(),
+        // Anything else is assumed to be another `#[derive(Dto)]` struct (or an enum
+        // the user types themselves) and is referenced by name.
+        other => other.to_string(),
+    }
+}
+
+/// Read the doc-comment lines off a set of attributes.
+fn dto_docs(attrs: &[syn::Attribute]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for attr in attrs {
+        if !attr.path().is_ident("doc") {
+            continue;
+        }
+        if let syn::Meta::NameValue(nv) = &attr.meta {
+            if let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+            {
+                lines.push(s.value().trim().to_string());
+            }
+        }
+    }
+    lines
+}
+
+/// `#[serde(rename_all = "...")]` on the struct.
+///
+/// Honoured, or REJECTED — never ignored. A DTO declaring `rename_all = "camelCase"`
+/// serialises `member_id` as `memberId`; a generated client that emitted `member_id`
+/// would compile, type-check, and be wrong at runtime against the server that produced
+/// it. Silence is the one option that is not available.
+fn dto_rename_all(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
+    let mut found = None;
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename_all") {
+                if let Ok(v) = meta.value() {
+                    if let Ok(lit) = v.parse::<syn::LitStr>() {
+                        found = Some((lit.value(), attr.span()));
+                    }
+                }
+            } else if let Ok(v) = meta.value() {
+                let _ = v.parse::<syn::Lit>();
+            }
+            Ok(())
+        });
+    }
+    match found {
+        None => Ok(None),
+        Some((style, span)) => match style.as_str() {
+            "camelCase"
+            | "snake_case"
+            | "SCREAMING_SNAKE_CASE"
+            | "kebab-case"
+            | "lowercase"
+            | "UPPERCASE"
+            | "PascalCase" => Ok(Some(style)),
+            other => Err(syn::Error::new(
+                span,
+                format!(
+                    "#[derive(Dto)] cannot yet translate `#[serde(rename_all = \"{other}\")]` \
+                     into TypeScript field names. Emitting the Rust names anyway would produce \
+                     a generated client that compiles and is WRONG against the server that \
+                     produced it, so this is an error rather than a silent guess. Use a \
+                     supported style (camelCase, snake_case, kebab-case, PascalCase, \
+                     lowercase, UPPERCASE, SCREAMING_SNAKE_CASE), or rename fields \
+                     individually with #[serde(rename = \"...\")]."
+                ),
+            )),
+        },
+    }
+}
+
+/// Field-level `#[serde(rename = "...")]`, and `#[serde(skip)]`.
+fn dto_field_serde(attrs: &[syn::Attribute]) -> (Option<String>, bool) {
+    let mut rename = None;
+    let mut skip = false;
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                if let Ok(v) = meta.value() {
+                    if let Ok(lit) = v.parse::<syn::LitStr>() {
+                        rename = Some(lit.value());
+                    }
+                }
+            } else if meta.path.is_ident("skip") || meta.path.is_ident("skip_serializing") {
+                skip = true;
+            } else if let Ok(v) = meta.value() {
+                let _ = v.parse::<syn::Lit>();
+            }
+            Ok(())
+        });
+    }
+    (rename, skip)
+}
+
+fn apply_rename_all(name: &str, style: &str) -> String {
+    let words: Vec<String> = name
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    let cap = |w: &str| -> String {
+        let mut c = w.chars();
+        match c.next() {
+            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            None => String::new(),
+        }
+    };
+    match style {
+        "camelCase" => words
+            .iter()
+            .enumerate()
+            .map(|(i, w)| if i == 0 { w.clone() } else { cap(w) })
+            .collect(),
+        "PascalCase" => words.iter().map(|w| cap(w)).collect(),
+        "kebab-case" => words.join("-"),
+        "SCREAMING_SNAKE_CASE" => name.to_uppercase(),
+        "UPPERCASE" => name.to_uppercase(),
+        "lowercase" => name.to_lowercase(),
+        // snake_case: the Rust field name already is one.
+        _ => name.to_string(),
+    }
+}
+
+fn expand_dto(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let name = &input.ident;
+    let name_str = name.to_string();
+    let syn::Data::Struct(data) = &input.data else {
+        return Err(syn::Error::new_spanned(
+            &input,
+            "#[derive(Dto)] only works on structs with named fields",
+        ));
+    };
+    let syn::Fields::Named(fields) = &data.fields else {
+        return Err(syn::Error::new_spanned(
+            &input,
+            "#[derive(Dto)] only works on structs with named fields",
+        ));
+    };
+
+    let rename_all = dto_rename_all(&input.attrs)?;
+    let struct_docs = dto_docs(&input.attrs);
+
+    let mut field_tokens = Vec::new();
+    for field in &fields.named {
+        let (rename, skip) = dto_field_serde(&field.attrs);
+        if skip {
+            // Not serialised → not in the JSON → not in the TypeScript.
+            continue;
+        }
+        let raw = field.ident.as_ref().expect("named field").to_string();
+        let json_name = rename.unwrap_or_else(|| match &rename_all {
+            Some(style) => apply_rename_all(&raw, style),
+            None => raw.clone(),
+        });
+        let (ts, optional) = dto_ts_type(&field.ty);
+        let docs = dto_docs(&field.attrs);
+        field_tokens.push(quote! {
+            ::umbral::typegen::DtoField {
+                name: #json_name,
+                ts_type: #ts,
+                optional: #optional,
+                docs: &[#(#docs),*],
+            }
+        });
+    }
+
+    Ok(quote! {
+        ::umbral::inventory::submit! {
+            ::umbral::typegen::DtoMeta {
+                name: #name_str,
+                fields: &[#(#field_tokens),*],
+                docs: &[#(#struct_docs),*],
+            }
+        }
+    })
+}
+
+/// Put a hand-shaped response struct into the generated TypeScript client.
+///
+/// `typegen` / `gen-client` emit types from your models — which covers everything
+/// except the shape you actually wrote, the moment one handler returns
+/// `Json<MemberCard>`. That is the cliff: the generated client is missing precisely the
+/// types you needed it for, so you hand-write the lot and stop generating.
+///
+/// ```ignore
+/// #[derive(Serialize, Dto)]
+/// struct MemberCard {
+///     name: String,
+///     matches_played: i64,
+///     last_seen: Option<DateTime<Utc>>,
+/// }
+/// ```
+///
+/// ```ts
+/// export interface MemberCard {
+///   name: string;
+///   matches_played: number;
+///   last_seen?: string | null;
+/// }
+/// ```
+///
+/// Registration is at link time (the same `inventory` mechanism `#[derive(Model)]`
+/// uses), so a DTO is in the client by virtue of existing — there is no registry to
+/// remember to add it to.
+#[proc_macro_derive(Dto, attributes(serde))]
+pub fn derive_dto(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_dto(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}

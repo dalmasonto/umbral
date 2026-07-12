@@ -33,6 +33,9 @@ pub mod prelude {
     // `Valid<T>` + the derive: a request body that is checked in the signature rather
     // than by a helper the handler must remember to call.
     pub use crate::validate::{Valid, Validate};
+    // `#[derive(Dto)]`: a response struct that is not a model still belongs in the
+    // generated client.
+    pub use crate::typegen::Dto;
     // The `Storage` trait so plugin authors can implement a custom
     // file-bytes backend via `use umbral::prelude::*`. The ambient
     // accessors (`storage`/`try_storage`/`set_storage`/`storage_opt`) stay on the
@@ -158,7 +161,14 @@ pub mod timezone {
 /// `umbral typegen` CLI subcommand rather than by calling it. [`typescript`]
 /// reads the live registry; [`typescript_for`] is the pure function behind it.
 pub mod typegen {
-    pub use umbral_core::typegen::{ts_base_type, typescript, typescript_for};
+    pub use umbral_core::typegen::{
+        DtoField, DtoMeta, registered_dtos, ts_base_type, typescript, typescript_for,
+        typescript_for_dtos,
+    };
+
+    /// The `#[derive(Dto)]` proc macro — put a hand-shaped response struct into the
+    /// generated TypeScript client (gaps3 #29 item 5).
+    pub use umbral_macros::Dto;
 }
 
 /// Kikosi #5 — graceful-shutdown drain coordination.

@@ -1,0 +1,78 @@
+---
+title: Custom response types
+description: "#[derive(Dto)] — put a hand-shaped response struct into the generated TypeScript client."
+sidebar_position: 10
+icon: braces
+tags: [rest, typescript, gen-client]
+badge: new
+---
+
+# Custom response types
+
+[`umbral gen-client`](./typescript-client) types every model. Which is great, right up to the first handler that returns something that *isn't* a model:
+
+```rust
+async fn member_card(...) -> Json<MemberCard> { ... }
+```
+
+Now the generated client covers everything **except the shape you actually wrote** — so you hand-write a type for it, then for the next one, and soon you're hand-writing all of them and the generator is dead weight. That's the cliff.
+
+`#[derive(Dto)]` puts the struct in the same output:
+
+```rust
+use umbral::prelude::*;
+
+/// A member's summary card.
+#[derive(Serialize, Dto)]
+struct MemberCard {
+    name: String,
+    matches_played: i64,
+    last_seen: Option<DateTime<Utc>>,
+    positions: Vec<String>,
+    club: ClubRef,          // another Dto — resolves by name
+}
+```
+
+```ts
+/** A member's summary card. */
+export interface MemberCard {
+  name: string;
+  matches_played: number;
+  last_seen?: string | null;
+  positions: string[];
+  club: ClubRef;
+}
+```
+
+Nothing to register. Registration happens at **link time** — the same mechanism `#[derive(Model)]` uses — so a DTO is in the client by virtue of existing. A registry you have to remember to add to is a registry that will be out of date.
+
+## The mapping
+
+| Rust | TypeScript |
+|---|---|
+| `String`, `Uuid`, `Decimal`, `DateTime`, `NaiveDate` | `string` |
+| any integer or float | `number` |
+| `bool` | `boolean` |
+| `Option<T>` | `field?: T \| null` |
+| `Vec<T>`, `HashSet<T>` | `T[]` |
+| `HashMap<K, V>` | `Record<string, V>` |
+| `serde_json::Value` | `unknown` |
+| any other struct | its own interface name |
+
+`Option<T>` is **both** optional and nullable, because serde produces both: omitted under `skip_serializing_if`, `null` without it. A type that admits only one breaks on the other.
+
+`unknown`, not `any` — the consumer has to narrow it, which is the entire point of generating types.
+
+## serde attributes are honoured
+
+`#[serde(rename)]`, `#[serde(rename_all)]` and `#[serde(skip)]` all affect what the server actually sends, so they all affect the generated type.
+
+<Callout type="warning">
+  If a `rename_all` style can't be translated, the derive is a **compile error** — not a silent guess. A client that emitted `member_id` for a field the server sends as `memberId` would compile, type-check, and be wrong at runtime against the very server that produced it. That's the worst failure available, because nothing errors.
+</Callout>
+
+## Where it shows up
+
+Both `umbral typegen` and `umbral gen-client`'s `client.d.ts`.
+
+Design notes: `planning/gaps3.md` #29 item 5.

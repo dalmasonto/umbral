@@ -605,6 +605,17 @@ fn emit_dts(e: &Emit<'_>) -> String {
     // FK value types still resolve against the full, unstripped model set.
     out.push_str(&umbral::typegen::typescript_for(&strip_hidden(exposed)));
 
+    // gaps3 #29 item 5: `#[derive(Dto)]` structs go in the CLIENT too, not just in
+    // `umbral typegen`'s output. `gen-client` is the artefact people actually import —
+    // a client that types every model and none of the hand-shaped response bodies is a
+    // client you abandon after the first custom handler, which is precisely what the
+    // audit found.
+    let dtos = umbral::typegen::registered_dtos();
+    if !dtos.is_empty() {
+        out.push('\n');
+        out.push_str(&umbral::typegen::typescript_for_dtos(&dtos));
+    }
+
     for model in exposed {
         out.push('\n');
         push_filters_type(&mut out, all, model);

@@ -55,7 +55,15 @@ use crate::orm::SqlType;
 pub fn typescript() -> String {
     let mut models = crate::migrate::registered_models();
     models.sort_by(|a, b| a.name.cmp(&b.name));
-    typescript_for(&models)
+    let mut out = typescript_for(&models);
+    // gaps3 #29 item 5: hand-shaped response structs registered with `#[derive(Dto)]`
+    // land in the SAME output as the models. A client that types every model and none
+    // of your actual response bodies is a client nobody uses.
+    let dtos = registered_dtos();
+    if !dtos.is_empty() {
+        out.push_str(&typescript_for_dtos(&dtos));
+    }
+    out
 }
 
 /// Emit TypeScript for an explicit model list.
@@ -347,4 +355,76 @@ fn ts_type(ty: SqlType) -> String {
 /// Escape a choice value for a TypeScript double-quoted string literal.
 fn escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+// =========================================================================
+// DTO registry (gaps3 #29 item 5).
+//
+// `typegen` / `gen-client` emit TypeScript from `ModelMeta` — which is perfect
+// right up to the first handler that returns `Json<MemberCard>` instead of a
+// model. At that point the generated client covers everything EXCEPT the shape
+// you actually wrote, so you hand-write types for the lot and stop generating
+// altogether. That is the cliff the live consumer fell off: three hand-shaped
+// response structs and a raw `HashMap`, and `gen-client` adopted not at all.
+//
+// `#[derive(Dto)]` puts a plain struct into the same output. The TS types are
+// computed by the MACRO, at expansion time, where the Rust type tokens are still
+// visible — so this registry holds nothing but strings, and a nested DTO resolves
+// to its own interface name for free.
+// =========================================================================
+
+/// One field of a registered DTO. Both types are already TypeScript.
+#[derive(Debug, Clone, Copy)]
+pub struct DtoField {
+    /// The name as it appears in JSON (post-`#[serde(rename)]`).
+    pub name: &'static str,
+    /// The TypeScript type, e.g. `string`, `number[]`, `MemberCard`.
+    pub ts_type: &'static str,
+    /// `Option<T>` — emitted as `name?: T | null`.
+    pub optional: bool,
+    /// The struct's doc-comment lines, if any.
+    pub docs: &'static [&'static str],
+}
+
+/// A struct registered by `#[derive(Dto)]`.
+#[derive(Debug, Clone, Copy)]
+pub struct DtoMeta {
+    /// The Rust struct name, used verbatim as the TS interface name.
+    pub name: &'static str,
+    pub fields: &'static [DtoField],
+    pub docs: &'static [&'static str],
+}
+
+inventory::collect!(DtoMeta);
+
+/// Every `#[derive(Dto)]` struct linked into this binary, sorted by name.
+///
+/// Link-time registration (same `inventory` mechanism as `#[derive(Model)]`), so a
+/// DTO is in the generated client by virtue of *existing* — there is no registry to
+/// remember to add it to, which is the failure mode a registry always has.
+pub fn registered_dtos() -> Vec<&'static DtoMeta> {
+    let mut dtos: Vec<&'static DtoMeta> = inventory::iter::<DtoMeta>.into_iter().collect();
+    dtos.sort_by_key(|d| d.name);
+    dtos
+}
+
+/// Emit the TS interface for one DTO.
+pub fn typescript_for_dtos(dtos: &[&DtoMeta]) -> String {
+    let mut out = String::new();
+    for dto in dtos {
+        let dto_docs: Vec<String> = dto.docs.iter().map(|s| s.to_string()).collect();
+        push_docs(&mut out, &dto_docs, "");
+        out.push_str(&format!("export interface {} {{\n", dto.name));
+        for f in dto.fields {
+            let field_docs: Vec<String> = f.docs.iter().map(|s| s.to_string()).collect();
+            push_docs(&mut out, &field_docs, "  ");
+            if f.optional {
+                out.push_str(&format!("  {}?: {} | null;\n", f.name, f.ts_type));
+            } else {
+                out.push_str(&format!("  {}: {};\n", f.name, f.ts_type));
+            }
+        }
+        out.push_str("}\n\n");
+    }
+    out
 }
