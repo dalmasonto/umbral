@@ -195,3 +195,21 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
     Proposed: `AuthPlugin::with_form_pages()` (or fold it into `with_form_routes`) serving `GET /auth/login` and `GET /auth/signup` from overridable plugin templates, the way the admin already ships its own.
 
     **The acceptance criterion already exists**: `plugins/umbral-auth/tests/template_surface.rs`, currently `#[ignore]`d and RED. It was written as a TDD spec against a `with_template_pages()` method that never shipped, and was found as an *untracked file in an abandoned agent worktree* during the 2026-07-12 branch cleanup — it existed in no branch and no commit, and would have been destroyed with the worktree. Un-`#[ignore]` it when the feature lands.
+
+64. [x] **`umbral startproject` produced a project that does not compile — in the SHIPPED 0.0.6 release** — archived. `Environment` derived only `Clone, Debug, Deserialize`, while the scaffold generates the single most obvious thing anyone writes with it:
+
+    ```rust
+    if umbral::settings::get().environment != Environment::Dev { ... }   // seed/credentials.rs
+    ```
+
+    No `PartialEq` → `error[E0369]: binary operation != cannot be applied to type umbral::Environment`. Verified against the **published** `umbral-cli-0.0.6` source in the registry: it emits that exact line, and published `umbral-core-0.0.6`'s `Environment` has no `PartialEq`. So **every `umbral startproject` on the current release yields a broken project on the very first `cargo build`** — the framework's front door. Fixed: `#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]`.
+
+    Found only by actually scaffolding a project and building it. No test covered it, because the scaffold's *output* was never compiled — the CLI tests assert on the generated file CONTENTS (`views_mod.contains("re-export")`), which cannot catch "this code does not build". A generator whose output is never compiled is a generator you are guessing about.
+
+    Also fixed alongside: `Html` was missing from the prelude (`Json` was there — an odd asymmetry for a framework whose scaffold renders templates), so the generated project emitted an unused-import warning on a brand-new build.
+
+65. [ ] **The scaffold pins the LAST RELEASE while generating code for `main`'s API.** `scaffold.rs` uses `env!("CARGO_PKG_VERSION")` — the CLI's own version, which during development is the last published one (0.0.6). So `cargo run -p umbral-cli -- startproject foo` from a HEAD checkout writes `umbral = "0.0.6"` into the new project's Cargo.toml and then generates code against **main's** API. Today that fails on `From<TemplateError> for ApiError` (#57, unreleased) and `AppBuilder::build_deferred` (unreleased).
+
+    Self-healing at release (the scaffold and the libs ship together), and `--local <repo>` path-deps correctly — so contributors have a working path and end users of a *published* CLI are unaffected by the skew itself. But the default invocation from a checkout is silently broken, which is exactly how #64 survived: nobody builds what `startproject` emits.
+
+    Fix: **compile the scaffold's output in CI.** `startproject --local` into a temp dir, `cargo build`, assert zero errors AND zero warnings. That one test would have caught #64, #65, and the unused-import wart in a single run. (A content-assertion test cannot.) Consider also warning when `startproject` runs from a source checkout without `--local`.

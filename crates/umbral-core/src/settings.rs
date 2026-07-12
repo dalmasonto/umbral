@@ -581,7 +581,11 @@ impl std::fmt::Debug for Settings {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+/// `PartialEq` / `Eq` / `Copy` are not decoration (gaps3 #64). The `startproject`
+/// scaffold generates `if settings.environment != Environment::Prod { ... }` in its seed
+/// step — the single most obvious thing anyone does with this enum — and without
+/// `PartialEq` that line does not compile. A scaffolded project has never built.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 pub enum Environment {
     Dev,
     Test,
