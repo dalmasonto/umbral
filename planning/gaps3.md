@@ -242,3 +242,11 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
     Also fixed the cramping the hamburger exposed: the header's inner `gap: 2.6rem` was a desktop measurement applied at every width, which squeezed the CTA until **"Sign up" wrapped onto two lines** on a 390px phone.
 
     Verified in a real browser at 390px and 768px: hamburger visible, panel opens with 11 links, Escape closes it, and it is hidden again at 1280px.
+
+69. [x] **The site called umbral an "app framework", and its hero badge hardcoded `v0.1 preview`** — archived.
+
+    **"App framework" is the wrong category.** That is what React, Dioxus and Leptos are — you reach for one to build an *application UI*. umbral is a **web framework**: models, migrations, admin, forms, REST, background work, served over HTTP. Advertising the wrong category is worse than advertising nothing, because the people who arrive are the ones who will bounce. Fixed in the hero, the meta description, the seeded blog copy, the design mock and a doc-comment. (`arch.md` still says "app framework" once — describing **Loco**, a third-party framework. Left alone; it is not our category to fix.)
+
+    **The badge was #67 again, on the website.** `v0.1 preview` was a literal tied to nothing — wrong the moment the dependency moved, and wrong for as long as nobody happened to look. It is now DATA: a single `UMBRAL_VERSION` const passed into the template, and `version_tests::umbral_version_matches_the_pinned_dependency` reads `Cargo.toml` and **fails the build** if the const and the pinned `umbral` version disagree. Verified the guard actually fails (set it to `0.1.0` against a pinned `0.0.6` and the test told me so, by name). Bump the dependency and the badge follows — or the build tells you that you forgot.
+
+    Live: `Modular Rust web framework · v0.0.6`. It reads 0.0.6 because that is what the site *runs*; it will read 0.0.7 the moment the dependency is bumped, and not one commit before, which is the entire point.

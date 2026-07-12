@@ -74,7 +74,7 @@ pub enum SlashRedirect {
     Off,
     /// Append-slash shape. On a 404 for `/foo`,
     /// the framework probes `/foo/`; if that would match, returns a
-    /// 308 redirect. Most app frameworks default to this.
+    /// 308 redirect. Most web frameworks default to this.
     Append,
     /// REST-API convention. On a 404 for `/foo/`, probes `/foo`;
     /// returns 308 if that would match. Useful for APIs that prefer

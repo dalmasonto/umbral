@@ -18,7 +18,7 @@ The site can still explain the familiar workflow: models, migrations, admin, for
 
 The homepage should communicate three ideas quickly:
 
-1. Umbral gives Rust developers a complete app framework, not only HTTP routing.
+1. Umbral gives Rust developers a complete web framework, not only HTTP routing.
 2. Umbral's batteries are prebuilt plugins that can be enabled, replaced, or extended.
 3. The website itself is built with Umbral, using the same project, app, migration, form, admin, and plugin systems it documents.
 

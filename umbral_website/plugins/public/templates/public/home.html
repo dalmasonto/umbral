@@ -3,7 +3,7 @@
 {% import "community/_channel.html" as cc %}
 
 {% block title %}Umbral - the batteries are real plugins{% endblock %}
-{% block meta_description %}Umbral gives Rust developers a complete app framework - models, migrations, admin, forms, REST, background work - with every battery delivered as a plugin you can enable, replace, or extend. This site is built with Umbral.{% endblock %}
+{% block meta_description %}Umbral gives Rust developers a complete web framework - models, migrations, admin, forms, REST, background work - with every battery delivered as a plugin you can enable, replace, or extend. This site is built with Umbral.{% endblock %}
 
 {# -----------------------------------------------------------------------
    Scoped presentation layer. Everything here is driven by the :root CSS
@@ -152,13 +152,13 @@
 <section class="hero mx-auto max-w-[1200px] px-7 pb-9 pt-[72px] text-center">
   <div class="reveal mb-[26px] inline-flex items-center gap-[9px] rounded-full border border-accent-line bg-accent-soft px-3.5 py-1.5 text-[13px] font-semibold text-accent-2" style="--d:0ms">
     <span class="h-[7px] w-[7px] rounded-full bg-accent"></span>
-    Modular Rust web framework · v0.1 preview
+    Modular Rust web framework · v{{ umbral_version }}
   </div>
   <h1 class="reveal mx-auto max-w-[880px] text-[40px] font-extrabold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[52px] lg:text-[62px]" style="--d:60ms">
     The batteries are <span class="text-accent">real plugins.</span>
   </h1>
   <p class="reveal mx-auto mt-6 max-w-[640px] text-[18px] leading-[1.55] text-muted sm:text-[20px]" style="--d:130ms">
-    Umbral gives Rust developers a complete app framework - models, migrations, admin, forms, REST, background work - with every battery delivered as a plugin you can enable, replace, or extend.
+    Umbral gives Rust developers a complete web framework - models, migrations, admin, forms, REST, background work - with every battery delivered as a plugin you can enable, replace, or extend.
   </p>
   <div class="reveal mt-[34px] flex flex-wrap justify-center gap-3" style="--d:200ms">
     <a href="/docs" class="btn-accent btn-accent--lg">
@@ -249,7 +249,7 @@
 
 {# -----------------------------------------------------------------------
    How Umbral works (gaps3 #47). Replaces the old three "why you should use
-   it" value-prop cards. A claim ("a complete app framework") asks the reader
+   it" value-prop cards. A claim ("a complete web framework") asks the reader
    to take our word for it; the actual loop - declare a model, migrate, get an
    admin and an API - shows them, and it is the product. It also answers the
    two questions a value-prop card leaves open ("what IS it" and "what do I

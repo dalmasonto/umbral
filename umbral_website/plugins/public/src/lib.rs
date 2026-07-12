@@ -21,6 +21,17 @@ use umbral::routes::RouteSpec;
 use umbral::templates::context;
 use umbral::web::{ApiError, Html, Router, get};
 
+/// The umbral version this site is built against (gaps3 #69).
+///
+/// Data, not markup. The hero badge hardcoded the literal `v0.1 preview` — the same class
+/// of bug as the admin's `v0.0.1` (#67): a version string tied to nothing, wrong the
+/// moment the dependency moves, and wrong for as long as nobody happens to look.
+///
+/// It cannot silently rot: the `version_tests` module below reads `Cargo.toml` and fails
+/// the build if this const and the pinned `umbral` version disagree. Bump the dependency
+/// and the badge follows — or the build tells you that you forgot.
+pub(crate) const UMBRAL_VERSION: &str = "0.0.6";
+
 #[derive(Debug, Default, Clone)]
 pub struct PublicPlugin;
 
@@ -167,13 +178,14 @@ struct Post {
   #[umbral(auto_user_add)]
   author: Option<FK<AuthUser>>,
   #[umbral(auto_now_add)]
-  created_at: DateTime&lt;Utc&gt;,
+  created_at: DateTime<Utc>,
 }
 ```";
 
     let body = umbral::templates::render(
         "public/home.html",
         &context! {
+            umbral_version => UMBRAL_VERSION,
             code => code,
             plugins => plugins,
             plugin_count => plugin_count,
@@ -308,4 +320,33 @@ fn internal_error<E: std::fmt::Display>(err: E) -> ApiError {
     // name, a SQL fragment, shown to whoever asked for the page. `ApiError::internal` logs
     // the cause server-side and returns an opaque 500.
     ApiError::internal(err.to_string())
+}
+
+#[cfg(test)]
+mod version_tests {
+    /// The hero badge's version must equal the `umbral` version this site actually
+    /// depends on. Without this, `UMBRAL_VERSION` is just another literal waiting to go
+    /// stale — which is exactly how the badge came to read `v0.1 preview` (gaps3 #69).
+    #[test]
+    fn umbral_version_matches_the_pinned_dependency() {
+        let manifest = include_str!("../../../Cargo.toml");
+        let pinned = manifest
+            .lines()
+            .find_map(|l| {
+                let l = l.trim();
+                let rest = l.strip_prefix("umbral")?.trim_start();
+                let rest = rest.strip_prefix('=')?.trim();
+                rest.strip_prefix('"')?.split('"').next()
+            })
+            .expect("umbral_website/Cargo.toml must pin an `umbral` version");
+
+        assert_eq!(
+            super::UMBRAL_VERSION,
+            pinned,
+            "the hero badge says umbral v{} but Cargo.toml depends on {pinned}. Bump \
+             UMBRAL_VERSION (or the dependency) so the site stops advertising a version \
+             it does not run.",
+            super::UMBRAL_VERSION
+        );
+    }
 }

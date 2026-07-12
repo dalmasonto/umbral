@@ -241,7 +241,7 @@ umbral-rest  = "0.1"
 acme-graphql = "0.3"   # a community plugin, same contract
 ```
 
-That's the entire pitch: a productive, batteries-included app framework where no capability is privileged, and the one you want to replace is always replaceable.
+That's the entire pitch: a productive, batteries-included web framework where no capability is privileged, and the one you want to replace is always replaceable.
 "#,
     },
     Seed {
