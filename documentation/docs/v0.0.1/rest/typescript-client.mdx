@@ -33,6 +33,29 @@ That writes two files:
 </script>
 ```
 
+### Using it from TypeScript
+
+You just import it — you never reference the `.js` yourself. TypeScript **never reads `client.js`**; it finds `client.d.ts` sitting beside it and takes the types from there, while your bundler resolves `client.js` for the code. It's the same mechanism every npm package uses.
+
+```ts
+import { Umbral, UmbralError, type Post } from "./api/client";
+//       ^^^^^^ value (client.js at runtime)      ^^^^ type (client.d.ts)
+
+const api = new Umbral("https://api.example.com", { token });
+const page = await api.from("post").filter({ title__contains: "x" }).page(1).list();
+page.results;   // Post[] — fully typed
+```
+
+| Your `moduleResolution` | Import as |
+|---|---|
+| `bundler` (Vite, Next, esbuild) | `"./api/client"` |
+| `node` (webpack, CRA, older tsconfig) | `"./api/client"` |
+| `nodenext` (native ESM) | `"./api/client.js"` |
+
+<Callout type="info">
+  **`allowJs` is not required.** It's a common assumption that importing a `.js` file needs it — it doesn't, because TypeScript reads the `.d.ts`, not the JavaScript. This type-checks with `allowJs: false` (the default). Under native ESM (`nodenext`) write the `.js` extension, as ESM requires for every import; TypeScript maps `client.js` to `client.d.ts` for you.
+</Callout>
+
 ## Generate and use
 
 <Steps>
