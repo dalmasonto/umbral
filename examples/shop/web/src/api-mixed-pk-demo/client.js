@@ -69,16 +69,16 @@ export class Umbral {
   from(table) { return new Query(this, table); }
 
   /** Retrieve one row by primary key. */
-  get(table, id) { return this._request("GET", `/api/${table}/${id}/`); }
+  get(table, id) { return this._request("GET", `/api/${table}/${id}`); }
 
   /** Create a row. */
   create(table, data) { return this._request("POST", `/api/${table}/`, data); }
 
   /** Partially update a row (PATCH). */
-  update(table, id, data) { return this._request("PATCH", `/api/${table}/${id}/`, data); }
+  update(table, id, data) { return this._request("PATCH", `/api/${table}/${id}`, data); }
 
   /** Delete a row by primary key. */
-  async delete(table, id) { await this._request("DELETE", `/api/${table}/${id}/`); }
+  async delete(table, id) { await this._request("DELETE", `/api/${table}/${id}`); }
 
   /** Subscribe to `created` / `updated` / `deleted` for a model.
    *

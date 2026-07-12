@@ -347,3 +347,25 @@ fn js_is_a_self_contained_es_module() {
         "client.js must be plain JS — no TypeScript annotations leaked in; got:\n{j}",
     );
 }
+
+/// The REST detail route is `{base}/{table}/{id}` with **no** trailing slash and
+/// no trailing-slash mirror (`umbral-rest/src/lib.rs:1921`) — unlike the list
+/// route (`{base}/{table}/`) and custom actions, which do mirror. The client
+/// emitted `/{id}/` and so 404'd on every get/update/delete against a real API.
+#[test]
+fn detail_urls_have_no_trailing_slash() {
+    let j = js();
+    for method in [
+        r#"get(table, id) { return this._request("GET", `/api/${table}/${id}`); }"#,
+        r#"update(table, id, data) { return this._request("PATCH", `/api/${table}/${id}`, data); }"#,
+    ] {
+        assert_has(&j, method);
+    }
+    assert!(
+        !j.contains("${id}/`"),
+        "a detail URL must not end in a slash — the REST detail route does not \
+         serve one and the request 404s; got:\n{j}",
+    );
+    // The LIST route, by contrast, DOES want its trailing slash.
+    assert_has(&j, "`/api/${this.table}/`");
+}
