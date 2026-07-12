@@ -137,6 +137,32 @@ pub trait Storage: Send + Sync {
         bytes: &[u8],
     ) -> Result<StoredFile, StorageError>;
 
+    /// Persist `bytes` at an **exact** key, rather than minting a new one.
+    ///
+    /// [`store`](Storage::store) generates a fresh collision-resistant key from
+    /// the filename, which is right for a user upload — you never want two users'
+    /// `avatar.png` to collide. But a *derived* object needs to land at a key the
+    /// caller computes: an image variant lives at `<original>__thumb.png` so its
+    /// URL is a pure function of the original's, with no extra column and no
+    /// second lookup.
+    ///
+    /// The default returns [`StorageError::Unsupported`] — additive, so an
+    /// existing backend keeps compiling; it just can't host derived objects until
+    /// it implements this. Overwrites an existing object at `key`: the caller
+    /// chose the key, so a re-run regenerating a variant is idempotent, not a
+    /// collision.
+    async fn store_at(
+        &self,
+        key: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        let _ = (key, content_type, bytes);
+        Err(StorageError::Unsupported(
+            "this storage backend cannot write at an exact key (store_at)".to_string(),
+        ))
+    }
+
     /// Read back the bytes stored under `key`.
     ///
     /// Returns [`StorageError::NotFound`] if no object exists for `key`.

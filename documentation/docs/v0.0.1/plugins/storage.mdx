@@ -686,3 +686,43 @@ StoragePlugin::default()
 Enforcement is a **storage decorator**, the same shape as the size cap — so the admin, form handling, REST, and any upload route you write yourself all inherit it, *including routes added after you set the policy*. A check in a handler only ever covers the handlers that existed the day it was written.
 
 `accept_images()` deliberately **excludes SVG**. An SVG is a script-execution vector, not a picture; an image allow-list shouldn't invite one in. (Active content that arrives some other way is still defanged on write — see above.)
+
+
+## Thumbnails and resizing
+
+Behind the `images` cargo feature, so an app with no user-uploaded images never compiles a codec:
+
+```toml
+umbral-storage = { version = "0.0.6", features = ["images"] }
+```
+
+```rust
+use umbral_storage::{Thumbnail, thumbnails, variant_key};
+
+static SIZES: &[Thumbnail] = &[
+    Thumbnail::new("thumb", 200, 200),
+    Thumbnail::new("medium", 800, 800),
+];
+
+StoragePlugin::default()
+    .media("/media", fs)
+    .accept_images()
+    .on_upload(thumbnails(SIZES))
+```
+
+Every image upload now gets its variants written automatically, at a **derived key**:
+
+```text
+original :  media/8f3a…-avatar.png
+thumb    :  media/8f3a…-avatar__thumb.png
+```
+
+A variant's key is a *pure function* of the original's — `variant_key(&file.key, "thumb")` — so a template builds a thumbnail URL with **no extra column, no join, and no second lookup**.
+
+<Callout type="info">
+  **It never upscales.** A 40×40 avatar asked for a 200×200 thumbnail stays 40×40: enlarging it invents detail that was never there and costs bytes to say nothing. The size is a **bounding box** the image is fitted *within* — aspect ratio is always preserved, never stretched to a shape.
+</Callout>
+
+Non-image uploads pass straight through: a PDF in the same bucket isn't an error, it's just not a thing to thumbnail. Decoding runs on a blocking thread (it's CPU-bound and would otherwise stall unrelated requests), bounded by `UMBRAL_MEDIA_PROCESSING_CONCURRENCY`.
+
+Variants are written with `Storage::store_at` — an exact-key write, as opposed to `store`, which mints a fresh UUID key (right for a user upload, where two users' `avatar.png` must not collide; wrong for a derived object whose key you computed). They're deliberately **not** recorded as `media_file` rows: a thumbnail isn't a second upload, and giving it a row would double every upload in the admin and let orphan cleanup delete a variant out from under its original.

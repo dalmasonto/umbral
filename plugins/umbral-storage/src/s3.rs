@@ -382,6 +382,23 @@ impl Storage for S3Storage {
         })
     }
 
+    /// Write at an exact key — what image variants need, so a variant's URL
+    /// stays a pure function of the original's. Without this, thumbnails would
+    /// silently not work on S3 while working locally: the worst kind of bug.
+    async fn store_at(
+        &self,
+        key: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        self.put_object(key, content_type, bytes.to_vec()).await?;
+        Ok(StoredFile {
+            url: self.url(key),
+            key: key.to_string(),
+            size: bytes.len() as u64,
+        })
+    }
+
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         let object_key = Self::object_key(&self.prefix, key);
         let bucket = self.bucket.clone();

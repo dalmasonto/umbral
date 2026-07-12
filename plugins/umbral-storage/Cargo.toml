@@ -16,8 +16,15 @@ default = []
 # `rust-s3` only when enabled, so a local-only app never compiles the AWS
 # client. Off by default — matches umbral-static's old `s3` feature.
 s3 = ["dep:rust-s3", "dep:futures-executor"]
+# Built-in image processing (thumbnails / resize). Pulls in the `image` crate
+# only when enabled, so an app with no user-uploaded images never compiles a
+# codec. Off by default (gaps3 #50).
+images = ["dep:image"]
 
 [dependencies]
+# Optional: only compiled with the `images` feature. Default features off — we
+# want the common web codecs, not every format the crate can decode.
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 umbral = { path = "../../crates/umbral", version = "0.0.6" }
 # Optional S3 backend (rust-s3). `blocking` so the synchronous collect path
 # can upload without an async runtime; default features off to keep the dep
@@ -63,6 +70,7 @@ clap = "4"
 async-trait = "0.1"
 
 [dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tempfile = "3"
 include_dir = "0.7"

@@ -78,6 +78,11 @@ pub use media::{
 };
 #[doc(hidden)]
 pub use media::{IMAGE_TYPES, sniff_content_type};
+
+#[cfg(feature = "images")]
+pub mod images;
+#[cfg(feature = "images")]
+pub use images::{Thumbnail, thumbnails, variant_key};
 #[cfg(feature = "s3")]
 pub use s3::{S3Storage, S3StorageBuilder};
 // Re-export the core Storage trait through this crate for ergonomic

@@ -459,6 +459,24 @@ impl Storage for FsStorage {
         })
     }
 
+    async fn store_at(
+        &self,
+        key: &str,
+        _content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        let path = self.path_for(key);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(&path, bytes).await?;
+        Ok(StoredFile {
+            key: key.to_string(),
+            url: self.url(key),
+            size: bytes.len() as u64,
+        })
+    }
+
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         match tokio::fs::read(self.path_for(key)).await {
             Ok(bytes) => Ok(bytes),
@@ -651,6 +669,21 @@ impl Storage for SizeLimitedStorage {
         }
     }
 
+    async fn store_at(
+        &self,
+        key: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        if bytes.len() as u64 > self.max_size {
+            return Err(StorageError::TooLarge {
+                limit: self.max_size,
+                actual: bytes.len() as u64,
+            });
+        }
+        self.inner.store_at(key, content_type, bytes).await
+    }
+
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
         self.inner.retrieve(key).await
     }
@@ -706,6 +739,20 @@ impl Storage for MediaTracking {
             .await?;
         record_tracking_row(filename, content_type, &stored).await;
         Ok(stored)
+    }
+
+    /// Derived objects (image variants) are written straight through and are
+    /// deliberately NOT recorded as `media_file` rows. A thumbnail is not a
+    /// second upload: giving it its own row would double every upload in the
+    /// admin, double the storage accounting, and make orphan cleanup delete a
+    /// variant out from under the original it belongs to.
+    async fn store_at(
+        &self,
+        key: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        self.inner.store_at(key, content_type, bytes).await
     }
 
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
@@ -1235,6 +1282,16 @@ impl Storage for TypeLimitedStorage {
     ) -> Result<StoredFile, StorageError> {
         self.check(content_type, bytes)?;
         self.inner.store(filename, content_type, bytes).await
+    }
+
+    async fn store_at(
+        &self,
+        key: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        self.check(content_type, bytes)?;
+        self.inner.store_at(key, content_type, bytes).await
     }
 
     async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
