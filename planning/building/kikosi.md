@@ -105,6 +105,12 @@ replacing Kikosi's hand-rolled `notify_change` + client `switch`.
 
 ## 3. Multi-tenancy as a posture, not a pile of parts
 
+**RESOLVED (2026-07-12) — this was the wrong tool; the real gap was smaller and is now closed.** Row-level tenant scoping was designed, then deliberately **not built**. The consumer's actual flow: *"I'm in web3clubs FC, later I join another club — same account, and I can see my clubs."* One user, many clubs, joined like groups. **That is not multi-tenancy.** Tenancy means isolated customers who must never see each other, and both tenancy tools actively break the flow: schema-per-tenant (already shipped in `umbral-tenants`) would scatter one account across schemas and make "my clubs" a cross-schema union; row-level auto-scoping pins every query to *one* tenant, which is exactly what makes belonging to two clubs impossible. The correct shape is ordinary modelling — a `Club` model, a `Membership` join model, plain FKs. No framework feature needed.
+
+The real risk in that design is **authorization**, not a forgotten `WHERE club_id`: an endpoint that fails to check "is the caller a member of *this* club". `ResourceConfig::scope` was the right hook but could not express it — `ScopeDecision::Restrict` is equality-only and ANDed (`club_id = 1 AND club_id = 2` matches nothing), and the hook was **sync**, so it could not run the membership query at all. So: `ScopeDecision::RestrictIn(col, values)` (`col IN (…)`, with **empty ⇒ DenyAll**, never "unconstrained" — "you joined nothing" must not become "you see everything") plus `ResourceConfig::scope_async` for the DB-backed lookup. Proven by `plugins/umbral-rest/tests/membership_scope.rs`: a user in two clubs sees both; a non-member gets **404, not 403** (a 403 would confirm the row exists); a user who joined nothing sees nothing. Full write-up: `docs/specs/row-level-tenancy.md`.
+
+Build row-level scoping only if a real driver appears — thousands of tenants (Postgres schema catalogs suffer past ~1k), or cross-tenant analytics in one query. Neither is true today.
+
 Kikosi's own roadmap is single-club → multi-club SaaS (a `Club` model,
 multi-club membership; see the app's `multi-tenancy-direction` note). umbral ships
 the *parts* — `umbral-rls` (Postgres RLS) and `umbral-permissions` — but safe

@@ -1,6 +1,25 @@
 # Row-level tenant scoping (kikosi #3 / gaps3 #38 item 3)
 
-Status: **design approved, Phase 1 landing.** Author: 2026-07-12.
+Status: **NOT BUILT — deliberately. Phase 1 landed; Phases 2–3 abandoned.** Author: 2026-07-12.
+
+## Why this was not built (read this first)
+
+The consumer that motivated it (Kikosi / web3clubs_fc) does **not** have a tenancy problem. Its real flow: *"I'm in web3clubs FC, and later I join another club — same account, and I can see my clubs."* One user, many clubs, joined like groups.
+
+That is not multi-tenancy. Tenancy means **isolated customers who must never see each other's data**. Both tenancy tools actively *break* the flow above:
+
+- **Schema-per-tenant** (already shipped, `umbral-tenants`) would put each club's rows in a separate Postgres schema. A single account would have to exist in each, and "show me my clubs" becomes a cross-schema union.
+- **Row-level auto-scoping** (this spec) pins every query to *one* tenant — which is precisely what makes "I belong to two clubs" impossible.
+
+The correct shape is ordinary modelling: a `Club` model, a `Membership` model (`user` FK + `club` FK), plain foreign keys. **No framework feature required.**
+
+The risk in that design is not a forgotten `WHERE club_id` — it is **authorization**: an endpoint that fails to check "is the caller a member of *this* club". That is what the framework should make hard to get wrong, and `umbral-rest`'s `ResourceConfig::scope` is the right hook for it — except it could not express the membership case. **That** became the actual work; see `docs/specs/membership-scoping.md`.
+
+Build row-level scoping only if a real driver appears: **thousands** of tenants (Postgres schema catalogs get unhappy past ~1k), or a need for cross-tenant analytics in one query. Neither is true today. Everything below is preserved as the record of what it would take.
+
+---
+
+## Original design (superseded)
 
 ## What this is, and what it is *not*
 

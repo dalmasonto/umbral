@@ -544,11 +544,11 @@ impl RestPlugin {
     /// turns the [`ScopeDecision`] into an [`ObjectScopeOutcome`] the CRUD
     /// handlers apply: `Unconstrained` (no hook / `All`), a `Filter` condition
     /// ANDed into every query, or `DenyAll` (list → empty, detail → 404).
-    fn object_scope(&self, table: &str, identity: Option<&Identity>) -> ObjectScopeOutcome {
+    async fn object_scope(&self, table: &str, identity: Option<&Identity>) -> ObjectScopeOutcome {
         let Some(hook) = self.object_scopes.get(table) else {
             return ObjectScopeOutcome::Unconstrained;
         };
-        match hook(identity) {
+        match hook(identity.cloned()).await {
             crate::resource::ScopeDecision::All => ObjectScopeOutcome::Unconstrained,
             crate::resource::ScopeDecision::None => ObjectScopeOutcome::DenyAll,
             crate::resource::ScopeDecision::Restrict(pairs) => {
@@ -559,6 +559,19 @@ impl RestPlugin {
                 for (col, val) in pairs {
                     cond = cond.add(sea_query::Expr::col(sea_query::Alias::new(col)).eq(val));
                 }
+                ObjectScopeOutcome::Filter(cond)
+            }
+            crate::resource::ScopeDecision::RestrictIn(col, values) => {
+                // Empty membership → NO rows, never all rows. A caller who
+                // belongs to no club must see nothing; defaulting to
+                // `Unconstrained` here (as the empty-`Restrict` arm above does,
+                // where an empty pair list means "the hook added no constraint")
+                // would turn "you joined nothing" into "you see everything".
+                if values.is_empty() {
+                    return ObjectScopeOutcome::DenyAll;
+                }
+                let cond = sea_query::Condition::all()
+                    .add(sea_query::Expr::col(sea_query::Alias::new(col)).is_in(values));
                 ObjectScopeOutcome::Filter(cond)
             }
         }
@@ -2587,7 +2600,7 @@ async fn list(
     // in-scope rows are returned. `DenyAll` becomes an always-false predicate,
     // so the normal pagination/response path yields an empty page (no special
     // early-return, no oracle).
-    match cfg.object_scope(&table, identity.as_ref()) {
+    match cfg.object_scope(&table, identity.as_ref()).await {
         ObjectScopeOutcome::Unconstrained => {}
         ObjectScopeOutcome::Filter(cond) => filter = filter.and(cond),
         ObjectScopeOutcome::DenyAll => {
@@ -2777,7 +2790,7 @@ async fn retrieve(
     // audit_2 H1/P2: object-level scope. A DenyAll (e.g. anonymous on an
     // owner-scoped resource) is a 404 — never reveal the row exists; a Filter
     // is ANDed into the by-id lookup so a non-owned row is Not Found.
-    let scope_filter = match cfg.object_scope(&table, identity.as_ref()) {
+    let scope_filter = match cfg.object_scope(&table, identity.as_ref()).await {
         ObjectScopeOutcome::DenyAll => {
             return Err(ApiError::NotFound(format!(
                 "no row with {} = {} in {}",
@@ -3736,7 +3749,7 @@ async fn update(
     // audit_2 H1/P2: object-level scope. DenyAll → 404; a Filter is ANDed into
     // the existence check, the UPDATE's WHERE, and the read-back, so a caller
     // can't update a row outside their scope by id (the row is Not Found).
-    let scope_cond = match cfg.object_scope(&table, identity.as_ref()) {
+    let scope_cond = match cfg.object_scope(&table, identity.as_ref()).await {
         ObjectScopeOutcome::DenyAll => {
             return Err(ApiError::NotFound(format!(
                 "no row with {pk_name} = {id} in {table}"
@@ -3831,7 +3844,7 @@ async fn destroy(
     // audit_2 H1/P2: scope the DELETE. DenyAll → 404; a Filter is ANDed into
     // the WHERE, so deleting an out-of-scope row affects 0 rows → 404 (a caller
     // can't delete another owner's/tenant's row by id).
-    let scope_cond = match cfg.object_scope(&table, identity.as_ref()) {
+    let scope_cond = match cfg.object_scope(&table, identity.as_ref()).await {
         ObjectScopeOutcome::DenyAll => {
             return Err(ApiError::NotFound(format!(
                 "no row with {} = {} in {}",

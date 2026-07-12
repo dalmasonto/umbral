@@ -221,6 +221,17 @@ pub enum ScopeDecision {
     /// Restrict to rows where every `(column, value)` equality holds (ANDed).
     /// The canonical owner scope is `vec![("owner_id".into(), id.user_id.clone())]`.
     Restrict(Vec<(String, String)>),
+    /// Restrict to rows whose `column` is one of `values` — `column IN (…)`.
+    ///
+    /// The membership case [`Self::Restrict`] cannot express: a caller who
+    /// belongs to *several* clubs/teams/workspaces sees rows from all of them.
+    /// `Restrict` is equality-only and ANDed, so `club_id = 1 AND club_id = 2`
+    /// matches nothing.
+    ///
+    /// **An empty `values` means no rows** — the same as [`Self::None`], never
+    /// "all rows". A user who belongs to nothing must see nothing; the failure
+    /// mode of the opposite default is a data leak.
+    RestrictIn(String, Vec<String>),
     /// No rows are in scope — e.g. an anonymous caller on an owner-scoped
     /// resource. List returns an empty page; retrieve/update/destroy 404
     /// (a non-owned row is indistinguishable from a missing one — no oracle).
@@ -230,7 +241,12 @@ pub enum ScopeDecision {
 /// A per-request row-scoping hook: maps the caller's [`Identity`] (or `None`
 /// for anonymous) to a [`ScopeDecision`]. Installed via
 /// [`ResourceConfig::scope`] / [`ResourceConfig::owned_by`].
-pub(crate) type ObjectScopeFn = Arc<dyn Fn(Option<&Identity>) -> ScopeDecision + Send + Sync>;
+/// Async because the interesting scopes need a database round-trip: "the rows
+/// belonging to any club this user is a member of" is a query, not a field on
+/// the `Identity`. A sync hook can express `owner_id = me` and nothing more.
+pub(crate) type ObjectScopeFn = Arc<
+    dyn Fn(Option<Identity>) -> Pin<Box<dyn Future<Output = ScopeDecision> + Send>> + Send + Sync,
+>;
 
 /// Bundled REST customization for one table. Build via
 /// [`Self::new`] + chainable methods; register with
@@ -356,11 +372,56 @@ impl ResourceConfig {
     ///     None => ScopeDecision::None,                            // anonymous see none
     /// });
     /// ```
-    pub fn scope<F>(mut self, f: F) -> Self
+    pub fn scope<F>(self, f: F) -> Self
     where
         F: Fn(Option<&Identity>) -> ScopeDecision + Send + Sync + 'static,
     {
-        self.scope = Some(Arc::new(f));
+        // The sync hook is the async one with a ready future — one code path.
+        self.scope_async(move |identity| {
+            let decision = f(identity.as_ref());
+            std::future::ready(decision)
+        })
+    }
+
+    /// [`Self::scope`] for a decision that needs to hit the database.
+    ///
+    /// This is what the membership pattern requires — "the rows belonging to any
+    /// club/team/workspace this user has joined" is a query, not a field on the
+    /// [`Identity`], so a sync hook cannot express it. Pair it with
+    /// [`ScopeDecision::RestrictIn`]:
+    ///
+    /// ```ignore
+    /// use umbral_rest::{ResourceConfig, ScopeDecision};
+    ///
+    /// ResourceConfig::new("fixture").scope_async(|identity| async move {
+    ///     let Some(id) = identity else { return ScopeDecision::None };  // anonymous: nothing
+    ///     if id.is_superuser { return ScopeDecision::All; }
+    ///
+    ///     // Which clubs has this user joined?
+    ///     let clubs: Vec<Membership> = Membership::objects()
+    ///         .filter(membership::USER.eq(&id.user_id))
+    ///         .fetch()
+    ///         .await
+    ///         .unwrap_or_default();
+    ///
+    ///     // Rows in ANY of them. An empty list means no rows — never all rows.
+    ///     ScopeDecision::RestrictIn(
+    ///         "club_id".into(),
+    ///         clubs.iter().map(|m| m.club.to_string()).collect(),
+    ///     )
+    /// });
+    /// ```
+    ///
+    /// The hook runs once per request, before the query it constrains. Keep it
+    /// cheap — it is on the read path of every list and detail call — and prefer
+    /// failing closed (`ScopeDecision::None`) if the lookup errors, rather than
+    /// falling back to [`ScopeDecision::All`].
+    pub fn scope_async<F, Fut>(mut self, f: F) -> Self
+    where
+        F: Fn(Option<Identity>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ScopeDecision> + Send + 'static,
+    {
+        self.scope = Some(Arc::new(move |identity| Box::pin(f(identity))));
         self
     }
 
