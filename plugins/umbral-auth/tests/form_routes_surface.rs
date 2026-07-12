@@ -1,23 +1,19 @@
-//! TDD spec — server-rendered auth PAGES (gaps3 #63). Currently RED, and `#[ignore]`d.
+//! `AuthPlugin::with_form_routes()` — the POST surface for server-rendered auth.
 //!
-//! Rescued from an abandoned agent worktree during the 2026-07-12 branch cleanup: it was
-//! an untracked file that existed in no branch and no commit, and deleting the worktree
-//! would have destroyed it.
+//! The framework owns the half that is dangerous to get wrong: `POST /auth/login`,
+//! `/auth/signup` and `/auth/logout`, with the password hashing, the throttle, the
+//! enumeration-safe error messages, the session cookie, the flash message, and the
+//! `?redirect=` open-redirect guard.
 //!
-//! It does not pass, and it is not meant to yet. `AuthPlugin::with_form_routes()` mounts
-//! the form **POST** handlers (`POST /auth/login`, `POST /auth/signup`) but serves no
-//! **GET** page — `GET /auth/login` is a 405 — so every app still hand-writes its own
-//! login and signup page handlers plus their templates. (The original test called
-//! `with_template_pages()`, a method that never existed; `with_form_routes` is what
-//! actually shipped, and it only covers half the surface.)
+//! **It does not serve the login PAGE, and that is deliberate.** Rendering `GET
+//! /auth/login` would mean choosing your markup, your CSS and your layout — the one part
+//! of auth that is purely yours. You write a normal handler and a normal template; you
+//! point its `<form>` at the endpoints below. See `auth/login-and-signup-pages.mdx`.
 //!
-//! Un-`#[ignore]` this the moment the plugin serves the pages. It IS the acceptance
-//! criterion — that is why it is kept rather than deleted.
-//!
-//! Boots a real App with `AuthPlugin::with_template_pages()` and drives the
-//! GET /auth/login and POST /auth/signup routes via `tower::ServiceExt::oneshot`.
-//! CSRF is not active in the test app (no SecurityPlugin), so plain form-encoded
-//! POSTs work without tokens.
+//! (This file began life as a TDD spec for an `AuthPlugin::with_template_pages()` that
+//! would have served those pages. It was rescued from an abandoned worktree, and then the
+//! feature was rejected on exactly the reasoning above — so the test was rewritten to
+//! cover the surface that DOES exist, which is the half worth testing.)
 
 use axum::Router;
 use tokio::sync::OnceCell;
@@ -148,11 +144,10 @@ async fn post_form(
 }
 
 #[tokio::test]
-#[ignore = "gaps3 #63: AuthPlugin serves the form POSTs but not the GET pages — this is the spec for that feature, not a regression"]
-async fn template_pages_render_and_signup_redirects() {
+async fn signup_and_login_post_endpoints_work_without_the_framework_serving_a_page() {
     let router = boot_template_app().await;
 
-    // GET /auth/login → 200, body contains the username input.
+    // There is no GET page, on purpose — the plugin mounts POST handlers only.
     use tower::ServiceExt;
     let resp = router
         .clone()
@@ -165,13 +160,11 @@ async fn template_pages_render_and_signup_redirects() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
-        .await
-        .unwrap();
-    assert!(
-        String::from_utf8_lossy(&body).contains("name=\"username\""),
-        "login form should contain username input"
+    assert_eq!(
+        resp.status(),
+        axum::http::StatusCode::METHOD_NOT_ALLOWED,
+        "the plugin must NOT serve the login page — the app owns its own markup. \
+         If this ever becomes a 200, the framework has started deciding your HTML."
     );
 
     // POST /auth/signup creates the user and redirects (303/302).

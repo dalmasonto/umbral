@@ -1,0 +1,82 @@
+---
+title: Login & signup pages
+description: The framework handles the POST; you design the page. How to wire your own login/signup templates to the auth endpoints.
+sidebar_position: 3
+icon: log-in
+tags: [auth, forms, templates]
+---
+
+# Login & signup pages
+
+umbral gives you the auth endpoints. **You design the pages.**
+
+That split is deliberate. Everything dangerous about auth lives in the `POST` — password hashing, throttling, enumeration-safe errors, the session cookie, the redirect guard — and none of it should be yours to re-derive. Everything *visual* about auth is yours: your markup, your CSS, your layout, your copy. A framework that rendered `GET /auth/login` for you would have picked your HTML, and you'd immediately be fighting it.
+
+## Turn on the endpoints
+
+```rust
+AuthPlugin::<AuthUser>::default().with_form_routes()
+```
+
+That mounts three POST handlers under `/auth` (use `with_form_routes_at("/accounts")` for a different prefix):
+
+| Endpoint | What it does |
+|---|---|
+| `POST /auth/login` | Verifies credentials, creates the session, sets the cookie |
+| `POST /auth/signup` | Validates + creates the user, logs them in |
+| `POST /auth/logout` | Destroys the session |
+
+Each one redirects on success, sets a flash message on failure, and honours `?redirect=<path>` — with an open-redirect guard, so an absolute URL to another host is refused.
+
+<Callout type="info">
+  There is **no `GET /auth/login`**. Asking for one returns a `405`. That isn't a gap — it's the line between what the framework owns and what you do.
+</Callout>
+
+## Write the page
+
+A login page is an ordinary handler and an ordinary template:
+
+```rust
+async fn login_page() -> Result<Html<String>, ApiError> {
+    let body = umbral::templates::render("login.html", &context!())?;
+    Ok(Html(body))
+}
+
+// in main.rs
+Routes::new().get("/login", login_page)
+```
+
+```html
+<!-- templates/login.html -->
+{% extends "base.html" %}
+{% block content %}
+  {% for msg in flash %}
+    <p class="error">{{ msg.body }}</p>
+  {% endfor %}
+
+  <form method="post" action="/auth/login?redirect=/dashboard">
+    {{ csrf_input | safe }}
+    <input name="username" autocomplete="username" required>
+    <input name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Log in</button>
+  </form>
+{% endblock %}
+```
+
+Signup is the same shape, pointed at `/auth/signup` with a `username`, `email` and `password`.
+
+## The three things to get right
+
+**`{{ csrf_input | safe }}`** — the `SecurityPlugin` rejects a POST without it. It's a hidden input; render it inside every `<form>`.
+
+**`flash`** — a failed login redirects back with a message in the session. Loop over `flash` in your template or the user is bounced back to the form with no idea why.
+
+**`?redirect=`** — where to go on success. It only accepts site-relative paths; an absolute URL to another host is refused, so this can't be turned into an open-redirect.
+
+## Why not a `GET` page?
+
+Because we'd be choosing your markup. The moment the framework renders the login form, you inherit its class names, its layout, its copy, and its idea of where the "forgot password" link goes — and your first task is to override all of it.
+
+The endpoints are the part where a mistake is a **vulnerability**. The page is the part where a mistake is a **preference**. Only one of those belongs to us.
+
+See also: [Auth gating](../web/auth-gating) for protecting the pages once someone is logged in.
