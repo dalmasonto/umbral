@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-tasks-v0.0.6...umbral-tasks-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(tasks)* admin model for the schedules (gaps3 #49)
+- *(tasks)* type-safe enqueue — #[task] generates a typed handle (gaps3 #48)
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-tasks-v0.0.5...umbral-tasks-v0.0.6) - 2026-07-07
 
 ### Added

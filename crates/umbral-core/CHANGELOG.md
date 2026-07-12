@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.6...umbral-core-v0.0.7) - 2026-07-12
+
+### Added
+
+- *(typegen)* #[derive(Dto)] — custom response types in the client (gaps3 #29.5)
+- *(rest)* ResourceConfig::under — parent-scoped sub-resources (gaps3 #29.2)
+- *(web)* Valid<T> + #[derive(Validate)] for request bodies (gaps3 #29.4)
+- *(orm)* database views, regular and materialized (features #73)
+- *(orm)* register_cleaner — custom per-field clean/validate hooks (features #83)
+- *(orm)* order by an annotation, and get annotation rows typed (gaps3 #29)
+- *(orm)* AppBuilder::auto_models() — models register themselves (gaps3 #46)
+- *(storage)* built-in thumbnails behind the `images` feature (gaps3 #50)
+- *(storage)* upload content-type allow-list (gaps3 #51)
+- *(orm)* model-level audit trail — #[umbral(audited)] (gaps3 #54)
+- *(orm)* auto_user_add / auto_user — stamp who wrote the row (gaps3 #55)
+- *(rest)* generate a typed TypeScript query client (umbral gen-client)
+- *(app)* drain readiness on shutdown for zero-downtime rollouts
+- *(health)* gate readiness on pending migrations
+- *(migrate)* emit help text as a Postgres column comment
+- *(orm)* generate TypeScript types from the model registry
+
+### Fixed
+
+- *(website)* umbral is a WEB framework, and the version badge is now data (gaps3 #69)
+- *(templates)* static() emitted &#x2f; instead of / — and it worked anyway (gaps3 #66)
+- *(settings)* `umbral startproject` emitted a project that would not compile (gaps3 #64)
+- *(website)* stop handing raw database errors to visitors (gaps3 #58, #62)
+- *(migrate)* a bad env prefix made `migrate` succeed against nothing (gaps3 #59/#60/#61)
+- *(permissions)* a UUID-keyed user was silently forbidden from everything (gaps3 #59)
+- *(examples)* the scaffold generated an information leak into every new app (gaps3 #57)
+- *(orm)* filter_eq_string fails CLOSED — a bad id no longer deletes the table (gaps3 #56)
+- *(orm)* #[umbral(trim, lowercase)] applies on every write path
+- *(orm)* create() and delete() now emit per-row signals (gaps3 #29)
+- *(orm)* soft delete now cascades (gaps3 #53)
+- *(orm)* reject DST-ambiguous local times instead of shifting them
+- *(app)* fire on_ready when the app is up, not when it is built
+- *(app)* order plugins by the foreign keys their models declare
+
+### Other
+
+- *(orm)* one implicit-filter seam per path, before tenant scoping
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.5...umbral-core-v0.0.6) - 2026-07-07
 
 ### Added

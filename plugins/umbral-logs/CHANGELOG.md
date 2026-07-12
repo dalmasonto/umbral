@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-logs-v0.0.6...umbral-logs-v0.0.7) - 2026-07-12
+
+### Fixed
+
+- *(migrate)* a bad env prefix made `migrate` succeed against nothing (gaps3 #59/#60/#61)
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-logs-v0.0.5...umbral-logs-v0.0.6) - 2026-07-07
 
 ### Added
