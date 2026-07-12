@@ -1,0 +1,79 @@
+{# Base layout. Every page extends this.
+
+   The stylesheet is a COMPILED Tailwind bundle served from ./static — not the
+   `cdn.tailwindcss.com` play script. That script is versionless (so it can carry no
+   meaningful SRI hash), pulls a third party into every page load, and is the first thing
+   a `default-src 'self'` Content-Security-Policy blocks. Rebuild it after editing
+   templates:
+
+       cd styles && npm install && npm run build
+
+   `{{ static(...) }}` rather than a hardcoded /static path: in production it resolves
+   through the hashed-asset manifest, so you get cache-busting for free. #}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}__PROJECT__{% endblock %}</title>
+  <link rel="stylesheet" href="{{ static('css/app.css') }}">
+</head>
+<body class="flex min-h-screen flex-col bg-paper text-body antialiased">
+
+  <header class="sticky top-0 z-40 border-b border-hairline bg-paper/85 backdrop-blur">
+    <nav class="mx-auto flex h-16 max-w-6xl items-center gap-8 px-5">
+      <a href="/" class="flex shrink-0 items-center gap-2.5 font-semibold text-ink">
+        <span class="grid h-7 w-7 place-items-center rounded-md bg-accent text-[13px] font-bold text-white">__INITIAL__</span>
+        <span class="tracking-tight">__PROJECT__</span>
+      </a>
+
+      <div class="hidden items-center gap-6 text-sm sm:flex">
+        <a href="/" class="text-body transition-colors hover:text-ink">Home</a>
+        <a href="/dashboard" class="text-body transition-colors hover:text-ink">Dashboard</a>
+        <a href="/admin/" class="text-body transition-colors hover:text-ink">Admin</a>
+        <a href="/openapi/" class="text-body transition-colors hover:text-ink">API</a>
+      </div>
+
+      <a href="__DOCS__/getting-started/your-first-app" target="_blank" rel="noopener"
+         class="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-accent-line bg-accent-soft px-3 py-1.5 text-sm font-medium text-accent-2 transition-colors hover:bg-accent hover:text-white">
+        Docs
+        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+          <path d="M7 13L13 7M13 7H8M13 7v5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </a>
+    </nav>
+  </header>
+
+  {# Flash messages — set by the auth form routes and by `flash::add(...)`. Without this
+     loop a failed login bounces the user back to the form with no idea why. #}
+  {% if flash %}
+    <div class="mx-auto w-full max-w-6xl px-5 pt-6">
+      {% for msg in flash %}
+        <p class="mb-2 rounded-lg border border-hairline-2 bg-surface px-4 py-2.5 text-sm text-ink-2">{{ msg.body }}</p>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <main class="mx-auto w-full max-w-6xl flex-1 px-5 py-12">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="mt-auto border-t border-hairline bg-surface-3">
+    <div class="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-8 text-sm sm:flex-row sm:items-center sm:justify-between">
+      <p class="text-faint">
+        Built with
+        <a href="__DOCS__" target="_blank" rel="noopener" class="font-medium text-accent-2 hover:text-accent">umbral</a>
+        — batteries-included Rust.
+      </p>
+      <div class="flex flex-wrap gap-x-5 gap-y-2 text-faint">
+        <a href="__DOCS__/orm/models" target="_blank" rel="noopener" class="hover:text-ink">Models</a>
+        <a href="__DOCS__/migrations/managed-migrations" target="_blank" rel="noopener" class="hover:text-ink">Migrations</a>
+        <a href="__DOCS__/plugins/admin" target="_blank" rel="noopener" class="hover:text-ink">Admin</a>
+        <a href="__DOCS__/rest/pagination" target="_blank" rel="noopener" class="hover:text-ink">REST</a>
+        <a href="__DOCS__/plugins/the-plugin-trait" target="_blank" rel="noopener" class="hover:text-ink">Plugins</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

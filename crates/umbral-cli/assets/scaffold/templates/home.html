@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}__PROJECT__{% endblock %}
+
+{% block content %}
+
+  {# ---- Hero ---------------------------------------------------------- #}
+  <section class="max-w-2xl">
+    <p class="mb-3 inline-flex items-center gap-2 rounded-full border border-hairline-2 bg-surface px-3 py-1 text-xs font-medium text-muted">
+      <span class="h-1.5 w-1.5 rounded-full bg-ok"></span>
+      Server running
+    </p>
+    <h1 class="text-4xl font-bold tracking-tight text-ink sm:text-5xl">
+      __PROJECT__ is up.
+    </h1>
+    <p class="mt-4 text-lg leading-relaxed text-muted">
+      You have a database, migrations, an admin, a REST API and an OpenAPI browser —
+      wired and running. There are
+      <strong class="font-semibold text-ink">{{ post_count }}</strong>
+      published post{% if post_count != 1 %}s{% endif %}.
+    </p>
+
+    <div class="mt-7 flex flex-wrap items-center gap-3">
+      <a href="/admin/"
+         class="inline-flex items-center rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-accent-2">
+        Open the admin
+      </a>
+      <a href="__DOCS__/getting-started/your-first-app" target="_blank" rel="noopener"
+         class="inline-flex items-center rounded-lg border border-hairline-2 bg-surface px-4 py-2.5 text-sm font-semibold text-ink-2 transition-colors hover:border-accent-line hover:text-accent-2">
+        Build your first app →
+      </a>
+    </div>
+  </section>
+
+  {# ---- What is already wired ------------------------------------------ #}
+  <section class="mt-16">
+    <h2 class="text-xs font-semibold uppercase tracking-widest text-faint">What is already wired</h2>
+
+    <div class="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+
+      <div class="group rounded-xl border border-hairline bg-surface p-5 transition-all hover:-translate-y-0.5 hover:border-accent-line hover:shadow-sm">
+        <h3><a href="__DOCS__/orm/models" target="_blank" rel="noopener" class="flex items-center gap-1 font-semibold text-ink transition-colors group-hover:text-accent-2">ORM &amp; models <svg class="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 13L13 7M13 7H8M13 7v5" stroke-linecap="round" stroke-linejoin="round"/></svg></a></h3>
+        <p class="mt-1.5 text-sm leading-relaxed text-muted"><code class="whitespace-nowrap rounded border border-hairline-2 bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-ink-2">Post</code> is declared in <code class="whitespace-nowrap rounded border border-hairline-2 bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-ink-2">src/main.rs</code>. Change it, then run <code class="whitespace-nowrap rounded border border-hairline-2 bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-ink-2">makemigrations</code>.</p>
+      </div>
+
+      <div class="group rounded-xl border border-hairline bg-surface p-5 transition-all hover:-translate-y-0.5 hover:border-accent-line hover:shadow-sm">
+        <h3><a href="__DOCS__/migrations/managed-migrations" target="_blank" rel="noopener" class="flex items-center gap-1 font-semibold text-ink transition-colors group-hover:text-accent-2">Migrations <svg class="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 13L13 7M13 7H8M13 7v5" stroke-linecap="round" stroke-linejoin="round"/></svg></a></h3>
+        <p class="mt-1.5 text-sm leading-relaxed text-muted">Autodetected from your models. The declare → migrate → change → migrate loop is the whole product.</p>
+      </div>
+
+      <div class="group rounded-xl border border-hairline bg-surface p-5 transition-all hover:-translate-y-0.5 hover:border-accent-line hover:shadow-sm">
+        <h3><a href="__DOCS__/plugins/admin" target="_blank" rel="noopener" class="flex items-center gap-1 font-semibold text-ink transition-colors group-hover:text-accent-2">Admin <svg class="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 13L13 7M13 7H8M13 7v5" stroke-linecap="round" stroke-linejoin="round"/></svg></a></h3>
+        <p class="mt-1.5 text-sm leading-relaxed text-muted">CRUD for every registered model at <a href="/admin/" class="font-medium text-accent-2 underline-offset-2 hover:underline">/admin/</a>. Run <code class="whitespace-nowrap rounded border border-hairline-2 bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-ink-2">createsuperuser</code> to get in.</p>
+      </div>
+
+      <div class="group rounded-xl border border-hairline bg-surface p-5 transition-all hover:-translate-y-0.5 hover:border-accent-line hover:shadow-sm">
+        <h3><a href="__DOCS__/rest/pagination" target="_blank" rel="noopener" class="flex items-center gap-1 font-semibold text-ink transition-colors group-hover:text-accent-2">REST API <svg class="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 13L13 7M13 7H8M13 7v5" stroke-linecap="round" stroke-linejoin="round"/></svg></a></h3>
+        <p class="mt-1.5 text-sm leading-relaxed text-muted">JSON CRUD + filtering at <a href="/api/post" class="font-medium text-accent-2 underline-offset-2 hover:underline">/api/post</a>. Try <code class="whitespace-nowrap rounded border border-hairline-2 bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-ink-2">?published=true</code>.</p>
+      </div>
+
+      <div class="group rounded-xl border border-hairline bg-surface p-5 transition-all hover:-translate-y-0.5 hover:border-accent-line hover:shadow-sm">
+        <h3><a href="__DOCS__/auth/login-and-signup-pages" target="_blank" rel="noopener" class="flex items-center gap-1 font-semibold text-ink transition-colors group-hover:text-accent-2">Auth &amp; sessions <svg class="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 13L13 7M13 7H8M13 7v5" stroke-linecap="round" stroke-linejoin="round"/></svg></a></h3>
+        <p class="mt-1.5 text-sm leading-relaxed text-muted">Users, password hashing, sessions, CSRF. The endpoints are ours; <span class="text-ink-2">the pages are yours.</span></p>
+      </div>
+
+      <div class="group rounded-xl border border-hairline bg-surface p-5 transition-all hover:-translate-y-0.5 hover:border-accent-line hover:shadow-sm">
+        <h3><a href="__DOCS__/plugins/the-plugin-trait" target="_blank" rel="noopener" class="flex items-center gap-1 font-semibold text-ink transition-colors group-hover:text-accent-2">Plugins <svg class="h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 13L13 7M13 7H8M13 7v5" stroke-linecap="round" stroke-linejoin="round"/></svg></a></h3>
+        <p class="mt-1.5 text-sm leading-relaxed text-muted">Everything above is a plugin. So is the app you are about to write — <code class="whitespace-nowrap rounded border border-hairline-2 bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-ink-2">umbral startapp blog</code>.</p>
+      </div>
+
+    </div>
+  </section>
+
+  {# ---- Next ----------------------------------------------------------- #}
+  <section class="mt-16 overflow-hidden rounded-2xl border border-hairline bg-shade">
+    <div class="border-b border-shade-2 px-6 py-3">
+      <p class="font-mono text-xs text-shade-faint">next steps</p>
+    </div>
+    <div class="px-6 py-6">
+      <ol class="space-y-4 font-mono text-sm">
+        <li class="flex gap-4">
+          <span class="select-none text-shade-faint">1</span>
+          <div>
+            <p class="text-shade-ink">umbral startapp blog</p>
+            <p class="mt-0.5 font-sans text-xs text-shade-muted">Scaffold your first plugin.</p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="select-none text-shade-faint">2</span>
+          <div>
+            <p class="text-shade-ink">cargo run -- makemigrations &amp;&amp; cargo run -- migrate</p>
+            <p class="mt-0.5 font-sans text-xs text-shade-muted">Declare a model, then let the engine write the schema.</p>
+          </div>
+        </li>
+        <li class="flex gap-4">
+          <span class="select-none text-shade-faint">3</span>
+          <div>
+            <p class="text-shade-ink">cargo run -- createsuperuser</p>
+            <p class="mt-0.5 font-sans text-xs text-shade-muted">Then log in at /admin/.</p>
+          </div>
+        </li>
+      </ol>
+      <p class="mt-6 border-t border-shade-2 pt-5 text-xs text-shade-muted">
+        Editing templates? Rebuild the CSS with
+        <span class="font-mono text-shade-ink">cd styles &amp;&amp; npm install &amp;&amp; npm run build</span>.
+        Full guide:
+        <a href="__DOCS__/getting-started/your-first-app" target="_blank" rel="noopener"
+           class="font-medium text-accent-ghost hover:text-white">Your first app →</a>
+      </p>
+    </div>
+  </section>
+
+{% endblock %}

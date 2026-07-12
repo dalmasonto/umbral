@@ -254,16 +254,78 @@ fn scaffold_project_readme_first_run_is_bare_cargo_run() {
     );
 }
 
-// gap 20: base.html contains the Tailwind CDN link.
+// The scaffold ships a COMPILED Tailwind bundle, not the play CDN.
+//
+// This assertion is inverted from what it used to be. The old scaffold pulled
+// `cdn.tailwindcss.com` into every page: a versionless third-party script that can carry
+// no meaningful SRI hash and is the first thing a `default-src 'self'` CSP blocks — so a
+// project styled that way breaks the moment it is hardened for production. The generated
+// app now serves its own ./static/css/app.css.
 #[test]
-fn scaffold_project_base_html_has_tailwind_cdn() {
+fn scaffold_project_ships_a_compiled_bundle_not_the_tailwind_cdn() {
     let tmp = TempDir::new().unwrap();
     let report = scaffold_project("testapp", tmp.path(), None).unwrap();
     let base = fs::read_to_string(report.root.join("templates/base.html")).unwrap();
+
+    // The literal domain still appears in a template COMMENT explaining why it is not
+    // used — so assert on the thing that actually loads it, a <script src=...>.
     assert!(
-        base.contains("cdn.tailwindcss.com"),
-        "templates/base.html should include the Tailwind CDN link; got:\n{base}"
+        !base.contains("<script src=\"https://cdn.tailwindcss.com"),
+        "base.html must NOT pull the Tailwind play CDN; got:\n{base}"
     );
+    assert!(
+        base.contains("static('css/app.css')"),
+        "base.html should link the compiled bundle via static(); got:\n{base}"
+    );
+
+    // The bundle itself ships prebuilt, so a brand-new project renders correctly with no
+    // `npm install` at all.
+    let css = fs::read_to_string(report.root.join("static/css/app.css"))
+        .expect("static/css/app.css must be generated");
+    assert!(
+        css.contains("--accent") || css.contains("bg-accent"),
+        "the shipped bundle should carry the umbral palette"
+    );
+
+    // ...and the Tailwind SOURCE ships too, so editing templates and rebuilding works.
+    for f in [
+        "styles/input.css",
+        "styles/tailwind.config.js",
+        "styles/package.json",
+    ] {
+        assert!(
+            report.root.join(f).exists(),
+            "{f} must be generated so `npm run build` can regenerate the bundle"
+        );
+    }
+}
+
+/// The generated templates point at the real docs, not a placeholder.
+#[test]
+fn scaffold_project_templates_link_the_docs() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("testapp", tmp.path(), None).unwrap();
+    let base = fs::read_to_string(report.root.join("templates/base.html")).unwrap();
+    let home = fs::read_to_string(report.root.join("templates/home.html")).unwrap();
+
+    assert!(
+        base.contains("dalmasonto.github.io/umbral/docs/"),
+        "the navbar should link the docs"
+    );
+    assert!(
+        home.contains("getting-started/your-first-app"),
+        "the home page should point at the getting-started guide"
+    );
+    // Every placeholder must have been substituted — a raw `__DOCS__` on the page is a
+    // broken link the user sees.
+    for tpl in [&base, &home] {
+        assert!(
+            !tpl.contains("__PROJECT__")
+                && !tpl.contains("__DOCS__")
+                && !tpl.contains("__INITIAL__"),
+            "an unsubstituted placeholder leaked into a generated template"
+        );
+    }
 }
 
 // gap 20: template substitution — project name appears in base.html title

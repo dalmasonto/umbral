@@ -239,6 +239,8 @@ fn random_dev_secret_key() -> String {
     }
     out
 }
+/// Where the generated templates point their "Docs" links.
+const DOCS_URL: &str = "https://dalmasonto.github.io/umbral/docs/v0.0.1";
 
 /// Write a new umbral project at `parent_dir/<name>/`.
 ///
@@ -339,6 +341,10 @@ umbral-security = "{version}"
 # feature to ALSO export OpenTelemetry traces over OTLP to a collector
 # (Jaeger/Tempo/Honeycomb): `umbral-logs = {{ version = "{version}", features = ["otel"] }}`.
 umbral-logs     = "{version}"
+# Serves ./static at /static — including the compiled Tailwind bundle this
+# project ships. Not optional: the SecurityPlugin's CSP blocks third-party
+# script/style CDNs, so an app must serve its own assets.
+umbral-storage  = "{version}"
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbral-playground   = "{version}"  # Interactive API playground UI (think mini-Postman) at /playground/.
@@ -347,7 +353,6 @@ umbral-logs     = "{version}"
 # umbral-rls          = "{version}"  # Postgres row-level security policy registration.
 # umbral-cache        = "{version}"  # Per-request caching helper.
 # umbral-email        = "{version}"  # SMTP + MIME email composer + sender.
-# umbral-storage      = "{version}"  # Unified storage: static-file serving (prod, whitenoise-equivalent) + uploaded-file storage (local FS + S3).
 # umbral-signals      = "{version}"  # Pre/post save/delete signal dispatch.
 # umbral-livereload   = "{version}"  # Dev-only browser live-reload (SSE push + file watcher). Add `.plugin(LiveReloadPlugin::new())`.
 
@@ -417,6 +422,7 @@ use umbral_admin::AdminPlugin;
 use umbral_rest::{{RestPlugin, ResourceConfig}};
 use umbral_openapi::OpenApiPlugin;
 use umbral_security::{{SecurityConfig, SecurityPlugin}};
+use umbral_storage::StoragePlugin;
 
 // ---------------------------------------------------------------------------
 // Models
@@ -481,6 +487,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
         // OpenAPI: Swagger UI at /openapi/ (override with
         // `.at("/api/docs")` if you prefer a different mount).
         .plugin(OpenApiPlugin::new())
+        // Static files: serves ./static at /static, which is where the compiled
+        // Tailwind bundle lives. Use `{{ static('css/app.css') }}` in templates
+        // rather than a hardcoded path — in production it resolves through the
+        // hashed-asset manifest so you get cache-busting for free.
+        //
+        // The same plugin also gives you uploaded-file storage (local FS or S3)
+        // when you add a FileField / ImageField: `.media("/media", "./media")`.
+        .plugin(StoragePlugin::new().static_files("/static", "./static"))
         // Security (on by default): CSRF + clickjacking/HSTS hardening
         // headers across the app. `/api` is exempt so token-authenticated
         // JSON clients can POST without a browser form CSRF cookie.
@@ -917,139 +931,103 @@ cargo run -- showmigrations
 cargo run -- makemigrations
 ```
 
+## Styling
+
+The pages use Tailwind, compiled to `static/css/app.css` and served by the
+StoragePlugin at `/static`. That bundle ships **prebuilt**, so this project renders
+correctly with no `npm install`.
+
+You only need Node once you edit a template and reach for a utility class that is not
+already in the bundle:
+
+```bash
+cd styles
+npm install
+npm run build      # or: npm run watch
+```
+
+The palette lives in `styles/input.css` as CSS variables (`--accent` is the violet).
+Change them there and every page follows. There is deliberately no `cdn.tailwindcss.com`
+script: it is versionless, it pulls a third party into every page load, and it is the
+first thing a `default-src 'self'` Content-Security-Policy blocks.
+
 ## Where to go next
 
 - Add a plugin: `umbral startapp posts`
-- Docs: https://umbral.dev/docs/v0.0.1/
-- ORM: /docs/v0.0.1/orm/models
-- Migrations: /docs/v0.0.1/migrations/managed-migrations
-- REST: /docs/v0.0.1/plugins/rest
-- Auth: /docs/v0.0.1/plugins/auth
-"#
+- Your first app: {docs}/getting-started/your-first-app
+- Models & the ORM: {docs}/orm/models
+- Migrations: {docs}/migrations/managed-migrations
+- Admin: {docs}/plugins/admin
+- REST: {docs}/rest/pagination
+- Login & signup pages: {docs}/auth/login-and-signup-pages
+- The Plugin trait: {docs}/plugins/the-plugin-trait
+"#,
+        docs = DOCS_URL,
     );
     write_file(&root, "README.md", &readme, &mut files)?;
 
     // ------------------------------------------------------------------ //
-    // templates/base.html — Tailwind CDN so the demo works standalone     //
+    // templates/ + styles/ + static/  — the design system                 //
+    //                                                                      //
+    // These live as real files under `crates/umbral-cli/assets/scaffold/`  //
+    // rather than as string literals, so the templates can be edited (and  //
+    // the Tailwind bundle actually COMPILED) like the HTML and CSS they    //
+    // are. `__PROJECT__` / `__INITIAL__` / `__DOCS__` are substituted here.//
     // ------------------------------------------------------------------ //
-    let base_html = format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{% block title %}}{name}{{% endblock %}}</title>
-  <!-- Tailwind CSS via the play CDN: DEV ONLY. This loads a third-party
-       script on every page and is versionless, so it can't take a
-       meaningful Subresource-Integrity (SRI) hash, and the SecurityPlugin's
-       Content-Security-Policy will block it. Before production, replace it
-       with a compiled/vendored CSS bundle you serve yourself. -->
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-50 text-gray-900 min-h-screen">
-  <nav class="bg-white shadow px-6 py-3 flex items-center gap-6">
-    <a href="/" class="font-bold text-lg">{name}</a>
-    <a href="/dashboard" class="text-sm text-gray-600 hover:text-gray-900">Dashboard</a>
-    <a href="/admin/" class="text-sm text-gray-600 hover:text-gray-900">Admin</a>
-    <a href="/openapi/" class="text-sm text-gray-600 hover:text-gray-900">API docs</a>
-  </nav>
-  <main class="max-w-3xl mx-auto px-4 py-8">
-    {{% block content %}}{{% endblock %}}
-  </main>
-</body>
-</html>
-"#
-    );
-    write_file(&root, "templates/base.html", &base_html, &mut files)?;
+    let initial = name
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "U".to_string());
+    let fill = |tpl: &str| -> String {
+        tpl.replace("__PROJECT__", name)
+            .replace("__INITIAL__", &initial)
+            .replace("__DOCS__", DOCS_URL)
+    };
 
-    // ------------------------------------------------------------------ //
-    // templates/home.html                                                  //
-    // ------------------------------------------------------------------ //
-    let home_html = r#"{% extends "base.html" %}
-{% block title %}Home{% endblock %}
-{% block content %}
-  <h1 class="text-3xl font-bold mb-4">Welcome</h1>
-  <p class="text-gray-600 mb-6">
-    There are <strong>{{ post_count }}</strong> published post(s).
-  </p>
-  <div class="flex gap-4">
-    <a href="/api/post/" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
-      Browse posts (JSON)
-    </a>
-    <a href="/dashboard" class="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300">
-      Dashboard (login required)
-    </a>
-  </div>
-{% endblock %}
-"#;
-    write_file(&root, "templates/home.html", home_html, &mut files)?;
-
-    // ------------------------------------------------------------------ //
-    // templates/dashboard.html                                             //
-    // ------------------------------------------------------------------ //
-    let dashboard_html = r#"{% extends "base.html" %}
-{% block title %}Dashboard{% endblock %}
-{% block content %}
-  <h1 class="text-3xl font-bold mb-2">Dashboard</h1>
-  <p class="text-gray-500 mb-6">Logged in as <strong>{{ user.username }}</strong></p>
-
-  <h2 class="text-xl font-semibold mb-3">Your posts</h2>
-  {% if my_posts %}
-    <ul class="space-y-2">
-      {% for post in my_posts %}
-        <li class="bg-white rounded shadow p-4">
-          <span class="font-medium">{{ post.title }}</span>
-          {% if post.published %}
-            <span class="ml-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">published</span>
-          {% else %}
-            <span class="ml-2 text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded">draft</span>
-          {% endif %}
-        </li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <p class="text-gray-400">No posts yet.</p>
-  {% endif %}
-{% endblock %}
-"#;
-    write_file(
-        &root,
-        "templates/dashboard.html",
-        dashboard_html,
-        &mut files,
-    )?;
-
-    // ------------------------------------------------------------------ //
-    // templates/404.html                                                   //
-    // ------------------------------------------------------------------ //
-    let not_found_html = r#"{% extends "base.html" %}
-{% block title %}Page not found{% endblock %}
-{% block content %}
-  <div class="text-center py-16">
-    <h1 class="text-6xl font-bold text-gray-300 mb-4">404</h1>
-    <p class="text-xl text-gray-600 mb-2">Page not found</p>
-    <p class="text-gray-400 mb-8">The path <code class="bg-gray-100 px-1 rounded">{{ path }}</code> doesn't exist.</p>
-    <a href="/" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Go home</a>
-  </div>
-{% endblock %}
-"#;
-    write_file(&root, "templates/404.html", not_found_html, &mut files)?;
-
-    // ------------------------------------------------------------------ //
-    // templates/500.html                                                   //
-    // ------------------------------------------------------------------ //
-    let server_error_html = r#"{% extends "base.html" %}
-{% block title %}Something went wrong{% endblock %}
-{% block content %}
-  <div class="text-center py-16">
-    <h1 class="text-6xl font-bold text-gray-300 mb-4">500</h1>
-    <p class="text-xl text-gray-600 mb-2">Something went wrong</p>
-    <p class="text-gray-400 mb-8">We've been notified and are looking into it.</p>
-    <a href="/" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Go home</a>
-  </div>
-{% endblock %}
-"#;
-    write_file(&root, "templates/500.html", server_error_html, &mut files)?;
+    for (path, body) in [
+        (
+            "templates/base.html",
+            include_str!("../assets/scaffold/templates/base.html"),
+        ),
+        (
+            "templates/home.html",
+            include_str!("../assets/scaffold/templates/home.html"),
+        ),
+        (
+            "templates/dashboard.html",
+            include_str!("../assets/scaffold/templates/dashboard.html"),
+        ),
+        (
+            "templates/404.html",
+            include_str!("../assets/scaffold/templates/404.html"),
+        ),
+        (
+            "templates/500.html",
+            include_str!("../assets/scaffold/templates/500.html"),
+        ),
+        (
+            "styles/input.css",
+            include_str!("../assets/scaffold/styles/input.css"),
+        ),
+        (
+            "styles/tailwind.config.js",
+            include_str!("../assets/scaffold/styles/tailwind.config.js"),
+        ),
+        (
+            "styles/package.json",
+            include_str!("../assets/scaffold/styles/package.json"),
+        ),
+        // The COMPILED bundle, shipped prebuilt. A brand-new project renders correctly
+        // with no npm install — `npm run build` in styles/ is only needed once you edit
+        // the templates and use a utility class that isn't already in here.
+        (
+            "static/css/app.css",
+            include_str!("../assets/scaffold/static/css/app.css"),
+        ),
+    ] {
+        write_file(&root, path, &fill(body), &mut files)?;
+    }
 
     let next_steps = vec![
         format!("cd {name}"),
