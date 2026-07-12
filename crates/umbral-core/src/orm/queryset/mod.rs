@@ -223,6 +223,10 @@ pub struct QuerySet<T> {
     /// `annotate()` contract: an annotation is query-builder state,
     /// not a side query.
     pub(crate) annotations: Vec<RelatedAnnotation>,
+    /// gaps3 #29 — `ORDER BY <annotation alias>`. Kept separate from
+    /// `order_by`, which is typed against the model's own columns and so cannot
+    /// name a computed alias.
+    pub(crate) annotation_order: Vec<(String, bool)>,
     /// audit_2 plugin-storage-tasks #6 — when `true`, a read terminal appends
     /// `FOR UPDATE SKIP LOCKED` (Postgres only). Lets N contending workers each
     /// claim a DIFFERENT row instead of all piling onto the same head row and
@@ -256,6 +260,7 @@ impl<T> Clone for QuerySet<T> {
             only_cols: self.only_cols.clone(),
             join_related: self.join_related.clone(),
             annotations: self.annotations.clone(),
+            annotation_order: self.annotation_order.clone(),
             for_update_skip_locked: self.for_update_skip_locked,
             _phantom: PhantomData,
         }
@@ -423,6 +428,7 @@ impl<T> QuerySet<T> {
             only_cols: None,
             join_related: Vec::new(),
             annotations: Vec::new(),
+            annotation_order: Vec::new(),
             for_update_skip_locked: false,
             _phantom: PhantomData,
         }
@@ -698,6 +704,14 @@ impl<T> QuerySet<T> {
                     Alias::new(ann.alias.as_str()),
                 );
             }
+        }
+        // gaps3 #29: ORDER BY an annotation alias — "top scorers by goal count".
+        // Both backends allow ordering by a SELECT-list alias, which is what the
+        // annotation is. Applied before the model-default ordering so an explicit
+        // annotation sort wins, exactly like `order_by` does.
+        for (alias, desc) in &self.annotation_order {
+            let order = if *desc { Order::Desc } else { Order::Asc };
+            q.order_by(Alias::new(alias.as_str()), order);
         }
         // BUG-8: default ORDER BY applies only when the caller didn't
         // supply an explicit `.order_by(...)`: the model-default
@@ -2592,6 +2606,36 @@ impl<T: Model> QuerySet<T> {
     ///     .await?;
     /// // [ { "author_id": 1, "count": 3 }, { "author_id": 2, "count": 2 } ]
     /// ```
+    /// [`Self::annotate`], deserialized into a struct of your own (gaps3 #29).
+    ///
+    /// `annotate` returns `Vec<serde_json::Value>` — a GROUP BY rollup you then
+    /// hand-decode. This gives you the rows typed:
+    ///
+    /// ```ignore
+    /// #[derive(Deserialize)]
+    /// struct ByAuthor { author_id: i64, posts: i64 }
+    ///
+    /// let rows: Vec<ByAuthor> = Post::objects()
+    ///     .annotate_as::<ByAuthor>(&["author_id"], &[("posts", Aggregate::count())])
+    ///     .await?;
+    /// ```
+    pub async fn annotate_as<R>(
+        self,
+        group_cols: &[&str],
+        aggs: &[(&str, crate::orm::Aggregate)],
+    ) -> Result<Vec<R>, sqlx::Error>
+    where
+        R: serde::de::DeserializeOwned,
+    {
+        let rows = self.annotate(group_cols, aggs).await?;
+        rows.into_iter()
+            .map(|v| {
+                serde_json::from_value::<R>(v)
+                    .map_err(|e| sqlx::Error::Protocol(format!("annotate_as: {e}")))
+            })
+            .collect()
+    }
+
     pub async fn annotate(
         self,
         group_cols: &[&str],
@@ -2837,6 +2881,33 @@ impl<T: Model> QuerySet<T> {
     /// `annotate_related("<relation>_count", relation, Aggregate::count())`.
     /// `.annotate_count("comment_set")` exposes the value under the
     /// `comment_set_count` alias in [`Self::fetch_annotated`].
+    /// `ORDER BY <annotation alias>` — sort by a value you annotated, not by a
+    /// column (gaps3 #29).
+    ///
+    /// This is what a leaderboard needs and what the ORM could not express:
+    /// `order_by` is typed against the model's own columns, so it cannot name a
+    /// computed alias, and without this there was no way to ask for "the top 20
+    /// authors *by post count*". A live consumer worked around it by pulling
+    /// whole tables into a `HashMap` and sorting in Rust — the aggregation engine
+    /// was already there, it just wasn't reachable.
+    ///
+    /// ```ignore
+    /// AuthUser::objects()
+    ///     .annotate_count("post_set")
+    ///     .order_by_annotation("post_set__count", true)   // desc
+    ///     .limit(20)
+    ///     .fetch_annotated()
+    ///     .await?
+    /// ```
+    ///
+    /// An alias that was never annotated is a loud error at query time, not
+    /// silently-wrong SQL — see [`Self::check_annotations`].
+    pub fn order_by_annotation(mut self, alias: &str, desc: bool) -> Self {
+        self.annotation_order.push((alias.to_string(), desc));
+        self.explicit_order = true;
+        self
+    }
+
     pub fn annotate_count(self, relation: &str) -> Self {
         let alias = format!("{relation}_count");
         self.annotate_related(&alias, relation, crate::orm::Aggregate::count())
@@ -2885,7 +2956,72 @@ impl<T: Model> QuerySet<T> {
                 return Err(sqlx::Error::Protocol(msg.clone()));
             }
         }
+        // gaps3 #29: `order_by_annotation("typo")` must fail loudly here, not
+        // emit SQL that orders by a column the database has never heard of (or,
+        // worse, silently matches a real column and returns confidently wrong
+        // rows).
+        for (alias, _) in &self.annotation_order {
+            if !self.annotations.iter().any(|a| &a.alias == alias) {
+                let known: Vec<&str> = self.annotations.iter().map(|a| a.alias.as_str()).collect();
+                return Err(sqlx::Error::Protocol(format!(
+                    "order_by_annotation(\"{alias}\") names an annotation that was never added; \
+                     annotated aliases on this queryset: {known:?}"
+                )));
+            }
+        }
         Ok(())
+    }
+
+    /// [`Self::fetch_annotated`], deserialized into one struct of your own
+    /// (gaps3 #29).
+    ///
+    /// `fetch_annotated` hands back `(T, Map<String, JsonValue>)`, so a handler
+    /// that wants a flat row still writes `map["post_count"].as_i64().unwrap_or(0)`
+    /// per field. That JSON-poking is plausibly *why* a live consumer skipped the
+    /// aggregation engine entirely and rebuilt GROUP BY with `HashMap`s in Rust —
+    /// the feature existed but wasn't reachable from a handler.
+    ///
+    /// The model's own columns and its annotations are merged into one object and
+    /// deserialized, so the target struct just names what it wants:
+    ///
+    /// ```ignore
+    /// #[derive(Deserialize)]
+    /// struct Leader { id: i64, username: String, post_set__count: i64 }
+    ///
+    /// let top: Vec<Leader> = AuthUser::objects()
+    ///     .annotate_count("post_set")
+    ///     .order_by_annotation("post_set__count", true)
+    ///     .limit(20)
+    ///     .fetch_annotated_as::<Leader>()
+    ///     .await?;
+    /// ```
+    ///
+    /// A field the query didn't produce is a deserialize error, not a silent
+    /// default — a typo in the struct should not read as "zero posts".
+    pub async fn fetch_annotated_as<R>(self) -> Result<Vec<R>, sqlx::Error>
+    where
+        R: serde::de::DeserializeOwned,
+        T: serde::Serialize
+            + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let rows = self.fetch_annotated().await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for (model, annotations) in rows {
+            let mut obj = match serde_json::to_value(&model) {
+                Ok(JsonValue::Object(o)) => o,
+                _ => serde_json::Map::new(),
+            };
+            // Annotations win on a name clash: you asked for the computed value.
+            for (k, v) in annotations {
+                obj.insert(k, v);
+            }
+            out.push(
+                serde_json::from_value::<R>(JsonValue::Object(obj))
+                    .map_err(|e| sqlx::Error::Protocol(format!("fetch_annotated_as: {e}")))?,
+            );
+        }
+        Ok(out)
     }
 
     /// Run the SELECT and return every matching row **with its
@@ -3734,6 +3870,23 @@ impl<T: Model> Manager<T> {
     /// See [`QuerySet::annotate_count`].
     pub fn annotate_count(&self, relation: &str) -> QuerySet<T> {
         self.queryset().annotate_count(relation)
+    }
+
+    /// See [`QuerySet::order_by_annotation`].
+    pub fn order_by_annotation(&self, alias: &str, desc: bool) -> QuerySet<T> {
+        self.queryset().order_by_annotation(alias, desc)
+    }
+
+    /// See [`QuerySet::annotate_as`] — the typed GROUP BY rollup.
+    pub async fn annotate_as<R>(
+        &self,
+        group_cols: &[&str],
+        aggs: &[(&str, crate::orm::Aggregate)],
+    ) -> Result<Vec<R>, sqlx::Error>
+    where
+        R: serde::de::DeserializeOwned,
+    {
+        self.queryset().annotate_as::<R>(group_cols, aggs).await
     }
 
     /// See [`QuerySet::annotate_count_where`] — starts a filtered

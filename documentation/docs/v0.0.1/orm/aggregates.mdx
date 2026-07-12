@@ -209,3 +209,55 @@ Declaring a `#[umbral(reverse_fk = "buyer_store")] ReverseSet<Order>` field pick
 - [Querying](/docs/v0.0.1/orm/querying): F-expressions, Q-objects, `exclude`, projections, subqueries, JSON ops.
 - [Relationships](/docs/v0.0.1/orm/relationships): `prefetch_related` for batched M2M loads alongside aggregate dashboards.
 - [Transactions](/docs/v0.0.1/orm/transactions): `.atomic()` for write paths. Aggregates are read-only and always single-statement.
+
+
+## Ordering by an annotation
+
+`order_by` is typed against the model's own columns, so it can't name a computed alias. `order_by_annotation` can — which is what a leaderboard needs:
+
+```rust
+let top = AuthUser::objects()
+    .annotate_count("post_set")
+    .order_by_annotation("post_set_count", true)   // true = descending
+    .limit(20)
+    .fetch_annotated()
+    .await?;
+```
+
+The sort happens **in SQL**, so it composes with `limit` — you get the top 20 by post count, not 20 arbitrary rows sorted afterwards.
+
+<Callout type="info">
+  A misspelled alias is a loud error naming both the alias you asked for and the ones that exist. It never emits `ORDER BY` against a column the database has never heard of — or, worse, one that happens to exist and returns confidently wrong rows.
+</Callout>
+
+## Typed annotation rows
+
+`fetch_annotated` hands back `(Model, Map<String, Value>)`, so a flat row means poking JSON per field. `fetch_annotated_as::<T>()` deserializes the model's columns **and** its annotations into one struct of your own:
+
+```rust
+#[derive(Deserialize)]
+struct Leader {
+    name: String,
+    post_set_count: i64,
+}
+
+let top: Vec<Leader> = AuthUser::objects()
+    .annotate_count("post_set")
+    .order_by_annotation("post_set_count", true)
+    .limit(20)
+    .fetch_annotated_as::<Leader>()
+    .await?;
+```
+
+`annotate_as::<T>()` does the same for the GROUP BY rollup:
+
+```rust
+#[derive(Deserialize)]
+struct ByAuthor { author: i64, posts: i64 }
+
+let rows: Vec<ByAuthor> = Post::objects()
+    .annotate_as::<ByAuthor>(&["author"], &[("posts", Aggregate::count())])
+    .await?;
+```
+
+A field the query didn't produce is a deserialize error, not a silent default — a typo in your struct shouldn't read as "zero posts".
