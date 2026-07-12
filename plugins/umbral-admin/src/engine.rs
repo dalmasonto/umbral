@@ -357,8 +357,11 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         // core engine's `static()` function isn't inherited; we register an
         // equivalent here, routing through `umbral::templates::resolve_static_url`
         // so the resolution logic lives in one place.
-        env.add_function("static", |path: String| -> String {
-            umbral::templates::resolve_static_url(&path)
+        // gaps3 #66: `safe_url`, not a bare String — a plain String is autoescaped, so
+        // the href rendered as `&#x2f;static&#x2f;...`. It still worked (browsers decode
+        // the entities) which is exactly why it went unnoticed.
+        env.add_function("static", |path: String| -> minijinja::Value {
+            umbral::templates::safe_url(umbral::templates::resolve_static_url(&path))
         });
 
         // Media-key resolver — mirrors `static()` but routes a stored
@@ -367,13 +370,16 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         // (`/media/<key>`) instead of the opaque key. An empty key
         // yields an empty string (the template skips the markup); with
         // no Storage backend wired the raw key falls through unchanged.
-        env.add_function("media_url", |key: String| -> String {
+        env.add_function("media_url", |key: String| -> minijinja::Value {
             if key.is_empty() {
-                return String::new();
+                return minijinja::Value::from("");
             }
-            umbral::storage::storage_opt()
+            let url = umbral::storage::storage_opt()
                 .map(|s| s.url(&key))
-                .unwrap_or(key)
+                .unwrap_or(key);
+            // `key` is an uploaded filename — user-controlled. `safe_url` keeps the
+            // escaping on any URL with an HTML-special character in it.
+            umbral::templates::safe_url(url)
         });
 
         env

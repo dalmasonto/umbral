@@ -425,16 +425,39 @@ fn register_img_filter(env: &mut Environment<'static>) {
 /// `"/static/admin/admin.css"`; with a CDN origin
 /// `static_url = "https://cdn.example.com/s/"` it yields
 /// `"https://cdn.example.com/s/admin/admin.css"`.
+/// A generated URL, returned to the template as SAFE unless it contains a character that
+/// could break out of the attribute it lands in (gaps3 #66).
+///
+/// `static()` and `media_url()` used to return a plain `String`, which minijinja
+/// autoescapes in HTML context — so `{{ static('css/app.css') }}` rendered as
+/// `href="&#x2f;static&#x2f;css&#x2f;app.css"`. Browsers decode `&#x2f;` back to `/`, so
+/// the stylesheet still loaded and the pages still looked right; it was working by
+/// accident, and any reader of the page source would reasonably conclude static serving
+/// was broken.
+///
+/// Marking the URL safe is what fixes it — but marking it *unconditionally* safe would be
+/// an XSS hole: `media_url(key)` takes a key that came from an uploaded filename, i.e.
+/// from a user, and a key containing `"` closes the `href` attribute. So a URL carrying
+/// any HTML-special character stays escaped. The path a template author writes by hand
+/// (`css/app.css`) never contains one; a hostile filename does, and it keeps its armour.
+pub fn safe_url(url: String) -> minijinja::Value {
+    if url.contains(['<', '>', '"', '\'', '&']) {
+        minijinja::Value::from(url)
+    } else {
+        minijinja::Value::from_safe_string(url)
+    }
+}
+
 fn register_static_function(env: &mut Environment<'static>, static_url: String) {
-    env.add_function("static", move |path: String| -> String {
+    env.add_function("static", move |path: String| -> minijinja::Value {
         // Route through the manifest-aware resolver so a `--hashed`
         // collect makes `{{ static("css/app.css") }}` emit the
         // content-hashed URL. The captured `static_url` is the fixed
         // prefix; the manifest lookup is the only per-call ambient read.
         if let Some(hashed) = crate::static_files::manifest_lookup(&path) {
-            return join_static_url(&static_url, hashed);
+            return safe_url(join_static_url(&static_url, hashed));
         }
-        join_static_url(&static_url, &path)
+        safe_url(join_static_url(&static_url, &path))
     });
 }
 
@@ -496,13 +519,17 @@ pub fn resolve_static_url(path: &str) -> String {
 /// - A `None`/optional field serializes to null, which the template's
 ///   `{% if %}` guard handles before the helper is ever called.
 fn register_media_url_function(env: &mut Environment<'static>) {
-    env.add_function("media_url", |key: String| -> String {
+    env.add_function("media_url", |key: String| -> minijinja::Value {
         if key.is_empty() {
-            return String::new();
+            return minijinja::Value::from("");
         }
-        crate::storage::storage_opt()
+        let url = crate::storage::storage_opt()
             .map(|s| s.url(&key))
-            .unwrap_or(key)
+            .unwrap_or(key);
+        // NOTE: `key` is an uploaded filename — user-controlled. `safe_url` keeps the
+        // escaping on any URL carrying an HTML-special character, so a hostile name
+        // cannot break out of the attribute.
+        safe_url(url)
     });
 }
 

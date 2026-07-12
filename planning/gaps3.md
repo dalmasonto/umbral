@@ -215,3 +215,13 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
     Self-healing at release (the scaffold and the libs ship together), and `--local <repo>` path-deps correctly — so contributors have a working path and end users of a *published* CLI are unaffected by the skew itself. But the default invocation from a checkout is silently broken, which is exactly how #64 survived: nobody builds what `startproject` emits.
 
     Fix: **compile the scaffold's output in CI.** `startproject --local` into a temp dir, `cargo build`, assert zero errors AND zero warnings. That one test would have caught #64, #65, and the unused-import wart in a single run. (A content-assertion test cannot.) Consider also warning when `startproject` runs from a source checkout without `--local`.
+
+66. [x] **`{{ static(...) }}` rendered `href="&#x2f;static&#x2f;css&#x2f;app.css"` — every page, every app** — archived. `static()` and `media_url()` returned a plain `String`, which minijinja autoescapes in HTML context, so every generated URL came out with its slashes as `&#x2f;`.
+
+    It **worked anyway** — browsers decode character references inside attribute values, so the stylesheet loaded and the pages looked right. That is exactly why it survived: nothing was broken enough to notice, and anyone who read the page source would reasonably have concluded that static serving was broken.
+
+    Fixed with `templates::safe_url(url) -> minijinja::Value`, used by `static()` and `media_url()` in core AND in `umbral-admin`, which had its own copy of both functions (and so its own copy of the bug).
+
+    **The fix has to hold both ends, and marking the URL unconditionally safe would have been an XSS hole.** `media_url(key)` takes a key that came from an *uploaded filename* — user-controlled — and a key containing `"` closes the `href` attribute: `a" onerror="alert(1)`. So `safe_url` only marks a URL safe when it carries no HTML-special character. A path a template author writes by hand (`css/app.css`) never does; a hostile filename does, and it keeps its armour. Three tests pin both halves.
+
+    Worth recording how the test nearly lied: written with `minijinja::render!`, which uses an *unnamed* template — and minijinja decides autoescaping from the template's file extension, so autoescape was OFF and the XSS assertion passed no matter what `safe_url` did. The test only became real once it rendered through a template named `t.html`.

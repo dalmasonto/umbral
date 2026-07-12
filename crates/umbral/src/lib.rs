@@ -547,7 +547,7 @@ pub mod templates {
     pub use umbral_core::templates::{
         CURRENT_CSRF, CURRENT_USER, LazyUser, TemplateError, TemplateRegistrar, current_csrf,
         highlight_css, merge_ambient_context, merge_ambient_value, render, resolve_static_url,
-        with_current_csrf, with_current_user, with_current_user_lazy,
+        safe_url, with_current_csrf, with_current_user, with_current_user_lazy,
     };
 }
 
