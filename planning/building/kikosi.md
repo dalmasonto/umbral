@@ -244,7 +244,9 @@ cascade-aware), plus a per-user data-export helper.
 **Why heavy.** Touches the ORM write path, querying defaults, cascade semantics, and
 admin — and is very hard to add after an app has hard-deleted for a year.
 
-**VERIFIED (2026-07-12) — soft delete is DONE end to end; audit is NOT.** The two halves of this item turned out to be in completely different states:
+**DONE (2026-07-12) — both halves now shipped.** (Superseded note: at audit time soft delete was done and the audit trail was not; `#[umbral(audited)]` has since landed, gaps3 #54.)
+
+**VERIFIED (2026-07-12) — soft delete is DONE end to end; audit was NOT (now is).** The two halves of this item turned out to be in completely different states:
 
 - **Soft delete — DONE, across all three surfaces.** `#[umbral(soft_delete)]` → `Model::SOFT_DELETE` (`orm/model.rs:298`), auto `WHERE deleted_at IS NULL` (`queryset/mod.rs:546`), `with_deleted()` / `only_deleted()` / `hard_delete()`, `delete()` rewritten to an UPDATE (`:2936`), `restore()` (`dynamic.rs:806`). **Admin** gets a full trash UI for free — trash view + auto-injected *Restore selected* and *Delete permanently* actions, injected only for soft-delete models (`umbral-admin/src/config.rs:269,314,382`), zero per-model config. **REST** inherits it through `DynQuerySet` (list excludes trashed, DELETE soft-deletes). Docs: `orm/soft-delete.mdx`.
 - **Audit trail — genuinely MISSING.** There is no `#[umbral(audited)]`; grep for it in the macros returns nothing. **Do not mistake `AdminAuditLog` for it** (`umbral-admin/src/models.rs:357`): that is Django's `LogEntry` — it records only writes made *through the admin UI*, its `diff_summary` is free-text prose rather than a field-level before/after, and a write from REST, a task, or `Model::objects().save()` produces **no row at all**.
@@ -265,3 +267,22 @@ most-universal tax and unlocks everything client-side. **#3 (tenancy)** should l
 before any consumer commits to a single-tenant schema it can't walk back. **#4/#5**
 (jobs + ops) are the "make the happy path production-grade" pair. **#6/#7** are
 valuable but app-triggered — build when a consumer actually needs them.
+
+
+---
+
+## Closure (2026-07-12)
+
+**All seven items resolved.** #1 / #2 / #5 shipped; #3 resolved as the wrong tool (the consumer's flow is groups, not tenancy — membership scoping shipped instead); #4 / #6 / #7 verified as overwhelmingly already-shipped, with the genuine remainders extracted into their own numbered gaps3 entries and then built:
+
+| Residue | Shipped |
+|---|---|
+| gaps3 #48 | type-safe `enqueue` (`SendWelcome::enqueue(payload)`) |
+| gaps3 #49 | `periodic_admin_model()` — the schedules in the admin |
+| gaps3 #50 | built-in thumbnails (`images` feature) |
+| gaps3 #51 | upload content-type allow-list (sniffs the bytes) |
+| gaps3 #53 | soft delete now cascades (+ cascade-aware restore) |
+| gaps3 #54 | `#[umbral(audited)]` — model-level audit trail |
+| gaps3 #55 | `#[umbral(auto_user)]` — who wrote the row |
+
+Still open and deliberately deferred: **gaps3 #52** (direct-to-S3 presigned *upload*). Every byte still transits the Rust process. It matters for large files and at scale, not day-one — build it when a consumer actually hits the ceiling.
