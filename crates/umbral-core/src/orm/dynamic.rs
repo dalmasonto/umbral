@@ -153,6 +153,45 @@ pub struct DynQuerySet<'a> {
     allow_privileged: Vec<String>,
 }
 
+/// Turn a string that arrived from a URL, a form or an identity into a correctly-TYPED
+/// `serde_json::Value` for `col`.
+///
+/// The JSON twin of [`typed_eq_condition`], and it exists for the same reason. Callers
+/// that need to *write* a value they only have as a string — the parent id in a nested
+/// route, the owner id from the authenticated identity — were reaching for
+///
+/// ```ignore
+/// match s.parse::<i64>() { Ok(n) => Value::from(n), Err(_) => Value::String(s) }
+/// ```
+///
+/// which is a **guess about the column's type made from the shape of the value**. It has
+/// two failure modes, and the second is the nasty one:
+///
+/// - A `Uuid` or `String` pk falls to the string arm and happens to work, so the guess
+///   looks correct in testing.
+/// - A `String` pk whose value is *numeric* (`"12345"`, a Stripe id, an external
+///   reference) is written as a JSON **number** — the wrong type, silently, for the one
+///   row shape nobody thought to test.
+///
+/// Ask the column, not the value. Returns `None` when the string cannot be that column's
+/// type at all; the caller turns that into a 400 or a 404, never into a guess.
+pub fn typed_json_value(col: &Column, value: &str) -> Option<serde_json::Value> {
+    use serde_json::Value as J;
+    match crate::migrate::fk_effective_type(col) {
+        SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
+            value.parse::<i64>().ok().map(J::from)
+        }
+        SqlType::Real | SqlType::Double => value.parse::<f64>().ok().map(J::from),
+        SqlType::Boolean => Some(J::Bool(matches!(value, "true" | "on" | "1"))),
+        // A UUID crosses JSON as its hyphenated string — but it is still VALIDATED here,
+        // so a non-UUID string cannot be written into a UUID column.
+        SqlType::Uuid => uuid::Uuid::parse_str(value)
+            .ok()
+            .map(|u| J::String(u.to_string())),
+        _ => Some(J::String(value.to_string())),
+    }
+}
+
 /// A predicate no row can satisfy (`1 = 0`).
 ///
 /// The safe answer whenever a filter cannot be expressed. See gaps3 #56: the unsafe
@@ -3925,11 +3964,18 @@ async fn hydrate_m2m_into_tx(
 /// to the raw string, letting `insert_json` surface a clear per-row error
 /// instead of silently dropping data. Text / Date / Time / Uuid / etc.
 /// pass through as strings — `json_to_sea_value` parses each from there.
-fn coerce_csv_cell(ty: SqlType, nullable: bool, raw: &str) -> serde_json::Value {
+fn coerce_csv_cell(col: &Column, raw: &str) -> serde_json::Value {
     use serde_json::Value;
-    if raw.is_empty() && nullable {
+    if raw.is_empty() && col.nullable {
         return Value::Null;
     }
+    // gaps3 #59 — resolve a FOREIGN KEY to its target's real primary-key type before
+    // coercing. This used to take a bare `col.ty` and parse every `SqlType::ForeignKey`
+    // as an `i64`, so importing a CSV whose FK points at a String-keyed target (a
+    // permission keyed by codename, a country keyed by ISO code) turned a numeric-looking
+    // value into a JSON number and bound it into a TEXT column. Every other type-driven
+    // site in this file already goes through `fk_effective_type`; this one did not.
+    let ty = crate::migrate::fk_effective_type(col);
     match ty {
         SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => raw
             .parse::<i64>()
@@ -3988,7 +4034,7 @@ pub async fn import_table_rows(
         let mut obj = serde_json::Map::new();
         for (header, cell) in headers.iter().zip(row.iter()) {
             if let Some(col) = col_for.get(header.as_str()) {
-                obj.insert(header.clone(), coerce_csv_cell(col.ty, col.nullable, cell));
+                obj.insert(header.clone(), coerce_csv_cell(col, cell));
             }
         }
         match DynQuerySet::for_meta(meta).insert_json(&obj).await {

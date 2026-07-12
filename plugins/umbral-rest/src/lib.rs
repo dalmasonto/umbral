@@ -3174,10 +3174,11 @@ async fn retrieve_impl(
 /// `/api/fixture/3/selection` believes something false about what it just created, and
 /// the 201 it gets back would confirm it. Better to say no.
 fn inject_parent(
-    table: &str,
+    model: &ModelMeta,
     parent_scope: Option<&(String, String)>,
     body: &mut serde_json::Map<String, Value>,
 ) -> Result<(), ApiError> {
+    let table = &model.table;
     let Some((fk_column, parent_id)) = parent_scope else {
         return Ok(());
     };
@@ -3187,11 +3188,23 @@ fn inject_parent(
              body when creating a `{table}` under its parent"
         )));
     }
-    // Match the FK's real type: an i64 FK bound as a JSON string is a row that inserts
-    // on SQLite (affinity) and errors on Postgres.
-    let value = match parent_id.parse::<i64>() {
-        Ok(n) => Value::from(n),
-        Err(_) => Value::String(parent_id.clone()),
+
+    // Ask the COLUMN what type it is. This used to guess from the shape of the value —
+    // `parse::<i64>()`, else a string — which is wrong for a `String` primary key whose
+    // value happens to be numeric (an external reference, a Stripe id): it would be
+    // written as a JSON number, silently, for the one row shape nobody tests.
+    let Some(col) = model.fields.iter().find(|c| &c.name == fk_column) else {
+        return Err(ApiError::Internal(format!(
+            "`{table}` declares `.under(..., \"{fk_column}\")` but has no such column"
+        )));
+    };
+    let Some(value) = umbral::orm::typed_json_value(col, parent_id) else {
+        // The parent id cannot be that column's type at all. `resolve_parent` already
+        // 404s this, so reaching here means the two disagree — say so rather than write
+        // a value of the wrong type.
+        return Err(ApiError::NotFound(format!(
+            "`{parent_id}` is not a valid `{table}.{fk_column}`"
+        )));
     };
     body.insert(fk_column.clone(), value);
     Ok(())
@@ -3199,10 +3212,11 @@ fn inject_parent(
 
 fn inject_owner_field(
     cfg: &RestPlugin,
-    table: &str,
+    model: &ModelMeta,
     identity: Option<&Identity>,
     body: &mut serde_json::Map<String, Value>,
 ) -> Result<(), ApiError> {
+    let table = &model.table;
     let Some(owner_col) = cfg.owner_fields.get(table) else {
         return Ok(());
     };
@@ -3214,9 +3228,25 @@ fn inject_owner_field(
             "`{owner_col}` is set from your identity and must not be supplied in the request body"
         )));
     }
-    let value = match id.user_id.parse::<i64>() {
-        Ok(n) => Value::from(n),
-        Err(_) => Value::String(id.user_id.clone()),
+
+    // Ask the COLUMN, not the value (gaps3 #59). The old shape —
+    // `id.user_id.parse::<i64>()`, else a string — guessed the owner column's type from
+    // whether the id LOOKED like a number. A UUID user model fell to the string arm and
+    // worked by luck; a `String`-keyed user model whose ids happen to be numeric got its
+    // owner column written as a JSON number.
+    let Some(col) = model.fields.iter().find(|c| &c.name == owner_col) else {
+        return Err(ApiError::Internal(format!(
+            "`{table}` declares `.owner_field(\"{owner_col}\")` but has no such column"
+        )));
+    };
+    let Some(value) = umbral::orm::typed_json_value(col, &id.user_id) else {
+        // The authenticated key cannot be this column's type. That is a wiring error
+        // (an i64 owner column on a UUID user model), not a client mistake.
+        return Err(ApiError::Internal(format!(
+            "identity key `{}` is not a valid `{table}.{owner_col}` — the owner column's \
+             type and the active user model's primary key disagree",
+            id.user_id
+        )));
     };
     body.insert(owner_col.clone(), value);
     Ok(())
@@ -3318,12 +3348,12 @@ async fn create_impl(
     // create a row owned by someone else). No-op unless `.owner_field(col)` was
     // declared. Runs before the nested split so both flat and nested creates
     // inject the parent's owner.
-    inject_owner_field(cfg, &table, identity.as_ref(), &mut body)?;
+    inject_owner_field(cfg, &model, identity.as_ref(), &mut body)?;
 
     // gaps3 #29 item 2: the parent id comes from the URL, and OVERRIDES whatever the
     // body claimed. The URL is the authority here — a body that disagrees with it is at
     // best confused and at worst an attempt to plant a row under someone else's parent.
-    inject_parent(&table, parent_scope.as_ref(), &mut body)?;
+    inject_parent(&model, parent_scope.as_ref(), &mut body)?;
 
     // Flat path (the common case) — unchanged, zero overhead. The ORM owns
     // pre-validation + constraint classification + noform-stripping;
@@ -3395,10 +3425,10 @@ async fn bulk_create(
         cfg.strip_hidden_for_write(table, &mut body);
         // gaps3 #16: owner-field injection per item — same rule as single create,
         // so bulk can't be used to forge ownership on any row.
-        inject_owner_field(cfg, table, identity, &mut body)?;
+        inject_owner_field(cfg, &model, identity, &mut body)?;
         // gaps3 #29 item 2: per item, same rule as single create — bulk can't be used
         // to plant a child under a different parent than the URL names.
-        inject_parent(table, parent_scope, &mut body)?;
+        inject_parent(&model, parent_scope, &mut body)?;
         let mut row = as_user(
             identity,
             umbral::orm::DynQuerySet::for_meta(&model).insert_json_in_tx(&body, &mut tx),

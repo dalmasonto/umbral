@@ -83,9 +83,25 @@ pub struct ActionContext {
     /// The custom action's name as written in the URL
     /// (e.g. `"publish"`).
     pub name: String,
-    /// Detail-scope only: the primary-key value the client sent, as
-    /// the raw URL segment. Parse with `.parse::<i64>()` (or whatever
-    /// matches your PK type). `None` for collection-scope actions.
+    /// Detail-scope only: the primary-key value the client sent, as the raw URL segment.
+    /// `None` for collection-scope actions.
+    ///
+    /// **Parse it against your model's PK type, not against `i64`** (gaps3 #59). This
+    /// doc-comment used to say "parse with `.parse::<i64>()`", which is wrong the moment
+    /// a model has a `String` or `Uuid` primary key — and doc-comments that hand you a
+    /// snippet decide the code that gets written:
+    ///
+    /// ```ignore
+    /// let pk: <Post as Model>::PrimaryKey = ctx.pk.as_deref().unwrap_or_default().parse()?;
+    /// ```
+    ///
+    /// Or skip parsing entirely and let the ORM coerce it against the column:
+    ///
+    /// ```ignore
+    /// Post::objects().filter(post::ID.eq(pk)) // typed
+    /// // or, on the dynamic path:
+    /// DynQuerySet::for_meta(&meta).filter_eq_string(&pk_name, raw)
+    /// ```
     pub pk: Option<String>,
     /// Whoever the auth backend resolved. `None` is anonymous.
     pub identity: Option<Identity>,

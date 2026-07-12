@@ -815,8 +815,13 @@ fn session_view_from_record(token: &str, record: Option<&SessionRecord>) -> Opti
 /// Read the request's session cookie and return the stringified user
 /// id stashed on the active session, if any. The result is the value
 /// `umbral_auth::login_with_request` (or any other login helper)
-/// stored via [`create_session`]; for an `AuthUser`-shaped i64 PK,
-/// `.parse::<i64>().ok()` round-trips it back.
+/// stored via [`create_session`].
+///
+/// **Parse it against the user model's own PK type, not `i64`** (gaps3 #59). This used
+/// to hand you `.parse::<i64>().ok()`, which is exactly the assumption this API exists to
+/// avoid: the id is stored as text precisely so a `String`- or `Uuid`-keyed `UserModel`
+/// works. Use `<U as Model>::PrimaryKey`'s `FromStr` (what `current_user_as::<U>` does),
+/// or `Identity::pk::<T>()` when you are holding an `Identity`.
 ///
 /// Returns `None` on any of: no cookie, expired session, anonymous
 /// session (`user_id IS NULL`). The user-id parse failure mode is

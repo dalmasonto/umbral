@@ -87,40 +87,68 @@ impl<A: Authentication> Authentication for WithPermissions<A> {
     async fn authenticate(&self, headers: &http::HeaderMap) -> Option<Identity> {
         let mut identity = self.inner.authenticate(headers).await?;
 
-        // Pull `is_active` and `is_superuser` off the user row. A None
-        // return here is "user vanished between authenticate and now,"
-        // which shouldn't be fatal — fall through and treat as inactive
-        // non-superuser (deny-by-default). The default `AuthUser` keys by
-        // i64; custom user models can key by any string, so parse on the
-        // way in and skip the lookup if the PK doesn't fit (the codename
-        // grants below still work, since `user_perms` already speaks
-        // strings).
-        let (is_active, is_superuser) = match identity.user_id.parse::<i64>() {
-            Ok(auth_user_id) => Manager::<AuthUser>::default()
-                .filter(Predicate::<AuthUser>::col_eq("id", auth_user_id))
-                .first()
-                .await
-                .ok()
-                .flatten()
-                .map(|u| (u.is_active, u.is_superuser && u.is_active))
-                .unwrap_or((false, false)),
-            Err(_) => (false, false),
+        // gaps3 #59 — THREE states, not two.
+        //
+        // "The user row says inactive" and "this identity is not an `AuthUser` at all"
+        // are different facts, and this code used to collapse both into `false`. The
+        // built-in `AuthUser` keys by `i64`; a custom `UserModel` may key by `String` or
+        // `Uuid`, and its id will never parse as an `i64` — so EVERY request from such a
+        // user landed in the `Err(_) => (false, false)` arm. That wrote
+        // `extras["is_active"] = false`, which makes `HasPermission::check` return
+        // Forbidden before it even looks at a codename, AND skipped populating
+        // `extras["permissions"]` entirely.
+        //
+        // Net effect: every REST route gated by a permission returned 403 to every
+        // non-i64-keyed user, permanently, silently — superusers included. The comment
+        // that used to sit here even claimed "the codename grants below still work";
+        // they did not, because this line had already turned them off.
+        //
+        // `middleware.rs::auth_user_flags` got this right: a non-i64 id means "not the
+        // built-in AuthUser", so fall through to the string-keyed `has_perm` rather than
+        // deny. This now matches it.
+        let auth_user_flags: Option<(bool, bool)> = match identity.user_id.parse::<i64>() {
+            Ok(auth_user_id) => Some(
+                Manager::<AuthUser>::default()
+                    .filter(Predicate::<AuthUser>::col_eq("id", auth_user_id))
+                    .first()
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|u| (u.is_active, u.is_superuser && u.is_active))
+                    // The id IS an i64 but the row is gone — the user vanished between
+                    // authenticate and now. Deny-by-default, as before.
+                    .unwrap_or((false, false)),
+            ),
+            // Not an `AuthUser` id. We cannot read this user model's row from here (the
+            // active `UserModel` is a compile-time type this plugin does not know), so we
+            // assert NOTHING about its flags and let the codename check govern. That is
+            // not fail-open: `user_perms` is keyed by the string id, and a user with no
+            // grants is still denied — by the permission check, which is the thing whose
+            // job that is.
+            Err(_) => None,
         };
-        // Store both flags so `HasPermission::check` can read them
-        // without touching the database — it is intentionally sync.
-        identity
-            .extras
-            .insert("is_active".to_string(), serde_json::Value::Bool(is_active));
+
+        // Store the flags so `HasPermission::check` can read them without touching the
+        // database — it is intentionally sync. An ABSENT `is_active` means "unknowable",
+        // and `check` already documents that it gives absence the benefit of the doubt;
+        // an explicit `false` still denies.
+        let is_superuser = auth_user_flags.map(|(_, su)| su).unwrap_or(false);
+        if let Some((is_active, _)) = auth_user_flags {
+            identity
+                .extras
+                .insert("is_active".to_string(), serde_json::Value::Bool(is_active));
+        }
         identity.extras.insert(
             "is_superuser".to_string(),
             serde_json::Value::Bool(is_superuser),
         );
 
-        // Skip the perm-set DB read for superusers (they bypass every
-        // codename check, so the list isn't load-bearing) and for
-        // inactive users (their session is stale — deny-by-default, so
-        // storing codenames would be misleading and wasteful).
-        if is_active && !is_superuser {
+        // Skip the perm-set DB read for superusers (they bypass every codename check, so
+        // the list isn't load-bearing) and for KNOWN-inactive users (their session is
+        // stale). A custom user model — flags unknowable — must still get its codenames,
+        // because for that user the codename check is the ONLY authorization there is.
+        let known_inactive = matches!(auth_user_flags, Some((false, _)));
+        if !known_inactive && !is_superuser {
             if let Ok(perms) = crate::user_perms(&identity.user_id).await {
                 let arr: Vec<serde_json::Value> =
                     perms.into_iter().map(serde_json::Value::String).collect();

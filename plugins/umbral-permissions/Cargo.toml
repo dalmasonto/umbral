@@ -47,3 +47,9 @@ rest = ["dep:umbral-rest", "dep:async-trait"]
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tempfile = "3"
+async-trait = "0.1"
+umbral-rest = { path = "../umbral-rest", version = "0.0.6" }
+# Self-dev-dep so `cargo test` turns the optional `rest` feature ON. Without it the
+# `rest` module — and the gaps3 #59 regression test for it — would not even compile in
+# `cargo test --workspace`, which is how a total-403 bug survived unnoticed.
+umbral-permissions = { path = ".", features = ["rest"] }
