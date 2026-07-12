@@ -130,6 +130,10 @@ pub(super) fn build_insert_one_for<T: Model>(
         // same column normalized or not depending on who wrote the row.
         let val =
             crate::orm::write::normalize_json(field.trim, field.lowercase, &val).unwrap_or(val);
+        // features #83: app-defined clean/validate hooks, at the same seam as the
+        // declarative normalizers — so a hook fires for EVERY writer, not just the
+        // ones that happen to arrive through REST.
+        let val = crate::orm::cleaners::apply(T::TABLE, field.name, &val)?.unwrap_or(val);
         // Reject a non-nullable FK left at the id-0 unset placeholder
         // (ForeignKey::default) before binding it — see
         // [`reject_unset_fk_placeholder`].
@@ -218,6 +222,7 @@ pub(super) fn build_insert_many_for<T: Model>(
                 // bulk_create must not be the path that skips it.
                 let val = crate::orm::write::normalize_json(field.trim, field.lowercase, &val)
                     .unwrap_or(val);
+                let val = crate::orm::cleaners::apply(T::TABLE, field.name, &val)?.unwrap_or(val);
                 reject_unset_fk_placeholder(field, &val)?;
                 json_to_sea_value(
                     field.ty,

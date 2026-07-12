@@ -1939,6 +1939,10 @@ impl<'a> DynQuerySet<'a> {
             // canonical value (the typed path is caller-controlled).
             let normalized_json = normalize_json_for_col(col, json);
             let json = normalized_json.as_ref().unwrap_or(json);
+            // features #83: app-defined clean/validate hooks. Before masking, so a
+            // hook sees the plaintext it is meant to inspect.
+            let cleaned_json = crate::orm::cleaners::apply(&self.meta.table, &col.name, json)?;
+            let json = cleaned_json.as_ref().unwrap_or(json);
             // Masked columns: seal the plaintext before binding so the dynamic
             // write path encrypts at rest too (audit_2 core-orm C1).
             let sealed = crate::orm::write::seal_masked_json(col, json)?;
@@ -2161,6 +2165,10 @@ impl<'a> DynQuerySet<'a> {
             // canonical value (the typed path is caller-controlled).
             let normalized_json = normalize_json_for_col(col, json);
             let json = normalized_json.as_ref().unwrap_or(json);
+            // features #83: app-defined clean/validate hooks. Before masking, so a
+            // hook sees the plaintext it is meant to inspect.
+            let cleaned_json = crate::orm::cleaners::apply(&self.meta.table, &col.name, json)?;
+            let json = cleaned_json.as_ref().unwrap_or(json);
             // Masked columns: seal the plaintext before binding so the dynamic
             // write path encrypts at rest too (audit_2 core-orm C1).
             let sealed = crate::orm::write::seal_masked_json(col, json)?;
@@ -3662,6 +3670,9 @@ fn build_insert_plan(
         // before masking / binding (dynamic write path only).
         let normalized_json = normalize_json_for_col(col, json);
         let json = normalized_json.as_ref().unwrap_or(json);
+        // features #83: app-defined clean/validate hooks.
+        let cleaned_json = crate::orm::cleaners::apply(&meta.table, &col.name, json)?;
+        let json = cleaned_json.as_ref().unwrap_or(json);
         // Masked columns: seal the plaintext before binding (audit_2 core-orm C1).
         let sealed = crate::orm::write::seal_masked_json(col, json)?;
         let sea_value = crate::orm::write::json_to_sea_value(

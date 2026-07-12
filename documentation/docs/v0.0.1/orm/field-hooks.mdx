@@ -1,0 +1,63 @@
+---
+title: Custom field rules
+description: register_cleaner — app-specific clean/validate hooks that run on every write path, surfacing as normal field errors.
+sidebar_position: 16
+icon: filter
+tags: [orm, validation, sanitization]
+badge: new
+---
+
+# Custom field rules
+
+The declarative attributes — `#[umbral(trim, lowercase, max_length, email)]` — cover the rules the framework can name. `register_cleaner` is the escape hatch for the ones only your app knows.
+
+```rust
+use umbral::cleaners::register_cleaner;
+
+register_cleaner::<Post>("title", |v| {
+    let s = v.as_str().unwrap_or_default();
+    if s.contains("<script") {
+        return Err("HTML is not allowed in a title".into());   // reject
+    }
+    Ok(json!(s.trim().to_string()))                             // rewrite
+});
+```
+
+One hook shape does both jobs, because in practice they're the same job:
+
+- **`Ok(value)`** — rewrites the value before it's written.
+- **`Err(message)`** — fails the write as a `WriteError::Validator`.
+
+You write the rule; you wire nothing. The rejection arrives keyed to the field, which is the shape **REST already renders as a 400 field-error map**, the `Form<T>` extractor already surfaces, and the **admin already shows inline**.
+
+## It runs on every write path
+
+Hooks fire at the same seam as `trim` / `lowercase` — the typed `create` / `bulk_create` / `update_values`, *and* the dynamic path REST and the admin run on.
+
+<Callout type="warning">
+  This is the whole point. A hook that only fired for REST would **look enforced** while a background job, a seed script, or a data migration walked straight past it — and you'd trust it. A rule you can't trust is worse than no rule.
+</Callout>
+
+## Composing
+
+Hooks run in registration order, each seeing the previous one's output — so a normalise step and a reject step work together:
+
+```rust
+register_cleaner::<Post>("title", |v| Ok(json!(v.as_str().unwrap_or_default().trim())));
+register_cleaner::<Post>("title", |v| {
+    if v.as_str().unwrap_or_default().is_empty() {
+        return Err("title cannot be blank".into());
+    }
+    Ok(v.clone())
+});
+```
+
+The second hook sees the *trimmed* value, so `"   "` is correctly caught as blank rather than sailing through as "non-empty".
+
+## Two deliberate constraints
+
+**A hook on a field that doesn't exist panics at boot.** A misspelled field name would otherwise register a moderation rule that *looks* installed and never runs — the failure you'd least want to discover in production.
+
+**Hooks are synchronous.** A cleaner runs once per field per row inside the write path; an `await` there would put a database round-trip (or a call to a moderation API) in the middle of every insert. If your rule genuinely needs I/O, do it in the handler and pass the result down — that keeps the cost somewhere you can see it.
+
+The framework ships no word lists and no content policy. It ships the hook.

@@ -268,6 +268,11 @@ pub mod check {
 /// without the app adding an `inventory` dependency of its own.
 pub use umbral_core::inventory;
 
+/// Per-field clean / validate hooks (features #83).
+pub mod cleaners {
+    pub use umbral_core::orm::cleaners::{Cleaner, clear_for_tests, register_cleaner};
+}
+
 pub mod migrate {
     //! The migration engine (M5).
     //!
