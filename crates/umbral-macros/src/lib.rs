@@ -2120,6 +2120,16 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     };
 
     let output = quote! {
+        // gaps3 #46: self-register into the link-time model slice, so
+        // `AppBuilder::auto_models()` can find this model without the app naming
+        // it. Costs nothing when auto_models() isn't used — the slice is just
+        // never read.
+        ::umbral::inventory::submit! {
+            ::umbral::migrate::ModelRegistration {
+                meta: || ::umbral::migrate::ModelMeta::for_::<#struct_name>(),
+            }
+        }
+
         impl ::umbral::orm::Model for #struct_name {
             type PrimaryKey = #pk_ty_tokens;
             const NAME: &'static str = #struct_name_str;

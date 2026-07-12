@@ -222,6 +222,8 @@ pub struct AppBuilder {
     /// fill it.
     route_paths: Vec<crate::routes::RouteSpec>,
     models: Vec<ModelMeta>,
+    /// gaps3 #46 — collect link-registered models at build time.
+    auto_models: bool,
     plugins: Vec<Box<dyn Plugin>>,
     templates_dir: Option<std::path::PathBuf>,
     slash_redirect: crate::slash::SlashRedirect,
@@ -310,6 +312,7 @@ impl Default for AppBuilder {
             router: None,
             route_paths: Vec::new(),
             models: Vec::new(),
+            auto_models: false,
             plugins: Vec::new(),
             templates_dir: None,
             slash_redirect: crate::slash::SlashRedirect::default(),
@@ -409,6 +412,37 @@ impl AppBuilder {
     /// migration code can iterate without naming concrete `T` at the
     /// call site. M7's Plugin contract will replace this with
     /// `Plugin::models()` discovered through the plugin registry.
+    /// Register every `#[derive(Model)]` type the binary links, instead of naming
+    /// each one (gaps3 #46).
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .settings(settings)
+    ///     .database("default", pool)
+    ///     .auto_models()          // replaces .model::<Post>().model::<Tag>()....
+    ///     .plugin(RestPlugin::default())
+    ///     .build()?
+    /// ```
+    ///
+    /// Explicit `.model::<T>()` still works and composes with this — the two are
+    /// merged and de-duplicated by table, so adding it to an existing app is safe.
+    ///
+    /// # Why this is opt-in
+    ///
+    /// Discovery is link-time. A model in your **binary** crate is always linked
+    /// and always found. A model in a **library** crate that nothing else
+    /// references can be dropped by the linker, and it would then be missing from
+    /// the registry — which means missing from `makemigrations`, i.e. a table that
+    /// silently never gets created. Making this the default would trade a little
+    /// typing for a failure mode that is invisible until production.
+    ///
+    /// If your models live in a library crate, either `use` it from `main.rs` (so
+    /// the linker keeps it) or keep naming them with `.model::<T>()`.
+    pub fn auto_models(mut self) -> Self {
+        self.auto_models = true;
+        self
+    }
+
     pub fn model<T: Model>(mut self) -> Self {
         self.models.push(ModelMeta::for_::<T>());
         self
@@ -1067,6 +1101,29 @@ impl AppBuilder {
         // for everything and silently disable the #22 guard. A CUSTOM router
         // is asked directly via `allow_relation`.
         //
+        // gaps3 #46: pull in every model the binary link-registered. Merged with
+        // (not instead of) the explicit `.model::<T>()` list, and de-duplicated by
+        // table, so the two compose and adding `auto_models()` to an existing app
+        // can't double-register anything.
+        if self.auto_models {
+            let known: std::collections::HashSet<String> = self
+                .models
+                .iter()
+                .map(|m| m.table.clone())
+                .chain(
+                    sorted_plugins
+                        .iter()
+                        .flat_map(|p| p.models())
+                        .map(|m| m.table),
+                )
+                .collect();
+            for meta in crate::migrate::link_registered_models() {
+                if !known.contains(&meta.table) {
+                    self.models.push(meta);
+                }
+            }
+        }
+
         // gaps3 #54: an `#[umbral(audited)]` model implies the audit table. Register
         // it automatically so `makemigrations` creates it through the normal
         // declare→migrate loop — no special-cased DDL, and no ceremony for the app.

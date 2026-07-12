@@ -7033,3 +7033,25 @@ mod tests {
         }
     }
 }
+
+/// A `#[derive(Model)]` type's self-registration (gaps3 #46).
+///
+/// The derive submits one of these into a link-time slice, so
+/// `AppBuilder::auto_models()` can discover every model the binary links without
+/// the app naming each one. It stores a *function* rather than a `ModelMeta`
+/// because `ModelMeta::for_::<T>()` isn't const — the meta is built on demand at
+/// boot.
+pub struct ModelRegistration {
+    /// Builds this model's meta.
+    pub meta: fn() -> ModelMeta,
+}
+
+inventory::collect!(ModelRegistration);
+
+/// Every model that self-registered via `#[derive(Model)]` in the linked binary.
+pub fn link_registered_models() -> Vec<ModelMeta> {
+    inventory::iter::<ModelRegistration>
+        .into_iter()
+        .map(|r| (r.meta)())
+        .collect()
+}

@@ -9,6 +9,9 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# gaps3 #46: `#[derive(Model)]` self-registers into a link-time slice so
+# `AppBuilder::auto_models()` can discover models without a .model::<T>() per model.
+inventory = "0.3"
 # Shared casing helpers (to_snake_case, pascal_case variants).
 umbral-casing = { path = "../umbral-casing", version = "0.0.6" }
 axum = "0.8"

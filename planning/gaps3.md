@@ -123,7 +123,7 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 43. [x] Field help text now emits a Postgres `COMMENT ON COLUMN` (SQLite has no comment facility; MySQL is not a backend) — archived
 44. [x] CSRF token visible in the admin `hx-headers` attribute — by design (double-submit); the real fix was `Cache-Control: no-store, private` on personalised responses — archived
 45. [x] Framework-enforced read/write permissions by group — not in the ORM (recursion, no denial error type, second global); shipped via `AuthPlugin::with_db_session_var` + Postgres RLS — archived
-46. [ ] How can we detect models instead of doing a .models() and a vec in it?
+46. [x] Detect models instead of a `.model::<T>()` per model — shipped `AppBuilder::auto_models()`: `#[derive(Model)]` self-registers into a link-time slice (inventory), merged + de-duplicated with explicit registration. Opt-in, per the `02-plugin-contract.md` posture: a model in a *library* crate can be dropped by the linker and would then silently vanish from `makemigrations` — archived
 47. [ ] We need to change umbral website landing page to show "How Umbral works" instead of "Why you should use Umbral" statements - This is more of a visual change than a technical one and also it closes both questions safely.
 48. [x] Name-keyed enqueue — shipped: `#[task]` generates a typed handle (`SendWelcome::enqueue(payload)`), plus `enqueue_task::<T>` and `TasksPlugin::periodic_task::<T>` — archived
 49. [x] `PeriodicTask` has no admin model — shipped `umbral_tasks::periodic_admin_model()` (schedule / next_run / last_run / enabled + an Enable-disable bulk action) — archived

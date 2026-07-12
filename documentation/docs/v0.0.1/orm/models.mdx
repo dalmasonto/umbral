@@ -510,3 +510,32 @@ Compared to `get_or_create`, `upsert` is the right call when you want to OVERWRI
 - [Transactions](/docs/v0.0.1/orm/transactions): wrap multiple writes in `umbral::transaction(...)` to commit or roll back atomically.
 - [Querying](/docs/v0.0.1/orm/querying): F-expressions, Q-objects, exclude, projections, sugar (earliest/latest/distinct/explain), mutate-side terminals, subqueries + set ops, JSON column ops.
 - Read the spec at `docs/specs/04-orm-model-and-fields.md` for the full field-type catalogue and the QuerySet surface.
+
+
+## Registering models
+
+Every model has to reach the registry, or it's invisible to `makemigrations`, the admin, and REST. The explicit way names each one:
+
+```rust
+App::builder()
+    .model::<Post>()
+    .model::<Tag>()
+    .model::<Comment>()
+    .build()?
+```
+
+`auto_models()` replaces the whole list — `#[derive(Model)]` self-registers, so the information is already there:
+
+```rust
+App::builder()
+    .auto_models()
+    .build()?
+```
+
+The two compose: a model named explicitly *and* discovered automatically is registered once, so you can add `auto_models()` to an existing app without touching the `.model::<T>()` calls you already have.
+
+<Callout type="warning">
+  **Why it's opt-in rather than the default.** Discovery is *link-time*. A model in your **binary** crate is always linked and always found. A model in a **library** crate that nothing else references can be dropped by the linker — and it would then be missing from the registry, which means missing from `makemigrations`, which means a table that silently never gets created. That failure is invisible until production, so it isn't something to switch on for you.
+
+  If your models live in a library crate, either `use` it from `main.rs` (so the linker keeps it) or keep naming them with `.model::<T>()`.
+</Callout>
