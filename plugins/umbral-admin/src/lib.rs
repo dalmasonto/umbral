@@ -56,7 +56,7 @@ mod views;
 pub mod widgets;
 
 mod auth;
-mod branding;
+pub mod branding;
 mod discovery;
 mod engine;
 mod error;
@@ -312,6 +312,53 @@ impl AdminPlugin {
     /// underneath the site title.
     pub fn site_description(mut self, description: impl Into<String>) -> Self {
         self.branding.site_description = description.into();
+        self
+    }
+
+    /// Show or hide the version string in the admin sidebar and on the login page
+    /// (gaps3 #67).
+    ///
+    /// ```ignore
+    /// AdminPlugin::default().show_version(false)
+    /// ```
+    ///
+    /// On by default, showing umbral's own version. Turning it off is reasonable: an
+    /// admin is a private surface, and telling every visitor which framework version you
+    /// run is free reconnaissance for anyone matching it against a CVE list.
+    /// The resolved branding, for tests. Not part of the stable surface.
+    #[doc(hidden)]
+    pub fn branding_for_tests(&self) -> &branding::AdminBranding {
+        &self.branding
+    }
+
+    pub fn show_version(mut self, show: bool) -> Self {
+        self.branding.version_label = if show {
+            Some(
+                self.branding
+                    .version_label
+                    .unwrap_or_else(crate::branding::umbral_version_label),
+            )
+        } else {
+            None
+        };
+        self
+    }
+
+    /// Show YOUR version instead of umbral's (gaps3 #67).
+    ///
+    /// ```ignore
+    /// AdminPlugin::default().version(concat!("MyShop v", env!("CARGO_PKG_VERSION")))
+    /// ```
+    ///
+    /// The default advertises the framework — which is what the operator of a shop
+    /// almost certainly does NOT want on their staff login page. Whose version an admin
+    /// shows is a product decision, so it is yours to make. Implies `show_version(true)`.
+    ///
+    /// Prefer `env!("CARGO_PKG_VERSION")` over a literal: a hardcoded version is a lie
+    /// waiting for the next release, which is exactly how the admin came to claim
+    /// `v0.0.1` five releases after it stopped being true.
+    pub fn version(mut self, label: impl Into<String>) -> Self {
+        self.branding.version_label = Some(label.into());
         self
     }
 

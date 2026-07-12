@@ -140,7 +140,7 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
             <p
                 class="sidebar-meta text-[10px] text-outline tracking-widest uppercase mt-0.5 truncate"
             >
-                {% if site_description %}{{ site_description }}{% else %}v0.0.1{% endif %}
+                {% if site_description %}{{ site_description }}{% elif admin_version %}{{ admin_version }}{% endif %}
             </p>
         </div>
         <button

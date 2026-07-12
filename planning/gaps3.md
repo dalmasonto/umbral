@@ -225,3 +225,12 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
     **The fix has to hold both ends, and marking the URL unconditionally safe would have been an XSS hole.** `media_url(key)` takes a key that came from an *uploaded filename* — user-controlled — and a key containing `"` closes the `href` attribute: `a" onerror="alert(1)`. So `safe_url` only marks a URL safe when it carries no HTML-special character. A path a template author writes by hand (`css/app.css`) never does; a hostile filename does, and it keeps its armour. Three tests pin both halves.
 
     Worth recording how the test nearly lied: written with `minijinja::render!`, which uses an *unnamed* template — and minijinja decides autoescaping from the template's file extension, so autoescape was OFF and the XSS assertion passed no matter what `safe_url` did. The test only became real once it rendered through a template named `t.html`.
+
+67. [x] **The admin claimed `v0.0.1` on every page — a hardcoded literal, wrong since 0.0.2** — archived. `base.html` and `login.html` carried the string `v0.0.1` verbatim. The workspace has been at 0.0.6 for a while; nothing tied the two together, so it would have gone on being wrong forever. A hardcoded version is not a value, it is a claim nobody is checking.
+
+    Now derived from the crate (`env!("CARGO_PKG_VERSION")`), so it cannot rot. And two controls, because *whose* version an admin shows is a product decision, not the framework's:
+
+    - `AdminPlugin::show_version(false)` — hide it. Arguably the better default for anything public-facing: a login page that announces your framework version is free reconnaissance for anyone matching it against a CVE list.
+    - `AdminPlugin::version(concat!("MyShop v", env!("CARGO_PKG_VERSION")))` — show YOUR version instead of ours. The operator of a shop is not shipping umbral; they are shipping their shop.
+
+    `.version(...)` implies showing it, so it wins after a `show_version(false)` — the caller said what they wanted second. 5 tests, including a source-level guard that fails if any admin template hardcodes a version literal again (a builder test cannot see a template, and the bug was *in* a template).

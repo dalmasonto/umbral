@@ -1,0 +1,43 @@
+---
+title: The version label
+description: Show umbral's version, show yours, or show none.
+sidebar_position: 6
+icon: tag
+tags: [admin, branding]
+badge: new
+---
+
+# The version label
+
+The admin sidebar and login page carry a small version string. By default it is umbral's own, read from the crate at compile time:
+
+```
+umbral v0.0.6
+```
+
+## Show your version instead
+
+Most of the time this is what you actually want. The operator of a shop is not shipping *umbral* — they are shipping *their shop*, and their staff want to know which build they're looking at:
+
+```rust
+AdminPlugin::default()
+    .version(concat!("MyShop v", env!("CARGO_PKG_VERSION")))
+```
+
+<Callout type="warning">
+  Use `env!("CARGO_PKG_VERSION")`, not a string literal. A hardcoded version is a lie waiting for your next release — the admin's own templates hardcoded `v0.0.1` and went on claiming it for five releases after it stopped being true.
+</Callout>
+
+## Show nothing
+
+```rust
+AdminPlugin::default().show_version(false)
+```
+
+Reasonable, and arguably the better default for a public-facing deployment: an admin login page that announces your framework version is free reconnaissance for anyone matching it against a CVE list.
+
+## Which wins
+
+`.version(...)` implies showing it, so an explicit label after `show_version(false)` wins — the caller said what they wanted second. `site_description`, if you set one, takes the sidebar slot instead; the login page always uses the version label.
+
+Design notes: `planning/gaps3.md` #67.

@@ -321,6 +321,15 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             minijinja::Value::from(branding.site_description),
         );
         env.add_global("brand_color", minijinja::Value::from(branding.brand_color));
+        // gaps3 #67 — `admin_version`. `None` when the operator called
+        // `show_version(false)`, which renders as falsy so the templates simply omit it.
+        env.add_global(
+            "admin_version",
+            match branding.version_label {
+                Some(v) => minijinja::Value::from(v),
+                None => minijinja::Value::from(()),
+            },
+        );
         // Gap 107: the admin base path. Templates reference this
         // via `{{ admin_base }}` so cross-page links and HTMX
         // targets resolve under whatever prefix the developer

@@ -28,6 +28,23 @@ pub struct AdminBranding {
     /// click. When `false`, the index always renders the dashboard and
     /// the changelist handler stops writing `last_path` (no dead data).
     pub restore_last_path: bool,
+    /// gaps3 #67 — the version string in the sidebar and on the login page.
+    ///
+    /// `None` hides it entirely (`AdminPlugin::show_version(false)`). The default is
+    /// umbral's OWN version, read from `CARGO_PKG_VERSION` at compile time — the
+    /// templates used to hardcode the literal `v0.0.1`, which had been wrong since
+    /// 0.0.2 and would have gone on being wrong forever.
+    ///
+    /// An app that would rather advertise ITS version than the framework's sets its own
+    /// string: `AdminPlugin::default().version(concat!("MyShop v", env!("CARGO_PKG_VERSION")))`.
+    /// Whose version an admin should show is a product decision, not ours.
+    pub version_label: Option<String>,
+}
+
+/// umbral's own version — the crate version of `umbral-admin`, which tracks the
+/// workspace. Not a literal, so it cannot go stale.
+pub fn umbral_version_label() -> String {
+    format!("umbral v{}", env!("CARGO_PKG_VERSION"))
 }
 
 impl Default for AdminBranding {
@@ -38,6 +55,7 @@ impl Default for AdminBranding {
             brand_color: String::new(),
             base_path: "/admin".to_string(),
             restore_last_path: true,
+            version_label: Some(umbral_version_label()),
         }
     }
 }

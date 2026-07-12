@@ -186,9 +186,11 @@
 
         <!-- Footer -->
         <footer class="mt-xl flex justify-center items-center space-x-md">
+            {% if admin_version %}
             <span class="font-label-md text-label-md text-outline"
-                >Umbral v0.0.1</span
+                >{{ admin_version }}</span
             >
+            {% endif %}
         </footer>
     </div>
 
