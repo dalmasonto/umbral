@@ -17,8 +17,21 @@ cargo run -- gen-client --out web/src/api/
 
 That writes two files:
 
-- `models.ts` — the row interfaces + choice unions (the `umbral typegen` output, scoped to your REST-exposed models).
-- `client.ts` — a `Filters`/`Ordering` type per model, the list envelope matching your paginator, and the `Umbral` runtime. Re-exports everything from `models.ts`, so your app imports from one place.
+- `client.js` — **the whole runtime, in one self-contained ES module.** No imports, no build step: load it from a plain `<script type="module">`, or let any bundler take it as-is.
+- `client.d.ts` — every type: row interfaces, choice unions, a `Filters`/`Ordering`/`Create`/`Update` per model, the list envelope matching your paginator, and the class declarations.
+
+<Callout type="info">
+  **Why no `.ts` runtime?** TypeScript types *erase* — your row and filter types compile to zero JavaScript. So shipping `.js` + `.d.ts` means the runtime exists exactly once (no bundler, no transpile step, no second copy to drift), while `import { Umbral } from "./api/client"` still type-checks fully: TS resolves the `.d.ts` for types, your bundler resolves the `.js` for code. It's the shape every published SDK uses — and it means a plain-JavaScript app can use the SDK with no toolchain at all.
+</Callout>
+
+```html
+<!-- No build step, no bundler, no TypeScript. -->
+<script type="module">
+  import { Umbral } from "/api/client.js";
+  const api = new Umbral("");
+  const page = await api.from("post").filter({ status: "published" }).list();
+</script>
+```
 
 ## Generate and use
 
@@ -42,7 +55,7 @@ That writes two files:
     ```
   </Step>
   <Step title="Import and call">
-    `client.ts` is dependency-free and re-exports the row types, so you import everything from one place.
+    `client.js` is dependency-free and `client.d.ts` sits beside it, so one import gets you the runtime *and* the types.
 
     ```ts
     import { Umbral, type Post } from "./api/client";
@@ -213,7 +226,7 @@ cargo run -- gen-client --out web/src/api/ --check
 
 ## Realtime
 
-The same client subscribes to live model-change events. `client.on(table, handlers, { group })` opens the [realtime plugin](../realtime/index)'s SSE stream and routes `created` / `updated` / `deleted` to typed handlers:
+The same client subscribes to live model-change events. `client.on(table, handlers, { group })` routes `created` / `updated` / `deleted` to typed handlers:
 
 ```ts
 const sub = api.on("post", {
@@ -236,8 +249,13 @@ RealtimePlugin::new()
     .expose::<Post>(Expose::to_group("public:posts"))
 ```
 
+Under the hood `.on(...)` **does not open its own connection**. It loads the [realtime plugin](../realtime/index)'s already-served `/realtime/client.js` and routes through `umbral.realtime.model(...)` — so it inherits the hard parts for free:
+
+- **One SSE connection shared across every tab** (via `SharedWorker`, union-routed). A client that opened an `EventSource` per subscription would use one connection per model and exhaust the browser's ~6-connections-per-origin cap at six subscriptions.
+- Presence, `@broadcast` / `@user:` channel routing, and graceful degradation (`SharedWorker → EventSource → no-op` under CSP).
+
 <Callout type="info">
-  `group` is required and must match the group you `expose(...)`-d to. The realtime base path defaults to `/realtime`; override it with `new Umbral(url, { realtimePath: "/rt" })` if you remounted the plugin. Subscriptions authenticate with the session cookie (`withCredentials`), matching `with_auth_sessions()`.
+  `group` is required and must match the group you `expose(...)`-d to. The realtime base path defaults to `/realtime`; override it with `new Umbral(url, { realtimePath: "/rt" })` if you remounted the plugin. `.on(...)` returns synchronously and is a **no-op during SSR** (no `document`), so a component can subscribe on mount and still render on the server.
 </Callout>
 
 ## Hidden fields are write-only
@@ -252,6 +270,6 @@ Design rationale: `planning/gaps3.md` #38 and `planning/building/kikosi.md` #1.
 
 ## See also
 
-- [TypeScript types](../orm/typegen) — the `models.ts` half, usable on its own.
+- [TypeScript types](../orm/typegen) — `umbral typegen`, if you want only the row types and not the client.
 - [Exposure](./exposure) — which models and fields the REST layer serves.
 - [Filtering & search](./index) — the query params the client wraps.

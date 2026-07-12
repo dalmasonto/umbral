@@ -29,20 +29,29 @@ pub struct PaPost {
     pub title: String,
 }
 
-/// Generate `client.ts` for a single model with the given paginator + schemes.
+/// Generate the client for a single model with the given paginator + schemes.
 fn gen_client(
     style: PaginationStyle,
     schema: Option<PaginationSchema>,
     schemes: &[(String, Value)],
-) -> String {
-    let (_models, client) = umbral_openapi::client_gen::generate_with(
+) -> umbral_openapi::client_gen::GeneratedClient {
+    umbral_openapi::client_gen::generate_with(
         &[ModelMeta::for_::<PaPost>()],
         "/api",
         style,
         schema,
         schemes,
-    );
-    client
+    )
+}
+
+/// Types (envelope, builder signatures) live in the declaration file.
+fn dts(style: PaginationStyle, schema: Option<PaginationSchema>) -> String {
+    gen_client(style, schema, &[]).dts
+}
+
+/// Runtime (builder impls, auth header logic) lives in the JS module.
+fn js_with(style: PaginationStyle, schemes: &[(String, Value)]) -> String {
+    gen_client(style, None, schemes).js
 }
 
 #[track_caller]
@@ -81,7 +90,7 @@ fn cursor_schema() -> PaginationSchema {
 
 #[test]
 fn page_number_envelope_and_builder_methods() {
-    let c = gen_client(PaginationStyle::PageNumber, None, &[]);
+    let d = dts(PaginationStyle::PageNumber, None);
     // Envelope carries the page-number metadata.
     for field in [
         "total_pages: number;",
@@ -89,52 +98,83 @@ fn page_number_envelope_and_builder_methods() {
         "page_size: number;",
         "next: number | null;",
     ] {
-        assert_has(&c, field);
+        assert_has(&d, field);
     }
-    // Query builder gains page / pageSize.
-    assert_has(&c, "page(n: number): this");
-    assert_has(&c, "pageSize(n: number): this");
+    // Builder methods are declared...
+    assert_has(&d, "page(v: number): this;");
+    assert_has(&d, "pageSize(v: number): this;");
+    // ...and implemented against the right wire params.
+    let j = js_with(PaginationStyle::PageNumber, &[]);
+    assert_has(
+        &j,
+        r#"page(v) { this.params.set("page", String(v)); return this; }"#,
+    );
+    assert_has(
+        &j,
+        r#"pageSize(v) { this.params.set("page_size", String(v)); return this; }"#,
+    );
 }
 
 #[test]
 fn limit_offset_envelope_and_builder_methods() {
-    let c = gen_client(PaginationStyle::LimitOffset, None, &[]);
-    assert_has(&c, "limit: number;");
-    assert_has(&c, "offset: number;");
-    assert_has(&c, "limit(n: number): this");
-    assert_has(&c, "offset(n: number): this");
+    let d = dts(PaginationStyle::LimitOffset, None);
+    assert_has(&d, "  limit: number;");
+    assert_has(&d, "  offset: number;");
+    assert_has(&d, "limit(v: number): this;");
+    assert_has(&d, "offset(v: number): this;");
+
+    let j = js_with(PaginationStyle::LimitOffset, &[]);
+    assert_has(
+        &j,
+        r#"limit(v) { this.params.set("limit", String(v)); return this; }"#,
+    );
+    assert_has(
+        &j,
+        r#"offset(v) { this.params.set("offset", String(v)); return this; }"#,
+    );
 }
 
 /// A custom paginator that DECLARED its shape gets a typed envelope + typed
 /// builder methods — the headline of "typed via metadata".
 #[test]
 fn custom_with_schema_is_fully_typed() {
-    let c = gen_client(PaginationStyle::Custom, Some(cursor_schema()), &[]);
+    let d = dts(PaginationStyle::Custom, Some(cursor_schema()));
     // Typed envelope, nullable honored.
-    assert_has(&c, "  results: T[];");
-    assert_has(&c, "  next_cursor: string | null;");
-    assert_has(&c, "  prev_cursor: string | null;");
-    assert_has(&c, "  has_more: boolean;");
+    assert_has(&d, "  results: T[];");
+    assert_has(&d, "  next_cursor: string | null;");
+    assert_has(&d, "  prev_cursor: string | null;");
+    assert_has(&d, "  has_more: boolean;");
     // The permissive index signature must NOT be there — the shape is known.
-    assert_absent(&c, "[key: string]: unknown;");
+    assert_absent(&d, "[key: string]: unknown;");
     // One typed builder method per declared param (snake_case → camelCase).
-    assert_has(&c, "cursor(v: string): this");
-    assert_has(&c, "pageSize(v: number): this");
+    assert_has(&d, "cursor(v: string): this;");
+    assert_has(&d, "pageSize(v: number): this;");
+
+    // And the runtime sets the declared wire params.
+    let c = gen_client(PaginationStyle::Custom, Some(cursor_schema()), &[]);
+    assert_has(
+        &c.js,
+        r#"cursor(v) { this.params.set("cursor", String(v)); return this; }"#,
+    );
+    assert_has(
+        &c.js,
+        r#"pageSize(v) { this.params.set("page_size", String(v)); return this; }"#,
+    );
 }
 
 /// A custom paginator that did NOT declare a shape gets an honest permissive
 /// envelope + the generic `.param(...)` escape hatch — no invented fields.
 #[test]
 fn custom_without_schema_is_permissive() {
-    let c = gen_client(PaginationStyle::Custom, None, &[]);
-    assert_has(&c, "  results?: T[];");
-    assert_has(&c, "  [key: string]: unknown;");
+    let d = dts(PaginationStyle::Custom, None);
+    assert_has(&d, "  results?: T[];");
+    assert_has(&d, "  [key: string]: unknown;");
     // No page-number/limit-offset fields leaked in.
-    assert_absent(&c, "total_pages");
-    assert_absent(&c, "current_page");
+    assert_absent(&d, "total_pages");
+    assert_absent(&d, "current_page");
 }
 
-/// The generic escape hatch is present for every style, custom or not.
+/// The generic escape hatch is present for every style, declared and implemented.
 #[test]
 fn generic_param_escape_hatch_is_always_present() {
     for style in [
@@ -144,13 +184,16 @@ fn generic_param_escape_hatch_is_always_present() {
     ] {
         let c = gen_client(style, None, &[]);
         assert_has(
-            &c,
-            "param(key: string, value: string | number | boolean): this",
+            &c.dts,
+            "param(key: string, value: string | number | boolean): this;",
         );
+        assert_has(&c.js, "param(key, value) {");
     }
 }
 
 // ---- Auth (derived from the declared security scheme) -------------------
+//
+// The header logic lives in the runtime, so these assert against `client.js`.
 
 fn scheme(name: &str, value: Value) -> Vec<(String, Value)> {
     vec![(name.to_string(), value)]
@@ -159,55 +202,51 @@ fn scheme(name: &str, value: Value) -> Vec<(String, Value)> {
 /// A standard `http`/`bearer` scheme → `Authorization: Bearer <token>`.
 #[test]
 fn bearer_scheme_yields_bearer_prefix() {
-    let c = gen_client(
+    let j = js_with(
         PaginationStyle::None,
-        None,
         &scheme("bearerAuth", json!({ "type": "http", "scheme": "bearer" })),
     );
-    assert_has(&c, r#"this.opts.tokenPrefix ?? "Bearer""#);
+    assert_has(&j, r#"this.opts.tokenPrefix ?? "Bearer""#);
 }
 
 /// The prefix is NOT hardcoded: an `http` scheme whose `scheme` is `token`
 /// yields `Authorization: Token <token>`. This is the case the user called out.
 #[test]
 fn token_scheme_yields_token_prefix_not_bearer() {
-    let c = gen_client(
+    let j = js_with(
         PaginationStyle::None,
-        None,
         &scheme("tokenAuth", json!({ "type": "http", "scheme": "token" })),
     );
-    assert_has(&c, r#"this.opts.tokenPrefix ?? "Token""#);
-    assert_absent(&c, r#"this.opts.tokenPrefix ?? "Bearer""#);
+    assert_has(&j, r#"this.opts.tokenPrefix ?? "Token""#);
+    assert_absent(&j, r#"this.opts.tokenPrefix ?? "Bearer""#);
 }
 
 /// The api-key header is NOT hardcoded: the declared `name` is baked as the
 /// default header — `x-umbral-api-key`, whatever the API chose.
 #[test]
 fn api_key_header_comes_from_the_scheme() {
-    let c = gen_client(
+    let j = js_with(
         PaginationStyle::None,
-        None,
         &scheme(
             "apiKeyAuth",
             json!({ "type": "apiKey", "in": "header", "name": "X-Umbral-Api-Key" }),
         ),
     );
-    assert_has(&c, r#"this.opts.apiKeyHeader ?? "X-Umbral-Api-Key""#);
-    assert_absent(&c, r#"this.opts.apiKeyHeader ?? "X-API-Key""#);
+    assert_has(&j, r#"this.opts.apiKeyHeader ?? "X-Umbral-Api-Key""#);
+    assert_absent(&j, r#"this.opts.apiKeyHeader ?? "X-API-Key""#);
 }
 
 /// A cookie (session) apiKey scheme flips fetch to send credentials by default.
 #[test]
 fn cookie_scheme_sends_credentials() {
-    let c = gen_client(
+    let j = js_with(
         PaginationStyle::None,
-        None,
         &scheme(
             "sessionAuth",
             json!({ "type": "apiKey", "in": "cookie", "name": "sessionid" }),
         ),
     );
-    assert_has(&c, r#"this.opts.credentials ?? "include""#);
+    assert_has(&j, r#"this.opts.credentials ?? "include""#);
 }
 
 /// With no scheme declared (the common case — auth undocumented), the client
@@ -215,10 +254,10 @@ fn cookie_scheme_sends_credentials() {
 /// dynamic hook. It sends no credentials by default.
 #[test]
 fn no_scheme_falls_back_to_generic_defaults() {
-    let c = gen_client(PaginationStyle::None, None, &[]);
-    assert_has(&c, r#"this.opts.tokenPrefix ?? "Bearer""#);
-    assert_has(&c, r#"this.opts.apiKeyHeader ?? "X-API-Key""#);
-    assert_has(&c, "this.opts.credentials ?? undefined");
+    let j = js_with(PaginationStyle::None, &[]);
+    assert_has(&j, r#"this.opts.tokenPrefix ?? "Bearer""#);
+    assert_has(&j, r#"this.opts.apiKeyHeader ?? "X-API-Key""#);
+    assert_has(&j, "this.opts.credentials ?? undefined");
 }
 
 /// The dynamic hook is always available — for a rotating JWT / refresh flow /
@@ -227,11 +266,11 @@ fn no_scheme_falls_back_to_generic_defaults() {
 fn dynamic_get_auth_headers_is_always_present() {
     let c = gen_client(PaginationStyle::None, None, &[]);
     assert_has(
-        &c,
+        &c.dts,
         "getAuthHeaders?: () => Record<string, string> | Promise<Record<string, string>>;",
     );
     assert_has(
-        &c,
+        &c.js,
         "Object.assign(headers, await this.opts.getAuthHeaders());",
     );
 }

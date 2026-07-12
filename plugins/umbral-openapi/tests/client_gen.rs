@@ -1,21 +1,24 @@
-//! gaps3 #38 / Kikosi #1 — the typed TypeScript query client.
+//! gaps3 #38 / Kikosi #1 — the typed client (`client.js` + `client.d.ts`).
 //!
 //! Drives `client_gen::generate_for` with real `#[derive(Model)]` types (so the
 //! derive → registry → generator path is under test) and asserts the structural
 //! guarantees a frontend relies on: a `Filters` type per model whose keys are
 //! exactly the REST-filterable (column, lookup) pairs, whose value types match
-//! the field types, with the primary key excluded — and the `Umbral` client that
-//! keys `.from(...)` off the exposed tables.
+//! the field types, with the primary key excluded — plus the write DTOs, the
+//! per-model id types, and the `Umbral` runtime that keys `.from(...)` off the
+//! exposed tables.
+//!
+//! Types live in `client.d.ts`; the runtime (one copy, no transpile step) lives
+//! in `client.js`. Each assertion targets whichever file the guarantee belongs
+//! to.
 //!
 //! The generator reads `umbral_rest` config via `OnceLock`s that default
 //! gracefully when unset (exposed, filters on, base path `/api`, no pagination),
 //! so no `App::build` is needed here.
-//!
-//! `tests/client_gen_tsc.rs` compiles the emitted output with a real `tsc` to
-//! prove the types actually constrain a consumer.
 
 use serde::{Deserialize, Serialize};
 use umbral::migrate::ModelMeta;
+use umbral_openapi::client_gen::GeneratedClient;
 
 #[derive(
     Debug, Default, Clone, Copy, PartialEq, Eq, umbral::orm::Choices, Serialize, Deserialize,
@@ -71,21 +74,22 @@ pub struct CgTicket {
     pub subject: String,
 }
 
-fn client() -> String {
-    let (_models, client) = umbral_openapi::client_gen::generate_for(&[
-        ModelMeta::for_::<CgAuthor>(),
-        ModelMeta::for_::<CgPost>(),
-        ModelMeta::for_::<CgTicket>(),
-    ]);
-    client
-}
-
-fn models() -> String {
+fn generated() -> GeneratedClient {
     umbral_openapi::client_gen::generate_for(&[
         ModelMeta::for_::<CgAuthor>(),
         ModelMeta::for_::<CgPost>(),
+        ModelMeta::for_::<CgTicket>(),
     ])
-    .0
+}
+
+/// The declaration file — every type.
+fn dts() -> String {
+    generated().dts
+}
+
+/// The runtime module — one copy, no types.
+fn js() -> String {
+    generated().js
 }
 
 #[track_caller]
@@ -96,50 +100,49 @@ fn assert_has(haystack: &str, needle: &str) {
     );
 }
 
-/// The types file is exactly the typegen output for the exposed models, so it
-/// carries the row interfaces and choice unions the client imports.
+/// The declaration file carries the row interfaces and choice unions.
 #[test]
-fn models_file_has_the_row_types() {
-    let m = models();
-    assert_has(&m, "export interface CgPost {");
+fn dts_has_the_row_types() {
+    let d = dts();
+    assert_has(&d, "export interface CgPost {");
     assert_has(
-        &m,
+        &d,
         r#"export type CgPostStatus = "draft" | "published" | "archived";"#,
     );
-    assert_has(&m, "export interface CgAuthor {");
+    assert_has(&d, "export interface CgAuthor {");
 }
 
 /// The headline feature: a per-model filter type whose keys are the exact
 /// query-params the REST list endpoint accepts, typed to the field's type.
 #[test]
 fn filters_type_lists_every_lookup_typed_to_the_field() {
-    let c = client();
-    assert_has(&c, "export interface CgPostFilters {");
+    let d = dts();
+    assert_has(&d, "export interface CgPostFilters {");
 
     // choices column → the enum union, plus __ne and __in (array of it).
-    assert_has(&c, r#"  "status"?: CgPostStatus;"#);
-    assert_has(&c, r#"  "status__in"?: CgPostStatus[];"#);
+    assert_has(&d, r#"  "status"?: CgPostStatus;"#);
+    assert_has(&d, r#"  "status__in"?: CgPostStatus[];"#);
 
     // numeric column → number, with the comparison lookups.
-    assert_has(&c, r#"  "views__gte"?: number;"#);
-    assert_has(&c, r#"  "views__lt"?: number;"#);
+    assert_has(&d, r#"  "views__gte"?: number;"#);
+    assert_has(&d, r#"  "views__lt"?: number;"#);
 
     // text column → substring lookups are string.
-    assert_has(&c, r#"  "title__contains"?: string;"#);
+    assert_has(&d, r#"  "title__contains"?: string;"#);
 
     // nullable column → __isnull is boolean.
-    assert_has(&c, r#"  "body__isnull"?: boolean;"#);
+    assert_has(&d, r#"  "body__isnull"?: boolean;"#);
 }
 
 /// The reason to generate rather than hand-write: an FK filter value is the
 /// target's PK type. `author` points at a String-PK model, so it's `string`.
 #[test]
 fn foreign_key_filter_value_is_the_targets_pk_type() {
-    let c = client();
-    assert_has(&c, r#"  "author"?: string;"#);
+    let d = dts();
+    assert_has(&d, r#"  "author"?: string;"#);
     assert!(
-        !c.contains(r#"  "author"?: number;"#),
-        "an FK to a String-PK model must filter by string, not number:\n{c}",
+        !d.contains(r#"  "author"?: number;"#),
+        "an FK to a String-PK model must filter by string, not number:\n{d}",
     );
 }
 
@@ -147,9 +150,8 @@ fn foreign_key_filter_value_is_the_targets_pk_type() {
 /// excludes the PK from filter params).
 #[test]
 fn primary_key_is_not_filterable() {
-    let c = client();
-    // `id` must not appear as a filter key on CgPost.
-    let filters = c
+    let d = dts();
+    let filters = d
         .split("export interface CgPostFilters {")
         .nth(1)
         .and_then(|s| s.split("}\n").next())
@@ -160,38 +162,43 @@ fn primary_key_is_not_filterable() {
     );
 }
 
-/// `.from(...)` keys off the exposed tables, and the client + envelope exist.
+/// `.from(...)` keys off the exposed tables; the runtime exports the classes the
+/// declarations describe.
 #[test]
 fn resource_map_and_client_are_present() {
-    let c = client();
+    let d = dts();
     assert_has(
-        &c,
+        &d,
         r#""cg_post": { row: CgPost; filters: CgPostFilters; ordering: CgPostOrdering; create: CgPostCreate; update: CgPostUpdate; id: number };"#,
     );
-    assert_has(&c, "export class Umbral {");
-    assert_has(&c, "from<K extends keyof UmbralResources>");
-    assert_has(&c, "export interface Paginated<T> {");
+    assert_has(&d, "export declare class Umbral {");
+    assert_has(&d, "from<K extends keyof UmbralResources>");
+    assert_has(&d, "export interface Paginated<T> {");
     // Default paginator is None → envelope is just results + count.
-    assert_has(&c, "  results: T[];");
-    assert_has(&c, "  count: number;");
+    assert_has(&d, "  results: T[];");
+    assert_has(&d, "  count: number;");
+
+    let j = js();
+    assert_has(&j, "export class Umbral {");
+    assert_has(&j, "export class Query {");
+    assert_has(&j, "export class UmbralError extends Error {");
 }
 
 /// Ordering type covers every visible column, both directions.
 #[test]
 fn ordering_type_covers_columns_both_directions() {
-    let c = client();
-    assert_has(&c, "export type CgPostOrdering =");
-    assert_has(&c, r#""title""#);
-    assert_has(&c, r#""-title""#);
+    let d = dts();
+    assert_has(&d, "export type CgPostOrdering =");
+    assert_has(&d, r#""title""#);
+    assert_has(&d, r#""-title""#);
 }
 
 /// Extract the body of one interface (between its `{` and the closing `}\n`).
-fn block<'a>(client: &'a str, decl: &str) -> &'a str {
-    client
-        .split(decl)
+fn block<'a>(dts: &'a str, decl: &str) -> &'a str {
+    dts.split(decl)
         .nth(1)
         .and_then(|s| s.split("}\n").next())
-        .unwrap_or_else(|| panic!("no `{decl}` block in:\n{client}"))
+        .unwrap_or_else(|| panic!("no `{decl}` block in:\n{dts}"))
 }
 
 /// The Create DTO includes creatable fields — including `noedit` (you can set a
@@ -199,10 +206,9 @@ fn block<'a>(client: &'a str, decl: &str) -> &'a str {
 /// omits every server-managed column.
 #[test]
 fn create_dto_includes_noedit_and_omits_server_managed() {
-    let c = client();
-    let create = block(&c, "export interface CgPostCreate {");
+    let d = dts();
+    let create = block(&d, "export interface CgPostCreate {");
 
-    // required (non-null, no default) — no `?`.
     assert!(create.contains("title: string;"), "got:\n{create}");
     assert!(
         create.contains("author: string;"),
@@ -229,8 +235,8 @@ fn create_dto_includes_noedit_and_omits_server_managed() {
 /// `noedit`: a slug set on create cannot be changed.
 #[test]
 fn update_dto_is_partial_and_drops_noedit() {
-    let c = client();
-    let update = block(&c, "export interface CgPostUpdate {");
+    let d = dts();
+    let update = block(&d, "export interface CgPostUpdate {");
 
     assert!(
         update.contains("title?: string;"),
@@ -241,7 +247,6 @@ fn update_dto_is_partial_and_drops_noedit() {
         !update.contains("slug"),
         "a noedit column must not be updatable; got:\n{update}",
     );
-    // Same server-managed exclusions as Create.
     for gone in ["id", "internal", "created_at"] {
         assert!(
             !update.contains(gone),
@@ -250,15 +255,19 @@ fn update_dto_is_partial_and_drops_noedit() {
     }
 }
 
-/// `.create` / `.update` / `.delete` exist on the client and the resource map
-/// carries the write types.
+/// `.create` / `.update` / `.delete` are declared AND implemented.
 #[test]
 fn client_exposes_write_operations() {
-    let c = client();
-    assert_has(&c, "create: CgPostCreate; update: CgPostUpdate");
-    assert_has(&c, "create<K extends keyof UmbralResources>");
-    assert_has(&c, "update<K extends keyof UmbralResources>");
-    assert_has(&c, "delete<K extends keyof UmbralResources>");
+    let d = dts();
+    assert_has(&d, "create: CgPostCreate; update: CgPostUpdate");
+    assert_has(&d, "create<K extends keyof UmbralResources>");
+    assert_has(&d, "update<K extends keyof UmbralResources>");
+    assert_has(&d, "delete<K extends keyof UmbralResources>");
+
+    let j = js();
+    assert_has(&j, "create(table, data)");
+    assert_has(&j, "update(table, id, data)");
+    assert_has(&j, "async delete(table, id)");
 }
 
 /// Each resource carries its OWN primary-key type, not a global union: the i64
@@ -266,46 +275,75 @@ fn client_exposes_write_operations() {
 /// `.get`/`.update`/`.delete` reject the wrong id type per model.
 #[test]
 fn each_resource_has_its_own_id_type() {
-    let c = client();
-    // i64 PK → number.
-    assert_has(&c, "\"cg_post\": { row: CgPost;");
+    let d = dts();
     assert!(
-        c.lines()
+        d.lines()
             .any(|l| l.contains("\"cg_post\":") && l.contains("id: number }")),
-        "an i64 PK must type as number; got:\n{c}",
+        "an i64 PK must type as number; got:\n{d}",
     );
-    // Uuid PK → string.
     assert!(
-        c.lines()
+        d.lines()
             .any(|l| l.contains("\"cg_ticket\":") && l.contains("id: string }")),
-        "a Uuid PK must type as string; got:\n{c}",
+        "a Uuid PK must type as string; got:\n{d}",
     );
-    // String-slug PK → string.
     assert!(
-        c.lines()
+        d.lines()
             .any(|l| l.contains("\"cg_author\":") && l.contains("id: string }")),
-        "a String PK must type as string; got:\n{c}",
+        "a String PK must type as string; got:\n{d}",
     );
     // The old global union is gone.
     assert!(
-        !c.contains("UmbralId"),
-        "the global id union must be gone; got:\n{c}"
+        !d.contains("UmbralId"),
+        "the global id union must be gone; got:\n{d}"
     );
-    // The methods key off the per-resource id.
-    assert_has(&c, "id: UmbralResources[K][\"id\"]");
+    assert_has(&d, "id: UmbralResources[K][\"id\"]");
 }
 
-/// The realtime subscription surface — a typed `.on(table, {created,updated,
-/// deleted}, {group})` over the SSE stream the realtime plugin already serves.
+/// The realtime subscription surface is typed in the `.d.ts`.
 #[test]
-fn client_exposes_typed_realtime_on() {
-    let c = client();
-    assert_has(&c, "export interface Subscription {");
-    assert_has(&c, "export interface ModelEvents<Row> {");
-    assert_has(&c, "on<K extends keyof UmbralResources>");
-    assert_has(&c, "ModelEvents<Partial<UmbralResources[K][\"row\"]>>");
-    // Subscribes to the realtime plugin's SSE stream.
-    assert_has(&c, "new EventSource(");
-    assert_has(&c, "/sse?groups=");
-    assert_has(&c, "realtimePath?: string;");
+fn realtime_on_is_typed() {
+    let d = dts();
+    assert_has(&d, "export interface Subscription {");
+    assert_has(&d, "export interface ModelEvents<Row> {");
+    assert_has(&d, "on<K extends keyof UmbralResources>");
+    assert_has(&d, "ModelEvents<Partial<UmbralResources[K][\"row\"]>>");
+}
+
+/// **The anti-duplication guarantee.** `.on(...)` must DELEGATE to the realtime
+/// plugin's already-served runtime (`umbral.realtime.model`), which shares ONE
+/// SSE connection across every tab via SharedWorker and brings presence +
+/// graceful degradation. It must NOT hand-roll its own `EventSource`: that opens
+/// one connection per subscription and exhausts the browser's ~6-per-origin cap
+/// at six models, while re-implementing (worse) logic that already exists.
+#[test]
+fn realtime_delegates_and_never_opens_its_own_eventsource() {
+    let j = js();
+    assert_has(&j, "/client.js`");
+    assert_has(&j, "rt.model(String(table)");
+    assert_has(&j, "g.umbral && g.umbral.realtime");
+    // It never CONSTRUCTS a transport of its own (the word appears in the
+    // explanatory comment; what must not exist is the construction).
+    assert!(
+        !j.contains("new EventSource") && !j.contains("new WebSocket"),
+        "the generated client must delegate to umbral.realtime, not open its own \
+         connection (one per subscription exhausts the browser's per-origin cap); \
+         got:\n{j}",
+    );
+}
+
+/// The runtime is a self-contained ES module: no imports (the types erase, so
+/// there is nothing to import) and no leftover type annotations. That's what
+/// makes it loadable from a plain `<script type="module">` with no build step.
+#[test]
+fn js_is_a_self_contained_es_module() {
+    let j = js();
+    assert!(
+        !j.contains("import ") && !j.contains("from \"./"),
+        "client.js must be self-contained — no imports; got:\n{j}",
+    );
+    assert_has(&j, "export class Umbral {");
+    assert!(
+        !j.contains("): Promise<") && !j.contains("?: string;"),
+        "client.js must be plain JS — no TypeScript annotations leaked in; got:\n{j}",
+    );
 }

@@ -3,7 +3,7 @@
 //! Builds an app with `RestPlugin` + `OpenApiPlugin` (so the REST/OpenAPI config
 //! `OnceLock`s are published by `routes()`), then runs `umbral gen-client --out
 //! <tmp>` exactly as `cargo run -- gen-client` would, and checks it wrote the two
-//! files and honoured a `hide(...)` on a column. This proves the whole path:
+//! files (client.js + client.d.ts) and honoured a `hide(...)` on a column. This proves the whole path:
 //! plugin-contributed command → offline (no `on_ready`) → reads the live
 //! registry + REST config → writes TypeScript.
 //!
@@ -53,16 +53,20 @@ async fn gen_client_writes_typed_files_and_respects_hide() {
         .await
         .expect("gen-client dispatch");
 
-    let models = std::fs::read_to_string(out.path().join("models.ts")).expect("models.ts written");
-    let client = std::fs::read_to_string(out.path().join("client.ts")).expect("client.ts written");
+    let dts = std::fs::read_to_string(out.path().join("client.d.ts")).expect("client.d.ts written");
+    let js = std::fs::read_to_string(out.path().join("client.js")).expect("client.js written");
+
+    // The runtime is a real, self-contained ES module (no build step needed).
+    assert!(js.contains("export class Umbral {"), "got:\n{js}");
+    assert!(
+        !js.contains("import "),
+        "client.js must be self-contained; got:\n{js}"
+    );
 
     // The row type is there, and the client keys off the exposed table.
-    assert!(
-        models.contains("export interface GcWidget {"),
-        "got:\n{models}"
-    );
+    assert!(dts.contains("export interface GcWidget {"), "got:\n{dts}");
     // `hide` is response-only: the hidden column is NOT in the row type...
-    let row = models
+    let row = dts
         .split("export interface GcWidget {")
         .nth(1)
         .and_then(|s| s.split('}').next())
@@ -76,7 +80,7 @@ async fn gen_client_writes_typed_files_and_respects_hide() {
         "a visible column must be in the row; got:\n{row}"
     );
     // ...but it stays settable (a hidden field can be write-only).
-    let create = client
+    let create = dts
         .split("export interface GcWidgetCreate {")
         .nth(1)
         .and_then(|s| s.split("}\n").next())
@@ -86,16 +90,16 @@ async fn gen_client_writes_typed_files_and_respects_hide() {
         "a hidden-but-writable column stays in the create DTO; got:\n{create}",
     );
     assert!(
-        client.contains(r#"  "gc_widget": { row: GcWidget;"#),
-        "the client must map the exposed table; got:\n{client}",
+        dts.contains(r#"  "gc_widget": { row: GcWidget;"#),
+        "the client must map the exposed table; got:\n{dts}",
     );
     assert!(
-        client.contains("Base path: /api"),
-        "default REST base path; got:\n{client}"
+        dts.contains("Base path: /api"),
+        "default REST base path; got:\n{dts}"
     );
 
     // The hidden column must not be a filter key (it's stripped from the surface).
-    let filters = client
+    let filters = dts
         .split("export interface GcWidgetFilters {")
         .nth(1)
         .and_then(|s| s.split("}\n").next())

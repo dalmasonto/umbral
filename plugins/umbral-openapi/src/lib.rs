@@ -1322,11 +1322,11 @@ pub fn test_ui_route(p: &OpenApiPlugin) -> String {
 
 /// `umbral gen-client` — write the typed TypeScript client (gaps3 #38).
 ///
-/// Emits `models.ts` + `client.ts` into `--out <dir>`. Offline: reads the model
-/// registry + the REST config that `routes()` already published at build time,
-/// so it needs no database and no running server. `--check` writes nothing and
-/// exits non-zero when the files on disk have drifted from the current
-/// registry — the CI gate.
+/// Emits `client.js` (the single-file ES-module runtime) + `client.d.ts` (every
+/// type) into `--out <dir>`. Offline: reads the model registry + the REST config
+/// that `routes()` already published at build time, so it needs no database and
+/// no running server. `--check` writes nothing and exits non-zero when the files
+/// on disk have drifted from the current registry — the CI gate.
 #[derive(Debug, Default)]
 struct GenClientCommand;
 
@@ -1334,13 +1334,13 @@ struct GenClientCommand;
 impl umbral::cli::PluginCommand for GenClientCommand {
     fn command(&self) -> clap::Command {
         clap::Command::new("gen-client")
-            .about("Generate a typed TypeScript client (models.ts + client.ts) for the REST API")
+            .about("Generate a typed client (client.js + client.d.ts) for the REST API")
             .arg(
                 clap::Arg::new("out")
                     .long("out")
                     .value_name("DIR")
                     .required(true)
-                    .help("Directory to write models.ts and client.ts into"),
+                    .help("Directory to write client.js and client.d.ts into"),
             )
             .arg(
                 clap::Arg::new("lang")
@@ -1372,8 +1372,8 @@ impl umbral::cli::PluginCommand for GenClientCommand {
         );
         let check = matches.get_flag("check");
 
-        let (models_ts, client_ts) = client_gen::generate();
-        let files = [("models.ts", models_ts), ("client.ts", client_ts)];
+        let generated = client_gen::generate();
+        let files = [("client.js", generated.js), ("client.d.ts", generated.dts)];
 
         if check {
             let mut stale = Vec::new();
@@ -1404,8 +1404,8 @@ impl umbral::cli::PluginCommand for GenClientCommand {
         }
         println!(
             "Wrote {} and {}.",
-            dir.join("models.ts").display(),
-            dir.join("client.ts").display(),
+            dir.join("client.js").display(),
+            dir.join("client.d.ts").display(),
         );
         Ok(())
     }

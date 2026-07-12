@@ -1,5 +1,5 @@
-//! `umbral gen-client` — a typed TypeScript client generated from the REST
-//! surface (gaps3 #38 / Kikosi #1).
+//! `umbral gen-client` — a typed client generated from the REST surface
+//! (gaps3 #38 / Kikosi #1).
 //!
 //! `umbral typegen` gives a frontend the *shapes*. This gives it the *client*:
 //! `new Umbral(url).from("post").filter({ status: "published" }).list()`, where
@@ -8,20 +8,39 @@
 //! document knows every column's type, choices, FK target, and which lookups
 //! (`__gte`, `__in`, `__contains`, `__isnull`) the REST list endpoint accepts.
 //!
-//! The generated code is plain, dependency-free TypeScript in two files:
+//! # Two files, one runtime
 //!
-//! - `models.ts` — the row interfaces + choice unions (`umbral typegen` output,
-//!   scoped to the REST-exposed models).
-//! - `client.ts` — a `Filters`/`Ordering` type per model, the list envelope that
-//!   matches the configured paginator, and the `Umbral` runtime.
+//! - `client.js` — a single-file, dependency-free ES module: `Umbral`, `Query`,
+//!   `UmbralError`. Usable straight from a `<script type="module">` with no
+//!   build step, and by any bundler.
+//! - `client.d.ts` — every type: row interfaces, choice unions, per-model
+//!   `Filters` / `Ordering` / `Create` / `Update`, the paginator's envelope, and
+//!   the class declarations.
+//!
+//! There is no `.ts` runtime: TypeScript's types *erase*, so the row/filter
+//! types produce no JavaScript at all. Emitting `.js` + `.d.ts` means the
+//! runtime exists exactly once (no bundler, no transpile step, no second copy to
+//! keep in step), while `import { Umbral } from "./api/client"` still type-checks
+//! fully — TS resolves the `.d.ts` for types and the bundler resolves the `.js`
+//! for code. It's the shape every published SDK ships.
+//!
+//! # Realtime is delegated, not reimplemented
+//!
+//! `Umbral.on(...)` does NOT open its own `EventSource`. It loads the realtime
+//! plugin's already-served `{realtimePath}/client.js` and calls
+//! `umbral.realtime.model(...)`, inheriting the hard parts: ONE SSE connection
+//! shared across every tab via `SharedWorker` (union-routed), presence, and
+//! graceful degradation. A per-subscription `EventSource` would open one
+//! connection per model — six subscriptions exhausts the browser's per-origin
+//! connection cap.
 //!
 //! It reads the live registry + umbral-rest's per-resource config
 //! (`filters_enabled_for`, `is_hidden`, `registered_base_path`,
-//! `registered_pagination_style`), which are populated when the plugins' routes
+//! `registered_pagination_style`, `registered_pagination_schema`,
+//! `registered_security_schemes`), which are populated when the plugins' routes
 //! are built — so `gen-client` runs as an offline CLI step with no server and no
 //! database, and reflects the *exact* surface the app serves.
 
-use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use serde_json::Value;
@@ -29,12 +48,21 @@ use umbral::migrate::{Column, ModelMeta};
 use umbral_casing::pascal_case_from_ident;
 use umbral_rest::{PaginationScalar, PaginationSchema, PaginationStyle};
 
-/// Generate the two client files: `(models_ts, client_ts)`.
+/// The generated client: one runtime module + one declaration file.
+#[derive(Debug, Clone)]
+pub struct GeneratedClient {
+    /// `client.js` — the single-file ES-module runtime.
+    pub js: String,
+    /// `client.d.ts` — every type, including declarations for the runtime's classes.
+    pub dts: String,
+}
+
+/// Generate the client from the live registry + REST config.
 ///
 /// Reads every registered model, keeps the REST-exposed ones, and resolves FK
 /// value types against the *full* set (so a filter on an FK column gets the
 /// target's real PK type even when the target model isn't itself exposed).
-pub fn generate() -> (String, String) {
+pub fn generate() -> GeneratedClient {
     let all: Vec<ModelMeta> = umbral::migrate::registered_plugins()
         .iter()
         .flat_map(|p| umbral::migrate::models_for_plugin(p))
@@ -44,10 +72,8 @@ pub fn generate() -> (String, String) {
 
 /// [`generate`] over an explicit model list. `all` is every model the app knows
 /// (used to resolve FK value types); the REST-exposed subset is what gets
-/// emitted, decided by `umbral_rest::is_exposed`. Tests drive this so they don't
-/// need a full `App::build`; the umbral-rest readers default sensibly when their
-/// config isn't published (exposed, filters on, base path `/api`).
-pub fn generate_for(all: &[ModelMeta]) -> (String, String) {
+/// emitted, decided by `umbral_rest::is_exposed`.
+pub fn generate_for(all: &[ModelMeta]) -> GeneratedClient {
     generate_with(
         all,
         umbral_rest::registered_base_path(),
@@ -72,7 +98,7 @@ pub fn generate_with(
     style: PaginationStyle,
     schema: Option<PaginationSchema>,
     security_schemes: &[(String, Value)],
-) -> (String, String) {
+) -> GeneratedClient {
     let mut exposed: Vec<ModelMeta> = all
         .iter()
         .filter(|m| umbral_rest::is_exposed(&m.table))
@@ -80,16 +106,14 @@ pub fn generate_with(
         .collect();
     exposed.sort_by(|a, b| a.name.cmp(&b.name));
 
-    // Row types describe RESPONSES, and `hide(...)` is response-only — a hidden
-    // column (a `password_hash`, an internal `cost`) is never in the JSON the API
-    // returns. So strip hidden columns from the row interfaces. They stay
-    // settable in the create/update DTOs (a hidden field can be write-only), and
-    // FK value types still resolve against the full, unstripped model set.
-    let row_models = strip_hidden(&exposed);
-    let models_ts = umbral::typegen::typescript_for(&row_models);
     let auth = AuthModel::from_schemes(security_schemes);
-    let client_ts = client_ts(all, &exposed, base_path, style, schema.as_ref(), &auth);
-    (models_ts, client_ts)
+    let schema = schema.as_ref();
+    let methods = page_methods(style, schema);
+
+    GeneratedClient {
+        js: emit_js(base_path, &auth, &methods),
+        dts: emit_dts(all, &exposed, base_path, style, schema, &auth, &methods),
+    }
 }
 
 /// Return `models` with every `hide(...)`-ed column removed from each model's
@@ -107,6 +131,467 @@ fn strip_hidden(models: &[ModelMeta]) -> Vec<ModelMeta> {
         })
         .collect()
 }
+
+// =========================================================================
+// Pagination methods — described once, rendered into BOTH the .js impl and
+// the .d.ts signature so the two can't drift apart.
+// =========================================================================
+
+/// One query-builder paging method, e.g. `page(n: number)` → `?page=`.
+struct PageMethod {
+    /// The JS/TS method name (camelCase): `pageSize`.
+    name: String,
+    /// The TS type of its single argument: `number`.
+    ty: &'static str,
+    /// The wire query param it sets: `page_size`.
+    wire: String,
+    /// Doc line.
+    doc: String,
+}
+
+/// The paging methods this paginator exposes. Built-ins are known; a `Custom`
+/// paginator contributes one method per param it declared in its
+/// [`PaginationSchema`], and one that declared nothing contributes none (the
+/// generic `.param(...)` escape hatch covers it).
+fn page_methods(style: PaginationStyle, schema: Option<&PaginationSchema>) -> Vec<PageMethod> {
+    let m = |name: &str, ty: &'static str, wire: &str, doc: &str| PageMethod {
+        name: name.to_string(),
+        ty,
+        wire: wire.to_string(),
+        doc: doc.to_string(),
+    };
+    match (style, schema) {
+        (PaginationStyle::PageNumber, _) => vec![
+            m("page", "number", "page", "1-based page number (`?page=`)."),
+            m(
+                "pageSize",
+                "number",
+                "page_size",
+                "Rows per page (`?page_size=`).",
+            ),
+        ],
+        (PaginationStyle::LimitOffset, _) => vec![
+            m("limit", "number", "limit", "Max rows (`?limit=`)."),
+            m("offset", "number", "offset", "Rows to skip (`?offset=`)."),
+        ],
+        (PaginationStyle::Custom, Some(s)) => s
+            .params
+            .iter()
+            .map(|p| PageMethod {
+                name: camel_case(&p.name),
+                ty: scalar_ts(p.ty),
+                wire: p.name.clone(),
+                doc: format!("Custom pagination param (`?{}=`).", p.name),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+// =========================================================================
+// client.js — the runtime. One copy, no types, no imports.
+// =========================================================================
+
+fn emit_js(base_path: &str, auth: &AuthModel, methods: &[PageMethod]) -> String {
+    // Auth defaults, derived from the app's declared security schemes — not
+    // hardcoded. `token` uses this Authorization prefix; `apiKey` uses this
+    // header; a session (cookie) scheme sends credentials by default.
+    let bearer_prefix = auth.bearer_prefix();
+    let api_key_header = auth.api_key_header();
+    let credentials_default = if auth.cookie {
+        "\"include\""
+    } else {
+        "undefined"
+    };
+
+    let mut page_impls = String::new();
+    for m in methods {
+        let _ = write!(
+            page_impls,
+            "\n  /** {doc} */\n  {name}(v) {{ this.params.set(\"{wire}\", String(v)); return this; }}\n",
+            doc = m.doc,
+            name = m.name,
+            wire = m.wire,
+        );
+    }
+
+    format!(
+        r#"{header}
+/** Thrown when the API returns a non-2xx response. `body` is the parsed error. */
+export class UmbralError extends Error {{
+  constructor(status, body) {{
+    super(`umbral: request failed with status ${{status}}`);
+    this.name = "UmbralError";
+    this.status = status;
+    this.body = body;
+  }}
+}}
+
+/** A list query. Built by `Umbral.from(table)`; see client.d.ts for the types. */
+export class Query {{
+  constructor(client, table) {{
+    this.client = client;
+    this.table = table;
+    this.params = new URLSearchParams();
+  }}
+
+  /** Field filters — keys and value types are specific to this model. */
+  filter(f) {{
+    for (const [k, v] of Object.entries(f || {{}})) {{
+      if (v === undefined) continue;
+      this.params.set(k, Array.isArray(v) ? v.join(",") : String(v));
+    }}
+    return this;
+  }}
+
+  /** Full-text `?search=` across the model's searchable columns. */
+  search(term) {{ this.params.set("search", term); return this; }}
+
+  /** `?ordering=` — pass fields; prefix `-` for descending. */
+  orderBy(...fields) {{ this.params.set("ordering", fields.join(",")); return this; }}
+{page_impls}
+  /** Set any raw query param — the escape hatch for params the typed builder
+      methods don't cover (a custom paginator's cursor, a one-off flag). */
+  param(key, value) {{ this.params.set(key, String(value)); return this; }}
+
+  /** Sparse fieldset (`?fields=`) — fetch only these columns. */
+  fields(...cols) {{ this.params.set("fields", cols.join(",")); return this; }}
+
+  /** Fetch the list. Resolves to the envelope your paginator emits. */
+  async list() {{
+    const qs = this.params.toString();
+    const path = `{base_path}/${{this.table}}/` + (qs ? `?${{qs}}` : "");
+    return this.client._request("GET", path);
+  }}
+}}
+
+/** A typed client for this app's REST API. `new Umbral("https://api.example.com")`. */
+export class Umbral {{
+  constructor(baseUrl, opts = {{}}) {{
+    this.baseUrl = String(baseUrl).replace(/\/+$/, "");
+    this.opts = opts;
+    this.realtimePath = (opts.realtimePath ?? "/realtime").replace(/\/+$/, "");
+    this._rt = null;
+  }}
+
+  /** Start a query against a REST-exposed table. */
+  from(table) {{ return new Query(this, table); }}
+
+  /** Retrieve one row by primary key. */
+  get(table, id) {{ return this._request("GET", `{base_path}/${{table}}/${{id}}/`); }}
+
+  /** Create a row. */
+  create(table, data) {{ return this._request("POST", `{base_path}/${{table}}/`, data); }}
+
+  /** Partially update a row (PATCH). */
+  update(table, id, data) {{ return this._request("PATCH", `{base_path}/${{table}}/${{id}}/`, data); }}
+
+  /** Delete a row by primary key. */
+  async delete(table, id) {{ await this._request("DELETE", `{base_path}/${{table}}/${{id}}/`); }}
+
+  /** Subscribe to `created` / `updated` / `deleted` for a model.
+   *
+   *  Delegates to the realtime plugin's runtime (loaded once from
+   *  `{{realtimePath}}/client.js`) rather than opening its own EventSource — so
+   *  every subscription in every tab shares ONE server connection via
+   *  SharedWorker, with presence and graceful degradation. Opening an
+   *  EventSource per subscription would blow the browser's per-origin
+   *  connection cap at ~6 models.
+   *
+   *  Returns synchronously; the underlying subscription attaches once the
+   *  runtime loads, and `close()` before then cancels it.
+   */
+  on(table, handlers, opts) {{
+    const group = opts && opts.group;
+    if (!group) throw new Error("umbral: .on(...) requires opts.group — the group you expose(...)-d to");
+    // SSR / non-browser: degrade to a no-op subscription, matching the realtime
+    // runtime's own posture (no transport → a no-op unsubscribe, no noise). A
+    // component that subscribes on mount then renders on the server must not
+    // throw or log.
+    if (typeof document === "undefined") return {{ close() {{}} }};
+    let sub = null;
+    let closed = false;
+    this._realtime()
+      .then((rt) => {{
+        if (closed) return;
+        sub = rt.model(String(table), handlers || {{}}, {{ group }});
+      }})
+      .catch((err) => {{
+        if (typeof console !== "undefined" && console.error) console.error(err);
+      }});
+    return {{
+      close() {{
+        closed = true;
+        if (sub) {{ try {{ sub.unsubscribe(); }} catch (_) {{}} sub = null; }}
+      }},
+    }};
+  }}
+
+  /** @internal Load the realtime runtime once, memoised. It is a classic
+   *  script (sets `window.umbral.realtime`), so it is injected via a script tag
+   *  — that works cross-origin without CORS, unlike a dynamic `import()`. */
+  _realtime() {{
+    const g = globalThis;
+    if (g.umbral && g.umbral.realtime) return Promise.resolve(g.umbral.realtime);
+    if (this._rt) return this._rt;
+    if (typeof document === "undefined") {{
+      return Promise.reject(new Error("umbral: realtime requires a browser environment"));
+    }}
+    const src = `${{this.baseUrl}}${{this.realtimePath}}/client.js`;
+    this._rt = new Promise((resolve, reject) => {{
+      const done = () => {{
+        if (g.umbral && g.umbral.realtime) resolve(g.umbral.realtime);
+        else reject(new Error(`umbral: loaded ${{src}} but umbral.realtime is missing`));
+      }};
+      let el = document.querySelector('script[data-umbral-realtime]');
+      if (!el) {{
+        el = document.createElement("script");
+        el.src = src;
+        el.async = true;
+        el.setAttribute("data-umbral-realtime", "");
+        el.addEventListener("load", done);
+        el.addEventListener("error", () =>
+          reject(new Error(`umbral: failed to load ${{src}} — is RealtimePlugin mounted at ${{this.realtimePath}}?`)));
+        document.head.appendChild(el);
+      }} else {{
+        el.addEventListener("load", done);
+        el.addEventListener("error", () => reject(new Error(`umbral: failed to load ${{src}}`)));
+        done();
+      }}
+    }});
+    return this._rt;
+  }}
+
+  /** @internal */
+  async _request(method, path, body) {{
+    const doFetch = this.opts.fetch ?? fetch;
+    const headers = {{ "Accept": "application/json", ...this.opts.headers }};
+    // Auth, in ascending precedence: static token, static apiKey, then the
+    // dynamic hook (so a fresh JWT overrides a stale static one). Defaults for
+    // the prefix / header come from your API's declared security scheme.
+    if (this.opts.token) {{
+      headers["Authorization"] = `${{this.opts.tokenPrefix ?? "{bearer_prefix}"}} ${{this.opts.token}}`;
+    }}
+    if (this.opts.apiKey) {{
+      headers[this.opts.apiKeyHeader ?? "{api_key_header}"] = this.opts.apiKey;
+    }}
+    if (this.opts.getAuthHeaders) {{
+      Object.assign(headers, await this.opts.getAuthHeaders());
+    }}
+    const init = {{ method, headers }};
+    const credentials = this.opts.credentials ?? {credentials_default};
+    if (credentials) init.credentials = credentials;
+    if (body !== undefined) {{
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }}
+    const res = await doFetch(this.baseUrl + path, init);
+    const parsed = res.status === 204 ? null : await res.json().catch(() => null);
+    if (!res.ok) throw new UmbralError(res.status, parsed);
+    return parsed;
+  }}
+}}
+"#,
+        header = header("client.js — the runtime (ES module)", base_path, auth),
+    )
+}
+
+// =========================================================================
+// client.d.ts — every type, plus declarations for the runtime's classes.
+// =========================================================================
+
+fn emit_dts(
+    all: &[ModelMeta],
+    exposed: &[ModelMeta],
+    base_path: &str,
+    style: PaginationStyle,
+    schema: Option<&PaginationSchema>,
+    auth: &AuthModel,
+    methods: &[PageMethod],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&header("client.d.ts — the types", base_path, auth));
+
+    // Row types describe RESPONSES, and `hide(...)` is response-only — a hidden
+    // column (a `password_hash`, an internal `cost`) is never in the JSON the API
+    // returns. So strip hidden columns from the row interfaces. They stay
+    // settable in the create/update DTOs (a hidden field can be write-only), and
+    // FK value types still resolve against the full, unstripped model set.
+    out.push_str(&umbral::typegen::typescript_for(&strip_hidden(exposed)));
+
+    for model in exposed {
+        out.push('\n');
+        push_filters_type(&mut out, all, model);
+        push_ordering_type(&mut out, model);
+        push_create_type(&mut out, all, model);
+        push_update_type(&mut out, all, model);
+    }
+
+    out.push('\n');
+    out.push_str(&envelope_type(style, schema));
+    out.push('\n');
+    push_resource_map(&mut out, exposed);
+    out.push('\n');
+    out.push_str(&options_types(auth));
+    out.push('\n');
+    out.push_str(&class_declarations(methods));
+    out
+}
+
+fn header(what: &str, base_path: &str, auth: &AuthModel) -> String {
+    format!(
+        "// Code generated by `umbral gen-client`. DO NOT EDIT.\n\
+         //\n\
+         // {what}\n\
+         //\n\
+         // Regenerate after any model or REST-resource change:\n\
+         //     cargo run -- gen-client --out <this directory>\n\
+         //\n\
+         // Base path: {base_path}. Auth: {auth}.\n\n",
+        auth = auth.summary(),
+    )
+}
+
+/// `UmbralOptions` + the realtime interfaces.
+fn options_types(auth: &AuthModel) -> String {
+    let bearer_prefix = auth.bearer_prefix();
+    let api_key_header = auth.api_key_header();
+    let creds = if auth.cookie {
+        "\"include\""
+    } else {
+        "undefined"
+    };
+    format!(
+        r#"export interface UmbralOptions {{
+  /** Token sent as `{bearer_prefix} <token>` in the `Authorization` header
+      (the prefix comes from your API's declared security scheme). Override the
+      prefix with `tokenPrefix` — e.g. an API that expects `Token <key>`. */
+  token?: string;
+  /** Overrides the `Authorization` prefix for `token`. Defaults to
+      "{bearer_prefix}", read from the security scheme. */
+  tokenPrefix?: string;
+  /** API key sent in the `{api_key_header}` header (the header name comes from
+      your API's declared apiKey scheme). Override with `apiKeyHeader`. */
+  apiKey?: string;
+  /** Overrides the header `apiKey` is sent in. Defaults to "{api_key_header}",
+      read from the security scheme. */
+  apiKeyHeader?: string;
+  /** Dynamic auth: called per request, its headers merged in last (they win).
+      Use for a rotating JWT, a refresh flow, request signing — anything the
+      static options above can't express. */
+  getAuthHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
+  /** Extra static headers merged into every request. */
+  headers?: Record<string, string>;
+  /** `fetch` credentials mode (cookies). Defaults to {creds}. */
+  credentials?: RequestCredentials;
+  /** Custom fetch (SSR / tests). Defaults to the global `fetch`. */
+  fetch?: typeof fetch;
+  /** Base path of the realtime plugin, for `.on(...)`. Defaults to "/realtime". */
+  realtimePath?: string;
+}}
+
+/** A live subscription started by `Umbral.on`. Call `close()` to stop it. */
+export interface Subscription {{
+  close(): void;
+}}
+
+/** Handlers for model-change events. Each receives the row your `expose(...)`
+    projection carries (the id by default), so you know which row to refetch. */
+export interface ModelEvents<Row> {{
+  created?(row: Row): void;
+  updated?(row: Row): void;
+  deleted?(row: Row): void;
+}}
+"#
+    )
+}
+
+/// Declarations for the classes `client.js` exports.
+fn class_declarations(methods: &[PageMethod]) -> String {
+    let mut page_sigs = String::new();
+    for m in methods {
+        let _ = write!(
+            page_sigs,
+            "\n  /** {doc} */\n  {name}(v: {ty}): this;\n",
+            doc = m.doc,
+            name = m.name,
+            ty = m.ty,
+        );
+    }
+    format!(
+        r#"/** Thrown when the API returns a non-2xx response. `body` is the parsed error. */
+export declare class UmbralError extends Error {{
+  readonly status: number;
+  readonly body: unknown;
+  constructor(status: number, body: unknown);
+}}
+
+/** A list query. Keys and value types are specific to the model it came from. */
+export declare class Query<Row, Filters, Ordering> {{
+  /** Field filters — the keys are exactly the (field, lookup) pairs this model accepts. */
+  filter(f: Filters): this;
+  /** Full-text `?search=` across the model's searchable columns. */
+  search(term: string): this;
+  /** `?ordering=` — pass fields; prefix `-` for descending. */
+  orderBy(...fields: Ordering[]): this;
+{page_sigs}
+  /** Set any raw query param — the escape hatch for params the typed methods don't cover. */
+  param(key: string, value: string | number | boolean): this;
+  /** Sparse fieldset (`?fields=`) — fetch only these columns. */
+  fields(...cols: string[]): this;
+  /** Fetch the list. */
+  list(): Promise<Paginated<Row>>;
+}}
+
+/** A typed client for this app's REST API. */
+export declare class Umbral {{
+  constructor(baseUrl: string, opts?: UmbralOptions);
+
+  /** Start a query against a REST-exposed table. */
+  from<K extends keyof UmbralResources>(
+    table: K,
+  ): Query<UmbralResources[K]["row"], UmbralResources[K]["filters"], UmbralResources[K]["ordering"]>;
+
+  /** Retrieve one row by primary key. */
+  get<K extends keyof UmbralResources>(
+    table: K,
+    id: UmbralResources[K]["id"],
+  ): Promise<UmbralResources[K]["row"]>;
+
+  /** Create a row. The body type omits server-managed fields; `noedit` fields
+      are allowed here (settable on create). */
+  create<K extends keyof UmbralResources>(
+    table: K,
+    data: UmbralResources[K]["create"],
+  ): Promise<UmbralResources[K]["row"]>;
+
+  /** Partially update a row (PATCH). The body type excludes `noedit` fields. */
+  update<K extends keyof UmbralResources>(
+    table: K,
+    id: UmbralResources[K]["id"],
+    data: UmbralResources[K]["update"],
+  ): Promise<UmbralResources[K]["row"]>;
+
+  /** Delete a row by primary key. */
+  delete<K extends keyof UmbralResources>(table: K, id: UmbralResources[K]["id"]): Promise<void>;
+
+  /** Subscribe to `created` / `updated` / `deleted` for a model, over the
+      realtime plugin's shared connection (one SSE stream across all tabs). The
+      model must be `expose(...)`-d to `group` on the server. */
+  on<K extends keyof UmbralResources>(
+    table: K,
+    handlers: ModelEvents<Partial<UmbralResources[K]["row"]>>,
+    opts: {{ group: string }},
+  ): Subscription;
+}}
+"#
+    )
+}
+
+// =========================================================================
+// Type emission (shared by the .d.ts): filters, ordering, write DTOs,
+// envelope, resource map.
+// =========================================================================
 
 /// The TypeScript type of a filter key's value for one (column, lookup) pair.
 ///
@@ -136,83 +621,6 @@ fn filter_key(col_name: &str, lookup: &str) -> String {
 /// A column the client should see: not hidden by the REST layer.
 fn visible(table: &str, col: &Column) -> bool {
     !umbral_rest::is_hidden(table, &col.name)
-}
-
-/// Every type name `models.ts` exports for the exposed models: the row interface
-/// (`Post`) plus one union per single-choice column (`PostStatus`) — matching
-/// typegen's naming exactly. Deduped and sorted for a stable import line.
-fn model_type_names(exposed: &[ModelMeta]) -> Vec<String> {
-    let mut names: BTreeSet<String> = BTreeSet::new();
-    for model in exposed {
-        names.insert(model.name.clone());
-        for col in &model.fields {
-            if !col.choices.is_empty() && !col.is_multichoice {
-                names.insert(format!(
-                    "{}{}",
-                    model.name,
-                    pascal_case_from_ident(&col.name)
-                ));
-            }
-        }
-    }
-    names.into_iter().collect()
-}
-
-fn client_ts(
-    all: &[ModelMeta],
-    exposed: &[ModelMeta],
-    base_path: &str,
-    style: PaginationStyle,
-    schema: Option<&PaginationSchema>,
-    auth: &AuthModel,
-) -> String {
-    let mut out = String::new();
-    out.push_str(&header(base_path, style, auth));
-    // Import the model-defined type names so the filter/resource types below can
-    // reference them by their bare names (the same names `ts_base_type` emits),
-    // and re-export everything so a consumer imports rows + client from one file.
-    let names = model_type_names(exposed);
-    if names.is_empty() {
-        out.push_str("export * from \"./models\";\n");
-    } else {
-        let _ = writeln!(
-            out,
-            "import type {{ {} }} from \"./models\";",
-            names.join(", ")
-        );
-        out.push_str("export * from \"./models\";\n");
-    }
-
-    // Per-model Filters + Ordering + write DTOs.
-    for model in exposed {
-        out.push('\n');
-        push_filters_type(&mut out, all, model);
-        push_ordering_type(&mut out, model);
-        push_create_type(&mut out, all, model);
-        push_update_type(&mut out, all, model);
-    }
-
-    // The list envelope (paginator-specific) + the resource map + runtime.
-    out.push('\n');
-    out.push_str(&envelope_type(style, schema));
-    out.push('\n');
-    push_resource_map(&mut out, exposed);
-    out.push('\n');
-    out.push_str(&runtime(base_path, style, schema, auth));
-    out
-}
-
-fn header(base_path: &str, style: PaginationStyle, auth: &AuthModel) -> String {
-    format!(
-        "// Code generated by `umbral gen-client`. DO NOT EDIT.\n\
-         //\n\
-         // Regenerate after any model or REST-resource change:\n\
-         //     cargo run -- gen-client --out <this directory>\n\
-         //\n\
-         // A typed client for this app's REST API. Base path: {base_path}\n\
-         // Pagination: {style:?}. Auth: {auth}. Row types live in ./models.ts.\n\n",
-        auth = auth.summary(),
-    )
 }
 
 /// `export interface PostFilters {{ status?: PostStatus; views__gte?: number; ... }}`
@@ -419,6 +827,51 @@ fn envelope_type(style: PaginationStyle, schema: Option<&PaginationSchema>) -> S
     }
 }
 
+/// `interface UmbralResources {{ "post": {{ row: Post; filters: PostFilters; ... }}; ... }}`
+fn push_resource_map(out: &mut String, exposed: &[ModelMeta]) {
+    out.push_str(
+        "/** Maps each REST-exposed table to its row, filter, and ordering types. \
+         `Umbral.from` keys off this. */\n",
+    );
+    out.push_str("export interface UmbralResources {\n");
+    for model in exposed {
+        // Each resource carries its OWN primary-key type — `number` for an i64
+        // PK, `string` for a Uuid or String PK — so `.get`/`.update`/`.delete`
+        // take exactly that model's id, not a union across every model.
+        let id = model
+            .pk_column()
+            .map(ts_scalar_for_pk)
+            .unwrap_or_else(|| "string | number".to_string());
+        let _ = writeln!(
+            out,
+            "  \"{table}\": {{ row: {name}; filters: {name}Filters; ordering: {name}Ordering; \
+             create: {name}Create; update: {name}Update; id: {id} }};",
+            table = model.table,
+            name = model.name,
+        );
+    }
+    out.push_str("}\n");
+}
+
+/// The PK's TS scalar. A PK is never an FK or a choices column, so the plain
+/// SqlType→TS scalar is right; `number` for int PKs, `string` for uuid/slug.
+fn ts_scalar_for_pk(col: &Column) -> String {
+    umbral::typegen::ts_base_type(
+        &[],
+        &ModelMeta {
+            name: String::new(),
+            table: String::new(),
+            fields: vec![col.clone()],
+            ..ModelMeta::default()
+        },
+        col,
+    )
+}
+
+// =========================================================================
+// Auth, derived from the declared OpenAPI security schemes.
+// =========================================================================
+
 /// How the client authenticates, derived from the app's OpenAPI security schemes
 /// (`registered_security_schemes()`) — nothing is hardcoded. A `http`/bearer-style
 /// scheme yields the `Authorization` prefix from its `scheme` field (`bearer` →
@@ -496,292 +949,4 @@ fn title_case(s: &str) -> String {
         Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
         None => String::new(),
     }
-}
-
-/// `interface UmbralResources {{ "post": {{ row: models.Post; filters: PostFilters; ordering: PostOrdering }}; ... }}`
-fn push_resource_map(out: &mut String, exposed: &[ModelMeta]) {
-    out.push_str(
-        "/** Maps each REST-exposed table to its row, filter, and ordering types. \
-         `Umbral.from` keys off this. */\n",
-    );
-    out.push_str("export interface UmbralResources {\n");
-    for model in exposed {
-        // Each resource carries its OWN primary-key type — `number` for an i64
-        // PK, `string` for a Uuid or String PK — so `.get`/`.update`/`.delete`
-        // take exactly that model's id, not a union across every model.
-        let id = model
-            .pk_column()
-            .map(ts_scalar_for_pk)
-            .unwrap_or_else(|| "string | number".to_string());
-        let _ = writeln!(
-            out,
-            "  \"{table}\": {{ row: {name}; filters: {name}Filters; ordering: {name}Ordering; \
-             create: {name}Create; update: {name}Update; id: {id} }};",
-            table = model.table,
-            name = model.name,
-        );
-    }
-    out.push_str("}\n");
-}
-
-/// The PK's TS scalar. A PK is never an FK or a choices column, so the plain
-/// SqlType→TS scalar is right; `number` for int PKs, `string` for uuid/slug.
-fn ts_scalar_for_pk(col: &Column) -> String {
-    // Reuse ts_base_type with an empty model list — a PK has no FK/choice to
-    // resolve, so it maps by its own SqlType.
-    umbral::typegen::ts_base_type(
-        &[],
-        &ModelMeta {
-            name: String::new(),
-            table: String::new(),
-            fields: vec![col.clone()],
-            ..ModelMeta::default()
-        },
-        col,
-    )
-}
-
-/// The fixed runtime — the `Umbral` class + query builder — parameterised by the
-/// base path and paginator. Emitted verbatim; no per-model branching lives here,
-/// so the type layer (above) is what makes each `.from(...)` call specific.
-fn runtime(
-    base_path: &str,
-    style: PaginationStyle,
-    schema: Option<&PaginationSchema>,
-    auth: &AuthModel,
-) -> String {
-    let page_methods = match (style, schema) {
-        (PaginationStyle::PageNumber, _) => String::from(
-            "  /** 1-based page number (`?page=`). */\n  \
-             page(n: number): this { this.params.set(\"page\", String(n)); return this; }\n  \
-             /** Rows per page (`?page_size=`). */\n  \
-             pageSize(n: number): this { this.params.set(\"page_size\", String(n)); return this; }\n",
-        ),
-        (PaginationStyle::LimitOffset, _) => String::from(
-            "  /** Max rows (`?limit=`). */\n  \
-             limit(n: number): this { this.params.set(\"limit\", String(n)); return this; }\n  \
-             /** Rows to skip (`?offset=`). */\n  \
-             offset(n: number): this { this.params.set(\"offset\", String(n)); return this; }\n",
-        ),
-        // A custom paginator that declared its params → one typed builder method
-        // each. Without a declaration, nothing here — the generic `.param(...)`
-        // below is the escape hatch for setting whatever the backend reads.
-        (PaginationStyle::Custom, Some(s)) => {
-            let mut methods = String::new();
-            for p in &s.params {
-                let method = camel_case(&p.name);
-                let ty = scalar_ts(p.ty);
-                let _ = writeln!(
-                    methods,
-                    "  /** Custom pagination param (`?{param}=`). */\n  \
-                     {method}(v: {ty}): this {{ this.params.set(\"{param}\", String(v)); return this; }}",
-                    param = p.name,
-                );
-            }
-            methods
-        }
-        _ => String::new(),
-    };
-
-    // Auth defaults, derived from the app's declared security schemes — not
-    // hardcoded. `token` uses this Authorization prefix; `apiKey` uses this
-    // header; a session (cookie) scheme sends credentials by default.
-    let bearer_prefix = auth.bearer_prefix();
-    let api_key_header = auth.api_key_header();
-    let credentials_default = if auth.cookie {
-        "\"include\""
-    } else {
-        "undefined"
-    };
-
-    format!(
-        r#"export interface UmbralOptions {{
-  /** Token sent as `{bearer_prefix} <token>` in the `Authorization` header
-      (the prefix comes from your API's declared security scheme). Override the
-      prefix with `tokenPrefix` — e.g. an API that expects `Token <key>`. */
-  token?: string;
-  /** Overrides the `Authorization` prefix for `token`. Defaults to
-      "{bearer_prefix}", read from the security scheme. */
-  tokenPrefix?: string;
-  /** API key sent in the `{api_key_header}` header (the header name comes from
-      your API's declared apiKey scheme). Override the header with
-      `apiKeyHeader`. */
-  apiKey?: string;
-  /** Overrides the header `apiKey` is sent in. Defaults to "{api_key_header}",
-      read from the security scheme. */
-  apiKeyHeader?: string;
-  /** Dynamic auth: called per request, its headers merged in last (they win).
-      Use for a rotating JWT, a refresh flow, request signing — anything the
-      static options above can't express. */
-  getAuthHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
-  /** Extra static headers merged into every request. */
-  headers?: Record<string, string>;
-  /** `fetch` credentials mode (cookies). Defaults to {credentials_default}. */
-  credentials?: RequestCredentials;
-  /** Custom fetch (SSR / tests). Defaults to the global `fetch`. */
-  fetch?: typeof fetch;
-  /** Base path of the realtime plugin, for `.on(...)`. Defaults to "/realtime". */
-  realtimePath?: string;
-}}
-
-/** A live subscription started by `Umbral.on`. Call `close()` to stop it. */
-export interface Subscription {{
-  close(): void;
-}}
-
-/** Handlers for model-change events. Each receives the row your `expose(...)`
-    projection carries (the id by default), so you know which row to refetch. */
-export interface ModelEvents<Row> {{
-  created?(row: Row): void;
-  updated?(row: Row): void;
-  deleted?(row: Row): void;
-}}
-
-/** Thrown when the API returns a non-2xx response. `body` is the parsed error. */
-export class UmbralError extends Error {{
-  constructor(public status: number, public body: unknown) {{
-    super(`umbral: request failed with status ${{status}}`);
-    this.name = "UmbralError";
-  }}
-}}
-
-class Query<Row, Filters, Ordering> {{
-  private params = new URLSearchParams();
-  constructor(private client: Umbral, private table: string) {{}}
-
-  /** Field filters — keys and value types are specific to this model. */
-  filter(f: Filters): this {{
-    for (const [k, v] of Object.entries(f as Record<string, unknown>)) {{
-      if (v === undefined) continue;
-      this.params.set(k, Array.isArray(v) ? v.join(",") : String(v));
-    }}
-    return this;
-  }}
-
-  /** Full-text `?search=` across the model's searchable columns. */
-  search(term: string): this {{ this.params.set("search", term); return this; }}
-
-  /** `?ordering=` — pass fields; prefix `-` for descending. */
-  orderBy(...fields: Ordering[]): this {{
-    this.params.set("ordering", (fields as unknown as string[]).join(","));
-    return this;
-  }}
-
-{page_methods}
-  /** Set any raw query param — the escape hatch for params the typed builder
-      methods don't cover (a custom paginator's cursor, a one-off flag). */
-  param(key: string, value: string | number | boolean): this {{
-    this.params.set(key, String(value));
-    return this;
-  }}
-
-  /** Sparse fieldset (`?fields=`) — fetch only these columns. */
-  fields(...cols: string[]): this {{ this.params.set("fields", cols.join(",")); return this; }}
-
-  /** Fetch the list. */
-  async list(): Promise<Paginated<Row>> {{
-    const qs = this.params.toString();
-    const path = `{base_path}/${{this.table}}/` + (qs ? `?${{qs}}` : "");
-    return this.client._request<Paginated<Row>>("GET", path);
-  }}
-}}
-
-/** A typed client for this app's REST API. `new Umbral("https://api.example.com")`. */
-export class Umbral {{
-  private realtimePath: string;
-  constructor(private baseUrl: string, private opts: UmbralOptions = {{}}) {{
-    this.baseUrl = baseUrl.replace(/\/+$/, "");
-    this.realtimePath = (opts.realtimePath ?? "/realtime").replace(/\/+$/, "");
-  }}
-
-  /** Subscribe to `created` / `updated` / `deleted` events for a model over the
-      realtime stream. The model must be `expose(...)`-d to `group` on the server.
-      `"post"` autocompletes to exposed tables; each handler gets a typed row.
-      Returns a {{@link Subscription}} — call `close()` to unsubscribe. */
-  on<K extends keyof UmbralResources>(
-    table: K,
-    handlers: ModelEvents<Partial<UmbralResources[K]["row"]>>,
-    opts: {{ group: string }},
-  ): Subscription {{
-    void table; // present for the type layer; the group carries the model's events
-    const url =
-      `${{this.baseUrl}}${{this.realtimePath}}/sse?groups=` + encodeURIComponent(opts.group);
-    const es = new EventSource(url, {{ withCredentials: true }});
-    const onEvent = (ev: MessageEvent) => {{
-      let env: {{ c?: string; e?: string; d?: unknown }};
-      try {{ env = JSON.parse(ev.data); }} catch {{ return; }}
-      if (env.c !== opts.group) return;
-      const cb = (handlers as Record<string, ((row: unknown) => void) | undefined>)[env.e ?? ""];
-      if (cb) cb(env.d);
-    }};
-    es.addEventListener("u", onEvent as EventListener);
-    return {{ close: () => es.close() }};
-  }}
-
-  /** Start a query against a REST-exposed table. */
-  from<K extends keyof UmbralResources>(
-    table: K,
-  ): Query<UmbralResources[K]["row"], UmbralResources[K]["filters"], UmbralResources[K]["ordering"]> {{
-    return new Query(this, table as string);
-  }}
-
-  /** Retrieve one row by primary key. */
-  get<K extends keyof UmbralResources>(table: K, id: UmbralResources[K]["id"]): Promise<UmbralResources[K]["row"]> {{
-    return this._request(`GET`, `{base_path}/${{table as string}}/${{id}}/`);
-  }}
-
-  /** Create a row. The body type omits server-managed fields; `noedit` fields
-      are allowed here (settable on create). */
-  create<K extends keyof UmbralResources>(
-    table: K,
-    data: UmbralResources[K]["create"],
-  ): Promise<UmbralResources[K]["row"]> {{
-    return this._request(`POST`, `{base_path}/${{table as string}}/`, data);
-  }}
-
-  /** Partially update a row (PATCH). The body type excludes `noedit` fields. */
-  update<K extends keyof UmbralResources>(
-    table: K,
-    id: UmbralResources[K]["id"],
-    data: UmbralResources[K]["update"],
-  ): Promise<UmbralResources[K]["row"]> {{
-    return this._request(`PATCH`, `{base_path}/${{table as string}}/${{id}}/`, data);
-  }}
-
-  /** Delete a row by primary key. */
-  async delete<K extends keyof UmbralResources>(table: K, id: UmbralResources[K]["id"]): Promise<void> {{
-    await this._request(`DELETE`, `{base_path}/${{table as string}}/${{id}}/`);
-  }}
-
-  /** @internal */
-  async _request<T>(method: string, path: string, body?: unknown): Promise<T> {{
-    const doFetch = this.opts.fetch ?? fetch;
-    const headers: Record<string, string> = {{ "Accept": "application/json", ...this.opts.headers }};
-    // Auth, in ascending precedence: static token, static apiKey, then the
-    // dynamic hook (so a fresh JWT overrides a stale static one). Defaults for
-    // the prefix / header come from your API's declared security scheme.
-    if (this.opts.token) {{
-      headers["Authorization"] = `${{this.opts.tokenPrefix ?? "{bearer_prefix}"}} ${{this.opts.token}}`;
-    }}
-    if (this.opts.apiKey) {{
-      headers[this.opts.apiKeyHeader ?? "{api_key_header}"] = this.opts.apiKey;
-    }}
-    if (this.opts.getAuthHeaders) {{
-      Object.assign(headers, await this.opts.getAuthHeaders());
-    }}
-    const init: RequestInit = {{ method, headers }};
-    const credentials = this.opts.credentials ?? {credentials_default};
-    if (credentials) init.credentials = credentials;
-    if (body !== undefined) {{
-      headers["Content-Type"] = "application/json";
-      init.body = JSON.stringify(body);
-    }}
-    const res = await doFetch(this.baseUrl + path, init);
-    const parsed = res.status === 204 ? null : await res.json().catch(() => null);
-    if (!res.ok) throw new UmbralError(res.status, parsed);
-    return parsed as T;
-  }}
-}}
-"#
-    )
 }
