@@ -351,8 +351,13 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
             "password": {"type": "string", "format": "password"},
         }
     });
+    // `required` matters: `UserOut` has no `Option` fields, so serde always
+    // emits all five. Omitting `required` under-specified the response and made
+    // every field optional to any consumer generating types from this document
+    // (`gen-client` would type `user.username` as `string | undefined`).
     let user_response = json!({
         "type": "object",
+        "required": ["id", "username", "email", "is_staff", "is_superuser"],
         "properties": {
             "id":           {"type": "integer", "format": "int64"},
             "username":     {"type": "string"},
@@ -363,6 +368,7 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
     });
     let login_response = json!({
         "type": "object",
+        "required": ["user", "token"],
         "properties": {
             "user":  user_response.clone(),
             "token": {"type": "string", "description": "Opaque bearer token. Shown ONCE."},

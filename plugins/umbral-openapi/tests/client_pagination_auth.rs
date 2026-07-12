@@ -41,6 +41,7 @@ fn gen_client(
         style,
         schema,
         schemes,
+        &[],
     )
 }
 

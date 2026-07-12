@@ -186,6 +186,69 @@ The list builder exposes exactly the paging controls your paginator reads, and `
   </Tab>
 </Tabs>
 
+## Sessions: log in, log out, who am I
+
+If your app mounts `AuthPlugin::with_default_routes()`, the client grows an `auth` namespace. **Signing in is enough** — the token is stored on the client and every later request sends it, so you never thread a token through call sites:
+
+```ts
+const api = new Umbral("https://api.example.com");
+
+const who = await api.auth.me();        // AuthUser | null — null means signed out
+const { user } = await api.auth.login({ username, password });
+
+await api.from("post").create({ title: "Hi" });   // already authenticated
+
+await api.auth.logout();                // token cleared; later calls are anonymous
+```
+
+- **`me()` resolves `null` when signed out**, it doesn't throw — a 401 is the *answer* to "am I logged in?", not a failure. Any other error still throws.
+- **`logout()` drops the token locally even if the server call fails**, so a user who clicks "log out" is never left holding a live credential.
+- The types come from the schemas your auth plugin actually publishes, and the endpoints are discovered by `operationId` — so a plugin mounted at a custom prefix still generates a working client, and an app with **no** auth plugin generates no `auth` namespace at all.
+
+<Callout type="warning">
+  **The client never writes your token to `localStorage`.** Anything in web storage is readable by any XSS on the page. Browsers already receive an httpOnly session cookie from `login`, which is the safer default and needs no work from you. If you *do* need the bearer token across reloads (mobile/CLI, or a cookie-less setup), persist it yourself via `onToken` — so that trade-off is one you made on purpose:
+
+  ```ts
+  new Umbral(url, {
+    token: sessionStorage.getItem("t") ?? undefined,   // your choice, your risk
+    onToken: (t) => t ? sessionStorage.setItem("t", t) : sessionStorage.removeItem("t"),
+  });
+  ```
+</Callout>
+
+## Optimistic updates
+
+The pattern that keeps a UI fast without letting it lie: **apply locally, send, reconcile — and let realtime be the source of truth.**
+
+```ts
+async function toggleRsvp(id: number, going: boolean) {
+  const prev = cache.get(id);
+  cache.set(id, { ...prev, going });          // 1. optimistic: paint it now
+
+  try {
+    const row = await api.update("rsvp", id, { going });
+    cache.set(id, row);                        // 2. reconcile with the server's row
+  } catch (err) {
+    cache.set(id, prev);                       // 3. roll back on failure
+    throw err;
+  }
+}
+```
+
+Two rules make this safe, and both are where hand-rolled versions go wrong:
+
+- **Reconcile with the server's response, don't keep your guess.** The server may normalise, stamp `updated_at`, or reject part of the write. Step 2 overwrites the optimistic value rather than leaving it.
+- **Don't let your own optimistic write fight the realtime event.** When you also subscribe with `.on(...)`, an `updated` event for a row you just wrote will arrive and can overwrite a *newer* local edit with an older server one. Key the write and ignore the echo, or simply treat the realtime event as "this row changed — refetch it" and let the refetch win:
+
+```ts
+api.on("rsvp", {
+  updated(row) {
+    if (inFlight.has(row.id)) return;          // my own write; step 2 already handled it
+    cache.set(row.id, row);
+  },
+}, { group: "match:42" });
+```
+
 ## Handling errors
 
 Any non-2xx response throws `UmbralError` with the status and the parsed body, so failures surface loudly instead of returning a half-typed object. A `204 No Content` (what `delete` returns) resolves to `null`.

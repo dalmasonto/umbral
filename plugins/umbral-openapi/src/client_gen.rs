@@ -80,6 +80,7 @@ pub fn generate_for(all: &[ModelMeta]) -> GeneratedClient {
         umbral_rest::registered_pagination_style(),
         umbral_rest::registered_pagination_schema(),
         &umbral_rest::registered_security_schemes(),
+        umbral::routes::registered_openapi_paths().unwrap_or_default(),
     )
 }
 
@@ -98,6 +99,7 @@ pub fn generate_with(
     style: PaginationStyle,
     schema: Option<PaginationSchema>,
     security_schemes: &[(String, Value)],
+    openapi_paths: &[(String, Value)],
 ) -> GeneratedClient {
     let mut exposed: Vec<ModelMeta> = all
         .iter()
@@ -109,10 +111,21 @@ pub fn generate_with(
     let auth = AuthModel::from_schemes(security_schemes);
     let schema = schema.as_ref();
     let methods = page_methods(style, schema);
+    let session = AuthEndpoints::discover(openapi_paths);
 
+    let emit = Emit {
+        all,
+        exposed: &exposed,
+        base_path,
+        style,
+        schema,
+        auth: &auth,
+        methods: &methods,
+        session: session.as_ref(),
+    };
     GeneratedClient {
-        js: emit_js(base_path, &auth, &methods),
-        dts: emit_dts(all, &exposed, base_path, style, schema, &auth, &methods),
+        js: emit_js(&emit),
+        dts: emit_dts(&emit),
     }
 }
 
@@ -192,7 +205,90 @@ fn page_methods(style: PaginationStyle, schema: Option<&PaginationSchema>) -> Ve
 // client.js — the runtime. One copy, no types, no imports.
 // =========================================================================
 
-fn emit_js(base_path: &str, auth: &AuthModel, methods: &[PageMethod]) -> String {
+/// The `AuthClient` class + the `this.auth = …` wiring, or empty when the app
+/// serves no auth endpoints (no dead code in a REST-only app).
+fn auth_runtime_js(session: Option<&AuthEndpoints>) -> (String, String) {
+    let Some(s) = session else {
+        return (String::new(), String::new());
+    };
+    let login = s.login.clone().unwrap_or_default();
+
+    let register = match &s.register {
+        Some(p) => format!(
+            r#"
+  /** Register, then adopt the returned token (same shape as login). */
+  async register(body) {{
+    const out = await this.client._request("POST", "{p}", body);
+    if (out && out.token) this.client._setToken(out.token);
+    return out;
+  }}
+"#
+        ),
+        None => String::new(),
+    };
+
+    let logout = match &s.logout {
+        Some(p) => format!(
+            r#"
+  /** Clear the server session, then drop the token locally — even if the
+      request fails, so a user pressing "log out" is never left holding one. */
+  async logout() {{
+    try {{ await this.client._request("POST", "{p}"); }}
+    finally {{ this.client._setToken(null); }}
+  }}
+"#
+        ),
+        None => r#"
+  /** No server logout endpoint; drop the token locally. */
+  async logout() { this.client._setToken(null); }
+"#
+        .to_string(),
+    };
+
+    let me = match &s.me {
+        Some(p) => format!(
+            r#"
+  /** The current user, or `null` when not signed in. A 401 is the ANSWER to
+      "am I logged in?", not an error — so it resolves null instead of throwing.
+      Any other failure still throws. */
+  async me() {{
+    try {{
+      return await this.client._request("GET", "{p}");
+    }} catch (err) {{
+      if (err instanceof UmbralError && err.status === 401) return null;
+      throw err;
+    }}
+  }}
+"#
+        ),
+        None => String::new(),
+    };
+
+    let class = format!(
+        r#"
+/** The session client — `api.auth`. Wraps this app's auth endpoints and owns
+    the bearer token, which every subsequent request picks up automatically. */
+export class AuthClient {{
+  constructor(client) {{ this.client = client; }}
+
+  /** The bearer token currently in use, or null. */
+  get token() {{ return this.client._token; }}
+
+  /** Sign in. Stores the returned token; later calls send it automatically.
+      (Browsers also get the server's session cookie, so either works.) */
+  async login(credentials) {{
+    const out = await this.client._request("POST", "{login}", credentials);
+    this.client._setToken(out && out.token ? out.token : null);
+    return out;
+  }}
+{register}{logout}{me}}}
+"#
+    );
+    (class, "\n    this.auth = new AuthClient(this);".to_string())
+}
+
+fn emit_js(e: &Emit<'_>) -> String {
+    let (base_path, auth, methods, session) = (e.base_path, e.auth, e.methods, e.session);
     // Auth defaults, derived from the app's declared security schemes — not
     // hardcoded. `token` uses this Authorization prefix; `apiKey` uses this
     // header; a session (cookie) scheme sends credentials by default.
@@ -203,6 +299,7 @@ fn emit_js(base_path: &str, auth: &AuthModel, methods: &[PageMethod]) -> String 
     } else {
         "undefined"
     };
+    let (auth_class, auth_wiring) = auth_runtime_js(session);
 
     let mut page_impls = String::new();
     for m in methods {
@@ -265,6 +362,7 @@ export class Query {{
   }}
 }}
 
+{auth_class}
 /** A typed client for this app's REST API. `new Umbral("https://api.example.com")`. */
 export class Umbral {{
   constructor(baseUrl, opts = {{}}) {{
@@ -272,6 +370,19 @@ export class Umbral {{
     this.opts = opts;
     this.realtimePath = (opts.realtimePath ?? "/realtime").replace(/\/+$/, "");
     this._rt = null;
+    // The live bearer token: seeded from `opts.token` and replaced whenever it
+    // changes. Every request reads it from here.
+    this._token = opts.token ?? null;{auth_wiring}
+  }}
+
+  /** @internal Set the live token and notify the app so it can persist it.
+   *  Deliberately NOT written to localStorage by the client: that is readable by
+   *  any XSS on the page. Browsers already get an httpOnly session cookie; if you
+   *  need the token across reloads, persist it yourself via `onToken` and decide
+   *  the trade-off knowingly. */
+  _setToken(token) {{
+    this._token = token;
+    if (this.opts.onToken) this.opts.onToken(token);
   }}
 
   /** Start a query against a REST-exposed table. */
@@ -369,8 +480,8 @@ export class Umbral {{
     // Auth, in ascending precedence: static token, static apiKey, then the
     // dynamic hook (so a fresh JWT overrides a stale static one). Defaults for
     // the prefix / header come from your API's declared security scheme.
-    if (this.opts.token) {{
-      headers["Authorization"] = `${{this.opts.tokenPrefix ?? "{bearer_prefix}"}} ${{this.opts.token}}`;
+    if (this._token) {{
+      headers["Authorization"] = `${{this.opts.tokenPrefix ?? "{bearer_prefix}"}} ${{this._token}}`;
     }}
     if (this.opts.apiKey) {{
       headers[this.opts.apiKeyHeader ?? "{api_key_header}"] = this.opts.apiKey;
@@ -400,15 +511,90 @@ export class Umbral {{
 // client.d.ts — every type, plus declarations for the runtime's classes.
 // =========================================================================
 
-fn emit_dts(
-    all: &[ModelMeta],
-    exposed: &[ModelMeta],
-    base_path: &str,
+/// Auth types + the `AuthClient` declaration, or empty when the app serves no
+/// auth endpoints. Types come from the *published* request/response schemas, so
+/// they track the real contract.
+fn auth_types_dts(session: Option<&AuthEndpoints>) -> (String, String) {
+    let Some(s) = session else {
+        return (String::new(), String::new());
+    };
+    let mut out = format!(
+        "/** The signed-in user, from this app's `/me` + login response schema. */\n\
+         export type AuthUser = {user};\n\n\
+         /** Credentials the login endpoint accepts. */\n\
+         export type LoginCredentials = {login};\n\n\
+         /** What a successful login returns. The token is stored on the client \
+         automatically; browsers additionally get an httpOnly session cookie. */\n\
+         export interface LoginResult {{\n  user: AuthUser;\n  token: string;\n}}\n",
+        user = s.user,
+        login = s.login_body,
+    );
+    let mut methods = String::from(
+        "  /** The bearer token currently in use, or null. */\n  \
+         readonly token: string | null;\n  \
+         /** Sign in. Stores the token; later requests send it automatically. */\n  \
+         login(credentials: LoginCredentials): Promise<LoginResult>;\n",
+    );
+    if s.register.is_some() {
+        let _ = write!(
+            out,
+            "\n/** Fields the register endpoint accepts. */\nexport type RegisterCredentials = {};\n",
+            s.register_body,
+        );
+        methods.push_str(
+            "  /** Register, then adopt the returned token. */\n  \
+             register(body: RegisterCredentials): Promise<LoginResult>;\n",
+        );
+    }
+    methods.push_str(
+        "  /** Clear the server session and drop the token locally. */\n  \
+         logout(): Promise<void>;\n",
+    );
+    if s.me.is_some() {
+        methods.push_str(
+            "  /** The current user, or `null` when not signed in (a 401 is the\n      \
+             answer to \"am I logged in?\", not an error). */\n  \
+             me(): Promise<AuthUser | null>;\n",
+        );
+    }
+    let _ = write!(
+        out,
+        "\n/** The session client — reachable as `client.auth`. */\n\
+         export declare class AuthClient {{\n{methods}}}\n"
+    );
+    (
+        out,
+        "\n  /** The session client: login / logout / me. */\n  readonly auth: AuthClient;\n"
+            .to_string(),
+    )
+}
+
+/// Everything the two emitters need — passed as one context so the signature
+/// doesn't grow a new positional argument every time the surface does.
+struct Emit<'a> {
+    /// Every model the app knows (FK value types resolve against this).
+    all: &'a [ModelMeta],
+    /// The REST-exposed subset, sorted — what actually gets emitted.
+    exposed: &'a [ModelMeta],
+    base_path: &'a str,
     style: PaginationStyle,
-    schema: Option<&PaginationSchema>,
-    auth: &AuthModel,
-    methods: &[PageMethod],
-) -> String {
+    schema: Option<&'a PaginationSchema>,
+    auth: &'a AuthModel,
+    methods: &'a [PageMethod],
+    session: Option<&'a AuthEndpoints>,
+}
+
+fn emit_dts(e: &Emit<'_>) -> String {
+    let (all, exposed, base_path, style, schema, auth, methods, session) = (
+        e.all,
+        e.exposed,
+        e.base_path,
+        e.style,
+        e.schema,
+        e.auth,
+        e.methods,
+        e.session,
+    );
     let mut out = String::new();
     out.push_str(&header("client.d.ts — the types", base_path, auth));
 
@@ -433,8 +619,13 @@ fn emit_dts(
     push_resource_map(&mut out, exposed);
     out.push('\n');
     out.push_str(&options_types(auth));
+    let (auth_types, auth_member) = auth_types_dts(session);
+    if !auth_types.is_empty() {
+        out.push('\n');
+        out.push_str(&auth_types);
+    }
     out.push('\n');
-    out.push_str(&class_declarations(methods));
+    out.push_str(&class_declarations(methods, &auth_member));
     out
 }
 
@@ -476,6 +667,12 @@ fn options_types(auth: &AuthModel) -> String {
   /** Overrides the header `apiKey` is sent in. Defaults to "{api_key_header}",
       read from the security scheme. */
   apiKeyHeader?: string;
+  /** Called whenever the live token changes — `auth.login()` sets it,
+      `auth.logout()` clears it (null). Persist it here if you need it across
+      reloads. The client deliberately does NOT write it to localStorage: that is
+      readable by any XSS on the page, and browsers already hold an httpOnly
+      session cookie. Make that trade-off knowingly. */
+  onToken?: (token: string | null) => void;
   /** Dynamic auth: called per request, its headers merged in last (they win).
       Use for a rotating JWT, a refresh flow, request signing — anything the
       static options above can't express. */
@@ -507,7 +704,7 @@ export interface ModelEvents<Row> {{
 }
 
 /// Declarations for the classes `client.js` exports.
-fn class_declarations(methods: &[PageMethod]) -> String {
+fn class_declarations(methods: &[PageMethod], auth_member: &str) -> String {
     let mut page_sigs = String::new();
     for m in methods {
         let _ = write!(
@@ -546,7 +743,7 @@ export declare class Query<Row, Filters, Ordering> {{
 /** A typed client for this app's REST API. */
 export declare class Umbral {{
   constructor(baseUrl: string, opts?: UmbralOptions);
-
+{auth_member}
   /** Start a query against a REST-exposed table. */
   from<K extends keyof UmbralResources>(
     table: K,
@@ -948,5 +1145,140 @@ fn title_case(s: &str) -> String {
     match chars.next() {
         Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+// =========================================================================
+// The session client — discovered from the app's published OpenAPI paths.
+// =========================================================================
+
+/// The auth endpoints this app actually serves, discovered from the paths every
+/// plugin publishes via `Plugin::openapi_paths()`.
+///
+/// Keyed off `operationId` (`auth_login`, `auth_logout`, `auth_me`,
+/// `auth_register`), NOT off path spelling — so a plugin mounted at a custom
+/// prefix (`.at("/accounts")`) still generates a working session client, and an
+/// app with no auth plugin generates none at all (no dead code).
+#[derive(Debug, Default)]
+struct AuthEndpoints {
+    login: Option<String>,
+    logout: Option<String>,
+    me: Option<String>,
+    register: Option<String>,
+    /// TS type of the login request body, from the published schema.
+    login_body: String,
+    /// TS type of the register request body.
+    register_body: String,
+    /// TS type of the user object (`/me`, and `login.user`).
+    user: String,
+}
+
+impl AuthEndpoints {
+    /// `Some` only when the app serves a login endpoint — the session client is
+    /// meaningless without one.
+    fn discover(paths: &[(String, Value)]) -> Option<Self> {
+        let mut e = AuthEndpoints::default();
+        for (path, item) in paths {
+            // A path item maps method → operation.
+            let Some(ops) = item.as_object() else {
+                continue;
+            };
+            for (_method, op) in ops {
+                let Some(id) = op.get("operationId").and_then(Value::as_str) else {
+                    continue;
+                };
+                match id {
+                    "auth_login" => {
+                        e.login = Some(path.clone());
+                        e.login_body = request_body_ts(op).unwrap_or_else(|| "unknown".into());
+                        // login returns `{ user, token }` — lift the user shape.
+                        if let Some(schema) = response_schema(op) {
+                            if let Some(user) = schema.get("properties").and_then(|p| p.get("user"))
+                            {
+                                e.user = schema_to_ts(user);
+                            }
+                        }
+                    }
+                    "auth_logout" => e.logout = Some(path.clone()),
+                    "auth_register" => {
+                        e.register = Some(path.clone());
+                        e.register_body = request_body_ts(op).unwrap_or_else(|| "unknown".into());
+                    }
+                    "auth_me" => {
+                        e.me = Some(path.clone());
+                        if e.user.is_empty() {
+                            if let Some(schema) = response_schema(op) {
+                                e.user = schema_to_ts(&schema);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if e.user.is_empty() {
+            e.user = "Record<string, unknown>".to_string();
+        }
+        e.login.as_ref()?;
+        Some(e)
+    }
+}
+
+/// The `application/json` request-body schema of an operation, as a TS type.
+fn request_body_ts(op: &Value) -> Option<String> {
+    let schema = op
+        .get("requestBody")?
+        .get("content")?
+        .get("application/json")?
+        .get("schema")?;
+    Some(schema_to_ts(schema))
+}
+
+/// The `200` `application/json` response schema of an operation.
+fn response_schema(op: &Value) -> Option<Value> {
+    op.get("responses")?
+        .get("200")?
+        .get("content")?
+        .get("application/json")?
+        .get("schema")
+        .cloned()
+}
+
+/// Render a (simple, inline) JSON Schema as a TypeScript type.
+///
+/// Covers what the auth surface publishes: objects with `properties` +
+/// `required`, and the scalar leaves. Anything it can't model degrades to
+/// `unknown` rather than guessing — a wrong type is worse than an honest one.
+fn schema_to_ts(schema: &Value) -> String {
+    match schema.get("type").and_then(Value::as_str) {
+        Some("object") => {
+            let Some(props) = schema.get("properties").and_then(Value::as_object) else {
+                return "Record<string, unknown>".to_string();
+            };
+            let required: Vec<&str> = schema
+                .get("required")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let mut out = String::from("{ ");
+            for (name, sub) in props {
+                let opt = if required.contains(&name.as_str()) {
+                    ""
+                } else {
+                    "?"
+                };
+                let _ = write!(out, "{name}{opt}: {}; ", schema_to_ts(sub));
+            }
+            out.push('}');
+            out
+        }
+        Some("array") => match schema.get("items") {
+            Some(items) => format!("{}[]", schema_to_ts(items)),
+            None => "unknown[]".to_string(),
+        },
+        Some("string") => "string".to_string(),
+        Some("integer") | Some("number") => "number".to_string(),
+        Some("boolean") => "boolean".to_string(),
+        _ => "unknown".to_string(),
     }
 }
