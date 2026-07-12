@@ -2,7 +2,7 @@
 //!
 //! Storefront pages for catalog and content plugin records. Every
 //! handler hands a minijinja context to `umbral::templates::render`
-//! and wraps DB / template errors with `internal_error`.
+//! and lets DB / template errors bubble through `?` as `ApiError`.
 
 use std::collections::HashMap;
 
@@ -11,9 +11,8 @@ use ecommerce::models::{Brand, Product, Review, brand, product, review};
 use serde::{Deserialize, Serialize};
 use umbral::forms::Form;
 use umbral::templates::context;
-use umbral::web::{Html, IntoResponse, Json, Path, Query, Redirect, Response, StatusCode};
+use umbral::web::{ApiError, Html, IntoResponse, Json, Path, Query, Redirect, Response};
 
-use super::internal_error;
 
 #[derive(Debug, Deserialize)]
 pub struct ContactQuery {
@@ -46,28 +45,26 @@ xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 }
 
-pub async fn bench_note_write() -> Result<Json<Note>, (StatusCode, String)> {
+pub async fn bench_note_write() -> Result<Json<Note>, ApiError> {
     let note = Note::objects()
         .create(Note {
             id: 0,
             title: "ApacheBench note".to_string(),
             description: "Inserted by the shop benchmark write endpoint.".to_string(),
         })
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     Ok(Json(note))
 }
 
-pub async fn bench_note_read() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+pub async fn bench_note_read() -> Result<Json<serde_json::Value>, ApiError> {
     let notes = Note::objects()
         .order_by(note::ID.desc())
         .limit(25)
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
-    let total = Note::objects().count().await.map_err(internal_error)?;
+    let total = Note::objects().count().await?;
 
     Ok(Json(serde_json::json!({
         "total": total,
@@ -82,43 +79,38 @@ pub async fn bench_note_read() -> Result<Json<serde_json::Value>, (StatusCode, S
 // signature. No parallel ContactForm struct, no field-by-field
 // duplication.
 
-pub async fn home() -> Result<Html<String>, (StatusCode, String)> {
+pub async fn home() -> Result<Html<String>, ApiError> {
     let featured = Product::objects()
         .filter(product::IS_FEATURED.eq(true))
         .filter(product::STATUS.eq("active"))
         .order_by(product::CREATED_AT.desc())
         .limit(4)
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let brands = Brand::objects()
         .order_by(brand::NAME.asc())
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let reviews = Review::objects()
         .filter(review::IS_APPROVED.eq(true))
         .order_by(review::CREATED_AT.desc())
         .limit(3)
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let home_faqs = Faq::objects()
         .filter(faq::IS_PUBLISHED.eq(true))
         .order_by(faq::POSITION.asc())
         .limit(3)
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let product_count = Product::objects()
         .filter(product::STATUS.eq("active"))
         .count()
-        .await
-        .map_err(internal_error)?;
+        .await?;
     let featured_count = featured.len();
     let brand_count = brands.len();
 
@@ -133,89 +125,78 @@ pub async fn home() -> Result<Html<String>, (StatusCode, String)> {
             featured_count,
             brand_count
         ),
-    )
-    .map_err(internal_error)?;
+    )?;
     Ok(Html(body))
 }
 
-pub async fn product_list() -> Result<Html<String>, (StatusCode, String)> {
+pub async fn product_list() -> Result<Html<String>, ApiError> {
     let products = Product::objects()
         .filter(product::STATUS.eq("active"))
         .order_by(product::NAME.asc())
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let product_count = products.len();
 
-    let body = umbral::templates::render("product_list.html", &context!(products, product_count))
-        .map_err(internal_error)?;
+    let body = umbral::templates::render("product_list.html", &context!(products, product_count))?;
     Ok(Html(body))
 }
 
-pub async fn product_detail(Path(id): Path<i64>) -> Result<Html<String>, (StatusCode, String)> {
+pub async fn product_detail(Path(id): Path<i64>) -> Result<Html<String>, ApiError> {
     let product = Product::objects()
         .filter(product::ID.eq(id))
         .first()
-        .await
-        .map_err(internal_error)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Product {id} not found")))?;
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("Product {id} not found")))?;
 
-    let body = umbral::templates::render("product_detail.html", &context!(product))
-        .map_err(internal_error)?;
+    let body = umbral::templates::render("product_detail.html", &context!(product))?;
     Ok(Html(body))
 }
 
-pub async fn post_list() -> Result<Html<String>, (StatusCode, String)> {
+pub async fn post_list() -> Result<Html<String>, ApiError> {
     let featured_posts = Post::objects()
         .filter(post::STATUS.eq("published"))
         .filter(post::IS_FEATURED.eq(true))
         .order_by(post::PUBLISHED_AT.desc())
         .limit(3)
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let posts = Post::objects()
         .filter(post::STATUS.eq("published"))
         .order_by(post::PUBLISHED_AT.desc())
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let post_count = posts.len();
 
-    let body = umbral::templates::render("posts.html", &context!(posts, featured_posts, post_count))
-        .map_err(internal_error)?;
+    let body = umbral::templates::render("posts.html", &context!(posts, featured_posts, post_count))?;
     Ok(Html(body))
 }
 
-pub async fn post_detail(Path(slug): Path<String>) -> Result<Html<String>, (StatusCode, String)> {
+pub async fn post_detail(Path(slug): Path<String>) -> Result<Html<String>, ApiError> {
     let post = Post::objects()
         .filter(post::SLUG.eq(slug.as_str()))
         .filter(post::STATUS.eq("published"))
         .first()
-        .await
-        .map_err(internal_error)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Post `{slug}` not found")))?;
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("Post `{slug}` not found")))?;
 
     let body =
-        umbral::templates::render("post_detail.html", &context!(post)).map_err(internal_error)?;
+        umbral::templates::render("post_detail.html", &context!(post))?;
     Ok(Html(body))
 }
 
-pub async fn faqs() -> Result<Html<String>, (StatusCode, String)> {
+pub async fn faqs() -> Result<Html<String>, ApiError> {
     let faqs = Faq::objects()
         .filter(faq::IS_PUBLISHED.eq(true))
         .order_by(faq::POSITION.asc())
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     let faq_count = faqs.len();
 
-    let body = umbral::templates::render("faqs.html", &context!(faqs, faq_count))
-        .map_err(internal_error)?;
+    let body = umbral::templates::render("faqs.html", &context!(faqs, faq_count))?;
     Ok(Html(body))
 }
 
@@ -225,12 +206,11 @@ pub async fn faqs() -> Result<Html<String>, (StatusCode, String)> {
 /// shows the thank-you banner.
 pub async fn contact(
     Query(query): Query<ContactQuery>,
-) -> Result<Html<String>, (StatusCode, String)> {
+) -> Result<Html<String>, ApiError> {
     let sent = query.sent.as_deref() == Some("1");
     let form = ContactMessage::default();
     let errors: HashMap<String, Vec<String>> = HashMap::new();
-    let body = umbral::templates::render("contact.html", &context!(sent, form, errors))
-        .map_err(internal_error)?;
+    let body = umbral::templates::render("contact.html", &context!(sent, form, errors))?;
     Ok(Html(body))
 }
 
@@ -239,7 +219,7 @@ pub async fn contact(
 /// `errs.render("contact.html")` is the whole failure path: it binds
 /// `form` (every keystroke kept) + `errors` (per-field + summary
 /// banner) and returns 422.
-pub async fn submit_contact(form: Form<ContactMessage>) -> Result<Response, (StatusCode, String)> {
+pub async fn submit_contact(form: Form<ContactMessage>) -> Result<Response, ApiError> {
     let mut msg = match form.into_result() {
         Ok(v) => v,
         Err(errs) => return Ok(errs.render("contact.html")),
@@ -251,8 +231,7 @@ pub async fn submit_contact(form: Form<ContactMessage>) -> Result<Response, (Sta
 
     ContactMessage::objects()
         .create(msg)
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     Ok(Redirect::to("/contact?sent=1").into_response())
 }

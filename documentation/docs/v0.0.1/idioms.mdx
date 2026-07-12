@@ -89,6 +89,40 @@ struct AuthUser {
 
 The hand-rolled version normalises at *the boundary you remembered*. A second endpoint, an admin edit, or a data import writes `" Ada@Example.COM "` straight through — and now `alice@x.com` and `Alice@X.com` are two different users, which is a support ticket and possibly a security one. See [Normalized fields](./orm/normalized-fields).
 
+## 4. Errors in a handler: return `ApiError`
+
+**Hand-rolled** — this was in the framework's *own examples*, and in the `startproject` scaffold, which means every new umbral app started life with it:
+
+```rust
+fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
+    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+}
+
+async fn home() -> Result<Html<String>, (StatusCode, String)> {
+    let count = Post::objects().count().await.map_err(internal_error)?;
+    let body = render("home.html", &context!(count)).map_err(internal_error)?;
+    Ok(Html(body))
+}
+```
+
+Look at what `err.to_string()` does on the failure path: it sends the **database's error text to the browser**. `no such table: shop_product`. A column name. A constraint. Whoever asked for the page gets a free look at your schema.
+
+**The framework**:
+
+```rust
+async fn home() -> Result<Html<String>, ApiError> {
+    let count = Post::objects().count().await?;
+    let body = render("home.html", &context!(count))?;
+    Ok(Html(body))
+}
+```
+
+`ApiError` converts from `sqlx::Error`, `WriteError` and `TemplateError`, so `?` just works. A 500 **logs the real cause server-side and returns an opaque message**. A `WriteError` that's a validation failure becomes a 400 with the per-field error map. There is no helper to write.
+
+<Callout type="warning">
+  The tell is `.map_err(...)` on an ORM or template call. If you wrote a `fn internal_error` / `fn err500` at the top of a file, you are almost certainly leaking internals on the failure path — and it only shows up when something is already going wrong.
+</Callout>
+
 ## The pattern behind all three
 
 Each hand-rolled version is *correct at the call site that wrote it* and wrong at the next one. The framework version moves the guarantee from **"a developer remembered"** to **"the type system / the schema / the transaction enforced it"** — which is the entire reason to use a framework rather than a pile of libraries.
@@ -98,6 +132,8 @@ If you're writing something that feels like plumbing, check whether it's already
 | You're about to write | Reach for |
 |---|---|
 | A permission check at the top of a handler | [`RequireStaff` / `RequireAuth`](./auth/login-and-request-user), or [REST permissions](./rest/permissions) |
+| `fn internal_error` / `.map_err(err500)` | [`ApiError`](./web/error-pages) — and stop leaking the DB error to the browser |
+| `identity.user_id.parse::<i64>()` | `Identity::pk::<i64>()`, or better, the `RequireAuth<T>` extractor |
 | Two or more writes in one handler | [`db::transaction`](./orm/transactions) |
 | `.trim()` / `.to_lowercase()` on input | [`#[umbral(trim, lowercase)]`](./orm/normalized-fields) |
 | Checking a JSON request body by hand | [`Valid<T>` + `#[derive(Validate)]`](./web/request-validation) |

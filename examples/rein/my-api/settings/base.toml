@@ -1,0 +1,43 @@
+# Base Settings for my-api
+#
+# This file contains the base configuration that is common across all environments.
+# Environment-specific settings should be placed in their respective files:
+# - local.toml (development)
+# - staging.toml (staging environment)
+# - production.toml (production environment)
+#
+# IMPORTANT: Copy this file to base.toml and update the values.
+# Commit non-secret defaults only when they are meant to be shared.
+
+[core]
+debug = false
+# secret_key = "uncomment-this-line-and-replace-with-a-long-random-string"
+allowed_hosts = []
+language_code = "en-us"
+time_zone = "UTC"
+use_i18n = true
+use_tz = true
+default_auto_field = "BigAutoField"
+middleware = []
+root_urlconf = ""
+
+[core.security]
+session_cookie_secure = false
+csrf_cookie_secure = false
+secure_ssl_redirect = false
+secure_hsts_seconds = 0
+secure_hsts_include_subdomains = false
+secure_hsts_preload = false
+append_slash = true
+
+[core.databases.default]
+engine = "postgresql"
+host = "localhost"
+port = 5432
+name = "my-api_db"
+user = "postgres"
+# password = "uncomment-this-line-and-replace-with-db-password"
+
+[static]
+url = "/static/"
+root = "staticfiles"

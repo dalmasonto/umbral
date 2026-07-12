@@ -39,6 +39,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::web::{HeaderMap, header};
 
+/// [`Identity::pk`] could not convert the stringified key back to its type.
+///
+/// In a correctly-configured app this cannot happen — the string was produced by
+/// `Display` on that very key type — which is exactly why hand-writing the parse (and its
+/// error branch) at every call site is waste.
+#[derive(Debug, Clone)]
+pub struct IdentityPkError {
+    /// The value that would not parse.
+    pub value: String,
+    /// The Rust type it was asked to become.
+    pub target: &'static str,
+}
+
+impl std::fmt::Display for IdentityPkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "umbral: identity primary key `{}` is not a valid `{}` — the active user model's \
+             key type and the session's stored key disagree",
+            self.value, self.target
+        )
+    }
+}
+
+impl std::error::Error for IdentityPkError {}
+
 /// Who the request belongs to, after authentication.
 ///
 /// The shape is intentionally narrow: `user_id`, `is_staff`, and
@@ -47,12 +73,20 @@ use crate::web::{HeaderMap, header};
 /// custom permission impls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Identity {
-    /// The authenticated user's primary key, stringified so the same
-    /// `Identity` shape works whether the active user model has an
-    /// `i64`, `String`, or UUID primary key. Permission checks that
-    /// need the typed PK back can parse on demand
-    /// (`identity.user_id.parse::<i64>()`); the framework's own
-    /// permissions plugin and session store already speak strings.
+    /// The authenticated user's primary key, stringified so the same `Identity` shape
+    /// works whether the active user model has an `i64`, `String`, or UUID primary key.
+    /// The framework's own permissions plugin and session store speak strings.
+    ///
+    /// **To get the typed key back, use [`Identity::pk`] — not `.parse()`.** This
+    /// doc-comment used to say "parse on demand (`identity.user_id.parse::<i64>()`)",
+    /// and a live consumer duly wrote that expression ~19 times, each with its own
+    /// bespoke error branch for a failure that cannot happen. Documentation that hands
+    /// you a snippet is documentation that decides your code; this one was teaching the
+    /// boilerplate it should have been replacing. (gaps3 #57.)
+    ///
+    /// In a handler, prefer not to touch this field at all — the
+    /// `RequireAuth<T>` / `RequireStaff` extractors hand you the typed key in the
+    /// signature, so a handler that forgot to authenticate cannot be written.
     pub user_id: String,
     /// Staff flag. Used by the
     /// built-in `IsStaff` permission class in `umbral-rest`.
@@ -71,6 +105,27 @@ pub struct Identity {
 }
 
 impl Identity {
+    /// The user's primary key, typed (gaps3 #57).
+    ///
+    /// `user_id` is a `String` because the framework supports `i64`, `String` and UUID
+    /// primary keys behind one `Identity` shape. This converts it back:
+    ///
+    /// ```ignore
+    /// let uid: i64 = identity.pk()?;
+    /// ```
+    ///
+    /// `Err` carries the unparseable value, which is the only useful thing to say about
+    /// it — but note that in a correctly-configured app this cannot fail: the string was
+    /// produced by `Display` on that very key type. That is precisely why hand-writing
+    /// `.parse::<i64>().map_err(|_| some_500())?` at every call site is waste: it is an
+    /// error branch for an impossible state, repeated once per handler.
+    pub fn pk<T: std::str::FromStr>(&self) -> Result<T, IdentityPkError> {
+        self.user_id.parse::<T>().map_err(|_| IdentityPkError {
+            value: self.user_id.clone(),
+            target: std::any::type_name::<T>(),
+        })
+    }
+
     /// Convenience constructor for a non-staff user. Accepts any
     /// stringifiable PK — `Identity::user(42)`, `Identity::user("42")`,
     /// or `Identity::user(uuid.to_string())` all work because the

@@ -15,10 +15,10 @@ pub mod public;
 pub use account::*;
 pub use public::*;
 
-use umbral::web::StatusCode;
-
-/// Convert any displayable error into a 500 response. Shared by
-/// every handler that bubbles a `?` through `.map_err(...)`.
-pub(crate) fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-}
+// There is deliberately no `internal_error` helper here any more.
+//
+// Every handler below returns `Result<_, umbral::web::ApiError>` and uses a bare `?`.
+// The old helper did `(StatusCode::INTERNAL_SERVER_ERROR, err.to_string())`, which hands
+// the raw error to whoever asked for the page — a missing table or a SQL fragment,
+// printed to the browser. `ApiError` logs the real cause server-side and returns an
+// opaque 500, which is what an example should be teaching.

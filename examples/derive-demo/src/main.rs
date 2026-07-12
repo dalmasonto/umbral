@@ -31,7 +31,7 @@ use std::sync::Arc;
 use umbral::migrate::MigrateError;
 use umbral::prelude::*;
 use umbral::templates::context;
-use umbral::web::{Html, StatusCode};
+use umbral::web::{ApiError, Html, StatusCode};
 use umbral_auth::{AuthUser, BearerAuthentication};
 use umbral_rest::{
     Action, ChainAuthentication, Identity, IsAuthenticated, IsStaff, Permission, PermissionError,
@@ -280,28 +280,25 @@ fn is_serve_invocation() -> bool {
 
 /// Home page. Counts the rows so the template has something to show
 /// without re-listing the full set.
-async fn home() -> Result<Html<String>, (StatusCode, String)> {
-    let count = Article::objects().count().await.map_err(internal_error)?;
-    let body = umbral::templates::render("home.html", &context!(article_count => count))
-        .map_err(internal_error)?;
+async fn home() -> Result<Html<String>, ApiError> {
+    let count = Article::objects().count().await?;
+    let body = umbral::templates::render("home.html", &context!(article_count => count))?;
     Ok(Html(body))
 }
 
 /// HTML list view. Same QuerySet the JSON endpoint uses; the only
 /// difference is which template runs over the result.
-async fn list_articles_html() -> Result<Html<String>, (StatusCode, String)> {
+async fn list_articles_html() -> Result<Html<String>, ApiError> {
     let articles = Article::objects()
         .order_by(article::ID.asc())
         .fetch()
-        .await
-        .map_err(internal_error)?;
-    let body = umbral::templates::render("articles_list.html", &context!(articles))
-        .map_err(internal_error)?;
+        .await?;
+    let body = umbral::templates::render("articles_list.html", &context!(articles))?;
     Ok(Html(body))
 }
 
-async fn test_500_html() -> Result<Html<String>, (StatusCode, String)> {
-    // let body = umbral::templates::render("test-500.html", &context!()).map_err(internal_error)?;
+async fn test_500_html() -> Result<Html<String>, ApiError> {
+    // let body = umbral::templates::render("test-500.html", &context!())?;
     panic!("Something went south ofcourse");
     // Ok(Html(body))
 }
@@ -310,22 +307,19 @@ async fn test_500_html() -> Result<Html<String>, (StatusCode, String)> {
 /// doesn't exist renders the `not_found.html` template with a 404.
 async fn article_detail(
     Path(id): Path<i64>,
-) -> Result<(StatusCode, Html<String>), (StatusCode, String)> {
+) -> Result<(StatusCode, Html<String>), ApiError> {
     let found = Article::objects()
         .filter(article::ID.eq(id))
         .first()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
     match found {
         Some(article) => {
-            let body = umbral::templates::render("article_detail.html", &context!(article))
-                .map_err(internal_error)?;
+            let body = umbral::templates::render("article_detail.html", &context!(article))?;
             Ok((StatusCode::OK, Html(body)))
         }
         None => {
-            let body = umbral::templates::render("not_found.html", &context!(id))
-                .map_err(internal_error)?;
+            let body = umbral::templates::render("not_found.html", &context!(id))?;
             Ok((StatusCode::NOT_FOUND, Html(body)))
         }
     }
@@ -335,17 +329,12 @@ async fn article_detail(
 /// landed; kept under `/api/articles` so the JSON shape stays
 /// reachable for clients (and for the documentation pages that
 /// reference it).
-async fn list_articles_json() -> Result<Json<Vec<Article>>, (StatusCode, String)> {
+async fn list_articles_json() -> Result<Json<Vec<Article>>, ApiError> {
     let articles = Article::objects()
         .order_by(article::ID.asc())
         .fetch()
-        .await
-        .map_err(internal_error)?;
+        .await?;
     Ok(Json(articles))
-}
-
-fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
 }
 
 async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

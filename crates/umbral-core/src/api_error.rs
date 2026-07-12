@@ -65,6 +65,22 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
+/// gaps3 #57 — so `umbral::templates::render(...)?` works with a bare `?`.
+///
+/// Rendering a template is the single most common fallible line in an HTML handler, and
+/// without this impl `ApiError` could not be that handler's error type at all. Which is
+/// how every example ended up hand-rolling `fn internal_error(e) -> (StatusCode, String)`
+/// — and that helper hands `e.to_string()` straight to the browser, so a missing table
+/// or a bad column name is printed to whoever asked for the page.
+///
+/// A broken template is a bug in the app, never in the request: it becomes an opaque 500
+/// with the real cause logged server-side, the same posture as a database error.
+impl From<crate::templates::TemplateError> for ApiError {
+    fn from(e: crate::templates::TemplateError) -> Self {
+        Self::Internal(e.to_string())
+    }
+}
+
 impl From<WriteError> for ApiError {
     fn from(e: WriteError) -> Self {
         // A validation failure (required field, FK-not-found, format rule, …) is

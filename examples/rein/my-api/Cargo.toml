@@ -1,0 +1,18 @@
+[package]
+name = "my-api"
+version = "0.1.0"
+edition = "2024"
+
+[profile.dev]
+codegen-units = 16
+debug = 0
+
+[[bin]]
+name = "manage"
+path = "src/bin/manage.rs"
+
+[dependencies]
+reinhardt = { version = "0.3.1", package = "reinhardt-web", default-features = false, features = ["full", "conf", "commands", "db-postgres", "api"] }
+ctor = "0.6"
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }

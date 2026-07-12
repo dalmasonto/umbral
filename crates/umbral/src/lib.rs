@@ -122,8 +122,8 @@ pub use umbral_core::settings::{Environment, Settings};
 /// `umbral-auth` can drop its `umbral-rest` dependency entirely.
 pub mod auth {
     pub use umbral_core::auth_contract::{
-        Authentication, ChainAuthentication, FnAuthentication, Identity, NoAuthentication,
-        parse_basic_credentials,
+        Authentication, ChainAuthentication, FnAuthentication, Identity, IdentityPkError,
+        NoAuthentication, parse_basic_credentials,
     };
 }
 

@@ -444,6 +444,62 @@ pub struct Render500State {
     pub hook: Option<ServerErrorHook>,
 }
 
+/// Turn an error response body into a human sentence for an error page.
+///
+/// gaps3 #57. `ApiError` — the error type every handler is supposed to return — renders
+/// as JSON, because its first audience is an API client. The error-page middlewares then
+/// captured that JSON *verbatim* and printed it as the page's message, so a browser hit
+/// a styled 500 that said `{"code":"database_error","error":"internal server error"}`.
+///
+/// That papercut is not cosmetic: it is a reason not to use `ApiError` in an HTML
+/// handler, which leaves the handler hand-rolling `(StatusCode, String)` — and the
+/// hand-rolled version passes `err.to_string()` straight to the browser, leaking table
+/// names and SQL fragments. The ugly page pushed people toward the leaky pattern.
+///
+/// So: if the body is a JSON object carrying a message, use that message. Anything else
+/// (plain text, an empty body, non-JSON) passes through untouched.
+fn humanize_error_body(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if !trimmed.starts_with('{') {
+        return raw.to_string();
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return raw.to_string();
+    };
+    // `error` is ApiError's message key; `detail` is the throttling / DRF-style one.
+    for key in ["error", "detail", "message"] {
+        if let Some(msg) = v.get(key).and_then(|m| m.as_str()) {
+            if !msg.is_empty() {
+                return msg.to_string();
+            }
+        }
+    }
+    // A validation failure has no single message — flatten the field errors into
+    // something a human can act on rather than showing them raw JSON.
+    if let Some(fields) = v.get("field_errors").and_then(|f| f.as_object()) {
+        let mut parts: Vec<String> = fields
+            .iter()
+            .map(|(field, msgs)| {
+                let joined = msgs
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|m| m.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default();
+                format!("{field}: {joined}")
+            })
+            .collect();
+        parts.sort();
+        if !parts.is_empty() {
+            return parts.join("; ");
+        }
+    }
+    raw.to_string()
+}
+
 /// Middleware that intercepts plain-text 500 responses and re-renders them
 /// through the configured `server_error_template` (or the embedded default
 /// when enabled). Already-HTML 500 responses pass through untouched — those
@@ -485,7 +541,7 @@ pub async fn render_500_middleware(
     let bytes = axum::body::to_bytes(body, 64 * 1024)
         .await
         .unwrap_or_default();
-    let error_msg = String::from_utf8_lossy(&bytes).to_string();
+    let error_msg = humanize_error_body(&String::from_utf8_lossy(&bytes));
 
     tracing::error!(
         error = %error_msg,
@@ -569,7 +625,7 @@ pub async fn render_error_middleware(
     let bytes = axum::body::to_bytes(body, 64 * 1024)
         .await
         .unwrap_or_default();
-    let message = String::from_utf8_lossy(&bytes).to_string();
+    let message = humanize_error_body(&String::from_utf8_lossy(&bytes));
 
     let ctx = error_context(status, &message, &path, is_dev_mode());
     let (body_str, content_type) = render_error_page(&template, status, &ctx);

@@ -263,7 +263,7 @@ fn random_dev_secret_key() -> String {
 /// ├── src/
 /// │   ├── main.rs           # App builder + route table + boot helpers
 /// │   ├── views/
-/// │   │   ├── mod.rs        # re-export layer + shared `internal_error`
+/// │   │   ├── mod.rs        # re-export layer (handlers return ApiError)
 /// │   │   └── public.rs     # public/unauth handlers
 /// │   ├── seed/
 /// │   │   ├── mod.rs        # `all()` orchestrator (pins dependency order)
@@ -571,7 +571,7 @@ async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
     write_file(&root, "src/main.rs", &main_rs, &mut files)?;
 
     // ------------------------------------------------------------------ //
-    // src/views/mod.rs — re-export layer + shared internal_error helper    //
+    // src/views/mod.rs — re-export layer (handlers return ApiError)        //
     // ------------------------------------------------------------------ //
     let views_mod_rs = r#"//! HTTP handlers, split by concern — the re-export / discoverability
 //! layer. Open this file and you see the whole web surface in a few
@@ -588,13 +588,12 @@ async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
 
 pub mod public;
 
-use umbral::web::StatusCode;
-
-/// Convert any displayable error into a 500 response. Shared by every
-/// handler that bubbles a `?` through `.map_err(internal_error)`.
-pub(crate) fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-}
+// No `internal_error` helper, on purpose.
+//
+// Handlers return `Result<_, umbral::web::ApiError>` and use a bare `?`. ApiError
+// converts from sqlx / WriteError / TemplateError, logs the real cause server-side, and
+// returns an opaque 500 — so a missing table or a SQL fragment never reaches the browser.
+// The `(StatusCode, String)` + `err.to_string()` pattern does the opposite.
 "#;
     write_file(&root, "src/views/mod.rs", views_mod_rs, &mut files)?;
 
@@ -603,36 +602,33 @@ pub(crate) fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, Strin
     // ------------------------------------------------------------------ //
     let views_public_rs = r#"//! Public storefront views — anyone can hit these, no auth required.
 //!
-//! Every handler hands a context to `umbral::templates::render` and wraps
-//! DB / template errors with the shared `internal_error` helper.
+//! Every handler returns `Result<_, ApiError>` and lets `?` do the work. `ApiError`
+//! converts from a database error, a `WriteError` and a template error, so there is no
+//! per-handler error helper to write — and a 500 logs the real cause server-side while
+//! the client gets an opaque message. Never hand `err.to_string()` to a browser: that is
+//! how table names and SQL fragments end up on someone else's screen.
 
 use umbral::prelude::*;
 use umbral::templates::context;
-use umbral::web::{Html, Json, StatusCode};
+use umbral::web::{ApiError, Html, Json};
 
-use super::internal_error;
 use crate::Post;
 use crate::post;
 
 /// Home page. Counts published posts and renders home.html.
-pub async fn home() -> Result<Html<String>, (StatusCode, String)> {
+pub async fn home() -> Result<Html<String>, ApiError> {
     let post_count = Post::objects()
         .filter(post::PUBLISHED.eq(true))
         .count()
-        .await
-        .map_err(internal_error)?;
+        .await?;
 
-    let body = umbral::templates::render("home.html", &context!(post_count)).map_err(internal_error)?;
+    let body = umbral::templates::render("home.html", &context!(post_count))?;
     Ok(Html(body))
 }
 
 /// JSON list of all posts — demonstrates the ORM QuerySet.
-pub async fn api_list_posts() -> Result<Json<Vec<Post>>, (StatusCode, String)> {
-    let posts = Post::objects()
-        .order_by(post::ID.desc())
-        .fetch()
-        .await
-        .map_err(internal_error)?;
+pub async fn api_list_posts() -> Result<Json<Vec<Post>>, ApiError> {
+    let posts = Post::objects().order_by(post::ID.desc()).fetch().await?;
     Ok(Json(posts))
 }
 
@@ -642,7 +638,7 @@ pub async fn api_list_posts() -> Result<Json<Vec<Post>>, (StatusCode, String)> {
 /// cheap field read, not a second DB query.
 pub async fn dashboard(
     user: umbral_auth::LoggedIn<umbral_auth::AuthUser>,
-) -> Result<Html<String>, (StatusCode, String)> {
+) -> Result<Html<String>, ApiError> {
     // Demonstrates a transaction: fetch the user's post list atomically.
     let user_id = user.id;
     let my_posts = umbral::transaction(|tx| {
@@ -654,11 +650,9 @@ pub async fn dashboard(
                 .await
         })
     })
-    .await
-    .map_err(internal_error)?;
+    .await?;
 
-    let body =
-        umbral::templates::render("dashboard.html", &context!(user, my_posts)).map_err(internal_error)?;
+    let body = umbral::templates::render("dashboard.html", &context!(user, my_posts))?;
     Ok(Html(body))
 }
 "#;
@@ -1915,9 +1909,22 @@ mod tests {
             views_mod.contains("re-export"),
             "views/mod.rs should describe itself as the re-export layer",
         );
+        // gaps3 #57. The scaffold used to GENERATE a `fn internal_error` helper into every
+        // new app — and that helper hands `err.to_string()` to the browser, so a missing
+        // table or a SQL fragment is printed to whoever asked for the page. The scaffold
+        // is the first umbral code a developer ever reads; it was teaching the leak.
+        //
+        // This assertion is deliberately inverted from what it used to be.
         assert!(
-            views_mod.contains("fn internal_error"),
-            "views/mod.rs must carry the shared internal_error helper",
+            !views_mod.contains("fn internal_error"),
+            "the scaffold must NOT generate an internal_error helper — handlers return \
+             ApiError, which logs the cause and keeps it off the wire",
+        );
+        let views_public = fs::read_to_string(root.join("src/views/public.rs")).unwrap();
+        assert!(
+            views_public.contains("Result<Html<String>, ApiError>")
+                && !views_public.contains("map_err(internal_error)"),
+            "generated handlers must return ApiError and use a bare `?`",
         );
 
         let seed_mod = fs::read_to_string(root.join("src/seed/mod.rs")).unwrap();

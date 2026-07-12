@@ -449,6 +449,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "chacha20"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3613f74bd2eac03dad61bd53dbe620703d4371614fe0bc3b9f04dd36fe4e818"
+dependencies = [
+ "cfg-if",
+ "cipher",
+ "cpufeatures",
+]
+
+[[package]]
+name = "chacha20poly1305"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
+dependencies = [
+ "aead",
+ "chacha20",
+ "cipher",
+ "poly1305",
+ "zeroize",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -844,6 +868,16 @@ name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
+name = "errno"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "etcetera"
@@ -1432,6 +1466,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "inventory"
+version = "0.3.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -2536,6 +2579,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3035,6 +3088,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
@@ -3271,7 +3325,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "umbral"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "minijinja",
@@ -3283,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-admin"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "axum",
  "chrono",
@@ -3305,7 +3359,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-auth"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "argon2",
  "async-trait",
@@ -3321,16 +3375,20 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
+ "tokio",
  "tower",
  "tracing",
  "umbral",
- "umbral-rest",
  "umbral-sessions",
 ]
 
 [[package]]
+name = "umbral-casing"
+version = "0.0.6"
+
+[[package]]
 name = "umbral-cli"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "clap",
  "csv",
@@ -3338,12 +3396,13 @@ dependencies = [
  "tokio",
  "tracing-subscriber",
  "umbral",
+ "umbral-casing",
  "umbral-core",
 ]
 
 [[package]]
 name = "umbral-core"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "ammonia",
  "async-trait",
@@ -3358,6 +3417,7 @@ dependencies = [
  "figment",
  "futures-util",
  "http",
+ "inventory",
  "ipnetwork",
  "mac_address",
  "minijinja",
@@ -3379,6 +3439,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "umbral-casing",
  "uuid",
 ]
 
@@ -3404,26 +3465,31 @@ dependencies = [
 
 [[package]]
 name = "umbral-macros"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+ "umbral-casing",
 ]
 
 [[package]]
 name = "umbral-openapi"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
+ "async-trait",
+ "clap",
  "serde",
  "serde_json",
+ "tracing",
  "umbral",
+ "umbral-casing",
  "umbral-rest",
 ]
 
 [[package]]
 name = "umbral-permissions"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "axum",
  "axum-core",
@@ -3436,11 +3502,12 @@ dependencies = [
  "tracing",
  "umbral",
  "umbral-auth",
+ "umbral-sessions",
 ]
 
 [[package]]
 name = "umbral-playground"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "axum",
  "serde_json",
@@ -3450,13 +3517,14 @@ dependencies = [
 
 [[package]]
 name = "umbral-rest"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
  "base64",
  "chrono",
  "csv",
+ "form_urlencoded",
  "http",
  "sea-query",
  "serde",
@@ -3469,7 +3537,7 @@ dependencies = [
 
 [[package]]
 name = "umbral-security"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "axum",
  "getrandom 0.2.17",
@@ -3485,17 +3553,22 @@ dependencies = [
 
 [[package]]
 name = "umbral-sessions"
-version = "0.0.1"
+version = "0.0.6"
 dependencies = [
  "async-trait",
  "axum",
  "axum-core",
+ "base64",
+ "chacha20poly1305",
  "chrono",
+ "clap",
+ "getrandom 0.2.17",
  "http",
  "serde",
  "serde_json",
  "sha2",
  "sqlx",
+ "tokio",
  "tracing",
  "umbral",
  "uuid",
