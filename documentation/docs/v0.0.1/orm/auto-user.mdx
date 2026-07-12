@@ -1,0 +1,73 @@
+---
+title: Who wrote this row
+description: auto_user_add / auto_user stamp the authenticated caller onto a row on write — the who-did-it twin of auto_now_add / auto_now.
+sidebar_position: 14
+icon: user-pen
+tags: [orm, audit, auth, models]
+badge: new
+---
+
+# Who wrote this row
+
+`auto_now_add` / `auto_now` record **when** a row was written. `auto_user_add` / `auto_user` record **who** wrote it, from the authenticated caller — no app code, no threading a user through your service layer.
+
+```rust
+#[derive(Model)]
+#[umbral(table = "memo")]
+struct Memo {
+    id: i64,
+    title: String,
+
+    #[umbral(auto_now_add)] created_at: DateTime<Utc>,
+    #[umbral(auto_now)]     updated_at: DateTime<Utc>,
+
+    #[umbral(auto_user_add)] created_by: Option<ForeignKey<AuthUser>>,  // set once, on create
+    #[umbral(auto_user)]     updated_by: Option<ForeignKey<AuthUser>>,  // refreshed on every write
+}
+```
+
+That's it. A `POST /api/memo/` from user 7 stores `created_by = 7` and `updated_by = 7`. A later `PATCH` by user 8 leaves `created_by = 7` and moves `updated_by` to 8 — which is the whole reason there are two attributes.
+
+## It keys off the attribute, never the column name
+
+Nothing in the framework looks for a column *called* `created_by`. The attribute is the opt-in. So:
+
+- You can call the field whatever your domain calls it — `recorded_by`, `author`, `submitted_by`.
+- A plain field you happen to name `created_by`, with **no** attribute, is **yours**. It is never stamped, never clobbered, and never given a meaning you didn't ask for.
+
+## The author is server-owned
+
+The stamp is written **before the request body is consulted**, so a client cannot forge it:
+
+```http
+POST /api/memo/            (authenticated as user 7)
+{ "title": "forged", "created_by": 99 }
+```
+
+stores `created_by = 7`. The body's claim is ignored — the same posture as `owned_by` / `inject_owner`. A user cannot create a row attributed to somebody else.
+
+## No caller means NULL
+
+A background task, a CLI command, a data migration, an anonymous request — none of them have a user. Those writes stamp **NULL** rather than inventing an author.
+
+<Callout type="warning">
+  This is why an `auto_user` column **must be nullable**, and a NOT NULL one fails the `model.auto_user` boot check. A job that writes a row would otherwise die on a constraint violation at runtime; better to hear it at boot.
+</Callout>
+
+Task-locals do not cross `tokio::spawn`, so a spawned job genuinely has no caller — it does not silently inherit the user of whichever request happened to enqueue it. If a job *should* act as someone, enter the context explicitly:
+
+```rust
+umbral::db::route_context_scope(
+    RouteContext::new().with_user(user_id.to_string()),
+    async { Memo::objects().create(memo).await },
+).await?;
+```
+
+## Where it applies
+
+Every ORM write path: the typed `QuerySet` (`Model::objects().create(...)`, `update_values`), and `DynQuerySet` — which is what **admin and REST** run on, so both stamp too, including nested creates.
+
+## See also
+
+- [Soft delete](./soft-delete) — the other row-lifecycle attribute.
+- [Privileged fields](./privileged-fields) — keeping a client from writing a column at all.

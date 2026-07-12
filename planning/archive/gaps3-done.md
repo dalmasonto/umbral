@@ -362,3 +362,19 @@ Two ideas carry the implementation. **Subqueries, not primary keys**: children a
 Ordering is load-bearing: delete cascades children-first (the parent's `deleted_at IS NULL` predicate is what locates them, and stamping the parent first empties the selector mid-cascade); restore goes deepest-first (a grandchild is located *through* its child, so the child must still carry `deleted_at`). Parent + cascade run in ONE transaction — a half-applied cascade would be its own corruption bug.
 
 A cascade child that is not itself `soft_delete` now fails the `model.soft_delete_cascade` boot check rather than being silently skipped: we refuse to hard-delete it (that would make a reversible operation irreversible), so leaving it behind is exactly the bug being fixed. Tests: `crates/umbral-core/tests/soft_delete_cascade.rs` — verified to FAIL without the fix (3 of 4 go red), covering child + grandchild cascade, a `set_null` child left alone, restore round-trip, and the independently-deleted-child case.
+
+
+55. [x] No `created_by` / `updated_by` auto-stamping. `created_at`/`updated_at` are handled (`auto_now`/`auto_now_add`), but nothing in the ORM write path knows about the request user — grep for `created_by|updated_by|current_user()` across core/macros/auth/admin returns zero. Every app hand-rolls it (Kikosi did, as `created_by`/`recorded_by`). Needs the ambient request identity (`RouteContext` already carries per-request state) plumbed into the write path behind a field attr. Small and self-contained. Related: per-user data export / retention (GDPR "download my data") is also absent — only whole-DB `dumpdata` exists.
+
+
+**SHIPPED (2026-07-12).** `#[umbral(auto_user_add)]` (stamp once, on create) and `#[umbral(auto_user)]` (refresh on every write) — the who-did-it twins of `auto_now_add` / `auto_now`. Threaded `UmbralFieldAttr -> FieldSpec -> Column`, so BOTH write paths stamp: the typed QuerySet and `DynQuerySet` (admin + REST, including nested creates).
+
+Three design calls worth keeping:
+
+1. **Opt-in by ATTRIBUTE, never by column name.** Nothing looks for a column called `created_by`. You can name the field `recorded_by` / `author`; and a plain field you happen to call `created_by` with no attribute is the app's own — never stamped, never clobbered.
+2. **The author is server-owned.** The stamp is written before the request body is consulted, so a client cannot forge it: a POST from user 7 carrying `"created_by": 99` stores 7. Same posture as `owned_by` / `inject_owner`.
+3. **No caller stamps NULL**, not a guess and not a failure — a background job, the CLI, a data migration and an anonymous request genuinely have no author. Hence the new `model.auto_user` boot check: an `auto_user` column MUST be nullable, or that write dies on a NOT NULL violation at runtime.
+
+The user id reaches the ORM through `RouteContext` (the existing per-request task-local), which gained a `user` field + `current_user_id()`. It travels as a string so the user model's PK shape doesn't leak into the ambient context, and is converted back to the stamping column's type (`BigInt` / `Text` / `Uuid`). umbral-rest scopes it around its writes (`as_user`) rather than re-authenticating in a router-wide layer, which would cost a second token lookup on every read too. Task-locals don't cross `tokio::spawn`, so a job does NOT silently inherit the enqueuing request's user — it must enter a context explicitly.
+
+Tests: `plugins/umbral-rest/tests/auto_user_stamping.rs`, through the real router — create stamps the caller, a client cannot forge the author, update re-stamps `auto_user` while `auto_user_add` stays frozen at the original, an unattributed column is left alone, and an anonymous write stamps NULL. Docs: `orm/auto-user.mdx`.

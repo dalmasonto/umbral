@@ -334,6 +334,8 @@ mod readonly_set_tests {
             privileged: false,
             db_constraint: true,
             noedit,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: vec![],

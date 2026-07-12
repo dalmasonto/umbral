@@ -83,7 +83,7 @@ pub(super) fn build_insert_one_for<T: Model>(
     _backend_name: &str,
     map: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<sea_query::InsertStatement, crate::orm::write::WriteError> {
-    use crate::orm::write::{is_default_pk, json_to_sea_value, now_for_column};
+    use crate::orm::write::{is_default_pk, json_to_sea_value, now_for_column, user_for_column};
     let mut columns: Vec<Alias> = Vec::new();
     let mut values: Vec<sea_query::SimpleExpr> = Vec::new();
     for field in T::FIELDS {
@@ -109,6 +109,16 @@ pub(super) fn build_insert_one_for<T: Model>(
         if field.auto_now_add || field.auto_now {
             columns.push(Alias::new(field.name));
             values.push(now_for_column(field.ty).into());
+            continue;
+        }
+        // gaps3 #55: `auto_user_add` / `auto_user` are the who-did-it twins of
+        // the timestamps above — server-owned, so a client cannot forge an
+        // author by putting someone else's id in the body. `None` (a job, the
+        // CLI, an anonymous request) stamps NULL rather than inventing a user,
+        // which is why the column has to be nullable (`model.auto_user` check).
+        if field.auto_user_add || field.auto_user {
+            columns.push(Alias::new(field.name));
+            values.push(user_for_column(field.ty).into());
             continue;
         }
         // Skip absent fields when nullable (caller didn't supply them).

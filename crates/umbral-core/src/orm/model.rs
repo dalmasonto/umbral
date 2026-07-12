@@ -687,6 +687,13 @@ pub struct FieldSpec {
     /// chose at the struct-init site. v1 scope: the framework
     /// auto-populates only when the body / form omits the field.
     pub auto_now_add: bool,
+    /// `#[umbral(auto_user_add)]` — stamp the authenticated caller's id on
+    /// INSERT only. Opt-in by ATTRIBUTE, never by column name: a field you
+    /// happen to call `created_by` with no attribute is yours, untouched.
+    pub auto_user_add: bool,
+    /// `#[umbral(auto_user)]` — stamp the authenticated caller's id on every
+    /// write.
+    pub auto_user: bool,
 
     /// When `true`, the column gets populated with `Utc::now()` on
     /// every write (create AND update). Set via `#[umbral(auto_now)]`. Closes

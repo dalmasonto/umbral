@@ -20,6 +20,8 @@ fn text_col(name: &str, choices: &[&str]) -> Column {
         privileged: false,
         db_constraint: true,
         noedit: false,
+        auto_user_add: false,
+        auto_user: false,
         is_string_repr: false,
         max_length: 0,
         choices: choices.iter().map(|s| s.to_string()).collect(),

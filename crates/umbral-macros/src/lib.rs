@@ -265,6 +265,13 @@ struct UmbralFieldAttr {
     /// `#[umbral(auto_now_add)]` — populate with `Utc::now()` on
     /// create. Closes BUG-5 from bugs/tests/testBugs.md.
     auto_now_add: bool,
+    /// `#[umbral(auto_user_add)]` — stamp the authenticated caller's id on
+    /// INSERT only (the row's author). Nothing is magic about the column's
+    /// *name*: a plain `created_by` field with no attribute is left alone.
+    auto_user_add: bool,
+    /// `#[umbral(auto_user)]` — stamp the authenticated caller's id on every
+    /// write (who touched it last).
+    auto_user: bool,
     /// `#[umbral(auto_now)]` — populate with `Utc::now()` on every
     /// write. Closes BUG-5.
     auto_now: bool,
@@ -365,6 +372,8 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         on_update: None,
         index: false,
         auto_now_add: false,
+        auto_user_add: false,
+        auto_user: false,
         auto_now: false,
         trim: false,
         lowercase: false,
@@ -499,6 +508,12 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 // (already indexed by the constraint).
                 parsed.index = true;
                 Ok(())
+            } else if meta.path.is_ident("auto_user_add") {
+                parsed.auto_user_add = true;
+                Ok(())
+            } else if meta.path.is_ident("auto_user") {
+                parsed.auto_user = true;
+                Ok(())
             } else if meta.path.is_ident("auto_now_add") {
                 parsed.auto_now_add = true;
                 Ok(())
@@ -597,7 +612,8 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
-                     `auto_now_add`, `trim`, `lowercase`, `case_insensitive`, \
+                     `auto_now_add`, `auto_user`, `auto_user_add`, `trim`, `lowercase`, \
+                     `case_insensitive`, \
                      `help = \"...\"`, \
                      `example = \"...\"`, `widget = \"...\"`, \
                      `backend = \"...\"`, \
@@ -1349,6 +1365,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let auto_user_add_lit = field_attr.auto_user_add;
+        let auto_user_lit = field_attr.auto_user;
         let auto_now_add_lit = if field_attr.auto_now_add {
             quote!(true)
         } else {
@@ -1519,6 +1537,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 on_update: #on_update_tokens,
                 index: #index_lit,
                 auto_now_add: #auto_now_add_lit,
+                auto_user_add: #auto_user_add_lit,
+                auto_user: #auto_user_lit,
                 auto_now: #auto_now_lit,
                 trim: #trim_lit,
                 lowercase: #lowercase_lit,

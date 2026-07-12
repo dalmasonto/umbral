@@ -176,6 +176,10 @@ pub fn framework_checks() -> Vec<SystemCheck> {
             run: soft_delete_cascade_targets,
         },
         SystemCheck {
+            id: "model.auto_user",
+            run: auto_user_columns_nullable,
+        },
+        SystemCheck {
             id: "settings.required",
             run: settings_required,
         },
@@ -376,6 +380,43 @@ fn settings_allowed_hosts(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
 /// guard exists to close. It's a Warning (some apps front the app with a proxy
 /// that already pins Host), but an explicit, deliberate downgrade should be
 /// visible in the boot log.
+/// An `auto_user` / `auto_user_add` column must be nullable (gaps3 #55).
+///
+/// Not every write has a user. A background job, a CLI command, a migration and
+/// an anonymous request all genuinely have no caller, and the framework stamps
+/// NULL rather than inventing an author. If the column is NOT NULL, that write
+/// dies on a constraint violation at runtime — so say it at boot instead.
+fn auto_user_columns_nullable(_ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let Some(models) = crate::migrate::registered_models_opt() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for m in &models {
+        for col in &m.fields {
+            if (col.auto_user || col.auto_user_add) && !col.nullable {
+                out.push(SystemCheckFinding {
+                    check_id: "model.auto_user",
+                    severity: Severity::Error,
+                    location: CheckLocation::Settings,
+                    message: format!(
+                        "`{}.{}` is `#[umbral(auto_user)]` but NOT NULL. Writes without an \
+                         authenticated caller — a background task, a CLI command, a data \
+                         migration, an anonymous request — have no user to stamp, so the \
+                         framework writes NULL there rather than inventing an author. Against a \
+                         NOT NULL column that write fails at runtime.",
+                        m.table, col.name,
+                    ),
+                    hint: Some(format!(
+                        "make it nullable: `{}: Option<ForeignKey<AuthUser>>`.",
+                        col.name
+                    )),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// A `soft_delete` parent must not have an `on_delete = "cascade"` child that
 /// cannot itself be soft-deleted (gaps3 #53).
 ///

@@ -865,6 +865,43 @@ pub fn now_for_column(sql_type: SqlType) -> SeaValue {
     }
 }
 
+/// The authenticated caller's id, bound as `sql_type` — what
+/// `#[umbral(auto_user_add)]` / `#[umbral(auto_user)]` stamp (gaps3 #55).
+///
+/// The id travels through [`crate::db::route_context::current_user_id`] as a
+/// string so the user model's PK shape doesn't leak into the ambient context;
+/// it is converted back here to whatever the *stamping* column actually is —
+/// `BigInt` for the usual `ForeignKey<AuthUser>`, `Text` for a slug-keyed user,
+/// `Uuid` for a uuid-keyed one.
+///
+/// No user in scope (a background job, the CLI, an anonymous request) → NULL.
+/// We stamp nothing rather than invent an author; that is the honest answer, and
+/// it is why an `auto_user` column must be nullable.
+pub fn user_for_column(sql_type: SqlType) -> SeaValue {
+    let Some(id) = crate::db::route_context::current_user_id() else {
+        return null_for(sql_type);
+    };
+    match sql_type {
+        SqlType::SmallInt | SqlType::Integer => match id.parse::<i32>() {
+            Ok(v) => SeaValue::Int(Some(v)),
+            Err(_) => null_for(sql_type),
+        },
+        SqlType::BigInt => match id.parse::<i64>() {
+            Ok(v) => SeaValue::BigInt(Some(v)),
+            Err(_) => null_for(sql_type),
+        },
+        SqlType::Uuid => match id.parse::<uuid::Uuid>() {
+            Ok(v) => SeaValue::Uuid(Some(Box::new(v))),
+            Err(_) => null_for(sql_type),
+        },
+        SqlType::Text => SeaValue::String(Some(Box::new(id))),
+        // A non-identity column tagged `auto_user` is a declaration error the
+        // `model.auto_user` boot check rejects; NULL here so a slipped-through
+        // case cannot write a nonsense value.
+        _ => null_for(sql_type),
+    }
+}
+
 /// Sea-query value representing SQL NULL for the given SqlType. The
 /// variant tag matters for sea-query's encoding even when the inner
 /// option is `None`.

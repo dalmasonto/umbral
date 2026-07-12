@@ -1020,6 +1020,18 @@ impl<'a> DynQuerySet<'a> {
             // standard "form omitted → skip" path below. Mirrors
             // `update_json` (line ~1047) so form + JSON write paths
             // honor the annotation identically.
+            // gaps3 #55: the author is SERVER-owned. Stamped unconditionally,
+            // before the body is even consulted, so a client cannot forge it by
+            // putting someone else's id in the payload. `auto_user_add` stays
+            // frozen on update (it fired on create); `auto_user` refreshes.
+            if col.auto_user {
+                q.value(
+                    Alias::new(&col.name),
+                    crate::orm::write::user_for_column(col.ty),
+                );
+                any = true;
+                continue;
+            }
             if col.auto_now {
                 q.value(
                     Alias::new(&col.name),
@@ -1181,6 +1193,13 @@ impl<'a> DynQuerySet<'a> {
             // `insert_json` (line ~836) so the form path and the
             // JSON path stay consistent — both honor the annotation
             // without the body / form having to carry the value.
+            // gaps3 #55: server-owned author on create. Ignores whatever the
+            // form carried — you cannot create a row authored by someone else.
+            if col.auto_user_add || col.auto_user {
+                cols.push(&col.name);
+                values.push(crate::orm::write::user_for_column(col.ty));
+                continue;
+            }
             if (col.auto_now_add || col.auto_now)
                 && form.get(&col.name).is_none_or(|v| v.is_empty())
             {
@@ -1851,6 +1870,18 @@ impl<'a> DynQuerySet<'a> {
             if col.primary_key {
                 continue;
             }
+            // gaps3 #55: the author is SERVER-owned. Stamped unconditionally,
+            // before the body is even consulted, so a client cannot forge it by
+            // putting someone else's id in the payload. `auto_user_add` stays
+            // frozen on update (it fired on create); `auto_user` refreshes.
+            if col.auto_user {
+                q.value(
+                    Alias::new(&col.name),
+                    crate::orm::write::user_for_column(col.ty),
+                );
+                any = true;
+                continue;
+            }
             let Some(json) = body.get(&col.name) else {
                 if col.auto_now {
                     let now_value = crate::orm::write::now_for_column(col.ty);
@@ -2045,6 +2076,18 @@ impl<'a> DynQuerySet<'a> {
         let mut any = false;
         for col in &self.meta.fields {
             if col.primary_key {
+                continue;
+            }
+            // gaps3 #55: the author is SERVER-owned. Stamped unconditionally,
+            // before the body is even consulted, so a client cannot forge it by
+            // putting someone else's id in the payload. `auto_user_add` stays
+            // frozen on update (it fired on create); `auto_user` refreshes.
+            if col.auto_user {
+                q.value(
+                    Alias::new(&col.name),
+                    crate::orm::write::user_for_column(col.ty),
+                );
+                any = true;
                 continue;
             }
             let Some(json) = body.get(&col.name) else {
@@ -3489,6 +3532,14 @@ fn build_insert_plan(
                 continue;
             }
         }
+        // gaps3 #55: the author is server-owned. Stamped before the body is read,
+        // so a REST POST cannot create a row attributed to another user by
+        // putting their id in the payload.
+        if col.auto_user_add || col.auto_user {
+            cols.push(&col.name);
+            values.push(crate::orm::write::user_for_column(col.ty));
+            continue;
+        }
         let Some(json) = body.get(&col.name) else {
             if col.auto_now_add || col.auto_now {
                 let now_value = crate::orm::write::now_for_column(col.ty);
@@ -3759,6 +3810,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: Vec::new(),

@@ -836,6 +836,8 @@ impl From<&IntrospectedColumn> for Column {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            auto_user_add: false,
+            auto_user: false,
             trim: false,
             lowercase: false,
             case_insensitive: false,

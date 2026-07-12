@@ -746,6 +746,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             fk_target: None,

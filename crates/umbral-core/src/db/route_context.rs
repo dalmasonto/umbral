@@ -29,6 +29,14 @@ pub struct RouteContext {
     /// runs `set_config(name, value, false)` for each; `after_release` resets
     /// them, so a value can't leak to the next request on the same connection.
     session_vars: Vec<(String, String)>,
+    /// The authenticated caller's id, as a string (PK-shape independent: i64,
+    /// String and Uuid user models all round-trip through this).
+    ///
+    /// This is what `#[umbral(auto_user_add)]` / `#[umbral(auto_user)]` stamp
+    /// into a row on write. `None` means "no user in scope" — a background job,
+    /// a CLI command, or an anonymous request — and stamps NULL, which is why
+    /// those columns must be nullable.
+    user: Option<String>,
     extensions: http::Extensions,
 }
 
@@ -42,6 +50,20 @@ impl RouteContext {
     }
     pub fn tenant(&self) -> Option<&TenantKey> {
         self.tenant.as_ref()
+    }
+    /// Set the authenticated caller for this request. Builder form.
+    pub fn with_user(mut self, user_id: impl Into<String>) -> Self {
+        self.user = Some(user_id.into());
+        self
+    }
+    /// Mutating form of [`Self::with_user`], for middleware that augments an
+    /// already-scoped context rather than building a fresh one.
+    pub fn set_user(&mut self, user_id: impl Into<String>) {
+        self.user = Some(user_id.into());
+    }
+    /// The authenticated caller's id, if one is in scope.
+    pub fn user(&self) -> Option<&str> {
+        self.user.as_deref()
     }
     /// Add a Postgres session variable (GUC) to apply on this request's DB
     /// connection. Builder form; see [`Self::session_vars`].
@@ -80,6 +102,20 @@ pub fn current() -> Arc<RouteContext> {
     ROUTE_CONTEXT
         .try_with(|c| c.clone())
         .unwrap_or_else(|_| Arc::new(RouteContext::default()))
+}
+
+/// The authenticated caller's id for this request, or `None`.
+///
+/// What `#[umbral(auto_user_add)]` / `#[umbral(auto_user)]` stamp on write. It is
+/// deliberately `Option`: a background job, a CLI command, a migration and an
+/// anonymous request all genuinely have no user, and a write from one of those
+/// stamps NULL rather than inventing an author. Task-locals do not cross
+/// `tokio::spawn`, so a spawned job has no user unless it explicitly enters a
+/// context with [`scope`] — which is the honest default.
+pub fn current_user_id() -> Option<String> {
+    ROUTE_CONTEXT
+        .try_with(|c| c.user().map(str::to_string))
+        .unwrap_or(None)
 }
 
 /// Run `fut` with `ctx` as the ambient routing context. The explicit opt-in a

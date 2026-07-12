@@ -455,6 +455,8 @@ impl Default for Column {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            auto_user_add: false,
+            auto_user: false,
             trim: false,
             lowercase: false,
             case_insensitive: false,
@@ -948,6 +950,14 @@ pub struct Column {
     /// round-trips unchanged.
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_now_add: bool,
+    /// Carries `FieldSpec::auto_user_add` to the runtime (dyn) write path, so
+    /// admin and REST stamp the author too — they run on `DynQuerySet`, not the
+    /// typed one. Not a schema property: skipped in snapshots.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_user_add: bool,
+    /// Carries `FieldSpec::auto_user`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_user: bool,
 
     /// Carries `FieldSpec::auto_now` into the migration snapshot.
     /// Same shape as `auto_now_add` but fires on update too.
@@ -1251,6 +1261,8 @@ impl From<&FieldSpec> for Column {
             on_update: f.on_update,
             index: f.index,
             auto_now_add: f.auto_now_add,
+            auto_user_add: f.auto_user_add,
+            auto_user: f.auto_user,
             auto_now: f.auto_now,
             trim: f.trim,
             lowercase: f.lowercase,
@@ -6045,6 +6057,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: vec![],
@@ -6081,6 +6095,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: vec![],
@@ -6115,6 +6131,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: vec![],
@@ -6219,6 +6237,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: vec![],
@@ -6342,6 +6362,8 @@ mod tests {
                 privileged: false,
                 db_constraint: true,
                 noedit: false,
+                auto_user_add: false,
+                auto_user: false,
                 is_string_repr: false,
                 max_length: 0,
                 choices: vec![],
@@ -6449,6 +6471,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: vec![],
@@ -6559,6 +6583,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: vec![],
@@ -6642,6 +6668,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: vec![],
@@ -6754,6 +6782,8 @@ mod tests {
             privileged: false,
             db_constraint: true,
             noedit: false,
+            auto_user_add: false,
+            auto_user: false,
             is_string_repr: false,
             max_length: 0,
             choices: vec![],
@@ -6861,6 +6891,8 @@ mod tests {
                 privileged: false,
                 db_constraint: true,
                 noedit: false,
+                auto_user_add: false,
+                auto_user: false,
                 is_string_repr: false,
                 max_length: 0,
                 choices: Vec::new(),

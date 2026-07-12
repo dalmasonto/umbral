@@ -2085,6 +2085,24 @@ enum EndpointKind {
     Detail,
 }
 
+/// Run `fut` with the authenticated caller in the ambient `RouteContext`, so ORM
+/// writes can stamp `#[umbral(auto_user_add)]` / `#[umbral(auto_user)]` columns
+/// (gaps3 #55).
+///
+/// Scoped around the WRITE rather than resolved in a router-wide layer, because
+/// the identity is already in hand here — re-authenticating in a layer would cost
+/// a second token lookup on every request, including reads that never stamp.
+async fn as_user<F: std::future::Future>(identity: Option<&Identity>, fut: F) -> F::Output {
+    match identity {
+        Some(id) => {
+            let mut ctx = (*umbral::db::route_context()).clone();
+            ctx.set_user(id.user_id.clone());
+            umbral::db::route_context_scope(ctx, fut).await
+        }
+        None => fut.await,
+    }
+}
+
 /// Build a `204 No Content` response carrying an `Allow` header.
 fn options_response(allow: &str) -> Response {
     let mut resp = StatusCode::NO_CONTENT.into_response();
@@ -2929,14 +2947,20 @@ async fn create(
         // No nesting declared for this table — an array-of-objects in the body
         // is an undeclared nested relation, not an ignorable extra (gaps3 #10).
         reject_undeclared_nested(&model, &body)?;
-        let mut row = umbral::orm::DynQuerySet::for_meta(&model)
-            .insert_json(&body)
-            .await?;
+        let mut row = as_user(
+            identity.as_ref(),
+            umbral::orm::DynQuerySet::for_meta(&model).insert_json(&body),
+        )
+        .await?;
         cfg.apply_overrides(&table, &mut row);
         return Ok((StatusCode::CREATED, Json(Value::Object(row))));
     }
 
-    let (status, Json(row)) = create_nested(cfg, model, &mut body, identity.as_ref()).await?;
+    let (status, Json(row)) = as_user(
+        identity.as_ref(),
+        create_nested(cfg, model, &mut body, identity.as_ref()),
+    )
+    .await?;
     Ok((status, Json(Value::Object(row))))
 }
 
@@ -2984,10 +3008,12 @@ async fn bulk_create(
         // gaps3 #16: owner-field injection per item — same rule as single create,
         // so bulk can't be used to forge ownership on any row.
         inject_owner_field(cfg, table, identity, &mut body)?;
-        let mut row = umbral::orm::DynQuerySet::for_meta(&model)
-            .insert_json_in_tx(&body, &mut tx)
-            .await
-            .map_err(|e| bulk_item_error(idx, "create", e.into()))?;
+        let mut row = as_user(
+            identity,
+            umbral::orm::DynQuerySet::for_meta(&model).insert_json_in_tx(&body, &mut tx),
+        )
+        .await
+        .map_err(|e| bulk_item_error(idx, "create", e.into()))?;
         cfg.apply_overrides(table, &mut row);
         created.push(Value::Object(row));
     }
@@ -3066,11 +3092,14 @@ async fn bulk_update(
         // SAME hidden-field denylist as single update.
         cfg.strip_hidden_for_write(&table, &mut body);
 
-        let affected = umbral::orm::DynQuerySet::for_meta(&model)
-            .filter_eq_string(&pk, &pk_str)
-            .update_json_in_tx(&body, &mut tx)
-            .await
-            .map_err(|e| bulk_item_error(idx, "update", e.into()))?;
+        let affected = as_user(
+            identity.as_ref(),
+            umbral::orm::DynQuerySet::for_meta(&model)
+                .filter_eq_string(&pk, &pk_str)
+                .update_json_in_tx(&body, &mut tx),
+        )
+        .await
+        .map_err(|e| bulk_item_error(idx, "update", e.into()))?;
         if affected == 0 {
             // A PK that matched no row → roll the whole batch back.
             return Err(ApiError::NotFound(format!(
@@ -3779,14 +3808,17 @@ async fn update(
     // (no implicit deletes; see the reconciliation policy in `update_nested`).
     let nested_specs = cfg.nested.get(&table).cloned().unwrap_or_default();
     if !nested_specs.is_empty() {
-        let row = update_nested(
-            cfg,
-            &table,
-            model,
-            &pk_name,
-            &id,
-            &mut body,
+        let row = as_user(
             identity.as_ref(),
+            update_nested(
+                cfg,
+                &table,
+                model,
+                &pk_name,
+                &id,
+                &mut body,
+                identity.as_ref(),
+            ),
         )
         .await?;
         return Ok(Json(row));
@@ -3804,7 +3836,7 @@ async fn update(
     if let Some(c) = &scope_cond {
         update_qs = update_qs.filter_condition(c.clone());
     }
-    update_qs.update_json(&body).await?;
+    as_user(identity.as_ref(), update_qs.update_json(&body)).await?;
     let mut rows = fetch_rows(&model, Some((&pk_name, &id)), None, &scope_filter, &[], &[]).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
