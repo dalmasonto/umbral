@@ -144,6 +144,16 @@ one hour before kickoff is the canonical example), and job observability in admi
 **Why heavy.** The queue crate is the easy 20%; the ops story (worker lifecycle,
 retries, scheduling, dead-letter, monitoring) is the 80% every app re-derives.
 
+**VERIFIED (2026-07-12) — largely already shipped; closing.** Audited against the code rather than assumed:
+
+- **Retries + backoff — DONE.** `RetryPolicy` (`umbral-tasks/src/lib.rs:602`), exponential `backoff_delay()` (`:634`, `base * 2^(attempts-1)`, clamped), default 3 attempts, 2s base / 5min cap. Plus a per-task timeout and **panic capture** (`:1005`), both counted as retriable failures.
+- **Cron / scheduled — DONE.** `Schedule::cron()` (`:1291`, real 5-field cron via the `cron` crate) and `Schedule::every()` (`:1296`), a `PeriodicTask` model (`:1362`), and a beat loop (`run_beat` `:1522`) that claims due rows with a conditional UPDATE so two beats can't double-fire. The canonical "one hour before kickoff" case is `EnqueueOptions::eta`/`delay`, not beat.
+- **Dead-letter — DONE in substance.** A terminal `failed` status (`:106`), queryable and filterable, with a `retry_task` (`:1682`) path. No separate DLQ table; `status='failed'` + the admin retry action is a de-facto dead-letter queue.
+- **Admin observability — DONE.** `umbral_tasks::admin_model()` (`:1725`) — read-only queue browser, `status`/`priority` filters, **"Retry selected"** bulk action.
+- **Worker/beat commands — DONE** (`tasks-worker` `:273`, `tasks-beat` `:309`, both with `--once`); **the deploy story was NOT** — "worker" appeared **zero** times in the deployment docs and compose. That was the actual gap kikosi named ("a worker service that ships in the compose template") and it is now fixed: `plugins/tasks.mdx` gained a *Running it in production* section with the compose services (same image, wait for one-shot `migrate`, scale workers freely, run exactly one beat, roll web+worker together or you get `HandlerNotFound`).
+
+**Still open (logged as gaps3 #48, #49):** enqueue is **name-keyed, not type-keyed** — `enqueue("send_welcome", payload, ..)`, so a typo or rename is a silent runtime `HandlerNotFound` rather than a compile error (the literal ask, `enqueue(MyJob{..})`, does not exist); and `PeriodicTask` has no admin model, so schedules and `next_run` aren't visible.
+
 ## 5. The production / ops story
 
 Deploying Kikosi is hand-assembled: a GH Actions workflow that builds the SPA +
@@ -207,6 +217,17 @@ asset), but any app with user-generated images needs it.
 **Proposed.** An uploads pipeline on top of `umbral-storage`: a form/field type for
 uploads, pluggable processors (image resize/thumbnail), and signed-URL delivery.
 
+**VERIFIED (2026-07-12) — the pipeline exists; uploads work. Closing.** Confirmed against the code (and by the consumer: avatar/media upload is live):
+
+- **Multipart — DONE.** `parse_multipart()` / `parse_multipart_capped()` / `parse_and_store_multipart()` (`crates/umbral-core/src/web/multipart.rs:221,244,354`), 32 MiB default cap. A parser + helper, not an extractor — you write the handler.
+- **Model field types — DONE.** `FileField` / `ImageField` (`crates/umbral-core/src/orm/file_field.rs:57`), `url()` resolving through the ambient `Storage`, and a **boot system-check** that fails if a model declares a file field with no storage registered (`plugin.rs:238`).
+- **Size validation — DONE.** 25 MiB default, `.max_size()` (`umbral-storage/src/lib.rs:344`), enforced at the storage decorator (`SizeLimitedStorage`, `media.rs:606`) with a mid-stream cap — so *every* save path inherits it.
+- **Private delivery — DONE, two ways.** S3 presigned GET (`s3.rs:260`, `UMBRAL_S3_PRESIGN_TTL`) and `StoragePlugin::media_access()` (`lib.rs:170`) — an async gate that runs before any byte is served, 403 on false.
+- **Processing lifecycle — DONE (the hook, not the images).** `Processor` (`media.rs:43`), `StoragePlugin::on_upload()` (`lib.rs:204`), `processing`/`ready`/`failed` states, `save_deferred`, and a concurrency cap (`DEFAULT_MEDIA_PROCESSING_CONCURRENCY = 8`, `media.rs:66` — *that* is the "media-processing cap" from audit_2; it bounds concurrent processors, it is not an image pipeline).
+- **Docs — DONE.** `plugins/storage.mdx`, `orm/file-image-fields.mdx`, honest about the gap below.
+
+**Still open (logged as gaps3 #50, #51, #52):** no built-in **image processing** (no imaging crate is even a dependency — the `on_upload` hook is there, you supply the pipeline); no **content-type/extension policy** (the size cap is enforced everywhere and active content is defanged, but nothing lets you say "this `ImageField` accepts only `image/*`", so a 20 MB `.exe` into an avatar field is stopped only by size); no **direct-to-S3 presigned upload** (`presign_get` exists, `presign_put` does not — every byte transits the Rust process).
+
 ## 7. Audit trail + soft delete + data lifecycle
 
 Kikosi hand-rolls audit-ish fields (`created_by` / `recorded_by`, which we just made
@@ -222,6 +243,18 @@ cascade-aware), plus a per-user data-export helper.
 
 **Why heavy.** Touches the ORM write path, querying defaults, cascade semantics, and
 admin — and is very hard to add after an app has hard-deleted for a year.
+
+**VERIFIED (2026-07-12) — soft delete is DONE end to end; audit is NOT.** The two halves of this item turned out to be in completely different states:
+
+- **Soft delete — DONE, across all three surfaces.** `#[umbral(soft_delete)]` → `Model::SOFT_DELETE` (`orm/model.rs:298`), auto `WHERE deleted_at IS NULL` (`queryset/mod.rs:546`), `with_deleted()` / `only_deleted()` / `hard_delete()`, `delete()` rewritten to an UPDATE (`:2936`), `restore()` (`dynamic.rs:806`). **Admin** gets a full trash UI for free — trash view + auto-injected *Restore selected* and *Delete permanently* actions, injected only for soft-delete models (`umbral-admin/src/config.rs:269,314,382`), zero per-model config. **REST** inherits it through `DynQuerySet` (list excludes trashed, DELETE soft-deletes). Docs: `orm/soft-delete.mdx`.
+- **Audit trail — genuinely MISSING.** There is no `#[umbral(audited)]`; grep for it in the macros returns nothing. **Do not mistake `AdminAuditLog` for it** (`umbral-admin/src/models.rs:357`): that is Django's `LogEntry` — it records only writes made *through the admin UI*, its `diff_summary` is free-text prose rather than a field-level before/after, and a write from REST, a task, or `Model::objects().save()` produces **no row at all**.
+
+**Still open (logged as gaps3 #53, #54, #55), ranked:**
+
+1. **Soft-delete cascade** — the one real correctness footgun. `on_delete = "cascade"` is a **DDL FK clause**: it fires on a real SQL `DELETE`, and a soft delete is an `UPDATE`, so children are **never touched**. Reads that traverse *from* a soft-deleted parent do hide them (`hydration.rs:741,869`), but the children remain live rows in their own right. Kikosi explicitly asked for "cascade-aware".
+2. **Model-level audit (`#[umbral(audited)]`)** — the retrofit-hostile one; it only gets more expensive to add.
+3. **`created_by` / `updated_by` auto-stamping** — zero code today; the ORM write path knows nothing of a request user. Kikosi hand-rolls it, and so will every app. Small and self-contained.
+4. **Per-user data export / retention** — only whole-DB `dumpdata` exists. Lowest priority.
 
 ---
 

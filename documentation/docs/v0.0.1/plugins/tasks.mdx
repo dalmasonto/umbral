@@ -463,6 +463,57 @@ and its result reads back as `Some(Value::Null)`. A failing handler leaves
 
 See `arch.md` and `plugins/umbral-tasks/src/lib.rs` for the design rationale.
 
+## Running it in production
+
+The queue is only as real as the process that drains it. `enqueue` writes a row and returns — **if nothing runs `tasks-worker`, your jobs sit in the table forever**, which looks exactly like "the feature silently doesn't work". So the worker is a service, alongside your web process:
+
+| Process | Command | What it does | How many |
+|---|---|---|---|
+| web | `myapp serve` | serves requests, calls `enqueue` | as many as you like |
+| **worker** | `myapp tasks-worker` | claims and runs due tasks | 1+ (scale horizontally; claiming is atomic) |
+| **beat** | `myapp tasks-beat` | fires [periodic tasks](#periodic-tasks-beat) when due | **exactly one** |
+
+<Callout type="warning">
+  Run **one** beat. The worker scales out safely — task claiming is an atomic conditional `UPDATE`, so two workers never run the same task. Beat also guards due-row claiming, but a single beat is the intended shape; more than one buys nothing and complicates reasoning. If you have no periodic tasks, don't run beat at all.
+</Callout>
+
+A compose deployment, extending the one in [Going to production](../deployment/going-to-production) (`db → migrate → web`) with the two task services:
+
+```yaml
+services:
+  migrate:
+    image: myapp:latest
+    command: ["myapp", "migrate"]
+    depends_on: { db: { condition: service_healthy } }
+    restart: "no"                       # one-shot; must finish before web/worker start
+
+  web:
+    image: myapp:latest
+    command: ["myapp", "serve"]
+    depends_on: { migrate: { condition: service_completed_successfully } }
+
+  worker:                               # drains the queue
+    image: myapp:latest                 # SAME image — it needs your #[task] fns
+    command: ["myapp", "tasks-worker"]
+    depends_on: { migrate: { condition: service_completed_successfully } }
+    restart: unless-stopped
+    deploy: { replicas: 2 }             # scale freely
+
+  beat:                                 # fires periodic tasks — exactly one
+    image: myapp:latest
+    command: ["myapp", "tasks-beat"]
+    depends_on: { migrate: { condition: service_completed_successfully } }
+    restart: unless-stopped
+```
+
+Three things that bite people:
+
+- **Same image, same binary.** The worker executes *your* `#[task]` functions, so it must be the app binary, not a generic runner. A worker built from a stale image runs stale task code — or fails with `HandlerNotFound` for a task the web process happily enqueues.
+- **Wait for `migrate`.** Both services touch `task_row`; starting them before the one-shot migrate finishes means querying a table that doesn't exist yet.
+- **A deploy changes the worker, too.** Roll web and worker together. A task enqueued by new web code and picked up by an old worker is the `HandlerNotFound` case.
+
+`--once` (`tasks-worker --once`, `tasks-beat --once`) drains a single batch and exits — the shape for a cron-driven or CI run when you don't want a resident process.
+
 ## Admin visibility
 
 Operators browse and inspect the task queue in the admin. `umbral_tasks::admin_model()` returns a **read-only** `AdminModel` for the `task_row` table - register it on the admin alongside your own models:
