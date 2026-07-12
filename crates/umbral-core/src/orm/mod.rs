@@ -37,6 +37,7 @@ pub mod queryset;
 pub mod reverse_accessor;
 pub mod reverse_set;
 pub mod search;
+pub mod soft_delete_cascade;
 pub mod tsvector;
 pub mod validation;
 pub mod validators;

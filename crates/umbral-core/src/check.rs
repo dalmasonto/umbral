@@ -172,6 +172,10 @@ pub enum CheckLocation {
 pub fn framework_checks() -> Vec<SystemCheck> {
     vec![
         SystemCheck {
+            id: "model.soft_delete_cascade",
+            run: soft_delete_cascade_targets,
+        },
+        SystemCheck {
             id: "settings.required",
             run: settings_required,
         },
@@ -372,6 +376,34 @@ fn settings_allowed_hosts(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
 /// guard exists to close. It's a Warning (some apps front the app with a proxy
 /// that already pins Host), but an explicit, deliberate downgrade should be
 /// visible in the boot log.
+/// A `soft_delete` parent must not have an `on_delete = "cascade"` child that
+/// cannot itself be soft-deleted (gaps3 #53).
+///
+/// `on_delete = "cascade"` promises *"when the parent goes, the child goes"*. If
+/// the parent's going is a soft delete (an `UPDATE`), the database never
+/// cascades — and if the child has no `deleted_at`, the cascade cannot follow
+/// either. We refuse to hard-delete the child (that would make a reversible
+/// operation irreversible, which is the one thing soft delete promises it is
+/// not), so the child would be silently left behind pointing at a deleted
+/// parent. An error at boot beats orphans in production.
+fn soft_delete_cascade_targets(_ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    crate::orm::soft_delete_cascade::check_cascade_targets()
+        .into_iter()
+        .map(|message| SystemCheckFinding {
+            check_id: "model.soft_delete_cascade",
+            severity: Severity::Error,
+            location: CheckLocation::Settings,
+            message,
+            hint: Some(
+                "mark the child `#[umbral(soft_delete)]` so the cascade can follow it, or change \
+                 the FK to `on_delete = \"set_null\"` / `\"restrict\"` if the child is meant to \
+                 outlive its parent."
+                    .to_string(),
+            ),
+        })
+        .collect()
+}
+
 fn settings_allowed_hosts_wildcard(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
     if !allowed_hosts_has_wildcard(&ctx.settings.environment, &ctx.settings.allowed_hosts) {
         return Vec::new();

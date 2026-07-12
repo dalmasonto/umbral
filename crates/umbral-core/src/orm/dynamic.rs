@@ -766,28 +766,62 @@ impl<'a> DynQuerySet<'a> {
             None => Vec::new(),
         };
 
-        let mut q = Query::update();
-        q.table(crate::db::router::schema_qualified_table(&self.meta.table));
-        q.value(
-            Alias::new("deleted_at"),
-            sea_query::Value::ChronoDateTimeUtc(Some(Box::new(chrono::Utc::now()))),
-        );
-        for cond in &where_clauses {
-            q.cond_where(cond.clone());
-        }
+        // One instant for the whole cascade: parent, children, grandchildren all
+        // get this exact `deleted_at`, which is what lets `restore()` later undo
+        // precisely this cascade and leave independently-trashed rows alone.
+        let at = chrono::Utc::now();
+        let meta = self.meta.clone();
+        let clauses = where_clauses.clone();
 
-        let rows_affected = match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
-            DbPool::Sqlite(pool) => {
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
-                res.rows_affected()
-            }
-            DbPool::Postgres(pool) => {
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
-                res.rows_affected()
-            }
-        };
+        // Parent + cascade in ONE transaction — a half-applied cascade would be
+        // its own corruption bug (gaps3 #53).
+        let rows_affected = crate::db::transaction(move |tx| {
+            Box::pin(async move {
+                // Cascade FIRST: the child selector reads the parent's live-rows
+                // predicate, which stops matching the moment the parent is stamped.
+                if let Some(pk) = meta.pk_column() {
+                    let mut sel = Query::select();
+                    sel.column(Alias::new(&pk.name))
+                        .from(crate::db::router::schema_qualified_table(&meta.table));
+                    for cond in &clauses {
+                        sel.cond_where(cond.clone());
+                    }
+                    let mut c = crate::orm::soft_delete_cascade::CascadeConn::from_tx(tx);
+                    crate::orm::soft_delete_cascade::cascade_soft_delete(&mut c, &meta, sel, at)
+                        .await?;
+                }
+
+                let mut q = Query::update();
+                q.table(crate::db::router::schema_qualified_table(&meta.table));
+                q.value(
+                    Alias::new("deleted_at"),
+                    sea_query::Value::ChronoDateTimeUtc(Some(Box::new(at))),
+                );
+                for cond in &clauses {
+                    q.cond_where(cond.clone());
+                }
+                let affected = match tx.backend_name() {
+                    "sqlite" => {
+                        let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                        let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                        sqlx::query_with(&sql, values)
+                            .execute(&mut **inner)
+                            .await?
+                            .rows_affected()
+                    }
+                    _ => {
+                        let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                        let inner = tx.as_pg_mut().expect("postgres backend_name");
+                        sqlx::query_with(&sql, values)
+                            .execute(&mut **inner)
+                            .await?
+                            .rows_affected()
+                    }
+                };
+                Ok::<u64, sqlx::Error>(affected)
+            })
+        })
+        .await?;
 
         crate::signals::emit_bulk_post_delete_by_table(&self.meta.table, parent_pks).await;
         Ok(rows_affected)
@@ -819,28 +853,63 @@ impl<'a> DynQuerySet<'a> {
             None => Vec::new(),
         };
 
-        let mut q = Query::update();
-        q.table(crate::db::router::schema_qualified_table(&self.meta.table));
-        q.value(
-            Alias::new("deleted_at"),
-            sea_query::Value::ChronoDateTimeUtc(None),
-        );
-        for cond in &where_clauses {
-            q.cond_where(cond.clone());
-        }
+        let meta = self.meta.clone();
+        let clauses = where_clauses.clone();
 
-        let rows_affected = match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
-            DbPool::Sqlite(pool) => {
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
-                res.rows_affected()
-            }
-            DbPool::Postgres(pool) => {
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
-                res.rows_affected()
-            }
-        };
+        let rows_affected = crate::db::transaction(move |tx| {
+            Box::pin(async move {
+                // Undo each cascade against ITS OWN deletion instant. Restoring
+                // three parents trashed on three different days undoes three
+                // distinct cascades — and a child trashed independently carries a
+                // different timestamp, so it is left trashed, as the user meant.
+                // Runs BEFORE the parent is cleared: descendants are located
+                // through the parent's still-present `deleted_at` (gaps3 #53).
+                let ats = {
+                    let mut c = crate::orm::soft_delete_cascade::CascadeConn::from_tx(tx);
+                    crate::orm::soft_delete_cascade::deleted_at_values(&mut c, &meta, &clauses)
+                        .await?
+                };
+                for at in ats {
+                    if let Some(sel) =
+                        crate::orm::soft_delete_cascade::selector_at(&meta, &clauses, at)
+                    {
+                        let mut c = crate::orm::soft_delete_cascade::CascadeConn::from_tx(tx);
+                        crate::orm::soft_delete_cascade::cascade_restore(&mut c, &meta, sel, at)
+                            .await?;
+                    }
+                }
+
+                let mut q = Query::update();
+                q.table(crate::db::router::schema_qualified_table(&meta.table));
+                q.value(
+                    Alias::new("deleted_at"),
+                    sea_query::Value::ChronoDateTimeUtc(None),
+                );
+                for cond in &clauses {
+                    q.cond_where(cond.clone());
+                }
+                let affected = match tx.backend_name() {
+                    "sqlite" => {
+                        let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                        let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                        sqlx::query_with(&sql, values)
+                            .execute(&mut **inner)
+                            .await?
+                            .rows_affected()
+                    }
+                    _ => {
+                        let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                        let inner = tx.as_pg_mut().expect("postgres backend_name");
+                        sqlx::query_with(&sql, values)
+                            .execute(&mut **inner)
+                            .await?
+                            .rows_affected()
+                    }
+                };
+                Ok::<u64, sqlx::Error>(affected)
+            })
+        })
+        .await?;
 
         // Restoring a row is a "save" from the data model's POV — the
         // row re-enters the live set — so emit the bulk-post-save

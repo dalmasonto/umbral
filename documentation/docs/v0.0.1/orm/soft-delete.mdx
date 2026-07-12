@@ -67,6 +67,37 @@ Soft-deleted rows still exist: they count toward UNIQUE constraints, foreign key
 `update_values` and `update_expr` honour the same soft-delete scope as reads: the default queryset only updates live rows (`deleted_at IS NULL`); `.with_deleted()` lifts the filter (live + trashed); `.only_deleted()` restricts to trashed rows only. This is what makes the restore pattern above safe - no explicit `filter(post::ID.eq(id))` is strictly required when `.only_deleted()` is in play, though adding one is good practice for targeted restores.
 </Callout>
 
+## It cascades
+
+Soft-deleting a parent soft-deletes every `on_delete = "cascade"` child — and their children, recursively — and restoring the parent brings back exactly those rows.
+
+```rust
+#[derive(Model)]
+#[umbral(table = "club", soft_delete)]
+struct Club { id: i64, name: String, deleted_at: Option<DateTime<Utc>> }
+
+#[derive(Model)]
+#[umbral(table = "team", soft_delete)]
+struct Team {
+    id: i64,
+    #[umbral(on_delete = "cascade")]
+    club: ForeignKey<Club>,          // trashed with its club, restored with it
+    deleted_at: Option<DateTime<Utc>>,
+}
+```
+
+This has to be done by the ORM, and here is why: `on_delete = "cascade"` is a **database** clause, and the database only fires it on a real `DELETE`. A soft delete is an `UPDATE`, so the database does nothing — a soft-deleted parent would leave its children behind as **live rows**. That was easy to miss, because reads *through* the parent hide them; the children were invisible via the club while still answering their own queries, still counting, still holding unique constraints.
+
+<Callout type="info">
+  **Restore brings back only what the cascade took.** Every row a single cascade touches is stamped with the *same* `deleted_at`, and restore clears only descendants carrying the parent's timestamp. So a team you deleted **on its own** last week stays deleted when you restore the club — restoring a parent never resurrects a child someone deliberately trashed.
+</Callout>
+
+A `set_null` or `restrict` FK is untouched: those say the child outlives its parent, and over-cascading is as wrong as under-cascading.
+
+<Callout type="warning">
+  A cascade child that is **not itself** `#[umbral(soft_delete)]` fails the `model.soft_delete_cascade` boot check. The declaration promises "when the parent goes, the child goes", but a child with no `deleted_at` has nowhere to record it — and we will not hard-delete it, because that would make a *reversible* operation irreversible. Either mark the child `soft_delete` so the cascade can follow, or change the FK to `set_null` / `restrict` if it is meant to outlive its parent.
+</Callout>
+
 ## Admin and REST
 
 The dynamic path (`DynQuerySet`) used by the admin and the REST plugin honours soft-delete identically: list endpoints exclude trashed rows by default, and the DELETE endpoint soft-deletes instead of hard-deleting. The same `with_deleted()` / `only_deleted()` / `hard_delete()` toggles are available on `DynQuerySet`, plus a `restore()` terminal that clears `deleted_at` on the matched trashed rows (the inverse of a soft `delete()`).

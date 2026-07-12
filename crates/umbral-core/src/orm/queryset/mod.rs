@@ -3240,7 +3240,6 @@ impl<T: Model> QuerySet<T> {
     /// `bulk_post_delete:<table>` so subscribers see the same event
     /// shape as a hard delete.
     async fn soft_delete_update(self) -> Result<u64, sqlx::Error> {
-        let atomic = self.should_atomic_wrap();
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
         let now = chrono::Utc::now();
@@ -3259,29 +3258,39 @@ impl<T: Model> QuerySet<T> {
         if let Some(pkf) = pk {
             stmt.returning_col(Alias::new(pkf.name));
         }
+        // The cascade must find the children BEFORE the parent is stamped: it
+        // locates them through the parent's still-matching live-rows predicate
+        // (same predicates + `deleted_at IS NULL` guard as the UPDATE above).
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        let cascade_sel = pk.map(|pkf| {
+            let mut sel = sea_query::Query::select();
+            sel.column(Alias::new(pkf.name))
+                .from(crate::db::router::schema_qualified_table(T::TABLE));
+            for p in &self.predicates {
+                sel.and_where(p.cond_for(backend));
+            }
+            sel.and_where(sea_query::Expr::col(Alias::new("deleted_at")).is_null());
+            sel
+        });
+
+        // Parent + cascade in ONE transaction, ALWAYS (gaps3 #53) — not gated on
+        // `should_atomic_wrap`. A half-applied cascade leaves exactly the orphaned
+        // live children this fix exists to prevent.
         let ids: Vec<JsonValue> = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let rows = if atomic {
-                    let mut tx = pool.begin().await?;
-                    let r = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                        .fetch_all(&mut *tx)
-                        .await;
-                    match r {
-                        Ok(rows) => {
-                            tx.commit().await?;
-                            rows
-                        }
-                        Err(e) => {
-                            let _ = tx.rollback().await;
-                            return Err(e);
-                        }
-                    }
-                } else {
-                    sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                        .fetch_all(&pool)
-                        .await?
-                };
+                let mut tx = pool.begin().await?;
+                if let Some(sel) = cascade_sel {
+                    let mut conn = crate::orm::soft_delete_cascade::CascadeConn::Sqlite(&mut tx);
+                    crate::orm::soft_delete_cascade::cascade_soft_delete(
+                        &mut conn, &meta, sel, now,
+                    )
+                    .await?;
+                }
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .fetch_all(&mut *tx)
+                    .await?;
+                tx.commit().await?;
                 match pk {
                     Some(field) => rows
                         .iter()
@@ -3292,26 +3301,18 @@ impl<T: Model> QuerySet<T> {
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let rows = if atomic {
-                    let mut tx = pool.begin().await?;
-                    let r = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                        .fetch_all(&mut *tx)
-                        .await;
-                    match r {
-                        Ok(rows) => {
-                            tx.commit().await?;
-                            rows
-                        }
-                        Err(e) => {
-                            let _ = tx.rollback().await;
-                            return Err(e);
-                        }
-                    }
-                } else {
-                    sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                        .fetch_all(&pool)
-                        .await?
-                };
+                let mut tx = pool.begin().await?;
+                if let Some(sel) = cascade_sel {
+                    let mut conn = crate::orm::soft_delete_cascade::CascadeConn::Pg(&mut tx);
+                    crate::orm::soft_delete_cascade::cascade_soft_delete(
+                        &mut conn, &meta, sel, now,
+                    )
+                    .await?;
+                }
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .fetch_all(&mut *tx)
+                    .await?;
+                tx.commit().await?;
                 match pk {
                     Some(field) => rows
                         .iter()

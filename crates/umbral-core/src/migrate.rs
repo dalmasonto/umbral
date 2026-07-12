@@ -83,12 +83,18 @@ pub(crate) fn init_plugins(per_plugin: std::collections::HashMap<String, Vec<Mod
 ///
 /// Panics if `App::build()` hasn't run.
 pub fn registered_models() -> Vec<ModelMeta> {
-    REGISTRY
-        .get()
+    registered_models_opt()
         .expect("umbral: model registry not initialised — did you call App::build()?")
-        .iter()
-        .map(|(_, m)| m.clone())
-        .collect()
+}
+
+/// [`registered_models`] without the panic: `None` when the registry hasn't been
+/// initialised yet.
+///
+/// For callers that legitimately run before (or without) `App::build()` — the
+/// boot system checks are the case in point, and a check that panics is a check
+/// that can never report anything.
+pub fn registered_models_opt() -> Option<Vec<ModelMeta>> {
+    Some(REGISTRY.get()?.iter().map(|(_, m)| m.clone()).collect())
 }
 
 /// Whether the model registry has been initialised. False before
