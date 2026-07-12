@@ -248,32 +248,76 @@
 </section>
 
 {# -----------------------------------------------------------------------
-   Three ideas - complete framework / batteries are plugins / dogfooded.
+   How Umbral works (gaps3 #47). Replaces the old three "why you should use
+   it" value-prop cards. A claim ("a complete app framework") asks the reader
+   to take our word for it; the actual loop - declare a model, migrate, get an
+   admin and an API - shows them, and it is the product. It also answers the
+   two questions a value-prop card leaves open ("what IS it" and "what do I
+   actually type") in one pass.
    ----------------------------------------------------------------------- #}
 <section class="mx-auto max-w-[1200px] px-7 pb-6 pt-16">
+  <div class="mb-9 text-center">
+    <h2 class="mb-3 text-[30px] font-extrabold leading-[1.08] tracking-[-0.03em] sm:text-[38px]">How Umbral works</h2>
+    <p class="mx-auto max-w-[620px] text-[16.5px] leading-[1.55] text-muted">Declare your data. Everything else - the schema, the admin, the API, the typed client - follows from it.</p>
+  </div>
+
   <div class="grid gap-[18px] md:grid-cols-3">
+
     <div class="card p-[26px]">
-      <div class="mb-4 flex h-[42px] w-[42px] items-center justify-center rounded-[11px] bg-accent-soft">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <div class="mb-4 flex items-center gap-2.5">
+        <span class="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-accent-soft text-[14px] font-extrabold text-accent-2">1</span>
+        <h3 class="text-[18px] font-bold tracking-[-0.01em]">Declare a model</h3>
       </div>
-      <h3 class="mb-2 text-[18px] font-bold tracking-[-0.01em]">A complete app framework</h3>
-      <p class="text-[14.5px] leading-[1.55] text-muted">Not just HTTP routing. Models, migrations, an admin, forms, REST and background work - the productive shape you already know.</p>
+      <p class="mb-4 text-[14.5px] leading-[1.55] text-muted">One Rust struct. The attributes carry the rules - length, timestamps, who wrote the row - so every write path enforces them, not just the one you remembered.</p>
+      <pre class="overflow-x-auto rounded-[10px] border border-hairline bg-surface p-3.5 text-[12.5px] leading-[1.6]"><code>#[derive(Model)]
+#[umbral(table = "post", audited)]
+struct Post {
+    id: i64,
+    #[umbral(max_length = 200)]
+    title: String,
+    #[umbral(auto_user_add)]
+    author: Option&lt;FK&lt;AuthUser&gt;&gt;,
+    #[umbral(auto_now_add)]
+    created_at: DateTime&lt;Utc&gt;,
+}</code></pre>
     </div>
+
     <div class="card p-[26px]">
-      <div class="mb-4 flex h-[42px] w-[42px] items-center justify-center rounded-[11px] bg-accent-soft">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 9 9"/><path d="M3 12a9 9 0 0 0 9 9 9 9 0 0 0 9-9"/><circle cx="12" cy="12" r="2.5"/></svg>
+      <div class="mb-4 flex items-center gap-2.5">
+        <span class="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-accent-soft text-[14px] font-extrabold text-accent-2">2</span>
+        <h3 class="text-[18px] font-bold tracking-[-0.01em]">Migrate</h3>
       </div>
-      <h3 class="mb-2 text-[18px] font-bold tracking-[-0.01em]">Batteries are plugins</h3>
-      <p class="text-[14.5px] leading-[1.55] text-muted">Official capabilities ship as prebuilt plugins. Enable them, replace them with a community plugin, or extend them - same boundary either way.</p>
+      <p class="mb-4 text-[14.5px] leading-[1.55] text-muted">Umbral diffs your models against the last snapshot and writes the migration. Change the struct later and it writes the <code class="text-[12.5px] text-accent-2">ALTER</code> - the loop is the same on day one and day four hundred.</p>
+      <pre class="overflow-x-auto rounded-[10px] border border-hairline bg-surface p-3.5 text-[12.5px] leading-[1.6]"><code>$ cargo run -- makemigrations
+  <span class="text-accent-2">+ create table post</span>
+
+$ cargo run -- migrate
+  <span class="text-accent-2">✓ 0001_create_post applied</span></code></pre>
     </div>
+
     <div class="card p-[26px]">
-      <div class="mb-4 flex h-[42px] w-[42px] items-center justify-center rounded-[11px] bg-accent-soft">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M20 7L9 18l-5-5"/></svg>
+      <div class="mb-4 flex items-center gap-2.5">
+        <span class="flex h-[30px] w-[30px] items-center justify-center rounded-[9px] bg-accent-soft text-[14px] font-extrabold text-accent-2">3</span>
+        <h3 class="text-[18px] font-bold tracking-[-0.01em]">Get the rest for free</h3>
       </div>
-      <h3 class="mb-2 text-[18px] font-bold tracking-[-0.01em]">Proven by this site</h3>
-      <p class="text-[14.5px] leading-[1.55] text-muted">Umbral.rs is itself an Umbral project - the directory, reviews, discussions and admin you see are the same systems it documents.</p>
+      <p class="mb-4 text-[14.5px] leading-[1.55] text-muted">Plug in what you want. An admin, a REST API, background jobs, realtime - each one is a plugin reading the same models, so none of it is scaffolding you maintain.</p>
+      <pre class="overflow-x-auto rounded-[10px] border border-hairline bg-surface p-3.5 text-[12.5px] leading-[1.6]"><code>App::builder()
+    .auto_models()
+    .plugin(AdminPlugin::default())
+    .plugin(RestPlugin::default())
+    .build()?
+
+<span class="text-muted">// /admin      - CRUD, search, filters
+// /api/post/  - REST, paginated
+// gen-client  - a typed TS client</span></code></pre>
     </div>
   </div>
+
+  <p class="mt-7 text-center text-[14.5px] text-muted">
+    Every battery is a plugin, on the same contract a third-party crate uses - which is why
+    <a href="/plugins" class="font-semibold text-accent-2 underline-offset-2 hover:underline">you can swap any of them</a>.
+    This site runs on it.
+  </p>
 </section>
 
 {# -----------------------------------------------------------------------
