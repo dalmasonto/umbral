@@ -125,6 +125,11 @@ pub(super) fn build_insert_one_for<T: Model>(
         if val.is_null() && field.nullable && !map.contains_key(field.name) {
             continue;
         }
+        // features #83: apply `#[umbral(trim, lowercase)]`. This was DYN-ONLY —
+        // REST and the admin normalized, the typed path silently did not, so the
+        // same column normalized or not depending on who wrote the row.
+        let val =
+            crate::orm::write::normalize_json(field.trim, field.lowercase, &val).unwrap_or(val);
         // Reject a non-nullable FK left at the id-0 unset placeholder
         // (ForeignKey::default) before binding it — see
         // [`reject_unset_fk_placeholder`].
@@ -209,6 +214,10 @@ pub(super) fn build_insert_many_for<T: Model>(
                 // in the batch fails the whole bulk_create — no partial
                 // insert of dangling FK rows). See
                 // [`reject_unset_fk_placeholder`].
+                // features #83: same normalization as the single-row insert —
+                // bulk_create must not be the path that skips it.
+                let val = crate::orm::write::normalize_json(field.trim, field.lowercase, &val)
+                    .unwrap_or(val);
                 reject_unset_fk_placeholder(field, &val)?;
                 json_to_sea_value(
                     field.ty,

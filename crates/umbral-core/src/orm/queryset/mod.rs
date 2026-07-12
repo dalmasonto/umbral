@@ -3577,6 +3577,10 @@ impl<T: Model> QuerySet<T> {
             if field.primary_key {
                 continue;
             }
+            // features #83: an UPDATE must normalize too — otherwise a field
+            // arrives clean on create and dirty on edit.
+            let normalized = crate::orm::write::normalize_json(field.trim, field.lowercase, val);
+            let val = normalized.as_ref().unwrap_or(val);
             let sea_value =
                 json_to_sea_value(field.ty, val, field.nullable, field.name, fk_pk_hint(field))?;
             stmt.value(Alias::new(field.name), sea_value);

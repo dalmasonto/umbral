@@ -902,6 +902,32 @@ pub fn user_for_column(sql_type: SqlType) -> SeaValue {
     }
 }
 
+/// Apply `#[umbral(trim)]` / `#[umbral(lowercase)]` to a JSON value.
+///
+/// **The declarative normalizers were dyn-path-only.** REST and the admin honoured
+/// them; `Model::objects().create(user)` did not — so the *same* field normalized
+/// or didn't depending on who wrote the row, and `alice@x.com` from REST could sit
+/// beside `  Alice@X.com  ` written by a seed script or a background job. A
+/// case-insensitive unique index then rejects a legitimate signup, or two accounts
+/// exist for one human. Declaring the rule on the field has to mean every write
+/// path obeys it, or the declaration is a lie.
+///
+/// Returns `None` when the column declares no normalization (the common case, so
+/// the caller can skip a clone).
+pub fn normalize_json(trim: bool, lowercase: bool, v: &JsonValue) -> Option<JsonValue> {
+    if !(trim || lowercase) {
+        return None;
+    }
+    let s = v.as_str()?;
+    let s = if trim { s.trim() } else { s };
+    let out = if lowercase {
+        s.to_lowercase()
+    } else {
+        s.to_string()
+    };
+    Some(JsonValue::String(out))
+}
+
 /// Sea-query value representing SQL NULL for the given SqlType. The
 /// variant tag matters for sea-query's encoding even when the inner
 /// option is `None`.
