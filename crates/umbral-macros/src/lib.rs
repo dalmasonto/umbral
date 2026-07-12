@@ -3879,11 +3879,79 @@ fn expand_task(args: TokenStream2, input: TokenStream2) -> syn::Result<TokenStre
         quote! { #s }
     };
 
+    // gaps3 #48: a typed handle for this task, named after the function
+    // (`send_welcome` -> `SendWelcome`). It carries the task's registered name
+    // and its payload type, so `SendWelcome::enqueue(payload)` replaces
+    // `enqueue("send_welcome", payload, ..)` — and a typo or a rename becomes a
+    // compile error instead of a runtime `HandlerNotFound` that quietly marks the
+    // row `failed` in production.
+    //
+    // A marker TYPE rather than a trait impl on the payload: implementing a
+    // foreign trait on a foreign payload (`String`, `i64`, a type from another
+    // crate) would trip the orphan rule, and two tasks sharing a payload type
+    // would collide. A generated marker has neither problem.
+    let handle_ident = format_ident!(
+        "{}",
+        fn_name
+            .to_string()
+            .split('_')
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                let mut c = s.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<String>()
+    );
+    let handle_vis = &func.vis;
+    let handle_doc = format!(
+        "Typed handle for the `{fn_name}` task. `{}::enqueue(payload)` enqueues it \
+         without naming it by string.",
+        handle_ident
+    );
+
     let output = quote! {
         // 1. Original function unchanged.
         #func
 
-        // 2. Companion registration function.
+        // 2. Typed handle (gaps3 #48). Inherits the task fn's visibility — a
+        // private handler taking a private payload must not generate a `pub`
+        // handle whose signature leaks that payload type.
+        #[doc = #handle_doc]
+        #[derive(Debug, Clone, Copy)]
+        #handle_vis struct #handle_ident;
+
+        impl ::umbral_tasks::Task for #handle_ident {
+            type Payload = #payload_ty;
+            const NAME: &'static str = #task_name_tokens;
+        }
+
+        impl #handle_ident {
+            /// Enqueue with the default options (3 attempts, run immediately).
+            #handle_vis async fn enqueue(
+                payload: #payload_ty,
+            ) -> ::core::result::Result<i64, ::umbral_tasks::TaskError> {
+                ::umbral_tasks::enqueue(
+                    #task_name_tokens,
+                    payload,
+                    ::core::default::Default::default(),
+                )
+                .await
+            }
+
+            /// Enqueue with explicit options — `eta` / `delay` / `max_attempts` /
+            /// `priority`.
+            #handle_vis async fn enqueue_with(
+                payload: #payload_ty,
+                opts: ::umbral_tasks::EnqueueOptions,
+            ) -> ::core::result::Result<i64, ::umbral_tasks::TaskError> {
+                ::umbral_tasks::enqueue(#task_name_tokens, payload, opts).await
+            }
+        }
+
+        // 3. Companion registration function.
         pub fn #register_fn_name() {
             ::umbral_tasks::register_handler(
                 #task_name_tokens,

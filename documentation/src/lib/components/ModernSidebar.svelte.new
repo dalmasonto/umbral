@@ -1,6 +1,6 @@
 <script lang="ts">
   import { page } from '$app/stores';
-  import { buildSidebarStructure, sortSidebarGroups, sortSidebarItems, link, renderInlineCode, resolveBadges } from 'specra';
+  import { buildSidebarStructure, sortSidebarGroups, sortSidebarItems, resolveBadges, renderInlineCode } from 'specra';
   import type { SpecraConfig } from 'specra';
   import { SidebarBadge } from 'specra/components';
   import SidebarSelect from './SidebarSelect.svelte';
@@ -41,8 +41,8 @@
 
   let docsBase = $derived(
     product && product !== '_default_'
-      ? link(`/docs/${product}/${version}`)
-      : link(`/docs/${version}`)
+      ? `/docs/${product}/${version}`
+      : `/docs/${version}`
   );
 
   let pathname = $derived($page.url.pathname.replace(/\/$/, ''));
@@ -150,7 +150,7 @@
       {/each}
 
       {#each sortSidebarGroups(group.children) as [childKey, childGroup]}
-        <h4 class="sidebar-subgroup-label">{childGroup.label}</h4>
+        <h4 class="sidebar-subgroup-label">{@html renderInlineCode(childGroup.label)}</h4>
         {#each sortSidebarItems(childGroup.items) as doc}
           <a
             href="{docsBase}/{doc.slug}"

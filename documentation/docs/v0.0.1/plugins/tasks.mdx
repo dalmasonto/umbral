@@ -103,6 +103,40 @@ are violated:
 | Exactly one parameter | `found N parameter(s)` |
 | Return type must be `Result<(), String>` | `requires -> Result<(), String>` |
 
+## Enqueue by type, not by string
+
+`#[task]` also generates a **typed handle** named after the function — `send_welcome` → `SendWelcome`. Enqueue through it and the task's name never appears at the call site:
+
+```rust
+#[task]
+async fn send_welcome(payload: Welcome) -> Result<(), String> { /* ... */ }
+
+// somewhere in a handler
+SendWelcome::enqueue(Welcome { user_id: 7 }).await?;
+SendWelcome::enqueue_with(payload, EnqueueOptions { max_attempts: Some(5), ..Default::default() }).await?;
+```
+
+<Callout type="warning">
+  **Why this matters.** The string form compiles no matter what you type:
+
+  ```rust
+  enqueue("send_welcom", payload, opts).await?;   // typo — compiles fine
+  ```
+
+  and the mistake surfaces at *runtime*, on the worker, as a `HandlerNotFound` that marks the row `failed` — in production, long after the deploy. **Renaming the handler has exactly the same shape, and is worse**: it's silent, and nothing in CI notices that every enqueue site now points at a task that no longer exists.
+
+  With the handle, a typo or a rename is a **compile error**. The payload can't drift either — the handler and the enqueue site name the same type.
+</Callout>
+
+Scheduled tasks take the same treatment, and need it more — a beat entry pointing at a deleted task fires forever into `HandlerNotFound` and is the *last* place anyone looks:
+
+```rust
+TasksPlugin::default()
+    .periodic_task::<SendMatchReminder>("reminders", Schedule::cron("0 * * * *"), payload)
+```
+
+`umbral_tasks::enqueue_task::<T>(payload, opts)` is the same thing when you're generic over the task. The string API (`enqueue("name", …)`, `.periodic(…, "name", …)`) still works — this is additive, and dynamic registration (below) still needs it.
+
 ## Dynamic registration (advanced)
 
 `register_handler` is available directly when you need to register a closure

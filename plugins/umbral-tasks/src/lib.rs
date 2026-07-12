@@ -242,6 +242,23 @@ impl TasksPlugin {
     ///     )
     ///     .build()?;
     /// ```
+    /// [`Self::periodic`] keyed by task TYPE rather than by a string (gaps3 #48).
+    ///
+    /// A schedule that names a task that no longer exists fires forever into a
+    /// `HandlerNotFound`, and nothing tells you — a beat entry is the *last*
+    /// place a typo gets noticed. Naming the type makes a rename a compile error.
+    ///
+    /// ```ignore
+    /// TasksPlugin::default()
+    ///     .periodic_task::<SendMatchReminder>("reminders", Schedule::cron("0 * * * *"), payload)
+    /// ```
+    pub fn periodic_task<T: Task>(self, name: &str, schedule: Schedule, payload: T::Payload) -> Self
+    where
+        T::Payload: Serialize,
+    {
+        self.periodic(name, schedule, T::NAME, payload)
+    }
+
     pub fn periodic<P: Serialize>(
         mut self,
         name: &str,
@@ -406,6 +423,42 @@ impl From<umbral::orm::write::WriteError> for TaskError {
 // =========================================================================
 
 /// Options for [`enqueue`]. Both fields are optional with sensible
+/// A task, identified by its type rather than by a string (gaps3 #48).
+///
+/// `#[task]` generates one of these per task — a marker type named after the
+/// function (`send_welcome` → `SendWelcome`) carrying the task's name and its
+/// payload type. That turns the enqueue site from
+///
+/// ```ignore
+/// enqueue("send_welcom", payload, opts).await?;   // typo: compiles, fails at RUNTIME
+/// ```
+///
+/// into
+///
+/// ```ignore
+/// SendWelcome::enqueue(payload).await?;           // typo: does not compile
+/// ```
+///
+/// The string form is still there and still works — but with this, a renamed or
+/// mistyped task is a compile error instead of a `HandlerNotFound` that marks the
+/// row `failed` in production, and the payload can't drift from what the handler
+/// deserialises either: both sides name the same type.
+pub trait Task {
+    /// The payload this task takes — the handler's single parameter.
+    type Payload: Serialize;
+    /// The registered handler name. Generated from the function name.
+    const NAME: &'static str;
+}
+
+/// Enqueue a [`Task`] by type. `SendWelcome::enqueue(payload)` is the sugar over
+/// this that `#[task]` generates; reach for this when you're generic over `T`.
+pub async fn enqueue_task<T: Task>(
+    payload: T::Payload,
+    opts: EnqueueOptions,
+) -> Result<i64, TaskError> {
+    enqueue(T::NAME, payload, opts).await
+}
+
 /// defaults: 3 attempts and immediate execution.
 #[derive(Debug, Clone, Default)]
 pub struct EnqueueOptions {

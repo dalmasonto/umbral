@@ -1,0 +1,21 @@
+{
+  "template": "modern",
+  "templateVersion": "0.4.0",
+  "files": {
+    "src/lib/components/ModernDocsPage.svelte": "sha256:d6418910f2a8ed62c11a7dbb86fb93dfba16f21b2518f0dbe9ff96af8f5839e6",
+    "src/lib/components/ModernFooter.svelte": "sha256:b66fcaa980afbb681e4b32eb2d1cf4137bb6752e0249ac70e2b3e1c5fc530886",
+    "src/lib/components/ModernSidebar.svelte": "sha256:60a0e7fd105d5e0a8a44db55b258c4bb4494f251533b1d4865312b93bd375fd3",
+    "src/lib/components/ModernToc.svelte": "sha256:3796e4d39038213163c9b93c8ff8d217fd6bd2b4e28a7ad0de779c3b3f8b4c24",
+    "src/lib/components/SidebarSelect.svelte": "sha256:eba743380cd2c01dfbeae5822b4415af1c02f8b27be6448e916c9df5447174ac",
+    "src/routes/docs/[product=product]/[version]/+layout.server.ts": "sha256:92ae2fb584aea72f710a9f4f84cdb5cd507ab1dbe896f28169194ca4933166b8",
+    "src/routes/docs/[product=product]/[version]/+page.server.ts": "sha256:f12f0fe97cc542027910cb723f30e52ec93f61ec95805751b88105b9520f9a13",
+    "src/routes/docs/[product=product]/[version]/+page.svelte": "sha256:6852dca829447ac189ef389015fc90d3101f34c04165558dc0852859ca49ce8a",
+    "src/routes/docs/[product=product]/[version]/[...slug]/+page.server.ts": "sha256:b0b6480644e625ab03941e23bfc44c0907958d1fde929426f3b254781ad34357",
+    "src/routes/docs/[product=product]/[version]/[...slug]/+page.svelte": "sha256:e91042fc2439558372d152e79f89bdd8f026ed4fa374fd4379b2df150286aa55",
+    "src/routes/docs/[version]/+layout.server.ts": "sha256:e837f09f12192d850af5cc977b06ce05bacce331a29e223c944b3f3bfd9f619f",
+    "src/routes/docs/[version]/+page.server.ts": "sha256:86c14b7f5f44806ca35a9163ca624eb86cd32a07505ccc4e345c1b453088af4f",
+    "src/routes/docs/[version]/+page.svelte": "sha256:6852dca829447ac189ef389015fc90d3101f34c04165558dc0852859ca49ce8a",
+    "src/routes/docs/[version]/[...slug]/+page.server.ts": "sha256:def5277487a1228806830e9fdb44155d407397e09e2163a22f90a591f285913a",
+    "src/routes/docs/[version]/[...slug]/+page.svelte": "sha256:e91042fc2439558372d152e79f89bdd8f026ed4fa374fd4379b2df150286aa55"
+  }
+}
