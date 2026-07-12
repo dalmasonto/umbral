@@ -5066,9 +5066,19 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             }
             stmts
         }
+        // gaps3 #60 — `IF EXISTS`, matching `DROP INDEX` and `DROP VIEW`, which have always
+        // said it. A migration's job is to make a statement about the DESIRED end state:
+        // "this table should not exist". Erroring because the table is already gone is a
+        // complaint that the world already agrees with you.
+        //
+        // It is not masking a bug. Forward application has to be idempotent, or a ledger
+        // that drifts even slightly — a table dropped out of band, a rename replayed, an
+        // app whose migration history was rewritten — becomes permanently unmigratable,
+        // and the only escape the operator can see is deleting the database.
         Operation::DropTable { table } => vec![
             Table::drop()
                 .table(Alias::new(table))
+                .if_exists()
                 .build(SqliteQueryBuilder),
         ],
         Operation::AddColumn { table, column } => {
@@ -5192,9 +5202,11 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 cty = m2m_pk_sql_type_sqlite(*child_ty),
             )]
         }
+        // gaps3 #60 — idempotent, same reasoning as `DropTable`.
         Operation::DropM2MTable { junction_table } => vec![
             Table::drop()
                 .table(Alias::new(junction_table))
+                .if_exists()
                 .build(SqliteQueryBuilder),
         ],
         Operation::RenameTable { from, to } => {
@@ -5327,9 +5339,11 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             }
             stmts
         }
+        // gaps3 #60 — see the SQLite renderer.
         Operation::DropTable { table } => vec![
             Table::drop()
                 .table(Alias::new(table))
+                .if_exists()
                 .build(PostgresQueryBuilder),
         ],
         Operation::AddColumn { table, column } => {
@@ -5394,9 +5408,11 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
                 cty = m2m_pk_sql_type_postgres(*child_ty),
             )]
         }
+        // gaps3 #60 — idempotent, same reasoning as `DropTable`.
         Operation::DropM2MTable { junction_table } => vec![
             Table::drop()
                 .table(Alias::new(junction_table))
+                .if_exists()
                 .build(PostgresQueryBuilder),
         ],
         Operation::RenameTable { from, to } => {

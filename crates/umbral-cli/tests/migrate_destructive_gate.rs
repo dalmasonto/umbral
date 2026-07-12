@@ -50,7 +50,14 @@ async fn migrate_refuses_a_pending_drop_table_without_allow_destructive() {
 
     // `umbral migrate` — no --allow-destructive. The gate must refuse BEFORE any
     // SQL runs, so nothing is dropped and the command errors.
-    let argv: Vec<std::ffi::OsString> = vec!["umbral".into(), "migrate".into()];
+    // `--allow-in-memory`: this test deliberately migrates an ephemeral DB, and gaps3 #61
+    // made `migrate` refuse that by default (a config that never loaded silently migrates
+    // `sqlite::memory:` and reports success). Saying so out loud is the point of the flag.
+    let argv: Vec<std::ffi::OsString> = vec![
+        "umbral".into(),
+        "migrate".into(),
+        "--allow-in-memory".into(),
+    ];
     let result = umbral_cli::dispatch_with_argv(app, argv).await;
 
     // Restore cwd before asserting so a panic can't leave the process elsewhere.

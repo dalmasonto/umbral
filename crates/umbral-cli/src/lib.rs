@@ -141,6 +141,17 @@ enum Command {
         /// dropping a production table (audit_2 core-migrate #6).
         #[arg(long, default_value_t = false)]
         allow_destructive: bool,
+        /// Allow migrating an IN-MEMORY database (gaps3 #61).
+        ///
+        /// `migrate` normally refuses, because `sqlite::memory:` is the DEFAULT
+        /// `database_url`: an app whose config never loaded migrates a database that
+        /// evaporates on exit while the command reports "Applied N migration(s)". Success
+        /// against nothing is worse than an error — the operator will trust it.
+        ///
+        /// Ephemeral migrates are legitimate in tests and CI. This flag is how you say so
+        /// out loud.
+        #[arg(long, default_value_t = false)]
+        allow_in_memory: bool,
     },
     /// List applied vs pending migrations per plugin.
     ///
@@ -431,7 +442,17 @@ pub async fn dispatch_with_argv(
             fake_initial,
             allow_drift,
             allow_destructive,
-        } => migrate(fake, fake_initial, allow_drift, allow_destructive).await,
+            allow_in_memory,
+        } => {
+            migrate(
+                fake,
+                fake_initial,
+                allow_drift,
+                allow_destructive,
+                allow_in_memory,
+            )
+            .await
+        }
         Command::Showmigrations => showmigrations().await,
         Command::Checkmigrations { strict } => checkmigrations(strict).await,
         Command::Typegen { out, check } => typegen(out, check),
@@ -714,7 +735,38 @@ async fn migrate(
     fake_initial: bool,
     allow_drift: bool,
     allow_destructive: bool,
+    allow_in_memory: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // gaps3 #61 — refuse to "migrate" a database that is about to evaporate.
+    //
+    // The default `database_url` is `sqlite::memory:`, so an app whose config never
+    // loaded (a stale `UMBRA_`-prefixed `.env` after the rename, a missing umbral.toml)
+    // silently migrates an IN-MEMORY database and prints "Applied 19 migration(s)". The
+    // command reports success, writes nothing, and the operator has no way to tell —
+    // which is strictly worse than an error, because they will now trust it.
+    //
+    // Found in `examples/shop`, whose entire `.env` had been dead since the rename.
+    if let Some(cfg) = umbral::settings::get_opt() {
+        let url = &cfg.database_url;
+        if !allow_in_memory && (url.contains(":memory:") || url.contains("mode=memory")) {
+            eprintln!("error: umbral migrate: `database_url` is an IN-MEMORY database ({url}).");
+            eprintln!();
+            eprintln!("  Migrating it would apply every migration to a database that is");
+            eprintln!("  discarded the moment this process exits — reporting success and");
+            eprintln!("  persisting nothing.");
+            eprintln!();
+            eprintln!("  `sqlite::memory:` is the DEFAULT, so this almost always means your");
+            eprintln!("  configuration never loaded. Common causes:");
+            eprintln!("    - a `.env` still using the old `UMBRA_` prefix (it is now `UMBRAL_`)");
+            eprintln!("    - no `umbral.toml` and no `UMBRAL_DATABASE_URL` in the environment");
+            eprintln!();
+            eprintln!("  Set UMBRAL_DATABASE_URL (e.g. sqlite://app.db?mode=rwc) and re-run.");
+            eprintln!("  If an ephemeral migrate IS what you want (tests, CI), say so:");
+            eprintln!("    umbral migrate --allow-in-memory");
+            return Err("refusing to migrate an in-memory database".into());
+        }
+    }
+
     // --fake <plugin/name>: mark one migration applied without running SQL.
     if let Some(ref spec) = fake {
         let (plugin, name) = parse_migration_spec(spec)?;

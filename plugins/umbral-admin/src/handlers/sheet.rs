@@ -518,7 +518,9 @@ pub(crate) async fn change_password_handler(
     }
     // Audit log — password change is a special-cased update we want
     // visible in the timeline. Don't log the new hash itself.
-    let object_id = id.parse::<i64>().ok();
+    // gaps3 #59: the pk is text. Parsing it to i64 discarded it for every
+    // Uuid/String-keyed model — the audit row named the table but not the row.
+    let object_id = Some(id.clone());
     crate::models::log(
         actor.id,
         "update",

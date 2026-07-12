@@ -78,9 +78,13 @@ pub struct RequestLog {
     pub status: i32,
     /// Wall-clock handler duration in milliseconds.
     pub duration_ms: i64,
-    /// Authenticated user id, best-effort. `None` for anonymous requests or
-    /// when the identity can't be resolved.
-    pub user_id: Option<i64>,
+    /// Authenticated user id, best-effort, as TEXT (gaps3 #59). `None` for anonymous
+    /// requests or when the identity can't be resolved.
+    ///
+    /// Text, not `i64`: a user model may key by `i64`, `String` or `Uuid`. As an INTEGER
+    /// this column could not hold a Uuid-keyed user's id at all, so every request from
+    /// such a user was recorded **unattributed** — the one field the log exists to carry.
+    pub user_id: Option<String>,
     /// Client IP, from `X-Forwarded-For` / `X-Real-IP` when present.
     pub ip: Option<String>,
     /// `User-Agent` header value, if present.
@@ -353,15 +357,15 @@ fn resolve_ip(headers: &axum::http::HeaderMap) -> Option<String> {
 /// plugin-observability #7). Keeping the id in an extension set by trusted
 /// middleware keeps umbral-logs free of an auth-plugin dependency while making
 /// attribution unforgeable.
-#[derive(Clone, Copy, Debug)]
-pub struct LoggedUserId(pub i64);
+#[derive(Clone, Debug)]
+pub struct LoggedUserId(pub String);
 
 /// Resolve the authenticated user id from the trusted [`LoggedUserId`] request
 /// extension only — never from a client-supplied header. `None` (unattributed)
 /// when no trusted middleware set it, which is safe: better no attribution than
 /// a forged one.
-fn resolve_user_id(extensions: &axum::http::Extensions) -> Option<i64> {
-    extensions.get::<LoggedUserId>().map(|u| u.0)
+fn resolve_user_id(extensions: &axum::http::Extensions) -> Option<String> {
+    extensions.get::<LoggedUserId>().map(|u| u.0.clone())
 }
 
 /// axum `from_fn` middleware that records each request to [`RequestLog`].
@@ -493,8 +497,18 @@ mod tests {
         let mut ext = axum::http::Extensions::new();
         assert_eq!(resolve_user_id(&ext), None);
         // The trusted extension set by auth middleware IS honoured.
-        ext.insert(LoggedUserId(42));
-        assert_eq!(resolve_user_id(&ext), Some(42));
+        ext.insert(LoggedUserId("42".to_string()));
+        assert_eq!(resolve_user_id(&ext), Some("42".to_string()));
+
+        // gaps3 #59: and a Uuid-keyed user is attributed too, not silently dropped.
+        let mut ext = axum::http::Extensions::new();
+        ext.insert(LoggedUserId(
+            "3f2504e0-4f89-11d3-9a0c-0305e82c3301".to_string(),
+        ));
+        assert_eq!(
+            resolve_user_id(&ext),
+            Some("3f2504e0-4f89-11d3-9a0c-0305e82c3301".to_string())
+        );
     }
 
     #[tokio::test]

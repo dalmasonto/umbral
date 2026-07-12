@@ -39,11 +39,10 @@ pub(crate) async fn history_handler(
     {
         return r;
     }
-    let object_id: i64 = match id.parse() {
-        Ok(v) => v,
-        Err(_) => return AdminError::BadInput(format!("invalid id: {id}")).into_response(),
-    };
-    let entries = match models::audit_for_object(&table, object_id, 50).await {
+    // gaps3 #59: no parse. This used to demand an `i64` and return a hard 400
+    // ("invalid id") for EVERY row of a Uuid/String-keyed model — the object-history page
+    // was unreachable, not merely empty.
+    let entries = match models::audit_for_object(&table, &id, 50).await {
         Ok(e) => e,
         Err(e) => {
             tracing::error!(error = %e, "admin: audit_for_object failed");
@@ -57,7 +56,7 @@ pub(crate) async fn history_handler(
         "admin/history.html",
         context!(
             model_name    => model.name.clone(),
-            object_id     => object_id,
+            object_id     => id.clone(),
             entries       => entries,
             apps          => apps,
             active_table  => table,

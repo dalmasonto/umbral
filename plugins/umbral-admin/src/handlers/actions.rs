@@ -106,7 +106,8 @@ pub(crate) async fn run_action(
         who.id,
         &format!("action:{action_key}"),
         &table,
-        selected_ids.first().and_then(|s| s.parse::<i64>().ok()),
+        // gaps3 #59: keep the pk as text — a Uuid/String-keyed row used to log NULL.
+        selected_ids.first().cloned(),
         &summary,
     )
     .await;
@@ -258,7 +259,8 @@ pub(crate) async fn dispatch_action(
         who.id,
         &format!("action:{key}"),
         &table,
-        ids.first().and_then(|s| s.parse::<i64>().ok()),
+        // gaps3 #59: keep the pk as text — a Uuid/String-keyed row used to log NULL.
+        ids.first().cloned(),
         &summary,
     )
     .await;

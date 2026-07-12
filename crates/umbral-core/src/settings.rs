@@ -637,8 +637,47 @@ impl Settings {
             .extract()
             .map_err(Box::new)?;
         warn_on_near_miss_keys(&settings.extra);
+        warn_on_legacy_umbra_prefix();
         Ok(settings)
     }
+}
+
+/// gaps3 #61 — shout about `UMBRA_*` environment variables, which are IGNORED.
+///
+/// The framework was renamed `umbra` → `umbral`, and the settings prefix moved with it.
+/// A leftover `UMBRA_DATABASE_URL` is not a near-miss key that figment reports as
+/// unmapped — it never reaches figment at all, because the prefix does not match. It is
+/// *invisible*.
+///
+/// That is as bad as it sounds. An app whose `.env` still says `UMBRA_DATABASE_URL` falls
+/// back to the DEFAULT database url, which is `sqlite::memory:` — so it runs happily
+/// against a database that evaporates on exit, and `migrate` reports "Applied N
+/// migration(s)" having written to nothing. Found the hard way in `examples/shop`, whose
+/// entire `.env` had been dead since the rename.
+///
+/// Warn, not fail: an app may legitimately have `UMBRA_`-prefixed variables belonging to
+/// something else entirely. But say it loudly, name the variables, and name the fix.
+fn warn_on_legacy_umbra_prefix() {
+    let legacy: Vec<String> = std::env::vars()
+        .map(|(k, _)| k)
+        .filter(|k| k.starts_with("UMBRA_") && !k.starts_with("UMBRAL_"))
+        .collect();
+    if legacy.is_empty() {
+        return;
+    }
+    let renamed: Vec<String> = legacy
+        .iter()
+        .map(|k| k.replacen("UMBRA_", "UMBRAL_", 1))
+        .collect();
+    tracing::warn!(
+        "umbral: {} environment variable(s) use the OLD `UMBRA_` prefix and are being \
+         IGNORED: {legacy:?}. The prefix is now `UMBRAL_` — rename them to {renamed:?}. \
+         Until you do, each of these settings silently falls back to its DEFAULT, and the \
+         default `database_url` is `sqlite::memory:` — an in-memory database that is \
+         discarded on exit, against which `migrate` will cheerfully report success and \
+         persist nothing.",
+        legacy.len(),
+    );
 }
 
 /// The flat `Settings` field names. A `UMBRAL_`-prefixed key that lands in the

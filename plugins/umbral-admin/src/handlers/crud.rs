@@ -701,7 +701,9 @@ pub(crate) async fn update(
             if let Err(e) = apply_m2m_selections(&model, &id, &multi_form).await {
                 return AdminError::Sqlx(e).into_response();
             }
-            let object_id = id.parse::<i64>().ok();
+            // gaps3 #59: the pk is text. Parsing it to i64 discarded it for every
+            // Uuid/String-keyed model — the audit row named the table but not the row.
+            let object_id = Some(id.clone());
             crate::models::log(
                 user.id,
                 "update",
@@ -876,7 +878,9 @@ pub(crate) async fn delete(
         .await
     {
         Ok(_) => {
-            let object_id = id.parse::<i64>().ok();
+            // gaps3 #59: the pk is text. Parsing it to i64 discarded it for every
+            // Uuid/String-keyed model — the audit row named the table but not the row.
+            let object_id = Some(id.clone());
             crate::models::log(
                 who.id,
                 "delete",
@@ -932,7 +936,9 @@ pub(crate) async fn htmx_delete(
         .await
     {
         Ok(_) => {
-            let object_id = id.parse::<i64>().ok();
+            // gaps3 #59: the pk is text. Parsing it to i64 discarded it for every
+            // Uuid/String-keyed model — the audit row named the table but not the row.
+            let object_id = Some(id.clone());
             crate::models::log(
                 who.id,
                 "delete",

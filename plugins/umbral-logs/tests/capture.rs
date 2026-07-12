@@ -66,7 +66,7 @@ async fn boot() {
                 path TEXT NOT NULL,\
                 status INTEGER NOT NULL,\
                 duration_ms INTEGER NOT NULL,\
-                user_id INTEGER,\
+                user_id TEXT,\
                 ip TEXT,\
                 user_agent TEXT,\
                 created_at TEXT NOT NULL\
@@ -245,7 +245,7 @@ async fn request_log_round_trips_through_orm() {
             path: "/round-trip".to_string(),
             status: 204,
             duration_ms: 7,
-            user_id: Some(42),
+            user_id: Some("42".to_string()),
             ip: Some("203.0.113.7".to_string()),
             user_agent: Some("umbral-test/1.0".to_string()),
             created_at: Utc::now(),
@@ -265,7 +265,7 @@ async fn request_log_round_trips_through_orm() {
     assert_eq!(fetched.path, "/round-trip");
     assert_eq!(fetched.status, 204);
     assert_eq!(fetched.duration_ms, 7);
-    assert_eq!(fetched.user_id, Some(42));
+    assert_eq!(fetched.user_id, Some("42".to_string()));
     assert_eq!(fetched.ip.as_deref(), Some("203.0.113.7"));
     assert_eq!(fetched.user_agent.as_deref(), Some("umbral-test/1.0"));
 }

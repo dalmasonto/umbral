@@ -365,9 +365,16 @@ pub struct AdminAuditLog {
     /// SQL table name the operation touched.
     #[umbral(noedit)]
     pub model: String,
-    /// PK of the affected row, NULL for bulk / non-row operations.
+    /// PK of the affected row, as TEXT, NULL for bulk / non-row operations (gaps3 #59).
+    ///
+    /// Text, not `i64`, for the same reason the session table stores its user id as text:
+    /// a model's primary key may be an `i64`, a `String` or a `Uuid`. As an INTEGER this
+    /// column could not address a non-i64 row at all — the object-history page 400'd for
+    /// every row of such a model, and every admin write logged `object_id = NULL`,
+    /// including the password-change audit. An audit trail that cannot name the object it
+    /// audited is not an audit trail.
     #[umbral(noedit)]
-    pub object_id: Option<i64>,
+    pub object_id: Option<String>,
     /// Short human description, e.g. `"created Post #42"`.
     #[umbral(noedit)]
     pub diff_summary: String,
@@ -382,7 +389,7 @@ pub async fn log(
     actor_user_id: i64,
     action: &str,
     model: &str,
-    object_id: Option<i64>,
+    object_id: Option<String>,
     diff_summary: &str,
 ) {
     let entry = AdminAuditLog {
@@ -404,12 +411,12 @@ pub async fn log(
 /// formatted as strings) for direct rendering by minijinja.
 pub async fn audit_for_object(
     model: &str,
-    object_id: i64,
+    object_id: &str,
     limit: u64,
 ) -> Result<Vec<AuditEntry>, sqlx::Error> {
     let rows = AdminAuditLog::objects()
         .filter(admin_audit_log::MODEL.eq(model.to_string()))
-        .filter(admin_audit_log::OBJECT_ID.eq(object_id))
+        .filter(admin_audit_log::OBJECT_ID.eq(object_id.to_string()))
         .order_by(admin_audit_log::CREATED_AT.desc())
         .limit(limit)
         .fetch()
@@ -425,7 +432,7 @@ pub struct AuditEntry {
     pub actor_user_id: i64,
     pub action: String,
     pub model: String,
-    pub object_id: Option<i64>,
+    pub object_id: Option<String>,
     pub diff_summary: String,
     pub created_at: String,
 }
@@ -482,7 +489,7 @@ pub async fn ensure_tables_for_tests(pool: &sqlx::SqlitePool) -> Result<(), sqlx
             actor_user_id INTEGER NOT NULL,
             action        TEXT    NOT NULL,
             model         TEXT    NOT NULL,
-            object_id     INTEGER,
+            object_id     TEXT,
             diff_summary  TEXT    NOT NULL,
             created_at    TEXT    NOT NULL
         )",

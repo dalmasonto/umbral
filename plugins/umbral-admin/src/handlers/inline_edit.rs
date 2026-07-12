@@ -189,7 +189,9 @@ pub(crate) async fn cell_edit_post(
     {
         Ok(_) => {
             // Audit log — inline cell edit counts as an update.
-            let object_id = id.parse::<i64>().ok();
+            // gaps3 #59: the pk is text. Parsing it to i64 discarded it for every
+            // Uuid/String-keyed model — the audit row named the table but not the row.
+            let object_id = Some(id.clone());
             crate::models::log(
                 user.id,
                 "update",
