@@ -5065,6 +5065,7 @@ dependencies = [
  "tracing",
  "umbral",
  "umbral-auth",
+ "umbral-permissions",
  "umbral-rest",
  "umbral-sessions",
 ]

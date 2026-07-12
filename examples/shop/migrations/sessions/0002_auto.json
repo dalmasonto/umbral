@@ -1,0 +1,88 @@
+{
+  "id": "0002_auto",
+  "plugin": "sessions",
+  "depends_on": [],
+  "operations": [
+    {
+      "kind": "AddIndex",
+      "table": "session",
+      "columns": [
+        "expires_at"
+      ],
+      "unique": false
+    },
+    {
+      "kind": "AddIndex",
+      "table": "session",
+      "columns": [
+        "user_id"
+      ],
+      "unique": false
+    }
+  ],
+  "snapshot_after": {
+    "models": [
+      {
+        "name": "Session",
+        "table": "session",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "Text",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "user_id",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "index": true
+          },
+          {
+            "name": "data",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "expires_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "index": true
+          }
+        ],
+        "display": "Session",
+        "icon": "database",
+        "app_label": "app"
+      }
+    ]
+  }
+}

@@ -1,0 +1,797 @@
+{
+  "id": "0002_auto",
+  "plugin": "auth",
+  "depends_on": [],
+  "operations": [
+    {
+      "kind": "AlterColumn",
+      "table": "auth_user",
+      "column": "is_staff",
+      "new_columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "username",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "unique": true,
+          "trim": true,
+          "lowercase": true
+        },
+        {
+          "name": "email",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0,
+          "unique": true,
+          "trim": true,
+          "lowercase": true
+        },
+        {
+          "name": "password_hash",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_active",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_staff",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "privileged": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "false"
+        },
+        {
+          "name": "is_superuser",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "privileged": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "false"
+        },
+        {
+          "name": "date_joined",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "last_login",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        }
+      ],
+      "prev_columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "username",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "unique": true
+        },
+        {
+          "name": "email",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0,
+          "unique": true
+        },
+        {
+          "name": "password_hash",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_active",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_staff",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_superuser",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "date_joined",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "last_login",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        }
+      ]
+    },
+    {
+      "kind": "AlterColumn",
+      "table": "auth_user",
+      "column": "is_superuser",
+      "new_columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "username",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "unique": true,
+          "trim": true,
+          "lowercase": true
+        },
+        {
+          "name": "email",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0,
+          "unique": true,
+          "trim": true,
+          "lowercase": true
+        },
+        {
+          "name": "password_hash",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_active",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_staff",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "privileged": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "false"
+        },
+        {
+          "name": "is_superuser",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "privileged": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "false"
+        },
+        {
+          "name": "date_joined",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "last_login",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        }
+      ],
+      "prev_columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "username",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "unique": true
+        },
+        {
+          "name": "email",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0,
+          "unique": true
+        },
+        {
+          "name": "password_hash",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_active",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_staff",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "is_superuser",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "date_joined",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "last_login",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        }
+      ]
+    },
+    {
+      "kind": "AddColumn",
+      "table": "auth_user",
+      "column": {
+        "name": "email_verified_at",
+        "ty": "Timestamptz",
+        "primary_key": false,
+        "nullable": true,
+        "noform": false,
+        "noedit": false,
+        "is_string_repr": false,
+        "max_length": 0
+      }
+    },
+    {
+      "kind": "CreateTable",
+      "table": "auth_challenge",
+      "columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "user_id",
+          "ty": "ForeignKey",
+          "primary_key": false,
+          "nullable": false,
+          "fk_target": "auth_user",
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "on_delete": "Cascade"
+        },
+        {
+          "name": "purpose",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 32
+        },
+        {
+          "name": "secret_hash",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 64
+        },
+        {
+          "name": "expires_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "attempts",
+          "ty": "Integer",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "used_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        }
+      ]
+    }
+  ],
+  "snapshot_after": {
+    "models": [
+      {
+        "name": "AuthChallenge",
+        "table": "auth_challenge",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "user_id",
+            "ty": "ForeignKey",
+            "primary_key": false,
+            "nullable": false,
+            "fk_target": "auth_user",
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "on_delete": "Cascade"
+          },
+          {
+            "name": "purpose",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 32
+          },
+          {
+            "name": "secret_hash",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 64
+          },
+          {
+            "name": "expires_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "attempts",
+            "ty": "Integer",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "used_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          }
+        ],
+        "display": "AuthChallenge",
+        "icon": "database",
+        "app_label": "app"
+      },
+      {
+        "name": "AuthToken",
+        "table": "auth_token",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "user_id",
+            "ty": "ForeignKey",
+            "primary_key": false,
+            "nullable": false,
+            "fk_target": "auth_user",
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "on_delete": "Cascade"
+          },
+          {
+            "name": "key_hash",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 64,
+            "unique": true
+          },
+          {
+            "name": "name",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 80
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "last_used_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          }
+        ],
+        "display": "AuthToken",
+        "icon": "database",
+        "app_label": "app"
+      },
+      {
+        "name": "AuthUser",
+        "table": "auth_user",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "username",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "unique": true,
+            "trim": true,
+            "lowercase": true
+          },
+          {
+            "name": "email",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0,
+            "unique": true,
+            "trim": true,
+            "lowercase": true
+          },
+          {
+            "name": "password_hash",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "is_active",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "is_staff",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "privileged": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "default": "false"
+          },
+          {
+            "name": "is_superuser",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "privileged": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "default": "false"
+          },
+          {
+            "name": "date_joined",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "last_login",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "email_verified_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          }
+        ],
+        "display": "AuthUser",
+        "icon": "database",
+        "app_label": "app"
+      }
+    ]
+  }
+}

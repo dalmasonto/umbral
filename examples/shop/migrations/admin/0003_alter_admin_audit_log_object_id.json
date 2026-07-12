@@ -1,0 +1,329 @@
+{
+  "id": "0003_alter_admin_audit_log_object_id",
+  "plugin": "admin",
+  "depends_on": [],
+  "operations": [
+    {
+      "kind": "AlterColumn",
+      "table": "admin_audit_log",
+      "column": "object_id",
+      "new_columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "actor_user_id",
+          "ty": "BigInt",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "action",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "model",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "object_id",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "diff_summary",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        }
+      ],
+      "prev_columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "actor_user_id",
+          "ty": "BigInt",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "action",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "model",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "object_id",
+          "ty": "BigInt",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "diff_summary",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": true,
+          "is_string_repr": false,
+          "max_length": 0
+        }
+      ]
+    }
+  ],
+  "snapshot_after": {
+    "models": [
+      {
+        "name": "AdminAuditLog",
+        "table": "admin_audit_log",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "actor_user_id",
+            "ty": "BigInt",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "action",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "model",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "object_id",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "diff_summary",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          }
+        ],
+        "display": "Audit log",
+        "icon": "scroll-text",
+        "app_label": "app"
+      },
+      {
+        "name": "AdminUserPref",
+        "table": "admin_user_pref",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "user_id",
+            "ty": "BigInt",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "theme",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "density",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "sidebar_collapsed",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "dashboard_layout",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "preferences",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0,
+            "widget": "code"
+          },
+          {
+            "name": "updated_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          }
+        ],
+        "display": "User preference",
+        "icon": "settings-2",
+        "app_label": "app"
+      }
+    ]
+  }
+}
