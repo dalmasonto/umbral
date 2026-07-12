@@ -30,7 +30,7 @@ use umbral::web::{ApiError, Html, Router, get};
 /// It cannot silently rot: the `version_tests` module below reads `Cargo.toml` and fails
 /// the build if this const and the pinned `umbral` version disagree. Bump the dependency
 /// and the badge follows — or the build tells you that you forgot.
-pub(crate) const UMBRAL_VERSION: &str = "0.0.6";
+pub(crate) const UMBRAL_VERSION: &str = "0.0.7";
 
 #[derive(Debug, Default, Clone)]
 pub struct PublicPlugin;

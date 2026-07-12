@@ -1450,6 +1450,7 @@ pub async fn add_moderator_logic(
         user: ForeignKey::new(user_id),
         added_by: Some(ForeignKey::new(added_by)),
         created_at: chrono::Utc::now(),
+        deleted_at: None,
     };
     match PluginModerator::objects().create(grant).await {
         Ok(_) => Ok(AddModeratorOutcome::Added),

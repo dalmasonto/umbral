@@ -16,31 +16,31 @@ edition = "2024"
 # these versions. See README.md -> "Why crates.io deps".
 
 # ----- Framework core (always required) ------------------------------------
-umbral         = "0.0.6"
-umbral-cli     = "0.0.6"
+umbral         = "0.0.7"
+umbral-cli     = "0.0.7"
 
 # ----- Active by default ---------------------------------------------------
 # What `src/main.rs` wires in. Comment any of these out only if you also remove
 # the matching `.plugin(...)` line.
-umbral-auth     = "0.0.6"
-umbral-sessions = "0.0.6"
-umbral-admin    = "0.0.6"
-umbral-rest     = "0.0.6"
-umbral-openapi  = "0.0.6"
-umbral-security = "0.0.6"
-umbral-storage  = "0.0.6"  # Unified storage: static-file serving + uploaded-file storage (local FS + S3).
-umbral-playground   = "0.0.6"  # Interactive API playground UI (think mini-Postman) at /playground/.
-umbral-oauth        = "0.0.6"  # OAuth / social login (Google, GitHub) + account connection.
-umbral-realtime     = "0.0.6"  # SSE + WebSocket real-time push (live note feed).
-umbral-livereload   = "0.0.6"  # Dev-only browser live-reload (SSE push + file watcher). Opt-in, inert outside Dev.
+umbral-auth     = "0.0.7"
+umbral-sessions = "0.0.7"
+umbral-admin    = "0.0.7"
+umbral-rest     = "0.0.7"
+umbral-openapi  = "0.0.7"
+umbral-security = "0.0.7"
+umbral-storage  = "0.0.7"  # Unified storage: static-file serving + uploaded-file storage (local FS + S3).
+umbral-playground   = "0.0.7"  # Interactive API playground UI (think mini-Postman) at /playground/.
+umbral-oauth        = "0.0.7"  # OAuth / social login (Google, GitHub) + account connection.
+umbral-realtime     = "0.0.7"  # SSE + WebSocket real-time push (live note feed).
+umbral-livereload   = "0.0.7"  # Dev-only browser live-reload (SSE push + file watcher). Opt-in, inert outside Dev.
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
-# umbral-tasks        = "0.0.6"  # DB-backed background task queue (Celery-equivalent).
-# umbral-permissions  = "0.0.6"  # ContentType + Group + Permission model.
-# umbral-rls          = "0.0.6"  # Postgres row-level security policy registration.
-umbral-cache          = "0.0.6"  # In-memory/SQLite/Redis cache + cache_page middleware.
-# umbral-email        = "0.0.6"  # SMTP + MIME email composer + sender.
-# umbral-signals      = "0.0.6"  # Pre/post save/delete signal dispatch.
+# umbral-tasks        = "0.0.7"  # DB-backed background task queue (Celery-equivalent).
+# umbral-permissions  = "0.0.7"  # ContentType + Group + Permission model.
+# umbral-rls          = "0.0.7"  # Postgres row-level security policy registration.
+umbral-cache          = "0.0.7"  # In-memory/SQLite/Redis cache + cache_page middleware.
+# umbral-email        = "0.0.7"  # SMTP + MIME email composer + sender.
+# umbral-signals      = "0.0.7"  # Pre/post save/delete signal dispatch.
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

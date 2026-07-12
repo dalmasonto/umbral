@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umbral = "0.0.6"
-umbral-auth = "0.0.6"
+umbral = "0.0.7"
+umbral-auth = "0.0.7"
 # Live note feed: broadcast a posted note to the plugin's SSE watchers.
-umbral-realtime = "0.0.6"
+umbral-realtime = "0.0.7"
 # The global header search (/search) spans plugins + blog posts.
 # Sibling-relative: `../../../umbral_website/plugins/site_content` escaped the
 # Docker build context (up out of umbral_website, then back in) and broke

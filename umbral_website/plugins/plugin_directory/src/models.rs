@@ -492,6 +492,7 @@ pub struct PluginComment {
     plugin = "plugin_directory",
     display = "Plugin moderators",
     icon = "shield-check",
+    soft_delete,
     unique_together = [["plugin", "user"]]
 )]
 pub struct PluginModerator {
@@ -512,6 +513,14 @@ pub struct PluginModerator {
 
     #[umbral(auto_now_add)]
     pub created_at: DateTime<Utc>,
+
+    /// Soft-delete marker. `Plugin` is `#[umbral(soft_delete)]` and this FK is
+    /// `on_delete = "cascade"` — but a soft delete is an UPDATE, so the DATABASE never
+    /// cascades. Without this column the grant would survive its plugin's deletion and
+    /// keep pointing at a hidden row; with it, the framework's soft-delete cascade can
+    /// follow. (Caught by the `model.soft_delete_cascade` boot check in umbral 0.0.7.)
+    #[umbral(noform, index)]
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]
