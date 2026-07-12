@@ -1,0 +1,35 @@
+[package]
+name = "umbral-graphql"
+description = "A real GraphQL API derived from your umbral models — relations and all. Opt-in plugin."
+workspace = "../.."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbral = { path = "../../crates/umbral", version = "0.0.7" }
+# The DYNAMIC schema builder is the whole reason this is tractable: umbral's models are
+# known at RUNTIME (the `ModelMeta` registry), not at compile time, so a derive-macro
+# GraphQL crate would not fit. `dynamic-schema` lets us build the types from the registry.
+# `dataloader` is not optional in spirit: without batching, a GraphQL list query
+# fires one DB query per row (the N+1 problem) and the CLIENT chooses how many rows.
+async-graphql = { version = "7.2", features = ["dynamic-schema", "dataloader"] }
+async-graphql-axum = "7.2"
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+# The loaders spawn their batch tasks; sea-query builds the `col IN (...)` predicate.
+tokio = { version = "1", features = ["rt"] }
+sea-query = "0.32"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+chrono = { version = "0.4", features = ["serde"] }

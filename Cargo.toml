@@ -29,6 +29,7 @@ members = [
     "plugins/umbral-rest",
     "plugins/umbral-tasks",
     "plugins/umbral-email",
+    "plugins/umbral-graphql",
     "plugins/umbral-openapi",
     "plugins/umbral-signals",
     "plugins/umbral-storage",

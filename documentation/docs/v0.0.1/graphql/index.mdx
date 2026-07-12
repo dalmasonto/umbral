@@ -1,0 +1,87 @@
+---
+title: GraphQL
+description: A real GraphQL API derived from your models — relations and all, batched, deny-by-default.
+sidebar_position: 1
+icon: share-2
+tags: [graphql, api]
+badge: new
+---
+
+# GraphQL
+
+```rust
+GraphqlPlugin::new()
+    .expose("post")
+    .expose("auth_user")
+```
+
+```graphql
+{ post(id: "1") { title author { username } } }
+```
+
+The schema is derived from your **model registry** — the same source `typegen`, `gen-client` and OpenAPI already read.
+
+## It's a graph, not RPC
+
+The cheap way to add GraphQL is to convert the OpenAPI spec. That gives you `getPost` / `listPosts` — GraphQL in name only. Nobody adopts GraphQL to make the same call with different syntax; they adopt it to **traverse a graph**.
+
+umbral already has the graph. A `ForeignKey<Author>` field *is* an edge. Invert it and you have the reverse relation. You get both directions, and you declared neither:
+
+```graphql
+{ post(id: "1")   { title author { username } } }   # forward:  post -> author
+{ author(id: "1") { username posts { title } } }    # reverse:  author -> posts
+```
+
+## Relations are batched
+
+```graphql
+{ posts(limit: 100) { title author { username } } }
+```
+
+The naive resolver runs 1 query for the posts and **100 more** — one per post — for the authors. It's correct, it returns identical JSON, and it melts your database the first time someone asks for a page.
+
+<Callout type="warning">
+  In GraphQL the **client** picks the query shape, which means the client picks your query count. An endpoint without batching is an N+1 generator that your caller aims.
+</Callout>
+
+Every relation goes through a DataLoader that coalesces ids into one `WHERE id IN (...)`. 100 posts → **1** author query. A test asserts the actual read count, because "we batch" is otherwise just a sentence in a doc-comment.
+
+Loaders are built **per request**, so one caller's cache can never serve another's rows — that would be a data leak wearing a performance costume.
+
+## Deny by default
+
+Nothing is exposed until you name it:
+
+```rust
+GraphqlPlugin::new()
+    .expose("post")
+    .expose_if("order", |id| id.is_some_and(|i| i.is_staff))
+```
+
+<Callout type="warning">
+  This isn't politeness. A GraphQL endpoint is the most efficient exfiltration tool you can hand an attacker, *because they choose the query shape*. An auto-exposed schema would put every column of every model — password hashes, session tokens, internal costs — one query away, and the framework would have done it on their behalf.
+</Callout>
+
+A relation is only traversable when **both ends** are exposed. Otherwise `post.author` would be a side door into a model you deliberately withheld. An unexposed model doesn't appear in the schema at all — not as a query, not as a relation, not in introspection.
+
+## What you get per model
+
+| | |
+|---|---|
+| `post(id: ID!)` | one row |
+| `posts(limit: Int, offset: Int)` | a list, capped at 200 |
+| `post.author` | forward FK → the object |
+| `post.author_id` | the raw key, if that's all you want |
+| `author.posts` | reverse FK → the list |
+
+Ids cross the wire as `String`: GraphQL's `Int` is an `i32`, a `BigInt` doesn't fit, and silently truncating a primary key isn't an option — nor is assuming it's an integer at all, since `String` and `Uuid` keys are first-class.
+
+## GraphiQL
+
+Served on `GET /graphql` in `Dev`, off otherwise — an interactive schema explorer on a production endpoint is a gift to whoever is enumerating your API. Force it either way with `.graphiql(true|false)`.
+
+## Not yet
+
+**Mutations.** Writes are the half where a mistake changes your database, and they want the same validation, permission and CSRF story the REST write path already has. That's a deliberate next slice, not an oversight. Today the endpoint is read-only.
+
+Design notes: `planning/features.md` #9.
