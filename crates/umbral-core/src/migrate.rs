@@ -4412,7 +4412,7 @@ fn build_create_m2m_op(spec: &M2MPair, current: &Snapshot) -> Result<Operation, 
         .models
         .iter()
         .find(|m| m.table == spec.target_table)
-        .map(|m| pk_col_and_ty(m))
+        .map(&pk_col_and_ty)
         .or_else(|| {
             // Non-panicking global lookup. `registered_models()` panics if the
             // registry isn't initialised (unit tests that call `diff` directly,

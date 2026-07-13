@@ -31,7 +31,7 @@ pub fn validate_choice_member(
         }
         return;
     }
-    if !values.iter().any(|v| *v == value) {
+    if !values.contains(&value) {
         errs.add(field, format!("{field} is not a valid choice"));
     }
 }

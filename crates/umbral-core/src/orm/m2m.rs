@@ -241,8 +241,8 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
         q.into_table(crate::db::router::schema_qualified_table(junction))
             .columns([Alias::new("parent_id"), Alias::new("child_id")])
             .values_panic([
-                Expr::value(parent_id.clone()).into(),
-                Expr::value(child_pk).into(),
+                Expr::value(parent_id.clone()),
+                Expr::value(child_pk),
             ])
             .on_conflict(
                 OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
@@ -373,8 +373,8 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
                         .into_table(crate::db::router::schema_qualified_table(junction))
                         .columns([Alias::new("parent_id"), Alias::new("child_id")])
                         .values_panic([
-                            Expr::value(parent_id.clone()).into(),
-                            Expr::value(child_pk).into(),
+                            Expr::value(parent_id.clone()),
+                            Expr::value(child_pk),
                         ])
                         .on_conflict(
                             OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
@@ -402,8 +402,8 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
                         .into_table(crate::db::router::schema_qualified_table(junction))
                         .columns([Alias::new("parent_id"), Alias::new("child_id")])
                         .values_panic([
-                            Expr::value(parent_id.clone()).into(),
-                            Expr::value(child_pk).into(),
+                            Expr::value(parent_id.clone()),
+                            Expr::value(child_pk),
                         ])
                         .on_conflict(
                             OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
@@ -646,8 +646,8 @@ pub async fn set_junction_dynamic(
         // so the whole set lands in a single statement.
         for child_id in child_ids {
             insert.values_panic([
-                Expr::value(parent_id.clone()).into(),
-                Expr::value(child_id).into(),
+                Expr::value(parent_id.clone()),
+                Expr::value(child_id),
             ]);
         }
         Some(insert)
@@ -711,8 +711,8 @@ pub async fn set_junction_dynamic_in_tx(
             );
         for child_id in child_ids {
             insert.values_panic([
-                Expr::value(parent_id.clone()).into(),
-                Expr::value(child_id).into(),
+                Expr::value(parent_id.clone()),
+                Expr::value(child_id),
             ]);
         }
         Some(insert)

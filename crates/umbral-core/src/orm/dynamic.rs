@@ -998,7 +998,7 @@ impl<'a> DynQuerySet<'a> {
         // column (every Model does in practice; the guard handles
         // the hypothetical PK-less ModelMeta).
         let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
-            Some(pk_col) => collect_parent_pks(&self.meta, pk_col, &where_clauses)
+            Some(pk_col) => collect_parent_pks(self.meta, pk_col, &where_clauses)
                 .await
                 .unwrap_or_default(),
             None => Vec::new(),
@@ -1741,7 +1741,7 @@ impl<'a> DynQuerySet<'a> {
         // for parents that have no junction rows (preserves the
         // per-row helper's "always echo the key" contract).
         if !self.meta.m2m_relations.is_empty() && !out.is_empty() {
-            hydrate_m2m_batched(&self.meta, &pk_name, &mut out).await?;
+            hydrate_m2m_batched(self.meta, &pk_name, &mut out).await?;
         }
 
         // FK expansion via select_related — one batched
@@ -1753,7 +1753,7 @@ impl<'a> DynQuerySet<'a> {
         // `QuerySet::select_related` path so SQLite + Postgres
         // dispatch stays in one place.
         if !self.select_related.is_empty() && !out.is_empty() {
-            hydrate_select_related_into(&self.meta, &self.select_related, &mut out).await?;
+            hydrate_select_related_into(self.meta, &self.select_related, &mut out).await?;
         }
         Ok(out)
     }
@@ -2395,7 +2395,7 @@ impl<'a> DynQuerySet<'a> {
             Vec::new()
         };
 
-        let validation_errors = crate::orm::validation::validate_on_update(&self.meta, body).await;
+        let validation_errors = crate::orm::validation::validate_on_update(self.meta, body).await;
         if !validation_errors.is_empty() {
             return Err(WriteError::Multiple {
                 errors: validation_errors,

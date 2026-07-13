@@ -2452,7 +2452,7 @@ impl<T: Model> QuerySet<T> {
                     for info in &rel_infos {
                         let pk_alias = format!("{}__{}", info.rel_name, info.related_pk.name);
                         let pk_is_null =
-                            backend_sqlite::joined_pk_is_null(row, &info.related_pk, &pk_alias);
+                            backend_sqlite::joined_pk_is_null(row, info.related_pk, &pk_alias);
                         if pk_is_null {
                             obj.insert(info.rel_name.clone(), JsonValue::Null);
                             continue;
@@ -2486,7 +2486,7 @@ impl<T: Model> QuerySet<T> {
                     for info in &rel_infos {
                         let pk_alias = format!("{}__{}", info.rel_name, info.related_pk.name);
                         let pk_is_null =
-                            backend_pg::joined_pk_is_null(row, &info.related_pk, &pk_alias);
+                            backend_pg::joined_pk_is_null(row, info.related_pk, &pk_alias);
                         if pk_is_null {
                             obj.insert(info.rel_name.clone(), JsonValue::Null);
                             continue;

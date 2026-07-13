@@ -4484,7 +4484,7 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
             let message = attrs
                 .regex_message
                 .clone()
-                .unwrap_or_else(|| format!("{{field}} doesn't match the required format"));
+                .unwrap_or_else(|| "{field} doesn't match the required format".to_string());
             chain = quote! { #chain.regex(#pattern, #message) };
         }
         if is_optional {

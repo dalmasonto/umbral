@@ -475,7 +475,7 @@ impl PoolConfig {
     fn resolve() -> Self {
         // Prefer the ambient settings once published by `App::build()`.
         if let Some(s) = crate::settings::get_opt() {
-            return PoolConfig::from_settings(&s);
+            return PoolConfig::from_settings(s);
         }
         // audit_2 H16: the default pool is opened via `db::connect()` BEFORE
         // `App::build()` in every documented boot path, so at this point the
@@ -542,7 +542,7 @@ pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
 /// context. Same [`PoolConfig`] knobs and the same RLS `before_acquire` GUC
 /// hook as the eager [`connect_postgres`].
 pub fn connect_postgres_lazy(url: &str) -> Result<PgPool, sqlx::Error> {
-    Ok(pg_pool_options().connect_lazy(url)?)
+    pg_pool_options().connect_lazy(url)
 }
 
 /// Shared `PgPoolOptions` builder for the eager + lazy connect paths, so the
