@@ -668,6 +668,7 @@ pub mod orm {
     /// fixture: M3's `#[derive(Model)]` retires it; users defining their
     /// own model produce their own column module from the derive.
     pub use umbral_core::orm::post::post;
+    pub use umbral_core::orm::secrets::{HARD_DENIED_FIELDS, is_hard_denied_field};
 
     /// Runtime helpers the `#[derive(Form)]` macro emits calls to —
     /// choice membership, FK existence probes, async `<select>` option

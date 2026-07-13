@@ -45,6 +45,28 @@ pub struct Exposed {
     pub meta: ModelMeta,
     /// `None` = readable by anyone. `Some(f)` = readable only when `f(identity)` is true.
     pub access: Option<AccessFn>,
+    /// Columns of this model that are omitted from the schema entirely. See
+    /// [`crate::GraphqlPlugin::hide`].
+    pub hidden: Vec<String>,
+}
+
+/// Whether a column appears in the schema at all.
+///
+/// Two independent reasons it might not:
+///
+/// 1. The operator hid it (`GraphqlPlugin::hide`) — configuration.
+/// 2. It is hard-denied in core (`password_hash`) — NOT configuration. No combination of
+///    builder calls can re-expose it, and that is the point.
+///
+/// The field is omitted from the SCHEMA, not merely resolved to null: a field that exists
+/// and always returns null still tells an attacker the column is there, and still shows up
+/// in introspection and in GraphiQL's autocomplete. Absent is a stronger statement than
+/// empty.
+fn is_visible(e: &Exposed, col_name: &str) -> bool {
+    if umbral::orm::is_hard_denied_field(col_name) {
+        return false;
+    }
+    !e.hidden.iter().any(|h| h == col_name)
 }
 
 /// The GraphQL type name for a model. `Model::NAME` is already PascalCase.
@@ -157,6 +179,9 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
 
         // ---- scalar fields -------------------------------------------------
         for col in &meta.fields {
+            if !is_visible(e, &col.name) {
+                continue;
+            }
             // An FK to an EXPOSED model is owned by the relation loop below: it emits the
             // object under the bare name (`author`) and the raw id under `author_id`.
             // Emitting a scalar here too would collide on the name — and async-graphql
@@ -200,6 +225,12 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
             let Some(target) = by_table.get(target_table) else {
                 continue;
             };
+            // Hiding an FK column drops the raw id AND the object edge. Keeping the edge
+            // would make `hide` decorative: `{ product { category { id } } }` hands back the
+            // very id you just hid, one hop further out.
+            if !is_visible(e, &col.name) {
+                continue;
+            }
             let target_meta = target.meta.clone();
             let target_type = type_name(&target_meta);
             let fk_col = col.name.clone();
@@ -259,6 +290,12 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
             }
             for col in &other.meta.fields {
                 if col.fk_target.as_deref() != Some(meta.table.as_str()) {
+                    continue;
+                }
+                // The child hid the FK that forms this edge, so the edge does not exist.
+                // Otherwise `author.posts` would quietly reinstate a relation the operator
+                // severed from the other side.
+                if !is_visible(other, &col.name) {
                     continue;
                 }
                 let child_meta = other.meta.clone();

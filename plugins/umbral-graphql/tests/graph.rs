@@ -30,7 +30,20 @@ pub struct GqAuthor {
 pub struct GqPost {
     pub id: i64,
     pub title: String,
+    /// Confidential, but only by convention — nothing in the model says so. It is hidden by
+    /// `GraphqlPlugin::hide`, which is the *configurable* tier.
+    pub internal_cost: Option<String>,
     pub author: ForeignKey<GqAuthor>,
+}
+
+/// Exposed ON PURPOSE, with no `.hide("password_hash")` anywhere — because that is exactly
+/// the mistake the core denylist exists to survive.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
+#[umbral(table = "gq_user")]
+pub struct GqUser {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: String,
 }
 
 /// Exposed to NOBODY. It exists to prove the deny-by-default rule: a model you did not
@@ -76,8 +89,16 @@ async fn boot() -> axum::Router {
             .model::<GqAuthor>()
             .model::<GqPost>()
             .model::<GqSecret>()
+            .model::<GqUser>()
             // gq_secret is deliberately NOT exposed.
-            .plugin(GraphqlPlugin::new().expose("gq_author").expose("gq_post"))
+            .plugin(
+                GraphqlPlugin::new()
+                    .expose("gq_author")
+                    .expose("gq_post")
+                    // Exposed with NO hide for password_hash. Core must save us anyway.
+                    .expose("gq_user")
+                    .hide("gq_post", "internal_cost"),
+            )
             .build()
             .expect("App::build");
 
@@ -85,13 +106,16 @@ async fn boot() -> axum::Router {
         for ddl in [
             "CREATE TABLE gq_author (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL)",
             "CREATE TABLE gq_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, \
-             author INTEGER NOT NULL REFERENCES gq_author(id))",
+             internal_cost TEXT, author INTEGER NOT NULL REFERENCES gq_author(id))",
+            "CREATE TABLE gq_user (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, \
+             password_hash TEXT NOT NULL)",
             "CREATE TABLE gq_secret (id INTEGER PRIMARY KEY AUTOINCREMENT, api_key TEXT NOT NULL, \
              author INTEGER NOT NULL REFERENCES gq_author(id))",
             "INSERT INTO gq_author (id, username) VALUES (1, 'ada'), (2, 'grace')",
             "INSERT INTO gq_post (title, author) VALUES ('Analytical Engine', 1), \
              ('Notes on the Engine', 1), ('COBOL', 2)",
             "INSERT INTO gq_secret (api_key, author) VALUES ('sk_live_do_not_leak', 1)",
+            "INSERT INTO gq_user (username, password_hash) VALUES ('ada', '$argon2id$v=19$leak')",
         ] {
             sqlx::query(ddl).execute(&p).await.expect("ddl");
         }
@@ -342,6 +366,7 @@ async fn expose_if_denies_anonymous_and_admits_staff() {
     let meta = umbral::migrate::ModelMeta::for_::<GqPost>();
     let gated = vec![Exposed {
         meta,
+        hidden: Vec::new(),
         access: Some(std::sync::Arc::new(
             |id: Option<&umbral::auth::Identity>| id.is_some_and(|i| i.is_staff),
         )),
@@ -374,5 +399,98 @@ async fn expose_if_denies_anonymous_and_admits_staff() {
     assert_eq!(
         data["gq_post"]["title"], "Analytical Engine",
         "the gate opened but returned nothing: {data}"
+    );
+}
+
+/// `hide` removes the column from the SCHEMA, not just from the payload.
+///
+/// A field that exists and always resolves to null is not hidden: it confirms the column to
+/// anyone reading introspection, and GraphiQL will happily autocomplete it. "Unknown field"
+/// is the only answer that tells the client nothing.
+#[tokio::test]
+async fn a_hidden_field_is_absent_from_the_schema() {
+    let _g = lock().lock().await;
+
+    let out = gql(r#"{ gq_post(id: "1") { internal_cost } }"#).await;
+    let errs = out["errors"].to_string();
+    assert!(
+        errs.contains("Unknown field"),
+        "a hidden field must not exist in the schema, got: {out}"
+    );
+
+    // ...and the model itself is still very much exposed, so the absence above is the hide
+    // doing its job — not the whole model having quietly vanished.
+    let out = gql(r#"{ gq_post(id: "1") { title } }"#).await;
+    assert!(out.get("errors").is_none(), "{out}");
+    assert_eq!(out["data"]["gq_post"]["title"], "Analytical Engine");
+}
+
+/// **The one that matters.** `gq_user` is exposed with no `.hide("password_hash")` — the
+/// exact mistake a hurried developer makes — and the hash must still be unreachable.
+///
+/// This is why the denylist lives in core rather than in each plugin: REST has carried this
+/// guarantee for ages, and GraphQL, written later, inherited none of it. A rule that every
+/// plugin must remember separately is a rule that fails the first time someone writes a new
+/// plugin. Now there is one list, in the middle, and no `expose` call can defeat it.
+#[tokio::test]
+async fn password_hash_is_denied_even_when_the_model_is_exposed() {
+    let _g = lock().lock().await;
+
+    let out = gql(r#"{ gq_user(id: "1") { password_hash } }"#).await;
+    let errs = out["errors"].to_string();
+    assert!(
+        errs.contains("Unknown field"),
+        "password_hash must not exist in the schema even on an exposed model, got: {out}"
+    );
+
+    // The model IS exposed and readable — so the denial above is surgical, not collateral.
+    let out = gql(r#"{ gq_user(id: "1") { username } }"#).await;
+    assert!(out.get("errors").is_none(), "{out}");
+    assert_eq!(out["data"]["gq_user"]["username"], "ada");
+}
+
+/// Hiding a foreign key severs the edge in BOTH directions.
+///
+/// Otherwise `hide` would be decorative: hide `post.author` and the client just asks for
+/// `post { author { id } }` — the id you hid, one hop further out — or comes at it from the
+/// other side via `author { posts { ... } }`.
+#[tokio::test]
+async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
+    let _g = lock().lock().await;
+    use umbral_graphql::Exposed;
+
+    let models = umbral::migrate::registered_models();
+    let author = models.iter().find(|m| m.table == "gq_author").unwrap();
+    let post = models.iter().find(|m| m.table == "gq_post").unwrap();
+
+    let schema = umbral_graphql::build_schema_for_tests(&[
+        Exposed {
+            meta: author.clone(),
+            access: None,
+            hidden: Vec::new(),
+        },
+        Exposed {
+            meta: post.clone(),
+            access: None,
+            // sever the FK from the CHILD's side
+            hidden: vec!["author".to_string()],
+        },
+    ])
+    .expect("schema");
+
+    let sdl = schema.sdl();
+    assert!(
+        !sdl.contains("author: GqAuthor"),
+        "the forward edge must be gone:\n{sdl}"
+    );
+    assert!(
+        !sdl.contains("author_id"),
+        "the raw fk id must be gone too — hiding the column and handing back its value is \
+         not hiding it:\n{sdl}"
+    );
+    assert!(
+        !sdl.contains("gqPosts") && !sdl.contains("gq_posts: [GqPost!]!"),
+        "the REVERSE edge must be gone as well, or the operator severed the relation from \
+         one side only:\n{sdl}"
     );
 }

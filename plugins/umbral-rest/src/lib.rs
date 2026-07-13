@@ -118,8 +118,16 @@ const DEFAULT_BLOCKED_TABLES: &[&str] = &[
 /// With it, `password_hash` is stripped *after* all configurable logic
 /// runs, so no combination of builder calls can re-expose it.
 ///
+/// The list itself now lives in **core** (`umbral::orm::HARD_DENIED_FIELDS`),
+/// not here. It was a REST-owned constant, which made `password_hash` safe
+/// only if you happened to mount REST — `umbral-graphql` exposed every column
+/// of every model it was pointed at and inherited none of this. Secrecy is a
+/// property of the data, not of the transport, so the rule belongs where every
+/// plugin picks it up for free. REST keeps enforcing it; it just no longer
+/// *owns* it.
+///
 /// Gap: gaps2 #75.
-const HARD_DENIED_FIELDS: &[&str] = &["password_hash"];
+use umbral::orm::HARD_DENIED_FIELDS;
 
 /// Closure that transforms one field's JSON value to another. Used
 /// by [`RestPlugin::transform`]. The signature is `&Value -> Value`

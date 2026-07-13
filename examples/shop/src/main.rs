@@ -224,6 +224,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .expose("category")
                 .expose("brand")
                 .expose("review")
+                // Exposing a model exposes EVERY column of it. `cost` is our wholesale
+                // cost — the REST resource above already hides it, and that hide does not
+                // carry across plugins, because "which fields this endpoint returns" is a
+                // property of the endpoint. Miss this line and `{ products { cost } }`
+                // hands your margins to anyone who asks.
+                .hide("product", "cost")
                 // --- staff only: try these logged out and you get "not authorized" ---
                 .expose_if("order", |id| id.is_some_and(|i| i.is_staff))
                 .expose_if("order_item", |id| id.is_some_and(|i| i.is_staff))

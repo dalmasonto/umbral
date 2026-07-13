@@ -4,11 +4,16 @@
 //! GraphqlPlugin::default()
 //!     .expose("post")
 //!     .expose("auth_user")
+//!     .hide("auth_user", "email")   // exposing a model exposes EVERY column of it
 //! ```
 //!
 //! ```graphql
 //! { post(id: "1") { title author { username } comments { body } } }
 //! ```
+//!
+//! `password_hash` needs no `hide`: it is denied in core and no builder call can bring it
+//! back ([`umbral::orm::HARD_DENIED_FIELDS`]). Everything else on a model you expose is
+//! public the moment you name it, so read the model before you expose it.
 //!
 //! # Why not convert the OpenAPI spec
 //!
@@ -110,8 +115,39 @@ pub(crate) fn guard(
 pub struct GraphqlPlugin {
     path: Option<String>,
     exposed: Vec<(String, Option<AccessFn>)>,
+    hidden: Vec<(String, String)>,
     graphiql: Option<bool>,
     auth: Option<Arc<dyn umbral::auth::Authentication>>,
+}
+
+/// Accepts `"cost"`, `["cost", "supplier"]`, or a `Vec<String>` — the same shape
+/// `RestPlugin::hide` takes, so the two plugins read alike.
+pub trait HideFields {
+    fn into_fields(self) -> Vec<String>;
+}
+
+impl HideFields for &str {
+    fn into_fields(self) -> Vec<String> {
+        vec![self.to_string()]
+    }
+}
+
+impl HideFields for String {
+    fn into_fields(self) -> Vec<String> {
+        vec![self]
+    }
+}
+
+impl<T: Into<String>, const N: usize> HideFields for [T; N] {
+    fn into_fields(self) -> Vec<String> {
+        self.into_iter().map(Into::into).collect()
+    }
+}
+
+impl<T: Into<String>> HideFields for Vec<T> {
+    fn into_fields(self) -> Vec<String> {
+        self.into_iter().map(Into::into).collect()
+    }
 }
 
 impl GraphqlPlugin {
@@ -149,6 +185,34 @@ impl GraphqlPlugin {
         self
     }
 
+    /// Omit columns from the schema.
+    ///
+    /// ```rust,ignore
+    /// .expose("product")
+    /// .hide("product", "cost")                 // wholesale cost is not the public's business
+    /// .hide("product", ["cost", "supplier"])
+    /// ```
+    ///
+    /// The column is absent from the schema — not present-but-null. A field that exists and
+    /// always returns null still confirms the column to anyone reading introspection.
+    ///
+    /// Hiding a foreign-key column also removes the relation it forms, in BOTH directions.
+    /// Otherwise hiding `product.category` would be decorative: the client could still ask
+    /// for `product { category { id } }` and get the id you hid.
+    ///
+    /// This is a *presentation* choice, and it is per-plugin on purpose — `RestPlugin::hide`
+    /// is a separate list, because REST and GraphQL are swappable and each owns its own
+    /// surface. What is NOT per-plugin is data that must never ship at all: `password_hash`
+    /// is denied in core (`umbral::orm::HARD_DENIED_FIELDS`) and no `expose` call here can
+    /// bring it back.
+    pub fn hide(mut self, table: impl Into<String>, fields: impl HideFields) -> Self {
+        let table = table.into();
+        for f in fields.into_fields() {
+            self.hidden.push((table.clone(), f));
+        }
+        self
+    }
+
     /// How to identify the caller — the same `Authentication` backends `RestPlugin` takes
     /// (session cookie, bearer token, a chain of both).
     ///
@@ -170,12 +234,35 @@ impl GraphqlPlugin {
 
     fn resolve_exposed(&self) -> Vec<Exposed> {
         let registry = umbral::migrate::registered_models();
+
+        // A typo in `.hide(...)` is a SECURITY typo: `.hide("product", "costt")` silently
+        // leaves `cost` in the schema, and the operator believes they hid it. Say so.
+        for (table, field) in &self.hidden {
+            let known = registry
+                .iter()
+                .find(|m| &m.table == table)
+                .is_some_and(|m| m.fields.iter().any(|c| &c.name == field));
+            if !known {
+                tracing::error!(
+                    table = %table, field = %field,
+                    "umbral-graphql: .hide(\"{table}\", \"{field}\") names a column that does not \
+                     exist on that model — NOTHING is being hidden. Check the column name."
+                );
+            }
+        }
+
         let mut out = Vec::new();
         for (table, access) in &self.exposed {
             match registry.iter().find(|m| &m.table == table) {
                 Some(meta) => out.push(Exposed {
                     meta: meta.clone(),
                     access: access.clone(),
+                    hidden: self
+                        .hidden
+                        .iter()
+                        .filter(|(t, _)| t == table)
+                        .map(|(_, f)| f.clone())
+                        .collect(),
                 }),
                 None => {
                     // A typo here silently produces a schema missing the type you thought

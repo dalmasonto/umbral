@@ -64,6 +64,25 @@ GraphqlPlugin::new()
 
 A relation is only traversable when **both ends** are exposed. Otherwise `post.author` would be a side door into a model you deliberately withheld. An unexposed model doesn't appear in the schema at all — not as a query, not as a relation, not in introspection.
 
+## Hiding fields
+
+Exposing a model exposes **every column of it**. That's the part people underestimate: `.expose("product")` puts your wholesale `cost` one query away, because the caller picks the fields.
+
+```rust
+GraphqlPlugin::new()
+    .expose("product")
+    .hide("product", "cost")
+    .hide("product", ["cost", "supplier_notes"])   // or several at once
+```
+
+A hidden column is **absent from the schema**, not present-and-null — a field that exists and always returns null still confirms the column to anyone reading introspection, and GraphiQL will autocomplete it. Hiding a foreign key also severs the relation *in both directions*, since otherwise `product { category { id } }` would hand back the id you just hid, one hop out.
+
+<Callout type="info">
+  This list is separate from `RestPlugin::hide` **on purpose**. "Which fields this endpoint returns" is a property of the endpoint, and REST and GraphQL are swappable — so each owns its own surface. The corollary is that hiding a field in REST does **not** hide it in GraphQL. If you hide something in one, go hide it in the other.
+</Callout>
+
+Data that must never ship over *any* transport is a different tier, and it isn't your job to remember: `password_hash` is denied in **core** (`umbral::orm::HARD_DENIED_FIELDS`), so no combination of `.expose(...)` can bring it back. Secrecy there is a property of the data, not of the door you walk through to reach it.
+
 ## Who is the caller
 
 `expose_if` hands your closure the caller's `Identity` — but the plugin only *has* one if you tell it how to authenticate. Give it the same backends you give `RestPlugin`:
