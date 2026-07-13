@@ -1,0 +1,68 @@
+---
+title: GraphQL plugin
+description: A real GraphQL API derived from your models - relations, mutations, subscriptions, and a schema that never lies about what you can see.
+sidebar_position: 10
+icon: share-2
+---
+
+`umbral-graphql` derives a GraphQL schema from the model registry: queries, relation traversal, mutations, and subscriptions, all from models you already declared. Where `umbral-rest` returns the shape *you* designed, GraphQL returns the shape the *caller* designed — so the plugin is built around saying yes deliberately, one capability at a time.
+
+```rust
+use umbral::prelude::*;
+use umbral_graphql::GraphqlPlugin;
+
+App::builder()
+    .plugin(
+        GraphqlPlugin::new()
+            .expose("post")
+            .expose("auth_user")
+            .hide("auth_user", "email")   // exposing a model exposes EVERY column of it
+            .mutable("post"),             // now createPost / updatePost / deletePost exist
+    )
+    .build()
+```
+
+```graphql
+{ post(id: "1") { title author { username } comments { body } } }
+```
+
+## Nothing is exposed until you say so
+
+Three separate opt-ins, because the blast radius of each is different:
+
+| Call | Grants |
+|---|---|
+| `.expose("post")` | read `post`, **and every column on it** |
+| `.mutable("post")` | `createPost`, `updatePost`, `deletePost` |
+| `.subscribable("post")` | live `postChanged` subscription |
+
+`expose` does not imply `mutable`. A read you got wrong leaks data; a write you got wrong destroys it, so you say so again.
+
+<Callout type="warning">
+Exposing a model exposes **all** of its columns. Reach for `.hide("auth_user", "email")` — or `#[umbral(private)]` on the field — for anything that shouldn't leave the database.
+</Callout>
+
+## One honest schema
+
+A `#[umbral(private)]` column can be unlocked per-caller with `.allow_private_if(..)`, the same unlock REST has. The schema stays a **single document**: the field is always present and always **nullable** — even when the column is `NOT NULL` — because a caller without the unlock receives nothing, and "nothing" has to be a legal value.
+
+That is the honest encoding. Introspection is one shared document; a schema that showed a field to some callers and hid it from others would be lying to one of them.
+
+On writes the plugin is stricter than REST: an unauthorized attempt to set a private column is refused **by name** (`not authorized to set 'cost'`) rather than silently dropped.
+
+## Relations don't N+1
+
+Relation fields resolve through a per-request DataLoader, so `posts { author { .. } }` batches the author lookup instead of firing one query per row. The loaders are per-request by construction — a shared cache would serve one caller's unlocked columns to another.
+
+## Install
+
+```toml
+[dependencies]
+umbral = "0.0.8"
+umbral-graphql = "0.0.8"
+```
+
+## See also
+
+- [REST plugin](/docs/v0.0.1/plugins/rest) — the same models, a fixed response shape.
+- Design rationale: `arch.md` and `docs/specs/` in the repository.
