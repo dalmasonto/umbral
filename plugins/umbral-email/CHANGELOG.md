@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/dalmasonto/umbral/compare/umbral-email-v0.0.7...umbral-email-v0.0.8) - 2026-07-13
+
+### Other
+
+- clippy --fix across the plugins
+
 ## [0.0.5](https://github.com/dalmasonto/umbral/compare/umbral-email-v0.0.4...umbral-email-v0.0.5) - 2026-07-05
 
 ### Fixed

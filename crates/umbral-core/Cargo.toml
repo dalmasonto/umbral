@@ -13,7 +13,7 @@ rust-version.workspace = true
 # `AppBuilder::auto_models()` can discover models without a .model::<T>() per model.
 inventory = "0.3"
 # Shared casing helpers (to_snake_case, pascal_case variants).
-umbral-casing = { path = "../umbral-casing", version = "0.0.7" }
+umbral-casing = { path = "../umbral-casing", version = "0.0.8" }
 axum = "0.8"
 # tower is the Service/Layer trait core that axum builds on. We need
 # it as a regular (not dev) dep because the trailing-slash redirect
