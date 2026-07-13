@@ -45,7 +45,13 @@ fn main() {
 
     match status {
         Ok(s) if s.success() => {
-            println!("cargo:warning=umbral-admin: Tailwind CSS built successfully.");
+            // NOT `cargo:warning=` — that channel means "something is wrong", and this is the
+            // happy path. Announcing success through it printed a `warning:` line into every
+            // single build of every umbral app, which trains users to skim past warnings; the
+            // next one, the real one, gets skimmed past too. Plain stdout from a build script
+            // is captured by cargo and shown with `-vv`, which is the right volume for "the
+            // thing that was supposed to happen happened."
+            println!("umbral-admin: Tailwind CSS built successfully.");
         }
         Ok(s) => {
             println!(

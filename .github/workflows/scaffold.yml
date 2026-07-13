@@ -1,0 +1,64 @@
+# Does `umbral startproject` emit a project that actually compiles?
+#
+# Three bugs shipped in the FIRST THING A NEW USER RUNS, and all three survived for
+# the same reason: nobody built what the scaffold emits. The scaffold tests assert
+# that the generated files contain the right strings, and they all passed the whole
+# time.
+#
+#   gaps3 #64 — generated main.rs matched on `Environment`, which had no `PartialEq`.
+#               Shipped, broken, in 0.0.6.
+#   gaps3 #57 — the generated error handler used `?` on a TemplateError with no
+#               `From` impl to carry it.
+#              — plus an unused import that a `-D warnings` build would have caught.
+#
+# A content assertion can only tell you the generator wrote what the generator meant
+# to write. Only rustc can tell you whether that was correct. So this job scaffolds a
+# project against THIS checkout and type-checks it, with warnings as errors — the bar
+# for generated code is not "it compiles", it is "it is clean", because a warning in
+# the scaffold teaches every new user to ignore warnings in the first file they open.
+#
+# It is its own workflow rather than part of a test job because it type-checks a whole
+# application (every umbral crate plus axum, sqlx, ...) and is minutes, not seconds.
+# The test itself is `#[ignore]`d for the same reason; this is what un-ignores it.
+#
+# gaps3 #65.
+
+name: scaffold-compiles
+
+on:
+  push:
+    paths:
+      - "crates/**"
+      - "plugins/**"
+      - "Cargo.lock"
+      - ".github/workflows/scaffold.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "plugins/**"
+      - "Cargo.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-compiles-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scaffold:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Two target dirs get warm here: the workspace's, and `target/scaffold-check`,
+      # which the generated project type-checks into.
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # `--ignored` runs exactly the test that is skipped in the normal loop.
+      - name: Compile the scaffolded project
+        run: cargo test -p umbral-cli --test scaffold_compiles -- --ignored --nocapture

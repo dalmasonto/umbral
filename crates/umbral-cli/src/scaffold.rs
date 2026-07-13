@@ -289,12 +289,69 @@ const DOCS_URL: &str = "https://dalmasonto.github.io/umbral/docs/v0.0.1";
 /// convention, not a requirement — the runtime reads `main.rs` directly
 /// and doesn't care whether handlers live in `views/`, `handlers/`, or
 /// inline.
+/// Walk up from `start` looking for an umbral source checkout.
+///
+/// Identified by `crates/umbral-core/Cargo.toml`, which no consumer project has.
+fn find_umbral_checkout(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|d| d.join("crates/umbral-core/Cargo.toml").is_file())
+        .map(Path::to_path_buf)
+}
+
+/// Warn when `startproject` is run from inside the umbral repo WITHOUT `--local`.
+///
+/// The generated `Cargo.toml` pins `env!("CARGO_PKG_VERSION")` — the CLI's own version, which
+/// during development is the LAST PUBLISHED release. So a `cargo run -p umbral-cli --
+/// startproject foo` from a HEAD checkout writes `umbral = "<last release>"` and then
+/// generates code against **main's** API. Any surface added since that release makes the new
+/// project fail to compile, and the failure looks like a bug in the framework rather than a
+/// version skew.
+///
+/// It heals itself at release (the scaffold and the libs ship together), so end users of a
+/// published CLI never see it. The only person who hits it is a contributor testing their own
+/// change — which is exactly the person who most needs `--local`, and exactly the person the
+/// silence misleads. gaps3 #65.
+fn warn_if_run_from_a_source_checkout(name: &str, parent_dir: &Path) {
+    let from_cwd = std::env::current_dir()
+        .ok()
+        .and_then(|d| find_umbral_checkout(&d));
+    let Some(repo) = from_cwd.or_else(|| find_umbral_checkout(parent_dir)) else {
+        return;
+    };
+    let version = env!("CARGO_PKG_VERSION");
+    let repo = repo.display();
+    eprintln!(
+        "warning: running `startproject` from an umbral source checkout ({repo}) without `--local`."
+    );
+    eprintln!();
+    eprintln!(
+        "  The new project will depend on the PUBLISHED umbral {version}, while your checkout is on"
+    );
+    eprintln!(
+        "  whatever you have got. Any framework surface you have added since {version} was released"
+    );
+    eprintln!(
+        "  will be missing, and the generated project will fail to compile against it — looking for"
+    );
+    eprintln!("  all the world like a framework bug rather than a version skew.");
+    eprintln!();
+    eprintln!("  To build against this checkout instead:");
+    eprintln!();
+    eprintln!("      umbral startproject {name} --local {repo}");
+    eprintln!();
+}
+
 pub fn scaffold_project(
     name: &str,
     parent_dir: &Path,
     local_umbral_repo: Option<&Path>,
 ) -> Result<ScaffoldReport, ScaffoldError> {
     validate_name(name)?;
+
+    if local_umbral_repo.is_none() {
+        warn_if_run_from_a_source_checkout(name, parent_dir);
+    }
 
     let root = parent_dir.join(name);
     if root.exists() {
