@@ -47,6 +47,8 @@ pub(crate) async fn custom_view(
     // Falls back to all widgets when PermissionsPlugin is absent.
     let widget_sections =
         crate::view::accessible_widget_sections_json(view.sections(), &user).await;
+    let widget_sections =
+        crate::view::apply_saved_layout(widget_sections, &crate::view::saved_layout(user.id).await);
 
     let breadcrumbs = vec![serde_json::json!({ "label": view.title(), "url": "" })];
 

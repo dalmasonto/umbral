@@ -866,3 +866,101 @@ async fn export_requires_staff() {
         "an anonymous export must not succeed"
     );
 }
+
+// =========================================================================
+// Per-user widget reordering (features.md #8)
+// =========================================================================
+
+/// The layout endpoint has stored a layout for a long time; nothing READ it, so
+/// dragging widgets appeared to work and silently reset on the next load. The
+/// dashboard must now render in the saved order.
+#[tokio::test]
+async fn a_saved_layout_reorders_the_dashboard() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    // Put a widget that registers LAST at the front, with a custom span.
+    let layout = r#"[
+        {"key":"test_progress","span":{"cols":6,"rows":2}},
+        {"key":"test_kpi","span":{"cols":3,"rows":1}}
+    ]"#;
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/admin/api/dashboard/layout")
+        .header(header::COOKIE, cookie.clone())
+        .header("Content-Type", "application/json")
+        .body(Body::from(layout))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let req = Request::builder()
+        .uri("/admin/")
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&body);
+
+    let progress_at = html
+        .find("id=\"widget-test_progress\"")
+        .expect("progress widget renders");
+    let kpi_at = html
+        .find("id=\"widget-test_kpi\"")
+        .expect("kpi widget renders");
+    assert!(
+        progress_at < kpi_at,
+        "the saved layout must put test_progress before test_kpi; the dashboard \
+         is still rendering in registration order"
+    );
+
+    // And the saved span must be applied, not the registration default (3x3).
+    let cell = &html[progress_at.saturating_sub(400)..progress_at];
+    assert!(
+        cell.contains("span 6"),
+        "the saved span must win over the registration default; got: {cell}"
+    );
+}
+
+/// A layout is a preference, not a permission. An entry naming a widget that no
+/// longer exists must be ignored rather than rendering a ghost cell.
+#[tokio::test]
+async fn a_layout_entry_for_an_unknown_widget_is_ignored() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    let layout = r#"[{"key":"widget_that_does_not_exist","span":{"cols":12,"rows":4}}]"#;
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/admin/api/dashboard/layout")
+        .header(header::COOKIE, cookie.clone())
+        .header("Content-Type", "application/json")
+        .body(Body::from(layout))
+        .unwrap();
+    assert_eq!(
+        router.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    let req = Request::builder()
+        .uri("/admin/")
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "the dashboard still renders");
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&body);
+    assert!(
+        !html.contains("widget_that_does_not_exist"),
+        "a stale layout entry must not render a ghost widget"
+    );
+    assert!(
+        html.contains("id=\"widget-test_kpi\""),
+        "and the real widgets still render"
+    );
+}

@@ -875,6 +875,10 @@
     }
 
     Object.assign(window.umbral, {
+      // Exported so the widget-reorder block (a separate IIFE) writes its layout
+      // PUT through the SAME CSRF helper. A second hand-rolled copy of the
+      // cookie-reading logic is one refactor away from silently drifting.
+      csrfHeaders: csrfHeaders,
       toggleTheme: toggleTheme,
       toggleSidebar: toggleSidebar,
       closeSidebar: closeSidebar,
@@ -1595,4 +1599,115 @@
       }
     }
   });
+})();
+
+/* =====================================================================
+ * Dashboard widget reordering (features.md #8)
+ * =====================================================================
+ * Drag a widget onto another and the grid reorders; the new order is PUT to
+ * /api/dashboard/layout, which the server now READS on render (view.rs
+ * apply_saved_layout). Before this, the layout endpoint existed and stored a
+ * layout that nothing ever applied — dragging appeared to work and silently
+ * reset on the next page load.
+ *
+ * Native HTML5 drag-and-drop: no new dependency for a feature this small.
+ * The whole cell is the handle, so there is nothing extra to aim at.
+ *
+ * The saved layout is a PREFERENCE, never a permission — the server ignores
+ * entries for widgets the user may not see, so a hand-edited layout cannot
+ * conjure a forbidden widget.
+ */
+(function () {
+  'use strict';
+
+  var dragging = null;
+
+  function cells(grid) {
+    return Array.prototype.slice.call(
+      grid.querySelectorAll('[data-widget-key]')
+    );
+  }
+
+  /** Collect every grid on the page into one ordered layout array. */
+  function currentLayout() {
+    var out = [];
+    var grids = document.querySelectorAll('[data-widget-grid]');
+    Array.prototype.forEach.call(grids, function (grid) {
+      cells(grid).forEach(function (cell) {
+        out.push({
+          key: cell.getAttribute('data-widget-key'),
+          span: {
+            cols: parseInt(cell.getAttribute('data-span-cols'), 10) || 3,
+            rows: parseInt(cell.getAttribute('data-span-rows'), 10) || 1
+          }
+        });
+      });
+    });
+    return out;
+  }
+
+  function saveLayout() {
+    var csrf = (window.umbral && window.umbral.csrfHeaders)
+      ? window.umbral.csrfHeaders()
+      : {};
+    fetch(umbralAdminBase + '/api/dashboard/layout', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, csrf),
+      body: JSON.stringify(currentLayout())
+    }).catch(function (err) {
+      // A failed save must not look like a successful one: put the widgets back
+      // where the server still thinks they are, rather than leaving the user
+      // with an arrangement that evaporates on reload.
+      console.error('umbral-admin: could not save dashboard layout', err);
+      window.location.reload();
+    });
+  }
+
+  function bindGrid(grid) {
+    if (grid.getAttribute('data-dnd-bound') === '1') { return; }
+    grid.setAttribute('data-dnd-bound', '1');
+
+    cells(grid).forEach(function (cell) {
+      cell.setAttribute('draggable', 'true');
+      cell.style.cursor = 'grab';
+
+      cell.addEventListener('dragstart', function (e) {
+        dragging = cell;
+        cell.style.opacity = '0.4';
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox refuses to start a drag without payload.
+        try { e.dataTransfer.setData('text/plain', cell.getAttribute('data-widget-key')); } catch (_) {}
+      });
+
+      cell.addEventListener('dragend', function () {
+        cell.style.opacity = '';
+        dragging = null;
+        saveLayout();
+      });
+
+      cell.addEventListener('dragover', function (e) {
+        if (!dragging || dragging === cell || dragging.parentNode !== cell.parentNode) { return; }
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        // Insert before or after depending on which half we're over, so the
+        // drop lands where the pointer is rather than always shifting left.
+        var box = cell.getBoundingClientRect();
+        var after = (e.clientX - box.left) > box.width / 2;
+        cell.parentNode.insertBefore(dragging, after ? cell.nextSibling : cell);
+      });
+
+      cell.addEventListener('drop', function (e) { e.preventDefault(); });
+    });
+  }
+
+  function bindAll() {
+    var grids = document.querySelectorAll('[data-widget-grid]');
+    Array.prototype.forEach.call(grids, bindGrid);
+  }
+
+  document.addEventListener('DOMContentLoaded', bindAll);
+  // Widget cells self-load their bodies over htmx; re-bind after a swap so a
+  // freshly swapped grid is still draggable.
+  document.body && document.body.addEventListener('htmx:afterSwap', bindAll);
 })();

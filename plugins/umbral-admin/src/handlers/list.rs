@@ -276,6 +276,11 @@ pub(crate) async fn index(
     // Falls back to showing all widgets when PermissionsPlugin is absent.
     let widget_sections =
         crate::view::accessible_widget_sections_json(&state.dashboard_sections, &user).await;
+    // Honour the layout this user saved. Until now `dashboard_layout_put` wrote a
+    // layout that nothing ever read, so dragging widgets around appeared to work
+    // and silently reset on the next load.
+    let widget_sections =
+        crate::view::apply_saved_layout(widget_sections, &crate::view::saved_layout(user.id).await);
 
     // Per-model row count for the dashboard cards. Fires every
     // COUNT concurrently so a project with 30 registered models

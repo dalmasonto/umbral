@@ -205,6 +205,90 @@ pub(crate) async fn accessible_widget_sections_json(
         .collect()
 }
 
+/// Reorder + resize a rendered section list according to the user's saved
+/// dashboard layout.
+///
+/// `dashboard_layout_put` has been persisting a `Vec<WidgetInstance>` for a
+/// while, but nothing ever READ it: the dashboard always rendered widgets in
+/// registration order at their default span. Saving your layout appeared to work
+/// and then silently did nothing on the next page load. This is the read side.
+///
+/// Rules, in the order they matter:
+///
+/// - A widget the user has placed moves to its saved position and takes its
+///   saved span.
+/// - A widget the layout does not mention keeps its registration order and lands
+///   AFTER the placed ones. A newly-installed plugin's widget therefore appears
+///   rather than vanishing because it was missing from a layout saved last month.
+/// - A layout entry naming a widget that no longer exists — or one this user is
+///   not permitted to see — is ignored. The layout is a preference, never a
+///   permission: it must not be able to conjure a widget the permission filter
+///   already removed.
+pub(crate) fn apply_saved_layout(
+    sections: Vec<serde_json::Value>,
+    layout: &[crate::widgets::WidgetInstance],
+) -> Vec<serde_json::Value> {
+    if layout.is_empty() {
+        return sections;
+    }
+    let position: std::collections::HashMap<&str, usize> = layout
+        .iter()
+        .enumerate()
+        .map(|(i, inst)| (inst.key.as_str(), i))
+        .collect();
+    let spans: std::collections::HashMap<&str, &crate::widgets::Span> =
+        layout.iter().map(|i| (i.key.as_str(), &i.span)).collect();
+
+    sections
+        .into_iter()
+        .map(|mut section| {
+            let Some(widgets) = section
+                .get_mut("widgets")
+                .and_then(|w| w.as_array_mut())
+                .map(std::mem::take)
+            else {
+                return section;
+            };
+
+            let mut placed: Vec<(usize, serde_json::Value)> = Vec::new();
+            let mut unplaced: Vec<serde_json::Value> = Vec::new();
+
+            for mut w in widgets {
+                let key = w
+                    .get("key")
+                    .and_then(|k| k.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                if let Some(span) = spans.get(key.as_str()) {
+                    w["span"] = serde_json::json!({ "cols": span.cols, "rows": span.rows });
+                }
+                match position.get(key.as_str()) {
+                    Some(&at) => placed.push((at, w)),
+                    None => unplaced.push(w),
+                }
+            }
+
+            placed.sort_by_key(|(at, _)| *at);
+            let ordered: Vec<serde_json::Value> =
+                placed.into_iter().map(|(_, w)| w).chain(unplaced).collect();
+            section["widgets"] = serde_json::Value::Array(ordered);
+            section
+        })
+        .collect()
+}
+
+/// The user's saved layout, or an empty vec when they have none / it is corrupt.
+///
+/// A layout that fails to parse is treated as "no layout" rather than an error:
+/// a mangled preference blob should cost you your custom arrangement, not your
+/// whole dashboard.
+pub(crate) async fn saved_layout(user_id: i64) -> Vec<crate::widgets::WidgetInstance> {
+    let Ok(prefs) = crate::models::fetch_or_default(user_id).await else {
+        return Vec::new();
+    };
+    serde_json::from_str(&prefs.dashboard_layout).unwrap_or_default()
+}
+
 // =========================================================================
 // Form fields
 // =========================================================================
