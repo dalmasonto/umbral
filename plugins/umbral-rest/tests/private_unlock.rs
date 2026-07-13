@@ -197,15 +197,16 @@ async fn the_list_endpoint_honours_the_unlock_in_both_directions() {
     assert_eq!(row["cost"], "4.20", "list must unlock for staff: {staff}");
 }
 
-/// **A field only staff may READ is not one an anonymous caller gets to SET.**
+/// **`private` is a READ policy. A write still lands.**
 ///
-/// Without this, marking a column `private` would hide it from every response while leaving
-/// it wide open to `PATCH` — a worse position than not marking it at all, because it *looks*
-/// protected.
+/// A caller who may write the resource may SET `cost` — and still cannot READ it back. That is
+/// the honest reading of "private": the value went in, the API just will not show it to you.
+/// The attribute for "must not be settable from an untrusted body" is `#[umbral(privileged)]`,
+/// which is a different question with a different answer.
 #[tokio::test]
-async fn an_anonymous_writer_cannot_set_a_private_column() {
-    // An anonymous PATCH naming `cost` must not change `cost`.
-    let _ = req(
+async fn an_anonymous_writer_can_set_a_private_column_but_never_read_it() {
+    // An anonymous PATCH naming `cost` DOES change `cost` ...
+    let echoed = req(
         "PATCH",
         "/api/pu_product/1",
         None,
@@ -213,24 +214,29 @@ async fn an_anonymous_writer_cannot_set_a_private_column() {
     )
     .await;
 
-    let staff = req("GET", "/api/pu_product/1", Some("staff"), None).await;
-    assert_ne!(
-        staff["cost"], "0.01",
-        "an anonymous caller wrote a private column: {staff}"
+    // ... but the response it gets back still does not contain it.
+    assert!(
+        echoed.get("cost").is_none(),
+        "the write echo leaked a private column to an anonymous caller: {echoed}"
     );
-    assert_eq!(staff["cost"], "4.20", "cost must be untouched: {staff}");
+
+    // The value really landed — read it back through the one caller allowed to see it.
+    let staff = req("GET", "/api/pu_product/1", Some("staff"), None).await;
+    assert_eq!(
+        staff["cost"], "0.01",
+        "the write must actually have landed: {staff}"
+    );
 }
 
-/// What an anonymous *create* looks like when a private column is NOT NULL.
+/// The create that used to fail with a lie.
 ///
-/// The caller's `cost` is stripped before the write, so the column has no value and the
-/// validator rejects the row: `cost: ["This field is required."]`. The data is safe — which is
-/// the point — but the message is misleading, because the client DID send `cost` and is being
-/// told it is missing. The honest answer would be "you are not allowed to set `cost`".
+/// `cost` is NOT NULL. It used to be stripped from the body before the write, so the row was
+/// invalid and the client got `cost: ["This field is required."]` — for a field it had
+/// demonstrably just sent. The data was safe; the message was false (gaps3 #75).
 ///
-/// Asserted here so the behaviour is pinned rather than discovered, and logged as gaps3 #74.
+/// Now the write lands: `private` never governed writes, it only looked like it did.
 #[tokio::test]
-async fn an_anonymous_create_is_rejected_when_the_private_column_is_required() {
+async fn an_anonymous_create_can_set_the_required_private_column() {
     let body = serde_json::json!({ "name": "Sneaky", "price": "1.00", "cost": "0.01" }).to_string();
     let res = boot()
         .await
@@ -246,15 +252,32 @@ async fn an_anonymous_create_is_rejected_when_the_private_column_is_required() {
         .unwrap();
     assert_eq!(
         res.status(),
-        StatusCode::BAD_REQUEST,
-        "the stripped column leaves the row invalid"
+        StatusCode::CREATED,
+        "a NOT NULL private column is settable, so the row is valid"
     );
 
-    // And nothing was created.
-    let staff = req("GET", "/api/pu_product/", Some("staff"), None).await;
+    let echoed: serde_json::Value = {
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    };
     assert!(
-        !staff["results"].to_string().contains("Sneaky"),
-        "a rejected create must not leave a row behind: {staff}"
+        echoed.get("cost").is_none(),
+        "the create echo must still hide the private column: {echoed}"
+    );
+
+    // The row exists, and the private value really is on it.
+    let staff = req("GET", "/api/pu_product/", Some("staff"), None).await;
+    let created = staff["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "Sneaky")
+        .expect("the row was created");
+    assert_eq!(
+        created["cost"], "0.01",
+        "the private column the anonymous caller sent must have landed: {created}"
     );
 }
 

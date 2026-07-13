@@ -48,7 +48,7 @@ A `#[umbral(private)]` column can be unlocked per-caller with `.allow_private_if
 
 That is the honest encoding. Introspection is one shared document; a schema that showed a field to some callers and hid it from others would be lying to one of them.
 
-On writes the plugin is stricter than REST: an unauthorized attempt to set a private column is refused **by name** (`not authorized to set 'cost'`) rather than silently dropped.
+Writes are governed separately: `private` hides a column from responses, it does not stop it being set. A private column stays in the mutation's *input* type — so a caller can set `cost` and still read back `null` for it. To make a column unsettable from an untrusted body, mark it `#[umbral(privileged)]`.
 
 ## Relations don't N+1
 

@@ -200,30 +200,41 @@ async fn every_read_path_honours_the_unlock() {
     );
 }
 
-/// **A field only staff may READ is not one an anonymous mutation gets to SET** — and GraphQL
-/// says so, rather than silently dropping the value.
+/// **`private` is a READ policy. The mutation lands.**
 ///
-/// REST strips it, which produces "cost: this field is required" for a field the client
-/// demonstrably sent (gaps3 #75). A write that appears to succeed while quietly discarding
-/// part of its input is worse than one that fails.
+/// An anonymous caller can SET `cost` and still cannot READ it back — the field is in the
+/// INPUT type but resolves to `null` for them on the way out. GraphQL models this natively: an
+/// input field need not exist on the object type.
+///
+/// The attribute for "must not be settable from an untrusted body" is `#[umbral(privileged)]`,
+/// which is a different question. Conflating the two is what produced the misleading "this
+/// field is required" on the REST side (gaps3 #75).
 #[tokio::test]
-async fn an_anonymous_writer_is_refused_by_name() {
+async fn an_anonymous_writer_can_set_a_private_column_but_reads_back_null() {
     let out = gql(
-        r#"mutation { createGpProduct(data: { name: "Sneaky", cost: "0.01" }) { id } }"#,
+        r#"mutation { createGpProduct(data: { name: "Sneaky", cost: "0.01" }) { id cost } }"#,
         None,
     )
     .await;
-    let errs = out["errors"].to_string();
     assert!(
-        errs.contains("not authorized to set") && errs.contains("cost"),
-        "an unauthorized write must be refused BY NAME, not silently stripped: {out}"
+        out.get("errors").is_none(),
+        "a private column is settable by anyone who may write: {out}"
+    );
+    assert!(
+        out["data"]["createGpProduct"]["cost"].is_null(),
+        "...but it must read back as null for a caller with no unlock: {out}"
     );
 
-    // ...and nothing was written.
-    let staff = gql(r#"{ gp_products(limit: 50) { name } }"#, Some("staff")).await;
-    assert!(
-        !staff["data"]["gp_products"].to_string().contains("Sneaky"),
-        "a refused mutation must not leave a row behind: {staff}"
+    // The value really landed — read it back through the one caller allowed to see it.
+    let staff = gql(r#"{ gp_products(limit: 50) { name cost } }"#, Some("staff")).await;
+    let rows = staff["data"]["gp_products"].as_array().unwrap();
+    let created = rows
+        .iter()
+        .find(|r| r["name"] == "Sneaky")
+        .expect("the row was created");
+    assert_eq!(
+        created["cost"], "0.01",
+        "the private column the anonymous caller sent must have landed: {created}"
     );
 }
 
@@ -239,4 +250,38 @@ async fn staff_can_write_the_unlocked_column() {
     // The row echoed back after a write is a serialized response like any other — so it is
     // unlocked for this caller, and would be null for an anonymous one.
     assert_eq!(out["data"]["createGpProduct"]["cost"], "9.99", "{out}");
+}
+
+/// The sharpest case: a private column with **no unlock at all**.
+///
+/// It is absent from the output type forever — nobody can read it, not even staff (asserted by
+/// `a_private_column_with_no_unlock_is_not_in_the_schema_at_all`). But it is still SETTABLE,
+/// because `private` is a read policy. This is the write-only column: a support agent files an
+/// `internal_note` that the API will never hand back.
+///
+/// If this ever regresses to "unwritable", `private` has silently become a write guard again —
+/// which is the confusion that produced gaps3 #75.
+#[tokio::test]
+async fn a_private_column_with_no_unlock_is_still_writable() {
+    let out = gql(
+        r#"mutation { createGpProduct(data: { name: "WriteOnly", cost: "1.00", supplier_notes: "from acme" }) { id } }"#,
+        Some("staff"),
+    )
+    .await;
+    assert!(
+        out.get("errors").is_none(),
+        "a private column with no unlock must still be settable: {out}"
+    );
+
+    // It cannot be read back through the API by anyone — so verify it landed by going around
+    // the API, straight to the database. That is the whole point of a write-only column.
+    let stored: String =
+        sqlx::query_scalar("SELECT supplier_notes FROM gp_product WHERE name = 'WriteOnly'")
+            .fetch_one(&umbral::db::pool())
+            .await
+            .expect("the row exists");
+    assert_eq!(
+        stored, "from acme",
+        "the write-only column must actually have been written"
+    );
 }

@@ -47,6 +47,35 @@ Every serialized read now omits those columns — REST payloads, GraphQL schemas
 
 `password_hash` is denied by **name**, on every table, even if you never annotate anything. Annotations only protect the people who remember to write them, and this exists for the people who don't.
 
+## `private` is a read policy. It does not guard writes.
+
+This is the part worth reading twice, because the name invites the wrong assumption.
+
+`private` answers **"who may SEE this?"** It says nothing about who may SET it, and it must not, because the two questions have different answers in real applications. A storefront takes `cost` on the create form and never shows it back. A support tool lets an agent file an `internal_note` nobody can read through the API afterwards. That column is **write-only**, and it is a perfectly ordinary thing to want.
+
+So a caller who is allowed to write the resource may write a `private` column, and still cannot read it back:
+
+```
+POST /api/product/   {"name": "Widget", "cost": "0.01"}   → 201, and the response has no `cost`
+GET  /api/product/1                                        → still no `cost`
+GET  /api/product/1  (as staff, with an unlock)            → "cost": "0.01"
+```
+
+To stop a column being **written** from an untrusted body, reach for a different attribute:
+
+| Want | Use |
+|---|---|
+| Hide it from responses | `#[umbral(private)]` (+ `allow_private_if` to unlock for some callers) |
+| Stop it being set by a client | `#[umbral(privileged)]` — the mass-assignment guard |
+| Neither readable nor writable, ever | `#[umbral(secret)]` |
+| Not a form field at all | `#[umbral(noform)]` / `#[umbral(noedit)]` |
+
+<Callout type="warning">
+  If you marked a column `private` expecting it to be unwritable, mark it `#[umbral(privileged)]` as well. `private` hides it; `privileged` protects it. Conflating the two used to make an honest `POST` fail with `cost: ["This field is required."]` — for a field the client had demonstrably just sent.
+</Callout>
+
+Your OpenAPI spec describes a never-readable-but-settable column with OpenAPI's own word for it, `writeOnly: true`, rather than omitting it and leaving a client unable to discover a field it is allowed to send.
+
 ## Unlocking a private field
 
 Over REST, on the resource:
@@ -56,7 +85,7 @@ ResourceConfig::new("product")
     .allow_private_if("cost", |id| id.is_some_and(|i| i.is_staff))
 ```
 
-`GET /api/product/1` now returns `cost` to staff and omits it for everyone else — same URL, same handler. And the unlock governs **writes too**: a column only staff may read is not one an anonymous `PATCH` gets to set. (Without that, marking a field `private` would hide it from every response while leaving it wide open to writes — a worse place to be than not marking it at all, because it *looks* protected.)
+`GET /api/product/1` now returns `cost` to staff and omits it for everyone else — same URL, same handler. The unlock governs **reads**, and only reads: see [above](#private-is-a-read-policy-it-does-not-guard-writes). Anyone who may write the resource may set `cost`; `#[umbral(privileged)]` is what stops them.
 
 <Callout type="info">
   One path cannot describe two response shapes, so a conditionally-visible column is emitted in your OpenAPI spec as **optional** — `cost?: string` — with a description of who gets it. That is the honest answer and it is correct for both audiences: the field genuinely may or may not be there, and a generated TypeScript client will make the consumer check.
@@ -70,7 +99,7 @@ GraphqlPlugin::new()
     .allow_private_if("product", "cost", |id| id.is_some_and(|i| i.is_staff))
 ```
 
-The schema is one document for everyone, so the field exists and is **nullable**, and who gets a value is decided per request. A mutation that tries to set it without the unlock is refused **by name** (`not authorized to set 'cost'`) rather than silently stripped — GraphQL is stricter than REST here on purpose.
+The schema is one document for everyone, so the field exists and is **nullable**, and who gets a value is decided per request. Writes are a separate question: the field is in the *input* type for everyone who may write the model, because `private` governs reads. GraphQL expresses that natively — an input field need not exist on the object type, which is exactly a write-only column.
 
 From your own handlers, the same unlock is a call on the queryset:
 

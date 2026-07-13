@@ -1613,53 +1613,69 @@ impl RestPlugin {
             .collect()
     }
 
-    /// Strip `#[umbral(private)]` columns this caller may not write.
+    /// Is this field denied on a WRITE?
     ///
-    /// A column only trusted callers may READ is not one an anonymous POST gets to SET, so the
-    /// unlock governs both directions: the same closure that reveals `cost` to staff is what
-    /// lets staff change it, and nobody else can do either. Without this, marking a field
-    /// `private` would hide it from every response while leaving it wide open to `PATCH` —
-    /// which is a worse position than not marking it at all, because it looks safe.
-    pub(crate) fn strip_private_for_write(
-        &self,
-        table: &str,
-        identity: Option<&Identity>,
-        body: &mut Map<String, Value>,
-    ) {
-        let allowed = self.unlocked_private(table, identity);
-        let models = umbral::migrate::registered_models_opt().unwrap_or_default();
-        let Some(meta) = models.iter().find(|m| m.table == table) else {
-            return;
-        };
-        body.retain(|k, _| match meta.fields.iter().find(|c| &c.name == k) {
-            // Not private → not this function's business. `strip_hidden_for_write` and the
-            // ORM's own `privileged` guard have their own say.
-            Some(c) if !c.private => true,
-            Some(_) => allowed.iter().any(|f| f == k),
-            None => true,
-        });
+    /// Deliberately NOT the same question as [`is_field_hidden`], which is the READ policy.
+    ///
+    /// `#[umbral(private)]` is a **read** policy: "do not show this to anyone who has not
+    /// earned it". It says nothing about who may SET the column, and it must not, because the
+    /// two questions have different answers. A storefront takes `cost` on the create form and
+    /// then never shows it back; a support tool lets an agent file an `internal_note` it cannot
+    /// read again. Conflating them meant marking a column `private` silently made it
+    /// unwritable, and the client got `cost: ["This field is required."]` for a field it
+    /// demonstrably sent (gaps3 #75) — the API lying about the cause.
+    ///
+    /// The write guards are separate attributes, and they still apply here:
+    ///
+    /// - `#[umbral(privileged)]` — the mass-assignment guard. Enforced in the ORM
+    ///   (`is_unauthorized_privileged`); this is the attribute to reach for when a column must
+    ///   not be settable from an untrusted body.
+    /// - `#[umbral(secret)]` / a hard-denied name (`password_hash`, …) — never readable, never
+    ///   writable through the API.
+    /// - `#[umbral(noform)]` / `noedit` — the ORM strips these from write bodies.
+    /// - `ResourceConfig::hide` / `RestPlugin::hide` — stays symmetric (hidden in, hidden out),
+    ///   because `hide` exists to stop mass assignment of things like `is_admin` (WEB-2).
+    ///
+    /// So: hidden-by-config and secret still block a write. `private` alone no longer does.
+    pub(crate) fn is_field_write_denied(&self, table: &str, field: &str) -> bool {
+        if HARD_DENIED_FIELDS.contains(&field) {
+            return true;
+        }
+        if let Some(col) = umbral::migrate::registered_models_opt()
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .find(|m| m.table == table)
+            .and_then(|m| m.fields.iter().find(|c| c.name == field))
+        {
+            if umbral::orm::is_secret_column(col) {
+                return true;
+            }
+        }
+        // The explicit hide list — but NOT `private`, which is read-only policy.
+        self.hidden.iter().any(|(t, f)| t == table && f == field)
     }
 
-    /// Drop every REST-hidden field from an inbound write body.
+    /// Drop every write-denied field from an inbound write body.
     ///
     /// WEB-2: hiding a field (`ResourceConfig::hide` / `RestPlugin::hide`)
     /// removes it from responses (`apply_overrides`), but the column stayed
     /// *writable* — so `PATCH /api/x {"hidden_field": ...}` could still set
     /// it (mass assignment / privilege escalation when the hidden field is
     /// something like `is_admin`). Stripping it here makes `hide` symmetric:
-    /// hidden in, hidden out. The ORM still strips `noform` columns on its
-    /// own; this layers the REST `hide` list on top.
+    /// hidden in, hidden out. The ORM still strips `noform` and unauthorized
+    /// `privileged` columns on its own; this layers the REST `hide` list on top.
+    ///
+    /// It filters on [`is_field_write_denied`], NOT `is_field_hidden`: a
+    /// `#[umbral(private)]` column is hidden from RESPONSES but remains settable.
+    /// See `is_field_write_denied` for why the two questions have different answers.
     pub(crate) fn strip_hidden_for_write(
         &self,
         table: &str,
-        identity: Option<&Identity>,
+        _identity: Option<&Identity>,
         body: &mut Map<String, Value>,
     ) {
-        body.retain(|k, _| !self.is_field_hidden(table, k));
-        // Folded in here rather than added as a second call at each of the eight write sites,
-        // because a guard you have to remember to call at eight places is a guard you will
-        // forget at one of them. Taking `identity` makes the compiler visit every site.
-        self.strip_private_for_write(table, identity, body);
+        body.retain(|k, _| !self.is_field_write_denied(table, k));
     }
 
     fn allow(&self, table: &str) -> bool {
@@ -1763,6 +1779,32 @@ pub fn is_hidden(table: &str, field: &str) -> bool {
         .get()
         .map(|cfg| cfg.is_field_hidden(table, field))
         .unwrap_or(false)
+}
+
+/// Is this column **write-only** — settable, but never returned to anyone?
+///
+/// That is a `#[umbral(private)]` column with no `allow_private_if` to unlock it. It is
+/// writable (`private` is a read policy, not a write guard) and permanently unreadable through
+/// the API. OpenAPI has exactly this concept — `writeOnly: true` — so the spec can describe it
+/// honestly in a single schema instead of pretending the field does not exist and leaving a
+/// client unable to discover a field it is allowed to send.
+///
+/// False for a column that is genuinely unwritable (`secret`, hard-denied, `hide`-ed) — those
+/// are absent from the API in both directions and belong in no schema at all.
+pub fn is_write_only(table: &str, field: &str) -> bool {
+    let Some(cfg) = CONFIG.get() else {
+        return false;
+    };
+    if cfg.is_field_write_denied(table, field) {
+        return false;
+    }
+    umbral::migrate::registered_models_opt()
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|m| m.table == table)
+        .and_then(|m| m.fields.iter().find(|c| c.name == field))
+        .is_some_and(|col| col.private && !cfg.has_private_unlock(table, field))
 }
 
 pub fn filters_enabled_for(table: &str) -> bool {

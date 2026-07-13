@@ -40,16 +40,6 @@ impl PrivateUnlocks {
     pub(crate) fn for_table(&self, table: &str) -> &[String] {
         self.0.get(table).map(Vec::as_slice).unwrap_or(&[])
     }
-
-    /// May this caller SET this column?
-    ///
-    /// The same closure governs both directions. A column only staff may READ is not one an
-    /// anonymous mutation gets to WRITE — otherwise marking a field `private` would hide it
-    /// from every response while leaving it wide open to `updateProduct`, which is a worse
-    /// position than not marking it at all, because it looks protected.
-    pub(crate) fn may_write(&self, table: &str, field: &str) -> bool {
-        self.for_table(table).iter().any(|f| f == field)
-    }
 }
 
 /// The caller's unlocks, out of the resolver context.

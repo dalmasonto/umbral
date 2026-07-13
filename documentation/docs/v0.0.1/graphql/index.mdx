@@ -95,7 +95,7 @@ GraphqlPlugin::new()
 
 The schema stays **one shape** for everybody — introspection is a single document, so it has to. The field exists and is **nullable** (even if the column is NOT NULL), and whether you get a value is decided per request. A caller without the unlock reads `null`.
 
-The unlock covers writes as well, and here GraphQL is stricter than REST on purpose: a mutation that tries to set a private column it may not touch is **refused by name** — `not authorized to set 'cost'` — rather than having the value quietly dropped. A write that appears to succeed while discarding part of its input is worse than one that fails.
+The unlock covers **reads**. It does not cover writes, because `private` is a read policy: a caller who may write the model may set `cost` and will still read back `null` for it. That is a write-only column, and GraphQL models it natively — an input field need not exist on the object type. To stop a column being set from an untrusted body, mark it `#[umbral(privileged)]`, which is the mass-assignment guard and a different question entirely.
 
 ## Who is the caller
 

@@ -364,10 +364,12 @@ impl GraphqlPlugin {
     /// unlock does not receive it, and "not there" has to be a legal value. It is one schema
     /// for everyone; who gets a value is decided per request.
     ///
-    /// **Writes too.** A column only staff may read is not one an anonymous mutation gets to
-    /// set — and unlike REST, which silently strips it, a mutation that tries says so:
-    /// `not authorized to set 'cost'`. An input field that quietly does nothing is worse than
-    /// an error.
+    /// **Reads only.** The unlock governs who may SEE the column, not who may SET it —
+    /// `private` is a read policy. The field stays in the mutation's *input* type for everyone
+    /// who may write the model, so a caller can set `cost` and read back `null` for it. That is
+    /// a write-only column, and GraphQL models it natively: an input field need not exist on
+    /// the object type. Use `#[umbral(privileged)]` to stop a column being set from an
+    /// untrusted body — a different question with a different answer.
     ///
     /// Needs [`Self::authenticate`], or every caller is anonymous and the unlock never opens.
     /// Cannot unlock a `secret` column; that tier has no unlock.

@@ -27,7 +27,7 @@ use serde_json::Value as Json;
 use umbral::migrate::{Column, ModelMeta};
 use umbral::orm::DynQuerySet;
 
-use crate::schema::{Exposed, is_visible, scalar_for, type_name};
+use crate::schema::{Exposed, scalar_for, type_name};
 
 /// Can this column be SET by a client?
 ///
@@ -41,13 +41,18 @@ use crate::schema::{Exposed, is_visible, scalar_for, type_name};
 ///   input would be a *lie*: the client sets `is_staff: true`, gets no error, and nothing
 ///   happens. An input field that silently does nothing is worse than no input field.
 pub(crate) fn is_writable(e: &Exposed, col: &Column) -> bool {
-    if !is_visible(e, &col.name) {
+    // `private` is a READ policy, not a write one, so a private column is settable even though
+    // it is absent from the output type. GraphQL models this natively: an input field need not
+    // exist on the object type. A storefront takes `cost` on create and never shows it back.
+    //
+    // Which is why this checks write-visibility, not read-visibility: `is_visible` would remove
+    // a private column from the INPUT as well, making `private` silently mean "unwritable" —
+    // the confusion that produced gaps3 #75 on the REST side.
+    if !is_write_visible(e, &col.name) {
         return false;
     }
-    // A `private` column with an unlock IS settable — by the callers the unlock approves. It
-    // stays in the input type, and `body_from_args` rejects anyone else BY NAME rather than
-    // silently dropping the value. (REST strips silently, which produces a "this field is
-    // required" error for a field the client demonstrably sent — gaps3 #75. Not repeating it.)
+    // The genuine write guards. `privileged` is the mass-assignment attribute: reach for it
+    // when a column must not be settable from an untrusted body.
     !(col.primary_key
         || col.privileged
         || col.noedit
@@ -55,6 +60,23 @@ pub(crate) fn is_writable(e: &Exposed, col: &Column) -> bool {
         || col.auto_now_add
         || col.auto_user
         || col.auto_user_add)
+}
+
+/// May this column appear in an INPUT type at all?
+///
+/// Same as [`is_visible`] minus the `private` rule: secret / hard-denied columns
+/// (`password_hash`) and explicitly `hide()`-ed ones stay out of writes, but a `private` column
+/// is writable by anyone the resource lets write.
+fn is_write_visible(e: &Exposed, col_name: &str) -> bool {
+    if umbral::orm::is_hard_denied_field(col_name) {
+        return false;
+    }
+    if let Some(col) = e.meta.fields.iter().find(|c| c.name == col_name) {
+        if umbral::orm::is_secret_column(col) {
+            return false;
+        }
+    }
+    !e.hidden.iter().any(|h| h == col_name)
 }
 
 /// Must the client supply this on create?
@@ -99,7 +121,6 @@ pub(crate) fn input_types(e: &Exposed) -> (InputObject, InputObject) {
 fn body_from_args(
     obj: &async_graphql::dynamic::ObjectAccessor<'_>,
     e: &Exposed,
-    unlocks: &crate::privacy::PrivateUnlocks,
 ) -> async_graphql::Result<serde_json::Map<String, Json>> {
     let mut body = serde_json::Map::new();
     for col in &e.meta.fields {
@@ -109,15 +130,11 @@ fn body_from_args(
         let Some(v) = obj.get(&col.name) else {
             continue; // absent: not part of this write at all
         };
-        // A column only trusted callers may READ is not one an anonymous mutation gets to
-        // SET. Said out loud, not silently dropped: a write that appears to succeed and
-        // quietly discards a field is worse than one that fails.
-        if col.private && !unlocks.may_write(&e.meta.table, &col.name) {
-            return Err(async_graphql::Error::new(format!(
-                "not authorized to set `{}`",
-                col.name
-            )));
-        }
+        // No `private` check here, deliberately. `private` governs who may READ the column, not
+        // who may SET it — the write guards are `privileged` / `noedit` / `secret` / `hide`,
+        // all of which `is_writable` has already applied. A caller can therefore set `cost` and
+        // not be able to read it back, which is the honest reading of "private": the value went
+        // in, the API just will not show it to you.
         body.insert(col.name.clone(), v.as_value().clone().into_json()?);
     }
     Ok(body)
@@ -155,7 +172,7 @@ pub(crate) fn build(exposed: &[Exposed]) -> Option<(Object, Vec<InputObject>)> {
                         crate::guard_write(&ctx, &e)?;
                         let data = ctx.args.try_get("data")?;
                         let unlocks = crate::privacy::from_ctx(&ctx);
-                        let body = body_from_args(&data.object()?, &e, &unlocks)?;
+                        let body = body_from_args(&data.object()?, &e)?;
                         let unlocked = unlocks.for_table(&e.meta.table);
                         let refs: Vec<&str> = unlocked.iter().map(String::as_str).collect();
                         // insert_json: strips privileged columns, runs cleaners/validators,
@@ -188,8 +205,7 @@ pub(crate) fn build(exposed: &[Exposed]) -> Option<(Object, Vec<InputObject>)> {
                         crate::guard_write(&ctx, &e)?;
                         let id = ctx.args.try_get("id")?.string()?.to_string();
                         let data = ctx.args.try_get("data")?;
-                        let unlocks = crate::privacy::from_ctx(&ctx);
-                        let body = body_from_args(&data.object()?, &e, &unlocks)?;
+                        let body = body_from_args(&data.object()?, &e)?;
                         let pk = crate::loader::pk_name(&e.meta);
 
                         let n = DynQuerySet::for_meta(&e.meta)
