@@ -49,8 +49,22 @@ Every serialized read now omits those columns — REST payloads, GraphQL schemas
 
 ## Unlocking a private field
 
+Over REST, on the resource:
+
 ```rust
-// a staff-only endpoint: wholesale cost is legitimately visible here
+ResourceConfig::new("product")
+    .allow_private_if("cost", |id| id.is_some_and(|i| i.is_staff))
+```
+
+`GET /api/product/1` now returns `cost` to staff and omits it for everyone else — same URL, same handler. And the unlock governs **writes too**: a column only staff may read is not one an anonymous `PATCH` gets to set. (Without that, marking a field `private` would hide it from every response while leaving it wide open to writes — a worse place to be than not marking it at all, because it *looks* protected.)
+
+<Callout type="info">
+  One path cannot describe two response shapes, so a conditionally-visible column is emitted in your OpenAPI spec as **optional** — `cost?: string` — with a description of who gets it. That is the honest answer and it is correct for both audiences: the field genuinely may or may not be there, and a generated TypeScript client will make the consumer check.
+</Callout>
+
+From your own handlers, the same unlock is a call on the queryset:
+
+```rust
 DynQuerySet::for_meta(&meta)
     .allow_private(&["cost"])
     .fetch_as_json()

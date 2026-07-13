@@ -539,6 +539,15 @@ fn model_schema(
         // those should appear in `required`; making them so
         // would force clients to ship server-managed timestamps
         // and password hashes on every POST.
+        //
+        // A conditionally-visible column (`#[umbral(private)]` + `allow_private_if`) is NEVER
+        // required, whatever the model says. One path cannot describe two response shapes:
+        // the endpoint returns `cost` to staff and omits it for everyone else, so marking it
+        // required lies to the anonymous caller and a generated client would insist on a
+        // field that never arrives. Optional is the truth — it may or may not be there.
+        if umbral_rest::is_conditionally_visible(&model.table, &col.name) {
+            continue;
+        }
         if !col.nullable && !col.primary_key && !col.auto_now && !col.auto_now_add && !col.noform {
             required.push(Value::String(col.name.clone()));
         }

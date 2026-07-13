@@ -272,9 +272,15 @@ pub(crate) type ObjectScopeFn = Arc<
 /// only — the closure-bearing vecs are kept private because the
 /// `ComputedFn` / `TransformFn` types are internal implementation
 /// detail.
+/// Decides whether THIS caller may see a `#[umbral(private)]` column.
+pub(crate) type PrivateFn =
+    Arc<dyn Fn(Option<&umbral::auth::Identity>) -> bool + Send + Sync + 'static>;
+
 pub struct ResourceConfig {
     pub(crate) table: String,
     pub(crate) hidden: Vec<String>,
+    /// `#[umbral(private)]` columns this resource can unlock, and for whom.
+    pub(crate) private_unlocks: Vec<(String, PrivateFn)>,
     pub(crate) transforms: Vec<(String, TransformFn)>,
     pub(crate) computed: Vec<(String, ComputedFn)>,
     /// Permission class for this resource. `None` defaults to
@@ -359,6 +365,7 @@ impl ResourceConfig {
         Self {
             table: table.into(),
             hidden: Vec::new(),
+            private_unlocks: Vec::new(),
             transforms: Vec::new(),
             computed: Vec::new(),
             permission: None,
@@ -739,6 +746,41 @@ impl ResourceConfig {
     /// ```
     pub fn hide(mut self, fields: impl HideFields) -> Self {
         self.hidden.extend(fields.into_field_list());
+        self
+    }
+
+    /// Let approved callers see a `#[umbral(private)]` column on this resource.
+    ///
+    /// ```rust,ignore
+    /// ResourceConfig::new("product")
+    ///     .allow_private_if("cost", |id| id.is_some_and(|i| i.is_staff))
+    /// ```
+    ///
+    /// A `private` column is stripped from every response by default — it is not even
+    /// SELECTed, so the value never leaves the database. This is the unlock: for a caller
+    /// your closure approves, the column is fetched and returned; for everyone else nothing
+    /// changes.
+    ///
+    /// **Reads and writes both.** The unlock also governs whether the column may be SET
+    /// through this endpoint, because a field only trusted callers may READ is not one an
+    /// anonymous `POST` should be able to write. (Write authority for ordinary columns is
+    /// `#[umbral(privileged)]`'s job; this is the private tier's own gate.)
+    ///
+    /// Cannot unlock a `#[umbral(secret)]` column — that tier has no unlock, and naming one
+    /// here does nothing.
+    ///
+    /// # What this does to your OpenAPI spec
+    ///
+    /// One path cannot describe two response shapes, so a conditionally-visible column is
+    /// emitted as **optional** (`cost?: string`) with a description saying who gets it. That
+    /// is the honest answer, and it is correct for both audiences: the field genuinely may or
+    /// may not be present. A generated TypeScript client will make you check, which is
+    /// exactly right.
+    pub fn allow_private_if<F>(mut self, field: &str, f: F) -> Self
+    where
+        F: Fn(Option<&umbral::auth::Identity>) -> bool + Send + Sync + 'static,
+    {
+        self.private_unlocks.push((field.to_string(), Arc::new(f)));
         self
     }
 

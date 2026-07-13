@@ -246,6 +246,8 @@ pub struct RestPlugin {
     expose: std::collections::HashSet<String>,
     /// `(table, field)` pairs that are stripped from response bodies.
     hidden: Vec<(String, String)>,
+    /// `#[umbral(private)]` columns a resource can unlock, and for whom. `(table, field, fn)`.
+    private_unlocks: Vec<(String, String, crate::resource::PrivateFn)>,
     /// `(table, field, transform_fn)` — replaces a field's value.
     transforms: Vec<(String, String, TransformFn)>,
     /// `(table, name, compute_fn)` — adds a derived field per row.
@@ -715,6 +717,7 @@ impl RestPlugin {
             extra_exclude: Vec::new(),
             expose: std::collections::HashSet::new(),
             hidden: Vec::new(),
+            private_unlocks: Vec::new(),
             transforms: Vec::new(),
             computed: Vec::new(),
             pagination: Arc::new(NoPagination),
@@ -1099,12 +1102,16 @@ impl RestPlugin {
             owner_field,
             cache_control,
             under,
+            private_unlocks,
         } = config;
         if let Some(cc) = cache_control {
             self.cache_controls.insert(table.clone(), cc);
         }
         for field in hidden {
             self.hidden.push((table.clone(), field));
+        }
+        for (field, func) in private_unlocks {
+            self.private_unlocks.push((table.clone(), field, func));
         }
         for (field, func) in transforms {
             self.transforms.push((table.clone(), field, func));
@@ -1555,25 +1562,82 @@ impl RestPlugin {
         if HARD_DENIED_FIELDS.contains(&field) {
             return true;
         }
-        // Declared on the MODEL: `#[umbral(private)]` / `#[umbral(secret)]` are stripped by
-        // the ORM itself, so they never appear in a payload no matter what REST thinks. Say
-        // so here too, or the OpenAPI spec (and the generated TS client) would advertise a
-        // field the API never returns — a schema that lies is worse than one that omits.
+        // Declared on the MODEL.
+        //
+        // `secret` can never be served to anyone, so it is hidden, full stop.
+        //
+        // `private` is hidden only when NOTHING can unlock it. With an `allow_private_if` on
+        // the resource the column is *conditionally* visible, and calling it "hidden" here
+        // would strip it straight back out of the response we just went to the trouble of
+        // fetching for an authorized caller. Those columns are decided per-request by
+        // `unlocked_private`, and described to OpenAPI by `is_conditionally_visible`.
+        //
         // `_opt`, not `registered_models()`: the latter PANICS when no `App::build()` has run,
         // and this is reachable from unit tests and spec-only tooling that never boot an app.
         // No registry => no model info => fall through to the configured hide list; the name
         // denylist above has already run, so the catastrophic case is covered either way.
-        if umbral::migrate::registered_models_opt()
+        if let Some(col) = umbral::migrate::registered_models_opt()
             .as_deref()
             .unwrap_or_default()
             .iter()
             .find(|m| m.table == table)
             .and_then(|m| m.fields.iter().find(|c| c.name == field))
-            .is_some_and(|c| c.private || umbral::orm::is_secret_column(c))
         {
-            return true;
+            if umbral::orm::is_secret_column(col) {
+                return true;
+            }
+            if col.private && !self.has_private_unlock(table, field) {
+                return true;
+            }
         }
         self.hidden.iter().any(|(t, f)| t == table && f == field)
+    }
+
+    /// Is an `allow_private_if` configured for this column at all?
+    pub(crate) fn has_private_unlock(&self, table: &str, field: &str) -> bool {
+        self.private_unlocks
+            .iter()
+            .any(|(t, f, _)| t == table && f == field)
+    }
+
+    /// Which `#[umbral(private)]` columns THIS caller may see on this table.
+    ///
+    /// Evaluated per request, because the caller's identity does not exist anywhere else. The
+    /// result is handed to `DynQuerySet::allow_private`, so an approved column is SELECTed and
+    /// a denied one never leaves the database.
+    pub(crate) fn unlocked_private(&self, table: &str, identity: Option<&Identity>) -> Vec<String> {
+        self.private_unlocks
+            .iter()
+            .filter(|(t, _, check)| t == table && check(identity))
+            .map(|(_, f, _)| f.clone())
+            .collect()
+    }
+
+    /// Strip `#[umbral(private)]` columns this caller may not write.
+    ///
+    /// A column only trusted callers may READ is not one an anonymous POST gets to SET, so the
+    /// unlock governs both directions: the same closure that reveals `cost` to staff is what
+    /// lets staff change it, and nobody else can do either. Without this, marking a field
+    /// `private` would hide it from every response while leaving it wide open to `PATCH` —
+    /// which is a worse position than not marking it at all, because it looks safe.
+    pub(crate) fn strip_private_for_write(
+        &self,
+        table: &str,
+        identity: Option<&Identity>,
+        body: &mut Map<String, Value>,
+    ) {
+        let allowed = self.unlocked_private(table, identity);
+        let models = umbral::migrate::registered_models_opt().unwrap_or_default();
+        let Some(meta) = models.iter().find(|m| m.table == table) else {
+            return;
+        };
+        body.retain(|k, _| match meta.fields.iter().find(|c| &c.name == k) {
+            // Not private → not this function's business. `strip_hidden_for_write` and the
+            // ORM's own `privileged` guard have their own say.
+            Some(c) if !c.private => true,
+            Some(_) => allowed.iter().any(|f| f == k),
+            None => true,
+        });
     }
 
     /// Drop every REST-hidden field from an inbound write body.
@@ -1585,8 +1649,17 @@ impl RestPlugin {
     /// something like `is_admin`). Stripping it here makes `hide` symmetric:
     /// hidden in, hidden out. The ORM still strips `noform` columns on its
     /// own; this layers the REST `hide` list on top.
-    pub(crate) fn strip_hidden_for_write(&self, table: &str, body: &mut Map<String, Value>) {
+    pub(crate) fn strip_hidden_for_write(
+        &self,
+        table: &str,
+        identity: Option<&Identity>,
+        body: &mut Map<String, Value>,
+    ) {
         body.retain(|k, _| !self.is_field_hidden(table, k));
+        // Folded in here rather than added as a second call at each of the eight write sites,
+        // because a guard you have to remember to call at eight places is a guard you will
+        // forget at one of them. Taking `identity` makes the compiler visit every site.
+        self.strip_private_for_write(table, identity, body);
     }
 
     fn allow(&self, table: &str) -> bool {
@@ -1667,6 +1740,24 @@ pub fn action_exposed(table: &str, action: &Action) -> bool {
 /// spec-only smoke tests) so the spec describes the default "nothing
 /// hidden" shape. Same defaulting ordering as `is_exposed`, which
 /// assumes CONFIG is set before openapi runs.
+/// Is this column visible to SOME callers but not others?
+///
+/// True exactly when the model marks it `#[umbral(private)]` and a resource configured an
+/// `allow_private_if` for it.
+///
+/// This exists for OpenAPI. One path cannot describe two response shapes, and with a
+/// per-request unlock the same endpoint returns `cost` to staff and omits it for everyone
+/// else. Advertising it as a required field lies to the anonymous caller; omitting it lies to
+/// the staff one. The truth is **optional** — the field may or may not be present — and that
+/// is what the spec says, so a generated TypeScript client emits `cost?: string` and makes
+/// the consumer check. Which is correct, because they do have to.
+pub fn is_conditionally_visible(table: &str, field: &str) -> bool {
+    CONFIG
+        .get()
+        .map(|cfg| cfg.has_private_unlock(table, field))
+        .unwrap_or(false)
+}
+
 pub fn is_hidden(table: &str, field: &str) -> bool {
     CONFIG
         .get()
@@ -2966,8 +3057,16 @@ async fn list_impl(
             offset: 0,
             page: None,
         };
-        let mut rows =
-            fetch_rows(&model, None, Some(csv_page), &filter, &include, &ordering).await?;
+        let mut rows = fetch_rows(
+            &model,
+            None,
+            Some(csv_page),
+            &filter,
+            &include,
+            &ordering,
+            &cfg.unlocked_private(&model.table, identity.as_ref()),
+        )
+        .await?;
         for row in &mut rows {
             if let Some(ref meta) = list_meta {
                 cfg.apply_overrides_with_meta(&table, meta, row);
@@ -2980,7 +3079,16 @@ async fn list_impl(
     }
 
     let page_req = cfg.pagination.extract_request(&params);
-    let mut rows = fetch_rows(&model, None, Some(page_req), &filter, &include, &ordering).await?;
+    let mut rows = fetch_rows(
+        &model,
+        None,
+        Some(page_req),
+        &filter,
+        &include,
+        &ordering,
+        &cfg.unlocked_private(&model.table, identity.as_ref()),
+    )
+    .await?;
     for row in &mut rows {
         if let Some(ref meta) = list_meta {
             cfg.apply_overrides_with_meta(&table, meta, row);
@@ -3171,6 +3279,7 @@ async fn retrieve_impl(
         &scope_filter,
         &include,
         &[],
+        &cfg.unlocked_private(&model.table, identity.as_ref()),
     )
     .await?;
     let Some(mut row) = rows.pop() else {
@@ -3367,7 +3476,7 @@ async fn create_impl(
     let nested_specs = cfg.nested.get(&table).cloned().unwrap_or_default();
 
     // WEB-2: a hidden field must not be writable (see strip_hidden_for_write).
-    cfg.strip_hidden_for_write(&table, &mut body);
+    cfg.strip_hidden_for_write(&table, identity.as_ref(), &mut body);
 
     // gaps3 #16: owner-field injection — fill the declared owner column from the
     // authenticated identity and reject a body-supplied value (a client can't
@@ -3448,7 +3557,7 @@ async fn bulk_create(
             )));
         };
         // SAME hidden-field denylist (incl. password_hash) as single create.
-        cfg.strip_hidden_for_write(table, &mut body);
+        cfg.strip_hidden_for_write(table, identity, &mut body);
         // gaps3 #16: owner-field injection per item — same rule as single create,
         // so bulk can't be used to forge ownership on any row.
         inject_owner_field(cfg, &model, identity, &mut body)?;
@@ -3537,7 +3646,7 @@ async fn bulk_update(
             ApiError::BadInput(format!("bulk update item {idx} has an invalid `{pk}`"))
         })?;
         // SAME hidden-field denylist as single update.
-        cfg.strip_hidden_for_write(&table, &mut body);
+        cfg.strip_hidden_for_write(&table, identity.as_ref(), &mut body);
 
         let affected = as_user(
             identity.as_ref(),
@@ -3831,7 +3940,7 @@ async fn insert_nested_tree(
             // FK is injected so the FK survives.
             ctx.charge_node()?;
             ctx.cfg
-                .strip_hidden_for_write(&child.table, &mut child_body);
+                .strip_hidden_for_write(&child.table, ctx.identity, &mut child_body);
             ctx.check_child_perm(&child.table, &Action::Create)?;
             child_body.insert(fk.clone(), pk_value.clone());
             // `Box::pin` breaks the otherwise-infinitely-sized async recursion.
@@ -4041,7 +4150,16 @@ async fn update_nested(
     // Read the parent back and attach the upserted children (the same shape
     // `create_nested` returns: only the children in the payload, hydrated).
     let no_filter = FilterClause::default();
-    let mut rows = fetch_rows(&model, Some((pk_name, id)), None, &no_filter, &[], &[]).await?;
+    let mut rows = fetch_rows(
+        &model,
+        Some((pk_name, id)),
+        None,
+        &no_filter,
+        &[],
+        &[],
+        &cfg.unlocked_private(&model.table, identity),
+    )
+    .await?;
     let mut parent = rows
         .pop()
         .ok_or_else(|| ApiError::BadInput("row updated but disappeared on read-back".into()))?;
@@ -4094,7 +4212,8 @@ async fn upsert_nested_child(
     let Some(pk_json) = supplied_pk else {
         // CREATE — enforce this child's own hidden-field denylist + create
         // permission (H2), set the FK, then insert the whole subtree.
-        ctx.cfg.strip_hidden_for_write(&meta.table, &mut body);
+        ctx.cfg
+            .strip_hidden_for_write(&meta.table, ctx.identity, &mut body);
         ctx.check_child_perm(&meta.table, &Action::Create)?;
         body.insert(parent.fk_col.to_string(), parent.pk_value.clone());
         return Box::pin(insert_nested_tree(ctx, meta, &mut body, tx, depth)).await;
@@ -4148,7 +4267,8 @@ async fn upsert_nested_child(
     // hidden/denied fields so a nested UPDATE can't set them either (H2).
     body.remove(&pk_col);
     body.remove(parent.fk_col);
-    ctx.cfg.strip_hidden_for_write(&meta.table, &mut body);
+    ctx.cfg
+        .strip_hidden_for_write(&meta.table, ctx.identity, &mut body);
     // Anything array-shaped still here is an undeclared nested relation.
     reject_undeclared_nested(meta, &body)?;
     umbral::orm::DynQuerySet::for_meta(meta)
@@ -4245,7 +4365,7 @@ async fn update_impl(
     let pk_name = pk_column(&model)?.name.clone();
 
     // WEB-2: a hidden field must not be writable (see strip_hidden_for_write).
-    cfg.strip_hidden_for_write(&table, &mut body);
+    cfg.strip_hidden_for_write(&table, identity.as_ref(), &mut body);
 
     // audit_2 H1/P2: object-level scope. DenyAll → 404; a Filter is ANDed into
     // the existence check, the UPDATE's WHERE, and the read-back, so a caller
@@ -4272,7 +4392,16 @@ async fn update_impl(
     };
 
     // 404 if the target row doesn't exist (or is out of scope) before the UPDATE.
-    let existing = fetch_rows(&model, Some((&pk_name, &id)), None, &scope_filter, &[], &[]).await?;
+    let existing = fetch_rows(
+        &model,
+        Some((&pk_name, &id)),
+        None,
+        &scope_filter,
+        &[],
+        &[],
+        &cfg.unlocked_private(&model.table, identity.as_ref()),
+    )
+    .await?;
     if existing.is_empty() {
         return Err(ApiError::NotFound(format!(
             "no row with {pk_name} = {id} in {table}"
@@ -4316,7 +4445,16 @@ async fn update_impl(
         update_qs = update_qs.filter_condition(c.clone());
     }
     as_user(identity.as_ref(), update_qs.update_json(&body)).await?;
-    let mut rows = fetch_rows(&model, Some((&pk_name, &id)), None, &scope_filter, &[], &[]).await?;
+    let mut rows = fetch_rows(
+        &model,
+        Some((&pk_name, &id)),
+        None,
+        &scope_filter,
+        &[],
+        &[],
+        &cfg.unlocked_private(&model.table, identity.as_ref()),
+    )
+    .await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row updated but disappeared on read-back".into(),
@@ -4619,8 +4757,16 @@ async fn fetch_rows(
     filter: &FilterClause,
     include: &[String],
     ordering: &[(String, bool)],
+    // `#[umbral(private)]` columns THIS caller has unlocked (`ResourceConfig::allow_private_if`).
+    // Empty for everyone else, which is the default and the safe direction: the ORM does not
+    // even SELECT a private column it was not told to, so the value never leaves the database.
+    unlocked_private: &[String],
 ) -> Result<Vec<Map<String, Value>>, ApiError> {
     let mut qs = umbral::orm::DynQuerySet::for_meta(model);
+    if !unlocked_private.is_empty() {
+        let refs: Vec<&str> = unlocked_private.iter().map(String::as_str).collect();
+        qs = qs.allow_private(&refs);
+    }
 
     if let Some((col, val)) = where_clause {
         // Single-row lookup (retrieve / update / delete read-back).
