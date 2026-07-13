@@ -109,6 +109,16 @@ version_group = "umbral"
 name = "umbral-openapi"
 version_group = "umbral"
 
+# Added for the 0.0.8 release. It was a workspace member with NO block here, which is
+# precisely the trap the header of this file warns about: the crate would have versioned
+# independently and silently broken lockstep. It CANNOT be back-published at 0.0.7 — it uses
+# umbral API that landed after 0.0.7 shipped (`Column::private`, `is_secret_column`,
+# `DynQuerySet::allow_private`, `Cmp` / `typed_cmp_condition`), so a 0.0.7 pin does not
+# compile. 0.0.8 is its first release, in lockstep with everything else.
+[[package]]
+name = "umbral-graphql"
+version_group = "umbral"
+
 [[package]]
 name = "umbral-signals"
 version_group = "umbral"
