@@ -61,11 +61,12 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
         for ddl in [
-            "CREATE TABLE fixture (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE selection (id INTEGER PRIMARY KEY AUTOINCREMENT, \
-             fixture_id INTEGER NOT NULL, player TEXT NOT NULL)",
             "INSERT INTO fixture (id, name) VALUES (1, 'derby'), (2, 'cup final')",
             "INSERT INTO selection (fixture_id, player) VALUES (1, 'ada'), (1, 'grace'), (2, 'linus')",
         ] {

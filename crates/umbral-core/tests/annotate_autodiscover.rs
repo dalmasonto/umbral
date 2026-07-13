@@ -95,17 +95,9 @@ async fn boot() {
             .model::<Order>()
             .build()
             .expect("App::build");
-
-        for ddl in [
-            "CREATE TABLE ad_blog (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
-            "CREATE TABLE ad_entry (id INTEGER PRIMARY KEY AUTOINCREMENT, headline TEXT NOT NULL, amount INTEGER NOT NULL, blog INTEGER NOT NULL REFERENCES ad_blog(id))",
-            "CREATE TABLE ad_shelf (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE ad_book (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, shelf INTEGER NOT NULL REFERENCES ad_shelf(id), deleted_at TEXT)",
-            "CREATE TABLE ad_store (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE ad_order (id INTEGER PRIMARY KEY AUTOINCREMENT, buyer_store INTEGER NOT NULL REFERENCES ad_store(id), seller_store INTEGER NOT NULL REFERENCES ad_store(id))",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         // Blogs: alpha (id 1) gets three entries amounts [10,20,30];
         // beta (id 2) gets none.

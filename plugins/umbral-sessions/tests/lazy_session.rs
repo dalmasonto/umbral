@@ -41,19 +41,9 @@ async fn boot() {
         .build()
         .expect("App::build with AuthPlugin + SessionsPlugin");
 
-    let pool = umbral::db::pool();
-    sqlx::query(
-        "CREATE TABLE session (\
-            id TEXT PRIMARY KEY,\
-            user_id TEXT,\
-            data TEXT NOT NULL,\
-            created_at TEXT NOT NULL,\
-            expires_at TEXT NOT NULL\
-         )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create session");
+    umbral::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
 }
 
 /// Reproduction / core fix: three sequential cookie-less requests

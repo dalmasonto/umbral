@@ -39,17 +39,9 @@ async fn boot() {
             .build()
             .expect("App::build should succeed");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS backup_json_doc (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                payload TEXT NOT NULL,\
-                meta TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create backup_json_doc");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

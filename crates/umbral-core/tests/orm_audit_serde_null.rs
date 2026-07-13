@@ -76,26 +76,9 @@ async fn boot() {
             .model::<Thing>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE auds_owner (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                nullable_count INTEGER
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE owner");
-        sqlx::query(
-            "CREATE TABLE auds_thing (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                owner INTEGER REFERENCES auds_owner(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE thing");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         // Insert alice with nullable_count = NULL — this is the row
         // select_related will fetch + JSON-shape via the path that

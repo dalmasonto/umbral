@@ -58,17 +58,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build with PageNumber pagination");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE note (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create note table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
+        let pool = umbral::db::pool();
         // 25 rows so paging shows three pages at page_size=10.
         for i in 1..=25 {
             sqlx::query("INSERT INTO note (title) VALUES (?)")

@@ -41,16 +41,9 @@ async fn pool() -> sqlx::SqlitePool {
             .model::<Book>()
             .build()
             .expect("App::build");
-        for ddl in [
-            "CREATE TABLE bk_author (slug TEXT PRIMARY KEY, name TEXT NOT NULL)",
-            "CREATE TABLE bk_book (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                author TEXT NOT NULL REFERENCES bk_author(slug),
-                title TEXT NOT NULL
-            )",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         sqlx::query("INSERT INTO bk_author (slug, name) VALUES ('ada', 'Ada')")
             .execute(&pool)
             .await

@@ -46,26 +46,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE srn_user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                manager INTEGER REFERENCES srn_user(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE srn_user");
-        sqlx::query(
-            "CREATE TABLE srn_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                author INTEGER NOT NULL REFERENCES srn_user(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE srn_post");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         // User hierarchy:
         //   1: ceo       (no manager)

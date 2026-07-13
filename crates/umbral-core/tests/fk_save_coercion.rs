@@ -64,27 +64,11 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE fkparent (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE fkparent");
         // `parent` is INTEGER NOT NULL — a text bind for the FK id is a
         // type mismatch here, exactly as Postgres bigint rejects text.
-        sqlx::query(
-            "CREATE TABLE fkchild (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent INTEGER NOT NULL REFERENCES fkparent(id),
-                body TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE fkchild");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

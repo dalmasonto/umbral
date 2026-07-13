@@ -86,20 +86,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE post (\
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                 title TEXT NOT NULL,\
-                 published BOOLEAN NOT NULL DEFAULT 0,\
-                 author INTEGER NOT NULL DEFAULT 0,\
-                 created_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create post table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
+        let pool = umbral::db::pool();
         // Seed rows.
         sqlx::query(
             "INSERT INTO post (title, published, author, created_at) VALUES \
@@ -113,20 +104,6 @@ async fn boot() -> &'static axum::Router {
         .expect("seed posts");
 
         // String-PK FK fixtures (review #4).
-        sqlx::query("CREATE TABLE flt_cat (slug TEXT PRIMARY KEY, name TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("create flt_cat");
-        sqlx::query(
-            "CREATE TABLE flt_doc (\
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                 cat TEXT NOT NULL REFERENCES flt_cat(slug),\
-                 title TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create flt_doc");
         sqlx::query(
             "INSERT INTO flt_cat (slug, name) VALUES ('tech', 'Tech'), ('news', 'News'), ('life', 'Life')",
         )

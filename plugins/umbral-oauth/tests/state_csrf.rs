@@ -64,45 +64,18 @@ async fn init() {
         .settings(settings)
         .database("default", pool)
         .plugin(SessionsPlugin::default())
+        .model::<SocialAccount>()
         .build()
         .expect("App::build with SessionsPlugin");
 
-    let pool = umbral::db::pool();
-    sqlx::query(
-        "CREATE TABLE session (\
-            id TEXT PRIMARY KEY,\
-            user_id TEXT,\
-            data TEXT NOT NULL,\
-            created_at TEXT NOT NULL,\
-            expires_at TEXT NOT NULL\
-         )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create session");
+    umbral::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
+
     // The callback's create-or-link policy would write here on success;
     // we assert it stays empty on a rejected callback. The table carries
     // the plugin prefix (`oauth_`), matching what the migration engine
     // generates for `SocialAccount`. Only enough columns for `COUNT(*)`.
-    sqlx::query(
-        "CREATE TABLE oauth_social_account (\
-            id INTEGER PRIMARY KEY AUTOINCREMENT,\
-            user_id INTEGER NOT NULL,\
-            provider TEXT NOT NULL,\
-            provider_uid TEXT NOT NULL,\
-            provider_email TEXT,\
-            email_verified INTEGER NOT NULL DEFAULT 0,\
-            access_token TEXT NOT NULL DEFAULT '',\
-            refresh_token TEXT,\
-            scopes TEXT NOT NULL DEFAULT '',\
-            expires_at TEXT,\
-            created_at TEXT NOT NULL DEFAULT '',\
-            updated_at TEXT NOT NULL DEFAULT ''\
-         )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create oauth_social_account");
 }
 
 /// Build a fresh wrapped router + drive a login to obtain a real session

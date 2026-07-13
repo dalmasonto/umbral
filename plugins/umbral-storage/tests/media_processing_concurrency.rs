@@ -39,22 +39,13 @@ async fn boot() {
     umbral::App::builder()
         .settings(settings)
         .database("default", pool)
+        .model::<MediaFile>()
         .build()
         .expect("App::build");
-    sqlx::query(
-        "CREATE TABLE media_file (\
-            id INTEGER PRIMARY KEY AUTOINCREMENT,\
-            key TEXT NOT NULL,\
-            filename TEXT NOT NULL,\
-            content_type TEXT NOT NULL,\
-            size INTEGER NOT NULL,\
-            uploaded_at TEXT NOT NULL,\
-            status TEXT NOT NULL DEFAULT 'ready'\
-         )",
-    )
-    .execute(&umbral::db::pool())
-    .await
-    .expect("create media_file");
+
+    umbral::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
 }
 
 static CONCURRENT: AtomicUsize = AtomicUsize::new(0);

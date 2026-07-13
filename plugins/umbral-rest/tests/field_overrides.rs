@@ -102,21 +102,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build with overrides");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL,\
-                email TEXT NOT NULL,\
-                password_hash TEXT,\
-                first_name TEXT NOT NULL,\
-                last_name TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create user table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
+        let pool = umbral::db::pool();
         // Seed two users so list + retrieve both have data.
         sqlx::query(
             "INSERT INTO user (username, email, password_hash, first_name, last_name) \
@@ -128,18 +118,6 @@ async fn boot() -> &'static axum::Router {
         .await
         .expect("seed");
 
-        sqlx::query(
-            "CREATE TABLE account (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                label TEXT NOT NULL,\
-                secret_a TEXT NOT NULL,\
-                secret_b TEXT NOT NULL,\
-                secret_c TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create account table");
         sqlx::query(
             "INSERT INTO account (label, secret_a, secret_b, secret_c) \
              VALUES ('acct', 'AAA', 'BBB', 'CCC')",

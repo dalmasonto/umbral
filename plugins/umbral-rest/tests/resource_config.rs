@@ -82,20 +82,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build with ResourceConfig");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                first_name TEXT NOT NULL,\
-                last_name TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create user table");
 
         sqlx::query(
             "INSERT INTO user (username, email, password_hash, first_name, last_name) \

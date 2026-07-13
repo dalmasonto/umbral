@@ -61,17 +61,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE replace_doc (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                attachment TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create replace_doc");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

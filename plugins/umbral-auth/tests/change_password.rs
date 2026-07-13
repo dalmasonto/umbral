@@ -35,24 +35,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE auth_user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                is_active INTEGER NOT NULL,
-                is_staff INTEGER NOT NULL,
-                is_superuser INTEGER NOT NULL,
-                date_joined TEXT NOT NULL,
-                last_login TEXT,
-                email_verified_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

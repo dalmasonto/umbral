@@ -63,44 +63,14 @@ async fn boot() {
         umbral::App::builder()
             .settings(settings)
             .database("default", pool)
+            .plugin(umbral_sessions::SessionsPlugin::default().without_auto_layer())
             .plugin(AuthPlugin::<AuthUser>::default())
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-
-        // Create auth_user table.
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS auth_user (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                username      TEXT NOT NULL UNIQUE,
-                email         TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                is_active     INTEGER NOT NULL DEFAULT 1,
-                is_staff      INTEGER NOT NULL DEFAULT 0,
-                is_superuser  INTEGER NOT NULL DEFAULT 0,
-                date_joined   TEXT NOT NULL,
-                last_login    TEXT,
-                email_verified_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user table");
-
-        // Create session table (mirrors umbral-sessions schema).
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS session (
-                id         TEXT PRIMARY KEY,
-                user_id    TEXT,
-                data       TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

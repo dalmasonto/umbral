@@ -112,14 +112,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        for ddl in [
-            "CREATE TABLE club (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE membership (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, club_id INTEGER NOT NULL)",
-            "CREATE TABLE fixture (id INTEGER PRIMARY KEY AUTOINCREMENT, club_id INTEGER NOT NULL, title TEXT NOT NULL)",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
         // Two clubs. User 7 is in BOTH 1 and 2 (the case `Restrict` cannot
         // express). User 8 is in club 3 only. User 42 has joined nothing.
         sqlx::query("INSERT INTO club (name) VALUES ('web3clubs'), ('club_x'), ('other')")

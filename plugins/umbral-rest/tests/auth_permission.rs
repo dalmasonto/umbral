@@ -119,15 +119,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        for ddl in [
-            "CREATE TABLE note (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
-            "CREATE TABLE secret (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)",
-            "CREATE TABLE archive (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)",
-            "CREATE TABLE catalog (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
         sqlx::query("INSERT INTO note (title) VALUES ('hello'), ('world')")
             .execute(&pool)
             .await

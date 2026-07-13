@@ -100,38 +100,19 @@ async fn boot_uuid() {
             let app = umbral::App::builder()
                 .settings(settings)
                 .database("default", pool)
+                .plugin(umbral_sessions::SessionsPlugin::default().without_auto_layer())
                 .plugin(AuthPlugin::<UuidUser>::default())
                 .build()
                 .expect("App::build with UuidUser");
+
+            umbral::migrate::create_tables_for_tests()
+                .await
+                .expect("create the test schema");
 
             // The auth plugin's migrations create `auth_user`; we
             // need `uuid_user` and `session` too. Build them by
             // hand — simpler than threading the migration engine
             // through a test.
-            let pool = umbral::db::pool();
-            sqlx::query(
-                "CREATE TABLE uuid_user (\
-                    id TEXT PRIMARY KEY NOT NULL,\
-                    username TEXT NOT NULL UNIQUE,\
-                    password_hash TEXT NOT NULL,\
-                    is_active INTEGER NOT NULL DEFAULT 1\
-                 )",
-            )
-            .execute(&pool)
-            .await
-            .expect("create uuid_user");
-            sqlx::query(
-                "CREATE TABLE session (\
-                    id TEXT PRIMARY KEY NOT NULL,\
-                    user_id TEXT,\
-                    data TEXT NOT NULL DEFAULT '{}',\
-                    created_at TEXT NOT NULL,\
-                    expires_at TEXT NOT NULL\
-                 )",
-            )
-            .execute(&pool)
-            .await
-            .expect("create session");
 
             // Hold the App alive past this scope so its ambient
             // pool registration sticks for the duration of the

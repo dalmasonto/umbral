@@ -60,24 +60,39 @@ async fn boot() {
             .model::<Note>()
             .build()
             .expect("App::build");
-        sqlx::query("CREATE TABLE sa_plugin (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, blurb TEXT NOT NULL)")
-            .execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE sa_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT NOT NULL)")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO sa_plugin (name, blurb) VALUES ('Redis cache', 'fast in-memory store')")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO sa_plugin (name, blurb) VALUES ('Logger', 'writes to redis sometimes')")
-            .execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO sa_post (title, body) VALUES ('Using redis', 'a guide to caching')")
-            .execute(&pool).await.unwrap();
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+        sqlx::query(
+            "INSERT INTO sa_plugin (name, blurb) VALUES ('Redis cache', 'fast in-memory store')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO sa_plugin (name, blurb) VALUES ('Logger', 'writes to redis sometimes')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO sa_post (title, body) VALUES ('Using redis', 'a guide to caching')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         sqlx::query("INSERT INTO sa_post (title, body) VALUES ('50% off coupon', 'limited time')")
-            .execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE sa_note (id INTEGER PRIMARY KEY AUTOINCREMENT, heading TEXT NOT NULL, state TEXT NOT NULL)")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO sa_note (heading, state) VALUES ('Alpha live entry', 'live')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO sa_note (heading, state) VALUES ('Alpha draft entry', 'draft')")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
     })
     .await;
 }

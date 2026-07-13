@@ -49,18 +49,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        for ddl in [
-            "CREATE TABLE pkm2m_course (code TEXT PRIMARY KEY, title TEXT NOT NULL)",
-            "CREATE TABLE pkm2m_student (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            // Junction: <table>_<field> with a TEXT parent_id (the course code).
-            "CREATE TABLE pkm2m_course_students (
-                parent_id TEXT NOT NULL,
-                child_id INTEGER NOT NULL,
-                PRIMARY KEY (parent_id, child_id)
-            )",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         for (code, title) in &[("rust101", "Intro to Rust"), ("go101", "Intro to Go")] {
             sqlx::query("INSERT INTO pkm2m_course (code, title) VALUES (?, ?)")

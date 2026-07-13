@@ -58,12 +58,13 @@ async fn boot() {
             .model::<Passport>()
             .build()
             .expect("App::build");
-        sqlx::query("CREATE TABLE ffk_author (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
-            .execute(&pool).await.expect("create author");
-        sqlx::query("CREATE TABLE ffk_book (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, author INTEGER NOT NULL REFERENCES ffk_author(id))")
-            .execute(&pool).await.expect("create book");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         sqlx::query("INSERT INTO ffk_author (name) VALUES ('Ada')")
-            .execute(&pool).await.expect("seed author");
+            .execute(&pool)
+            .await
+            .expect("seed author");
     })
     .await;
 }
@@ -161,8 +162,6 @@ async fn fk_field_rejects_nonexistent_parent_and_inserts_no_row() {
 #[tokio::test]
 async fn forward_o2o_unique_violation_surfaces_as_write_error() {
     boot().await;
-    sqlx::query("CREATE TABLE IF NOT EXISTS ffk_passport (id INTEGER PRIMARY KEY AUTOINCREMENT, holder INTEGER NOT NULL UNIQUE REFERENCES ffk_author(id), number TEXT NOT NULL)")
-        .execute(&db::pool()).await.expect("create passport");
     let p1 = Passport::validate(&data(&[("holder", "1"), ("number", "A1")]))
         .await
         .expect("valid o2o");

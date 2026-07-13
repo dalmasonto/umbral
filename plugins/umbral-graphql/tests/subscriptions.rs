@@ -61,14 +61,11 @@ async fn boot() {
             .build()
             .expect("build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let p = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE sb_ticker (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, \
-             price TEXT NOT NULL, internal_book TEXT NOT NULL)",
-        )
-        .execute(&p)
-        .await
-        .expect("ddl");
         sqlx::query(
             "INSERT INTO sb_ticker (id, symbol, price, internal_book) VALUES \
              (1, 'ACME', '10.00', 'do-not-leak')",

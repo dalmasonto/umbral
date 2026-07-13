@@ -86,10 +86,12 @@ async fn boot() -> axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let p = umbral::db::pool();
         for ddl in [
-            "CREATE TABLE pu_product (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-             price TEXT NOT NULL, cost TEXT NOT NULL, supplier_notes TEXT)",
             // Row 1 is READ-ONLY for these tests; row 2 is the one the write test mutates.
             // Sharing a mutable row across tests that run in parallel is a race, and the
             // failure looks exactly like a bug in the feature under test.

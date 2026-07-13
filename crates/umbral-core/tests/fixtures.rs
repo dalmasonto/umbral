@@ -40,10 +40,9 @@ async fn boot() {
             .model::<Post>()
             .build()
             .expect("App::build");
-        sqlx::query("CREATE TABLE fx_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT, created_at TEXT NOT NULL)")
-            .execute(&pool)
+        umbral_core::migrate::create_tables_for_tests()
             .await
-            .expect("create fx_post");
+            .expect("create the test schema");
     })
     .await;
 }

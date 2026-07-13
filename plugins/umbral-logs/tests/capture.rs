@@ -57,24 +57,11 @@ async fn boot() {
             .build()
             .expect("App::build with LogsPlugin");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         // Create the logs_requestlog table (test-only DDL; tests bypass migrate).
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE logs_requestlog (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                method TEXT NOT NULL,\
-                path TEXT NOT NULL,\
-                status INTEGER NOT NULL,\
-                duration_ms INTEGER NOT NULL,\
-                user_id TEXT,\
-                ip TEXT,\
-                user_agent TEXT,\
-                created_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create logs_requestlog");
     })
     .await;
 }

@@ -53,18 +53,9 @@ async fn boot() {
             .model::<Secret>()
             .build()
             .expect("App::build");
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE masked_secret (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                label TEXT NOT NULL,
-                api_key TEXT NOT NULL,
-                recovery_code TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

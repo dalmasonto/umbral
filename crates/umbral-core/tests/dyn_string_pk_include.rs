@@ -59,26 +59,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE spk_tag (
-                slug  TEXT PRIMARY KEY,
-                label TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE spk_tag");
-
-        sqlx::query(
-            "CREATE TABLE spk_bookmark (
-                id  INTEGER PRIMARY KEY AUTOINCREMENT,
-                url TEXT NOT NULL,
-                tag TEXT NOT NULL REFERENCES spk_tag(slug)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE spk_bookmark");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         for (slug, label) in &[("rust", "Rust"), ("web", "Web"), ("db", "Database")] {
             sqlx::query("INSERT INTO spk_tag (slug, label) VALUES (?, ?)")

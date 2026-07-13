@@ -50,25 +50,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE pkrfk_author (
-                slug TEXT PRIMARY KEY,
-                name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE pkrfk_author");
-        sqlx::query(
-            "CREATE TABLE pkrfk_article (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                author TEXT NOT NULL REFERENCES pkrfk_author(slug)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE pkrfk_article");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         for (slug, name) in &[("rust", "Rust"), ("go", "Go"), ("zig", "Zig")] {
             sqlx::query("INSERT INTO pkrfk_author (slug, name) VALUES (?, ?)")

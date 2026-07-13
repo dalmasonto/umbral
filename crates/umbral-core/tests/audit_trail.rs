@@ -61,17 +61,12 @@ async fn boot() {
             .model::<Plain>()
             .build()
             .expect("App::build");
-        let pool = umbral::db::pool();
-        for ddl in [
-            "CREATE TABLE invoice (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, amount INTEGER NOT NULL)",
-            "CREATE TABLE note (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, deleted_at TEXT)",
-            "CREATE TABLE plain (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            // The audit table is auto-registered; create it as migrate would.
-            "CREATE TABLE umbral_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, table_name TEXT NOT NULL, \
-             row_pk TEXT NOT NULL, action TEXT NOT NULL, actor TEXT, at TEXT NOT NULL, changes TEXT NOT NULL)",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+        // `umbral_audit` is not a registered model (it's a hand-built
+        // `ModelMeta` the audit feature writes through via `DynQuerySet`,
+        // see `orm/audit.rs::audit_meta()`) so it never appears in
     })
     .await;
 }

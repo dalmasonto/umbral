@@ -66,21 +66,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        for ddl in [
-            "CREATE TABLE oto_pk_account (handle TEXT PRIMARY KEY, name TEXT NOT NULL)",
-            "CREATE TABLE oto_pk_profile (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                account TEXT NOT NULL UNIQUE REFERENCES oto_pk_account(handle),
-                bio TEXT NOT NULL
-            )",
-            "CREATE TABLE oto_pk_badge (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                holder TEXT NOT NULL REFERENCES oto_pk_account(handle),
-                label TEXT NOT NULL
-            )",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         for (handle, name) in &[("ada", "Ada"), ("grace", "Grace")] {
             sqlx::query("INSERT INTO oto_pk_account (handle, name) VALUES (?, ?)")

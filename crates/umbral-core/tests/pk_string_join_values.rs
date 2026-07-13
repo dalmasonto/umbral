@@ -40,16 +40,9 @@ async fn boot() {
             .model::<Post>()
             .build()
             .expect("App::build");
-        for ddl in [
-            "CREATE TABLE jsv_author (handle TEXT PRIMARY KEY, name TEXT NOT NULL)",
-            "CREATE TABLE jsv_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                author TEXT NOT NULL REFERENCES jsv_author(handle),
-                title TEXT NOT NULL
-            )",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         sqlx::query("INSERT INTO jsv_author (handle, name) VALUES ('ada', 'Ada')")
             .execute(&pool)
             .await

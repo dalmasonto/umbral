@@ -25,10 +25,13 @@ async fn boot() {
             .model::<Doc>()
             .build()
             .expect("App::build");
-        sqlx::query("CREATE TABLE mqc_doc (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, views INTEGER NOT NULL)")
-            .execute(&pool).await.unwrap();
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         sqlx::query("INSERT INTO mqc_doc (title, views) VALUES ('hello', 10)")
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
     })
     .await;
 }

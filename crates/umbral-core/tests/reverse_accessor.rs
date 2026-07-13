@@ -76,36 +76,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE rva_parent (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE rva_parent");
-        sqlx::query(
-            "CREATE TABLE rva_child (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                label TEXT NOT NULL,
-                parent INTEGER NOT NULL REFERENCES rva_parent(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE rva_child");
-        sqlx::query(
-            "CREATE TABLE rva_link (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                note TEXT NOT NULL,
-                fk_a INTEGER NOT NULL REFERENCES rva_parent(id),
-                fk_b INTEGER NOT NULL REFERENCES rva_parent(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE rva_link");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         // p1 (id 1): two children. p2 (id 2): one. p3 (id 3): zero.
         for name in ["p1", "p2", "p3"] {

@@ -58,15 +58,12 @@ async fn uuid_pk_relations_round_trip_on_postgres() {
     for ddl in [
         "DROP TABLE IF EXISTS pkuuid_member",
         "DROP TABLE IF EXISTS pkuuid_org",
-        "CREATE TABLE pkuuid_org (id UUID PRIMARY KEY, name TEXT NOT NULL)",
-        "CREATE TABLE pkuuid_member (
-            id BIGSERIAL PRIMARY KEY,
-            org UUID NOT NULL REFERENCES pkuuid_org(id),
-            name TEXT NOT NULL
-        )",
     ] {
         sqlx::query(ddl).execute(&pool).await.expect("ddl");
     }
+    umbral_core::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
 
     let org_id = uuid::Uuid::from_u128(0x1234_5678_9abc_def0_1234_5678_9abc_def0);
     sqlx::query("INSERT INTO pkuuid_org (id, name) VALUES ($1, $2)")

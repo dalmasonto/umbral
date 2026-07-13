@@ -34,13 +34,17 @@ async fn tx_count_renders_bare_asterisk_on_postgres() {
         .build()
         .expect("App::build");
 
-    for ddl in [
-        "DROP TABLE IF EXISTS txc_item",
-        "CREATE TABLE txc_item (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL)",
-        "INSERT INTO txc_item (name) VALUES ('a'), ('b'), ('c')",
-    ] {
-        sqlx::query(ddl).execute(&pool).await.expect("setup");
-    }
+    sqlx::query("DROP TABLE IF EXISTS txc_item")
+        .execute(&pool)
+        .await
+        .expect("setup");
+    umbral_core::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
+    sqlx::query("INSERT INTO txc_item (name) VALUES ('a'), ('b'), ('c')")
+        .execute(&pool)
+        .await
+        .expect("setup");
 
     let mut tx = begin_pg(&pool).await.expect("begin");
     // Pre-fix this errored with `column "*" does not exist`.

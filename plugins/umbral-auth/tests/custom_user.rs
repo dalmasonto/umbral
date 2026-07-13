@@ -103,22 +103,12 @@ async fn boot_custom() {
                 .build()
                 .expect("App::build should succeed with AuthPlugin::<CustomUser>");
 
+            umbral::migrate::create_tables_for_tests()
+                .await
+                .expect("create the test schema");
+
             // Create the custom_user table directly. Column names must
             // match the CustomUser field names for sqlx::FromRow to bind.
-            let pool = umbral::db::pool();
-            sqlx::query(
-                "CREATE TABLE custom_user (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username     TEXT NOT NULL UNIQUE,
-                    password_hash TEXT NOT NULL,
-                    display_name TEXT NOT NULL,
-                    tenant_id    INTEGER NOT NULL,
-                    is_active    INTEGER NOT NULL DEFAULT 1
-                )",
-            )
-            .execute(&pool)
-            .await
-            .expect("create custom_user table");
         })
         .await;
 }

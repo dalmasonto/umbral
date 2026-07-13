@@ -53,27 +53,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE jr_category (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                slug TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE jr_category");
-        sqlx::query(
-            "CREATE TABLE jr_product (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                category INTEGER NOT NULL REFERENCES jr_category(id),
-                brand INTEGER REFERENCES jr_category(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE jr_product");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         for (name, slug) in &[("Coffee", "coffee"), ("Tea", "tea")] {
             sqlx::query("INSERT INTO jr_category (name, slug) VALUES (?, ?)")
                 .bind(*name)

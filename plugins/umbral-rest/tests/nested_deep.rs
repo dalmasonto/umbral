@@ -74,35 +74,9 @@ async fn boot() -> axum::Router {
         .build()
         .expect("App::build");
 
-    let pool = umbral::db::pool();
-    sqlx::query(
-        "CREATE TABLE \"order\" (id INTEGER PRIMARY KEY AUTOINCREMENT, customer TEXT NOT NULL)",
-    )
-    .execute(&pool)
-    .await
-    .expect("create order");
-    sqlx::query(
-        "CREATE TABLE order_item (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            \"order\" INTEGER NOT NULL REFERENCES \"order\"(id),
-            product TEXT NOT NULL,
-            qty INTEGER NOT NULL
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create order_item");
-    sqlx::query(
-        "CREATE TABLE component (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item INTEGER NOT NULL REFERENCES order_item(id),
-            name TEXT NOT NULL,
-            grams INTEGER NOT NULL
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create component");
+    umbral::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
 
     app.into_router()
 }

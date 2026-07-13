@@ -50,13 +50,10 @@ async fn boot() -> &'static axum::Router {
             )
             .build()
             .expect("App::build");
-        let pool = umbral::db::pool();
-        for ddl in [
-            "CREATE TABLE widget (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE country (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         app.into_router()
     })
     .await

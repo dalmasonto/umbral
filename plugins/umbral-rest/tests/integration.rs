@@ -57,18 +57,9 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build with RestPlugin");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE note (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                body TEXT NOT NULL,\
-                published_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create note");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         app.into_router()
     })

@@ -61,25 +61,9 @@ async fn boot() {
             .model::<Item>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE ditx_order (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                reference TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE order");
-        sqlx::query(
-            "CREATE TABLE ditx_item (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                \"order\" INTEGER NOT NULL REFERENCES ditx_order(id),
-                sku TEXT NOT NULL UNIQUE
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE item");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

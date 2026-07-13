@@ -61,58 +61,12 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE rfk_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE rfk_post");
-        sqlx::query(
-            "CREATE TABLE rfk_comment (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                body TEXT NOT NULL,
-                post INTEGER NOT NULL REFERENCES rfk_post(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE rfk_comment");
-
-        // orm_fixes #1 fixture: an Article with TWO reverse sets.
-        sqlx::query(
-            "CREATE TABLE rfk_article (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                headline TEXT NOT NULL,
-                deleted_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE rfk_article");
-        sqlx::query(
-            "CREATE TABLE rfk_note (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text TEXT NOT NULL,
-                article INTEGER NOT NULL REFERENCES rfk_article(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE rfk_note");
-        sqlx::query(
-            "CREATE TABLE rfk_tagline (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                phrase TEXT NOT NULL,
-                article INTEGER NOT NULL REFERENCES rfk_article(id),
-                created_at TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE rfk_tagline");
+        // orm_fixes #1 fixture: an Article with TWO reverse sets. The schema
+        // for rfk_post/rfk_comment/rfk_article/rfk_note/rfk_tagline all comes
+        // from the registered models above.
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         sqlx::query("INSERT INTO rfk_article (headline) VALUES ('a1')")
             .execute(&pool)

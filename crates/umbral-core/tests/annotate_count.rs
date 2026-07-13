@@ -95,66 +95,9 @@ async fn boot() {
             .model::<Tag>()
             .build()
             .expect("App::build");
-
-        sqlx::query(
-            "CREATE TABLE anc_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE anc_post");
-        sqlx::query(
-            "CREATE TABLE anc_comment (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                body TEXT NOT NULL,
-                post INTEGER NOT NULL REFERENCES anc_post(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE anc_comment");
-        sqlx::query(
-            "CREATE TABLE anc_review (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                rating REAL NOT NULL,
-                post INTEGER NOT NULL REFERENCES anc_post(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE anc_review");
-        sqlx::query(
-            "CREATE TABLE anc_note (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                body TEXT NOT NULL,
-                post INTEGER NOT NULL REFERENCES anc_post(id),
-                moderation TEXT NOT NULL DEFAULT 'visible',
-                deleted_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE anc_note");
-        sqlx::query(
-            "CREATE TABLE anc_tag (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE anc_tag");
-        sqlx::query(
-            "CREATE TABLE anc_post_tags (
-                parent_id INTEGER NOT NULL REFERENCES anc_post(id),
-                child_id INTEGER NOT NULL REFERENCES anc_tag(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE anc_post_tags");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         for title in ["alpha", "beta", "gamma"] {
             sqlx::query("INSERT INTO anc_post (title) VALUES (?)")

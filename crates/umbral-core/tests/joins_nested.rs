@@ -4,9 +4,11 @@
 //! an orphan parent is DROPPED under INNER and KEPT (with a null/empty
 //! relation) under LEFT — proven by the returned rows, not just the SQL
 //! substring. Nested chains assert real three-level graph hydration
-//! from ONE query. The harness copies `join_related.rs`'s App::builder +
-//! raw-DDL in-memory SQLite setup (the sanctioned test-only raw-SQL
-//! exception per CLAUDE.md).
+//! from ONE query. The harness copies `join_related.rs`'s App::builder
+//! setup; the schema comes from `create_tables_for_tests()` (diffed off
+//! the registered models), with the dangling-FK seed row below remaining
+//! the sanctioned test-only raw-SQL exception per CLAUDE.md (bypassing
+//! `PRAGMA foreign_keys` to model a stale reference).
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
@@ -91,21 +93,9 @@ async fn boot() {
             .model::<Post2>()
             .build()
             .expect("App::build");
-        for ddl in [
-            "CREATE TABLE dj_author (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE dj_plugin (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-             author INTEGER NOT NULL REFERENCES dj_author(id))",
-            "CREATE TABLE dj_comment (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, \
-             plugin INTEGER REFERENCES dj_plugin(id))",
-            "CREATE TABLE dj_cat (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE dj_tag (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-             category INTEGER NOT NULL REFERENCES dj_cat(id))",
-            "CREATE TABLE dj_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
-            "CREATE TABLE dj_post_tags (parent_id INTEGER NOT NULL REFERENCES dj_post(id), \
-             child_id INTEGER NOT NULL REFERENCES dj_tag(id), PRIMARY KEY (parent_id, child_id))",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         // author 1 = Ada ; plugin 1 -> author 1 ; comment 1 -> plugin 1
         // comment 2 -> plugin NULL (orphan).
         sqlx::query("INSERT INTO dj_author (name) VALUES ('Ada')")

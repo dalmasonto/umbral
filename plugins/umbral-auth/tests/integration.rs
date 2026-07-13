@@ -1,7 +1,7 @@
 //! End-to-end coverage for the M9 v1 umbral-auth plugin.
 //!
-//! Boots a real `App` with [`AuthPlugin`] registered, applies the
-//! `auth_user` table directly against an in-memory SQLite pool, and
+//! Boots a real `App` with [`AuthPlugin`] registered, derives the schema from
+//! the registered models against a temp SQLite pool, and
 //! exercises the M9 helper surface ([`hash_password`], [`verify_password`],
 //! [`create_user`], [`authenticate`], [`set_password`]) against that pool.
 //!
@@ -12,10 +12,10 @@
 //! `crates/umbral-core/tests/plugin_contract.rs` and
 //! `crates/umbral-core/tests/migrate.rs`.
 //!
-//! The `auth_user` table is created with a raw `CREATE TABLE`. The M7
-//! `make_in` / `run_in` loop also handles this, but the helpers are what
-//! these tests pin; a raw DDL keeps the setup tight and the assertions
-//! focused on the helpers' behaviour.
+//! The schema is derived from the MODELS by `migrate::create_tables_for_tests`,
+//! so it cannot drift from them. It used to be a hand-written `CREATE TABLE`,
+//! which had quietly omitted the `UNIQUE` that `AuthUser::email` declares — the
+//! suite was proving things against a schema laxer than production's.
 //!
 //! See `plugins/umbral-auth/src/lib.rs` for the surface under test and
 //! `docs/specs/02-plugin-contract.md` "What shipped at M7 v1" for the
@@ -69,28 +69,9 @@ async fn boot() {
             .build()
             .expect("App::build should succeed with AuthPlugin");
 
-        // Create the auth_user table directly. M7's migrate engine
-        // would do this via `make_in` + `run_in` against a tempdir,
-        // but the auth tests are testing the helpers, not the
-        // migration loop. Raw CREATE TABLE keeps the setup tight.
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE auth_user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                email TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                is_active INTEGER NOT NULL,
-                is_staff INTEGER NOT NULL,
-                is_superuser INTEGER NOT NULL,
-                date_joined TEXT NOT NULL,
-                last_login TEXT,
-                email_verified_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }
@@ -477,9 +458,15 @@ async fn createsuperuser_noinput_errors_without_password_env() {
 async fn create_user_normalizes_username_and_email_to_lowercase() {
     boot().await;
 
+    // Its own email, not `dave@example.com`: the model declares
+    // `#[umbral(unique)]` on `email`, and now that the test schema is derived from
+    // the model that UNIQUE is actually enforced — `authenticate_rejects_inactive_user`
+    // already owns `dave@example.com` in this shared database. The hand-written test
+    // table used to omit the constraint, so this collision passed unnoticed against a
+    // schema laxer than production's.
     let user = create_user(
         "  MixedCase_Dave  ",
-        "Dave@Example.COM",
+        "MixedCase_Dave@Example.COM",
         "Tr0ub4dour&3xpl-dave",
     )
     .await
@@ -490,7 +477,7 @@ async fn create_user_normalizes_username_and_email_to_lowercase() {
         "username is trimmed + lowercased on the returned struct"
     );
     assert_eq!(
-        user.email, "dave@example.com",
+        user.email, "mixedcase_dave@example.com",
         "email is trimmed + lowercased on the returned struct"
     );
 
@@ -502,7 +489,7 @@ async fn create_user_normalizes_username_and_email_to_lowercase() {
             .await
             .expect("row stored under the lowercased username");
     assert_eq!(row.0, "mixedcase_dave");
-    assert_eq!(row.1, "dave@example.com");
+    assert_eq!(row.1, "mixedcase_dave@example.com");
 }
 
 /// A second signup that differs from an existing account only by case is

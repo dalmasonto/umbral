@@ -102,15 +102,12 @@ async fn boot() -> axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let p = umbral::db::pool();
         for ddl in [
-            "CREATE TABLE gq_author (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL)",
-            "CREATE TABLE gq_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, \
-             internal_cost TEXT, author INTEGER NOT NULL REFERENCES gq_author(id))",
-            "CREATE TABLE gq_user (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL, \
-             password_hash TEXT NOT NULL)",
-            "CREATE TABLE gq_secret (id INTEGER PRIMARY KEY AUTOINCREMENT, api_key TEXT NOT NULL, \
-             author INTEGER NOT NULL REFERENCES gq_author(id))",
             "INSERT INTO gq_author (id, username) VALUES (1, 'ada'), (2, 'grace')",
             "INSERT INTO gq_post (title, author) VALUES ('Analytical Engine', 1), \
              ('Notes on the Engine', 1), ('COBOL', 2)",

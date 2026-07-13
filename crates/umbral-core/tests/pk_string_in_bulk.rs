@@ -26,10 +26,9 @@ async fn boot() -> SqlitePool {
         .model::<Tag>()
         .build()
         .expect("App::build");
-    sqlx::query("CREATE TABLE ib_tag (slug TEXT PRIMARY KEY, label TEXT NOT NULL)")
-        .execute(&pool)
+    umbral_core::migrate::create_tables_for_tests()
         .await
-        .expect("create");
+        .expect("create the test schema");
     for (slug, label) in &[("rust", "Rust"), ("go", "Go"), ("zig", "Zig")] {
         sqlx::query("INSERT INTO ib_tag (slug, label) VALUES (?, ?)")
             .bind(*slug)

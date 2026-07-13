@@ -54,14 +54,11 @@ async fn boot() -> axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let p = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE pg_item (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-             rank INTEGER NOT NULL)",
-        )
-        .execute(&p)
-        .await
-        .expect("ddl");
         // Ten rows, five distinct ranks — every rank is a tie.
         for i in 1..=10 {
             sqlx::query("INSERT INTO pg_item (name, rank) VALUES (?, ?)")

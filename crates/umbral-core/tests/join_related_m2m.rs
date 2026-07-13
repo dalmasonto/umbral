@@ -62,45 +62,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE jrm2m_tag (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE tag");
-        sqlx::query(
-            "CREATE TABLE jrm2m_category (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE category");
-        sqlx::query(
-            "CREATE TABLE jrm2m_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                category INTEGER NOT NULL REFERENCES jrm2m_category(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE post");
-        // Junction table — naming convention `<parent_table>_<field>`.
-        sqlx::query(
-            "CREATE TABLE jrm2m_post_tags (
-                parent_id INTEGER NOT NULL REFERENCES jrm2m_post(id),
-                child_id INTEGER NOT NULL REFERENCES jrm2m_tag(id),
-                PRIMARY KEY (parent_id, child_id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE junction");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         // Categories: 1 = news, 2 = tech
         for name in &["news", "tech"] {

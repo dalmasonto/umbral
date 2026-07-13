@@ -363,3 +363,22 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 78. [ ] **266 test files still hand-write their `CREATE TABLE`** — `umbral_testing::create_tables()` (features.md #79) derives the test schema from the model registry, so it cannot drift. The existing suites predate it and each carries its own hand-written DDL, which is a second source of truth for the schema: add a column to a model and those tables silently lack it, the ORM queries a column that isn't there, and error-swallowing on the path turns that into a test that passes with the wrong answer rather than failing. That already happened once (`146c34a8` — a soft-delete column missing from a fixture made an authz test report a user was a moderator when they were not).
 
     Mechanical to fix (delete the DDL, call `create_tables()` after `App::build()`), but 266 files is its own pass — and each conversion is a chance to surface a drift bug that is currently hiding, so it wants attention rather than a blind sed. Start with the suites whose models change most: `plugins/umbral-admin/tests`, `plugins/umbral-rest/tests`, and the website's `plugin_directory`.
+
+79. [ ] **M2M with a Uuid-PK child is broken on SQLite under a real schema** — found by the gaps3 #78 test-schema conversion, and the exact class of bug that conversion exists to expose.
+
+    The framework stores the two sides of the junction in DIFFERENT representations:
+
+    - the ORM writes a `Uuid` primary key as a **BLOB** (sqlx's `Encode<Sqlite> for Uuid` uses `as_bytes()`), even though the migration engine declares the column `TEXT` (`migrate.rs`: `SqlType::Text | SqlType::Uuid => "TEXT"`);
+    - the M2M junction writes `child_id` as the uuid's **TEXT** string — `forms_runtime::pk_string_to_sea_value` maps `SqlType::Uuid` to `sea_query::Value::String` (`forms_runtime.rs:157`).
+
+    The junction table a real migration emits carries the FK:
+
+        "child_id" TEXT NOT NULL REFERENCES "fmc_badge"("id") ON DELETE CASCADE
+
+    A TEXT `child_id` can never match a BLOB `id`, so on any migration-created schema an M2M whose CHILD has a Uuid PK fails the insert with `FOREIGN KEY constraint failed`. `crates/umbral-core/tests/form_m2m_non_i64_child.rs` has been passing only because its hand-written junction table had **no FK** — the constraint that would have caught this was never there. That file therefore keeps its hand-written schema for now, with a comment pointing here; it should convert once this is fixed.
+
+    Two candidate fixes, and the choice is a real decision rather than a typo:
+    - make the junction bind the child PK with the same coercion the child table uses (`pk_string_to_sea_value` returns `Value::Uuid`), so both sides are BLOBs; or
+    - make the ORM store `Uuid` as TEXT everywhere, matching the column type `migrate` actually declares. This is the more honest shape — a `TEXT` column holding blobs is a lie — but it touches every uuid read/write path and needs a data migration story for anyone already storing blobs.
+
+    Postgres is likely unaffected (a real `uuid` column type, and both sides bind as uuid), but that is untested here.

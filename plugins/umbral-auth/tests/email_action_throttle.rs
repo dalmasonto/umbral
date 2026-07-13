@@ -71,6 +71,7 @@ async fn boot() -> &'static Router {
         let app = umbral::App::builder()
             .settings(settings)
             .database("default", pool)
+            .plugin(umbral_sessions::SessionsPlugin::default().without_auto_layer())
             .plugin(
                 AuthPlugin::<AuthUser>::default()
                     .with_default_routes()
@@ -83,71 +84,12 @@ async fn boot() -> &'static Router {
             .build()
             .expect("App::build should succeed");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let router = app.into_router();
         ROUTER.set(router).ok();
-
-        let pool = umbral::db::pool();
-
-        sqlx::query(
-            "CREATE TABLE auth_user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                is_active INTEGER NOT NULL,
-                is_staff INTEGER NOT NULL,
-                is_superuser INTEGER NOT NULL,
-                date_joined TEXT NOT NULL,
-                last_login TEXT,
-                email_verified_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user table");
-
-        sqlx::query(
-            "CREATE TABLE auth_challenge (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                purpose TEXT NOT NULL,
-                secret_hash TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                attempts INTEGER NOT NULL,
-                used_at TEXT,
-                created_at TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_challenge table");
-
-        sqlx::query(
-            "CREATE TABLE auth_token (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                key_hash TEXT NOT NULL UNIQUE,
-                name TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                last_used_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_token table");
-
-        sqlx::query(
-            "CREATE TABLE session (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                data TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session table");
     })
     .await;
 

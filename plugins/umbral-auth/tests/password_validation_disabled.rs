@@ -56,24 +56,11 @@ async fn disabled_validation_accepts_weak_password_at_register_route() {
         .build()
         .expect("App::build should succeed");
 
+    umbral::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
+
     let pool = umbral::db::pool();
-    sqlx::query(
-        "CREATE TABLE auth_user (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            email TEXT NOT NULL,
-            password_hash TEXT NOT NULL,
-            is_active INTEGER NOT NULL,
-            is_staff INTEGER NOT NULL,
-            is_superuser INTEGER NOT NULL,
-            date_joined TEXT NOT NULL,
-            last_login TEXT,
-            email_verified_at TEXT
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create auth_user table");
 
     // The disabled policy is installed ambiently in on_ready; the route reads
     // it via `validate_password`, so `"a"` passes the boundary check.

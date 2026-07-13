@@ -63,10 +63,9 @@ async fn a_second_claimer_skips_the_locked_row_instead_of_blocking() {
         .execute(&pool)
         .await
         .expect("drop");
-    sqlx::query("CREATE TABLE ful_job (id BIGINT PRIMARY KEY, status TEXT NOT NULL)")
-        .execute(&pool)
+    umbral_core::migrate::create_tables_for_tests()
         .await
-        .expect("create");
+        .expect("create the test schema");
     sqlx::query("INSERT INTO ful_job (id, status) VALUES (1, 'pending'), (2, 'pending')")
         .execute(&pool)
         .await

@@ -107,66 +107,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE audr_user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                manager INTEGER REFERENCES audr_user(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE user");
-        sqlx::query(
-            "CREATE TABLE audr_tag (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE tag");
-        sqlx::query(
-            "CREATE TABLE audr_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                author INTEGER NOT NULL REFERENCES audr_user(id),
-                editor INTEGER REFERENCES audr_user(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE post");
-        sqlx::query(
-            "CREATE TABLE audr_post_tags (
-                parent_id INTEGER NOT NULL REFERENCES audr_post(id) ON DELETE CASCADE,
-                child_id  INTEGER NOT NULL REFERENCES audr_tag(id)  ON DELETE CASCADE,
-                PRIMARY KEY (parent_id, child_id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE junction");
-        sqlx::query(
-            "CREATE TABLE audr_comment (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                body TEXT NOT NULL,
-                post INTEGER NOT NULL REFERENCES audr_post(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE comment");
-        sqlx::query(
-            "CREATE TABLE audr_review (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                stars INTEGER NOT NULL,
-                post INTEGER NOT NULL REFERENCES audr_post(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE review");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         // Users:
         //   1: ceo       (no manager)

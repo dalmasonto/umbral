@@ -53,18 +53,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE ord_item (\
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                 name TEXT NOT NULL,\
-                 score INTEGER NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create ord_item table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
+        let pool = umbral::db::pool();
         // Seed rows with deliberately non-sequential (name, score) so order is observable.
         sqlx::query(
             "INSERT INTO ord_item (name, score) VALUES \

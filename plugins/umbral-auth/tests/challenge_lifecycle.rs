@@ -49,43 +49,9 @@ async fn boot() {
             .build()
             .expect("App::build should succeed with AuthPlugin");
 
-        let pool = umbral::db::pool();
-
-        // auth_user table — identical shape to integration.rs.
-        sqlx::query(
-            "CREATE TABLE auth_user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                email TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                is_active INTEGER NOT NULL,
-                is_staff INTEGER NOT NULL,
-                is_superuser INTEGER NOT NULL,
-                date_joined TEXT NOT NULL,
-                last_login TEXT,
-                email_verified_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user table");
-
-        // auth_challenge table — columns match the AuthChallenge struct.
-        sqlx::query(
-            "CREATE TABLE auth_challenge (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                purpose TEXT NOT NULL,
-                secret_hash TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                attempts INTEGER NOT NULL,
-                used_at TEXT,
-                created_at TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_challenge table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

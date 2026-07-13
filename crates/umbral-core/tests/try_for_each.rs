@@ -38,12 +38,9 @@ async fn boot() {
             .expect("App::build should succeed");
         // Schema + seed. Run inside the boot so every test sees the
         // same 25 rows in PK order without each test reseeding.
-        sqlx::query(
-            "CREATE TABLE item (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)",
-        )
-        .execute(&pool)
-        .await
-        .expect("create table");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         for i in 1..=25 {
             sqlx::query("INSERT INTO item (label) VALUES (?)")
                 .bind(format!("row-{i}"))

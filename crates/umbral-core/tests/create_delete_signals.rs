@@ -54,12 +54,9 @@ async fn boot() {
             .model::<SigNote>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE sig_note (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)",
-        )
-        .execute(&umbral::db::pool())
-        .await
-        .expect("ddl");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

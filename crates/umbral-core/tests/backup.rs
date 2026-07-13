@@ -63,33 +63,9 @@ async fn boot() {
             .build()
             .expect("App::build should succeed");
 
-        // Create the model tables via raw SQL so the test doesn't
-        // race against the migrate seed in other test binaries that
-        // share these models. The shapes match what the M5 + M5.1
-        // engine would emit (INTEGER PRIMARY KEY AUTOINCREMENT for
-        // the `i64` PKs).
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS post (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                body TEXT NOT NULL,\
-                published_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create post");
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS comment (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                body TEXT NOT NULL,\
-                posted_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create comment");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

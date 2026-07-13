@@ -14,6 +14,14 @@ use tokio::sync::{Barrier, Mutex, OnceCell};
 #[umbral(table = "goc_widget")]
 pub struct Widget {
     pub id: i64,
+    /// `unique` is load-bearing, not decoration: `get_or_create`'s
+    /// convergence-under-race guarantee IS the database rejecting the second
+    /// concurrent insert. The old hand-written test table declared
+    /// `slug TEXT NOT NULL UNIQUE` while this model did not — so the test proved
+    /// a guarantee against a schema no migration would ever produce. Now the
+    /// schema is derived from the model, the constraint has to be declared here,
+    /// which is also what a real app would have to do to get the behaviour.
+    #[umbral(unique)]
     pub slug: String,
     pub label: String,
     pub stock: i64,
@@ -48,18 +56,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE goc_widget (\
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                 slug TEXT NOT NULL UNIQUE,\
-                 label TEXT NOT NULL,\
-                 stock INTEGER NOT NULL DEFAULT 0\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create goc_widget");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

@@ -54,17 +54,9 @@ async fn boot() {
             .model::<Post>()
             .build()
             .expect("App::build");
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE updpost (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                published BOOLEAN NOT NULL DEFAULT 0\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE updpost");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

@@ -66,15 +66,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS sig_post (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL\
-             )",
-        )
-        .execute(&umbral::db::pool())
-        .await
-        .expect("create sig_post table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

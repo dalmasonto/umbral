@@ -65,16 +65,9 @@ async fn boot() {
             .model::<Note>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE dsig_note (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                body  TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

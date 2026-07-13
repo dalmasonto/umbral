@@ -49,17 +49,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        for ddl in [
-            "CREATE TABLE pkm2m_lab (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
-            "CREATE TABLE pkm2m_researcher (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE pkm2m_lab_members (
-                parent_id TEXT NOT NULL,
-                child_id INTEGER NOT NULL,
-                PRIMARY KEY (parent_id, child_id)
-            )",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         for (n, name) in &[(1u128, "Quantum Lab"), (2u128, "Bio Lab")] {
             sqlx::query("INSERT INTO pkm2m_lab (id, name) VALUES (?, ?)")

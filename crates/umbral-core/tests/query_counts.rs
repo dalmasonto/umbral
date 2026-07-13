@@ -299,13 +299,10 @@ async fn boot_and_seed(n: i64) {
             .model::<Reaction>()
             .build()
             .expect("App::build");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         for ddl in [
-            "CREATE TABLE author (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
-            "CREATE TABLE plugin (id INTEGER PRIMARY KEY, name TEXT NOT NULL, author INTEGER NOT NULL)",
-            "CREATE TABLE tag (id INTEGER PRIMARY KEY, label TEXT NOT NULL)",
-            "CREATE TABLE comment (id INTEGER PRIMARY KEY, body TEXT NOT NULL, plugin INTEGER NOT NULL)",
-            "CREATE TABLE reaction (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, comment INTEGER NOT NULL)",
-            "CREATE TABLE comment_tags (parent_id INTEGER NOT NULL, child_id INTEGER NOT NULL)",
             "INSERT INTO author (id, name) VALUES (1, 'Ada')",
             "INSERT INTO plugin (id, name, author) VALUES (1, 'orm', 1)",
             "INSERT INTO tag (id, label) VALUES (1, 'perf'), (2, 'safety')",

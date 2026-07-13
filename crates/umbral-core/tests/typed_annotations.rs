@@ -61,13 +61,10 @@ async fn boot() {
             .model::<TaPost>()
             .build()
             .expect("App::build");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         let pool = umbral::db::pool();
-        for ddl in [
-            "CREATE TABLE ta_author (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE ta_post (id INTEGER PRIMARY KEY AUTOINCREMENT, author INTEGER NOT NULL, title TEXT NOT NULL)",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
         // ada: 3 posts, bob: 1, cleo: 0 — a deliberate tie-free ordering.
         sqlx::query("INSERT INTO ta_author (name) VALUES ('ada'),('bob'),('cleo')")
             .execute(&pool)

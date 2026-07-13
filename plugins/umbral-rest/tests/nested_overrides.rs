@@ -116,29 +116,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        for sql in &[
-            "CREATE TABLE no_zone (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                city TEXT NOT NULL,\
-                secret_zone TEXT NOT NULL\
-             )",
-            "CREATE TABLE no_child (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL,\
-                email TEXT NOT NULL,\
-                secret TEXT NOT NULL,\
-                zone INTEGER NOT NULL REFERENCES no_zone(id)\
-             )",
-            "CREATE TABLE no_parent (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                label TEXT NOT NULL,\
-                created_by INTEGER NOT NULL REFERENCES no_child(id)\
-             )",
-        ] {
-            sqlx::query(sql).execute(&pool).await.expect("create table");
-        }
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
+        let pool = umbral::db::pool();
         sqlx::query("INSERT INTO no_zone (city, secret_zone) VALUES ('Nairobi', 'ZZZ')")
             .execute(&pool)
             .await

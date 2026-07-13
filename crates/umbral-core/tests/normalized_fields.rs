@@ -51,16 +51,9 @@ async fn boot() {
             .model::<Account>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE norm_account (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                email        TEXT NOT NULL UNIQUE,
-                display_name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

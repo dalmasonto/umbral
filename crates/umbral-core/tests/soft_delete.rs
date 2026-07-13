@@ -49,15 +49,15 @@ async fn boot() {
             .model::<HardPost>()
             .build()
             .expect("App::build should succeed");
-        sqlx::query("CREATE TABLE sd_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, deleted_at TEXT)")
-            .execute(&pool)
+        umbral_core::migrate::create_tables_for_tests()
             .await
-            .expect("create sd_post");
-        sqlx::query("CREATE TABLE hard_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("create hard_post");
-        for (table, label) in &[("sd_post", "a"), ("sd_post", "b"), ("sd_post", "c"), ("hard_post", "x")] {
+            .expect("create the test schema");
+        for (table, label) in &[
+            ("sd_post", "a"),
+            ("sd_post", "b"),
+            ("sd_post", "c"),
+            ("hard_post", "x"),
+        ] {
             sqlx::query(&format!("INSERT INTO {table} (title) VALUES (?)"))
                 .bind(*label)
                 .execute(&pool)

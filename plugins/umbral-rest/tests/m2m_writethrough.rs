@@ -65,37 +65,13 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        // The schema — including the `post_tags` junction the `M2M<Tag>`
+        // field implies — comes from the models via the migration engine.
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE tag (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                name TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create tag");
-        sqlx::query(
-            "CREATE TABLE post (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create post");
-        // Junction. The macro convention is `<parent>_<field>`,
-        // so for `Post.tags` that's `post_tags`.
-        sqlx::query(
-            "CREATE TABLE post_tags (\
-                parent_id INTEGER NOT NULL REFERENCES post(id),\
-                child_id INTEGER NOT NULL REFERENCES tag(id),\
-                PRIMARY KEY (parent_id, child_id)\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create post_tags");
         sqlx::query("PRAGMA foreign_keys = ON")
             .execute(&pool)
             .await

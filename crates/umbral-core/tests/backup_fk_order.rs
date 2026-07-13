@@ -47,18 +47,9 @@ async fn boot() {
             .model::<Child>()
             .build()
             .expect("App::build");
-        let pool = umbral::db::pool();
-        // `ord_child.parent` is a real FK — an out-of-order restore
-        // (child before parent) fails the FK check.
-        for ddl in [
-            "CREATE TABLE ord_parent (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE ord_child (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                parent INTEGER NOT NULL REFERENCES ord_parent(id),\
-                note TEXT NOT NULL)",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

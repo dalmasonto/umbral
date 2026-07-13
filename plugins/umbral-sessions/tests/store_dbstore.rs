@@ -33,22 +33,16 @@ async fn boot() {
         umbral::App::builder()
             .settings(settings)
             .database("default", pool)
+            // No SessionsPlugin here (this test installs the `DbStore` itself),
+            // so register the model directly — that is what lets the test schema
+            // be derived from it instead of hand-written DDL.
+            .model::<umbral_sessions::Session>()
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL,\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

@@ -70,15 +70,9 @@ async fn boot() {
             .model::<Invoice>()
             .build()
             .expect("App::build");
-        let pool = umbral::db::pool();
-        for ddl in [
-            "CREATE TABLE club (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, deleted_at TEXT)",
-            "CREATE TABLE team (id INTEGER PRIMARY KEY AUTOINCREMENT, club INTEGER NOT NULL, name TEXT NOT NULL, deleted_at TEXT)",
-            "CREATE TABLE player (id INTEGER PRIMARY KEY AUTOINCREMENT, team INTEGER NOT NULL, name TEXT NOT NULL, deleted_at TEXT)",
-            "CREATE TABLE invoice (id INTEGER PRIMARY KEY AUTOINCREMENT, club INTEGER, amount INTEGER NOT NULL, deleted_at TEXT)",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

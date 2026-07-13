@@ -51,17 +51,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE widget \
-             (id INTEGER PRIMARY KEY AUTOINCREMENT, \
-              name TEXT NOT NULL, \
-              qty  INTEGER NOT NULL)",
-        )
-        .execute(&pool)
-        .await
-        .expect("create widget");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
+        let pool = umbral::db::pool();
         // Seed the two hand-checked named rows first (IDs 1, 2) so they
         // always fall within MAX_LIST_ROWS and the header/quoting assertions
         // in list_exports_csv remain meaningful.

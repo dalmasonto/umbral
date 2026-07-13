@@ -30,18 +30,9 @@ async fn boot() -> SqlitePool {
         .model::<Widget>()
         .build()
         .expect("App::build");
-    sqlx::query(
-        "CREATE TABLE csv_widget (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            qty BIGINT NOT NULL,
-            active BOOLEAN NOT NULL,
-            note TEXT
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create table");
+    umbral_core::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
     pool
 }
 

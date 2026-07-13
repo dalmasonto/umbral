@@ -55,16 +55,9 @@ async fn build_once() -> SqlitePool {
         .build_deferred()
         .expect("App::build_deferred");
 
-    sqlx::query(
-        "CREATE TABLE dttz_event (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            label TEXT NOT NULL,
-            at TEXT NOT NULL
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("CREATE TABLE");
+    umbral_core::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
 
     pool
 }

@@ -83,13 +83,12 @@ async fn boot() -> axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let p = umbral::db::pool();
         for ddl in [
-            "CREATE TABLE mu_author (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL)",
-            "CREATE TABLE mu_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, \
-             author INTEGER NOT NULL REFERENCES mu_author(id), \
-             is_published BOOLEAN NOT NULL DEFAULT 0, internal_score INTEGER)",
-            "CREATE TABLE mu_readonly (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
             "INSERT INTO mu_author (id, username) VALUES (1, 'ada')",
             "INSERT INTO mu_post (id, title, author) VALUES (1, 'Existing', 1)",
         ] {

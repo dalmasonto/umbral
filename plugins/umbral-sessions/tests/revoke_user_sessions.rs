@@ -29,22 +29,16 @@ async fn boot() {
         umbral::App::builder()
             .settings(settings)
             .database("default", pool)
+            // No SessionsPlugin here (this test drives `create_session` /
+            // `revoke_user_sessions` directly), so register the model itself —
+            // that is what lets the test schema be derived from it.
+            .model::<umbral_sessions::Session>()
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL,\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

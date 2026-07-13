@@ -40,17 +40,9 @@ async fn boot() {
             .model::<Brand>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE op_brand (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                slug TEXT NOT NULL,
-                website TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         for (name, slug) in &[("Acme", "acme"), ("UmbralGear", "umbralgear")] {
             sqlx::query("INSERT INTO op_brand (name, slug) VALUES (?, ?)")
                 .bind(*name)

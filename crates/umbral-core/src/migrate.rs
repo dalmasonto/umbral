@@ -2039,6 +2039,62 @@ pub fn squash_in(dir: &Path, plugin: &str) -> Result<SquashOutcome, MigrateError
     Ok(SquashOutcome { path, id, replaced })
 }
 
+/// Create a table for every registered model, deriving the schema from the
+/// models themselves. **For tests.**
+///
+/// This is the migration engine pointed at an empty database: diff `Snapshot`
+/// nothing against [`Snapshot::current`], render the resulting `CreateTable`
+/// operations for the ambient backend, and run them. Same `ModelMeta` the ORM
+/// reads, same renderer [`run`] uses — so the schema it produces cannot
+/// disagree with your models.
+///
+/// # Why this exists
+///
+/// The alternative, and what most test suites reach for, is a hand-written
+/// `CREATE TABLE` in the test file. That is a **second source of truth** for the
+/// schema, and it drifts: add a column to the model and the test's table
+/// silently lacks it. The ORM then queries a column that does not exist, and any
+/// error-swallowing on the path (an `unwrap_or(false)`) turns that failure into a
+/// test that *passes with the wrong answer* rather than failing. That is not a
+/// hypothetical — a soft-delete column drifting out of a fixture is exactly what
+/// made an authorization test report that a user was already a moderator when
+/// they were not.
+///
+/// # Not a substitute for `migrate`
+///
+/// It writes no ledger row and runs no migration file. It cannot ALTER an
+/// existing table, so it will not carry a database from one shape to another —
+/// which is the entire job of [`run`] and the reason `makemigrations` exists.
+/// Point it at a throwaway database, never a real one.
+///
+/// Idempotent: an "already exists" error is skipped, so a shared test boot that
+/// runs twice is harmless. Returns the number of statements executed.
+pub async fn create_tables_for_tests() -> Result<u64, MigrateError> {
+    let ops = diff(&Snapshot { models: Vec::new() }, &Snapshot::current())?;
+    let backend = match crate::db::pool_dispatched() {
+        crate::db::DbPool::Sqlite(_) => "sqlite",
+        crate::db::DbPool::Postgres(_) => "postgres",
+    };
+
+    let mut executed = 0u64;
+    for op in &ops {
+        for sql in render_operation_for(op, backend) {
+            let res = match crate::db::pool_dispatched() {
+                crate::db::DbPool::Sqlite(p) => sqlx::query(&sql).execute(p).await.map(|_| ()),
+                crate::db::DbPool::Postgres(p) => sqlx::query(&sql).execute(p).await.map(|_| ()),
+            };
+            match res {
+                Ok(()) => executed += 1,
+                // A shared `OnceCell` boot may land here twice; a test that dies
+                // on its own setup is worse than useless.
+                Err(e) if e.to_string().to_lowercase().contains("already exists") => {}
+                Err(e) => return Err(MigrateError::Sqlx(e)),
+            }
+        }
+    }
+    Ok(executed)
+}
+
 /// Apply every pending migration across every registered plugin's
 /// `migrations/<plugin>/` directory to the ambient pool. Reads the
 /// `umbral_migrations` tracking table to determine "pending"; each

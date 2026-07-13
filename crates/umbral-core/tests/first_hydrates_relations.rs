@@ -43,16 +43,9 @@ async fn boot() {
             .model::<Book>()
             .build()
             .expect("App::build");
-        for ddl in [
-            "CREATE TABLE fhr_author (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-            "CREATE TABLE fhr_book (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                author INTEGER NOT NULL REFERENCES fhr_author(id),
-                title TEXT NOT NULL
-            )",
-        ] {
-            sqlx::query(ddl).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         sqlx::query("INSERT INTO fhr_author (name) VALUES ('Ada')")
             .execute(&pool)
             .await

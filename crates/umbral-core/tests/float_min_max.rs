@@ -163,16 +163,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE flt_product (\
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                 score REAL NOT NULL,\
-                 rating REAL NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create table");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

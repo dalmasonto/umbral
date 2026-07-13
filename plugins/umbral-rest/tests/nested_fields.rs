@@ -84,28 +84,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        for sql in &[
-            "CREATE TABLE nf_profile (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                github_url TEXT NOT NULL,\
-                bio TEXT NOT NULL\
-             )",
-            "CREATE TABLE nf_author (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                name TEXT NOT NULL,\
-                nickname TEXT NOT NULL,\
-                profile INTEGER NOT NULL REFERENCES nf_profile(id)\
-             )",
-            "CREATE TABLE nf_post (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                author INTEGER NOT NULL REFERENCES nf_author(id)\
-             )",
-        ] {
-            sqlx::query(sql).execute(&pool).await.expect("create table");
-        }
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
+        let pool = umbral::db::pool();
         sqlx::query("INSERT INTO nf_profile (github_url, bio) VALUES ('gh/alice', 'hello world')")
             .execute(&pool)
             .await

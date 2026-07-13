@@ -123,19 +123,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE brand (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                name TEXT NOT NULL,\
-                logo TEXT NOT NULL DEFAULT '',\
-                spec_sheet TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create brand table");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
+        let pool = umbral::db::pool();
         // Row 1: image key + file key, both non-empty.
         // Row 2: null spec_sheet (nullable) + empty-string logo.
         sqlx::query(

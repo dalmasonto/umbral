@@ -485,47 +485,19 @@ pub trait Factory {
 // Schema — build the test database from the models themselves (feature #79)
 // =========================================================================
 
-/// Error from [`create_tables`].
-#[derive(Debug)]
-pub enum SchemaError {
-    /// The migration engine could not diff the model registry.
-    Diff(umbral::migrate::MigrateError),
-    /// A generated `CREATE TABLE` failed against the pool.
-    Sql(sqlx::Error),
-}
-
-impl std::fmt::Display for SchemaError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SchemaError::Diff(e) => write!(f, "could not diff the model registry: {e}"),
-            SchemaError::Sql(e) => write!(f, "could not create the test schema: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for SchemaError {}
-
 /// Create a table for every registered model, deriving the schema from the
 /// models themselves.
 ///
-/// **This is the one that stops your tests lying to you.** The alternative —
-/// and what most of this repo still does — is hand-writing `CREATE TABLE` in
-/// the test file. That schema is a *second source of truth*, and it drifts
-/// silently: add a column to the model, and the hand-written test table no
-/// longer has it. The ORM then queries a column that does not exist, and if any
-/// code on the path swallows the error (an `unwrap_or(false)`, say) the test
-/// does not fail — it *passes with the wrong answer*. That is not hypothetical;
-/// it is exactly how a soft-delete column drifting out of a fixture made an
-/// authorization test report that a user was already a moderator when they were
-/// not.
+/// A thin alias for [`umbral::migrate::create_tables_for_tests`], which is where
+/// the implementation lives — the migration engine already knows how to turn a
+/// `ModelMeta` into DDL, and umbral-core's own test suite needs the same helper
+/// without a dev-dependency cycle back through this crate.
 ///
-/// Here the schema comes from the same `ModelMeta` the ORM reads and the same
-/// operation renderer `migrate` uses in production, so it cannot drift by
-/// construction. Add a column to a model and the test table has it, with no
-/// edit anywhere.
-///
-/// Call it after `App::builder()…build()` (which registers the models and sets
-/// the ambient pool) and before touching any data:
+/// **This is the one that stops your tests lying to you.** The alternative is a
+/// hand-written `CREATE TABLE` in the test file: a *second source of truth* for
+/// the schema, which drifts the moment a model grows a column. The ORM then
+/// queries a column that isn't there, and any error-swallowing on the path (an
+/// `unwrap_or(false)`) turns that into a test that PASSES WITH THE WRONG ANSWER.
 ///
 /// ```ignore
 /// umbral::App::builder()
@@ -537,49 +509,10 @@ impl std::error::Error for SchemaError {}
 /// umbral_testing::create_tables().await?;   // schema == your models. always.
 /// ```
 ///
-/// Idempotent enough for a shared-boot test file: an already-created table is
-/// left alone rather than erroring, so a `OnceCell` boot that runs twice is
-/// harmless.
-///
-/// Works on both backends — it renders for whichever pool is ambient.
-pub async fn create_tables() -> Result<(), SchemaError> {
-    let empty = umbral::migrate::Snapshot { models: Vec::new() };
-    let current = umbral::migrate::Snapshot::current();
-    let ops = umbral::migrate::diff(&empty, &current).map_err(SchemaError::Diff)?;
-
-    let (backend, pool) = match umbral::db::pool_dispatched() {
-        umbral::db::DbPool::Sqlite(p) => ("sqlite", Backend::Sqlite(p.clone())),
-        umbral::db::DbPool::Postgres(p) => ("postgres", Backend::Postgres(p.clone())),
-    };
-
-    for op in &ops {
-        for sql in umbral::migrate::render_operation_for(op, backend) {
-            // "already exists" is not a failure here: a test file with a shared
-            // boot may create the schema more than once, and a test that dies on
-            // its own setup is worse than useless.
-            let res = match &pool {
-                Backend::Sqlite(p) => sqlx::query(&sql).execute(p).await.map(|_| ()),
-                Backend::Postgres(p) => sqlx::query(&sql).execute(p).await.map(|_| ()),
-            };
-            if let Err(e) = res {
-                if is_already_exists(&e) {
-                    continue;
-                }
-                return Err(SchemaError::Sql(e));
-            }
-        }
-    }
-    Ok(())
-}
-
-enum Backend {
-    Sqlite(sqlx::SqlitePool),
-    Postgres(sqlx::PgPool),
-}
-
-fn is_already_exists(e: &sqlx::Error) -> bool {
-    let msg = e.to_string().to_lowercase();
-    msg.contains("already exists")
+/// Idempotent, and works on both backends. Most tests want [`boot`], which calls
+/// this for you.
+pub async fn create_tables() -> Result<(), umbral::migrate::MigrateError> {
+    umbral::migrate::create_tables_for_tests().await.map(|_| ())
 }
 
 // =========================================================================

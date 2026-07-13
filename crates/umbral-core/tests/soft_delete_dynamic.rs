@@ -63,25 +63,9 @@ async fn boot() {
             .model::<DynHardPost>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE dynsdt_post (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                title      TEXT NOT NULL,
-                deleted_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create dynsdt_post");
-        sqlx::query(
-            "CREATE TABLE dynsdt_hard (
-                id    INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create dynsdt_hard");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

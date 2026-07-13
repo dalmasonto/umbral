@@ -69,26 +69,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE oto_user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE user");
-        sqlx::query(
-            "CREATE TABLE oto_profile (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user INTEGER NOT NULL UNIQUE REFERENCES oto_user(id),
-                avatar TEXT NOT NULL,
-                bio TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE profile");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         // alice has a profile; bob doesn't. carol exists to test
         // that the loader handles the "no match" case AND populates

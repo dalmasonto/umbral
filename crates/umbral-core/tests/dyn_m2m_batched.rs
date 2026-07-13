@@ -48,23 +48,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        for sql in &[
-            "CREATE TABLE m2mb_tag (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-            "CREATE TABLE m2mb_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL
-            )",
-            "CREATE TABLE m2mb_post_tags (
-                parent_id INTEGER NOT NULL REFERENCES m2mb_post(id) ON DELETE CASCADE,
-                child_id  INTEGER NOT NULL REFERENCES m2mb_tag(id)  ON DELETE CASCADE,
-                PRIMARY KEY (parent_id, child_id)
-            )",
-        ] {
-            sqlx::query(sql).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         for (id, name) in &[(1_i64, "rust"), (2, "web"), (3, "framework")] {
             sqlx::query("INSERT INTO m2mb_tag (id, name) VALUES (?, ?)")
                 .bind(*id)

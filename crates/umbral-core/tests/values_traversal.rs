@@ -49,27 +49,9 @@ async fn boot() {
             .model::<Post>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE vt_author (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                email TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE author");
-        sqlx::query(
-            "CREATE TABLE vt_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                author INTEGER NOT NULL REFERENCES vt_author(id),
-                editor INTEGER REFERENCES vt_author(id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE post");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         for (name, email) in &[("Alice", "a@x"), ("Bob", "b@x")] {
             sqlx::query("INSERT INTO vt_author (name, email) VALUES (?, ?)")
                 .bind(*name)

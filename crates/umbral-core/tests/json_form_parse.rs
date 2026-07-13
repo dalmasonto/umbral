@@ -31,21 +31,9 @@ pub struct Event {
 }
 
 async fn fresh_pool() -> SqlitePool {
-    let pool = umbral::db::connect_sqlite("sqlite::memory:")
+    umbral::db::connect_sqlite("sqlite::memory:")
         .await
-        .expect("in-memory sqlite");
-    sqlx::query(
-        "CREATE TABLE jform_event (\
-             id INTEGER PRIMARY KEY AUTOINCREMENT,\
-             kind TEXT NOT NULL,\
-             payload TEXT NOT NULL,\
-             meta TEXT\
-         )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create table");
-    pool
+        .expect("in-memory sqlite")
 }
 
 async fn boot() {
@@ -59,6 +47,9 @@ async fn boot() {
             .model::<Event>()
             .build()
             .expect("App::build");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

@@ -35,6 +35,10 @@ use umbral_rest::{AllowAny, RestPlugin};
 struct Author {
     id: i64,
     username: String,
+    // The UNIQUE the doc comment above promises. It used to live only in
+    // the hand-written DDL — the model never declared it, so the constraint
+    // vanished the moment the schema came from the models.
+    #[umbral(unique)]
     email: String,
 }
 
@@ -73,27 +77,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE author (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL,\
-                email TEXT NOT NULL UNIQUE\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create author");
-        sqlx::query(
-            "CREATE TABLE comment (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                author_id INTEGER NOT NULL REFERENCES author(id),\
-                body TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create comment");
         // SQLite needs FKs enabled per-connection. The pool gives
         // sticky-enough behaviour for these tests; production
         // setups would set this in a pool acquire hook.

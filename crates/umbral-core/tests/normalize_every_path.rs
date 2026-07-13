@@ -50,12 +50,9 @@ async fn boot() {
             .model::<NzUser>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE nz_user (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL)",
-        )
-        .execute(&umbral::db::pool())
-        .await
-        .expect("ddl");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

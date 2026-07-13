@@ -14,6 +14,31 @@
 
 #![allow(dead_code)]
 
+// NOT converted to `create_tables_for_tests()` — deliberately, and this is the
+// interesting one. See gaps3 #79.
+//
+// Converting it swaps these hand-written tables for the schema the migration engine
+// actually emits, which includes the FOREIGN KEY on the junction:
+//
+//     "child_id" TEXT NOT NULL REFERENCES "fmc_badge"("id") ON DELETE CASCADE
+//
+// And then `m2m_form_uuid_pk_child_writes_junction_rows` fails with
+// `FOREIGN KEY constraint failed`, because the framework stores the two sides in
+// DIFFERENT representations:
+//
+//   * the ORM writes a `Uuid` primary key as a BLOB (sqlx's `Encode<Sqlite> for Uuid`
+//     uses `as_bytes()`), even though `migrate` declares the column `TEXT`;
+//   * the M2M junction writes `child_id` as the uuid's TEXT string
+//     (`forms_runtime::pk_string_to_sea_value` maps `SqlType::Uuid` to `Value::String`).
+//
+// A TEXT `child_id` can never match a BLOB `id`, so on any real (migration-created)
+// schema, an M2M whose CHILD has a Uuid PK is broken on SQLite. The hand-written table
+// below has no FK, which is the only reason this suite has been passing.
+//
+// That is a production bug, not a test bug, so it is logged rather than papered over,
+// and this file keeps its hand-written schema until the bug is fixed — at which point
+// it should convert like every other suite.
+
 use std::collections::HashMap;
 use tokio::sync::OnceCell;
 use umbral::forms::FormValidate;

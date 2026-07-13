@@ -60,11 +60,9 @@ async fn build() -> axum::Router {
         .build()
         .expect("App::build");
 
-    let pool = umbral::db::pool();
-    sqlx::query("CREATE TABLE gadget (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
-        .execute(&pool)
+    umbral::migrate::create_tables_for_tests()
         .await
-        .expect("create gadget");
+        .expect("create the test schema");
 
     app.into_router()
 }

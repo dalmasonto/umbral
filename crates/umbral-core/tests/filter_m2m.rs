@@ -48,34 +48,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE fm2m_tag (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE tag");
-        sqlx::query(
-            "CREATE TABLE fm2m_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE post");
-        sqlx::query(
-            "CREATE TABLE fm2m_post_tags (
-                parent_id INTEGER NOT NULL REFERENCES fm2m_post(id) ON DELETE CASCADE,
-                child_id  INTEGER NOT NULL REFERENCES fm2m_tag(id)  ON DELETE CASCADE,
-                PRIMARY KEY (parent_id, child_id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE junction");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         for name in &["rust", "web", "framework"] {
             sqlx::query("INSERT INTO fm2m_tag (name) VALUES (?)")

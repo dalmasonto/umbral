@@ -48,16 +48,9 @@ async fn boot() {
             .model::<SecretRow>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE secretrow (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                name TEXT NOT NULL,\
-                secret TEXT NOT NULL\
-             )",
-        )
-        .execute(&umbral::db::pool())
-        .await
-        .expect("CREATE TABLE secretrow");
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
     })
     .await;
 }

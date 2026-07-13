@@ -56,24 +56,9 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        for sql in &[
-            "CREATE TABLE srn_dyn_profile (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                github_url TEXT NOT NULL
-            )",
-            "CREATE TABLE srn_dyn_author (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                profile INTEGER NOT NULL REFERENCES srn_dyn_profile(id)
-            )",
-            "CREATE TABLE srn_dyn_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                author INTEGER NOT NULL REFERENCES srn_dyn_author(id)
-            )",
-        ] {
-            sqlx::query(sql).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         for (id, url) in &[(1_i64, "https://gh/alice"), (2, "https://gh/bob")] {
             sqlx::query("INSERT INTO srn_dyn_profile (id, github_url) VALUES (?, ?)")
                 .bind(*id)

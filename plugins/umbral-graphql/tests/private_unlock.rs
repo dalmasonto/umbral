@@ -78,10 +78,12 @@ async fn boot() -> axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let p = umbral::db::pool();
         for ddl in [
-            "CREATE TABLE gp_product (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-             cost TEXT NOT NULL, supplier_notes TEXT)",
             "INSERT INTO gp_product (id, name, cost, supplier_notes) VALUES \
              (1, 'Widget', '4.20', 'acme, net 30')",
         ] {

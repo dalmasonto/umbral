@@ -206,19 +206,9 @@ async fn end_to_end_through_session_layer_zero_db_rows() {
         .build()
         .expect("App::build with CookieStore");
 
-    let pool = umbral::db::pool();
-    sqlx::query(
-        "CREATE TABLE session (\
-            id TEXT PRIMARY KEY,\
-            user_id TEXT,\
-            data TEXT NOT NULL,\
-            created_at TEXT NOT NULL,\
-            expires_at TEXT NOT NULL\
-         )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create session table");
+    umbral::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
 
     assert_eq!(Session::objects().count().await.unwrap(), 0, "fresh DB");
 
