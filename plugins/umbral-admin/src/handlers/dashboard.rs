@@ -236,6 +236,82 @@ pub(crate) async fn dashboard_layout_put(headers: HeaderMap, body: String) -> Re
 /// `GET /admin/api/dashboard/widgets/{key}/data` — compute and return
 /// one widget's payload. Returns either JSON (API consumers) or an
 /// HTML fragment (HTMX swap).
+/// Both permission gates a widget fetch must pass, in one place.
+///
+/// The data endpoint and the CSV export endpoint MUST agree on who may see a
+/// widget. Duplicating these checks is how one of them quietly drifts and
+/// becomes the bypass — export the numbers you were forbidden to look at.
+async fn gate_widget(
+    state: &AdminState,
+    user: &umbral_auth::AuthUser,
+    key: &str,
+    widget: &Widget,
+) -> Option<Response> {
+    // If this widget belongs to a permission-gated custom view, the requesting
+    // user must hold the view's codename — the same check the page handler
+    // enforces. Without it, a staff user blocked from the page could bypass
+    // `.with_permission(...)` by calling the endpoint directly.
+    if let Some(code) = state.widget_gates.get(key) {
+        if let Err(r) = crate::permcheck::require_codename(user, code).await {
+            return Some(r);
+        }
+    }
+    // Per-widget gate, independent of any view-level gate above. Graceful no-op:
+    // `require_codename` allows all when PermissionsPlugin is absent.
+    if let Some(code) = widget.permission {
+        if let Err(r) = crate::permcheck::require_codename(user, code).await {
+            return Some(r);
+        }
+    }
+    None
+}
+
+/// `GET /admin/api/dashboard/widgets/{key}/export.csv` — the same payload the
+/// widget renders, as a CSV download.
+///
+/// It runs the widget's own data closure with the SAME resolved filters the
+/// dashboard is showing, so the file you download is the chart you are looking
+/// at. An export that silently ignored the filters would hand someone a
+/// spreadsheet that disagrees with the screen they exported it from.
+pub(crate) async fn dashboard_widget_export(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Response {
+    let user = match require_staff(&headers, "/admin/api/dashboard/widgets/.../export.csv").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some(widget) = state.widget_catalog.iter().find(|w| w.key == key.as_str()) else {
+        return AdminError::NotFound(format!("no widget `{key}`")).into_response();
+    };
+    if let Some(denied) = gate_widget(&state, &user, &key, widget).await {
+        return denied;
+    }
+
+    let (params, _filters) =
+        resolve_widget_params(&user, &key, widget, query.as_deref().unwrap_or("")).await;
+    let payload = (widget.data.0.clone())(user, params).await;
+
+    let Some(csv) = payload.to_csv() else {
+        return AdminError::NotFound(format!(
+            "widget `{key}` renders a shape that has no rows to export"
+        ))
+        .into_response();
+    };
+
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header(
+            "Content-Disposition",
+            format!("attachment; filename=\"{key}.csv\""),
+        )
+        .body(axum::body::Body::from(csv))
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "csv error").into_response())
+}
+
 pub(crate) async fn dashboard_widget_data(
     State(state): State<AdminState>,
     headers: HeaderMap,
@@ -249,32 +325,80 @@ pub(crate) async fn dashboard_widget_data(
     let Some(widget) = state.widget_catalog.iter().find(|w| w.key == key.as_str()) else {
         return AdminError::NotFound(format!("no widget `{key}`")).into_response();
     };
-
-    // Security gate: if this widget belongs to a permission-gated custom view,
-    // the requesting user must hold the view's codename — the same check the
-    // page handler enforces. Without this, a staff user blocked from the page
-    // could bypass `.with_permission(...)` by calling the data endpoint directly.
-    if let Some(code) = state.widget_gates.get(key.as_str()) {
-        if let Err(r) = crate::permcheck::require_codename(&user, code).await {
-            return r;
-        }
+    if let Some(denied) = gate_widget(&state, &user, &key, widget).await {
+        return denied;
     }
 
-    // Per-widget permission gate (independent of any view-level gate above).
-    // A widget with `permission: Some(codename)` may only be fetched by a
-    // user holding that codename, regardless of which page the widget lives on.
-    // Graceful no-op: `require_codename` allows all when PermissionsPlugin is absent.
-    if let Some(code) = widget.permission {
-        if let Err(r) = crate::permcheck::require_codename(&user, code).await {
-            return r;
-        }
+    let (params, filters) =
+        resolve_widget_params(&user, &key, widget, query.as_deref().unwrap_or("")).await;
+
+    let data_fn = widget.data.0.clone();
+    let payload = data_fn(user, params.clone()).await;
+    let exportable = payload.to_csv().is_some();
+
+    if is_htmx(&headers) {
+        let kind = widget.kind.as_str().to_string();
+        let title = widget.title.clone();
+        let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+        let active_period = params.period.clone().unwrap_or_default();
+        let widget_key = widget.key.to_string();
+        let filters_json = serde_json::to_value(&filters).unwrap_or(serde_json::Value::Null);
+        // Declared vs. synthesized: a line chart with no declared filters keeps
+        // its own inline chip strip (the historic behaviour). One that declares
+        // filters hands rendering to the generic strip and suppresses its chips,
+        // so a widget never shows two competing period strips.
+        let has_declared_filters = !widget.filters.is_empty();
+        // The export link must carry the filters currently in force, so the file
+        // matches the chart on screen.
+        let export_query = query.clone().unwrap_or_default();
+        return match render(
+            "admin/widget_data.html",
+            context!(
+                kind                 => kind,
+                title                => title,
+                payload              => payload_json,
+                widget_key           => widget_key,
+                active_period        => active_period,
+                filters              => filters_json,
+                has_declared_filters => has_declared_filters,
+                exportable           => exportable,
+                export_query         => export_query,
+            ),
+        ) {
+            Ok(html) => html.into_response(),
+            Err(e) => e.into_response(),
+        };
     }
+    Json(serde_json::json!({
+        "key": key,
+        "kind": widget.kind.as_str(),
+        "title": widget.title,
+        "payload": serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
+    }))
+    .into_response()
+}
+
+/// Resolve a widget's per-request params + filter states.
+///
+/// Shared by the data and export endpoints so a CSV can never be computed from
+/// different filters than the chart it came from.
+async fn resolve_widget_params(
+    user: &umbral_auth::AuthUser,
+    key: &str,
+    widget: &Widget,
+    raw_query: &str,
+) -> (
+    crate::widgets::WidgetParams,
+    Vec<crate::widgets::WidgetFilter>,
+) {
+    let user = user.clone();
+    let key = key.to_string();
 
     // Per-request parameters parsed from the query string.
     // Closures registered via `WidgetDataFn::with_params` read
     // these to vary the response (`?period=7d`, etc.); closures
     // registered via plain `::new` see them dropped.
-    let mut params = crate::widgets::WidgetParams::from_query(query.as_deref().unwrap_or(""));
+    let mut params = crate::widgets::WidgetParams::from_query(raw_query);
 
     // gaps2 #11 round 2 — period resolution priority:
     //
@@ -404,45 +528,5 @@ pub(crate) async fn dashboard_widget_data(
         filter.carry = carry;
     }
 
-    let data_fn = widget.data.0.clone();
-    let payload = data_fn(user, params.clone()).await;
-
-    if is_htmx(&headers) {
-        let kind = widget.kind.as_str().to_string();
-        let title = widget.title.clone();
-        let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
-        // Pass the active period through to the template so the
-        // chip strip can highlight the current selection.
-        let active_period = params.period.clone().unwrap_or_default();
-        let widget_key = widget.key.to_string();
-        let filters_json = serde_json::to_value(&filters).unwrap_or(serde_json::Value::Null);
-        // Declared vs. synthesized: a line chart with no declared filters keeps
-        // its own inline chip strip (the historic behaviour). One that declares
-        // filters hands rendering to the generic strip and suppresses its chips,
-        // so a widget never shows two competing period strips.
-        let has_declared_filters = !widget.filters.is_empty();
-        match render(
-            "admin/widget_data.html",
-            context!(
-                kind                 => kind,
-                title                => title,
-                payload              => payload_json,
-                widget_key           => widget_key,
-                active_period        => active_period,
-                filters              => filters_json,
-                has_declared_filters => has_declared_filters,
-            ),
-        ) {
-            Ok(html) => html.into_response(),
-            Err(e) => e.into_response(),
-        }
-    } else {
-        Json(serde_json::json!({
-            "key": key,
-            "kind": widget.kind.as_str(),
-            "title": widget.title,
-            "payload": serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
-        }))
-        .into_response()
-    }
+    (params, filters)
 }

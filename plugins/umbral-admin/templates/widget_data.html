@@ -23,8 +23,24 @@
    through to the generic strip and suppresses its inline chips, so there is
    never a page with two chip strips on the same widget. #}
 {%- set line_handles_its_own = (kind == "line" and not has_declared_filters) -%}
-{% if filters and not line_handles_its_own %}
-<div class="px-md pt-md">{{ filter_strip(widget_key, filters) }}</div>
+{%- set show_strip = filters and not line_handles_its_own -%}
+{% if show_strip or exportable %}
+<div class="px-md pt-md flex items-center justify-between gap-sm flex-wrap">
+  {% if show_strip %}{{ filter_strip(widget_key, filters) }}{% else %}<span></span>{% endif %}
+
+  {# Export the rows behind the picture. The link carries the CURRENT query, so
+     the CSV matches what is on screen rather than an unfiltered dump. #}
+  {% if exportable %}
+  <a href="{{ admin_base }}/api/dashboard/widgets/{{ widget_key }}/export.csv{% if export_query %}?{{ export_query }}{% endif %}"
+     class="inline-flex items-center gap-1 text-label-sm text-on-surface-variant hover:text-on-surface
+            px-2 py-1 rounded-md hover:bg-surface-container-high transition-colors"
+     title="Download this widget's data as CSV"
+     download>
+    <i data-lucide="download" class="w-3.5 h-3.5"></i>
+    <span>CSV</span>
+  </a>
+  {% endif %}
+</div>
 {% endif %}
 
 {% if kind == "kpi" %}

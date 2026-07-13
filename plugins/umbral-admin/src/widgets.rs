@@ -785,6 +785,123 @@ pub enum WidgetPayload {
     Feed(FeedPayload),
 }
 
+/// Quote a CSV field per RFC 4180: wrap in `"` when it contains a comma, a
+/// quote or a newline, and double any embedded quotes.
+///
+/// Also neutralises the spreadsheet-formula injection vector: a cell whose text
+/// starts with `=`, `+`, `-` or `@` is executed as a formula when the file is
+/// opened in Excel or Sheets, so a row whose value someone typed into your app
+/// (`=HYPERLINK(...)`, `=cmd|...`) becomes code running on the machine of
+/// whoever opened the export. Prefixing a tab keeps the text readable while
+/// making it inert.
+fn csv_field(value: &str) -> String {
+    let dangerous = value
+        .chars()
+        .next()
+        .is_some_and(|c| matches!(c, '=' | '+' | '-' | '@'));
+    let value = if dangerous {
+        format!("\t{value}")
+    } else {
+        value.to_string()
+    };
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value
+    }
+}
+
+fn csv_row<I: IntoIterator<Item = String>>(cells: I) -> String {
+    cells
+        .into_iter()
+        .map(|c| csv_field(&c))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn num(v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v}")
+    }
+}
+
+impl WidgetPayload {
+    /// The payload as CSV, when it has rows worth exporting.
+    ///
+    /// `None` for the shapes that are a single number or a prose feed — a KPI
+    /// tile is not a table, and pretending otherwise would hand the user a
+    /// one-cell file. Everything with a series, slices, bars or rows exports.
+    pub fn to_csv(&self) -> Option<String> {
+        let mut out = String::new();
+        match self {
+            // A chart is (series, x, y) once flattened, which is exactly what a
+            // spreadsheet wants — one tidy row per point, series as a column so
+            // a multi-series chart round-trips into a pivot table.
+            WidgetPayload::Line(LinePayload { series, .. })
+            | WidgetPayload::Bar(BarPayload { series, .. }) => {
+                out.push_str("series,x,y\n");
+                for s in series {
+                    for p in &s.points {
+                        out.push_str(&csv_row([s.name.clone(), p.x.clone(), num(p.y)]));
+                        out.push('\n');
+                    }
+                }
+            }
+            WidgetPayload::Donut(p) => {
+                out.push_str("label,value\n");
+                for s in &p.slices {
+                    out.push_str(&csv_row([s.label.clone(), num(s.value)]));
+                    out.push('\n');
+                }
+            }
+            WidgetPayload::Radial(p) => {
+                out.push_str("label,value\n");
+                for t in &p.tracks {
+                    out.push_str(&csv_row([t.label.clone(), num(t.value)]));
+                    out.push('\n');
+                }
+            }
+            WidgetPayload::Progress(p) => {
+                for i in &p.items {
+                    out.push_str(&csv_row([
+                        i.label.clone(),
+                        num(i.percent),
+                        i.display.clone(),
+                    ]));
+                    out.push('\n');
+                }
+            }
+            WidgetPayload::Heatmap(p) => {
+                out.push_str("row,column,value\n");
+                for r in &p.rows {
+                    for c in &r.cells {
+                        out.push_str(&csv_row([r.name.clone(), c.x.clone(), num(c.y)]));
+                        out.push('\n');
+                    }
+                }
+            }
+            WidgetPayload::Table(p) => {
+                out.push_str(&csv_row(p.columns.iter().map(|c| c.label.clone())));
+                out.push('\n');
+                for row in &p.rows {
+                    let cells = p.columns.iter().map(|c| match row.get(&c.key) {
+                        Some(serde_json::Value::String(s)) => s.clone(),
+                        Some(serde_json::Value::Null) | None => String::new(),
+                        Some(v) => v.to_string(),
+                    });
+                    out.push_str(&csv_row(cells));
+                    out.push('\n');
+                }
+            }
+            // A single number or a prose feed is not a table.
+            WidgetPayload::Kpi(_) | WidgetPayload::Card(_) | WidgetPayload::Feed(_) => return None,
+        }
+        Some(out)
+    }
+}
+
 // =========================================================================
 // WidgetDataFn
 // =========================================================================
@@ -1496,5 +1613,76 @@ mod tests {
         assert_eq!(json["items"][0]["percent"], 100.0);
         // No explicit color -> the field is skipped entirely.
         assert!(json["items"][0].get("color").is_none());
+    }
+}
+
+#[cfg(test)]
+mod csv_tests {
+    use super::*;
+
+    #[test]
+    fn csv_quotes_commas_quotes_and_newlines() {
+        assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_field("two\nlines"), "\"two\nlines\"");
+    }
+
+    /// A cell beginning `=`, `+`, `-` or `@` is executed as a FORMULA when the
+    /// file is opened in Excel or Sheets. A product name someone typed into your
+    /// app then becomes code running on the machine of whoever opened the export.
+    /// The value must survive as readable text, but inert.
+    #[test]
+    fn csv_neutralises_spreadsheet_formulas() {
+        for (payload, still_reads) in [
+            ("=HYPERLINK(\"http://evil\")", "HYPERLINK"),
+            ("+1+1", "+1+1"),
+            ("-2+3", "-2+3"),
+            ("@SUM(A1)", "@SUM(A1)"),
+        ] {
+            let out = csv_field(payload);
+            // The tab may sit inside the RFC-4180 quoting, so accept either.
+            assert!(
+                out.starts_with('\t') || out.starts_with("\"\t"),
+                "a formula-leading cell must be neutralised, got {out}"
+            );
+            assert!(
+                out.contains(still_reads),
+                "and must remain readable, got {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bar_payload_exports_one_row_per_point() {
+        let payload = WidgetPayload::Bar(BarPayload {
+            series: vec![Series {
+                name: "sales".into(),
+                points: vec![
+                    ChartPoint {
+                        x: "Mon".into(),
+                        y: 3.0,
+                    },
+                    ChartPoint {
+                        x: "Tue".into(),
+                        y: 4.5,
+                    },
+                ],
+            }],
+            x_type: "day".into(),
+        });
+        let csv = payload.to_csv().expect("a bar chart has rows");
+        assert_eq!(csv, "series,x,y\nsales,Mon,3\nsales,Tue,4.5\n");
+    }
+
+    #[test]
+    fn a_kpi_has_nothing_to_export() {
+        let payload = WidgetPayload::Kpi(KpiPayload {
+            value: "42".into(),
+            unit: None,
+            delta: None,
+            sparkline: None,
+        });
+        assert!(payload.to_csv().is_none());
     }
 }

@@ -901,6 +901,15 @@ impl Plugin for AdminPlugin {
                 &route("/api/dashboard/widgets/{key}/data", &self.base_path),
                 axum::routing::get(handlers::dashboard::dashboard_widget_data),
             )
+            // CSV export of a widget's own payload, computed from the SAME
+            // resolved filters the dashboard is showing — so the file matches
+            // the chart you exported it from. Shares `gate_widget` with the data
+            // endpoint, so it cannot become a way to read numbers you are not
+            // allowed to see.
+            .route(
+                &route("/api/dashboard/widgets/{key}/export.csv", &self.base_path),
+                axum::routing::get(handlers::dashboard::dashboard_widget_export),
+            )
             // gaps2 #36: EasyMDE markdown-editor image upload. Staff-gated
             // (no `{table}` — a media upload isn't scoped to one model), and
             // stores through the ambient `umbral::storage` seam. Returns

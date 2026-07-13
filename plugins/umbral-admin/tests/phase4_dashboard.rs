@@ -783,3 +783,86 @@ async fn a_control_carries_the_other_filters_values() {
         "a period chip must carry the active status along; got: {html}"
     );
 }
+
+// =========================================================================
+// CSV export
+// =========================================================================
+
+/// The export must be computed from the filters currently in force — a CSV that
+/// silently ignored them would disagree with the chart it came from.
+#[tokio::test]
+async fn export_honours_the_active_filters() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    let req = Request::builder()
+        .uri("/admin/api/dashboard/widgets/test_filtered/export.csv?status=paid&period=7d")
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let ctype = resp
+        .headers()
+        .get("Content-Type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let disp = resp
+        .headers()
+        .get("Content-Disposition")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(ctype.starts_with("text/csv"), "served as CSV, got {ctype}");
+    assert!(
+        disp.contains("attachment") && disp.contains("test_filtered.csv"),
+        "downloads as a named file, got {disp}"
+    );
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let csv = String::from_utf8_lossy(&body);
+    assert!(csv.starts_with("series,x,y\n"), "has a header row: {csv}");
+    assert!(
+        csv.contains("status=paid") && csv.contains("period=7d"),
+        "the export ran the closure with the ACTIVE filters: {csv}"
+    );
+}
+
+/// A KPI is a single number, not a table. Exporting it would hand back a
+/// one-cell file, so the endpoint says so instead of pretending.
+#[tokio::test]
+async fn export_refuses_a_shape_with_no_rows() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    let req = Request::builder()
+        .uri("/admin/api/dashboard/widgets/test_kpi/export.csv")
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// Anonymous callers cannot export. The export shares `gate_widget` with the
+/// data endpoint precisely so it can never become the softer way in.
+#[tokio::test]
+async fn export_requires_staff() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+
+    let req = Request::builder()
+        .uri("/admin/api/dashboard/widgets/test_filtered/export.csv")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::OK,
+        "an anonymous export must not succeed"
+    );
+}
