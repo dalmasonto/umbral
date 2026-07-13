@@ -349,6 +349,12 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
 
         objects.push(obj);
 
+        // Relay connection types for this model: `ProductEdge` + `ProductConnection`.
+        let (edge, conn) = crate::connection::types_for(e);
+        objects.push(edge);
+        objects.push(conn);
+        query = query.field(crate::connection::query_field(e));
+
         // ---- Query.post(id:) ------------------------------------------------
         let single_meta = meta.clone();
         let single_access = e.access.clone();
@@ -404,6 +410,12 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
 
     // The Mutation root exists only if something is actually writable. A schema that
     // advertises an empty `Mutation` type is an invitation to go looking for a way in.
+    if !exposed.is_empty() {
+        // Shared by every connection, so registered once — a second `PageInfo` is a schema
+        // build error, not a duplicate.
+        objects.push(crate::connection::page_info_type());
+    }
+
     let mutation = crate::mutation::build(exposed);
     let mut schema = Schema::build("Query", mutation.as_ref().map(|_| "Mutation"), None);
     for o in objects {

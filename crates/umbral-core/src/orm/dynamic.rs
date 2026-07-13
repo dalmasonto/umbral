@@ -242,6 +242,58 @@ pub fn typed_eq_condition(meta: &ModelMeta, col: &str, value: &str) -> Option<Co
     predicate.map(|p| Condition::all().add(p))
 }
 
+/// Which way a [`typed_cmp_condition`] points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cmp {
+    /// `col > value`
+    Gt,
+    /// `col < value`
+    Lt,
+}
+
+/// Build a typed `col > value` / `col < value` predicate from a **string** value.
+///
+/// The ordering sibling of [`typed_eq_condition`], and it exists for the same reason: the
+/// value arrives as a string (out of a URL, a form, or a **pagination cursor**) and the
+/// column it is compared against usually is not. Bind the raw string against an `INTEGER`
+/// column and SQLite silently coerces it while Postgres refuses — but worse for an
+/// inequality than for an equality, because a *string* comparison against a numeric column
+/// orders lexicographically: `"10" < "9"`. A keyset paginator built on that skips rows and
+/// repeats others, and it does it silently.
+///
+/// Returns `None` for an unknown column or a value that cannot be coerced. As with
+/// `typed_eq_condition`, a `None` obliges the caller to produce NO ROWS — never to drop the
+/// predicate (gaps3 #56).
+pub fn typed_cmp_condition(
+    meta: &ModelMeta,
+    col: &str,
+    value: &str,
+    cmp: Cmp,
+) -> Option<Condition> {
+    let meta_col = meta.fields.iter().find(|c| c.name == col)?;
+    let expr = Expr::col(Alias::new(col));
+    macro_rules! go {
+        ($v:expr) => {
+            match cmp {
+                Cmp::Gt => expr.gt($v),
+                Cmp::Lt => expr.lt($v),
+            }
+        };
+    }
+    let predicate = match crate::migrate::fk_effective_type(meta_col) {
+        SqlType::SmallInt | SqlType::Integer => value.parse::<i32>().ok().map(|v| go!(v)),
+        SqlType::BigInt | SqlType::ForeignKey => value.parse::<i64>().ok().map(|v| go!(v)),
+        SqlType::Real | SqlType::Double => value.parse::<f64>().ok().map(|v| go!(v)),
+        // Booleans and UUIDs have no useful ordering to paginate by: `WHERE is_active > true`
+        // is not a page boundary, it is a mistake. Refuse rather than emit nonsense.
+        SqlType::Boolean | SqlType::Uuid => None,
+        // Text, dates and timestamps all compare correctly as strings in both backends
+        // (ISO-8601 is lexicographically ordered — that is the whole reason to store it).
+        _ => Some(go!(value.to_string())),
+    };
+    predicate.map(|p| Condition::all().add(p))
+}
+
 impl<'a> DynQuerySet<'a> {
     /// Start a `SELECT` against the model's table. The column list
     /// defaults to every field in declaration order; restrict it with

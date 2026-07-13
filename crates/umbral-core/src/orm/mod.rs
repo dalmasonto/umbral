@@ -122,8 +122,8 @@ impl Subquery {
 }
 pub use choices::ChoiceField;
 pub use dynamic::{
-    CsvImportReport, DynError, DynQuerySet, decode_to_string, import_table_rows, never_matches,
-    typed_eq_condition, typed_json_value,
+    Cmp, CsvImportReport, DynError, DynQuerySet, decode_to_string, import_table_rows,
+    never_matches, typed_cmp_condition, typed_eq_condition, typed_json_value,
 };
 pub use expr::{F, FColExt, FExpr, Q};
 pub use file_field::{FileField, ImageField};

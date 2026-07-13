@@ -54,6 +54,7 @@ use umbral::migrate::ModelMeta;
 use umbral::plugin::Plugin;
 use umbral::web::Router;
 
+mod connection;
 mod loader;
 mod mutation;
 mod schema;

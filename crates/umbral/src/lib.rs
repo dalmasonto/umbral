@@ -640,7 +640,7 @@ pub mod orm {
 
     pub use umbral_core::orm::write::{SaveError, WriteError, slugify};
     pub use umbral_core::orm::{
-        Aggregate, AggregateKind, ArrayElement, ChoiceField, CsvImportReport, DynError,
+        Aggregate, AggregateKind, ArrayElement, ChoiceField, Cmp, CsvImportReport, DynError,
         DynQuerySet, Email, F, FColExt, FExpr, FieldSpec, FileField, FkAction, ForeignKey,
         GetError, HydrateRelated, ImageField, JoinKind, M2M, M2MRelationSpec, Manager, MaskError,
         MaskKeyring, Masked, Model, MultiChoice, OneToOne, OneToOneRelationSpec, Post, Predicate,
@@ -648,7 +648,7 @@ pub mod orm {
         ReverseSet, Search, SearchHit, Searchable, Slug, SqlType, TryForEachError, TsVector, Url,
         ValidatorError, column, decode_to_string, escape_like_literal, import_table_rows,
         load_junction_selection, never_matches, pk_key, set_junction_dynamic, set_mask_keyring,
-        typed_eq_condition, typed_json_value, validate_text_format, write,
+        typed_cmp_condition, typed_eq_condition, typed_json_value, validate_text_format, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the

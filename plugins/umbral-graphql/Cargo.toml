@@ -25,6 +25,9 @@ tracing = "0.1"
 # The loaders spawn their batch tasks; sea-query builds the `col IN (...)` predicate.
 tokio = { version = "1", features = ["rt"] }
 sea-query = "0.32"
+# Cursors are base64 because they must be OPAQUE — a client that parses one is a client
+# that breaks when paging changes. Not encryption: a cursor holds a sort key, not a secret.
+base64 = "0.22"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

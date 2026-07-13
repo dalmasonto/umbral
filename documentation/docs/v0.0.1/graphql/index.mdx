@@ -110,7 +110,7 @@ SecurityPlugin::default()
     .csrf_exempt_paths(vec!["/graphql".to_string()])
 ```
 
-That's tolerable *only* because the endpoint is read-only: a cross-site page can send the request, but an `application/json` POST is not a CORS "simple request", so the browser preflights it and — absent a permissive CORS policy — never lets the attacker read the response. CSRF protects against forged **writes**, and there are none here yet. When mutations land, this exemption stops being safe and the advice changes with them.
+Exempting it is safe because the plugin replaces the token check with a defence CSRF middleware can't provide here: **every POST must be `Content-Type: application/json`** (see [Mutations](#mutations-change-the-csrf-story) below). That's not a formality — it's precisely the property a cross-site `<form>` cannot satisfy.
 
 ## What you get per model
 
@@ -118,6 +118,7 @@ That's tolerable *only* because the endpoint is read-only: a cross-site page can
 |---|---|
 | `post(id: ID!)` | one row |
 | `posts(limit: Int, offset: Int)` | a list, capped at 200 |
+| `postsConnection(first:, after:, orderBy:, desc:)` | a cursor page — stable under writes |
 | `post.author` | forward FK → the object |
 | `post.author_id` | the raw key, if that's all you want |
 | `author.posts` | reverse FK → the list |
@@ -127,6 +128,39 @@ Ids cross the wire as `String`: GraphQL's `Int` is an `i32`, a `BigInt` doesn't 
 ## GraphiQL
 
 Served on `GET /graphql` in `Dev`, off otherwise — an interactive schema explorer on a production endpoint is a gift to whoever is enumerating your API. Force it either way with `.graphiql(true|false)`.
+
+## Pagination
+
+Every model gets a `limit`/`offset` list **and** a Relay-style cursor connection:
+
+```graphql
+{
+  productsConnection(first: 20, orderBy: "created_at", desc: true) {
+    edges { node { name price } cursor }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+Feed `endCursor` back as `after` for the next page. Apollo, Relay and urql all recognise this shape and will page for you.
+
+### Why not just use offset
+
+`OFFSET` is **positional**, and that's fine right up until somebody writes to the table. Read page 1 (rows 1–20), have a row deleted from behind you, then read page 2 (`OFFSET 20`) — it now starts one row late, and the row that moved into position 20 is **never served to anyone**. An insert does the mirror image: a row gets served twice. Nothing errors. The client quietly receives a list with a hole in it.
+
+A cursor isn't a row number; it's the **sort key of the last row you saw**. The next page is "everything that sorts after this" — a `WHERE`, not a count — so a write elsewhere in the table can't move it. It's also faster: `OFFSET 100000` makes the database walk and discard 100 000 rows before returning the page you wanted.
+
+<Callout type="info">
+  `limit`/`offset` isn't going anywhere, and it's genuinely the right tool for a small, stable table. Nobody wants a cursor to fetch ten categories.
+</Callout>
+
+Three details that are easy to get wrong, and are handled:
+
+- **Ties break on the primary key.** Order by `created_at` alone and two rows sharing a timestamp straddle the page boundary — one served twice, one skipped. The key is always `(sort_col, pk)`, so the ordering is total.
+- **A cursor remembers its ordering.** One minted under `created_at ASC` is meaningless under `price DESC`, so replaying it across orderings is an error rather than a guess.
+- **`hasNextPage` costs one extra row.** Fetch exactly `first` and you can't distinguish a full last page from one with more behind it.
+
+Cursors are opaque base64 — not encryption, just a signal not to parse them, since a client that does is a client that breaks the next time paging changes. And you can't order by a column that isn't in the schema: a cursor built on a hidden column would carry its values back out inside the cursor.
 
 ## Mutations
 
