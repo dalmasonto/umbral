@@ -118,9 +118,7 @@ async fn session_layer_set_data_persists_via_installed_store() {
     let inner = axum::Router::new().route("/w", get(writer));
     // Use .store(DbStore::default()) explicitly — this exercises the builder
     // path (on_ready tries to install again; idempotent, keeps first).
-    let router = SessionsPlugin::default()
-        .store(DbStore)
-        .wrap_router(inner);
+    let router = SessionsPlugin::default().store(DbStore).wrap_router(inner);
 
     let req = Request::builder().uri("/w").body(Body::empty()).unwrap();
     let resp = router.oneshot(req).await.unwrap();

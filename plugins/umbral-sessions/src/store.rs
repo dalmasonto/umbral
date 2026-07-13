@@ -271,8 +271,5 @@ pub fn install_store(store: Arc<dyn SessionStore>) {
 /// has been installed. The default is constructed on each call (it holds
 /// no state) and uses the ambient ORM pool.
 pub fn active_store() -> Arc<dyn SessionStore> {
-    STORE
-        .get()
-        .cloned()
-        .unwrap_or_else(|| Arc::new(DbStore))
+    STORE.get().cloned().unwrap_or_else(|| Arc::new(DbStore))
 }

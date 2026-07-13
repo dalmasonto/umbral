@@ -6,10 +6,8 @@ This is an optional plugin for umbral, a batteries-included web framework for Ru
 
 ## Install
 
-```toml
-[dependencies]
-umbral = "0.0.8"
-umbral-graphql = "0.0.8"
+```bash
+cargo add umbral umbral-graphql
 ```
 
 ## Use

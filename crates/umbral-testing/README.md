@@ -6,9 +6,8 @@ Test helpers for umbral apps: an in-process test client, throwaway database pool
 
 ## Install
 
-```toml
-[dev-dependencies]
-umbral-testing = "0.0.1"
+```bash
+cargo add --dev umbral-testing
 ```
 
 ## Documentation

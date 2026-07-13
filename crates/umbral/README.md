@@ -6,9 +6,8 @@ The name "umbral" means "of the shadow" (from the Latin umbra, shadow).
 
 ## Install
 
-```toml
-[dependencies]
-umbral = "0.0.1"
+```bash
+cargo add umbral
 ```
 
 ```rust

@@ -48,12 +48,9 @@ Project commands run through the project binary with `cargo run -- <command>`: `
 
 Most apps depend on the `umbral` facade plus the plugins they want:
 
-```toml
-[dependencies]
-umbral = "0.0.1"          # the facade: ORM, migrations, routing, the plugin system
-umbral-auth = "0.0.1"     # add the built-in plugins you need
-umbral-rest = "0.0.1"
-umbral-admin = "0.0.1"
+```bash
+cargo add umbral                          # the facade: ORM, migrations, routing, the plugin system
+cargo add umbral-auth umbral-rest umbral-admin   # add the built-in plugins you need
 ```
 
 ```rust
