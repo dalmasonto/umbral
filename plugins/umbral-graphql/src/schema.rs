@@ -48,6 +48,8 @@ pub struct Exposed {
     /// Columns of this model that are omitted from the schema entirely. See
     /// [`crate::GraphqlPlugin::hide`].
     pub hidden: Vec<String>,
+    /// Live updates over WebSocket/SSE. Off by default.
+    pub subscribable: bool,
     /// `None` = READ-ONLY. `Some(f)` = writable when `f(identity)` is true.
     ///
     /// A separate opt-in from `access` on purpose: a read you got wrong leaks data, a write
@@ -417,7 +419,15 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
     }
 
     let mutation = crate::mutation::build(exposed);
-    let mut schema = Schema::build("Query", mutation.as_ref().map(|_| "Mutation"), None);
+    let subscription = crate::subscription::build(exposed);
+    let mut schema = Schema::build(
+        "Query",
+        mutation.as_ref().map(|_| "Mutation"),
+        subscription.as_ref().map(|_| "Subscription"),
+    );
+    if let Some(sub) = subscription {
+        schema = schema.register(sub);
+    }
     for o in objects {
         schema = schema.register(o);
     }

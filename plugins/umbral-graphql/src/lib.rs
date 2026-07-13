@@ -48,8 +48,9 @@ use std::sync::Arc;
 
 use async_graphql::dynamic::Schema;
 use async_graphql::http::GraphiQLSource;
-use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
 use axum::response::{Html, IntoResponse};
+use futures_util::StreamExt;
 use umbral::migrate::ModelMeta;
 use umbral::plugin::Plugin;
 use umbral::web::Router;
@@ -58,6 +59,7 @@ mod connection;
 mod loader;
 mod mutation;
 mod schema;
+mod subscription;
 
 pub use schema::{AccessFn, Exposed};
 
@@ -85,6 +87,16 @@ pub fn build_schema_for_tests(
 #[doc(hidden)]
 pub fn new_loaders_for_tests() -> loader::Loaders {
     loader::Loaders::new()
+}
+
+/// Test-only: publish a change event without performing a write.
+#[doc(hidden)]
+pub use subscription::publish_for_tests;
+
+/// Test-only: subscribe to the ORM write signals for a table (what `on_ready` does).
+#[doc(hidden)]
+pub fn wire_signals_for_tests(table: &str) {
+    subscription::wire_signals(table);
 }
 
 /// Test-only: the plural query-field name for a model type name.
@@ -203,6 +215,7 @@ pub struct GraphqlPlugin {
     path: Option<String>,
     exposed: Vec<(String, Option<AccessFn>)>,
     writable: Vec<(String, AccessFn)>,
+    subscribable: Vec<String>,
     hidden: Vec<(String, String)>,
     graphiql: Option<bool>,
     auth: Option<Arc<dyn umbral::auth::Authentication>>,
@@ -309,6 +322,31 @@ impl GraphqlPlugin {
         self
     }
 
+    /// Stream live changes to this model over WebSocket or SSE.
+    ///
+    /// ```graphql
+    /// subscription { productChanged(id: "1") { name price } }
+    /// subscription { productDeleted }
+    /// ```
+    ///
+    /// Events come from the ORM's `post_save` / `post_delete` signals, so a row changed by
+    /// ANY write path — a mutation, a REST call, an admin form, a background task — reaches
+    /// subscribers. No write path can forget to publish, because publishing was never its job.
+    ///
+    /// The row a subscriber receives is **re-read through the ORM**, not lifted from the
+    /// signal payload. The payload is a serde dump of the model and knows nothing about
+    /// `private` / `secret` / `hide`; forwarding it would defeat the entire field policy
+    /// merely because the data left over a socket instead of a response body.
+    ///
+    /// Gated by the same `expose_if` closure as reads — a subscription IS a read, just a long
+    /// one. Note the gate is checked when the subscription is ESTABLISHED, not per event: a
+    /// caller who is demoted mid-stream keeps receiving until they reconnect. If that matters,
+    /// keep the streams short-lived.
+    pub fn subscribable(mut self, table: impl Into<String>) -> Self {
+        self.subscribable.push(table.into());
+        self
+    }
+
     /// Omit columns from the schema.
     ///
     /// ```rust,ignore
@@ -386,6 +424,7 @@ impl GraphqlPlugin {
                         .iter()
                         .find(|(t, _)| t == table)
                         .map(|(_, f)| f.clone()),
+                    subscribable: self.subscribable.iter().any(|t| t == table),
                     hidden: self
                         .hidden
                         .iter()
@@ -412,6 +451,20 @@ impl GraphqlPlugin {
 impl Plugin for GraphqlPlugin {
     fn name(&self) -> &'static str {
         "graphql"
+    }
+
+    /// Subscribe to the ORM's write signals for every subscribable model.
+    ///
+    /// In `on_ready`, not `routes()`: the model registry has to be populated first, and the
+    /// signal subscription is a runtime side effect rather than part of building the router.
+    fn on_ready(
+        &self,
+        _ctx: &umbral::plugin::AppContext,
+    ) -> Result<(), umbral::plugin::PluginError> {
+        for table in &self.subscribable {
+            subscription::wire_signals(table);
+        }
+        Ok(())
     }
 
     fn routes(&self) -> Router {
@@ -486,6 +539,44 @@ impl Plugin for GraphqlPlugin {
         // extractor that knows nothing about CSRF. A route layer runs before extraction, so
         // the rule is enforced by the code that states it.
         router = router.route_layer(axum::middleware::from_fn(csrf_content_type_guard));
+
+        // ---- subscriptions -------------------------------------------------
+        //
+        // Two transports, because they are good at different things.
+        //
+        // WebSocket (`<path>/ws`) is what Apollo and Relay reach for by default, and it is
+        // bidirectional — the client can start and stop individual subscriptions over one
+        // connection.
+        //
+        // SSE (`<path>/sse`) is server→client only, which is all a subscription actually
+        // needs. It is plain HTTP: it survives proxies that mangle upgrades, it reconnects on
+        // its own, and it needs no protocol negotiation. For "push me updates" it is the
+        // cheaper half, and most apps never need more.
+        if exposed.iter().any(|e| e.subscribable) {
+            let ws_schema = schema.clone();
+            router = router.route(
+                &format!("{path}/ws"),
+                axum::routing::get_service(GraphQLSubscription::new(ws_schema)),
+            );
+
+            let sse_schema = schema.clone();
+            router = router.route(
+                &format!("{path}/sse"),
+                axum::routing::post(move |req: GraphQLRequest| {
+                    let schema = sse_schema.clone();
+                    async move {
+                        let stream =
+                            schema.execute_stream(req.into_inner().data(loader::Loaders::new()));
+                        axum::response::Sse::new(stream.map(|res| {
+                            axum::response::sse::Event::default()
+                                .json_data(res)
+                                .map_err(|e| e.to_string())
+                        }))
+                        .keep_alive(axum::response::sse::KeepAlive::default())
+                    }
+                }),
+            );
+        }
 
         if show_ide {
             router =

@@ -200,8 +200,46 @@ So the plugin enforces its own defence: **every POST must be `Content-Type: appl
 
 You don't configure this and you can't turn it off. It's the same defence Apollo Server ships, for the same reason.
 
+## Subscriptions
+
+Live data, over WebSocket or SSE. Another opt-in:
+
+```rust
+GraphqlPlugin::new()
+    .expose("product")
+    .subscribable("product")
+```
+
+```graphql
+subscription { productChanged(id: "1") { name price } }
+subscription { productDeleted }
+```
+
+Two transports, mounted alongside the endpoint:
+
+| | |
+|---|---|
+| `POST /graphql/sse` | Server-Sent Events. Plain HTTP, reconnects on its own, survives proxies that mangle upgrades. Server→client only — which is all a subscription needs. |
+| `GET /graphql/ws` | WebSocket. What Apollo and Relay reach for by default; bidirectional, so one connection carries many subscriptions. |
+
+### Events come from the ORM, not from GraphQL
+
+The write signals already exist and fire on **every** write path — a GraphQL mutation, a REST call, an admin form edit, a background task. Subscriptions just listen. That's the property that makes this trustworthy: no write path can forget to publish, because publishing was never the write path's job.
+
+<Callout type="warning">
+  The row a subscriber receives is **re-read through the ORM** — not lifted out of the signal payload. That payload is a serde dump of your model and knows nothing about `private`, `secret`, `Masked<T>` or `hide`. Forwarding it would ship every protected column down the socket, defeating the whole field policy merely because the data left over a WebSocket instead of a response body. A subscription is a read. The socket is a transport, not an exemption.
+</Callout>
+
+A deleted row can't be re-read, so `productDeleted` yields the **ID**, not an object — echoing the last-known row would be that same leak, and a "row" that no longer exists is a lie besides.
+
+### Two things to know
+
+**The gate is checked when the subscription is established, not per event.** A caller demoted mid-stream keeps receiving until they reconnect. If that matters for your app, keep streams short-lived.
+
+**You subscribe before you read, not after.** A client that fetches its initial state and *then* subscribes has a window where writes land in between and are lost. Subscribe first, then query — the same discipline any event stream demands.
+
 ## Not yet
 
-**Subscriptions.** Live data over WebSocket or SSE. Next.
+**Filtered subscriptions** beyond `id` (e.g. "every order over £100"), and **batched** delivery for a firehose table. Both are additive; say the word.
 
 Design notes: `planning/features.md` #9.

@@ -368,6 +368,7 @@ async fn expose_if_denies_anonymous_and_admits_staff() {
         meta,
         hidden: Vec::new(),
         writable: None,
+        subscribable: false,
         access: Some(std::sync::Arc::new(
             |id: Option<&umbral::auth::Identity>| id.is_some_and(|i| i.is_staff),
         )),
@@ -460,6 +461,10 @@ async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
     let _g = lock().lock().await;
     use umbral_graphql::Exposed;
 
+    // The registry only exists after an App::build. Reading it without booting passed only
+    // when some OTHER test in this binary happened to run first — a test that depends on
+    // sibling ordering is a test that fails on a machine with a different core count.
+    let _router = boot().await;
     let models = umbral::migrate::registered_models();
     let author = models.iter().find(|m| m.table == "gq_author").unwrap();
     let post = models.iter().find(|m| m.table == "gq_post").unwrap();
@@ -470,6 +475,7 @@ async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
             access: None,
             hidden: Vec::new(),
             writable: None,
+            subscribable: false,
         },
         Exposed {
             meta: post.clone(),
@@ -477,6 +483,7 @@ async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
             // sever the FK from the CHILD's side
             hidden: vec!["author".to_string()],
             writable: None,
+            subscribable: false,
         },
     ])
     .expect("schema");

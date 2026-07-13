@@ -266,3 +266,21 @@ pub async fn fetch_list(
         .map_err(|e| async_graphql::Error::new(e.to_string()))?;
     Ok(rows.into_iter().map(Json::Object).collect())
 }
+
+/// Read one row by primary key, fresh and redacted.
+///
+/// Not batched, and deliberately not going through the DataLoader: a subscription event is
+/// its own moment in time, and a cached row would serve a subscriber the state from whenever
+/// the cache was filled rather than the state that just changed.
+pub async fn load_one_json(
+    meta: &ModelMeta,
+    pk: &str,
+) -> Result<Option<serde_json::Map<String, Json>>, String> {
+    let pk_col = pk_name(meta);
+    DB_READS.fetch_add(1, Ordering::Relaxed);
+    DynQuerySet::for_meta(meta)
+        .filter_eq_string(&pk_col, pk)
+        .first_as_json()
+        .await
+        .map_err(|e| e.to_string())
+}
