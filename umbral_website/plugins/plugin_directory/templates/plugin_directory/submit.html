@@ -225,7 +225,7 @@
 
       <div class="pd-field {% if errors.installation_commands %}pd-field--error{% endif %}">
         <label class="pd-label" for="f-install">Installation commands <span class="pd-req">*</span></label>
-        <textarea class="pd-textarea pd-mono" id="f-install" name="installation_commands" rows="3" placeholder="umbral add umbral-rest" required>{{ form.installation_commands | default('') }}</textarea>
+        <textarea class="pd-textarea pd-mono" id="f-install" name="installation_commands" rows="3" placeholder="cargo add umbral-rest" required>{{ form.installation_commands | default('') }}</textarea>
         {% if errors.installation_commands %}<span class="pd-error"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>{{ errors.installation_commands }}</span>{% endif %}
       </div>
 

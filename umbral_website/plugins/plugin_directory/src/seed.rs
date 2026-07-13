@@ -80,7 +80,7 @@ const OFFICIAL: &[OfficialRow] = &[
 ## Install
 
 ```bash
-umbral add umbral-admin
+cargo add umbral-admin
 ```
 
 ## Wire it up
@@ -131,8 +131,8 @@ AdminPlugin::default()
 - Soft-delete + trash, bulk actions, and a per-row audit log
 "#,
         setup_notes: "Mount `AdminPlugin` after the plugins whose models you want to manage — it discovers every model registered before it and builds the CRUD UI. Give it a title, and optionally dashboard widgets and custom views.",
-        installation_commands: "umbral-admin = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-admin",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: true,
@@ -149,8 +149,8 @@ AdminPlugin::default()
 ## Install
 
 ```bash
-umbral add umbral-auth
-umbral add umbral-sessions   # auth needs a place to keep the session
+cargo add umbral-auth
+cargo add umbral-sessions   # auth needs a place to keep the session
 ```
 
 ## Wire it up
@@ -193,8 +193,8 @@ async fn dashboard(user: LoggedIn<AuthUser>) -> Html<String> {
 - Pairs with umbral-oauth for Google / GitHub social login
 "#,
         setup_notes: "Pair with `SessionsPlugin` (auth stores its session there). `with_default_routes()` mounts /login, /logout and /signup; `with_user_in_templates()` injects `user` into every template so your base layout's nav can branch on `user.is_authenticated`.",
-        installation_commands: "umbral-auth = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-auth",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: true,
@@ -211,7 +211,7 @@ async fn dashboard(user: LoggedIn<AuthUser>) -> Html<String> {
 ## Install
 
 ```bash
-umbral add umbral-sessions
+cargo add umbral-sessions
 ```
 
 ## Wire it up
@@ -251,8 +251,8 @@ async fn add_to_cart(session: Session) {
 - Redis-backed store on the roadmap for horizontal scaling
 "#,
         setup_notes: "Register `SessionsPlugin` before any plugin that reads the session (auth reads it on every request). The default store persists sessions through the ORM, so there's nothing extra to deploy.",
-        installation_commands: "umbral-sessions = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-sessions",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -269,7 +269,7 @@ async fn add_to_cart(session: Session) {
 ## Install
 
 ```bash
-umbral add umbral-rest
+cargo add umbral-rest
 ```
 
 ## Wire it up
@@ -314,8 +314,8 @@ RestPlugin::default()
 - Safe by default: writes 403 until a permission opts them in; list capped
 "#,
         setup_notes: "Register a `ResourceConfig::for_::<Model>()` per model you want on the wire. Resources are read-only until you attach a write permission via `.default_permission(...)`, so a bare `POST` is a 403, not an open door.",
-        installation_commands: "umbral-rest = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-rest",
+        version: "0.0.8",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: true,
@@ -332,7 +332,7 @@ RestPlugin::default()
 ## Install
 
 ```bash
-umbral add umbral-openapi   # depends on umbral-rest
+cargo add umbral-openapi   # depends on umbral-rest
 ```
 
 ## Wire it up
@@ -366,12 +366,71 @@ Point them at the explorer — they get every route, its parameters, and a "try 
 - Pairs with umbral-playground for an in-app request console
 "#,
         setup_notes: "Add `OpenApiPlugin::new()` after `RestPlugin` — it introspects the resources REST already registered, so there's nothing to annotate by hand. The schema and Swagger UI update themselves as you add resources.",
-        installation_commands: "umbral-openapi = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-openapi",
+        version: "0.0.8",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
         display_order: 50,
+    },
+    OfficialRow {
+        crate_name: "umbral-graphql",
+        name: "Umbral GraphQL",
+        slug: "umbral-graphql",
+        author: "Umbral contributors",
+        short_description: "schema from your models, relations, mutations, subscriptions",
+        full_content: r#"A REST endpoint returns the shape *you* designed. A GraphQL endpoint returns the shape the *caller* designed — which is the whole appeal, and the reason this plugin makes you say yes on purpose. Point it at the models you already declared and it derives the schema: queries, relation traversal, mutations, and live subscriptions, with no resolver code to write and nothing to keep in sync by hand.
+
+## Install
+
+```bash
+cargo add umbral-graphql
+```
+
+## Wire it up
+
+```rust
+use umbral::prelude::*;
+use umbral_graphql::GraphqlPlugin;
+
+let app = App::builder()
+    .database("default", pool)
+    .plugin(
+        GraphqlPlugin::new()
+            .expose("post")
+            .expose("auth_user")
+            .hide("auth_user", "email")   // exposing a model exposes EVERY column
+            .mutable("post"),             // createPost / updatePost / deletePost
+    )
+    .build()?;
+```
+
+```graphql
+{ post(id: "1") { title author { username } comments { body } } }
+```
+
+## Target: nothing leaves the database by accident
+
+Exposing a model exposes every column on it, so reads and writes are separate opt-ins: `expose` makes a model readable, `mutable` makes it writable, `subscribable` makes it live. A read you got wrong leaks data; a write you got wrong destroys it.
+
+A `#[umbral(private)]` column stays invisible until `allow_private_if` unlocks it for a caller who has earned it — and the schema stays one honest document, with the field always present and always nullable, because a caller without the unlock has to legally receive nothing.
+
+## What you get
+
+- Schema derived from the model registry — queries, filters, and relations
+- Mutations and live subscriptions, each a separate opt-in
+- Relation fields batched through a per-request DataLoader, so no N+1
+- `#[umbral(private)]` columns unlockable per caller, with one honest schema
+- Unauthorized writes refused by name, not silently dropped
+- GraphiQL explorer in dev
+"#,
+        setup_notes: "Nothing is exposed until you call `.expose(\"table\")`, and an exposed model is readable but not writable until you also call `.mutable(\"table\")`. Exposing a model exposes every column on it — reach for `.hide(..)` or `#[umbral(private)]` for anything that shouldn't leave the database.",
+        installation_commands: "cargo add umbral-graphql",
+        version: "0.0.8",
+        status: PluginStatus::Usable,
+        maturity: PluginMaturity::Beta,
+        featured: true,
+        display_order: 55,
     },
     OfficialRow {
         crate_name: "umbral-tasks",
@@ -384,7 +443,7 @@ Point them at the explorer — they get every route, its parameters, and a "try 
 ## Install
 
 ```bash
-umbral add umbral-tasks
+cargo add umbral-tasks
 ```
 
 ## Wire it up
@@ -433,8 +492,8 @@ enqueue("send_welcome", &WelcomePayload { user_id }, EnqueueOptions::default()).
 - Read-only queue browser in the admin, with "Retry selected"
 "#,
         setup_notes: "Register `TasksPlugin` in the app, annotate handlers with `#[umbral::task]`, and call `register_<fn>()` at startup so the worker knows them. Enqueue with `enqueue(...)` from any handler, then run `cargo run -- worker` (and `tasks-beat` for schedules) beside the web process.",
-        installation_commands: "umbral-tasks = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-tasks",
+        version: "0.0.8",
         status: PluginStatus::Experimental,
         maturity: PluginMaturity::Alpha,
         featured: false,
@@ -451,7 +510,7 @@ enqueue("send_welcome", &WelcomePayload { user_id }, EnqueueOptions::default()).
 ## Install
 
 ```bash
-umbral add umbral-security
+cargo add umbral-security
 ```
 
 ## Wire it up
@@ -491,8 +550,8 @@ SecurityPlugin::with_config(SecurityConfig {
 - Per-path escape hatches instead of a global kill switch
 "#,
         setup_notes: "Mount `SecurityPlugin::new()` for hardened defaults, or `SecurityPlugin::with_config(...)` to narrow a single default — e.g. `csrf_exempt_paths` for a bearer-token API. Exemptions are per-path, never a global off switch.",
-        installation_commands: "umbral-security = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-security",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -509,7 +568,7 @@ SecurityPlugin::with_config(SecurityConfig {
 ## Install
 
 ```bash
-umbral add umbral-storage
+cargo add umbral-storage
 ```
 
 ## Wire it up
@@ -551,8 +610,8 @@ struct Profile {
 - Static-asset serving in production (no nginx required to start)
 "#,
         setup_notes: "One `StoragePlugin` serves both sides: `.static_files(url, dir)` for compiled assets and `.media(url, dir)` for user uploads. The same `File`/`Image` model fields work against the filesystem in dev and S3 in prod — no handler change.",
-        installation_commands: "umbral-storage = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-storage",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -569,7 +628,7 @@ struct Profile {
 ## Install
 
 ```bash
-umbral add umbral-permissions
+cargo add umbral-permissions
 ```
 
 ## Wire it up
@@ -600,8 +659,8 @@ Put users in groups, grant the group the model permissions it needs, and both th
 - Auto-provisioned permissions for every registered model
 "#,
         setup_notes: "Mount `PermissionsPlugin::default()` after your model plugins — on boot it provisions the four standard permissions (view/add/change/delete) for every registered model. The admin and umbral-rest consult these checks automatically.",
-        installation_commands: "umbral-permissions = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-permissions",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -618,7 +677,7 @@ Put users in groups, grant the group the model permissions it needs, and both th
 ## Install
 
 ```bash
-umbral add umbral-oauth   # builds on umbral-auth
+cargo add umbral-oauth   # builds on umbral-auth
 ```
 
 ## Wire it up
@@ -654,8 +713,8 @@ Beyond first-time login, a signed-in user can link a provider to their existing 
 - Builds on umbral-auth's user model and session
 "#,
         setup_notes: "Give `OAuthPlugin::new(base)` your public origin (for callback URLs), then `.provider(...)` each provider. Read client id/secret from the environment and register a provider only when both are present — an unconfigured provider is simply skipped.",
-        installation_commands: "umbral-oauth = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-oauth",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Beta,
         featured: true,
@@ -672,7 +731,7 @@ Beyond first-time login, a signed-in user can link a provider to their existing 
 ## Install
 
 ```bash
-umbral add umbral-realtime
+cargo add umbral-realtime
 ```
 
 ## Wire it up
@@ -718,8 +777,8 @@ Realtime::to_user(admin_id.to_string())
 - User-targeted events = private channels with no group to guess
 "#,
         setup_notes: "Register `RealtimePlugin::default()` and hang `.on_model::<T, _, _>(...)` handlers off the models whose changes should push. Browsers connect at `/realtime/sse`; send to a room or to a specific user id with `Realtime::to_user(...)`.",
-        installation_commands: "umbral-realtime = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-realtime",
+        version: "0.0.8",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -736,7 +795,7 @@ Realtime::to_user(admin_id.to_string())
 ## Install
 
 ```bash
-umbral add umbral-cache
+cargo add umbral-cache
 ```
 
 ## Wire it up
@@ -776,8 +835,8 @@ async fn stats() -> Stats {
 - A pluggable backend so a shared store can slot in later
 "#,
         setup_notes: "Install `CachePlugin::new(Cache::memory())` to register the ambient cache handle, then reach it from any handler with `umbral_cache::ambient()`. Layer `cache_page` only on responses that are safe to share (anonymous, non-per-user).",
-        installation_commands: "umbral-cache = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-cache",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -794,7 +853,7 @@ async fn stats() -> Stats {
 ## Install
 
 ```bash
-umbral add umbral-health
+cargo add umbral-health
 ```
 
 ## Wire it up
@@ -831,8 +890,8 @@ HealthPlugin::default()
 - Zero config to start — mount and deploy
 "#,
         setup_notes: "Mount `HealthPlugin::default()` for `/healthz` (liveness) and `/ready` (readiness, which verifies the DB). Add `.check(...)` for extra dependencies and `.check_timeout(...)` so a hung dependency fails the probe fast instead of hanging it.",
-        installation_commands: "umbral-health = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-health",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -849,7 +908,7 @@ HealthPlugin::default()
 ## Install
 
 ```bash
-umbral add umbral-livereload
+cargo add umbral-livereload
 ```
 
 ## Wire it up
@@ -879,8 +938,8 @@ let app = App::builder()
 - Fully inert outside dev mode — nothing to remove for prod
 "#,
         setup_notes: "Add `LiveReloadPlugin::new()` and chain `.watch(dir)` for each extra directory to watch (the site templates + static are watched by default). It's automatically inert outside dev mode, so it's safe to leave wired in.",
-        installation_commands: "umbral-livereload = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-livereload",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -897,7 +956,7 @@ let app = App::builder()
 ## Install
 
 ```bash
-umbral add umbral-analytics
+cargo add umbral-analytics
 ```
 
 ## Wire it up
@@ -930,8 +989,8 @@ Auto-capture gives you traffic; a custom event gives you the funnel step that ma
 - Key from env via `from_env()`, or explicit with `new(api_key)`
 "#,
         setup_notes: "Configure with `AnalyticsPlugin::from_env()` (reads the PostHog key from the environment) or `AnalyticsPlugin::new(api_key)`, and `.with_exclude_prefixes(...)` to skip assets and probes. Outbound sends are bounded so instrumentation can't overwhelm the request path.",
-        installation_commands: "umbral-analytics = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-analytics",
+        version: "0.0.8",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -948,7 +1007,7 @@ Auto-capture gives you traffic; a custom event gives you the funnel step that ma
 ## Install
 
 ```bash
-umbral add umbral-email
+cargo add umbral-email
 ```
 
 ## Wire it up
@@ -986,8 +1045,8 @@ msg.send().await?;   // SMTP, API, or console — same call
 - The delivery layer umbral-auth's password reset plugs into
 "#,
         setup_notes: "Register `EmailPlugin`; the backend (SMTP, provider API, or the dev console) is chosen from the environment. Compose with `EmailMessage::new(subject, recipients)` and `.send().await` — swapping providers is a config change, never a code change.",
-        installation_commands: "umbral-email = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-email",
+        version: "0.0.8",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -1004,7 +1063,7 @@ msg.send().await?;   // SMTP, API, or console — same call
 ## Install
 
 ```bash
-umbral add umbral-logs
+cargo add umbral-logs
 ```
 
 ## Wire it up
@@ -1040,8 +1099,8 @@ LogsPlugin::default().sample_rate(0.05);  // log 5% of requests
 - Pairs with the framework's trusted-proxy client-IP resolution
 "#,
         setup_notes: "Mount `LogsPlugin::default()` and tune it: `.exclude_prefix(...)` to drop asset noise, `.min_status(n)` to capture only errors, and `.sample_rate(f)` to thin a high-traffic route. The client IP comes from your trusted-proxy config, so it's the caller — never a forgeable header.",
-        installation_commands: "umbral-logs = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-logs",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -1058,7 +1117,7 @@ LogsPlugin::default().sample_rate(0.05);  // log 5% of requests
 ## Install
 
 ```bash
-umbral add umbral-signals
+cargo add umbral-signals
 ```
 
 ## Wire it up
@@ -1101,8 +1160,8 @@ For work that must survive a crash, have the handler enqueue an `umbral-tasks` j
 - Pair with umbral-tasks for durable, crash-safe reactions
 "#,
         setup_notes: "Register `SignalsPlugin` and, at startup, `subscribe_async(\"event\", handler)`; emit with `emit(\"event\", json).await` or let the ORM's post_save/update/delete signals fire automatically. Signals are in-process — pair with umbral-tasks when a reaction must survive a crash.",
-        installation_commands: "umbral-signals = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-signals",
+        version: "0.0.8",
         status: PluginStatus::Shipped,
         maturity: PluginMaturity::Stable,
         featured: false,
@@ -1119,7 +1178,7 @@ For work that must survive a crash, have the handler enqueue an `umbral-tasks` j
 ## Install
 
 ```bash
-umbral add umbral-rls
+cargo add umbral-rls
 ```
 
 *Postgres only — RLS is a Postgres feature. On SQLite the plugin skips with a warning rather than silently diverging.*
@@ -1154,8 +1213,8 @@ Pair it with umbral-tenants: tenants routes and scopes the request; RLS makes th
 - Pairs with umbral-tenants for layered multi-tenancy
 "#,
         setup_notes: "Postgres only. Declare `.policy(table, sql_predicate)` per protected table on `RlsPlugin::new()`; the plugin sets a per-request GUC through the pool so a tenant's context can't leak across requests. On SQLite it skips with a warning rather than diverging.",
-        installation_commands: "umbral-rls = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-rls",
+        version: "0.0.8",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -1172,7 +1231,7 @@ Pair it with umbral-tenants: tenants routes and scopes the request; RLS makes th
 ## Install
 
 ```bash
-umbral add umbral-tenants
+cargo add umbral-tenants
 ```
 
 ## Wire it up
@@ -1207,8 +1266,8 @@ Run `TenantStrategy::Schema` for separation and layer umbral-rls underneath, so 
 - Pairs with umbral-rls for database-enforced defence in depth
 "#,
         setup_notes: "On `TenantsPlugin::new()` pick a `.strategy(...)` (schema-per-tenant or shared-column), list the `.tenant_apps([...])` that are scoped, and set how the tenant is resolved (`.tenant_header(...)` or a membership guard). Layer umbral-rls for database-enforced isolation.",
-        installation_commands: "umbral-tenants = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-tenants",
+        version: "0.0.8",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -1225,7 +1284,7 @@ Run `TenantStrategy::Schema` for separation and layer umbral-rls underneath, so 
 ## Install
 
 ```bash
-umbral add umbral-playground   # sits alongside umbral-rest / umbral-openapi
+cargo add umbral-playground   # sits alongside umbral-rest / umbral-openapi
 ```
 
 ## Wire it up
@@ -1257,8 +1316,8 @@ Instead of maintaining a Postman collection, send the playground URL — it disc
 - Zero external tooling to install or keep in sync
 "#,
         setup_notes: "Mount `PlaygroundPlugin::new(title).at(\"/path/\")` alongside umbral-rest and umbral-openapi — it discovers resources from the running server and auto-detects auth from the published securitySchemes, so the console is never out of date.",
-        installation_commands: "umbral-playground = \"0.0.6\"",
-        version: "0.0.6",
+        installation_commands: "cargo add umbral-playground",
+        version: "0.0.8",
         status: PluginStatus::Usable,
         maturity: PluginMaturity::Beta,
         featured: false,
@@ -1405,7 +1464,7 @@ pub async fn backfill_plugin_content() -> Result<u64, Box<dyn std::error::Error 
 }
 
 /// Editorial audit assessment for each first-party plugin, keyed by crate
-/// name. The v0.0.6 directory marks every official plugin as self-reviewed:
+/// name. The v0.0.8 directory marks every official plugin as self-reviewed:
 /// maintainers have checked the claims in the public copy, but this is not a
 /// third-party security audit.
 const AUDIT: &[(&str, &str)] = &[
@@ -1415,6 +1474,7 @@ const AUDIT: &[(&str, &str)] = &[
     ("umbral-permissions", "self_reviewed"),
     ("umbral-rest", "self_reviewed"),
     ("umbral-openapi", "self_reviewed"),
+    ("umbral-graphql", "self_reviewed"),
     ("umbral-tasks", "self_reviewed"),
     ("umbral-security", "self_reviewed"),
     ("umbral-storage", "self_reviewed"),
@@ -1573,9 +1633,9 @@ const BETA: PluginMaturity = PluginMaturity::Beta;
 const ALPHA: PluginMaturity = PluginMaturity::Alpha;
 const DES: PluginMaturity = PluginMaturity::Design;
 
-/// Hand-curated feature tracker per official plugin. Mirrors the real v0.0.6
+/// Hand-curated feature tracker per official plugin. Mirrors the real v0.0.8
 /// capability surface so the `/prebuilt` grid and detail tracker show useful
-/// content for all 21 official plugins.
+/// content for all 22 official plugins.
 const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
     PluginFeatureSet {
         crate_name: "umbral-admin",
@@ -1902,6 +1962,59 @@ const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
             FeatureSeed {
                 name: "Production gating",
                 description: "Docs UI can stay disabled in production unless explicitly allowed.",
+                status: S,
+                maturity: BETA,
+            },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbral-graphql",
+        features: &[
+            FeatureSeed {
+                name: "Schema from the model registry",
+                description: "Queries, filters, and types derived from models you already declared.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Relation traversal",
+                description: "Walk FK, O2O, and M2M edges in one query, as deep as the caller asks.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "DataLoader batching",
+                description: "Relation fields batch per request, so nested selections don't N+1.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Mutations",
+                description: "create / update / delete per model — a second opt-in on top of expose.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Subscriptions",
+                description: "Live per-model change streams over WebSocket, opt-in per model.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Private-column unlock",
+                description: "`allow_private_if` reveals a private column per caller, one honest schema.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "Field hiding",
+                description: "`hide` drops columns from the schema — exposing a model exposes every column.",
+                status: S,
+                maturity: BETA,
+            },
+            FeatureSeed {
+                name: "GraphiQL explorer",
+                description: "In-browser query console, toggleable for production.",
                 status: S,
                 maturity: BETA,
             },
