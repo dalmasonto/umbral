@@ -58,6 +58,7 @@ use umbral::web::Router;
 mod connection;
 mod loader;
 mod mutation;
+mod privacy;
 mod schema;
 mod subscription;
 
@@ -86,7 +87,7 @@ pub fn build_schema_for_tests(
 /// Test-only: a fresh per-request loader set.
 #[doc(hidden)]
 pub fn new_loaders_for_tests() -> loader::Loaders {
-    loader::Loaders::new()
+    loader::Loaders::default()
 }
 
 /// Test-only: publish a change event without performing a write.
@@ -215,6 +216,7 @@ pub struct GraphqlPlugin {
     path: Option<String>,
     exposed: Vec<(String, Option<AccessFn>)>,
     writable: Vec<(String, AccessFn)>,
+    private_unlocks: Vec<(String, String, AccessFn)>,
     subscribable: Vec<String>,
     hidden: Vec<(String, String)>,
     graphiql: Option<bool>,
@@ -347,6 +349,39 @@ impl GraphqlPlugin {
         self
     }
 
+    /// Let approved callers read a `#[umbral(private)]` column.
+    ///
+    /// ```rust,ignore
+    /// .expose("product")
+    /// .allow_private_if("product", "cost", |id| id.is_some_and(|i| i.is_staff))
+    /// ```
+    ///
+    /// Without this, a `private` column is absent from the schema entirely — which makes it
+    /// indistinguishable from `#[umbral(secret)]`. This is the unlock that gives `private` its
+    /// second tier.
+    ///
+    /// The field is emitted as **nullable**, whatever the database says: a caller without the
+    /// unlock does not receive it, and "not there" has to be a legal value. It is one schema
+    /// for everyone; who gets a value is decided per request.
+    ///
+    /// **Writes too.** A column only staff may read is not one an anonymous mutation gets to
+    /// set — and unlike REST, which silently strips it, a mutation that tries says so:
+    /// `not authorized to set 'cost'`. An input field that quietly does nothing is worse than
+    /// an error.
+    ///
+    /// Needs [`Self::authenticate`], or every caller is anonymous and the unlock never opens.
+    /// Cannot unlock a `secret` column; that tier has no unlock.
+    pub fn allow_private_if(
+        mut self,
+        table: impl Into<String>,
+        field: impl Into<String>,
+        access: impl Fn(Option<&umbral::auth::Identity>) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.private_unlocks
+            .push((table.into(), field.into(), Arc::new(access)));
+        self
+    }
+
     /// Omit columns from the schema.
     ///
     /// ```rust,ignore
@@ -425,6 +460,12 @@ impl GraphqlPlugin {
                         .find(|(t, _)| t == table)
                         .map(|(_, f)| f.clone()),
                     subscribable: self.subscribable.iter().any(|t| t == table),
+                    private_unlocks: self
+                        .private_unlocks
+                        .iter()
+                        .filter(|(t, _, _)| t == table)
+                        .map(|(_, f, func)| (f.clone(), func.clone()))
+                        .collect(),
                     hidden: self
                         .hidden
                         .iter()
@@ -494,6 +535,7 @@ impl Plugin for GraphqlPlugin {
         let show_ide = self.graphiql.unwrap_or(dev);
 
         let post_schema = schema.clone();
+        let post_exposed = Arc::new(exposed.clone());
         let post_path = path.clone();
         let ide_path = path.clone();
         let auth = self.auth.clone();
@@ -515,18 +557,28 @@ impl Plugin for GraphqlPlugin {
                 move |headers: umbral::web::HeaderMap, req: GraphQLRequest| {
                     let schema = post_schema.clone();
                     let auth = auth.clone();
+                    let exposed = post_exposed.clone();
                     async move {
                         let identity: Option<umbral::auth::Identity> = match &auth {
                             Some(a) => a.authenticate(&headers).await,
                             None => None,
                         };
+                        // Which `private` columns THIS caller unlocked. Computed here because
+                        // this is the only place the identity exists; the schema is built once
+                        // at boot and cannot know who is asking.
+                        let unlocks = Arc::new(privacy::PrivateUnlocks::resolve(
+                            &exposed,
+                            identity.as_ref(),
+                        ));
                         // Fresh loaders PER REQUEST. A shared cache would serve one caller's
-                        // rows to another — a data leak wearing a performance costume.
-                        let inner = req.into_inner().data(loader::Loaders::new()).data::<Option<
-                            umbral::auth::Identity,
-                        >>(
-                            identity
-                        );
+                        // rows to another — a data leak wearing a performance costume. And now
+                        // it would serve one caller's UNLOCKED columns to another, which is the
+                        // same leak with a permission bypass on top.
+                        let inner = req
+                            .into_inner()
+                            .data(loader::Loaders::new(unlocks.clone()))
+                            .data(unlocks)
+                            .data::<Option<umbral::auth::Identity>>(identity);
                         GraphQLResponse::from(schema.execute(inner).await).into_response()
                     }
                 },
@@ -570,8 +622,8 @@ impl Plugin for GraphqlPlugin {
                 axum::routing::post(move |req: GraphQLRequest| {
                     let schema = sse_schema.clone();
                     async move {
-                        let stream =
-                            schema.execute_stream(req.into_inner().data(loader::Loaders::new()));
+                        let stream = schema
+                            .execute_stream(req.into_inner().data(loader::Loaders::default()));
                         axum::response::Sse::new(stream.map(|res| {
                             axum::response::sse::Event::default()
                                 .json_data(res)

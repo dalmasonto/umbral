@@ -277,7 +277,14 @@ pub(crate) fn query_field(e: &Exposed) -> Field {
                     )));
                 }
 
-                let mut qs = DynQuerySet::for_meta(&e.meta);
+                // A cursor page is a read like any other, so it carries the same field policy.
+                // Wiring the unlock into the list resolver and forgetting this one is exactly
+                // the kind of hole a per-resolver policy invites — there are four separate
+                // paths through the ORM in this plugin, and a test caught this one missing.
+                let unlocks = crate::privacy::from_ctx(&ctx);
+                let unlocked = unlocks.for_table(&e.meta.table);
+                let refs: Vec<&str> = unlocked.iter().map(String::as_str).collect();
+                let mut qs = DynQuerySet::for_meta(&e.meta).allow_private(&refs);
                 if let Some(c) = &cursor {
                     qs = qs.filter_condition(keyset(&e.meta, &sort, &pk, c)?);
                 }

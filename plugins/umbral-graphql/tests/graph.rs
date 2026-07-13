@@ -368,6 +368,7 @@ async fn expose_if_denies_anonymous_and_admits_staff() {
         meta,
         hidden: Vec::new(),
         writable: None,
+        private_unlocks: Vec::new(),
         subscribable: false,
         access: Some(std::sync::Arc::new(
             |id: Option<&umbral::auth::Identity>| id.is_some_and(|i| i.is_staff),
@@ -475,6 +476,7 @@ async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
             access: None,
             hidden: Vec::new(),
             writable: None,
+            private_unlocks: Vec::new(),
             subscribable: false,
         },
         Exposed {
@@ -483,6 +485,7 @@ async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
             // sever the FK from the CHILD's side
             hidden: vec!["author".to_string()],
             writable: None,
+            private_unlocks: Vec::new(),
             subscribable: false,
         },
     ])

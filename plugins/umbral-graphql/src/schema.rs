@@ -55,6 +55,9 @@ pub struct Exposed {
     /// A separate opt-in from `access` on purpose: a read you got wrong leaks data, a write
     /// you got wrong destroys it. Exposing a model does not make it writable.
     pub writable: Option<AccessFn>,
+    /// `#[umbral(private)]` columns this model can unlock, and for whom.
+    /// See [`crate::GraphqlPlugin::allow_private_if`].
+    pub private_unlocks: Vec<(String, AccessFn)>,
 }
 
 /// Whether a column appears in the schema at all.
@@ -71,11 +74,15 @@ pub struct Exposed {
 /// empty.
 pub(crate) fn is_visible(e: &Exposed, col_name: &str) -> bool {
     if let Some(col) = e.meta.fields.iter().find(|c| c.name == col_name) {
-        // Declared on the MODEL: `#[umbral(secret)]` (and every `Masked<T>`) can never be
-        // served, and `#[umbral(private)]` is not served here because GraphQL has no way to
-        // establish that a given caller has unlocked it — `DynQuerySet::allow_private` is a
-        // per-read decision, and the client picks the query shape. Absent, not null.
-        if umbral::orm::is_secret_column(col) || col.private {
+        // `#[umbral(secret)]` (and every `Masked<T>`) can never be served to anyone. Absent.
+        if umbral::orm::is_secret_column(col) {
+            return false;
+        }
+        // `#[umbral(private)]` is absent UNLESS an `allow_private_if` can unlock it. With one,
+        // the field is in the schema and NULLABLE — for a caller without the unlock it simply
+        // does not arrive. Emitting it as non-null would turn a permission decision into a
+        // schema violation at execution time.
+        if col.private && !crate::privacy::is_conditional(e, col_name) {
             return false;
         }
     }
@@ -218,7 +225,9 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
             }
             let key = col.name.clone();
             let c = col.clone();
-            let ty = if col.nullable {
+            // A conditionally-visible column is nullable whatever the database says: the
+            // caller who cannot see it receives nothing, and "nothing" must be a legal value.
+            let ty = if col.nullable || crate::privacy::is_conditional(e, &col.name) {
                 TypeRef::named(scalar_for(col))
             } else {
                 TypeRef::named_nn(scalar_for(col))
@@ -398,7 +407,14 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
                             .get("offset")
                             .and_then(|v| v.u64().ok())
                             .unwrap_or(0);
-                        let rows = crate::loader::fetch_list(&m, limit, offset).await?;
+                        let unlocks = crate::privacy::from_ctx(&ctx);
+                        let rows = crate::loader::fetch_list(
+                            &m,
+                            limit,
+                            offset,
+                            unlocks.for_table(&m.table),
+                        )
+                        .await?;
                         Ok(Some(FieldValue::list(
                             rows.into_iter().map(FieldValue::owned_any),
                         )))

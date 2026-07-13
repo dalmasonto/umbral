@@ -173,12 +173,17 @@ pub(crate) fn build(exposed: &[Exposed]) -> Option<Subscription> {
                             let rx = bus().subscribe();
                             let table = e.meta.table.clone();
                             let meta = Arc::new(e.meta.clone());
+                            // Resolved ONCE, when the subscription is established — same as the
+                            // access gate above, and with the same caveat: a caller demoted
+                            // mid-stream keeps their unlocks until they reconnect.
+                            let unlocks = crate::privacy::from_ctx(&ctx);
 
                             Ok(tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(
                                 move |ev| {
                                     let table = table.clone();
                                     let only = only.clone();
                                     let meta = meta.clone();
+                                    let unlocks = unlocks.clone();
                                     async move {
                                         // A lagging subscriber yields Err(Lagged(n)) — it
                                         // missed messages. Skip, do not kill the stream: a
@@ -192,9 +197,13 @@ pub(crate) fn build(exposed: &[Exposed]) -> Option<Subscription> {
                                         }
                                         // Re-read through the ORM: redacted, current, and a
                                         // real node in the graph (its relations resolve).
-                                        let row = crate::loader::load_one_json(&meta, &ev.pk)
-                                            .await
-                                            .ok()??;
+                                        let row = crate::loader::load_one_json(
+                                            &meta,
+                                            &ev.pk,
+                                            unlocks.for_table(&meta.table),
+                                        )
+                                        .await
+                                        .ok()??;
                                         Some(Ok(FieldValue::owned_any(serde_json::Value::Object(
                                             row,
                                         ))))

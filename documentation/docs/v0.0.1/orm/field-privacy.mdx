@@ -62,6 +62,16 @@ ResourceConfig::new("product")
   One path cannot describe two response shapes, so a conditionally-visible column is emitted in your OpenAPI spec as **optional** — `cost?: string` — with a description of who gets it. That is the honest answer and it is correct for both audiences: the field genuinely may or may not be there, and a generated TypeScript client will make the consumer check.
 </Callout>
 
+Over GraphQL, on the plugin:
+
+```rust
+GraphqlPlugin::new()
+    .expose("product")
+    .allow_private_if("product", "cost", |id| id.is_some_and(|i| i.is_staff))
+```
+
+The schema is one document for everyone, so the field exists and is **nullable**, and who gets a value is decided per request. A mutation that tries to set it without the unlock is refused **by name** (`not authorized to set 'cost'`) rather than silently stripped — GraphQL is stricter than REST here on purpose.
+
 From your own handlers, the same unlock is a call on the queryset:
 
 ```rust

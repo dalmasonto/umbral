@@ -44,6 +44,10 @@ pub(crate) fn is_writable(e: &Exposed, col: &Column) -> bool {
     if !is_visible(e, &col.name) {
         return false;
     }
+    // A `private` column with an unlock IS settable — by the callers the unlock approves. It
+    // stays in the input type, and `body_from_args` rejects anyone else BY NAME rather than
+    // silently dropping the value. (REST strips silently, which produces a "this field is
+    // required" error for a field the client demonstrably sent — gaps3 #75. Not repeating it.)
     !(col.primary_key
         || col.privileged
         || col.noedit
@@ -95,6 +99,7 @@ pub(crate) fn input_types(e: &Exposed) -> (InputObject, InputObject) {
 fn body_from_args(
     obj: &async_graphql::dynamic::ObjectAccessor<'_>,
     e: &Exposed,
+    unlocks: &crate::privacy::PrivateUnlocks,
 ) -> async_graphql::Result<serde_json::Map<String, Json>> {
     let mut body = serde_json::Map::new();
     for col in &e.meta.fields {
@@ -104,6 +109,15 @@ fn body_from_args(
         let Some(v) = obj.get(&col.name) else {
             continue; // absent: not part of this write at all
         };
+        // A column only trusted callers may READ is not one an anonymous mutation gets to
+        // SET. Said out loud, not silently dropped: a write that appears to succeed and
+        // quietly discards a field is worse than one that fails.
+        if col.private && !unlocks.may_write(&e.meta.table, &col.name) {
+            return Err(async_graphql::Error::new(format!(
+                "not authorized to set `{}`",
+                col.name
+            )));
+        }
         body.insert(col.name.clone(), v.as_value().clone().into_json()?);
     }
     Ok(body)
@@ -140,10 +154,15 @@ pub(crate) fn build(exposed: &[Exposed]) -> Option<(Object, Vec<InputObject>)> {
                     FieldFuture::new(async move {
                         crate::guard_write(&ctx, &e)?;
                         let data = ctx.args.try_get("data")?;
-                        let body = body_from_args(&data.object()?, &e)?;
+                        let unlocks = crate::privacy::from_ctx(&ctx);
+                        let body = body_from_args(&data.object()?, &e, &unlocks)?;
+                        let unlocked = unlocks.for_table(&e.meta.table);
+                        let refs: Vec<&str> = unlocked.iter().map(String::as_str).collect();
                         // insert_json: strips privileged columns, runs cleaners/validators,
-                        // fires signals, and hands back a row that is already redacted.
+                        // fires signals, and hands back a row that is already redacted —
+                        // including the private columns this caller did not unlock.
                         let row = DynQuerySet::for_meta(&e.meta)
+                            .allow_private(&refs)
                             .insert_json(&body)
                             .await
                             .map_err(|err| async_graphql::Error::new(err.to_string()))?;
@@ -169,7 +188,8 @@ pub(crate) fn build(exposed: &[Exposed]) -> Option<(Object, Vec<InputObject>)> {
                         crate::guard_write(&ctx, &e)?;
                         let id = ctx.args.try_get("id")?.string()?.to_string();
                         let data = ctx.args.try_get("data")?;
-                        let body = body_from_args(&data.object()?, &e)?;
+                        let unlocks = crate::privacy::from_ctx(&ctx);
+                        let body = body_from_args(&data.object()?, &e, &unlocks)?;
                         let pk = crate::loader::pk_name(&e.meta);
 
                         let n = DynQuerySet::for_meta(&e.meta)

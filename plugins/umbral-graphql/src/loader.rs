@@ -50,7 +50,9 @@ pub struct ChildKey {
     pub parent_id: String,
 }
 
-pub struct RowLoader;
+pub struct RowLoader {
+    unlocks: Arc<crate::privacy::PrivateUnlocks>,
+}
 
 impl Loader<PkKey> for RowLoader {
     type Value = Json;
@@ -72,7 +74,7 @@ impl Loader<PkKey> for RowLoader {
             let pk = pk_name(&meta);
             let ids: Vec<String> = ks.iter().map(|k| k.id.clone()).collect();
 
-            let rows = fetch_where_in(&meta, &pk, &ids)
+            let rows = fetch_where_in(&meta, &pk, &ids, self.unlocks.for_table(table))
                 .await
                 .map_err(|e| Arc::new(async_graphql::Error::new(e)))?;
 
@@ -94,7 +96,9 @@ impl Loader<PkKey> for RowLoader {
     }
 }
 
-pub struct ChildLoader;
+pub struct ChildLoader {
+    unlocks: Arc<crate::privacy::PrivateUnlocks>,
+}
 
 impl Loader<ChildKey> for ChildLoader {
     type Value = Vec<Json>;
@@ -117,7 +121,7 @@ impl Loader<ChildKey> for ChildLoader {
             };
             let ids: Vec<String> = ks.iter().map(|k| k.parent_id.clone()).collect();
 
-            let rows = fetch_where_in(&meta, fk_col, &ids)
+            let rows = fetch_where_in(&meta, fk_col, &ids, self.unlocks.for_table(table))
                 .await
                 .map_err(|e| Arc::new(async_graphql::Error::new(e)))?;
 
@@ -152,10 +156,15 @@ pub struct Loaders {
 }
 
 impl Loaders {
-    pub fn new() -> Self {
+    pub fn new(unlocks: Arc<crate::privacy::PrivateUnlocks>) -> Self {
         Self {
-            rows: Arc::new(DataLoader::new(RowLoader, tokio::spawn)),
-            children: Arc::new(DataLoader::new(ChildLoader, tokio::spawn)),
+            rows: Arc::new(DataLoader::new(
+                RowLoader {
+                    unlocks: unlocks.clone(),
+                },
+                tokio::spawn,
+            )),
+            children: Arc::new(DataLoader::new(ChildLoader { unlocks }, tokio::spawn)),
         }
     }
 
@@ -195,7 +204,7 @@ impl Loaders {
 
 impl Default for Loaders {
     fn default() -> Self {
-        Self::new()
+        Self::new(Arc::new(crate::privacy::PrivateUnlocks::default()))
     }
 }
 
@@ -217,7 +226,12 @@ pub fn pk_name(meta: &ModelMeta) -> String {
 /// pk whose value is numeric is bound as text and an i64 FK is bound as an i64. Binding a
 /// string against an INTEGER column works on SQLite by affinity and ERRORS on Postgres —
 /// the gaps3 #59 trap.
-async fn fetch_where_in(meta: &ModelMeta, col: &str, ids: &[String]) -> Result<Vec<Json>, String> {
+async fn fetch_where_in(
+    meta: &ModelMeta,
+    col: &str,
+    ids: &[String],
+    unlocked: &[String],
+) -> Result<Vec<Json>, String> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -228,7 +242,9 @@ async fn fetch_where_in(meta: &ModelMeta, col: &str, ids: &[String]) -> Result<V
         any = Some(umbral::orm::never_matches());
     }
     DB_READS.fetch_add(1, Ordering::Relaxed);
+    let refs: Vec<&str> = unlocked.iter().map(String::as_str).collect();
     let rows = DynQuerySet::for_meta(meta)
+        .allow_private(&refs)
         .filter_condition(any.expect("set above"))
         .limit(crate::MAX_LIMIT)
         .fetch_as_json()
@@ -256,9 +272,12 @@ pub async fn fetch_list(
     meta: &ModelMeta,
     limit: u64,
     offset: u64,
+    unlocked: &[String],
 ) -> async_graphql::Result<Vec<Json>> {
     DB_READS.fetch_add(1, Ordering::Relaxed);
+    let refs: Vec<&str> = unlocked.iter().map(String::as_str).collect();
     let rows = DynQuerySet::for_meta(meta)
+        .allow_private(&refs)
         .limit(limit)
         .offset(offset)
         .fetch_as_json()
@@ -275,10 +294,13 @@ pub async fn fetch_list(
 pub async fn load_one_json(
     meta: &ModelMeta,
     pk: &str,
+    unlocked: &[String],
 ) -> Result<Option<serde_json::Map<String, Json>>, String> {
     let pk_col = pk_name(meta);
     DB_READS.fetch_add(1, Ordering::Relaxed);
+    let refs: Vec<&str> = unlocked.iter().map(String::as_str).collect();
     DynQuerySet::for_meta(meta)
+        .allow_private(&refs)
         .filter_eq_string(&pk_col, pk)
         .first_as_json()
         .await

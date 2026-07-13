@@ -83,6 +83,20 @@ A hidden column is **absent from the schema**, not present-and-null — a field 
 
 Data that must never ship over *any* transport is a different tier, and it isn't your job to remember: `password_hash` is denied in **core** (`umbral::orm::HARD_DENIED_FIELDS`), so no combination of `.expose(...)` can bring it back. Secrecy there is a property of the data, not of the door you walk through to reach it.
 
+### Private columns
+
+A `#[umbral(private)]` column (see [field privacy](/docs/v0.0.1/orm/field-privacy)) is absent from the schema unless you say who may read it:
+
+```rust
+GraphqlPlugin::new()
+    .expose("product")
+    .allow_private_if("product", "cost", |id| id.is_some_and(|i| i.is_staff))
+```
+
+The schema stays **one shape** for everybody — introspection is a single document, so it has to. The field exists and is **nullable** (even if the column is NOT NULL), and whether you get a value is decided per request. A caller without the unlock reads `null`.
+
+The unlock covers writes as well, and here GraphQL is stricter than REST on purpose: a mutation that tries to set a private column it may not touch is **refused by name** — `not authorized to set 'cost'` — rather than having the value quietly dropped. A write that appears to succeed while discarding part of its input is worse than one that fails.
+
 ## Who is the caller
 
 `expose_if` hands your closure the caller's `Identity` — but the plugin only *has* one if you tell it how to authenticate. Give it the same backends you give `RestPlugin`:
