@@ -552,6 +552,11 @@ impl Plugin for GraphqlPlugin {
         // needs. It is plain HTTP: it survives proxies that mangle upgrades, it reconnects on
         // its own, and it needs no protocol negotiation. For "push me updates" it is the
         // cheaper half, and most apps never need more.
+        let ws_endpoint: Option<String> = exposed
+            .iter()
+            .any(|e| e.subscribable)
+            .then(|| format!("{path}/ws"));
+
         if exposed.iter().any(|e| e.subscribable) {
             let ws_schema = schema.clone();
             router = router.route(
@@ -579,16 +584,24 @@ impl Plugin for GraphqlPlugin {
         }
 
         if show_ide {
-            router =
-                router.route(
-                    &ide_path,
-                    axum::routing::get(move || {
-                        let p = post_path.clone();
-                        async move {
-                            Html(GraphiQLSource::build().endpoint(&p).finish()).into_response()
+            router = router.route(
+                &ide_path,
+                axum::routing::get(move || {
+                    let p = post_path.clone();
+                    let ws = ws_endpoint.clone();
+                    async move {
+                        let mut ide = GraphiQLSource::build().endpoint(&p);
+                        // Without this, GraphiQL knows the query endpoint but not the
+                        // socket, so a `subscription { ... }` typed into the IDE silently
+                        // does nothing — the one place a developer will first try to use
+                        // the feature is the one place it would not work.
+                        if let Some(ws) = ws.as_deref() {
+                            ide = ide.subscription_endpoint(ws);
                         }
-                    }),
-                );
+                        Html(ide.finish()).into_response()
+                    }
+                }),
+            );
         }
 
         router

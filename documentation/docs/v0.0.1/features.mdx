@@ -16,7 +16,7 @@ Every official plugin implements the same [`Plugin`](/docs/v0.0.1/plugins/the-pl
 
 ## Official plugins
 
-All 21 are published on crates.io alongside the [`umbral`](https://crates.io/crates/umbral) facade. The **Scaffolded** column marks the ones `umbral startproject` wires into `main.rs` for you; the rest are one line in `Cargo.toml` plus one `.plugin(...)` call away.
+21 of the 22 are published on crates.io alongside the [`umbral`](https://crates.io/crates/umbral) facade — `umbral-graphql` is newer than the last release and lands with the next one. The **Scaffolded** column marks the ones `umbral startproject` wires into `main.rs` for you; the rest are one line in `Cargo.toml` plus one `.plugin(...)` call away.
 
 | Plugin | What you get | Mounts | Scaffolded |
 |---|---|---|---|
@@ -25,6 +25,7 @@ All 21 are published on crates.io alongside the [`umbral`](https://crates.io/cra
 | [`umbral-admin`](/docs/v0.0.1/plugins/admin) | Auto-generated CRUD admin UI, dashboard widgets, inlines, custom views. | `/admin` | Yes |
 | [`umbral-rest`](/docs/v0.0.1/plugins/rest) | Auto-generated JSON REST API: serializers, viewsets, routers, filtering, pagination, throttling, CSV export. Safe-by-default permissions. | `/api` | Yes |
 | [`umbral-openapi`](/docs/v0.0.1/plugins/openapi) | OpenAPI 3.0 schema + Swagger UI over your REST endpoints. | `/openapi` | Yes |
+| [`umbral-graphql`](/docs/v0.0.1/graphql) | A real GraphQL API derived from your models: relations both ways, DataLoader batching, cursor pagination, mutations, subscriptions over WS/SSE. Deny-by-default. | `/graphql` | Opt-in |
 | [`umbral-security`](/docs/v0.0.1/plugins/security) | CSRF middleware, security headers (HSTS, CSP, frame options, nosniff, referrer policy). | middleware | Yes |
 | [`umbral-logs`](/docs/v0.0.1/plugins/logs) | Non-blocking request logging into a `RequestLog` model, browsable in the admin. Optional OTel export. | layer + admin | Yes |
 | [`umbral-permissions`](/docs/v0.0.1/plugins/permissions) | Role-based access control: `ContentType`, `Permission`, `Group`, user↔group and user↔permission M2M, `has_perm` query layer. | — | Opt-in |
@@ -75,5 +76,5 @@ Declared on the model, enforced by the schema. `#[derive(Model)]` turns each of 
 | Timestamps | `#[umbral(auto_now, auto_now_add)]` | Set on write without touching your handler. |
 
 <Callout type="warning">
-Umbral is `0.0.x`. The surface above is real and tested, but APIs still move before 1.0. Not shipped today: GraphQL, gRPC, i18n, and a first-party WASM frontend - Umbral renders HTML server-side and exposes an optional REST API, and expects you to bring your own client if you want one.
+Umbral is `0.0.x`. The surface above is real and tested, but APIs still move before 1.0. Not shipped today: gRPC, i18n, and a first-party WASM frontend - Umbral renders HTML server-side and exposes REST and GraphQL APIs, and expects you to bring your own client if you want one.
 </Callout>

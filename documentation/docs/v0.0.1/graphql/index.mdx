@@ -122,12 +122,16 @@ Exempting it is safe because the plugin replaces the token check with a defence 
 | `post.author` | forward FK → the object |
 | `post.author_id` | the raw key, if that's all you want |
 | `author.posts` | reverse FK → the list |
+| `createPost` / `updatePost` / `deletePost` | writes — **opt in** with `.mutable(...)` |
+| `postChanged` / `postDeleted` | live updates — **opt in** with `.subscribable(...)` |
 
 Ids cross the wire as `String`: GraphQL's `Int` is an `i32`, a `BigInt` doesn't fit, and silently truncating a primary key isn't an option — nor is assuming it's an integer at all, since `String` and `Uuid` keys are first-class.
 
 ## GraphiQL
 
 Served on `GET /graphql` in `Dev`, off otherwise — an interactive schema explorer on a production endpoint is a gift to whoever is enumerating your API. Force it either way with `.graphiql(true|false)`.
+
+If any model is `subscribable`, GraphiQL is pointed at the WebSocket endpoint too, so you can run a `subscription { ... }` in the IDE and watch rows arrive as you edit them in another tab.
 
 ## Pagination
 
