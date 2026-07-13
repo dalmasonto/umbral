@@ -1,0 +1,87 @@
+---
+title: Booting a test app
+description: One call gives you an in-memory database, your models and plugins, and a schema derived from the models themselves.
+sidebar_position: 1
+icon: flask-conical
+tags: [testing]
+---
+
+# Booting a test app
+
+Every umbral test needs the same three things: a database, a built app (which sets the ambient pool and registers your models), and tables to write to. `umbral_testing::boot` is all three.
+
+```rust
+use umbral_testing::boot;
+
+#[tokio::test]
+async fn a_note_can_be_created() {
+    boot(|b| b.model::<Note>()).await;
+
+    let note = Note { id: 0, title: "Hello".into() };
+    let saved = Note::objects().create(note).await.unwrap();
+    assert_eq!(saved.title, "Hello");
+}
+```
+
+That's the whole setup. Call it at the top of **every** test in the file — the first call builds the app, the rest are no-ops.
+
+<Callout type="info">
+`App::build()` initialises process-wide state and panics if it runs twice, which is why test files traditionally grow a `OnceCell` + `Mutex` dance. `boot` is that dance, written once, in the library.
+</Callout>
+
+Plugins and models both go in the closure, which hands you the `AppBuilder` mid-flight:
+
+```rust
+boot(|b| {
+    b.plugin(AuthPlugin::<AuthUser>::default())
+     .plugin(SessionsPlugin::default())
+     .model::<Note>()
+}).await;
+```
+
+A plugin's own models (`auth_user`, `session`, …) are registered by the plugin, so their tables are created too. You don't list them.
+
+## The schema comes from your models
+
+This is the part worth understanding, because it removes a whole category of bug.
+
+`boot` builds the schema with `create_tables()`, which asks the **migration engine** to diff an empty database against your registered models and runs the `CREATE TABLE` statements it emits — the same `ModelMeta` the ORM reads, and the same renderer `umbral migrate` uses in production.
+
+The alternative, and what most test suites do, is hand-write `CREATE TABLE` in the test file:
+
+```rust
+// Don't. This is a SECOND source of truth for your schema.
+sqlx::query("CREATE TABLE note (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+    .execute(&pool).await.unwrap();
+```
+
+<Callout type="warning">
+A hand-written test schema **drifts**. Add a column to the model and that table silently lacks it. The ORM then queries a column that isn't there — and if anything on the path swallows the error (an `unwrap_or(false)`, say) the test doesn't fail. It *passes with the wrong answer*.
+
+That's not hypothetical. A soft-delete column drifting out of a test fixture is what made an authorization test cheerfully report that a user was already a moderator when they weren't.
+</Callout>
+
+With `create_tables()` the schema can't drift, because there's only one source of truth. Add a column to a model and the test table has it, with no edit anywhere.
+
+You can call it directly if you're building the app yourself:
+
+```rust
+umbral::App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .model::<Note>()
+    .build()?;
+
+umbral_testing::create_tables().await?;   // schema == your models
+```
+
+It works on both backends and is idempotent, so a second call is a no-op rather than an error.
+
+## Rows persist for the test binary
+
+One database per process: tests in the same file share it. So assert on rows *you* created rather than on global counts, and keep unique columns distinct with [`seq()`](./factories#unique-columns-seq).
+
+## See also
+
+- [Factories](./factories) — realistic rows without writing struct literals.
+- [Test client](./test-client) — drive routes and assert on responses.

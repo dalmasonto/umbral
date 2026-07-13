@@ -1,7 +1,7 @@
 ---
 title: Factories
 description: Generate realistic test data by building in-memory instances or persisting them through the ORM, the factory_boy way.
-sidebar_position: 1
+sidebar_position: 2
 tags: [testing, factories, fixtures, fake]
 ---
 
@@ -42,7 +42,11 @@ impl Factory for PluginFactory {
 
 ## Creating rows
 
-The `create*` methods persist through the ORM against the **ambient pool**, so a built app (`App::builder()…build()`) must be in scope and the tables must exist.
+The `create*` methods persist through the ORM against the **ambient pool**, so an app must be built and the tables must exist. [`boot`](./setup) does both:
+
+```rust
+boot(|b| b.model::<Plugin>()).await;
+```
 
 ```rust
 let one      = PluginFactory::create().await?;                    // one row
@@ -72,8 +76,8 @@ Simulate a realistic submission, then drive the actual flow with the [test clien
 ```rust
 #[tokio::test]
 async fn directory_lists_a_factory_built_plugin() {
-    // App::builder()…build() sets the ambient pool + registers models.
-    boot().await;
+    // Builds the app, registers the models, creates their tables.
+    umbral_testing::boot(|b| b.model::<Plugin>()).await;
 
     let plugin = PluginFactory::create_with(|p| {
         p.moderation = PluginModeration::Approved;
@@ -89,6 +93,7 @@ async fn directory_lists_a_factory_built_plugin() {
 
 ## See also
 
-- [Test client](./test-client): boot the app and assert on responses.
+- [Booting a test app](./setup): `boot` + `create_tables`, and why a hand-written test schema drifts.
+- [Test client](./test-client): drive routes and assert on responses.
 - JSON seed files: `load_fixture` / `dump_fixture` in `crates/umbral-core/src/fixtures.rs`.
 - Design and rationale: `planning/features.md` #79 / #52.

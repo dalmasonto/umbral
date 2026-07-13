@@ -5684,6 +5684,7 @@ dependencies = [
  "tokio",
  "tower",
  "umbral",
+ "umbral-auth",
 ]
 
 [[package]]

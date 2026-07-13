@@ -29,4 +29,8 @@ async-trait = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+# Proves the claim that a plugin's OWN models get their tables created by
+# `boot`/`create_tables` without the test listing them. Dev-only: umbral-testing
+# is not a plugin and must not carry auth into anyone's release build.
+umbral-auth = { path = "../../plugins/umbral-auth", version = "0.0.8" }
 chrono = { version = "0.4", features = ["serde"] }

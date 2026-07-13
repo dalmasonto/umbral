@@ -50,17 +50,11 @@ async fn boot() {
         .build()
         .expect("App::build");
 
-    sqlx::query(
-        "CREATE TABLE widget (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            slug TEXT NOT NULL UNIQUE,
-            count INTEGER NOT NULL
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("CREATE TABLE");
+    // The schema comes from the model, not from a hand-written CREATE TABLE that
+    // would drift the moment `Widget` grows a field.
+    umbral_testing::create_tables()
+        .await
+        .expect("create the test schema");
 }
 
 #[tokio::test]
