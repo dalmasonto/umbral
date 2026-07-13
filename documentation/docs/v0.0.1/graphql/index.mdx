@@ -128,8 +128,46 @@ Ids cross the wire as `String`: GraphQL's `Int` is an `i32`, a `BigInt` doesn't 
 
 Served on `GET /graphql` in `Dev`, off otherwise — an interactive schema explorer on a production endpoint is a gift to whoever is enumerating your API. Force it either way with `.graphiql(true|false)`.
 
+## Mutations
+
+Writing is a **second** opt-in. `expose` makes a model readable; `mutable` makes it writable — because a read you got wrong leaks data, and a write you got wrong destroys it.
+
+```rust
+GraphqlPlugin::new()
+    .expose("product")
+    .expose("review")
+    .mutable("review")                                       // anyone may post a review
+    .mutable_if("product", |id| id.is_some_and(|i| i.is_staff))   // staff only
+```
+
+You get three fields per writable model:
+
+```graphql
+mutation {
+  createReview(data: { product: "1", rating: 5, comment: "Great" }) { id rating }
+  updateReview(id: "7", data: { rating: 4 }) { id rating }
+  deleteReview(id: "7")
+}
+```
+
+`Input` requires the columns your model requires (NOT NULL, no default); `Patch` makes everything optional, so changing one field doesn't mean re-sending the row. `update` reads the row **back** rather than echoing your request, since defaults, `auto_now` and cleaners mean the stored row isn't always the row you sent.
+
+Mutations run through the ORM's dynamic write path — the same one REST and the admin use — so they inherit validators, cleaners, defaults, signals, and the mass-assignment guard for free.
+
+<Callout type="warning">
+  A `#[umbral(privileged)]` column (`is_staff`, ownership FKs) isn't merely *ignored* in a mutation body — it isn't in the input type at all. An input field that silently does nothing is worse than no input field: the client sets `is_staff: true`, gets a `200`, and believes it worked.
+</Callout>
+
+### Mutations change the CSRF story
+
+`/graphql` has to be CSRF-exempt for queries to work at all (GraphQL reads are POSTs). That's harmless while the endpoint is read-only. The moment a mutation exists, that exemption is a hole: a hostile page can submit an HTML `<form>` at your endpoint and the browser attaches your user's session cookie.
+
+So the plugin enforces its own defence: **every POST must be `Content-Type: application/json`**, or it's rejected with `415`. An HTML form can only send three content types (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`) and none of them is JSON — while a cross-origin `fetch()` that *does* send JSON gets preflighted, and your app never answers that preflight permissively. The set of requests an attacker can forge is exactly the set that gets refused.
+
+You don't configure this and you can't turn it off. It's the same defence Apollo Server ships, for the same reason.
+
 ## Not yet
 
-**Mutations.** Writes are the half where a mistake changes your database, and they want the same validation, permission and CSRF story the REST write path already has. That's a deliberate next slice, not an oversight. Today the endpoint is read-only.
+**Subscriptions.** Live data over WebSocket or SSE. Next.
 
 Design notes: `planning/features.md` #9.

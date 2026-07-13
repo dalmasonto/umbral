@@ -34,11 +34,15 @@
 //! A relation is only traversable when BOTH ends are exposed. Otherwise `post.author`
 //! would be a side door into a model you deliberately withheld.
 //!
-//! # Read-only, for now
+//! # Writes are a second opt-in
 //!
-//! Queries only. Mutations are the half where a mistake writes to your database, and they
-//! want the same validation, permission and CSRF story the REST write path already has —
-//! that is a deliberate next slice, not an oversight.
+//! `expose` makes a model readable. `mutable` makes it writable. Two calls, because a read
+//! you got wrong leaks data and a write you got wrong destroys it.
+//!
+//! Mutations go through the ORM's dynamic write path, so they inherit the mass-assignment
+//! guard, validators, cleaners, defaults and signals — see `mutation.rs`. And because the
+//! endpoint now accepts writes over a `POST` that CSRF middleware is typically told to
+//! exempt, it enforces its own CSRF defence: see [`GraphqlPlugin`] and `is_csrf_safe`.
 
 use std::sync::Arc;
 
@@ -51,6 +55,7 @@ use umbral::plugin::Plugin;
 use umbral::web::Router;
 
 mod loader;
+mod mutation;
 mod schema;
 
 pub use schema::{AccessFn, Exposed};
@@ -87,6 +92,61 @@ pub fn plural_for_tests(model_name: &str) -> String {
     schema::plural(model_name)
 }
 
+/// Would a browser have been *forced* to preflight this request?
+///
+/// # The hole mutations open
+///
+/// GraphQL speaks POST for reads, so every umbral app puts `/graphql` in
+/// `csrf_exempt_paths` — otherwise every query 403s. That was defensible while the endpoint
+/// was read-only. It stops being defensible the moment a mutation exists: a cross-site page
+/// can submit a plain HTML `<form>` at your endpoint, the browser attaches the victim's
+/// session cookie, and the write happens. Classic CSRF, with the token check turned off by
+/// the very exemption that made queries work.
+///
+/// # Why a content-type check is a real defence and not a fig leaf
+///
+/// An HTML form can only send three content types: `application/x-www-form-urlencoded`,
+/// `multipart/form-data`, `text/plain`. None of them is `application/json`. And a `fetch()`
+/// with `Content-Type: application/json` is NOT a CORS "simple request", so the browser must
+/// preflight it with `OPTIONS` — which an attacker's origin fails, because we never answer it
+/// with permissive CORS headers.
+///
+/// So: require `application/json`, and the set of requests a hostile page can *forge* becomes
+/// exactly the set we reject. This is the same defence Apollo Server ships as its built-in
+/// CSRF prevention, for the same reason.
+///
+/// Note what this does NOT depend on: a token, a session, or any state. It is a property of
+/// what browsers are willing to send cross-origin.
+pub(crate) fn is_csrf_safe(headers: &umbral::web::HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| {
+            let ct = ct.split(';').next().unwrap_or("").trim();
+            ct.eq_ignore_ascii_case("application/json")
+                || ct.eq_ignore_ascii_case("application/graphql+json")
+        })
+}
+
+/// Reject any POST that a cross-site HTML form could have produced. See [`is_csrf_safe`].
+async fn csrf_content_type_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if req.method() == axum::http::Method::POST && !is_csrf_safe(req.headers()) {
+        return (
+            axum::http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "graphql requires `Content-Type: application/json`. This is a CSRF defence, not a \
+             formality: `/graphql` must be CSRF-exempt for queries to work at all (GraphQL \
+             reads are POSTs), so the content type is what stands between a hostile page's \
+             <form> and a mutation carrying your user's session cookie. A form cannot send \
+             this content type, and a cross-origin fetch that does gets preflighted.",
+        )
+            .into_response();
+    }
+    next.run(req).await
+}
+
 /// Guard a top-level query field.
 pub(crate) fn guard(
     ctx: &async_graphql::dynamic::ResolverContext<'_>,
@@ -110,11 +170,38 @@ pub(crate) fn guard(
     }
 }
 
+/// Guard a mutation field.
+///
+/// Separate from [`guard`] because the failure has to be separate: a read denial can afford
+/// to be vague, but a write denial the caller cannot distinguish from "it worked" is how
+/// data silently does not get saved.
+pub(crate) fn guard_write(
+    ctx: &async_graphql::dynamic::ResolverContext<'_>,
+    e: &Exposed,
+) -> async_graphql::Result<()> {
+    let Some(check) = e.writable.as_ref() else {
+        // Unreachable in a well-formed schema (the field would not exist), but a mutation
+        // that falls through to "allowed" because of a future refactor is not a failure mode
+        // worth leaving open.
+        return Err(async_graphql::Error::new("not writable"));
+    };
+    let identity = ctx.data_opt::<Option<umbral::auth::Identity>>();
+    if check(identity.and_then(|o| o.as_ref())) {
+        Ok(())
+    } else {
+        Err(async_graphql::Error::new(format!(
+            "not authorized to write `{}`",
+            mutation::meta_name(&e.meta)
+        )))
+    }
+}
+
 /// Mounts a GraphQL endpoint (and GraphiQL) over the models you expose.
 #[derive(Default, Clone)]
 pub struct GraphqlPlugin {
     path: Option<String>,
     exposed: Vec<(String, Option<AccessFn>)>,
+    writable: Vec<(String, AccessFn)>,
     hidden: Vec<(String, String)>,
     graphiql: Option<bool>,
     auth: Option<Arc<dyn umbral::auth::Authentication>>,
@@ -182,6 +269,42 @@ impl GraphqlPlugin {
         access: impl Fn(Option<&umbral::auth::Identity>) -> bool + Send + Sync + 'static,
     ) -> Self {
         self.exposed.push((table.into(), Some(Arc::new(access))));
+        self
+    }
+
+    /// Make a model **writable**: `createProduct`, `updateProduct`, `deleteProduct`.
+    ///
+    /// A second opt-in, on top of `expose`. A read you got wrong leaks data; a write you got
+    /// wrong destroys it, so exposing a model does not make it writable — you say so again.
+    ///
+    /// ```rust,ignore
+    /// .expose("review").mutable("review")     // anyone may post a review
+    /// ```
+    ///
+    /// The model must also be exposed: a mutation returns the row it wrote, and returning a
+    /// type that is not in the schema is not a thing that can be done.
+    ///
+    /// Writes go through the ORM's dynamic write path, so they inherit the mass-assignment
+    /// guard (`#[umbral(privileged)]` columns cannot be set by a client that did not
+    /// authorize them), validators, cleaners, defaults and signals.
+    pub fn mutable(mut self, table: impl Into<String>) -> Self {
+        self.writable.push((table.into(), Arc::new(|_| true)));
+        self
+    }
+
+    /// Make a model writable only by callers your closure approves.
+    ///
+    /// ```rust,ignore
+    /// .mutable_if("product", |id| id.is_some_and(|i| i.is_staff))
+    /// ```
+    ///
+    /// Needs [`Self::authenticate`], or every caller is anonymous and the gate can only deny.
+    pub fn mutable_if(
+        mut self,
+        table: impl Into<String>,
+        access: impl Fn(Option<&umbral::auth::Identity>) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.writable.push((table.into(), Arc::new(access)));
         self
     }
 
@@ -257,6 +380,11 @@ impl GraphqlPlugin {
                 Some(meta) => out.push(Exposed {
                     meta: meta.clone(),
                     access: access.clone(),
+                    writable: self
+                        .writable
+                        .iter()
+                        .find(|(t, _)| t == table)
+                        .map(|(_, f)| f.clone()),
                     hidden: self
                         .hidden
                         .iter()
@@ -345,11 +473,18 @@ impl Plugin for GraphqlPlugin {
                         >>(
                             identity
                         );
-                        GraphQLResponse::from(schema.execute(inner).await)
+                        GraphQLResponse::from(schema.execute(inner).await).into_response()
                     }
                 },
             ),
         );
+
+        // As a LAYER, not a check inside the handler: the handler's `GraphQLRequest` extractor
+        // runs first and would reject a multipart body with its own 400 before we ever looked
+        // at the content type — which means the CSRF defence would have been decided by an
+        // extractor that knows nothing about CSRF. A route layer runs before extraction, so
+        // the rule is enforced by the code that states it.
+        router = router.route_layer(axum::middleware::from_fn(csrf_content_type_guard));
 
         if show_ide {
             router =

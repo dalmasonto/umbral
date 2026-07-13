@@ -367,6 +367,7 @@ async fn expose_if_denies_anonymous_and_admits_staff() {
     let gated = vec![Exposed {
         meta,
         hidden: Vec::new(),
+        writable: None,
         access: Some(std::sync::Arc::new(
             |id: Option<&umbral::auth::Identity>| id.is_some_and(|i| i.is_staff),
         )),
@@ -468,12 +469,14 @@ async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
             meta: author.clone(),
             access: None,
             hidden: Vec::new(),
+            writable: None,
         },
         Exposed {
             meta: post.clone(),
             access: None,
             // sever the FK from the CHILD's side
             hidden: vec!["author".to_string()],
+            writable: None,
         },
     ])
     .expect("schema");

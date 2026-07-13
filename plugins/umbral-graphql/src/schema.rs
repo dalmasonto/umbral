@@ -48,6 +48,11 @@ pub struct Exposed {
     /// Columns of this model that are omitted from the schema entirely. See
     /// [`crate::GraphqlPlugin::hide`].
     pub hidden: Vec<String>,
+    /// `None` = READ-ONLY. `Some(f)` = writable when `f(identity)` is true.
+    ///
+    /// A separate opt-in from `access` on purpose: a read you got wrong leaks data, a write
+    /// you got wrong destroys it. Exposing a model does not make it writable.
+    pub writable: Option<AccessFn>,
 }
 
 /// Whether a column appears in the schema at all.
@@ -62,7 +67,7 @@ pub struct Exposed {
 /// and always returns null still tells an attacker the column is there, and still shows up
 /// in introspection and in GraphiQL's autocomplete. Absent is a stronger statement than
 /// empty.
-fn is_visible(e: &Exposed, col_name: &str) -> bool {
+pub(crate) fn is_visible(e: &Exposed, col_name: &str) -> bool {
     if let Some(col) = e.meta.fields.iter().find(|c| c.name == col_name) {
         // Declared on the MODEL: `#[umbral(secret)]` (and every `Masked<T>`) can never be
         // served, and `#[umbral(private)]` is not served here because GraphQL has no way to
@@ -79,7 +84,7 @@ fn is_visible(e: &Exposed, col_name: &str) -> bool {
 }
 
 /// The GraphQL type name for a model. `Model::NAME` is already PascalCase.
-fn type_name(meta: &ModelMeta) -> String {
+pub(crate) fn type_name(meta: &ModelMeta) -> String {
     meta.name.clone()
 }
 
@@ -113,6 +118,10 @@ pub(crate) fn plural(model_name: &str) -> String {
     }
 }
 
+pub(crate) fn snake_name(pascal: &str) -> String {
+    snake(pascal)
+}
+
 fn snake(pascal: &str) -> String {
     let mut out = String::new();
     for (i, c) in pascal.chars().enumerate() {
@@ -133,7 +142,7 @@ fn snake(pascal: &str) -> String {
 /// Dates, UUIDs and Decimal cross the wire as `String` — the same choice `typegen` makes
 /// for TypeScript, so a client sees one consistent shape whichever API it talks to. A
 /// `Json` column is `String` too (serialised), because GraphQL has no `Any`.
-fn scalar_for(col: &Column) -> &'static str {
+pub(crate) fn scalar_for(col: &Column) -> &'static str {
     match umbral::migrate::fk_effective_type(col) {
         SqlType::SmallInt | SqlType::Integer => TypeRef::INT,
         // GraphQL's Int is i32. A BigInt does not fit, and silently truncating someone's
@@ -393,9 +402,18 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
         );
     }
 
-    let mut schema = Schema::build("Query", None, None);
+    // The Mutation root exists only if something is actually writable. A schema that
+    // advertises an empty `Mutation` type is an invitation to go looking for a way in.
+    let mutation = crate::mutation::build(exposed);
+    let mut schema = Schema::build("Query", mutation.as_ref().map(|_| "Mutation"), None);
     for o in objects {
         schema = schema.register(o);
+    }
+    if let Some((m, inputs)) = mutation {
+        for i in inputs {
+            schema = schema.register(i);
+        }
+        schema = schema.register(m);
     }
     schema.register(query).finish()
 }
