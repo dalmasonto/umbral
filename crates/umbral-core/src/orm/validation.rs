@@ -744,6 +744,8 @@ mod tests {
             nullable: false,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,

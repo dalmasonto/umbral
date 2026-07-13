@@ -17,6 +17,8 @@ fn col(name: &str, nullable: bool, default: &str) -> Column {
         fk_target: None,
         noform: false,
         privileged: false,
+        private: false,
+        secret: false,
         db_constraint: true,
         noedit: false,
         auto_user_add: false,

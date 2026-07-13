@@ -1555,6 +1555,24 @@ impl RestPlugin {
         if HARD_DENIED_FIELDS.contains(&field) {
             return true;
         }
+        // Declared on the MODEL: `#[umbral(private)]` / `#[umbral(secret)]` are stripped by
+        // the ORM itself, so they never appear in a payload no matter what REST thinks. Say
+        // so here too, or the OpenAPI spec (and the generated TS client) would advertise a
+        // field the API never returns — a schema that lies is worse than one that omits.
+        // `_opt`, not `registered_models()`: the latter PANICS when no `App::build()` has run,
+        // and this is reachable from unit tests and spec-only tooling that never boot an app.
+        // No registry => no model info => fall through to the configured hide list; the name
+        // denylist above has already run, so the catastrophic case is covered either way.
+        if umbral::migrate::registered_models_opt()
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .find(|m| m.table == table)
+            .and_then(|m| m.fields.iter().find(|c| c.name == field))
+            .is_some_and(|c| c.private || umbral::orm::is_secret_column(c))
+        {
+            return true;
+        }
         self.hidden.iter().any(|(t, f)| t == table && f == field)
     }
 

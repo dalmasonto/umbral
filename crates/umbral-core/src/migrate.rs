@@ -460,6 +460,8 @@ impl Default for Column {
             fk_target: None,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             is_string_repr: false,
@@ -909,6 +911,16 @@ pub struct Column {
     /// migration snapshots when at its `false` default.
     #[serde(default, skip_serializing_if = "is_false")]
     pub privileged: bool,
+    /// Confidential: stripped from serialized output unless the read unlocks it via
+    /// `DynQuerySet::allow_private`. Propagated from `FieldSpec::private`. Purely a
+    /// read-auth concern — never part of the schema shape, so it is skipped from migration
+    /// snapshots at its `false` default, exactly like `privileged`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub private: bool,
+    /// Never serialized to a client, with no unlock. Propagated from `FieldSpec::secret`
+    /// (and set automatically for every `Masked<T>` field). Also not schema shape.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub secret: bool,
     /// For FK columns: whether to emit a physical `FOREIGN KEY ...
     /// REFERENCES` constraint. Propagated from `FieldSpec::db_constraint`.
     /// `false` (set via `#[umbral(db_constraint = false)]`) keeps the
@@ -1294,6 +1306,8 @@ impl From<&FieldSpec> for Column {
             fk_target: f.fk_target.map(|s| s.to_string()),
             noform: f.noform,
             privileged: f.privileged,
+            private: f.private,
+            secret: f.secret,
             db_constraint: f.db_constraint,
             noedit: f.noedit,
             is_string_repr: f.is_string_repr,
@@ -6438,6 +6452,8 @@ mod tests {
             fk_target: None,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,
@@ -6476,6 +6492,8 @@ mod tests {
             fk_target: None,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,
@@ -6512,6 +6530,8 @@ mod tests {
             fk_target: None,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,
@@ -6618,6 +6638,8 @@ mod tests {
             fk_target: Some("post".into()),
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,
@@ -6743,6 +6765,8 @@ mod tests {
                 fk_target: None,
                 noform: false,
                 privileged: false,
+                private: false,
+                secret: false,
                 db_constraint: true,
                 noedit: false,
                 auto_user_add: false,
@@ -6855,6 +6879,8 @@ mod tests {
             fk_target: None,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,
@@ -6967,6 +6993,8 @@ mod tests {
             fk_target: None,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,
@@ -7052,6 +7080,8 @@ mod tests {
             fk_target: None,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,
@@ -7166,6 +7196,8 @@ mod tests {
             fk_target: None,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,
@@ -7275,6 +7307,8 @@ mod tests {
                 fk_target: None,
                 noform: false,
                 privileged: false,
+                private: false,
+                secret: false,
                 db_constraint: true,
                 noedit: false,
                 auto_user_add: false,

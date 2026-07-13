@@ -151,6 +151,12 @@ pub struct DynQuerySet<'a> {
     /// audit_2 H3). The REST/admin layer fills this from the requester's
     /// authorization (e.g. only a superuser may set `is_superuser`).
     allow_privileged: Vec<String>,
+    /// `#[umbral(private)]` columns this READ has unlocked. Empty by default → every
+    /// private column is stripped. The read-path twin of `allow_privileged`.
+    allow_private: Vec<String>,
+    /// Bypass the read-side field policy entirely. Database dumps only; see
+    /// [`DynQuerySet::unredacted_for_backup`].
+    unredacted: bool,
 }
 
 /// Turn a string that arrived from a URL, a form or an identity into a correctly-TYPED
@@ -254,7 +260,88 @@ impl<'a> DynQuerySet<'a> {
             hard_delete: false,
             select_related: Vec::new(),
             allow_privileged: Vec::new(),
+            allow_private: Vec::new(),
+            unredacted: false,
         }
+    }
+
+    /// Unlock specific `#[umbral(private)]` columns for THIS read.
+    ///
+    /// Private columns are stripped from every JSON read by default — they are not even
+    /// SELECTed, so the value never leaves the database. A caller that has established the
+    /// requester may see them opts them back in here:
+    ///
+    /// ```ignore
+    /// // staff endpoint: wholesale cost is legitimately visible
+    /// DynQuerySet::for_meta(&meta)
+    ///     .allow_private(&["cost"])
+    ///     .fetch_as_json().await?;
+    /// ```
+    ///
+    /// Per-field and at the call site ON PURPOSE. The verbosity IS the audit trail:
+    /// `grep -rn allow_private` yields a complete inventory of every place confidential data
+    /// is permitted to leave the process. A per-audience switch ("this whole surface is
+    /// trusted") would be one line, and adding a new `private` field later would silently
+    /// widen it.
+    ///
+    /// Cannot unlock a [`crate::orm::FieldSpec::secret`] column — that tier has no unlock,
+    /// and naming one here does nothing. Names not on the model are ignored. Accumulates.
+    pub fn allow_private(mut self, cols: &[&str]) -> Self {
+        self.allow_private
+            .extend(cols.iter().map(|c| (*c).to_string()));
+        self
+    }
+
+    /// Read EVERY column, including `secret` ones. For database dumps only.
+    ///
+    /// The `secret` tier has no unlock because a client should never receive those bytes.
+    /// A database dump is not a client: `dumpdata` must round-trip `password_hash` or a
+    /// restore locks every user out of their account, and it must round-trip `Masked<T>`
+    /// ciphertext or the encrypted columns come back empty.
+    ///
+    /// So this exists, and it is named the way it is on purpose — it should be jarring to
+    /// read in a request handler, and `grep -rn unredacted_for_backup` should return the
+    /// backup code and nothing else. If it ever shows up on a path that answers HTTP, that
+    /// is the bug.
+    pub fn unredacted_for_backup(mut self) -> Self {
+        self.unredacted = true;
+        self
+    }
+
+    /// Whether a column may appear in serialized output from this queryset.
+    ///
+    /// The single place the read-side field policy is decided. Every JSON terminal routes
+    /// through it, so a new terminal inherits the policy instead of having to remember it —
+    /// which is precisely the mistake that let `umbral-graphql` serve password hashes.
+    pub(crate) fn may_serialize(&self, col: &Column) -> bool {
+        if self.unredacted {
+            return true;
+        }
+        if crate::orm::secrets::is_secret_column(col) {
+            return false;
+        }
+        if col.private {
+            return self.allow_private.iter().any(|c| c == &col.name);
+        }
+        true
+    }
+
+    /// `select_cols` minus everything this reader may not see. Not selecting the column at
+    /// all is strictly better than selecting and then dropping it: the confidential value
+    /// never crosses the database boundary, so it cannot be logged, cached, or leaked by a
+    /// panic on the way out.
+    pub(crate) fn visible_select_cols(&self) -> Vec<String> {
+        self.select_cols
+            .iter()
+            .filter(|name| {
+                self.meta
+                    .fields
+                    .iter()
+                    .find(|c| &c.name == *name)
+                    .is_none_or(|c| self.may_serialize(c))
+            })
+            .cloned()
+            .collect()
     }
 
     /// Authorize specific `#[umbral(privileged)]` columns for this write.
@@ -1445,9 +1532,13 @@ impl<'a> DynQuerySet<'a> {
     /// keyed by column name, holding only the columns named in
     /// `select_cols` (defaults to all).
     pub async fn fetch_as_strings(self) -> Result<Vec<HashMap<String, String>>, DynError> {
+        // Read-side field policy is applied to the SELECT LIST, not to the rows on the way
+        // out: a column this reader may not see is never fetched, so its value never even
+        // crosses the database boundary.
+        let select_cols = self.visible_select_cols();
         let mut q = Query::select();
         q.from(crate::db::router::schema_qualified_table(&self.meta.table));
-        for c in &self.select_cols {
+        for c in &select_cols {
             q.column(Alias::new(c));
         }
         let where_clauses = self.effective_where_clauses();
@@ -1474,7 +1565,7 @@ impl<'a> DynQuerySet<'a> {
                 let mut out: Vec<HashMap<String, String>> = Vec::with_capacity(rows.len());
                 for row in rows {
                     let mut entry = HashMap::new();
-                    for col_name in &self.select_cols {
+                    for col_name in &select_cols {
                         if let Some(col_meta) =
                             self.meta.fields.iter().find(|c| &c.name == col_name)
                         {
@@ -1492,7 +1583,7 @@ impl<'a> DynQuerySet<'a> {
                 let mut out: Vec<HashMap<String, String>> = Vec::with_capacity(rows.len());
                 for row in rows {
                     let mut entry = HashMap::new();
-                    for col_name in &self.select_cols {
+                    for col_name in &select_cols {
                         if let Some(col_meta) =
                             self.meta.fields.iter().find(|c| &c.name == col_name)
                         {
@@ -1515,9 +1606,13 @@ impl<'a> DynQuerySet<'a> {
     pub async fn fetch_as_json(
         self,
     ) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, DynError> {
+        // Read-side field policy is applied to the SELECT LIST, not to the rows on the way
+        // out: a column this reader may not see is never fetched, so its value never even
+        // crosses the database boundary.
+        let select_cols = self.visible_select_cols();
         let mut q = Query::select();
         q.from(crate::db::router::schema_qualified_table(&self.meta.table));
-        for c in &self.select_cols {
+        for c in &select_cols {
             q.column(Alias::new(c));
         }
         let where_clauses = self.effective_where_clauses();
@@ -1542,8 +1637,7 @@ impl<'a> DynQuerySet<'a> {
             .pk_column()
             .map(|c| c.name.clone())
             .unwrap_or_default();
-        let selected_cols: Vec<(&String, &Column)> = self
-            .select_cols
+        let selected_cols: Vec<(&String, &Column)> = select_cols
             .iter()
             .filter_map(|col_name| {
                 self.meta
@@ -1656,7 +1750,7 @@ impl<'a> DynQuerySet<'a> {
                 match row {
                     Some(row) => {
                         let mut entry = serde_json::Map::new();
-                        for col in &self.meta.fields {
+                        for col in self.meta.fields.iter().filter(|c| self.may_serialize(c)) {
                             entry.insert(col.name.clone(), decode_to_json(&row, col)?);
                         }
                         Some(entry)
@@ -1797,7 +1891,7 @@ impl<'a> DynQuerySet<'a> {
                     let row = sqlx::query_with(&sel_sql, sel_vals)
                         .fetch_one(&mut **inner)
                         .await?;
-                    for col in &self.meta.fields {
+                    for col in self.meta.fields.iter().filter(|c| self.may_serialize(c)) {
                         out.insert(col.name.clone(), decode_to_json(&row, col)?);
                     }
                 }
@@ -1961,7 +2055,7 @@ impl<'a> DynQuerySet<'a> {
                     let row = sqlx::query_with(&sel_sql, sel_vals)
                         .fetch_one(&mut **inner)
                         .await?;
-                    for col in &self.meta.fields {
+                    for col in self.meta.fields.iter().filter(|c| self.may_serialize(c)) {
                         out.insert(col.name.clone(), decode_to_json(&row, col)?);
                     }
                 }
@@ -4061,6 +4155,8 @@ mod tests {
             fk_target: None,
             noform: false,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit: false,
             auto_user_add: false,

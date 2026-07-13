@@ -1,0 +1,84 @@
+---
+title: Field privacy
+description: Mark a field private or secret on the model, and every API inherits it — REST, GraphQL, the admin, and whatever you write next.
+sidebar_position: 9
+icon: shield
+tags: [orm, security]
+---
+
+# Field privacy
+
+Some columns should not leave the process. Your wholesale `cost`. An API signing key. A password hash.
+
+The tempting place to enforce that is the API layer — `RestPlugin::hide("product", "cost")` — and for *presentation* that's right. But it means each API re-derives what is confidential, and you don't get three independent policies. You get one policy with three chances to forget it, where forgetting is a breach. That's exactly how umbral's own GraphQL plugin shipped able to serve password hashes: REST had guarded them for a year, and GraphQL, written later, inherited none of it.
+
+So secrecy is declared on the **model**, because it's a property of the data rather than of the door someone walks through to reach it.
+
+```rust
+#[derive(Model)]
+pub struct Product {
+    pub id: i64,
+    pub name: String,
+
+    #[umbral(private)]           // confidential — but staff may see it
+    pub cost: String,
+
+    #[umbral(secret)]            // nobody sees it. ever.
+    pub signing_key: String,
+
+    pub api_token: Masked<String>,   // secret automatically — no annotation needed
+}
+```
+
+Every serialized read now omits those columns — REST payloads, GraphQL schemas, the admin, and any plugin written in future — without any of them being asked to cooperate. They aren't stripped from the response; they are never **SELECT**ed, so the value doesn't cross the database boundary at all.
+
+## The two tiers
+
+| | |
+|---|---|
+| `#[umbral(private)]` | Hidden by default. **Unlockable** by a read that explicitly asks. |
+| `#[umbral(secret)]` | Never serialized. **No unlock exists**, anywhere. |
+
+`private` is for data that some callers legitimately see: wholesale cost, internal notes, another user's email. `secret` is for data that no client should ever receive, whoever they are — and it deliberately has no escape hatch, because the value of a tier you can't reach for is that nobody reaches for it at 2am under a deadline. An admin that needs to show *whether* a password is set shows "set / not set", never the hash.
+
+<Callout type="info">
+  Every `Masked<T>` field is `secret` automatically. Encryption at rest exists so the plaintext isn't lying around; handing it back over an API would defeat the entire point. Opt-in secrecy fails the first time someone forgets — and the person adding an encrypted field is the one with the most to lose.
+</Callout>
+
+`password_hash` is denied by **name**, on every table, even if you never annotate anything. Annotations only protect the people who remember to write them, and this exists for the people who don't.
+
+## Unlocking a private field
+
+```rust
+// a staff-only endpoint: wholesale cost is legitimately visible here
+DynQuerySet::for_meta(&meta)
+    .allow_private(&["cost"])
+    .fetch_as_json()
+    .await?
+```
+
+Per-field, at the call site, on purpose. The verbosity **is** the audit trail: `grep -rn allow_private` gives you a complete inventory of every place in your codebase where confidential data is permitted to leave. A per-audience switch ("this whole surface is trusted") would be one line — and then adding a new `private` field a year later would silently widen it.
+
+Naming a `secret` column here does nothing. That's not an oversight; it's the tier.
+
+This mirrors the write path, which has worked this way all along: `#[umbral(privileged)]` marks fields like `is_staff` that an untrusted JSON body may not set, and `allow_privileged` is how a caller who has *checked* opts them back in. `private`/`allow_private` is the same shape, pointed at disclosure instead of mass assignment.
+
+## Backups are not clients
+
+```rust
+DynQuerySet::for_meta(&meta).unredacted_for_backup()
+```
+
+`dumpdata` reads through this, and it has to: a fixture without `password_hash` restores a database where nobody can log in, and one without the `Masked` ciphertext restores empty encrypted columns.
+
+<Callout type="warning">
+  Two consequences. A dump file **contains your secrets** — treat it like one. And `grep -rn unredacted_for_backup` should only ever return backup code. If it appears on a path that answers HTTP, that's the bug.
+</Callout>
+
+## What stays in the plugins
+
+Field *privacy* is on the model. Field *selection* is not: `RestPlugin::hide` and `GraphqlPlugin::hide` are still per-plugin, because "which fields this endpoint returns" is a property of the endpoint, and REST and GraphQL are swappable. Hiding a field in one does not hide it in the other.
+
+The line: if forgetting it means **data leaks**, it belongs on the model. If forgetting it means **the API is uglier than you'd like**, it belongs in the plugin.
+
+See `planning/gaps3.md` #70–#71 for the design discussion.

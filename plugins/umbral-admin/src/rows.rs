@@ -332,6 +332,8 @@ mod readonly_set_tests {
             fk_target: None,
             noform,
             privileged: false,
+            private: false,
+            secret: false,
             db_constraint: true,
             noedit,
             auto_user_add: false,

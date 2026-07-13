@@ -178,7 +178,15 @@ where
     P: AsRef<Path>,
 {
     let meta = ModelMeta::for_::<T>();
+    // A dump is not an API response. `private` and `secret` columns are stripped from every
+    // serialized read by default — correct for a client, catastrophic for a backup: a fixture
+    // without `password_hash` restores a database in which nobody can log in, and one without
+    // `Masked<T>` ciphertext restores empty encrypted columns. So this reads everything, via
+    // the one loudly-named escape that exists for exactly this.
+    //
+    // Which also means: a dump file holds secrets. Treat it like one.
     let rows = DynQuerySet::for_meta(&meta)
+        .unredacted_for_backup()
         .fetch_as_json()
         .await
         .map_err(FixtureError::Read)?;

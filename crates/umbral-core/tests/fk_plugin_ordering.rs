@@ -77,6 +77,8 @@ fn column(name: &str, ty: SqlType, primary_key: bool) -> Column {
         fk_target: None,
         noform: false,
         privileged: false,
+        private: false,
+        secret: false,
         db_constraint: true,
         noedit: false,
         auto_user_add: false,

@@ -63,6 +63,15 @@ pub struct Exposed {
 /// in introspection and in GraphiQL's autocomplete. Absent is a stronger statement than
 /// empty.
 fn is_visible(e: &Exposed, col_name: &str) -> bool {
+    if let Some(col) = e.meta.fields.iter().find(|c| c.name == col_name) {
+        // Declared on the MODEL: `#[umbral(secret)]` (and every `Masked<T>`) can never be
+        // served, and `#[umbral(private)]` is not served here because GraphQL has no way to
+        // establish that a given caller has unlocked it — `DynQuerySet::allow_private` is a
+        // per-read decision, and the client picks the query shape. Absent, not null.
+        if umbral::orm::is_secret_column(col) || col.private {
+            return false;
+        }
+    }
     if umbral::orm::is_hard_denied_field(col_name) {
         return false;
     }

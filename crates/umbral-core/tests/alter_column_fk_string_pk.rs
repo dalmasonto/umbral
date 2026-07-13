@@ -60,6 +60,8 @@ fn fk_col(on_delete: FkAction) -> Column {
         fk_target: Some("af_permission".to_string()),
         noform: false,
         privileged: false,
+        private: false,
+        secret: false,
         db_constraint: true,
         noedit: false,
         auto_user_add: false,

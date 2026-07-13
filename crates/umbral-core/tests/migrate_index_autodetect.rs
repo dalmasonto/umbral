@@ -25,6 +25,8 @@ fn col(name: &str, ty: SqlType) -> Column {
         fk_target: None,
         noform: false,
         privileged: false,
+        private: false,
+        secret: false,
         db_constraint: true,
         noedit: false,
         auto_user_add: false,

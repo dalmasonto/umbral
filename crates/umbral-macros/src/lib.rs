@@ -203,6 +203,15 @@ struct UmbralFieldAttr {
     /// `DynQuerySet::allow_privileged`. Default-deny mass-assignment guard for
     /// `is_superuser`/ownership FKs (audit_2 H3). Still shown on forms.
     privileged: bool,
+
+    /// `#[umbral(private)]` — confidential, but legitimately viewable by SOME callers.
+    /// Stripped from every serialized response unless the read explicitly unlocks it via
+    /// `DynQuerySet::allow_private`. The read-path twin of `privileged`.
+    private: bool,
+
+    /// `#[umbral(secret)]` — must never be serialized to a client, by anyone, ever. There
+    /// is deliberately no unlock. `Masked<T>` fields get this automatically.
+    secret: bool,
     /// `#[umbral(db_constraint = false)]` — keep the FK logical (column +
     /// `fk_target`) but emit no physical `FOREIGN KEY ... REFERENCES`
     /// constraint. Disables the physical FK constraint.
@@ -368,6 +377,8 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         noform: false,
         signal_skip: false,
         privileged: false,
+        private: false,
+        secret: false,
         db_constraint: true,
         noedit: false,
         primary_key: false,
@@ -433,6 +444,15 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
             } else if meta.path.is_ident("signal_skip") {
                 // `#[umbral(signal_skip)]` — strip from signal payloads.
                 parsed.signal_skip = true;
+                Ok(())
+            } else if meta.path.is_ident("private") {
+                // `#[umbral(private)]` — confidential; stripped from serialized
+                // output unless the reader explicitly unlocks it.
+                parsed.private = true;
+                Ok(())
+            } else if meta.path.is_ident("secret") {
+                // `#[umbral(secret)]` — never serialized. No unlock exists.
+                parsed.secret = true;
                 Ok(())
             } else if meta.path.is_ident("privileged") {
                 // `#[umbral(privileged)]` — server-managed field; stripped from
@@ -615,7 +635,8 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 Err(meta.error(format!(
                     "unknown field-level umbral attribute `{path}` — known keys are \
                      `cidr`, `macaddr`, `xml`, `ltree`, `bit`, \
-                     `noform`, `signal_skip`, `privileged`, `db_constraint = false`, `noedit`, \
+                     `noform`, `signal_skip`, `privileged`, `private`, `secret`, \
+                     `db_constraint = false`, `noedit`, \
                      `primary_key`, `no_reverse`, \
                      `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
@@ -1277,6 +1298,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let private_lit = if field_attr.private {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
+        // A `Masked<T>` field is encrypted at rest precisely because its plaintext must not
+        // be lying around. Serializing it to a client would hand back the very thing the
+        // encryption exists to protect, so it is `secret` whether or not anyone said so.
+        // Opt-in secrecy fails the moment somebody forgets; this one cannot be forgotten.
+        let secret_lit = if field_attr.secret || is_masked_field(&field.ty) {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
         let db_constraint_lit = if field_attr.db_constraint {
             quote!(true)
         } else {
@@ -1561,6 +1596,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 fk_target: #fk_target_tokens,
                 noform: #noform_lit,
                 privileged: #privileged_lit,
+                private: #private_lit,
+                secret: #secret_lit,
                 db_constraint: #db_constraint_lit,
                 noedit: #noedit_lit,
                 is_string_repr: #is_string_repr_lit,
@@ -3247,6 +3284,19 @@ fn type_is_ident(ty: &Type, name: &str) -> bool {
 /// *regardless* of generic arguments. Used for framework wrapper types
 /// whose inner is fixed, like `Masked<String>` — `type_is_ident` rejects
 /// those because they carry a `PathArguments::AngleBracketed`.
+/// Is this field a `Masked<T>` — including `Option<Masked<T>>`?
+///
+/// Encryption at rest exists so the plaintext is not lying around. Handing it to a client
+/// over an API would defeat the entire point, so a masked field is `secret` by construction
+/// rather than by annotation: opt-in secrecy fails the first time someone forgets, and the
+/// person adding a `Masked` field is exactly the person with the most to lose.
+fn is_masked_field(ty: &Type) -> bool {
+    if type_leaf_is(ty, "Masked") {
+        return true;
+    }
+    option_inner(ty).is_some_and(|inner| type_leaf_is(inner, "Masked"))
+}
+
 fn type_leaf_is(ty: &Type, name: &str) -> bool {
     if let Type::Path(TypePath { qself: None, path }) = ty {
         if let Some(last) = path.segments.last() {

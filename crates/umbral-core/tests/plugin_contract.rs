@@ -125,6 +125,8 @@ impl Plugin for TestPlugin {
                 fk_target: None,
                 noform: false,
                 privileged: false,
+                private: false,
+                secret: false,
                 db_constraint: true,
                 noedit: false,
                 auto_user_add: false,

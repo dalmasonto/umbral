@@ -43,6 +43,23 @@ pub fn is_hard_denied_field(field: &str) -> bool {
     HARD_DENIED_FIELDS.contains(&field)
 }
 
+/// Whether this column may never be serialized to a client — for any reason.
+///
+/// Two independent sources, and a column needs only one of them:
+///
+/// 1. `#[umbral(secret)]`, which every `Masked<T>` field also gets automatically. A masked
+///    column is encrypted at rest precisely so its plaintext is not lying around; handing it
+///    to an API caller would defeat the entire point of encrypting it.
+/// 2. The name denylist ([`HARD_DENIED_FIELDS`]) — a backstop for models that predate the
+///    annotation, or whose author never thought to add it. `password_hash` means the same
+///    thing whatever the table is called.
+///
+/// The name check is why (2) exists at all: annotations only protect the people who remember
+/// to write them, and the whole point of this module is to protect the people who don't.
+pub fn is_secret_column(col: &crate::migrate::Column) -> bool {
+    col.secret || is_hard_denied_field(&col.name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

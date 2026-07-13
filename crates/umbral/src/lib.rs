@@ -304,9 +304,9 @@ pub mod migrate {
         fk_effective_type, is_initialised, link_registered_models, make, make_empty, make_empty_in,
         make_in, migrate_apps_into_pool, migrate_apps_into_pool_in, model_alias,
         model_meta_for_table, models_for_plugin, pk_meta_for_table, plugin_order, record_applied,
-        registered_api_endpoints, registered_models, registered_plugins, render_operation_for, run,
-        run_checked, run_checked_in, run_for_schema, run_for_schema_in, run_in, run_shared,
-        run_shared_in, show, show_in, squash_in, table_alias,
+        registered_api_endpoints, registered_models, registered_models_opt, registered_plugins,
+        render_operation_for, run, run_checked, run_checked_in, run_for_schema, run_for_schema_in,
+        run_in, run_shared, run_shared_in, show, show_in, squash_in, table_alias,
     };
 }
 
@@ -668,7 +668,9 @@ pub mod orm {
     /// fixture: M3's `#[derive(Model)]` retires it; users defining their
     /// own model produce their own column module from the derive.
     pub use umbral_core::orm::post::post;
-    pub use umbral_core::orm::secrets::{HARD_DENIED_FIELDS, is_hard_denied_field};
+    pub use umbral_core::orm::secrets::{
+        HARD_DENIED_FIELDS, is_hard_denied_field, is_secret_column,
+    };
 
     /// Runtime helpers the `#[derive(Form)]` macro emits calls to —
     /// choice membership, FK existence probes, async `<select>` option

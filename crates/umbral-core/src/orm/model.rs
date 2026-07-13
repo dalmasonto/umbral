@@ -582,6 +582,31 @@ pub struct FieldSpec {
     /// authorization decision, not a static contract.
     pub privileged: bool,
 
+    /// Confidential, but legitimately viewable by SOME callers. Stripped from every
+    /// serialized response (`DynQuerySet`'s JSON reads — which is what REST, GraphQL and the
+    /// admin all sit on) UNLESS that read explicitly unlocks it via
+    /// [`crate::orm::dynamic::DynQuerySet::allow_private`]. Set via `#[umbral(private)]`.
+    ///
+    /// This is the read-path twin of [`Self::privileged`]: default-deny, with an explicit
+    /// unlock at the call site rather than a config flag, so that `grep -rn allow_private`
+    /// is a complete inventory of every place confidential data is permitted to leave.
+    ///
+    /// Wholesale cost, internal notes, another user's email. NOT password hashes — those are
+    /// [`Self::secret`], which has no unlock at all.
+    pub private: bool,
+
+    /// Must never be serialized to a client. By anyone. There is deliberately **no unlock**.
+    /// Set via `#[umbral(secret)]`, and applied automatically to every `Masked<T>` field.
+    ///
+    /// The value of a tier with no escape hatch is that nobody can reach for it at 2am under
+    /// a deadline. An admin that needs to show *whether* a password is set shows "set / not
+    /// set" — never the hash.
+    ///
+    /// The one thing that is not a client: a database dump. `dumpdata` must round-trip
+    /// password hashes or a restore locks every user out, so it reads through the loudly
+    /// named [`crate::orm::dynamic::DynQuerySet::unredacted_for_backup`].
+    pub secret: bool,
+
     /// For `SqlType::ForeignKey` fields: whether the migration engine
     /// emits a *physical* `FOREIGN KEY ... REFERENCES` constraint.
     /// Toggles the physical FK constraint. Set via
