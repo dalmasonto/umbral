@@ -13,18 +13,15 @@ The shape is the same across every kind: pick a `WidgetKind`, declare a `default
 
 ```rust
 use umbral_admin::{
-    CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
+    CardPayload, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
 };
 
 pub fn shop_customers_card() -> Widget {
-    Widget {
-        key: "shop_customers",
-        title: "Customers".to_string(),
-        kind: WidgetKind::Card,
-        default_span: Span { cols: 3, rows: 2 },
-        permission: None,
-        default_period: None,
-        data: WidgetDataFn::new(|_user| async move {
+    Widget::new(
+        "shop_customers",
+        "Customers",
+        WidgetKind::Card,
+        WidgetDataFn::new(|_user| async move {
             let total = Customer::objects().count().await.unwrap_or(0);
             WidgetPayload::Card(
                 CardPayload::new(umbral_admin::humanize_number(total as f64))
@@ -33,9 +30,14 @@ pub fn shop_customers_card() -> Widget {
                     .subtitle("All time"),
             )
         }),
-    }
+    )
+    .with_span(3, 2)
 }
 ```
+
+<Callout type="warning">
+Prefer `Widget::new(..)` over a `Widget { .. }` struct literal. `Widget` grows fields as the dashboard grows — `filters` was added this way — and every new field breaks every literal that spells out the old ones. The builder makes the next field free.
+</Callout>
 
 Then register it in the dashboard:
 
@@ -174,22 +176,16 @@ WidgetPayload::Line(LinePayload {
 
 ### Period chips
 
-Line widgets can carry a `[7d] [30d] [90d]` chip strip in the header. Clicking re-fetches the widget data with `?period=X`. The data closure reads via `params.period_days()`:
+A line widget carries a `[7d] [30d] [90d]` chip strip in its header by default. Clicking re-fetches the widget with `?period=X`, and the data closure reads it via `params.period_days()`:
 
 ```rust
-data: WidgetDataFn::with_params(|_user, params| async move {
+WidgetDataFn::with_params(|_user, params| async move {
     let days = params.period_days().unwrap_or(30);   // "7d" → 7
-    ...
-}),
+    // ...
+})
 ```
 
-Pre-select the active chip on first load via `.with_default_period("7d")`:
-
-```rust
-.widget(shop_daily_sales_chart().with_default_period("7d"))
-```
-
-When the URL has no `?period=`, the handler stamps `params.period = Some("7d")` before calling the data fn, so the template renders the matching chip highlighted and the data closure sees the same period. One source of truth: the URL.
+Pre-select the active chip with `.with_default_period("7d")`. For anything beyond a period — or on any other widget kind — declare filters, below.
 
 ## Donut
 
@@ -462,3 +458,79 @@ The skeleton-first shape means the dashboard paints fast: every widget loads in 
 - [Admin plugin](/v0.0.1/plugins/admin): the broader admin features (CRUD, filters, search, permissions).
 - [user in templates](/v0.0.1/auth/user-in-templates): widget headers can branch on `user.is_staff` for staff-only widgets.
 </content>
+
+## Filters: making a widget answer a question
+
+A widget with no controls answers one fixed question. Declare filters and the admin renders controls in its header — on **any** widget kind, not just charts:
+
+```rust
+use umbral_admin::{Widget, WidgetDataFn, WidgetFilter, WidgetKind};
+
+Widget::new("orders_by_status", "Orders", WidgetKind::Bar, WidgetDataFn::with_params(
+    |_user, params| async move {
+        let status = params.choice("status").unwrap_or("open");
+        let days   = params.period_days().unwrap_or(30);
+        // an explicit range beats a period preset
+        if let Some((start, end)) = params.date_range() {
+            // ...
+        }
+        // ... build the payload
+    },
+))
+.filter(WidgetFilter::period_default())                    // [7d] [30d] [90d]
+.filter(WidgetFilter::date_range())                       // start → end
+.filter(WidgetFilter::choice("status", "Status", [        // a <select>
+    ("open", "Open"),
+    ("paid", "Paid"),
+]))
+```
+
+Three kinds, because each reaches the closure by a different route:
+
+| Filter | Control | Read it with |
+|---|---|---|
+| `WidgetFilter::period([...])` | chip strip | `params.period_days()` |
+| `WidgetFilter::date_range()` | two date inputs | `params.date_range()` → `Some((start, end))` |
+| `WidgetFilter::choice(key, label, [...])` | `<select>` | `params.choice(key)` |
+
+`WidgetFilter::period_default()` is the conventional `7d / 30d / 90d` strip. Give any filter a first-paint value with `.with_default("paid")`.
+
+<Callout type="info">
+**Filters are sticky.** The value a user picks is saved to their admin preferences and restored on the next visit — a dashboard you re-open every morning shouldn't make you re-pick "status = paid" every time. Selecting one control also preserves the others, so choosing a status doesn't silently reset the period.
+</Callout>
+
+A **half-specified date range is ignored**: "from March" with no end date is not a window, and guessing an end would show data nobody asked for. Fill both boxes.
+
+## Export: the rows behind the picture
+
+Any widget whose payload has rows — line, bar, donut, radial, heatmap, progress, table — gets a **CSV** link in its header. The export runs the widget's own data closure with the *same filters currently in force*, so the file matches the chart you exported it from.
+
+```
+GET /admin/api/dashboard/widgets/{key}/export.csv?status=paid&period=7d
+```
+
+A KPI tile or a feed exports nothing (404): a single number is not a table. The endpoint enforces the same permission gates as the data endpoint, so export can never become the softer way to read numbers you're not allowed to see.
+
+## Reordering: the dashboard is the user's
+
+Drag any widget onto another and the grid reorders. The new arrangement is saved per user (`PUT /admin/api/dashboard/layout`) and honoured on the next render, spans included.
+
+A widget the saved layout doesn't mention — a plugin you installed last week — still appears, after the placed ones, rather than vanishing because it was missing from a layout saved a month ago. A layout is a *preference*, never a permission: an entry for a widget you may not see is ignored.
+
+## Reports
+
+A report page is just a custom view holding filterable widgets — a filter strip per widget, a CSV link per widget, and the whole page behind a permission:
+
+```rust
+AdminPlugin::default().view(
+    AdminView::new("reports/sales", "Sales report")
+        .with_permission("shop.view_report")
+        .section(
+            WidgetSection::new("Revenue")
+                .widget(revenue_by_month())   // .filter(WidgetFilter::date_range())
+                .widget(orders_by_status()),  // .filter(WidgetFilter::choice(..))
+        ),
+)
+```
+
+See [Custom views](/docs/v0.0.1/admin/custom-views) for the page itself.
