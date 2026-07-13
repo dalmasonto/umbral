@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/dalmasonto/umbral/compare/umbral-security-v0.0.7...umbral-security-v0.0.8) - 2026-07-13
+
+### Other
+
+- clippy --fix across the plugins
+
 ## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-security-v0.0.6...umbral-security-v0.0.7) - 2026-07-12
 
 ### Added
