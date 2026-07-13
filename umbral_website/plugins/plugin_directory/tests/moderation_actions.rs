@@ -185,6 +185,7 @@ async fn ensure_tables(pool: &sqlx::SqlitePool) {
                 user INTEGER NOT NULL REFERENCES auth_user(id),
                 added_by INTEGER REFERENCES auth_user(id),
                 created_at TEXT NOT NULL,
+                deleted_at TEXT,
                 UNIQUE (plugin, user)
             )",
             t = PluginModerator::TABLE,

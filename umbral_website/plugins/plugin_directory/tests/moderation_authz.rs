@@ -170,6 +170,7 @@ async fn ensure_tables(pool: &sqlx::SqlitePool) {
                 user INTEGER NOT NULL REFERENCES auth_user(id),
                 added_by INTEGER REFERENCES auth_user(id),
                 created_at TEXT NOT NULL,
+                deleted_at TEXT,
                 UNIQUE (plugin, user)
             )",
             t = PluginModerator::TABLE,
@@ -233,6 +234,7 @@ async fn can_moderate_grants_owner_and_moderator_but_not_strangers() {
         user: ForeignKey::new(2),
         added_by: Some(ForeignKey::new(1)),
         created_at: chrono::Utc::now(),
+        deleted_at: None,
     };
     PluginModerator::objects()
         .create(grant)
@@ -265,6 +267,7 @@ async fn can_moderate_grants_owner_and_moderator_but_not_strangers() {
         user: ForeignKey::new(2),
         added_by: Some(ForeignKey::new(1)),
         created_at: chrono::Utc::now(),
+        deleted_at: None,
     };
     assert!(
         PluginModerator::objects().create(dup).await.is_err(),
