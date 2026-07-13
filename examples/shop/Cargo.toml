@@ -14,6 +14,8 @@ umbral-auth     = { path = "../../plugins/umbral-auth" }
 umbral-sessions = { path = "../../plugins/umbral-sessions" }
 umbral-admin    = { path = "../../plugins/umbral-admin" }
 umbral-rest     = { path = "../../plugins/umbral-rest" }
+# NOTE: not on crates.io yet — 0.0.7 shipped before this plugin existed. Path dep only.
+umbral-graphql  = { path = "../../plugins/umbral-graphql" }
 umbral-openapi  = { path = "../../plugins/umbral-openapi" }
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----

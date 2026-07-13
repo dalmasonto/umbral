@@ -52,10 +52,30 @@ fn type_name(meta: &ModelMeta) -> String {
     meta.name.clone()
 }
 
-/// Plural query field for a model: `post` -> `posts`.
+/// Plural query field for a model: `post` -> `posts`, `category` -> `categories`.
+///
+/// English, not a naive `+ "s"`. The first version produced `categorys`, which is the kind
+/// of thing a user sees in GraphiQL and immediately distrusts the rest of the schema over.
 fn list_field_name(meta: &ModelMeta) -> String {
-    let s = snake(&meta.name);
-    if s.ends_with('s') {
+    plural(&meta.name)
+}
+
+/// See [`list_field_name`].
+pub(crate) fn plural(model_name: &str) -> String {
+    let s = snake(model_name);
+    let last = s.chars().last().unwrap_or('x');
+    let penult = s.chars().rev().nth(1).unwrap_or('x');
+
+    if last == 'y' && !matches!(penult, 'a' | 'e' | 'i' | 'o' | 'u') {
+        // category -> categories, but day -> days
+        format!("{}ies", &s[..s.len() - 1])
+    } else if s.ends_with('s')
+        || s.ends_with('x')
+        || s.ends_with('z')
+        || s.ends_with("ch")
+        || s.ends_with("sh")
+    {
+        // address -> addresses, box -> boxes
         format!("{s}es")
     } else {
         format!("{s}s")

@@ -5307,6 +5307,7 @@ version = "0.0.7"
 dependencies = [
  "async-graphql",
  "async-graphql-axum",
+ "async-trait",
  "axum",
  "chrono",
  "http",

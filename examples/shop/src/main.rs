@@ -34,6 +34,7 @@ use umbral::prelude::*;
 use umbral::web::SlashRedirect;
 use umbral_admin::{AdminModel, AdminPlugin};
 use umbral_auth::{AuthPlugin, AuthUser, BearerAuthentication, login_required_html};
+use umbral_graphql::GraphqlPlugin;
 use umbral_openapi::OpenApiPlugin;
 use umbral_permissions::{PermissionsPlugin, permission_required_html};
 use umbral_playground::PlaygroundPlugin;
@@ -200,6 +201,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     ])),
                 ),
         )
+        // GraphQL over the SAME models REST already serves. The schema is derived from the
+        // model registry, so `product { category { name } }` and `category { products {...} }`
+        // work without either edge being declared — they ARE the ForeignKey fields.
+        //
+        // Note what is and is not here. The catalog is public. `order`, `order_item`,
+        // `customer` and `payment` are NOT exposed: a GraphQL endpoint lets the CALLER pick
+        // the query shape, so exposing an order would hand anyone `orders { customer {
+        // address { ... } } }` in one request. `expose_if` gates the ones staff need.
+        .plugin(
+            GraphqlPlugin::new()
+                // The SAME auth chain REST uses. Without it every GraphQL request is
+                // anonymous and the `expose_if` models below could only ever be DENIED —
+                // a gate that cannot be opened is a wall with a lock painted on it.
+                .authenticate(ChainAuthentication::new(vec![
+                    Arc::new(session_authentication()) as Arc<dyn Authentication>,
+                    Arc::new(BearerAuthentication::default()) as Arc<dyn Authentication>,
+                    Arc::new(TokenSchemeAuthentication::default()) as Arc<dyn Authentication>,
+                ]))
+                // --- public catalog ---
+                .expose("product")
+                .expose("category")
+                .expose("brand")
+                .expose("review")
+                // --- staff only: try these logged out and you get "not authorized" ---
+                .expose_if("order", |id| id.is_some_and(|i| i.is_staff))
+                .expose_if("order_item", |id| id.is_some_and(|i| i.is_staff))
+                .expose_if("customer", |id| id.is_some_and(|i| i.is_staff)),
+        )
         .plugin(OpenApiPlugin::new().at("/api/docs"))
         .plugin(PlaygroundPlugin::new("shop"))
         // gaps2 #20: serve compiled Tailwind (styles/input.css →
@@ -212,7 +241,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // cookie), so the double-submit check doesn't apply there. HSTS stays
         // off for local http dev (flip it on behind a prod profile).
         .plugin(SecurityPlugin::with_config(SecurityConfig {
-            csrf_exempt_paths: vec!["/api".to_string()],
+            csrf_exempt_paths: vec!["/api".to_string(),
+                // Every GraphQL request is a POST, so the CSRF middleware 403s the whole
+                // endpoint unless it is exempt. Safe here because the transport requires
+                // `content-type: application/json`, which a browser cannot send
+                // cross-origin without a CORS preflight — there is no simple-request path
+                // for a hostile page to forge one.
+                "/graphql".to_string(),],
             ..Default::default()
         }))
         // CORS scoped to the REST API only (`/api`) — the HTML pages stay

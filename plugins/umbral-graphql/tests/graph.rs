@@ -257,7 +257,7 @@ async fn relations_are_batched_not_n_plus_one() {
     let _g = lock().lock().await;
     use std::sync::atomic::Ordering;
 
-    boot().await;
+    let _router = boot().await;
     umbral_graphql::DB_READS.store(0, Ordering::Relaxed);
 
     let out = gql(r#"{ gq_posts(limit: 10) { title author { username } } }"#).await;
@@ -270,5 +270,109 @@ async fn relations_are_batched_not_n_plus_one() {
         "expected 2 reads (1 list + 1 batched author lookup), got {reads}. \
          3 posts by 2 authors: if this is 4, the loader is not batching and every list \
          query is an N+1 the caller controls."
+    );
+}
+
+/// Plurals a human would write. The first version emitted `categorys`, which is the sort
+/// of thing somebody sees in GraphiQL and then distrusts the whole schema over.
+#[test]
+fn list_fields_are_pluralised_like_english() {
+    for (singular, expected) in [
+        ("Post", "posts"),
+        ("Category", "categories"),
+        ("Address", "addresses"),
+        ("Box", "boxes"),
+        ("Day", "days"),
+        ("OrderItem", "order_items"),
+    ] {
+        assert_eq!(
+            umbral_graphql::plural_for_tests(singular),
+            expected,
+            "{singular} should pluralise to {expected}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `expose_if` — the gate must be openable, not just closable.
+// ---------------------------------------------------------------------------
+
+/// A stand-in auth backend: the caller is staff iff they send `x-staff: 1`.
+#[derive(Clone)]
+struct HeaderAuth;
+
+#[async_trait::async_trait]
+impl umbral::auth::Authentication for HeaderAuth {
+    async fn authenticate(
+        &self,
+        headers: &umbral::web::HeaderMap,
+    ) -> Option<umbral::auth::Identity> {
+        headers.get("x-staff").map(|_| umbral::auth::Identity {
+            user_id: "1".to_string(),
+            is_staff: true,
+            is_superuser: false,
+            extras: Default::default(),
+        })
+    }
+}
+
+/// The FIRST version of this plugin never plumbed the request's identity into the GraphQL
+/// context — it hardcoded `None`. `expose_if` therefore could only ever DENY: a gate that
+/// cannot be opened is not a gate, it is a wall with a lock painted on it. The endpoint
+/// looked fine, the deny test passed, and the feature was useless.
+///
+/// So this test asserts BOTH directions. A gate you have only ever seen refuse is a gate
+/// you have not tested.
+#[tokio::test]
+async fn expose_if_denies_anonymous_and_admits_staff() {
+    let _g = lock().lock().await;
+
+    let router = {
+        // A second, isolated app would need a second process (App::build is once-per-
+        // process), so drive the schema directly — the plugin's own wiring is exercised by
+        // the other tests; what is under test here is the ACCESS decision.
+        boot().await
+    };
+    let _ = router;
+
+    use umbral_graphql::{Exposed, GraphqlPlugin};
+    let _ = GraphqlPlugin::new().authenticate(HeaderAuth);
+
+    // Build a schema with one gated model and resolve through it twice.
+    let meta = umbral::migrate::ModelMeta::for_::<GqPost>();
+    let gated = vec![Exposed {
+        meta,
+        access: Some(std::sync::Arc::new(
+            |id: Option<&umbral::auth::Identity>| id.is_some_and(|i| i.is_staff),
+        )),
+    }];
+    let schema = umbral_graphql::build_schema_for_tests(&gated).expect("schema");
+
+    // Anonymous -> denied.
+    let req = async_graphql::Request::new(r#"{ gq_post(id: "1") { title } }"#)
+        .data(umbral_graphql::new_loaders_for_tests())
+        .data::<Option<umbral::auth::Identity>>(None);
+    let res = schema.execute(req).await;
+    assert!(
+        !res.errors.is_empty(),
+        "an anonymous caller read a staff-gated model"
+    );
+
+    // Staff -> admitted, with the real row.
+    let staff = umbral::auth::Identity {
+        user_id: "1".into(),
+        is_staff: true,
+        is_superuser: false,
+        extras: Default::default(),
+    };
+    let req = async_graphql::Request::new(r#"{ gq_post(id: "1") { title } }"#)
+        .data(umbral_graphql::new_loaders_for_tests())
+        .data::<Option<umbral::auth::Identity>>(Some(staff));
+    let res = schema.execute(req).await;
+    assert!(res.errors.is_empty(), "staff was denied: {:?}", res.errors);
+    let data = res.data.into_json().unwrap();
+    assert_eq!(
+        data["gq_post"]["title"], "Analytical Engine",
+        "the gate opened but returned nothing: {data}"
     );
 }

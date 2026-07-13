@@ -62,6 +62,26 @@ pub(crate) use schema::id_string as schema_id_string;
 #[doc(hidden)]
 pub use loader::DB_READS;
 
+/// Test-only: build a schema from an explicit `Exposed` list.
+#[doc(hidden)]
+pub fn build_schema_for_tests(
+    exposed: &[Exposed],
+) -> Result<Schema, async_graphql::dynamic::SchemaError> {
+    schema::build(exposed)
+}
+
+/// Test-only: a fresh per-request loader set.
+#[doc(hidden)]
+pub fn new_loaders_for_tests() -> loader::Loaders {
+    loader::Loaders::new()
+}
+
+/// Test-only: the plural query-field name for a model type name.
+#[doc(hidden)]
+pub fn plural_for_tests(model_name: &str) -> String {
+    schema::plural(model_name)
+}
+
 /// Guard a top-level query field.
 pub(crate) fn guard(
     ctx: &async_graphql::dynamic::ResolverContext<'_>,
@@ -91,6 +111,7 @@ pub struct GraphqlPlugin {
     path: Option<String>,
     exposed: Vec<(String, Option<AccessFn>)>,
     graphiql: Option<bool>,
+    auth: Option<Arc<dyn umbral::auth::Authentication>>,
 }
 
 impl GraphqlPlugin {
@@ -125,6 +146,17 @@ impl GraphqlPlugin {
         access: impl Fn(Option<&umbral::auth::Identity>) -> bool + Send + Sync + 'static,
     ) -> Self {
         self.exposed.push((table.into(), Some(Arc::new(access))));
+        self
+    }
+
+    /// How to identify the caller — the same `Authentication` backends `RestPlugin` takes
+    /// (session cookie, bearer token, a chain of both).
+    ///
+    /// Without this, EVERY request is anonymous, and `expose_if` can only ever deny — a
+    /// gate that cannot be opened is not a gate, it is a wall with a lock painted on it.
+    /// The endpoint still works; only the guarded models become unreachable.
+    pub fn authenticate<A: umbral::auth::Authentication>(mut self, auth: A) -> Self {
+        self.auth = Some(Arc::new(auth));
         self
     }
 
@@ -195,21 +227,41 @@ impl Plugin for GraphqlPlugin {
         let post_schema = schema.clone();
         let post_path = path.clone();
         let ide_path = path.clone();
+        let auth = self.auth.clone();
+
+        // A gated model with no way to authenticate is a permanent 403 the operator will
+        // debug for an hour. Say it at boot instead.
+        if auth.is_none() && exposed.iter().any(|e| e.access.is_some()) {
+            tracing::warn!(
+                "umbral-graphql: a model is exposed with `expose_if(...)` but no \
+                 `.authenticate(...)` backend is configured — every request is anonymous, so \
+                 those models will ALWAYS be denied. Pass the same Authentication you give \
+                 RestPlugin (e.g. SessionAuthentication)."
+            );
+        }
 
         let mut router = Router::new().route(
             &path,
-            axum::routing::post(move |req: GraphQLRequest| {
-                let schema = post_schema.clone();
-                async move {
-                    // Fresh loaders PER REQUEST. A shared cache would serve one caller's
-                    // rows to another — a data leak wearing a performance costume.
-                    let inner =
-                        req.into_inner()
-                            .data(loader::Loaders::new())
-                            .data::<Option<umbral::auth::Identity>>(None);
-                    GraphQLResponse::from(schema.execute(inner).await)
-                }
-            }),
+            axum::routing::post(
+                move |headers: umbral::web::HeaderMap, req: GraphQLRequest| {
+                    let schema = post_schema.clone();
+                    let auth = auth.clone();
+                    async move {
+                        let identity: Option<umbral::auth::Identity> = match &auth {
+                            Some(a) => a.authenticate(&headers).await,
+                            None => None,
+                        };
+                        // Fresh loaders PER REQUEST. A shared cache would serve one caller's
+                        // rows to another — a data leak wearing a performance costume.
+                        let inner = req.into_inner().data(loader::Loaders::new()).data::<Option<
+                            umbral::auth::Identity,
+                        >>(
+                            identity
+                        );
+                        GraphQLResponse::from(schema.execute(inner).await)
+                    }
+                },
+            ),
         );
 
         if show_ide {

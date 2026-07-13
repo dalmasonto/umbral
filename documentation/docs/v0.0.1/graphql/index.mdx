@@ -64,6 +64,35 @@ GraphqlPlugin::new()
 
 A relation is only traversable when **both ends** are exposed. Otherwise `post.author` would be a side door into a model you deliberately withheld. An unexposed model doesn't appear in the schema at all — not as a query, not as a relation, not in introspection.
 
+## Who is the caller
+
+`expose_if` hands your closure the caller's `Identity` — but the plugin only *has* one if you tell it how to authenticate. Give it the same backends you give `RestPlugin`:
+
+```rust
+GraphqlPlugin::new()
+    .authenticate(ChainAuthentication::new(vec![
+        Arc::new(session_authentication()) as Arc<dyn Authentication>,
+        Arc::new(BearerAuthentication::default()) as Arc<dyn Authentication>,
+    ]))
+    .expose("product")
+    .expose_if("order", |id| id.is_some_and(|i| i.is_staff))
+```
+
+<Callout type="warning">
+  Without `.authenticate(...)` every request is anonymous, so `expose_if` can only ever **deny** — a gate that can't be opened is a wall with a lock painted on it. The plugin warns at boot if you gate a model without configuring authentication.
+</Callout>
+
+## Mounting it
+
+GraphQL speaks `POST` for *reads*, so a browser-facing app with CSRF protection on will reject every query with a **403** until you exempt the endpoint:
+
+```rust
+SecurityPlugin::default()
+    .csrf_exempt_paths(vec!["/graphql".to_string()])
+```
+
+That's tolerable *only* because the endpoint is read-only: a cross-site page can send the request, but an `application/json` POST is not a CORS "simple request", so the browser preflights it and — absent a permissive CORS policy — never lets the attacker read the response. CSRF protects against forged **writes**, and there are none here yet. When mutations land, this exemption stops being safe and the advice changes with them.
+
 ## What you get per model
 
 | | |
