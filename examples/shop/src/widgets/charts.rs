@@ -26,6 +26,7 @@ pub fn shop_daily_sales_chart() -> Widget {
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
         default_period: Some("30d"),
+        filters: Vec::new(),
         data: WidgetDataFn::with_params(|_user, params| async move {
             let days = params.period_days().unwrap_or(30);
             let now = chrono::Utc::now();
@@ -63,6 +64,7 @@ pub fn shop_activity_chart() -> Widget {
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
         default_period: Some("30d"),
+        filters: Vec::new(),
         data: WidgetDataFn::with_params(|_user, params| async move {
             let days = params.period_days().unwrap_or(30);
             let now = chrono::Utc::now();
@@ -125,6 +127,7 @@ pub fn shop_order_status_donut() -> Widget {
         default_span: Span { cols: 4, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             // GROUP BY status in SQL — one row per status with its
             // count — instead of fetching every order into memory and

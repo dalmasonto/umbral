@@ -17,6 +17,7 @@ pub fn shop_recent_orders_table() -> Widget {
         default_span: Span { cols: 4, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let columns = vec![
                 TableColumn {

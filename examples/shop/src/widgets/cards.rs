@@ -24,6 +24,7 @@ pub fn shop_total_sales_widget() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
             let month_ago = now - chrono::Duration::days(30);
@@ -54,6 +55,7 @@ pub fn shop_orders_widget() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
             let month_ago = now - chrono::Duration::days(30);
@@ -84,6 +86,7 @@ pub fn shop_customers_widget() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let total = Customer::objects().count().await.unwrap_or(0);
             WidgetPayload::Card(
@@ -104,6 +107,7 @@ pub fn shop_avg_order_value_widget() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
             let month_ago = now - chrono::Duration::days(30);

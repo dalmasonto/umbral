@@ -842,6 +842,28 @@ impl WidgetParams {
         let digits: String = p.chars().take_while(|c| c.is_ascii_digit()).collect();
         digits.parse().ok()
     }
+
+    /// Value of a [`WidgetFilter::choice`] control, by its key.
+    ///
+    /// ```rust,ignore
+    /// let status = params.choice("status").unwrap_or("open");
+    /// ```
+    pub fn choice(&self, key: &str) -> Option<&str> {
+        self.raw
+            .get(key)
+            .map(String::as_str)
+            .filter(|v| !v.is_empty())
+    }
+
+    /// The resolved window as `(start, end)` ISO dates, if a date-range filter
+    /// supplied both. Takes precedence over `period` — a caller who picked
+    /// explicit dates meant them.
+    pub fn date_range(&self) -> Option<(&str, &str)> {
+        match (self.start.as_deref(), self.end.as_deref()) {
+            (Some(s), Some(e)) if !s.is_empty() && !e.is_empty() => Some((s, e)),
+            _ => None,
+        }
+    }
 }
 
 /// Minimal `%XX` → byte decoder; avoids pulling a query-string
@@ -875,6 +897,183 @@ fn urlencoding_decode(raw: &str) -> String {
         }
     }
     out
+}
+
+// =========================================================================
+// WidgetFilter — declarative, per-widget UI controls
+// =========================================================================
+
+/// What kind of control a [`WidgetFilter`] renders.
+///
+/// The variants exist because the three shapes reach the data closure by
+/// different routes: a period lands in `WidgetParams::period`, a date range in
+/// `start` / `end`, and a choice in `raw[key]`. Keeping that in the type means
+/// the template never has to guess which query parameter a control writes to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WidgetFilterKind {
+    /// A chip strip of presets — `7d`, `30d`, `90d`. Writes `?period=`.
+    Period { presets: Vec<FilterOption> },
+    /// Two `<input type="date">` boxes. Writes `?start=` and `?end=`.
+    DateRange,
+    /// A `<select>`. Writes `?<key>=`, readable via `params.choice(key)`.
+    Choice { options: Vec<FilterOption> },
+}
+
+/// One selectable value in a period or choice filter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilterOption {
+    pub value: String,
+    pub label: String,
+}
+
+impl FilterOption {
+    pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+        }
+    }
+}
+
+/// A control the admin renders in a widget's header, declared at registration
+/// time and rendered for **every** widget kind.
+///
+/// Before this existed the only filter in the admin was a `[7d][30d][90d]` chip
+/// strip hardcoded inside `line.html`, which meant a bar chart or a table could
+/// not be filtered at all, and no widget could offer anything but a period. A
+/// filter is now data: the widget declares it, the admin renders it, and the
+/// value arrives in [`WidgetParams`].
+///
+/// ```rust,ignore
+/// Widget::new("orders_by_status", "Orders", WidgetKind::Bar, data_fn)
+///     .filter(WidgetFilter::period_default())
+///     .filter(WidgetFilter::choice("status", "Status", [
+///         ("open", "Open"), ("paid", "Paid"),
+///     ]))
+/// ```
+///
+/// The chosen value is **sticky per user**: picking one persists to the user's
+/// admin preferences, so it survives a reload the same way a period chip does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WidgetFilter {
+    /// Query-parameter name. `"period"` for a period filter, `"start"`/`"end"`
+    /// are implied by a date range, anything else for a choice.
+    pub key: String,
+    /// Label shown beside the control.
+    pub label: String,
+    /// Which control to render.
+    #[serde(flatten)]
+    pub kind: WidgetFilterKind,
+    /// Value selected when the user has never touched this filter.
+    pub default: Option<String>,
+    /// Resolved value for THIS request — URL, else the user's saved choice,
+    /// else `default`. Filled in by the handler; ignored at registration.
+    #[serde(default)]
+    pub active: Option<String>,
+    /// Resolved range ends, for a [`WidgetFilterKind::DateRange`] only.
+    /// Filled in by the handler; ignored at registration.
+    #[serde(default)]
+    pub active_start: Option<String>,
+    #[serde(default)]
+    pub active_end: Option<String>,
+    /// Query-string fragment carrying every OTHER filter's current value, e.g.
+    /// `"&status=paid&period=7d"`. Filled in by the handler.
+    ///
+    /// It lives here, computed in Rust, because the alternative was assembling
+    /// it in the template with `split`/`trim` gymnastics — and a control that
+    /// gets this wrong silently resets its neighbours the moment you touch it.
+    #[serde(default)]
+    pub carry: String,
+    /// The same fragment without the leading `&`, for a control that starts the
+    /// query string rather than appending to one (a `<select>` whose own value
+    /// htmx appends via `hx-include`).
+    #[serde(default)]
+    pub carry_lead: String,
+}
+
+impl WidgetFilter {
+    /// A period chip strip with custom presets.
+    pub fn period<I, V, L>(presets: I) -> Self
+    where
+        I: IntoIterator<Item = (V, L)>,
+        V: Into<String>,
+        L: Into<String>,
+    {
+        Self {
+            key: "period".to_string(),
+            label: "Period".to_string(),
+            kind: WidgetFilterKind::Period {
+                presets: presets
+                    .into_iter()
+                    .map(|(v, l)| FilterOption::new(v, l))
+                    .collect(),
+            },
+            default: None,
+            active: None,
+            active_start: None,
+            active_end: None,
+            carry: String::new(),
+            carry_lead: String::new(),
+        }
+    }
+
+    /// The conventional `[7d] [30d] [90d]` strip — what `line.html` hardcoded.
+    pub fn period_default() -> Self {
+        Self::period([("7d", "7d"), ("30d", "30d"), ("90d", "90d")]).with_default("30d")
+    }
+
+    /// A start/end date pair. Reaches the closure as `params.start` / `params.end`,
+    /// which take precedence over `period` when both are present.
+    pub fn date_range() -> Self {
+        Self {
+            key: "range".to_string(),
+            label: "Date range".to_string(),
+            kind: WidgetFilterKind::DateRange,
+            default: None,
+            active: None,
+            active_start: None,
+            active_end: None,
+            carry: String::new(),
+            carry_lead: String::new(),
+        }
+    }
+
+    /// A `<select>` writing `?<key>=`. Read it back with `params.choice(key)`.
+    pub fn choice<I, V, L>(key: impl Into<String>, label: impl Into<String>, options: I) -> Self
+    where
+        I: IntoIterator<Item = (V, L)>,
+        V: Into<String>,
+        L: Into<String>,
+    {
+        Self {
+            key: key.into(),
+            label: label.into(),
+            kind: WidgetFilterKind::Choice {
+                options: options
+                    .into_iter()
+                    .map(|(v, l)| FilterOption::new(v, l))
+                    .collect(),
+            },
+            default: None,
+            active: None,
+            active_start: None,
+            active_end: None,
+            carry: String::new(),
+            carry_lead: String::new(),
+        }
+    }
+
+    /// Pre-select a value on first paint.
+    pub fn with_default(mut self, value: impl Into<String>) -> Self {
+        self.default = Some(value.into());
+        self
+    }
+
+    /// The value in force for this request.
+    pub fn active_value(&self) -> Option<&str> {
+        self.active.as_deref().or(self.default.as_deref())
+    }
 }
 
 pub(crate) type DataFuture = Pin<Box<dyn Future<Output = WidgetPayload> + Send + 'static>>;
@@ -951,9 +1150,78 @@ pub struct Widget {
     /// `None` falls back to whatever the template / data closure
     /// chooses as its fallback.
     pub default_period: Option<&'static str>,
+    /// Controls rendered in this widget's header — see [`WidgetFilter`].
+    ///
+    /// Empty means no controls, with one compatibility exception: a
+    /// [`WidgetKind::Line`] with no declared filters still gets the historic
+    /// `[7d][30d][90d]` strip, because that strip used to be hardcoded in
+    /// `line.html` and removing it would silently strip controls from every
+    /// line chart already in the wild.
+    pub filters: Vec<WidgetFilter>,
 }
 
 impl Widget {
+    /// Build a widget without naming every field.
+    ///
+    /// Prefer this over a struct literal. `Widget` grows fields as the
+    /// dashboard grows (this is how `filters` arrived), and every new field
+    /// breaks every literal that spells out the old ones. Going through the
+    /// builder means the next field costs you nothing.
+    ///
+    /// ```rust,ignore
+    /// Widget::new("orders", "Orders", WidgetKind::Bar, data_fn)
+    ///     .with_span(6, 2)
+    ///     .filter(WidgetFilter::period_default())
+    /// ```
+    pub fn new(
+        key: &'static str,
+        title: impl Into<String>,
+        kind: WidgetKind,
+        data: WidgetDataFn,
+    ) -> Self {
+        Self {
+            key,
+            title: title.into(),
+            kind,
+            default_span: Span::default(),
+            permission: None,
+            data,
+            default_period: None,
+            filters: Vec::new(),
+        }
+    }
+
+    /// Gate the widget behind a permission codename.
+    pub fn with_permission(mut self, codename: &'static str) -> Self {
+        self.permission = Some(codename);
+        self
+    }
+
+    /// Add one filter control to the widget header.
+    pub fn filter(mut self, filter: WidgetFilter) -> Self {
+        self.filters.push(filter);
+        self
+    }
+
+    /// Replace the widget's filters wholesale.
+    pub fn with_filters(mut self, filters: impl IntoIterator<Item = WidgetFilter>) -> Self {
+        self.filters = filters.into_iter().collect();
+        self
+    }
+
+    /// The filters to render for this request, including the line-chart
+    /// compatibility strip described on [`Widget::filters`].
+    pub(crate) fn effective_filters(&self) -> Vec<WidgetFilter> {
+        if self.filters.is_empty() && matches!(self.kind, WidgetKind::Line) {
+            let mut period = WidgetFilter::period_default();
+            if let Some(d) = self.default_period {
+                period.default = Some(d.to_string());
+            }
+            return vec![period];
+        }
+        self.filters.clone()
+    }
+
     /// Override the default grid span. Lets a caller resize a
     /// builtin (or any pre-built widget) at registration time
     /// without having to re-construct the whole struct literal:

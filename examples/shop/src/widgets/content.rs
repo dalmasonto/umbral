@@ -21,6 +21,7 @@ pub fn content_recent_posts_table() -> Widget {
         default_span: Span { cols: 6, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let columns = vec![
                 TableColumn {
@@ -66,6 +67,7 @@ pub fn content_post_status_donut() -> Widget {
         default_span: Span { cols: 3, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let posts = Post::objects().fetch().await.unwrap_or_default();
             let mut counts: HashMap<String, f64> = HashMap::new();
@@ -96,6 +98,7 @@ pub fn content_subscribers_card() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let total = Subscriber::objects().count().await.unwrap_or(0);
             let confirmed = Subscriber::objects()

@@ -222,6 +222,11 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         )
         .expect("admin/_macros/widgets/kpi.html parses");
         env.add_template(
+            "admin/_macros/widgets/filters.html",
+            include_str!("../templates/_macros/widgets/filters.html"),
+        )
+        .expect("admin/_macros/widgets/filters.html parses");
+        env.add_template(
             "admin/_macros/widgets/bar.html",
             include_str!("../templates/_macros/widgets/bar.html"),
         )

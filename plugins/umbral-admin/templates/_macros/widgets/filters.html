@@ -1,0 +1,101 @@
+{#
+  filters.html
+  ============
+  The widget filter strip — one control row rendered for EVERY widget kind.
+
+  Before this existed, the only filter in the admin was a `[7d][30d][90d]` chip
+  strip hardcoded inside `line.html`, so a bar chart or a table could not be
+  filtered at all and no widget could offer anything but a period. Filters are
+  now declared on the widget (`Widget::filter(..)`) and rendered here, whatever
+  the kind.
+
+  Every control hx-gets the widget's own data endpoint and swaps the widget body
+  in place. Each one appends `f.carry` — a query fragment holding the OTHER
+  filters' current values, computed in Rust — so picking a status does not
+  silently reset the period.
+
+  Params:
+    widget_key — the widget's key; the strip is skipped without it.
+    filters    — resolved filters from the handler. Each carries `key`, `label`,
+                 `kind`, its options, the `active` value, `active_start` /
+                 `active_end` for a range, and `carry`.
+#}
+
+{% macro filter_strip(widget_key, filters) %}
+{% if widget_key and filters %}
+<div class="widget-filters flex items-center flex-wrap gap-sm" role="group" aria-label="Filters">
+  {% for f in filters %}
+    {%- set base = admin_base ~ "/api/dashboard/widgets/" ~ widget_key ~ "/data" -%}
+
+    {# ---- Period: a chip strip ------------------------------------- #}
+    {% if f.kind == "period" %}
+    <div class="inline-flex items-center bg-surface-container-low rounded-lg p-0.5 gap-0.5"
+         role="group" aria-label="{{ f.label }}">
+      {% for p in f.presets %}
+      {%- set is_active = (p.value == f.active) -%}
+      <button
+        type="button"
+        hx-get="{{ base }}?period={{ p.value }}{{ f.carry }}"
+        hx-target="#widget-{{ widget_key }}"
+        hx-swap="innerHTML"
+        class="text-label-sm font-medium px-2 py-0.5 rounded-md transition-colors
+               {% if is_active %}bg-surface-container-high text-on-surface{% else %}text-on-surface-variant hover:text-on-surface{% endif %}"
+        aria-pressed="{{ 'true' if is_active else 'false' }}"
+      >{{ p.label }}</button>
+      {% endfor %}
+    </div>
+
+    {# ---- Choice: a select ----------------------------------------- #}
+    {# htmx appends an hx-include'd control's own name=value to a GET query, so
+       the select contributes `?<key>=<value>` itself and `carry_lead` supplies
+       the neighbours. No JS, no hx-vals. #}
+    {% elif f.kind == "choice" %}
+    <select
+      hx-get="{{ base }}{% if f.carry_lead %}?{{ f.carry_lead }}{% endif %}"
+      hx-target="#widget-{{ widget_key }}"
+      hx-swap="innerHTML"
+      hx-trigger="change"
+      hx-include="this"
+      name="{{ f.key }}"
+      aria-label="{{ f.label }}"
+      class="text-label-sm bg-surface-container-low border border-outline-variant
+             rounded-md px-2 py-1 text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+    >
+      {% for o in f.options %}
+      <option value="{{ o.value }}" {% if o.value == f.active %}selected{% endif %}>{{ o.label }}</option>
+      {% endfor %}
+    </select>
+
+    {# ---- Date range: two date inputs ------------------------------ #}
+    {# Both inputs are hx-include'd together, so a change to either sends BOTH
+       `start` and `end`. A half-range (one box filled) is ignored server-side —
+       "from March" with no end date is not a window, and guessing one would
+       quietly show the user data they never asked for. #}
+    {% elif f.kind == "date_range" %}
+    <div class="widget-filter-range inline-flex items-center gap-1"
+         role="group" aria-label="{{ f.label }}">
+      <input type="date" name="start" value="{{ f.active_start or '' }}"
+             hx-get="{{ base }}{% if f.carry_lead %}?{{ f.carry_lead }}{% endif %}"
+             hx-target="#widget-{{ widget_key }}"
+             hx-swap="innerHTML"
+             hx-trigger="change"
+             hx-include="closest .widget-filter-range"
+             aria-label="{{ f.label }} start"
+             class="text-label-sm bg-surface-container-low border border-outline-variant rounded-md
+                    px-2 py-1 text-on-surface focus:outline-none focus:ring-2 focus:ring-primary">
+      <span class="text-label-sm text-outline" aria-hidden="true">→</span>
+      <input type="date" name="end" value="{{ f.active_end or '' }}"
+             hx-get="{{ base }}{% if f.carry_lead %}?{{ f.carry_lead }}{% endif %}"
+             hx-target="#widget-{{ widget_key }}"
+             hx-swap="innerHTML"
+             hx-trigger="change"
+             hx-include="closest .widget-filter-range"
+             aria-label="{{ f.label }} end"
+             class="text-label-sm bg-surface-container-low border border-outline-variant rounded-md
+                    px-2 py-1 text-on-surface focus:outline-none focus:ring-2 focus:ring-primary">
+    </div>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+{% endmacro %}

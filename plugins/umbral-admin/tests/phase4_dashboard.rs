@@ -16,8 +16,8 @@ use tokio::sync::{Mutex, OnceCell};
 use tower::ServiceExt;
 
 use umbral_admin::{
-    AdminPlugin, HeatmapPayload, KpiPayload, ProgressPayload, RadialPayload, Span, Widget,
-    WidgetDataFn, WidgetKind, WidgetPayload,
+    AdminPlugin, BarPayload, ChartPoint, HeatmapPayload, KpiPayload, ProgressPayload,
+    RadialPayload, Series, Span, Widget, WidgetDataFn, WidgetFilter, WidgetKind, WidgetPayload,
 };
 use umbral_auth::{AuthPlugin, AuthUser, create_user_with_flags};
 use umbral_sessions::SessionsPlugin;
@@ -49,6 +49,7 @@ async fn boot() -> &'static axum::Router {
             default_span: Span { cols: 3, rows: 1 },
             permission: None,
             default_period: None,
+            filters: Vec::new(),
             data: WidgetDataFn::new(|_user| async move {
                 WidgetPayload::Kpi(KpiPayload {
                     value: "99".to_string(),
@@ -70,6 +71,7 @@ async fn boot() -> &'static axum::Router {
             default_span: Span { cols: 3, rows: 2 },
             permission: None,
             default_period: None,
+            filters: Vec::new(),
             data: WidgetDataFn::new(|_user| async move {
                 WidgetPayload::Radial(RadialPayload::single("Done", 73.0))
             }),
@@ -81,6 +83,7 @@ async fn boot() -> &'static axum::Router {
             default_span: Span { cols: 6, rows: 3 },
             permission: None,
             default_period: None,
+            filters: Vec::new(),
             data: WidgetDataFn::new(|_user| async move {
                 WidgetPayload::Heatmap(HeatmapPayload::from_grid(
                     ["R1"],
@@ -89,6 +92,42 @@ async fn boot() -> &'static axum::Router {
                 ))
             }),
         };
+        // A widget carrying declarative filters. The data closure echoes the
+        // resolved filter values straight back into the payload, so a test can
+        // assert what the CLOSURE actually received rather than merely that some
+        // HTML contains a `<select>` — a control that renders but never reaches
+        // the query is the exact bug worth catching.
+        let filtered_widget = Widget::new(
+            "test_filtered",
+            "Filtered",
+            WidgetKind::Bar,
+            WidgetDataFn::with_params(|_user, params| async move {
+                let status = params.choice("status").unwrap_or("none").to_string();
+                let period = params.period.clone().unwrap_or_else(|| "none".into());
+                let range = params
+                    .date_range()
+                    .map(|(s, e)| format!("{s}..{e}"))
+                    .unwrap_or_else(|| "none".into());
+                WidgetPayload::Bar(BarPayload {
+                    series: vec![Series {
+                        name: format!("status={status};period={period};range={range}"),
+                        points: vec![ChartPoint {
+                            x: "x".to_string(),
+                            y: 1.0,
+                        }],
+                    }],
+                    x_type: "t".to_string(),
+                })
+            }),
+        )
+        .filter(WidgetFilter::period_default())
+        .filter(WidgetFilter::date_range())
+        .filter(WidgetFilter::choice(
+            "status",
+            "Status",
+            [("open", "Open"), ("paid", "Paid")],
+        ));
+
         let progress_widget = Widget {
             key: "test_progress",
             title: "Test Progress".to_string(),
@@ -96,6 +135,7 @@ async fn boot() -> &'static axum::Router {
             default_span: Span { cols: 3, rows: 3 },
             permission: None,
             default_period: None,
+            filters: Vec::new(),
             data: WidgetDataFn::new(|_user| async move {
                 WidgetPayload::Progress(ProgressPayload::from_pairs([("A", 10.0), ("B", 5.0)]))
             }),
@@ -116,7 +156,8 @@ async fn boot() -> &'static axum::Router {
                     .register_widget(custom_widget)
                     .register_widget(radial_widget)
                     .register_widget(heatmap_widget)
-                    .register_widget(progress_widget),
+                    .register_widget(progress_widget)
+                    .register_widget(filtered_widget),
             )
             .build()
             .expect("App::build");
@@ -634,5 +675,111 @@ async fn test_dashboard_widget_grid_renders_via_macro() {
     assert!(
         html.contains("/api/dashboard/widgets/") && html.contains("hx-trigger=\"load\""),
         "dashboard still renders widget cells via the shared grid macro"
+    );
+}
+
+// =========================================================================
+// Declarative widget filters
+// =========================================================================
+
+/// Fetch the filtered widget's data endpoint and return the rendered HTML.
+async fn filtered_html(router: &axum::Router, cookie: &str, query: &str) -> String {
+    let uri = if query.is_empty() {
+        "/admin/api/dashboard/widgets/test_filtered/data".to_string()
+    } else {
+        format!("/admin/api/dashboard/widgets/test_filtered/data?{query}")
+    };
+    let req = Request::builder()
+        .uri(uri)
+        .header(header::COOKIE, cookie)
+        .header("HX-Request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8_lossy(&body).to_string()
+}
+
+/// A filter is only real if its value reaches the data closure. The closure
+/// echoes what it received into the series name, so this asserts the plumbing
+/// end to end rather than just that a `<select>` appears somewhere.
+#[tokio::test]
+async fn declared_filters_reach_the_data_closure() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    let html = filtered_html(router, &cookie, "status=paid&period=7d").await;
+    assert!(
+        html.contains("status=paid"),
+        "the choice filter's value must reach the closure; got: {html}"
+    );
+    assert!(
+        html.contains("period=7d"),
+        "the period must reach the closure; got: {html}"
+    );
+}
+
+/// Every widget kind gets controls now — this one is a Bar, which before this
+/// change could not be filtered at all (the chip strip was hardcoded inside
+/// line.html).
+#[tokio::test]
+async fn a_non_line_widget_renders_its_declared_controls() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    let html = filtered_html(router, &cookie, "").await;
+    assert!(
+        html.contains("<select") && html.contains("value=\"paid\""),
+        "the choice filter renders a select with its options on a BAR widget"
+    );
+    assert!(
+        html.contains("type=\"date\""),
+        "the date-range filter renders two date inputs"
+    );
+    assert!(
+        html.contains("aria-pressed"),
+        "the period filter renders its chip strip"
+    );
+}
+
+/// Picking a filter sticks: a later request with a bare URL still sees it.
+/// Without this the dashboard resets every reload and the controls are a toy.
+#[tokio::test]
+async fn a_chosen_filter_is_sticky_across_requests() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    // Pick it once...
+    let _ = filtered_html(router, &cookie, "status=paid").await;
+    // ...then ask with NO query at all.
+    let html = filtered_html(router, &cookie, "").await;
+
+    assert!(
+        html.contains("status=paid"),
+        "the previously chosen status must survive a bare request; got: {html}"
+    );
+    assert!(
+        html.contains(r#"<option value="paid" selected"#),
+        "and the select must render it as the selected option"
+    );
+}
+
+/// A control must carry its neighbours' values, or clicking one silently
+/// resets the others — the strip would then lie about what you are looking at.
+#[tokio::test]
+async fn a_control_carries_the_other_filters_values() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    let html = filtered_html(router, &cookie, "status=open&period=90d").await;
+    // The period chips must preserve `status=open` in their own hx-get URLs.
+    assert!(
+        html.contains("period=7d&status=open") || html.contains("period=7d&amp;status=open"),
+        "a period chip must carry the active status along; got: {html}"
     );
 }

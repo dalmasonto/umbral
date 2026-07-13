@@ -32,6 +32,7 @@ pub fn builtin_total_models_widget() -> Widget {
         default_span: Span { cols: 4, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let points = models_by_plugin_points();
             WidgetPayload::Bar(BarPayload {
@@ -100,6 +101,7 @@ pub fn builtin_recent_users_widget() -> Widget {
         default_span: Span { cols: 4, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let items = match find_model("auth_user") {
                 Some((_, meta)) => {
@@ -302,6 +304,106 @@ pub(crate) async fn dashboard_widget_data(
             params.period = Some(default.to_string());
         }
     }
+
+    // Declarative filters resolve on the same ladder the period does:
+    //
+    //   1. an explicit value in THIS request's query string,
+    //   2. the value this user last picked (sticky, persisted),
+    //   3. the filter's registration-time default.
+    //
+    // An explicit pick is persisted so it survives a reload — the same deal
+    // period chips already got, extended to every control. The resolved value
+    // is written back into `params` so the data closure sees the user's choice
+    // even when the URL is bare, which is what makes a bookmarked /admin land
+    // on the dashboard you left rather than a reset one.
+    let mut filters = widget.effective_filters();
+    let saved = models::get_widget_filters(user.id, &key)
+        .await
+        .unwrap_or_default();
+
+    for filter in &mut filters {
+        match &filter.kind {
+            crate::widgets::WidgetFilterKind::DateRange => {
+                // A date range is two params, and a half-specified range is not
+                // a range — only persist and apply it when both ends are given.
+                if let (Some(s), Some(e)) = (params.start.clone(), params.end.clone()) {
+                    let _ = models::set_widget_filter(user.id, &key, "start", &s).await;
+                    let _ = models::set_widget_filter(user.id, &key, "end", &e).await;
+                } else {
+                    if params.start.is_none() {
+                        params.start = saved.get("start").cloned();
+                    }
+                    if params.end.is_none() {
+                        params.end = saved.get("end").cloned();
+                    }
+                }
+                filter.active_start = params.start.clone();
+                filter.active_end = params.end.clone();
+            }
+            crate::widgets::WidgetFilterKind::Period { .. } => {
+                // Resolved above; mirror it so the chip strip highlights.
+                filter.active = params.period.clone().or(filter.default.clone());
+            }
+            crate::widgets::WidgetFilterKind::Choice { .. } => {
+                let fk = filter.key.clone();
+                if let Some(explicit) = params.raw.get(&fk).cloned() {
+                    if let Err(e) = models::set_widget_filter(user.id, &key, &fk, &explicit).await {
+                        tracing::warn!(
+                            user = user.id, widget = %key, filter = %fk, error = %e,
+                            "admin: failed to persist widget filter (continuing render)"
+                        );
+                    }
+                    filter.active = Some(explicit);
+                } else {
+                    let resolved = saved.get(&fk).cloned().or_else(|| filter.default.clone());
+                    if let Some(v) = &resolved {
+                        params.raw.insert(fk, v.clone());
+                    }
+                    filter.active = resolved;
+                }
+            }
+        }
+    }
+
+    // Each control must carry the OTHER controls' current values in its URL.
+    // Without this, clicking "30d" on a widget filtered to status=paid would
+    // navigate to `?period=30d` alone and silently drop the status — the filter
+    // strip would lie about what the user is looking at.
+    let snapshot: Vec<(String, Option<String>, Option<String>, Option<String>)> = filters
+        .iter()
+        .map(|f| {
+            (
+                f.key.clone(),
+                f.active.clone(),
+                f.active_start.clone(),
+                f.active_end.clone(),
+            )
+        })
+        .collect();
+    for filter in &mut filters {
+        let mut carry = String::new();
+        for (other_key, active, start, end) in &snapshot {
+            if *other_key == filter.key {
+                continue;
+            }
+            if let (Some(s), Some(e)) = (start, end) {
+                carry.push_str(&format!(
+                    "&start={}&end={}",
+                    crate::util::urlencoding_simple(s),
+                    crate::util::urlencoding_simple(e)
+                ));
+            } else if let Some(v) = active {
+                carry.push_str(&format!(
+                    "&{}={}",
+                    crate::util::urlencoding_simple(other_key),
+                    crate::util::urlencoding_simple(v)
+                ));
+            }
+        }
+        filter.carry_lead = carry.trim_start_matches('&').to_string();
+        filter.carry = carry;
+    }
+
     let data_fn = widget.data.0.clone();
     let payload = data_fn(user, params.clone()).await;
 
@@ -313,14 +415,22 @@ pub(crate) async fn dashboard_widget_data(
         // chip strip can highlight the current selection.
         let active_period = params.period.clone().unwrap_or_default();
         let widget_key = widget.key.to_string();
+        let filters_json = serde_json::to_value(&filters).unwrap_or(serde_json::Value::Null);
+        // Declared vs. synthesized: a line chart with no declared filters keeps
+        // its own inline chip strip (the historic behaviour). One that declares
+        // filters hands rendering to the generic strip and suppresses its chips,
+        // so a widget never shows two competing period strips.
+        let has_declared_filters = !widget.filters.is_empty();
         match render(
             "admin/widget_data.html",
             context!(
-                kind          => kind,
-                title         => title,
-                payload       => payload_json,
-                widget_key    => widget_key,
-                active_period => active_period,
+                kind                 => kind,
+                title                => title,
+                payload              => payload_json,
+                widget_key           => widget_key,
+                active_period        => active_period,
+                filters              => filters_json,
+                has_declared_filters => has_declared_filters,
             ),
         ) {
             Ok(html) => html.into_response(),

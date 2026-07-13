@@ -292,6 +292,87 @@ pub async fn set_widget_period(
     Ok(())
 }
 
+/// Every saved filter value for one widget, from
+/// `preferences.dashboard.widget_filters.<widget_key>`.
+///
+/// Falls back to the legacy `widget_periods` map for the `period` key so the
+/// period a user picked before declarative filters existed survives the
+/// upgrade. Without the fallback their chip selection would silently reset.
+pub async fn get_widget_filters(
+    user_id: i64,
+    widget_key: &str,
+) -> Result<std::collections::HashMap<String, String>, sqlx::Error> {
+    let mut out = std::collections::HashMap::new();
+
+    if let Some(legacy) = get_widget_period(user_id, widget_key).await? {
+        out.insert("period".to_string(), legacy);
+    }
+
+    let prefs = fetch_or_default(user_id).await?;
+    let Some(raw) = prefs.preferences.as_deref() else {
+        return Ok(out);
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Ok(out);
+    };
+    if let Some(map) = root
+        .get("dashboard")
+        .and_then(|d| d.get("widget_filters"))
+        .and_then(|f| f.get(widget_key))
+        .and_then(|v| v.as_object())
+    {
+        for (k, v) in map {
+            if let Some(s) = v.as_str() {
+                out.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Persist one filter value at
+/// `preferences.dashboard.widget_filters.<widget_key>.<filter_key>`.
+///
+/// Same read-modify-write merge as [`set_widget_period`]. A filter the user
+/// picks is sticky across reloads, tabs and devices — the dashboard is a tool
+/// people re-open, and re-picking "status = paid" every morning is the kind of
+/// papercut that makes a control panel feel disposable.
+pub async fn set_widget_filter(
+    user_id: i64,
+    widget_key: &str,
+    filter_key: &str,
+    value: &str,
+) -> Result<(), sqlx::Error> {
+    let existing = fetch_or_default(user_id).await?;
+    let mut root: serde_json::Value = existing
+        .preferences
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    root.as_object_mut()
+        .expect("root is always an object")
+        .entry("dashboard")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("dashboard is always an object")
+        .entry("widget_filters")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("widget_filters is always an object")
+        .entry(widget_key.to_string())
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("per-widget filter map is always an object")
+        .insert(
+            filter_key.to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+    let mut next = existing;
+    next.preferences = Some(root.to_string());
+    upsert(next).await?;
+    Ok(())
+}
+
 /// gaps2 #11 round 2 — flip a column's visibility on
 /// `preferences.tables.<table>.hidden_cols`. Idempotent toggle:
 /// already-hidden → visible, already-visible → hidden. Returns

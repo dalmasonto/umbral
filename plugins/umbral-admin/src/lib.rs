@@ -92,10 +92,10 @@ pub use handlers::dashboard::{builtin_recent_users_widget, builtin_total_models_
 pub use views::AdminView;
 pub use widgets::{
     BarPayload, CardPayload, CatalogEntry, ChartPoint, DonutPayload, DonutSlice, FeedItem,
-    FeedPayload, HeatmapCell, HeatmapPayload, HeatmapRow, KpiPayload, LinePayload, ProgressItem,
-    ProgressPayload, RadialPayload, RadialTrack, Series, Span, TableColumn, TablePayload, Widget,
-    WidgetDataFn, WidgetInstance, WidgetKind, WidgetParams, WidgetPayload, WidgetSection,
-    format_thousands, humanize_number,
+    FeedPayload, FilterOption, HeatmapCell, HeatmapPayload, HeatmapRow, KpiPayload, LinePayload,
+    ProgressItem, ProgressPayload, RadialPayload, RadialTrack, Series, Span, TableColumn,
+    TablePayload, Widget, WidgetDataFn, WidgetFilter, WidgetFilterKind, WidgetInstance, WidgetKind,
+    WidgetParams, WidgetPayload, WidgetSection, format_thousands, humanize_number,
 };
 
 use std::sync::Arc;
@@ -1149,6 +1149,7 @@ mod custom_view_wiring_tests {
                 })
             }),
             default_period: None,
+            filters: Vec::new(),
         }
     }
 

@@ -14,6 +14,18 @@
 {% from "admin/_macros/widgets/progress.html" import progress_widget %}
 {% from "admin/_macros/widgets/feed.html" import feed_widget %}
 {% from "admin/_macros/widgets/table.html" import table_widget %}
+{% from "admin/_macros/widgets/filters.html" import filter_strip %}
+
+{# The declarative filter strip renders above the widget body for EVERY kind.
+   `line` is the exception: it draws its own period chips inline in its header,
+   so it gets `show_chips` and we skip the strip for the period-only case it
+   already handles. Any line widget that declares filters explicitly falls
+   through to the generic strip and suppresses its inline chips, so there is
+   never a page with two chip strips on the same widget. #}
+{%- set line_handles_its_own = (kind == "line" and not has_declared_filters) -%}
+{% if filters and not line_handles_its_own %}
+<div class="px-md pt-md">{{ filter_strip(widget_key, filters) }}</div>
+{% endif %}
 
 {% if kind == "kpi" %}
   {{ kpi_widget(title, payload) }}
@@ -22,7 +34,7 @@
 {% elif kind == "bar" %}
   {{ bar_widget(title, payload) }}
 {% elif kind == "line" %}
-  {{ line_widget(title, payload, widget_key, active_period) }}
+  {{ line_widget(title, payload, widget_key, active_period, line_handles_its_own) }}
 {% elif kind == "donut" %}
   {{ donut_widget(title, payload) }}
 {% elif kind == "radial" %}

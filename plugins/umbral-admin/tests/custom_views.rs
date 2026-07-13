@@ -49,6 +49,7 @@ fn tiny_kpi(key: &'static str) -> Widget {
         default_span: Span { cols: 3, rows: 1 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             WidgetPayload::Kpi(KpiPayload {
                 value: "42".to_string(),
@@ -68,6 +69,7 @@ fn tiny_kpi_permissioned(key: &'static str, perm: &'static str) -> Widget {
         default_span: Span { cols: 3, rows: 1 },
         permission: Some(perm),
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             WidgetPayload::Kpi(KpiPayload {
                 value: "99".to_string(),

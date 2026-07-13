@@ -50,6 +50,7 @@ pub fn shop_fulfillment_radial() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let counts = status_counts().await;
             let total: f64 = counts.iter().map(|(_, n)| *n).sum();
@@ -79,6 +80,7 @@ pub fn shop_sales_heatmap() -> Widget {
         default_span: Span { cols: 6, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let trail = daily_sales_trail(28).await;
             let weeks = ["Week 1", "Week 2", "Week 3", "Week 4"];
@@ -105,6 +107,7 @@ pub fn shop_order_status_progress() -> Widget {
         default_span: Span { cols: 3, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let mut pairs = status_counts().await;
             pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

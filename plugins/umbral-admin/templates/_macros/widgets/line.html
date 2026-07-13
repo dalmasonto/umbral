@@ -21,7 +21,7 @@
     hx-swap   → innerHTML
 #}
 
-{% macro line_widget(title, payload, widget_key="", active_period="") %}
+{% macro line_widget(title, payload, widget_key="", active_period="", show_chips=true) %}
 {%- set periods = [
   {"key": "7d",  "label": "7d"},
   {"key": "30d", "label": "30d"},
@@ -33,7 +33,7 @@
   {# Header: title (left) + period chips (right) ============== #}
   <div class="flex items-center justify-between gap-sm mb-sm flex-shrink-0">
     <p class="text-label-sm text-outline uppercase tracking-wider truncate">{{ title }}</p>
-    {% if widget_key %}
+    {% if widget_key and show_chips %}
     <div class="inline-flex items-center bg-surface-container-low rounded-lg p-0.5 gap-0.5"
          role="group" aria-label="Period">
       {% for p in periods %}
