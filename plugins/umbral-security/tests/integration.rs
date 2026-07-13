@@ -309,7 +309,7 @@ async fn middleware_token_wins_over_handler_minted_cookie() {
     let last_csrf = cookies
         .iter()
         .filter(|c| c.starts_with("umbral_csrf_token="))
-        .last()
+        .next_back()
         .expect("middleware must append its cookie")
         .split(';')
         .next()

@@ -1078,103 +1078,6 @@ pub(crate) async fn save_stream_through(
     finish_save(stored, filename, content_type).await
 }
 
-#[cfg(test)]
-mod active_content_tests {
-    use super::{neutralise_active_content, neutralised_upload, sanitise_filename};
-
-    /// The shared stored-XSS guard every key-generating backend applies
-    /// (audit `plugin-storage-tasks` #1): active content is renamed to
-    /// `.txt` AND its recorded content type forced to `text/plain`, so a
-    /// backend that serves the recorded type verbatim (S3) stays inert.
-    #[test]
-    fn neutralised_upload_defangs_name_and_content_type() {
-        for (name, declared) in [
-            ("evil.html", "text/html"),
-            ("payload.svg", "image/svg+xml"),
-            ("worm.js", "application/javascript"),
-            ("page.XHTML", "application/xhtml+xml"),
-        ] {
-            let (safe_name, ct) = neutralised_upload(name, declared);
-            assert!(
-                safe_name.ends_with(".txt"),
-                "{name} must be renamed to .txt, got {safe_name}"
-            );
-            assert_eq!(
-                ct, "text/plain",
-                "{name} ({declared}) must be recorded as text/plain, got {ct}"
-            );
-        }
-    }
-
-    #[test]
-    fn neutralised_upload_leaves_inert_uploads_alone() {
-        for (name, declared) in [
-            ("photo.png", "image/png"),
-            ("doc.pdf", "application/pdf"),
-            ("notes.txt", "text/plain"),
-        ] {
-            let (safe_name, ct) = neutralised_upload(name, declared);
-            assert_eq!(safe_name, name, "{name} must keep its name");
-            assert_eq!(ct, declared, "{name} must keep its declared type");
-        }
-    }
-
-    /// A traversal-shaped filename must still be defanged AFTER the
-    /// separators are stripped — `../evil.html` sanitises to `..evil.html`,
-    /// which is active content and must come back `.txt` + `text/plain`.
-    #[test]
-    fn neutralised_upload_sanitises_before_defanging() {
-        let (safe_name, ct) = neutralised_upload("../evil.html", "text/html");
-        assert!(!safe_name.contains('/'), "separators stripped: {safe_name}");
-        assert!(safe_name.ends_with(".txt"), "defanged: {safe_name}");
-        assert_eq!(ct, "text/plain");
-    }
-
-    /// Audit `plugin-storage-tasks` #12: control characters (newlines,
-    /// escapes, NUL) must not survive into a generated key.
-    #[test]
-    fn sanitise_filename_strips_separators_and_control_chars() {
-        assert_eq!(sanitise_filename("a/b\\c.txt"), "abc.txt");
-        assert_eq!(sanitise_filename("evil\nname\r.png"), "evilname.png");
-        assert_eq!(sanitise_filename("nul\0byte.gif"), "nulbyte.gif");
-        assert_eq!(sanitise_filename("esc\u{1b}[31m.jpg"), "esc[31m.jpg");
-        // Length cap preserved from the original inline sanitiser.
-        let long = "x".repeat(200);
-        assert_eq!(sanitise_filename(&long).len(), 120);
-    }
-
-    #[test]
-    fn dangerous_extensions_get_neutralised() {
-        for n in [
-            "evil.html",
-            "x.HTM",
-            "a.svg",
-            "p.SVG",
-            "s.js",
-            "m.mjs",
-            "d.xhtml",
-            "q.xml",
-        ] {
-            let out = neutralise_active_content(n);
-            assert!(out.ends_with(".txt"), "{n} should be defanged, got {out}");
-        }
-    }
-
-    #[test]
-    fn safe_files_are_untouched() {
-        for n in [
-            "photo.png",
-            "doc.pdf",
-            "a.jpg",
-            "data.csv",
-            "noext",
-            "archive.zip",
-        ] {
-            assert_eq!(neutralise_active_content(n), n, "{n} must be left as-is");
-        }
-    }
-}
-
 // =========================================================================
 // Upload content-type policy (gaps3 #51)
 // =========================================================================
@@ -1324,5 +1227,102 @@ impl Storage for TypeLimitedStorage {
 
     fn url(&self, key: &str) -> String {
         self.inner.url(key)
+    }
+}
+
+#[cfg(test)]
+mod active_content_tests {
+    use super::{neutralise_active_content, neutralised_upload, sanitise_filename};
+
+    /// The shared stored-XSS guard every key-generating backend applies
+    /// (audit `plugin-storage-tasks` #1): active content is renamed to
+    /// `.txt` AND its recorded content type forced to `text/plain`, so a
+    /// backend that serves the recorded type verbatim (S3) stays inert.
+    #[test]
+    fn neutralised_upload_defangs_name_and_content_type() {
+        for (name, declared) in [
+            ("evil.html", "text/html"),
+            ("payload.svg", "image/svg+xml"),
+            ("worm.js", "application/javascript"),
+            ("page.XHTML", "application/xhtml+xml"),
+        ] {
+            let (safe_name, ct) = neutralised_upload(name, declared);
+            assert!(
+                safe_name.ends_with(".txt"),
+                "{name} must be renamed to .txt, got {safe_name}"
+            );
+            assert_eq!(
+                ct, "text/plain",
+                "{name} ({declared}) must be recorded as text/plain, got {ct}"
+            );
+        }
+    }
+
+    #[test]
+    fn neutralised_upload_leaves_inert_uploads_alone() {
+        for (name, declared) in [
+            ("photo.png", "image/png"),
+            ("doc.pdf", "application/pdf"),
+            ("notes.txt", "text/plain"),
+        ] {
+            let (safe_name, ct) = neutralised_upload(name, declared);
+            assert_eq!(safe_name, name, "{name} must keep its name");
+            assert_eq!(ct, declared, "{name} must keep its declared type");
+        }
+    }
+
+    /// A traversal-shaped filename must still be defanged AFTER the
+    /// separators are stripped — `../evil.html` sanitises to `..evil.html`,
+    /// which is active content and must come back `.txt` + `text/plain`.
+    #[test]
+    fn neutralised_upload_sanitises_before_defanging() {
+        let (safe_name, ct) = neutralised_upload("../evil.html", "text/html");
+        assert!(!safe_name.contains('/'), "separators stripped: {safe_name}");
+        assert!(safe_name.ends_with(".txt"), "defanged: {safe_name}");
+        assert_eq!(ct, "text/plain");
+    }
+
+    /// Audit `plugin-storage-tasks` #12: control characters (newlines,
+    /// escapes, NUL) must not survive into a generated key.
+    #[test]
+    fn sanitise_filename_strips_separators_and_control_chars() {
+        assert_eq!(sanitise_filename("a/b\\c.txt"), "abc.txt");
+        assert_eq!(sanitise_filename("evil\nname\r.png"), "evilname.png");
+        assert_eq!(sanitise_filename("nul\0byte.gif"), "nulbyte.gif");
+        assert_eq!(sanitise_filename("esc\u{1b}[31m.jpg"), "esc[31m.jpg");
+        // Length cap preserved from the original inline sanitiser.
+        let long = "x".repeat(200);
+        assert_eq!(sanitise_filename(&long).len(), 120);
+    }
+
+    #[test]
+    fn dangerous_extensions_get_neutralised() {
+        for n in [
+            "evil.html",
+            "x.HTM",
+            "a.svg",
+            "p.SVG",
+            "s.js",
+            "m.mjs",
+            "d.xhtml",
+            "q.xml",
+        ] {
+            let out = neutralise_active_content(n);
+            assert!(out.ends_with(".txt"), "{n} should be defanged, got {out}");
+        }
+    }
+
+    #[test]
+    fn safe_files_are_untouched() {
+        for n in [
+            "photo.png",
+            "doc.pdf",
+            "a.jpg",
+            "data.csv",
+            "noext",
+            "archive.zip",
+        ] {
+            assert_eq!(neutralise_active_content(n), n, "{n} must be left as-is");
+        }
     }
 }

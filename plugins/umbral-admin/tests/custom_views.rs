@@ -361,7 +361,7 @@ async fn test_custom_view_widget_data_gated_403() {
     let cookie = cookie_for("cv_staff").await;
 
     let req = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/admin/api/dashboard/widgets/{SECRET_WIDGET_KEY}/data"
         ))
         .header(header::COOKIE, cookie)
@@ -386,7 +386,7 @@ async fn test_custom_view_widget_data_gated_200_with_codename() {
     let cookie = cookie_for("cv_priv").await;
 
     let req = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/admin/api/dashboard/widgets/{SECRET_WIDGET_KEY}/data"
         ))
         .header(header::COOKIE, cookie)
@@ -473,7 +473,7 @@ async fn test_widget_permission_gates_data_endpoint() {
     // cv_staff (no codename) → must be denied with 403.
     let cookie_no_perm = cookie_for("cv_staff").await;
     let req = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/admin/api/dashboard/widgets/{DASH_WIDGET_KEY}/data"
         ))
         .header(header::COOKIE, cookie_no_perm)
@@ -489,7 +489,7 @@ async fn test_widget_permission_gates_data_endpoint() {
     // cv_priv (holds SECRET_CODENAME) → must be served with 200.
     let cookie_with_perm = cookie_for("cv_priv").await;
     let req2 = Request::builder()
-        .uri(&format!(
+        .uri(format!(
             "/admin/api/dashboard/widgets/{DASH_WIDGET_KEY}/data"
         ))
         .header(header::COOKIE, cookie_with_perm)

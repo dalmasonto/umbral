@@ -629,7 +629,7 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
             // initialises settings (a worker bootstrap, a test) must not
             // panic. With settings absent we treat the environment as
             // unknown and take the safe path: refuse to print secrets.
-            let env = umbral::settings::get_opt().map(|s| s.environment.clone());
+            let env = umbral::settings::get_opt().map(|s| s.environment);
             let is_dev_or_test = matches!(
                 env,
                 Some(umbral::Environment::Dev) | Some(umbral::Environment::Test)

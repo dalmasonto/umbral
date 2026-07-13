@@ -58,7 +58,7 @@ async fn boot() {
 #[tokio::test]
 async fn save_and_load_round_trip() {
     boot().await;
-    let store = DbStore::default();
+    let store = DbStore;
     let now = Utc::now();
     let record = SessionRecord {
         user_id: Some("42".to_string()),
@@ -83,7 +83,7 @@ async fn save_and_load_round_trip() {
 #[tokio::test]
 async fn load_missing_token_returns_none() {
     boot().await;
-    let store = DbStore::default();
+    let store = DbStore;
     let result = store.load("tok-missing").await.expect("no error");
     assert!(result.is_none(), "non-existent token → None");
 }
@@ -94,7 +94,7 @@ async fn load_missing_token_returns_none() {
 #[tokio::test]
 async fn load_expired_record_returns_none_and_deletes_row() {
     boot().await;
-    let store = DbStore::default();
+    let store = DbStore;
     let now = Utc::now();
     let record = SessionRecord {
         user_id: None,
@@ -128,7 +128,7 @@ async fn load_expired_record_returns_none_and_deletes_row() {
 #[tokio::test]
 async fn destroy_removes_row() {
     boot().await;
-    let store = DbStore::default();
+    let store = DbStore;
     let now = Utc::now();
     let record = SessionRecord {
         user_id: Some("7".to_string()),
@@ -154,7 +154,7 @@ async fn destroy_removes_row() {
 #[tokio::test]
 async fn destroy_is_idempotent() {
     boot().await;
-    let store = DbStore::default();
+    let store = DbStore;
     // Never saved — destroy should succeed (no error).
     store
         .destroy("tok-never-existed")
@@ -167,7 +167,7 @@ async fn destroy_is_idempotent() {
 #[tokio::test]
 async fn db_id_is_hashed_token_not_raw_token() {
     boot().await;
-    let store = DbStore::default();
+    let store = DbStore;
     let now = Utc::now();
     let record = SessionRecord {
         user_id: None,
@@ -227,8 +227,8 @@ async fn active_store_returns_default_dbstore_when_none_installed() {
 async fn install_store_is_idempotent() {
     boot().await;
     use std::sync::Arc;
-    let s1 = Arc::new(DbStore::default()) as Arc<dyn SessionStore + Send + Sync>;
-    let s2 = Arc::new(DbStore::default()) as Arc<dyn SessionStore + Send + Sync>;
+    let s1 = Arc::new(DbStore) as Arc<dyn SessionStore + Send + Sync>;
+    let s2 = Arc::new(DbStore) as Arc<dyn SessionStore + Send + Sync>;
     // Both calls should succeed (second silently warns + keeps first).
     install_store(s1);
     install_store(s2);

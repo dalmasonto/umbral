@@ -270,7 +270,7 @@ impl Default for SessionsPlugin {
             sliding_expiry: false,
             max_age_seconds: None,
             same_site: None,
-            store: std::sync::Arc::new(DbStore::default()),
+            store: std::sync::Arc::new(DbStore),
         }
     }
 }

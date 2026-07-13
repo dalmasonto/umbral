@@ -1463,7 +1463,7 @@ where
     // guard. `login_columns()` is never empty.
     let mut ident_match: Option<umbral::orm::Predicate<U>> = None;
     for col in U::login_columns() {
-        let p = umbral::orm::Predicate::<U>::col_eq(*col, ident.as_str());
+        let p = umbral::orm::Predicate::<U>::col_eq(col, ident.as_str());
         ident_match = Some(match ident_match {
             Some(acc) => acc | p,
             None => p,

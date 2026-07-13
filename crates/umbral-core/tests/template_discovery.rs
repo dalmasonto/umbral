@@ -208,7 +208,7 @@ fn collision_first_registered_wins_and_is_reported() {
 async fn ambient_user_renders_when_layer_scoped_value_is_set() {
     boot();
 
-    let user = minijinja::Value::from_serialize(&serde_json::json!({
+    let user = minijinja::Value::from_serialize(serde_json::json!({
         "username": "alice",
         "is_authenticated": true,
     }));
@@ -239,7 +239,7 @@ async fn ambient_user_falls_back_to_anonymous_branch_outside_layer_scope() {
 async fn explicit_ctx_user_wins_over_ambient_layer_value() {
     boot();
 
-    let ambient = minijinja::Value::from_serialize(&serde_json::json!({
+    let ambient = minijinja::Value::from_serialize(serde_json::json!({
         "username": "alice",
         "is_authenticated": true,
     }));

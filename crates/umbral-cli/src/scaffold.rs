@@ -1310,10 +1310,7 @@ pub fn router() -> Router {{
     // back the scaffold files already written.
     let project_cargo_toml = project_root.join("Cargo.toml");
     let cargo_toml_registered = if project_cargo_toml.is_file() {
-        match register_dep_in_cargo_toml(&project_cargo_toml, name) {
-            Ok(added) => Some(added),
-            Err(_) => None,
-        }
+        register_dep_in_cargo_toml(&project_cargo_toml, name).ok()
     } else {
         None
     };
@@ -1609,10 +1606,7 @@ pub async fn hello(Query(params): Query<HelloParams>) -> Json<HelloResponse> {{
     // Auto-register the new crate as a path dep in the project's Cargo.toml.
     let project_cargo_toml = project_root.join("Cargo.toml");
     let cargo_toml_registered = if project_cargo_toml.is_file() {
-        match register_dep_in_cargo_toml(&project_cargo_toml, name) {
-            Ok(added) => Some(added),
-            Err(_) => None,
-        }
+        register_dep_in_cargo_toml(&project_cargo_toml, name).ok()
     } else {
         None
     };

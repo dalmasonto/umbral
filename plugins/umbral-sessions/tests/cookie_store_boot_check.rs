@@ -106,7 +106,7 @@ async fn cookie_store_explicit_key_boots_in_prod_with_empty_ambient() {
 async fn dbstore_prod_empty_secret_boots() {
     // DbStore keeps the session server-side; it never derives anything from
     // secret_key, so an empty secret is not its concern.
-    let plugin = SessionsPlugin::default().store(DbStore::default());
+    let plugin = SessionsPlugin::default().store(DbStore);
     let ctx = ctx("", Environment::Prod).await;
     assert!(
         plugin.on_ready(&ctx).is_ok(),

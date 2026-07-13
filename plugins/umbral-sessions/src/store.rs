@@ -274,5 +274,5 @@ pub fn active_store() -> Arc<dyn SessionStore> {
     STORE
         .get()
         .cloned()
-        .unwrap_or_else(|| Arc::new(DbStore::default()))
+        .unwrap_or_else(|| Arc::new(DbStore))
 }

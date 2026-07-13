@@ -14,7 +14,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::sqlite::SqlitePoolOptions;
-use umbral::orm::Model as _;
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 #[umbral(table = "invoice", audited)]

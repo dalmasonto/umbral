@@ -150,7 +150,7 @@ async fn prefs_get_returns_defaults_for_new_user() {
 
     assert_eq!(json["theme"].as_str().unwrap_or(""), "dark");
     assert_eq!(json["density"].as_str().unwrap_or(""), "comfortable");
-    assert_eq!(json["sidebar_collapsed"].as_bool().unwrap_or(true), false);
+    assert!(!json["sidebar_collapsed"].as_bool().unwrap_or(true));
 }
 
 #[tokio::test]

@@ -45,7 +45,7 @@ async fn boot() {
             // Boot with an explicit .store(DbStore::default()) to exercise
             // the builder. The `on_ready` hook installs it into the ambient
             // OnceLock so active_store() returns it for the rest of the suite.
-            .plugin(SessionsPlugin::default().store(DbStore::default()))
+            .plugin(SessionsPlugin::default().store(DbStore))
             .build()
             .expect("App::build with SessionsPlugin + explicit store");
 
@@ -119,7 +119,7 @@ async fn session_layer_set_data_persists_via_installed_store() {
     // Use .store(DbStore::default()) explicitly — this exercises the builder
     // path (on_ready tries to install again; idempotent, keeps first).
     let router = SessionsPlugin::default()
-        .store(DbStore::default())
+        .store(DbStore)
         .wrap_router(inner);
 
     let req = Request::builder().uri("/w").body(Body::empty()).unwrap();

@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use tokio::sync::OnceCell;
 use umbral::forms::FormValidate;
-use umbral::orm::Model;
 use umbral_core::db;
 
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]

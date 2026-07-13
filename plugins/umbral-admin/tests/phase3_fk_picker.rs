@@ -323,7 +323,7 @@ async fn test_fk_options_resolve_returns_labels() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let v: serde_json::Value = serde_json::from_str(&body).expect(&format!("json: {body}"));
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| panic!("json: {body}"));
     let items = v["items"].as_array().expect("items array");
     assert!(!items.is_empty(), "items non-empty: {body}");
     assert!(items[0]["label"].is_string(), "label is string: {body}");
