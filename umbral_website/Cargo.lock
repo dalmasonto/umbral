@@ -2322,6 +2322,7 @@ dependencies = [
  "serde",
  "site_content",
  "sqlx",
+ "tokio",
  "umbral",
 ]
 

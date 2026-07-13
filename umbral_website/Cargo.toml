@@ -3,6 +3,25 @@ name = "umbral_website"
 version = "0.1.0"
 edition = "2024"
 
+# The site's plugins are workspace MEMBERS, not merely path dependencies.
+#
+# Cargo will happily *build* a path dependency that sits outside the workspace, but it
+# refuses to *test* one: a non-member's `[dev-dependencies]` are never resolved into the
+# lockfile. So `cargo test -p public` failed with "requires dev-dependencies and is not a
+# member of the workspace" — and the only two plugins that hit it were the only two with
+# dev-deps (public and sponsor, both wanting tokio for an async render test). Membership is
+# what makes their tests runnable at all.
+#
+# It also means `cargo test --workspace` from this directory runs EVERY plugin's suite
+# instead of just the root binary's zero tests, which is how the plugin_directory suite
+# managed to rot unnoticed until it neither compiled nor passed.
+#
+# The framework workspace at the repo root `exclude`s this directory, so there is no
+# double membership. Docker still copies `umbral_website/` whole, and the members live
+# inside it, so the deploy build is unaffected.
+[workspace]
+members = ["plugins/*"]
+
 [dependencies]
 
 # The framework comes from crates.io, NOT from `../crates` / `../plugins`.
