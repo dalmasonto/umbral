@@ -122,3 +122,106 @@ fn the_scaffolded_project_compiles_with_no_errors_and_no_warnings() {
         warnings.join("\n")
     );
 }
+
+/// The GENERATORS emit code too, and nobody was compiling it either.
+///
+/// `umbral startcommand` and umbral-rest's four class generators
+/// (`startpermission` / `startauthentication` / `startpagination` /
+/// `startthrottle`) are string templates. String templates have no
+/// typechecker, and the unit tests around them assert on *substrings* — which
+/// is the same trap that let three broken `startproject` templates ship, and it
+/// caught the generators too: `PaginationScalar::Integer` does not exist (it is
+/// `Number`), and `RateLimiter::new` takes a `Rate`, not a `&str`. Both compiled
+/// fine as strings. Both were found only by handing the output to rustc.
+///
+/// So this does that, in CI, every push: scaffold a project, run every
+/// generator, wire the results into the App exactly as the generators' own
+/// printed instructions say to, and type-check the lot with warnings denied.
+#[test]
+#[ignore = "type-checks an entire generated app (minutes, GBs). CI runs it; locally: --ignored"]
+fn the_generated_commands_and_rest_classes_compile_with_no_warnings() {
+    use umbral::codegen::Target;
+    use umbral_cli::scaffold::scaffold_command;
+
+    let repo = repo_root();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let report =
+        umbral_cli::scaffold::scaffold_project("genme", tmp.path(), Some(&repo)).expect("project");
+    let root = &report.root;
+    let target_dir = repo.join("target/scaffold-check");
+
+    // A project-owned command, and one inside a plugin — both wiring paths.
+    umbral_cli::scaffold::scaffold_app("blog", root, Some(&repo)).expect("startapp");
+    scaffold_command("backfill_slugs", &Target::Root, root).expect("startcommand --in root");
+    scaffold_command("reindex", &Target::Plugin("blog".into()), root)
+        .expect("startcommand --in blog");
+
+    // The REST classes are driven through the PROJECT'S OWN BINARY — `cargo run --
+    // startpermission IsOwner` — which is how a user reaches them, and which is
+    // also the only honest way to test them: they are plugin commands, so this
+    // exercises `Plugin::commands()` dispatch and the generator together. It also
+    // keeps `umbral-cli` from dev-depending on `umbral-rest`, which would add an
+    // edge to the publish order for a test's sake.
+    for (cmd, name) in [
+        ("startpermission", "IsOwner"),
+        ("startauthentication", "ApiKeyAuth"),
+        ("startpagination", "CursorPagination"),
+        ("startthrottle", "BurstThrottle"),
+    ] {
+        let out = Command::new(env!("CARGO"))
+            .current_dir(root)
+            .args(["run", "--quiet", "--", cmd, name, "--in", "root"])
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .output()
+            .unwrap_or_else(|e| panic!("running `{cmd}`: {e}"));
+        assert!(
+            out.status.success(),
+            "`cargo run -- {cmd} {name}` failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    // Wire the classes into the RestPlugin, which is what the generators tell the
+    // user to do. Unwired, each class's re-export is an unused import — a true
+    // warning, and the nudge that you have generated something you haven't used
+    // yet. Wired, the project must be clean.
+    let main_rs = root.join("src/main.rs");
+    let src = std::fs::read_to_string(&main_rs).expect("read main.rs");
+    let src = src.replace(
+        "use umbral_rest::{RestPlugin, ResourceConfig};",
+        "use umbral_rest::{RestPlugin, ResourceConfig};\n\
+         use crate::authentication::ApiKeyAuth;\n\
+         use crate::pagination::CursorPagination;\n\
+         use crate::permissions::IsOwner;\n\
+         use crate::throttles::BurstThrottle;",
+    );
+    let src = src.replace(
+        "            RestPlugin::default()\n                .resource(ResourceConfig::new(\"post\")),",
+        "            RestPlugin::default()\n                .resource(ResourceConfig::new(\"post\"))\n\
+         \x20               .default_permission(IsOwner)\n\
+         \x20               .authenticate(ApiKeyAuth)\n\
+         \x20               .paginate(CursorPagination)\n\
+         \x20               .default_throttle(BurstThrottle::new()),",
+    );
+    assert!(
+        src.contains(".default_permission(IsOwner)"),
+        "the startproject main.rs no longer has the RestPlugin shape this test wires into — \
+         update the fixture, and check the generators' printed instructions still match too"
+    );
+    std::fs::write(&main_rs, src).expect("write main.rs");
+
+    let out = Command::new(env!("CARGO"))
+        .current_dir(root)
+        .args(["check", "--all-targets", "--message-format=short"])
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .env("RUSTFLAGS", "-D warnings")
+        .output()
+        .expect("cargo check should be runnable");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a generator emitted code that does not compile. Fix the TEMPLATE, not the test.\n\n\
+         cargo check said:\n{stderr}"
+    );
+}

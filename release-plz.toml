@@ -34,26 +34,31 @@ git_tag_enable = true
 # the entire dependency graph on every release.
 dependencies_update = false
 
-# --- FIRST-RELEASE BOOTSTRAP (relax after the initial publish) -------------
-# Nothing is on crates.io yet, so there's no baseline to diff against. These
-# two settings only matter while packages are unpublished; once the first
-# release tags every crate, release-plz diffs against those tags and ignores
-# them. RAISE/REMOVE both after the initial publish:
+# --- FIRST-RELEASE BOOTSTRAP — RETIRED at 0.0.10 ---------------------------
+# Two settings used to live here, both only meaningful while the crates were
+# unpublished. Every crate has been on crates.io since 0.0.1, so both are gone:
 #
-#   semver_check        — needs a published baseline to compare the API against;
-#                         with nothing published it can't run. Re-enable (drop
-#                         this line, default is true) once crates are on crates.io.
-#   max_analyze_commits — for UNPUBLISHED packages, release-plz walks back this
-#                         many commits to build the diff/changelog. The default
-#                         (1000) walks past the commit where the workspace root
-#                         (and Cargo.lock) moved to the repo root; cargo rewrites
-#                         that old crates/Cargo.lock and breaks release-plz's
-#                         internal `git checkout`. Pinning to 1 keeps it on the
-#                         post-move HEAD. Trade-off: a minimal changelog for the
-#                         first 0.0.1 release. Remove this line after first publish
-#                         to get full changelogs for future new crates.
-semver_check = false
-max_analyze_commits = 1
+#   semver_check = false     — it needs a published baseline to diff the API
+#                              against, and there wasn't one. There is now (the
+#                              0.0.9 tags), so the check runs and actually earns
+#                              its keep: 0.0.10 changed public signatures in
+#                              umbral-core (`dispatch_with_app_commands` gained a
+#                              `reserved` param, `PluginCommand` gained
+#                              `needs_ready`). Those are additive-or-pre-release
+#                              by inspection — which is exactly the kind of claim
+#                              a tool should verify rather than a human assert.
+#
+#   max_analyze_commits = 1  — it only applies to UNPUBLISHED packages, and it
+#                              truncated the changelog to a single commit. With
+#                              everything published, release-plz diffs against
+#                              the per-crate tags and this does nothing but hide
+#                              the other commits from the release notes.
+#
+# NOTE for a future NEW crate (which is, by definition, unpublished): if
+# release-plz's internal `git checkout` breaks while walking back past the
+# commit that moved the workspace root to the repo root (cargo rewrites the old
+# crates/Cargo.lock), re-add `max_analyze_commits` FOR THAT RELEASE ONLY, then
+# remove it again. Don't leave it on — it silently empties every changelog.
 
 # --- core crates (crates/) ---
 [[package]]
