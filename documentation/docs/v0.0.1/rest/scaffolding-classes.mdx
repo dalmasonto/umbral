@@ -1,0 +1,108 @@
+---
+title: Scaffolding your own classes
+description: "startpermission, startauthentication, startpagination and startthrottle — the REST plugin writes the first draft of each of its four extension points, correct on the details that are easy to get subtly wrong."
+sidebar_position: 13
+icon: wand-2
+tags: [rest, permissions, authentication, pagination, throttling, cli]
+---
+
+REST has four pluggable trait families, and every one of them is a struct **you** write:
+
+| Question | Trait | Command |
+|---|---|---|
+| Who is the caller? | [`Authentication`](./authentication) | `startauthentication` |
+| What may they do? | [`Permission`](./permissions) | `startpermission` |
+| How is a list sliced? | `Pagination` | `startpagination` |
+| How often may they ask? | [`Throttle`](./throttling) | `startthrottle` |
+
+Each is a small impl of an obvious trait — which is exactly the kind of code that's annoying to start and easy to get *subtly* wrong. So the plugin writes the first draft:
+
+```bash
+cargo run -- startpermission IsOwner
+cargo run -- startauthentication ApiKeyAuth
+cargo run -- startpagination CursorPagination
+cargo run -- startthrottle BurstThrottle --in blog   # into a plugin
+```
+
+Omit the name and it asks; omit `--in` and it lists your plugins so you can pick. `IsOwner` and `is_owner` land in the same place, so type whichever you think in.
+
+## What you get
+
+```text
+src/
+  permissions/
+    mod.rs        # pub mod is_owner;  pub use is_owner::IsOwner;
+    is_owner.rs   # the class
+  main.rs         # mod permissions;   ← declared for you
+```
+
+The generated class is a **working implementation with sensible behaviour**, not a `todo!()` — a stub that compiles and denies everything teaches you nothing about the contract you're implementing. What it teaches instead is the handful of things that are easy to get wrong:
+
+<Accordion title="Permission: 401 and 403 are different answers">
+```rust
+let Some(identity) = identity else {
+    return Err(PermissionError::Unauthenticated);   // 401, not 403
+};
+```
+`Unauthenticated` tells the client "log in and try again"; `Forbidden` tells it "you are logged in and the answer is still no". Collapse the two and a client has no way to recover from the first.
+
+The generated class also shows the thing people reach for a permission class to do and shouldn't: **row-level ownership**. A permission runs *before* the row is fetched, so there's no row to consult. `ResourceConfig::owned_by("author")` scopes the SQL instead, which makes someone else's row not merely forbidden but invisible.
+</Accordion>
+
+<Accordion title="Authentication: never return an error">
+```rust
+let raw = headers.get("authorization")?.to_str().ok()?;
+let token = raw.strip_prefix("Bearer ")?.trim();
+```
+A missing header, a malformed one and a wrong token all mean the same thing here — "I don't know who this is" — and answering anything more specific tells an attacker which of their guesses was closer. Returning `None` is the whole contract; the permission check turns the resulting anonymity into a 401.
+</Accordion>
+
+<Accordion title="Pagination: cap the page size, and declare your wire shape">
+```rust
+const MAX_LIMIT: u64 = 100;
+// ...
+.clamp(1, MAX_LIMIT)
+```
+Without a ceiling, `?limit=100000000` is a denial-of-service request your own API cheerfully serves. The generated class also implements `schema()`, which is what makes the OpenAPI spec and the generated TypeScript client come out **typed** instead of handing your callers `unknown` and a generic `.param(...)`.
+</Accordion>
+
+<Accordion title="Throttle: key the bucket by who, not by what">
+```rust
+let (limiter, key) = match ctx.identity {
+    Some(identity) => (&self.user, format!("user:{}", identity.user_id)),
+    None => (&self.anon, format!("anon:{}", ctx.client_ip.unwrap_or("unknown"))),
+};
+```
+An authenticated caller keyed by user id carries their limit across IPs. Key everyone by IP and a whole office behind one NAT shares a single bucket.
+</Accordion>
+
+## Wiring it up
+
+The generator prints the builder line but doesn't write it — only you know which resource a permission guards, and a builder chain is not a thing to rewrite by regex:
+
+```rust
+use crate::permissions::IsOwner;
+use crate::authentication::ApiKeyAuth;
+use crate::pagination::CursorPagination;
+use crate::throttles::BurstThrottle;
+
+.plugin(
+    RestPlugin::default()
+        .resource(ResourceConfig::new("post"))
+        .default_permission(IsOwner)            // or ResourceConfig::permission(...) per resource
+        .authenticate(ApiKeyAuth)
+        .paginate(CursorPagination)
+        .default_throttle(BurstThrottle::new()),
+)
+```
+
+<Callout type="info">
+Until you wire a class up, `cargo check` warns that its re-export is unused. That's not noise — it's the compiler noticing you generated a class and haven't put it to work yet. The warning disappears the moment you register it.
+</Callout>
+
+## Notes
+
+- **Import serde_json from `umbral_rest::serde_json`.** `Pagination::paginate` names `serde_json::Map` and `Value` in its own signature, so the plugin re-exports the crate. Declaring your own `serde_json` dependency risks resolving a different major version than the code that will call you. (Same reasoning as [`umbral::cli::clap`](../cli/startcommand).)
+- **A class scaffolded into a plugin** gets `umbral-rest` added to that plugin's `Cargo.toml` — otherwise it wouldn't compile, and a generator that hands you a crate that doesn't build has not helped you.
+- **Nothing is ever overwritten.** Re-running with a name that exists is an error, not a silent replacement of an hour of your work.
+- These are **plugin commands**, contributed through `Plugin::commands()` exactly like a third-party plugin's. `umbral-rest` gets no special treatment — see [writing your own command](../cli/startcommand).

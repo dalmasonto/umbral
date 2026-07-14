@@ -449,3 +449,18 @@ All seven items closed 2026-07-12. Each is given as the **finding** (what the au
 
 Docs: `cli/startcommand.mdx`.
 
+82. [x] REST scaffolds its own extension classes (`startpermission` / `startauthentication` / `startpagination` / `startthrottle`)
+
+**Finding.** Sibling of #81, raised in the same session: "another related command is for authentication classes, permission classes, pagination classes for rest. You can add similar commands that the rest plugin exposes."
+
+**Shipped.** All four — REST has four pluggable trait families, not three (`Throttle` is the fourth), and leaving it out would have been an arbitrary hole. Each is contributed through `Plugin::commands()` like any third-party plugin's, so `umbral-rest` gets no special treatment: `cargo run -- startpermission IsOwner`, `--in blog` to put it in a plugin, prompts for whatever you leave out. `IsOwner` and `is_owner` land in the same file.
+
+**`umbral::codegen` — the contract underneath.** A plugin cannot depend on `umbral-cli` (dependencies point inward), so if the file surgery stayed in the CLI, every plugin generator would hand-roll its own `mod`-insertion — and hand-rolled `mod` insertion is how a generator eats somebody's `main.rs`. So the primitives moved into core and out through the facade: `Target`/`resolve_target` ("root or which plugin?", answered against what's on disk), `write_new_file` (writes, never overwrites), `declare_module` + `insert_before_marker` (the only two edits a generator may make to a file it doesn't own), `ensure_dependency`, and `prompt` (which carries the non-obvious rule for free: never prompt when stdin isn't a terminal, or a CI job hangs forever on a question nothing will answer). Every one of them **declines** rather than guesses when the file isn't the shape it expected. `startcommand` was then refactored onto the same primitives — two copies of file surgery would have drifted — and `CommandTarget` is now an alias of `codegen::Target`.
+
+**`umbral_rest::serde_json` re-export.** Same species of bug as #81's clap: `Pagination::paginate` names `serde_json::Map` and `Value` in its own public signature while the crate handed out no way to reach them, so every implementor declared its own serde_json and bet on the major version — and a scaffolded project has no serde_json dependency at all. A trait that names a foreign type has to hand that type out.
+
+**The generated classes are working implementations, not `todo!()` stubs**, because a stub that compiles and denies everything teaches nothing about the contract. What they teach is the handful of things that are subtly wrong by default: `Unauthenticated` (401) vs `Forbidden` (403), and that row-level ownership is `owned_by` scoping rather than a permission check with no row to check; that `authenticate` must never return an error (a typed error tells an attacker which guess was closer); that a paginator without a `MAX_LIMIT` clamp serves `?limit=100000000` as a DoS on request, and that `schema()` is what makes the OpenAPI spec and TS client come out typed; that a throttle should key its bucket by user id when it can, or an office behind one NAT shares a bucket.
+
+**Verified by compiling, which caught two bugs no string assertion would have**: `PaginationScalar::Integer` doesn't exist (it's `Number`), and `RateLimiter::new` takes a `Rate`, not a `&str`. All four classes then `cargo check` clean in a real `startproject`'d demo, wire into the builder via the exact lines the generator prints (which is also how the throttle's `::new()` hint got fixed — the bare-name line wouldn't have compiled), and the app boots: anonymous `GET /api/post/` returns **401 `unauthenticated`**, not 403, straight out of the generated `IsOwner`.
+
+Docs: `rest/scaffolding-classes.mdx`.

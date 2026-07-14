@@ -41,6 +41,7 @@ Built-in plugins contribute their own subcommands through the `Plugin::commands(
   <Card icon="clock" title="tasks-beat" description="umbral-tasks. Run the periodic-task scheduler. --once syncs schedules, runs one tick, exits." />
   <Card icon="trash-2" title="clearsessions" description="umbral-sessions. Delete all expired session rows from the database." />
   <Card icon="folder-down" title="collectstatic" description="umbral-storage. Collect every plugin's static assets into static_root. --clear / --hashed / --storage." />
+  <Card icon="wand-2" title="startpermission / startauthentication / startpagination / startthrottle" description="umbral-rest. Scaffold one of REST's four extension classes, registered and ready to wire. See rest/scaffolding-classes." />
 </CardGrid>
 
 Each plugin command shares the same `cargo run -- <cmd>` form and is detailed in its own section below.

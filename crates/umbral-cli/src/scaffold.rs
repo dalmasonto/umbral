@@ -89,6 +89,10 @@ pub const RESERVED_PLUGIN_COMMAND_NAMES: &[&str] = &[
     "createsuperuser",
     "gen-client",
     "migrate_schemas",
+    "startauthentication",
+    "startpagination",
+    "startpermission",
+    "startthrottle",
     "tasks-beat",
     "tasks-worker",
 ];

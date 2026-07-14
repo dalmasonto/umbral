@@ -399,3 +399,4 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
 81. [x] `startcommand` — shipped, with the missing contract it needed (`AppBuilder::command`: a project could not own a command without inventing a plugin to carry it) — archived
 
+82. [x] REST scaffolds its own extension classes — `startpermission` / `startauthentication` / `startpagination` / `startthrottle`, on a shared `umbral::codegen` a plugin can build a generator with — archived

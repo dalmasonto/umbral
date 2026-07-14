@@ -79,6 +79,19 @@ pub use throttle::{
     UserRateThrottle,
 };
 
+pub mod commands;
+
+/// Re-export of `serde_json` — the crate [`Pagination`] names in its own
+/// signature (`fn paginate(&self, rows: Vec<Map<String, Value>>, ...) -> Value`).
+///
+/// A trait whose surface names a foreign type has to hand that type out, or
+/// every implementor declares its own `serde_json` dependency and bets on
+/// resolving the same major version as the crate that will call it. Write
+/// `use umbral_rest::serde_json::{Map, Value};` and the bet is off the table —
+/// which also means a scaffolded project can implement `Pagination` without
+/// touching its `Cargo.toml`. Same reasoning as `umbral::cli::clap`.
+pub use serde_json;
+
 /// The block-list every plugin starts with. Exposing these via REST
 /// would leak password hashes (auth_user), session IDs (session), the
 /// migration tracking table, the authorization model itself (the
@@ -2002,6 +2015,18 @@ fn schema_label(path: &str) -> String {
 impl Plugin for RestPlugin {
     fn name(&self) -> &'static str {
         "rest"
+    }
+
+    /// The four generators — `startpermission`, `startauthentication`,
+    /// `startpagination`, `startthrottle`. Each of REST's pluggable trait
+    /// families is a struct the user writes; these write the first draft of
+    /// one, correct on the details that are easy to get subtly wrong (401 vs
+    /// 403, never erroring out of `authenticate`, capping page size).
+    ///
+    /// They come through `Plugin::commands()` like any third-party plugin's —
+    /// no special treatment, which is the plugin contract doing its job.
+    fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>> {
+        commands::all()
     }
 
     fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
