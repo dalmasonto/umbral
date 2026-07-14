@@ -99,50 +99,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build with AdminPlugin + AdminModel");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL,\
-                is_staff INTEGER NOT NULL,\
-                is_superuser INTEGER NOT NULL,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user");
-
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session");
-
-        sqlx::query(
-            "CREATE TABLE article (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                body TEXT NOT NULL,\
-                published INTEGER NOT NULL DEFAULT 0,\
-                created_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create article");
 
         // Seed a staff user.
         let staff = create_user("admin_ext", "admin_ext@example.com", "password123")
@@ -166,6 +127,30 @@ async fn boot() -> &'static axum::Router {
         app.into_router()
     })
     .await
+}
+
+/// A staff user of this test's own, logged in.
+///
+/// gaps2 #11: a list visit with NO query params 303-redirects to the query string that
+/// USER last used, so filters follow them across tabs and devices. Tests that assert the
+/// DEFAULT (unfiltered) view therefore cannot share a user with a test that filters —
+/// whichever runs first decides what the other sees. Saved preferences are per-user, so
+/// the isolation belongs there rather than in a `DELETE FROM` that races the other tests.
+///
+/// This never used to matter: the suite never created `admin_user_pref` at all, so
+/// `get_table_pref` errored, the restore silently never fired, and a bare GET always
+/// returned 200. Deriving the schema from the models created the table, which switched a
+/// shipped feature on in these tests for the first time.
+async fn own_staff_cookie(router: &axum::Router, name: &str) -> String {
+    let user = create_user(name, &format!("{name}@example.com"), "password123")
+        .await
+        .expect("create staff user");
+    sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
+        .bind(user.id)
+        .execute(&umbral::db::pool())
+        .await
+        .expect("mark staff");
+    login_session(router, name, "password123").await
 }
 
 // =========================================================================
@@ -284,7 +269,7 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
 #[tokio::test]
 async fn list_display_filters_columns() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "admin_ext", "password123").await;
+    let cookie = own_staff_cookie(&router, "ext_cols").await;
     let (status, body) = send(
         router,
         Request::builder()
@@ -323,7 +308,7 @@ async fn list_display_filters_columns() {
 #[tokio::test]
 async fn list_filter_shows_facets_in_sidebar() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "admin_ext", "password123").await;
+    let cookie = own_staff_cookie(&router, "ext_facets").await;
     let (status, body) = send(
         router.clone(),
         Request::builder()
@@ -419,7 +404,7 @@ async fn search_fields_no_match_shows_empty() {
 #[tokio::test]
 async fn ordering_applies_to_list() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "admin_ext", "password123").await;
+    let cookie = own_staff_cookie(&router, "ext_order").await;
     let (status, body) = send(
         router,
         Request::builder()

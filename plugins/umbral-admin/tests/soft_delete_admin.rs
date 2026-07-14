@@ -84,58 +84,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL,\
-                is_staff INTEGER NOT NULL,\
-                is_superuser INTEGER NOT NULL,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("auth_user");
-
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("session");
-
-        sqlx::query(
-            "CREATE TABLE sdadmin_note (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                deleted_at TEXT\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("note");
-
-        sqlx::query(
-            "CREATE TABLE sdadmin_tag (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                name TEXT NOT NULL\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("tag");
 
         let staff = create_user("sd_admin", "sd@example.com", "pass123")
             .await
@@ -190,7 +143,33 @@ fn extract_cookie(set_cookie: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Log in as a staff user unique to THIS call.
+///
+/// The admin persists per-user UI state (gaps2 #11): a bare list visit 303-redirects to
+/// the query string that USER last used. A test asserting the DEFAULT list therefore
+/// cannot share a user with a test that visited `?trash=1` — whichever ran first decides
+/// what the other sees. A fresh user per login is the isolation; the state is per-user, so
+/// that is where it belongs.
+///
+/// It never used to matter: this suite never created `admin_user_pref`, so the lookup
+/// errored and the restore silently never fired. Deriving the schema from the models
+/// created the table and switched a shipped feature on here for the first time.
 async fn login(router: axum::Router) -> String {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let username = format!("sd_admin{n}");
+    let user = umbral_auth::create_user(&username, &format!("{username}@test.com"), "pass123")
+        .await
+        .expect("create staff user");
+    sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
+        .bind(user.id)
+        .execute(&umbral::db::pool())
+        .await
+        .expect("mark staff");
+    login_as(router, &username).await
+}
+
+async fn login_as(router: axum::Router, username: &str) -> String {
     let resp = router
         .clone()
         .oneshot(
@@ -217,7 +196,7 @@ async fn login(router: axum::Router) -> String {
     let html = String::from_utf8_lossy(&bytes).into_owned();
     let csrf = extract_csrf(&html);
     let form = serde_urlencoded::to_string([
-        ("username", "sd_admin"),
+        ("username", username),
         ("password", "pass123"),
         ("csrf_token", csrf.as_str()),
         ("next", "/admin/"),

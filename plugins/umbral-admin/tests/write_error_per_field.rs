@@ -33,7 +33,13 @@ use umbral_sessions::SessionsPlugin;
 #[umbral(table = "write_err_item")]
 pub struct WriteErrItem {
     pub id: i64,
-    /// UNIQUE in the schema — submitting a duplicate triggers a per-field error.
+    /// UNIQUE — submitting a duplicate triggers a per-field error.
+    ///
+    /// The attribute is load-bearing and used to be missing: the doc comment claimed
+    /// "UNIQUE in the schema" while the MODEL declared no such thing, and only the
+    /// hand-written test table carried the constraint. The suite was proving the admin's
+    /// per-field UNIQUE-violation rendering against a schema no migration would produce.
+    #[umbral(unique)]
     pub slug: String,
     pub title: String,
 }
@@ -69,50 +75,13 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
 
-        sqlx::query(
-            "CREATE TABLE auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL,\
-                is_staff INTEGER NOT NULL,\
-                is_superuser INTEGER NOT NULL,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user");
-
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session");
-
         // UNIQUE on slug is the constraint we'll violate to get a per-field error.
-        sqlx::query(
-            "CREATE TABLE write_err_item (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                slug TEXT NOT NULL UNIQUE,\
-                title TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create write_err_item");
 
         // Seed one row so the second create with the same slug triggers UNIQUE.
         sqlx::query("INSERT INTO write_err_item (slug, title) VALUES ('hello', 'Hello')")
@@ -231,6 +200,32 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
         .expect("POST /admin/login must set a session cookie on success")
 }
 
+/// Log in as a staff user unique to THIS call.
+///
+/// The admin persists per-user UI state (gaps2 #11): a bare list visit 303-redirects to
+/// the query string that USER last used, and `/admin/` redirects to the path they last
+/// visited. Tests asserting the DEFAULT view therefore cannot share a user with a test
+/// that filters — whichever runs first decides what the other sees. The state is per-user,
+/// so a fresh user per login is where the isolation belongs.
+///
+/// It never used to matter: these suites never created `admin_user_pref`, so the lookups
+/// errored and the restore silently never fired. Deriving the schema from the models
+/// created the table and switched a shipped feature on here for the first time.
+async fn fresh_staff(router: &axum::Router) -> String {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let username = format!("staff_iso{n}");
+    let user = create_user(&username, &format!("{username}@test.com"), "pw")
+        .await
+        .expect("create staff user");
+    sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
+        .bind(user.id)
+        .execute(&umbral::db::pool())
+        .await
+        .expect("mark staff");
+    login_session(router, &username, "pw").await
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 /// Submitting a duplicate `slug` on the create form must render the UNIQUE
@@ -245,7 +240,7 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
 #[tokio::test]
 async fn unique_violation_on_create_renders_error_under_slug_field() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "admin_wef", "pw").await;
+    let cookie = fresh_staff(&router).await;
     let auth_cookie = format!("umbral_session={cookie}");
 
     // Submit a row whose slug already exists in the seeded DB.
@@ -314,7 +309,7 @@ async fn unique_violation_on_create_renders_error_under_slug_field() {
 #[tokio::test]
 async fn unique_violation_on_update_renders_error_under_slug_field() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "admin_wef", "pw").await;
+    let cookie = fresh_staff(&router).await;
     let auth_cookie = format!("umbral_session={cookie}");
 
     // First create a second row with slug "world".

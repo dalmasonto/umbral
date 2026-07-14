@@ -77,50 +77,12 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build with AuthPlugin + SessionsPlugin + AdminPlugin");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
         // Create tables manually (no migrate runner in test harness).
-        sqlx::query(
-            "CREATE TABLE auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL,\
-                is_staff INTEGER NOT NULL,\
-                is_superuser INTEGER NOT NULL,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user");
-
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session");
-
-        sqlx::query(
-            "CREATE TABLE note (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                body TEXT NOT NULL,\
-                published_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create note");
 
         // Seed two users: one staff, one not.
         let staff = create_user("alice", "alice@example.com", "hunter2")
@@ -253,6 +215,30 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
         .expect("POST /admin/login must set a session cookie on success")
 }
 
+/// A staff user of this test's own, logged in.
+///
+/// The admin persists per-user UI state (gaps2 #11): a bare list visit 303-redirects to
+/// the query string that USER last used, and `/admin/` redirects to the path they last
+/// visited. Tests asserting a DEFAULT view therefore cannot share a user with a test that
+/// filters — whichever runs first decides what the other sees.
+///
+/// It never used to matter: these suites never created `admin_user_pref`, so the lookups
+/// errored and the restore silently never fired. Deriving the schema from the models
+/// created the table and switched a shipped feature on here for the first time.
+async fn own_staff_cookie(router: &axum::Router, name: &str) -> String {
+    {
+        let user = create_user(name, &format!("{name}@test.com"), "hunter2")
+            .await
+            .expect("create staff user");
+        sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
+            .bind(user.id)
+            .execute(&umbral::db::pool())
+            .await
+            .expect("mark staff");
+        login_session(router, name, "hunter2").await
+    }
+}
+
 /// Extract the csrf_token value from a login page's hidden input.
 fn extract_csrf_token(html: &str) -> Option<String> {
     // The form has an <input type="hidden" name="csrf_token" value="<token>"/>
@@ -368,7 +354,7 @@ async fn admin_with_wrong_password_returns_error() {
 #[tokio::test]
 async fn admin_index_as_staff_lists_registered_models() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "alice", "hunter2").await;
+    let cookie = own_staff_cookie(&router, "u_admin_index_as_staff_lists_registered_").await;
     let (status, body) = send(
         router,
         Request::builder()
@@ -399,7 +385,7 @@ async fn admin_index_as_staff_lists_registered_models() {
 #[tokio::test]
 async fn full_crud_flow_against_note_model() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "alice", "hunter2").await;
+    let cookie = own_staff_cookie(&router, "u_full_crud_flow_against_note_model").await;
     let auth_cookie = format!("umbral_session={cookie}");
 
     // 1. Create via POST /admin/note/new

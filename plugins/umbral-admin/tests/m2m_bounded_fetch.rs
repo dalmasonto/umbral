@@ -94,73 +94,18 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
 
         // Auth / session tables (no migrate runner in test harness).
-        sqlx::query(
-            "CREATE TABLE auth_user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                email TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                is_active INTEGER NOT NULL,
-                is_staff INTEGER NOT NULL,
-                is_superuser INTEGER NOT NULL,
-                date_joined TEXT NOT NULL,
-                last_login TEXT,
-                email_verified_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("auth_user");
-
-        sqlx::query(
-            "CREATE TABLE session (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                data TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("session");
 
         // Domain tables.
-        sqlx::query(
-            "CREATE TABLE m2mb_item (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("m2mb_item");
-
-        sqlx::query(
-            "CREATE TABLE m2mb_group (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("m2mb_group");
 
         // Junction table uses the framework's `parent_id` / `child_id`
         // column names (see crates/umbral-core/src/orm/m2m.rs).
-        sqlx::query(
-            "CREATE TABLE m2mb_group_items (
-                parent_id INTEGER NOT NULL REFERENCES m2mb_group(id),
-                child_id  INTEGER NOT NULL REFERENCES m2mb_item(id),
-                PRIMARY KEY (parent_id, child_id)
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("m2mb_group_items");
 
         // Seed 210 items — more than the M2M_OPTION_CAP of 200.
         for i in 1..=210i64 {

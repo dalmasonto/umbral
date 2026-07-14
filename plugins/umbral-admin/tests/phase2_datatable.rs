@@ -69,49 +69,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL,\
-                is_staff INTEGER NOT NULL,\
-                is_superuser INTEGER NOT NULL,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user");
-
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session");
-
-        sqlx::query(
-            "CREATE TABLE post (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                published INTEGER NOT NULL DEFAULT 0,\
-                created_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create post");
 
         let staff = create_user("dt_admin", "dt_admin@example.com", "password123")
             .await
@@ -245,10 +207,35 @@ async fn login_session(router: axum::Router, username: &str, password: &str) -> 
         .unwrap_or(anon_cookie)
 }
 
+/// A staff user of this test's own, logged in.
+///
+/// The admin persists per-user UI state (gaps2 #11): a bare list visit 303-redirects to
+/// the query string that USER last used, and `/admin/` redirects to the path they last
+/// visited. Tests asserting a DEFAULT view therefore cannot share a user with a test that
+/// filters — whichever runs first decides what the other sees.
+///
+/// It never used to matter: these suites never created `admin_user_pref`, so the lookups
+/// errored and the restore silently never fired. Deriving the schema from the models
+/// created the table and switched a shipped feature on here for the first time.
+async fn own_staff_cookie(router: axum::Router, name: &str) -> String {
+    {
+        let user = create_user(name, &format!("{name}@test.com"), "password123")
+            .await
+            .expect("create staff user");
+        sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
+            .bind(user.id)
+            .execute(&umbral::db::pool())
+            .await
+            .expect("mark staff");
+        login_session(router.clone(), name, "password123").await
+    }
+}
+
 #[tokio::test]
 async fn test_changelist_list_display_columns_only() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session =
+        own_staff_cookie(router.clone(), "u_test_changelist_list_display_columns_o").await;
 
     let req = Request::builder()
         .uri("/admin/post/")
@@ -275,7 +262,8 @@ async fn test_changelist_list_display_columns_only() {
 #[tokio::test]
 async fn test_changelist_tbody_carries_authoritative_rows_url() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session =
+        own_staff_cookie(router.clone(), "u_test_changelist_tbody_carries_authorit").await;
 
     let req = Request::builder()
         .uri("/admin/post/")
@@ -293,7 +281,8 @@ async fn test_changelist_tbody_carries_authoritative_rows_url() {
 #[tokio::test]
 async fn test_changelist_search_returns_matching_rows() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session =
+        own_staff_cookie(router.clone(), "u_test_changelist_search_returns_matchin").await;
 
     let req = Request::builder()
         .uri("/admin/post/rows?search=alpha")
@@ -316,7 +305,7 @@ async fn test_changelist_search_returns_matching_rows() {
 #[tokio::test]
 async fn test_changelist_sort_order_desc() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session = own_staff_cookie(router.clone(), "u_test_changelist_sort_order_desc").await;
 
     let req = Request::builder()
         .uri("/admin/post/rows?sort=title&order=desc&page_size=10")
@@ -339,7 +328,7 @@ async fn test_changelist_sort_order_desc() {
 #[tokio::test]
 async fn test_changelist_filter_published() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session = own_staff_cookie(router.clone(), "u_test_changelist_filter_published").await;
 
     let req = Request::builder()
         .uri("/admin/post/rows?filter=published=true&page_size=10")
@@ -362,7 +351,7 @@ async fn test_changelist_filter_published() {
 #[tokio::test]
 async fn test_changelist_pagination() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session = own_staff_cookie(router.clone(), "u_test_changelist_pagination").await;
 
     // page_size=1, page=2 should give Beta (second in alpha order)
     let req = Request::builder()
@@ -381,7 +370,8 @@ async fn test_changelist_pagination() {
 #[tokio::test]
 async fn test_changelist_htmx_target_markup_present() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session =
+        own_staff_cookie(router.clone(), "u_test_changelist_htmx_target_markup_pre").await;
 
     let req = Request::builder()
         .uri("/admin/post/")
@@ -403,7 +393,8 @@ async fn test_changelist_htmx_target_markup_present() {
 #[tokio::test]
 async fn test_rows_fragment_includes_action_column() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session =
+        own_staff_cookie(router.clone(), "u_test_rows_fragment_includes_action_col").await;
 
     let req = Request::builder()
         .uri("/admin/post/rows?sort=title&order=asc&page_size=10")
@@ -436,7 +427,7 @@ async fn test_rows_fragment_includes_action_column() {
 #[tokio::test]
 async fn test_rows_htmx_fragment_only() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session = own_staff_cookie(router.clone(), "u_test_rows_htmx_fragment_only").await;
 
     // HTMX request to /rows endpoint
     let req = Request::builder()
@@ -499,7 +490,8 @@ async fn test_rows_htmx_fragment_only() {
 #[tokio::test]
 async fn test_chip_strip_oob_swap_clears_when_filter_removed() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session =
+        own_staff_cookie(router.clone(), "u_test_chip_strip_oob_swap_clears_when_f").await;
 
     // (1) Filter applied — strip should have the chip + OOB marker.
     let req_with_filter = Request::builder()
@@ -594,7 +586,8 @@ async fn test_chip_strip_oob_swap_clears_when_filter_removed() {
 #[tokio::test]
 async fn test_rows_swap_keeps_numbered_pagination() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "dt_admin", "password123").await;
+    let session =
+        own_staff_cookie(router.clone(), "u_test_rows_swap_keeps_numbered_paginati").await;
 
     // page_size=10 over the 3 seeded posts — only 1 page, but the numbered
     // nav always renders a page-1 button, so the assertion holds.

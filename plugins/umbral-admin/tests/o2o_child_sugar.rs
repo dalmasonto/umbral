@@ -49,38 +49,14 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        sqlx::query(
-            "CREATE TABLE auth_user (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                email TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                is_active BOOLEAN NOT NULL,
-                is_staff BOOLEAN NOT NULL,
-                is_superuser BOOLEAN NOT NULL,
-                date_joined TEXT NOT NULL,
-                last_login TEXT NULL,
-                email_verified_at TEXT
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE auth_user");
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
 
         // CRITICAL: the column for `user` must be a BIGINT with FK + UNIQUE
         // constraints — the exact shape `#[umbral(unique)] pub user:
         // ForeignKey<AuthUser>` would emit. Hand-create here to keep this
         // test focused on the macro path, not the migration engine.
-        sqlx::query(
-            "CREATE TABLE shopper_profile (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user INTEGER NOT NULL UNIQUE REFERENCES auth_user(id),
-                bio TEXT NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE shopper_profile");
     })
     .await;
 }

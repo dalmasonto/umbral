@@ -64,47 +64,13 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL,\
-                is_staff INTEGER NOT NULL,\
-                is_superuser INTEGER NOT NULL,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("auth_user");
 
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("session");
 
-        sqlx::query(
-            "CREATE TABLE tag (\
-                id TEXT PRIMARY KEY,\
-                label TEXT NOT NULL\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("tag");
 
         let staff = create_user("strpk_admin", "strpk@example.com", "pass123")
             .await

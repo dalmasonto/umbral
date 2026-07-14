@@ -63,50 +63,14 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
 
-        sqlx::query(
-            "CREATE TABLE auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL,\
-                is_staff INTEGER NOT NULL,\
-                is_superuser INTEGER NOT NULL,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user");
 
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session");
 
-        sqlx::query(
-            "CREATE TABLE staff_member (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                role TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create staff_member");
 
         // Seed one row so edit form is reachable.
         sqlx::query(
@@ -216,11 +180,37 @@ async fn login_session(router: axum::Router, username: &str, password: &str) -> 
         .unwrap_or(anon_cookie)
 }
 
+/// Log in as a staff user unique to THIS call.
+///
+/// The admin persists per-user UI state (gaps2 #11): a bare list visit 303-redirects to
+/// the query string that USER last used, and `/admin/` redirects to the path they last
+/// visited. Tests asserting the DEFAULT view therefore cannot share a user with a test
+/// that filters — whichever runs first decides what the other sees. The state is per-user,
+/// so a fresh user per login is where the isolation belongs.
+///
+/// It never used to matter: these suites never created `admin_user_pref`, so the lookups
+/// errored and the restore silently never fired. Deriving the schema from the models
+/// created the table and switched a shipped feature on here for the first time.
+async fn fresh_staff(router: axum::Router) -> String {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let username = format!("staff_iso{n}");
+    let user = create_user(&username, &format!("{username}@test.com"), "password123")
+        .await
+        .expect("create staff user");
+    sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
+        .bind(user.id)
+        .execute(&umbral::db::pool())
+        .await
+        .expect("mark staff");
+    login_session(router, &username, "password123").await
+}
+
 /// Bug 2: `column_widths` builder produces `<col style="width: ...">` colgroup markup.
 #[tokio::test]
 async fn test_column_widths_renders_colgroup() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "polish_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let req = Request::builder()
         .uri("/admin/staff_member/")
@@ -251,7 +241,7 @@ async fn test_column_widths_renders_colgroup() {
 #[tokio::test]
 async fn test_password_hash_is_readonly_by_default() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "polish_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     // Load the edit-sheet fragment for row #1.
     let req = Request::builder()
@@ -282,7 +272,7 @@ async fn test_password_hash_is_readonly_by_default() {
 #[tokio::test]
 async fn test_dashboard_model_cards_render() {
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "polish_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let req = Request::builder()
         .uri("/admin/")

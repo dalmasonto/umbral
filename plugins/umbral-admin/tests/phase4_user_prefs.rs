@@ -46,42 +46,9 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
-        let pool = umbral::db::pool();
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL DEFAULT 1,\
-                is_staff INTEGER NOT NULL DEFAULT 0,\
-                is_superuser INTEGER NOT NULL DEFAULT 0,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .ok();
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .ok();
-
-        umbral_admin::models::ensure_tables_for_tests(&pool)
+        umbral::migrate::create_tables_for_tests()
             .await
-            .expect("ensure_tables");
+            .expect("create the test schema");
 
         app.into_router()
     })

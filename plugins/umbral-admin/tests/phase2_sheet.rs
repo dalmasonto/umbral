@@ -73,49 +73,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL,\
-                is_staff INTEGER NOT NULL,\
-                is_superuser INTEGER NOT NULL,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user");
-
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session");
-
-        sqlx::query(
-            "CREATE TABLE note (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                body TEXT NOT NULL,\
-                published INTEGER NOT NULL DEFAULT 0\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create note");
 
         let staff = create_user("sheet_admin", "sheet@example.com", "password123")
             .await
@@ -257,11 +219,37 @@ async fn login_session(router: axum::Router, username: &str, password: &str) -> 
         .unwrap_or(anon_cookie)
 }
 
+/// Log in as a staff user unique to THIS call.
+///
+/// The admin persists per-user UI state (gaps2 #11): a bare list visit 303-redirects to
+/// the query string that USER last used, and `/admin/` redirects to the path they last
+/// visited. Tests asserting the DEFAULT view therefore cannot share a user with a test
+/// that filters — whichever runs first decides what the other sees. The state is per-user,
+/// so a fresh user per login is where the isolation belongs.
+///
+/// It never used to matter: these suites never created `admin_user_pref`, so the lookups
+/// errored and the restore silently never fired. Deriving the schema from the models
+/// created the table and switched a shipped feature on here for the first time.
+async fn fresh_staff(router: axum::Router) -> String {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let username = format!("staff_iso{n}");
+    let user = create_user(&username, &format!("{username}@test.com"), "password123")
+        .await
+        .expect("create staff user");
+    sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
+        .bind(user.id)
+        .execute(&umbral::db::pool())
+        .await
+        .expect("mark staff");
+    login_session(router, &username, "password123").await
+}
+
 #[tokio::test]
 async fn test_preview_sheet_htmx_returns_fragment() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     // Seed our OWN note with a unique title rather than reading the shared
     // `note/1`: sibling edit tests (`POST /note/1/edit` with `title=...`)
@@ -307,7 +295,7 @@ async fn test_preview_sheet_htmx_returns_fragment() {
 async fn test_edit_sheet_htmx_returns_form_with_editors() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let req = Request::builder()
         .uri("/admin/note/1/edit-sheet")
@@ -334,7 +322,7 @@ async fn test_edit_sheet_htmx_returns_form_with_editors() {
 async fn test_edit_sheet_renders_markdown_body_without_native_required() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let req = Request::builder()
         .uri("/admin/note/1/edit-sheet")
@@ -368,7 +356,7 @@ async fn test_edit_sheet_renders_markdown_body_without_native_required() {
 async fn test_edit_sheet_renders_ambient_csrf_input() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let req = Request::builder()
         .uri("/admin/note/1/edit-sheet")
@@ -398,7 +386,7 @@ async fn test_edit_sheet_renders_ambient_csrf_input() {
 async fn test_preview_sheet_without_htmx_redirects() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     // Non-HTMX request to /sheet endpoint
     let req = Request::builder()
@@ -423,7 +411,7 @@ async fn test_preview_sheet_without_htmx_redirects() {
 async fn test_update_row_via_post() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     // POST to legacy edit endpoint (still works, used by non-HTMX flows)
     let body = "title=Updated+Title&body=Updated+body&published=true";
@@ -463,7 +451,7 @@ async fn test_delete_row_via_post() {
     // We verify the delete endpoint returns a redirect, then check the note is gone.
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     // First: create a fresh note specifically to delete (won't affect other tests
     // since tests run sequentially with --test-threads=1).
@@ -550,7 +538,7 @@ async fn test_delete_row_via_post() {
 async fn test_new_sheet_returns_create_form() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let req = Request::builder()
         .uri("/admin/note/new-sheet")
@@ -573,7 +561,7 @@ async fn test_new_sheet_returns_create_form() {
 async fn test_confirm_delete_dialog_fragment() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let req = Request::builder()
         .uri("/admin/note/1/_confirm-delete")
@@ -628,7 +616,7 @@ async fn test_confirm_delete_dialog_fragment() {
 async fn test_sheet_create_success_emits_show_toast_trigger() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let body = "title=ToastCreateNote&body=Hello&published=false";
     let req = Request::builder()
@@ -663,7 +651,7 @@ async fn test_sheet_create_success_emits_show_toast_trigger() {
 async fn test_sheet_update_success_emits_show_toast_trigger() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let body = "title=ToastUpdateNote&body=ChangedBody&published=true";
     let req = Request::builder()
@@ -694,7 +682,7 @@ async fn test_sheet_update_success_emits_show_toast_trigger() {
 async fn test_sheet_delete_success_emits_show_toast_trigger() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     // Create a fresh note specifically to delete so we don't compete
     // with other tests for note id 1.
@@ -762,7 +750,7 @@ async fn test_sheet_delete_success_emits_show_toast_trigger() {
 async fn test_sheet_create_renders_per_field_error_for_empty_required() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let body = "title=&body=some+body&published=false";
     let req = Request::builder()
@@ -808,7 +796,7 @@ async fn test_sheet_create_renders_per_field_error_for_empty_required() {
 async fn test_sheet_panel_is_viewport_clamped() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
     let req = Request::builder()
         .uri("/admin/note/new-sheet")
         .header(header::COOKIE, format!("umbral_session={session}"))
@@ -837,7 +825,7 @@ async fn test_sheet_panel_is_viewport_clamped() {
 async fn test_sheet_edit_renders_per_field_error_inline_htmx() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     let body = "title=&body=updated&published=true"; // empty required title
     let req = Request::builder()
@@ -884,7 +872,7 @@ async fn test_sheet_edit_renders_per_field_error_inline_htmx() {
 async fn test_save_and_continue_refreshes_table_but_keeps_sheet_open() {
     let _g = NOTE_LOCK.lock().await;
     let router = boot().await.clone();
-    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+    let session = fresh_staff(router.clone()).await;
 
     // _save_continue=1 → re-render the sheet AND refresh the underlying table.
     let body = "title=SaveContinueNote&body=Stay&published=true&_save_continue=1";

@@ -70,49 +70,11 @@ async fn boot() -> &'static axum::Router {
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let pool = umbral::db::pool();
-
-        sqlx::query(
-            "CREATE TABLE auth_user (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                username TEXT NOT NULL UNIQUE,\
-                email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
-                is_active INTEGER NOT NULL,\
-                is_staff INTEGER NOT NULL,\
-                is_superuser INTEGER NOT NULL,\
-                date_joined TEXT NOT NULL,\
-                last_login TEXT,\
-                email_verified_at TEXT\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create auth_user");
-
-        sqlx::query(
-            "CREATE TABLE session (\
-                id TEXT PRIMARY KEY,\
-                user_id TEXT,\
-                data TEXT NOT NULL DEFAULT '{}',\
-                created_at TEXT NOT NULL,\
-                expires_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create session");
-
-        sqlx::query(
-            "CREATE TABLE post (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                title TEXT NOT NULL,\
-                body TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create post");
 
         // Seed: one staff user, one non-staff.
         let staff = create_user("staff_user", "staff@test.com", "staffpass")
@@ -230,6 +192,28 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
                 .and_then(|p| p.split_once('=').map(|(_, v)| v.to_string()))
         })
         .expect("POST /admin/login must set authenticated session cookie")
+}
+
+/// A staff user of this test's own, logged in.
+///
+/// The admin persists per-user UI state (gaps2 #11): a list visit with no query params
+/// 303-redirects to the query string that USER last used, and `/admin/` redirects to the
+/// path they last visited. Tests asserting a DEFAULT view therefore cannot share a user
+/// with a test that filters — whichever runs first decides what the other sees.
+///
+/// It never used to matter: this suite never created `admin_user_pref`, so the lookups
+/// errored and the restore silently never fired. Deriving the schema from the models
+/// created the table and switched a shipped feature on here for the first time.
+async fn own_staff_cookie(router: &axum::Router, name: &str) -> String {
+    let user = create_user(name, &format!("{name}@test.com"), "staffpass")
+        .await
+        .expect("create staff user");
+    sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
+        .bind(user.id)
+        .execute(&umbral::db::pool())
+        .await
+        .expect("mark staff");
+    login_session(router, name, "staffpass").await
 }
 
 // =========================================================================
@@ -499,7 +483,7 @@ async fn login_malicious_next_is_rejected() {
 #[tokio::test]
 async fn changelist_renders_with_sidebar() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "staff_user", "staffpass").await;
+    let cookie = own_staff_cookie(&router, "u_changelist_renders_with_sidebar").await;
 
     let (status, body) = send(
         router,
@@ -529,7 +513,7 @@ async fn changelist_renders_with_sidebar() {
 #[tokio::test]
 async fn sidebar_nav_lists_models_by_plugin() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "staff_user", "staffpass").await;
+    let cookie = own_staff_cookie(&router, "shell_nav").await;
 
     let (status, body) = send(
         router,
@@ -561,7 +545,7 @@ async fn sidebar_nav_lists_models_by_plugin() {
 #[tokio::test]
 async fn explicit_label_overrides_model_display() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "staff_user", "staffpass").await;
+    let cookie = own_staff_cookie(&router, "u_explicit_label_overrides_model_display").await;
 
     let (status, body) = send(
         router,
@@ -588,7 +572,7 @@ async fn explicit_label_overrides_model_display() {
 #[tokio::test]
 async fn explicit_icon_appears_in_sidebar() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "staff_user", "staffpass").await;
+    let cookie = own_staff_cookie(&router, "u_explicit_icon_appears_in_sidebar").await;
 
     let (status, body) = send(
         router,
@@ -618,7 +602,7 @@ async fn explicit_icon_appears_in_sidebar() {
 #[tokio::test]
 async fn auto_discovered_model_appears_in_sidebar() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "staff_user", "staffpass").await;
+    let cookie = own_staff_cookie(&router, "u_auto_discovered_model_appears_in_sideb").await;
 
     let (status, body) = send(
         router,
@@ -646,7 +630,7 @@ async fn auto_discovered_model_appears_in_sidebar() {
 #[tokio::test]
 async fn theme_toggle_button_has_onclick() {
     let router = boot().await.clone();
-    let cookie = login_session(&router, "staff_user", "staffpass").await;
+    let cookie = own_staff_cookie(&router, "u_theme_toggle_button_has_onclick").await;
 
     let (status, body) = send(
         router,
