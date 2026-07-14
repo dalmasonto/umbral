@@ -51,6 +51,15 @@ async fn dyn_count_routes_to_analytics_pool() {
         .build()
         .unwrap();
 
+    // The schema comes from the models, on EVERY registered alias — a replica with
+    // no tables is not a replica.
+    umbral_core::migrate::create_tables_for_tests_on("default")
+        .await
+        .expect("create the test schema on `default`");
+    umbral_core::migrate::create_tables_for_tests_on("analytics")
+        .await
+        .expect("create the test schema on `analytics`");
+
     let meta = umbral::migrate::registered_models()
         .into_iter()
         .find(|m| m.table == "dyn_event")

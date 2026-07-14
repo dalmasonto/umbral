@@ -37,17 +37,10 @@ async fn boot() {
             .model::<Product>()
             .build()
             .expect("App::build");
-        sqlx::query(
-            "CREATE TABLE fis_product (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                stock INTEGER NOT NULL,
-                is_featured BOOLEAN NOT NULL
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("CREATE TABLE");
+
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
         for (name, stock, feat) in &[
             ("alpha", 10, true),
             ("beta", 20, false),

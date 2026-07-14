@@ -70,14 +70,10 @@ async fn boot() {
             .model::<City>()
             .build()
             .expect("App::build");
-        sqlx::query("CREATE TABLE ffk_str_country (code TEXT PRIMARY KEY, name TEXT NOT NULL)")
-            .execute(&pool)
+
+        umbral::migrate::create_tables_for_tests()
             .await
-            .expect("create country");
-        sqlx::query("CREATE TABLE ffk_str_city (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, country TEXT NOT NULL REFERENCES ffk_str_country(code))")
-            .execute(&pool)
-            .await
-            .expect("create city");
+            .expect("create the test schema");
         sqlx::query("INSERT INTO ffk_str_country (code, name) VALUES ('ke', 'Kenya')")
             .execute(&pool)
             .await

@@ -61,21 +61,12 @@ async fn file_field_round_trips_through_sqlite_text_column() {
         .build()
         .expect("App::build should succeed with a storage-providing plugin");
 
+    umbral_core::migrate::create_tables_for_tests()
+        .await
+        .expect("create the test schema");
+
     // Sanity: the model registered and carries the expected meta.
     let _ = ModelMeta::for_::<FileDoc>();
-
-    let pool = umbral::db::pool();
-    sqlx::query(
-        "CREATE TABLE file_doc (\
-            id INTEGER PRIMARY KEY AUTOINCREMENT,\
-            attachment TEXT NOT NULL,\
-            cover TEXT NOT NULL,\
-            thumbnail TEXT\
-         )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create file_doc table");
 
     let row = FileDoc {
         id: 0,

@@ -45,10 +45,6 @@ async fn mk_pool(name: &str) -> sqlx::SqlitePool {
         )
         .await
         .expect("pool");
-    sqlx::query("CREATE TABLE widget (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
-        .execute(&pool)
-        .await
-        .expect("create widget");
     pool
 }
 
@@ -78,6 +74,15 @@ async fn begin_for_and_transaction_on_target_the_named_pool() {
         .model::<Widget>()
         .build()
         .expect("App::build");
+
+    // The schema comes from the models, on EVERY registered alias — a replica with
+    // no tables is not a replica.
+    umbral_core::migrate::create_tables_for_tests_on("default")
+        .await
+        .expect("create the test schema on `default`");
+    umbral_core::migrate::create_tables_for_tests_on("secondary")
+        .await
+        .expect("create the test schema on `secondary`");
 
     // (1) begin_for("secondary") — the manual-control primitive.
     let mut tx = umbral::db::begin_for("secondary")

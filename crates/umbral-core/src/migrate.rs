@@ -2070,8 +2070,19 @@ pub fn squash_in(dir: &Path, plugin: &str) -> Result<SquashOutcome, MigrateError
 /// Idempotent: an "already exists" error is skipped, so a shared test boot that
 /// runs twice is harmless. Returns the number of statements executed.
 pub async fn create_tables_for_tests() -> Result<u64, MigrateError> {
+    create_tables_for_tests_on("default").await
+}
+
+/// [`create_tables_for_tests`], against a named database alias.
+///
+/// A read/write-split or multi-database test registers more than one pool
+/// (`.database("default", ..).database("replica", ..)`) and needs the schema on
+/// each of them — a replica with no tables is not a replica. The ambient-pool
+/// variant only ever reaches `"default"`.
+pub async fn create_tables_for_tests_on(alias: &str) -> Result<u64, MigrateError> {
     let ops = diff(&Snapshot { models: Vec::new() }, &Snapshot::current())?;
-    let backend = match crate::db::pool_dispatched() {
+    let pool = crate::db::pool_for_dispatched(alias);
+    let backend = match pool {
         crate::db::DbPool::Sqlite(_) => "sqlite",
         crate::db::DbPool::Postgres(_) => "postgres",
     };
@@ -2079,7 +2090,7 @@ pub async fn create_tables_for_tests() -> Result<u64, MigrateError> {
     let mut executed = 0u64;
     for op in &ops {
         for sql in render_operation_for(op, backend) {
-            let res = match crate::db::pool_dispatched() {
+            let res = match crate::db::pool_for_dispatched(alias) {
                 crate::db::DbPool::Sqlite(p) => sqlx::query(&sql).execute(p).await.map(|_| ()),
                 crate::db::DbPool::Postgres(p) => sqlx::query(&sql).execute(p).await.map(|_| ()),
             };

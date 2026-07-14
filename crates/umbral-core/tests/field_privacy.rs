@@ -56,16 +56,18 @@ async fn boot() -> ModelMeta {
             .build()
             .expect("build");
 
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         let p = umbral::db::pool();
-        for ddl in [
-            "CREATE TABLE fp_product (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
-             cost TEXT NOT NULL, signing_key TEXT NOT NULL, api_token TEXT NOT NULL, \
-             password_hash TEXT NOT NULL)",
+        sqlx::query(
             "INSERT INTO fp_product (name, cost, signing_key, api_token, password_hash) VALUES \
              ('Widget', '4.20', 'sk_signing_do_not_leak', 'enc:deadbeef', '$argon2id$leak')",
-        ] {
-            sqlx::query(ddl).execute(&p).await.expect("ddl");
-        }
+        )
+        .execute(&p)
+        .await
+        .expect("seed the product row");
     })
     .await;
     ModelMeta::for_::<FpProduct>()

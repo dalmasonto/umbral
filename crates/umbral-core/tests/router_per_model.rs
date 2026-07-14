@@ -72,6 +72,18 @@ async fn router_routes_each_model_to_its_own_database() {
         .build()
         .unwrap();
 
+    // The schema comes from the models, on EVERY registered alias — a replica with
+    // no tables is not a replica.
+    umbral_core::migrate::create_tables_for_tests_on("default")
+        .await
+        .expect("create the test schema on `default`");
+    umbral_core::migrate::create_tables_for_tests_on("db_a")
+        .await
+        .expect("create the test schema on `db_a`");
+    umbral_core::migrate::create_tables_for_tests_on("db_b")
+        .await
+        .expect("create the test schema on `db_b`");
+
     // Each write lands in the model's own database.
     Alpha::objects()
         .create(Alpha {

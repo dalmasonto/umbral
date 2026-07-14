@@ -44,16 +44,6 @@ async fn make_pool_with_junction() -> sqlx::SqlitePool {
         .await
         .unwrap();
     // The junction table the helpers will operate on.
-    sqlx::query(
-        "CREATE TABLE jn_parent_tags (\
-            parent_id INTEGER NOT NULL, \
-            child_id  INTEGER NOT NULL, \
-            PRIMARY KEY (parent_id, child_id)\
-        )",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
     pool
 }
 
@@ -73,6 +63,32 @@ async fn junction_write_routes_to_write_pool_and_read_routes_to_read_pool() {
         .model::<JnParent>()
         .build()
         .unwrap();
+
+    // The schema comes from the models, on EVERY registered alias — a replica with
+    // no tables is not a replica.
+    umbral_core::migrate::create_tables_for_tests_on("default")
+        .await
+        .expect("create the test schema on `default`");
+    umbral_core::migrate::create_tables_for_tests_on("replica")
+        .await
+        .expect("create the test schema on `replica`");
+
+    // `jn_parent_tags` stays hand-written, on both pools. It is NOT a model-derived table:
+    // `JnParent` declares no `M2M` field, so the migration engine emits no junction for it —
+    // this test drives `set_junction_dynamic` directly to prove the junction WRITE routes to
+    // the write pool and the READ to the read pool. The parent table comes from the model.
+    for pool in [&default_pool, &replica_pool] {
+        sqlx::query(
+            "CREATE TABLE jn_parent_tags (\
+                parent_id INTEGER NOT NULL, \
+                child_id  INTEGER NOT NULL, \
+                PRIMARY KEY (parent_id, child_id)\
+            )",
+        )
+        .execute(pool)
+        .await
+        .expect("create the junction table");
+    }
 
     let parent_id = sea_query::Value::BigInt(Some(1));
     let child_id = sea_query::Value::BigInt(Some(42));

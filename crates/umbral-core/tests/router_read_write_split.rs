@@ -34,12 +34,6 @@ async fn make_pool() -> sqlx::SqlitePool {
     let pool = umbral_core::db::connect_sqlite("sqlite::memory:")
         .await
         .unwrap();
-    sqlx::query(
-        "CREATE TABLE rw_widget (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
     pool
 }
 
@@ -56,6 +50,15 @@ async fn read_write_split_across_terminals_and_on_override() {
         .model::<Widget>()
         .build()
         .unwrap();
+
+    // The schema comes from the models, on EVERY registered alias — a replica with
+    // no tables is not a replica.
+    umbral_core::migrate::create_tables_for_tests_on("default")
+        .await
+        .expect("create the test schema on `default`");
+    umbral_core::migrate::create_tables_for_tests_on("replica")
+        .await
+        .expect("create the test schema on `replica`");
 
     // create() is a WRITE -> "default".
     Widget::objects()

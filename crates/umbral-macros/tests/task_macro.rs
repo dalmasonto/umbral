@@ -28,32 +28,19 @@ async fn boot() {
         umbral::App::builder()
             .settings(settings)
             .database("default", pool)
+            // TasksPlugin owns the `task_row` model, so registering it is what puts the
+            // table in the registry the derived schema is built from. It used to be a
+            // hand-written CREATE TABLE here — a copy of another crate's model, free to
+            // drift the moment that model changed.
+            .plugin(umbral_tasks::TasksPlugin::default())
             .build()
             .expect("App::build");
 
+        umbral::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
         // Create the task_row table so enqueue works.
-        let pool = umbral::db::pool();
-        sqlx::query(
-            "CREATE TABLE task_row (\
-                id INTEGER PRIMARY KEY AUTOINCREMENT,\
-                name TEXT NOT NULL,\
-                payload TEXT NOT NULL,\
-                status TEXT NOT NULL,\
-                attempts INTEGER NOT NULL,\
-                max_attempts INTEGER NOT NULL,\
-                scheduled_for TEXT NOT NULL,\
-                run_at TEXT,\
-                started_at TEXT,\
-                completed_at TEXT,\
-                error TEXT,\
-                result TEXT,\
-                priority INTEGER,\
-                created_at TEXT NOT NULL\
-             )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create task_row");
     })
     .await;
 }

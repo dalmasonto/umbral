@@ -83,17 +83,30 @@ async fn boot() {
             .model::<Phantom>()
             .build()
             .expect("App::build");
-        sqlx::query("CREATE TABLE fm_tag (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
-            .execute(&pool).await.expect("create tag");
-        sqlx::query("CREATE TABLE fm_article (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)")
-            .execute(&pool).await.expect("create article");
+
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
+        // `fm_phantom` is REGISTERED but must have NO table: that is what
+        // `m2m_validation_db_error_is_non_field_not_per_id_misses` exercises — a real
+        // database error ("no such table") has to surface as a non-field error, not as N
+        // bogus "no matching record" errors keyed to the field. The derived schema creates
+        // a table for every registered model, so the absence has to be arranged on purpose.
+        sqlx::query("DROP TABLE fm_phantom")
+            .execute(&pool)
+            .await
+            .expect("drop fm_phantom so it is registered-but-missing");
         // Junction follows the <parent_table>_<field> convention.
-        sqlx::query("CREATE TABLE fm_article_tags (parent_id INTEGER NOT NULL, child_id INTEGER NOT NULL, PRIMARY KEY (parent_id, child_id))")
-            .execute(&pool).await.expect("create junction");
-        for name in ["a", "b", "c"] {
+        // Six tags: the junction round-trip below sets {1,2,3} → {2,3,4} → {5,5,6}, and
+        // every one of those child ids must be a real row now that the junction carries the
+        // FOREIGN KEY the migration engine emits.
+        for name in ["a", "b", "c", "d", "e", "f"] {
             sqlx::query("INSERT INTO fm_tag (name) VALUES (?)")
                 .bind(name)
-                .execute(&pool).await.expect("seed tag");
+                .execute(&pool)
+                .await
+                .expect("seed tag");
         }
     })
     .await;
@@ -249,6 +262,17 @@ async fn set_junction_dynamic_batched_insert_round_trip() {
     boot().await;
     let parent = 777_000_i64;
     let pval = bigint(parent);
+
+    // The parent row has to exist. The junction the migration engine emits carries
+    // `parent_id REFERENCES fm_article(id)`, so a junction row for a parent that was
+    // never created is refused — as it would be in production. The old hand-written
+    // junction had no FK, which is why this test could invent an id out of thin air.
+    sqlx::query("INSERT INTO fm_article (id, title) VALUES (?, ?)")
+        .bind(parent)
+        .bind("junction parent")
+        .execute(&umbral::db::pool())
+        .await
+        .expect("seed the parent article");
 
     // Set {1,2,3} → exactly those three rows exist.
     umbral::orm::set_junction_dynamic(

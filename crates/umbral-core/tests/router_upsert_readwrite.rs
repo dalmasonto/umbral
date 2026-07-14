@@ -35,16 +35,6 @@ async fn make_pool() -> sqlx::SqlitePool {
     let pool = umbral_core::db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory sqlite");
-    sqlx::query(
-        "CREATE TABLE rwu_widget (\
-             id INTEGER PRIMARY KEY AUTOINCREMENT,\
-             slug TEXT NOT NULL UNIQUE,\
-             label TEXT NOT NULL\
-         )",
-    )
-    .execute(&pool)
-    .await
-    .expect("create rwu_widget");
     pool
 }
 
@@ -52,13 +42,6 @@ async fn make_pool() -> sqlx::SqlitePool {
 async fn upsert_existence_probe_uses_write_db_not_replica() {
     let default = make_pool().await;
     let replica = make_pool().await;
-
-    // Seed the WRITE (default) pool only; the replica stays empty — simulating
-    // a row that hasn't replicated yet.
-    sqlx::query("INSERT INTO rwu_widget (slug, label) VALUES ('alpha', 'Alpha')")
-        .execute(&default)
-        .await
-        .expect("seed write db");
 
     umbral::App::builder()
         .settings(umbral::Settings::from_env().expect("settings"))
@@ -68,6 +51,22 @@ async fn upsert_existence_probe_uses_write_db_not_replica() {
         .model::<Widget>()
         .build()
         .expect("App::build");
+
+    // The schema comes from the models, on EVERY registered alias — a replica with
+    // no tables is not a replica.
+    umbral_core::migrate::create_tables_for_tests_on("default")
+        .await
+        .expect("create the test schema on `default`");
+    umbral_core::migrate::create_tables_for_tests_on("replica")
+        .await
+        .expect("create the test schema on `replica`");
+
+    // Seed the WRITE (default) pool only; the replica stays empty — simulating
+    // a row that hasn't replicated yet.
+    sqlx::query("INSERT INTO rwu_widget (slug, label) VALUES ('alpha', 'Alpha')")
+        .execute(&default)
+        .await
+        .expect("seed write db");
 
     // get_or_create: must FIND the seeded row via the write DB, not miss it on
     // the empty replica and insert a duplicate.

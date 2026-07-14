@@ -360,17 +360,22 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
 77. [ ] **Cross-table widgets (customers against sales)** — every widget today reads one table. The interesting dashboards compare two: revenue per customer, orders per product, signups against conversions. `DynQuerySet` has `select_related` and joins, so the ORM can express it; what is missing is a widget-level way to *say* it without dropping to raw SQL, and a payload shape for "two series over a shared dimension" (the multi-series `LinePayload` is close, but the x-axis has to be the join key rather than a date). Depends on nothing; blocked mostly on picking an honest API rather than a stringly-typed one. Pairs with #76 — the UI for "customers against sales" is exactly the thing an admin-authored widget would want to express.
 
-78. [~] **Test files hand-writing their `CREATE TABLE`** — 191 of them now derive the schema from the models via `migrate::create_tables_for_tests()`. **39 convertible files remain** (mostly `crates/umbral-core/tests`), plus 38 that never build an App (no registry to derive from) and 12 that keep DDL for genuinely non-model tables. The website's 11 wait on a release — it builds against crates.io, and the helper does not exist in 0.0.8.
+78. [x] **Test files hand-writing their `CREATE TABLE`** — DONE. **205 suites** now derive their schema from the models via `migrate::create_tables_for_tests()` (and `create_tables_for_tests_on(alias)` for the read/write-split and multi-database tests — a replica with no tables is not a replica).
 
-    The conversion earned its keep: it surfaced **five real bugs** the hand-written schemas were hiding, four of them cases where a test was proving behaviour against a schema no migration would ever produce.
+    Twenty files keep hand-written DDL, all for a reason:
 
-    - `auth_user.email` is `unique` on the model and was NOT unique in any auth test's table — the auth suite ran against a laxer schema than production, with two tests quietly sharing an email.
-    - `get_or_create`'s convergence-under-race guarantee IS the database rejecting the second insert; its test hand-wrote `slug TEXT NOT NULL UNIQUE` while the model declared no `unique` at all.
-    - the admin's per-field UNIQUE-violation rendering was tested against a `slug` whose doc comment said "UNIQUE in the schema" while the model said nothing of the kind.
-    - the admin's per-user UI-state restore (gaps2 #11 — a bare list visit 303s to the query you last used; `/admin/` returns you to the path you left) was **inert in every admin test**, because those suites never created `admin_user_pref`. The lookup errored, the redirect never fired. Creating the table switched a shipped feature on in the tests for the first time, and the suites that shared one staff user promptly started racing each other. Fixed by giving each login its own user, which is where per-user state belongs.
-    - M2M with a Uuid-PK child is broken on any real schema — see #79.
+    - **4 migration-engine tests** (`migrate`, `inspect`, `migrate_drift`, `alter_inbound_fk_engine`, plus `fk_plugin_ordering` and the two `router_schema_*`): they *are* the schema machinery under test. Deriving their schema from the engine would be marking their own homework — and the multi-schema ones create the same table across several attached SQLite schemas, which the helper does not do.
+    - **13 Postgres-only suites** (`*_pg`, `*_postgres`, `array_field`, `decimal_field`, `network_field`, `fulltext_field`, `text_pg_field`, `database_views`): convertible in principle, but there is no Postgres server here, so converting them would mean shipping changes nobody has run. Do them on a box with PG.
+    - a handful of genuinely non-model tables (a junction no model declares, a deliberately-absent table a test needs missing).
 
-    Finish the remaining 39 the same way: one crate at a time, reading each failure rather than making it green.
+    The conversion found **six real bugs**, four of them the same shape — a test proving behaviour against a schema no migration would ever produce:
+
+    - `auth_user.email` is `unique` on the model and was NOT unique in any auth test's table.
+    - `get_or_create`'s convergence-under-race test hand-wrote `slug TEXT NOT NULL UNIQUE` while its model declared no `unique` at all — the guarantee IS the database rejecting the second insert.
+    - the admin's per-field UNIQUE-violation rendering was tested against a `slug` whose doc comment claimed "UNIQUE in the schema" while the model said nothing of the kind.
+    - the admin's per-user UI-state restore (gaps2 #11) was **inert in every admin test**: those suites never created `admin_user_pref`, the lookup errored, and the redirect never fired. Creating the table switched a shipped feature on for the first time, and suites sharing one staff user promptly raced each other.
+    - `form_m2m`'s junction tests wrote rows for a parent id that never existed and child ids that were never seeded — legal without an FK, refused by the junction the engine actually emits.
+    - M2M with a Uuid-PK child is broken on any real schema — see #79, the one genuine production bug.
 
 79. [ ] **M2M with a Uuid-PK child is broken on SQLite under a real schema** — found by the gaps3 #78 test-schema conversion, and the exact class of bug that conversion exists to expose.
 

@@ -92,24 +92,18 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        for sql in &[
-            "CREATE TABLE atomtx_tag (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )",
-            "CREATE TABLE atomtx_post (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL
-            )",
-            // NOTE: atomtx_post_tags is deliberately absent.
-            "CREATE TABLE atomtx_sd (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                deleted_at TEXT
-            )",
-        ] {
-            sqlx::query(sql).execute(&pool).await.expect("ddl");
-        }
+        umbral_core::migrate::create_tables_for_tests()
+            .await
+            .expect("create the test schema");
+
+        // The junction `atomtx_post_tags` must be ABSENT: these tests assert that a write
+        // whose M2M step fails leaves no parent row behind, and the missing junction is how
+        // the failure is provoked. The derived schema creates a table for every registered
+        // model, so the absence has to be arranged on purpose.
+        sqlx::query("DROP TABLE atomtx_post_tags")
+            .execute(&pool)
+            .await
+            .expect("drop the junction so the M2M write fails");
         // One tag so the M2M *validation* (which checks the child table)
         // passes and the write actually starts.
         sqlx::query("INSERT INTO atomtx_tag (id, name) VALUES (1, 'rust')")
