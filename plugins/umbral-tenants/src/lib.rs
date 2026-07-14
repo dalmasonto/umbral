@@ -313,8 +313,15 @@ impl TenantsPlugin {
     /// you must enumerate *every* shared app — forget one and it silently
     /// becomes tenant (its tables fragment into every schema). With
     /// `tenant_apps` you list only the handful of apps you own that are
-    /// tenant-specific; forgetting one leaves it shared (public), which is the
-    /// safe failure. The `tenants` registry is forced shared regardless.
+    /// tenant-specific; forgetting one leaves it shared (public). The `tenants`
+    /// registry is forced shared regardless.
+    ///
+    /// **The "forgotten → shared" failure is only safe if the forgotten app
+    /// has no per-tenant data.** For an app that DOES own tenant rows, being
+    /// left shared mixes those rows across tenants — an isolation failure that
+    /// stays silent until production. `on_ready` logs the tenant-owned set at
+    /// boot (gaps4 #11) so you can audit that nothing tenant-specific is
+    /// missing from it; still list every tenant-owning app deliberately.
     ///
     /// **Prefer this** over `shared_apps`. If both are set, `tenant_apps` wins.
     pub fn tenant_apps<I, S>(mut self, apps: I) -> Self
@@ -762,6 +769,27 @@ impl Plugin for TenantsPlugin {
                 )
                 .into());
             }
+        }
+
+        // gaps4 #11: in `tenant_apps` (inverse) mode, EVERYTHING not listed is
+        // shared/public — including an app you forgot to list. For an app with
+        // no tenant data that is the safe failure the docs describe; for an app
+        // that DOES own per-tenant rows it is a cross-tenant isolation failure,
+        // and it stays silent until two tenants' data mixes in production. Make
+        // the split auditable at boot: list what is tenant-owned so the operator
+        // can confirm nothing tenant-specific is missing from it.
+        if let Some(apps) = &self.tenant_apps {
+            let mut tenant_apps: Vec<&str> = apps.iter().map(String::as_str).collect();
+            tenant_apps.sort_unstable();
+            tracing::warn!(
+                target: "umbral::tenants",
+                tenant_owned = ?tenant_apps,
+                "umbral-tenants: `tenant_apps` inverse mode — these apps are per-tenant; \
+                 EVERY OTHER registered app (built-ins AND any you added or forgot) is \
+                 SHARED/public. Confirm no unlisted app owns tenant-specific rows: an \
+                 omitted app is not isolated, and the mistake surfaces only once two \
+                 tenants have data."
+            );
         }
 
         // Install the TenantRouter now that the model registry is published, so

@@ -34,7 +34,7 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 
 10. [x] **GraphQL has no depth/complexity budget.** FIXED: `schema::build` now applies `limit_depth(12)` + `limit_complexity(500)` by default (conservative, ON out of the box), overridable via `GraphqlPlugin::max_depth` / `max_complexity`. async-graphql rejects an over-budget query at validation, before any resolver runs. Regression tests `a_query_deeper_than_the_budget_is_rejected` / `a_normal_shallow_query_is_within_the_budget`. (codex #05; claude triage graphql/schema.rs:439/456)
 
-11. [ ] **Tenant inverse mode can share forgotten tables.** An app not explicitly classified becomes shared under `tenant_apps` inverse mode → cross-tenant data exposure. Fix: require classification + boot error. (codex #09)
+11. [x] **Tenant inverse mode can share forgotten tables.** FIXED (make-visible): `on_ready` now logs the tenant-owned app set at boot under `tenant_apps` mode so the shared/tenant split is auditable, and the `tenant_apps` doc's "forgotten → shared is safe" claim is corrected — it's only safe if the app has no per-tenant data. A blanket require-classification error would break inverse mode's ergonomics (unlisted=shared is the design), so this surfaces the risk without changing routing. (codex #09)
 
 ---
 
