@@ -189,8 +189,32 @@ fn json_to_gql(col: &Column, v: &Json) -> Value {
 /// The parent row a resolver receives.
 type Row = Json;
 
-/// Build the whole schema from the exposed models.
+/// Conservative default query budgets (gaps4 #10). A public GraphQL endpoint
+/// must not accept an unbounded query — one deeply-nested or wide request fans
+/// out into thousands of resolver + DB calls. These are deliberately generous
+/// for ordinary queries and only bite pathological ones; override per-app with
+/// `GraphqlPlugin::max_depth` / `max_complexity`.
+pub const DEFAULT_MAX_DEPTH: usize = 12;
+pub const DEFAULT_MAX_COMPLEXITY: usize = 500;
+
+/// Build the whole schema from the exposed models, with the default query
+/// budget. Used by tests and the simple path.
 pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
+    build_with_limits(
+        exposed,
+        Some(DEFAULT_MAX_DEPTH),
+        Some(DEFAULT_MAX_COMPLEXITY),
+    )
+}
+
+/// Build the schema, applying the given depth / complexity budget. `None`
+/// leaves that dimension uncapped — only sensible on a trusted internal
+/// endpoint.
+pub fn build_with_limits(
+    exposed: &[Exposed],
+    max_depth: Option<usize>,
+    max_complexity: Option<usize>,
+) -> Result<Schema, SchemaError> {
     let by_table: BTreeMap<String, Exposed> = exposed
         .iter()
         .map(|e| (e.meta.table.clone(), e.clone()))
@@ -453,7 +477,16 @@ pub fn build(exposed: &[Exposed]) -> Result<Schema, SchemaError> {
         }
         schema = schema.register(m);
     }
-    schema.register(query).finish()
+    schema = schema.register(query);
+    // gaps4 #10: apply the query budget before finishing. async-graphql rejects
+    // an over-budget query at validation time, before a single resolver runs.
+    if let Some(d) = max_depth {
+        schema = schema.limit_depth(d);
+    }
+    if let Some(c) = max_complexity {
+        schema = schema.limit_complexity(c);
+    }
+    schema.finish()
 }
 
 fn pk_of(row: &Json, pk: &str) -> String {

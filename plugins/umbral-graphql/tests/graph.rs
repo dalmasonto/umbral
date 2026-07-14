@@ -504,3 +504,44 @@ async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
          one side only:\n{sdl}"
     );
 }
+
+/// gaps4 #10 — a query nested past the default depth budget is rejected at
+/// validation, before any resolver runs. Without a budget, the post<->author
+/// cycle lets one request fan out into an unbounded resolver/DB storm — the
+/// cheapest GraphQL DoS.
+#[tokio::test]
+async fn a_query_deeper_than_the_budget_is_rejected() {
+    let _g = lock().lock().await;
+
+    // Build `{ gq_author(id: "1") { gq_posts { author { gq_posts { author { ... } } } } } }`
+    // nested well past DEFAULT_MAX_DEPTH (12). Each level adds real depth.
+    let mut inner = String::from("username");
+    for _ in 0..12 {
+        inner = format!("author {{ gq_posts {{ {inner} }} }}");
+    }
+    let query = format!(r#"{{ gq_author(id: "1") {{ gq_posts {{ {inner} }} }} }}"#);
+
+    let out = gql(&query).await;
+    let errors = out.get("errors");
+    assert!(
+        errors.is_some(),
+        "an over-depth query must be rejected, not executed: {out}"
+    );
+    assert!(
+        out.get("data").map(|d| d.is_null()).unwrap_or(true),
+        "no data should be resolved for a rejected query: {out}"
+    );
+}
+
+/// The default budget does NOT reject an ordinary shallow query — the cap is
+/// for pathological nesting, not real use.
+#[tokio::test]
+async fn a_normal_shallow_query_is_within_the_budget() {
+    let _g = lock().lock().await;
+    let out =
+        gql(r#"{ gq_author(id: "1") { username gq_posts { title author { username } } } }"#).await;
+    assert!(
+        out.get("errors").is_none(),
+        "a normal query must not be capped: {out}"
+    );
+}

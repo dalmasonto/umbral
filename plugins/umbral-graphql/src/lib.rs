@@ -221,6 +221,11 @@ pub struct GraphqlPlugin {
     hidden: Vec<(String, String)>,
     graphiql: Option<bool>,
     auth: Option<Arc<dyn umbral::auth::Authentication>>,
+    /// Query depth / complexity budget (gaps4 #10). `None` uses the
+    /// conservative built-in defaults; a public endpoint should not accept an
+    /// unbounded query, so these are ON by default.
+    max_depth: Option<usize>,
+    max_complexity: Option<usize>,
 }
 
 /// Accepts `"cost"`, `["cost", "supplier"]`, or a `Vec<String>` — the same shape
@@ -431,6 +436,25 @@ impl GraphqlPlugin {
         self
     }
 
+    /// Cap the nesting depth of an accepted query (gaps4 #10). A deeply nested
+    /// query over relations is the cheapest GraphQL DoS: one request fans out
+    /// into thousands of resolver calls. Defaults to [`DEFAULT_MAX_DEPTH`].
+    /// Raise it if a legitimate query is being rejected; you almost never want
+    /// to remove the cap on a public endpoint.
+    pub fn max_depth(mut self, depth: usize) -> Self {
+        self.max_depth = Some(depth);
+        self
+    }
+
+    /// Cap the total complexity (roughly, field count) of an accepted query
+    /// (gaps4 #10). Complements [`Self::max_depth`]: a wide query with many
+    /// aliased fields is as expensive as a deep one. Defaults to
+    /// [`DEFAULT_MAX_COMPLEXITY`].
+    pub fn max_complexity(mut self, complexity: usize) -> Self {
+        self.max_complexity = Some(complexity);
+        self
+    }
+
     fn resolve_exposed(&self) -> Vec<Exposed> {
         let registry = umbral::migrate::registered_models();
 
@@ -521,7 +545,11 @@ impl Plugin for GraphqlPlugin {
             );
         }
 
-        let schema: Schema = match schema::build(&exposed) {
+        // gaps4 #10: apply this plugin's query budget (or the conservative
+        // defaults) so a public endpoint can't be DoS'd by an unbounded query.
+        let max_depth = self.max_depth.or(Some(schema::DEFAULT_MAX_DEPTH));
+        let max_complexity = self.max_complexity.or(Some(schema::DEFAULT_MAX_COMPLEXITY));
+        let schema: Schema = match schema::build_with_limits(&exposed, max_depth, max_complexity) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(error = %e, "umbral-graphql: failed to build the schema");
