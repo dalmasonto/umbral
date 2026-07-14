@@ -4,6 +4,12 @@ Auto-generated CRUD admin for umbral models. Drop in `AdminPlugin` and every
 registered model gets a list view, detail view, create form, edit form, and
 delete action under `/admin/`.
 
+## Install
+
+```bash
+cargo add umbral-admin
+```
+
 ## Development
 
 In `dev` mode (the default) the admin loads Tailwind CSS from the CDN:

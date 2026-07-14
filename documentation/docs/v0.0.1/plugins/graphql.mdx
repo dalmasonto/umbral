@@ -26,6 +26,12 @@ App::builder()
 { post(id: "1") { title author { username } comments { body } } }
 ```
 
+## Install
+
+```bash
+cargo add umbral-graphql
+```
+
 ## Nothing is exposed until you say so
 
 Three separate opt-ins, because the blast radius of each is different:
@@ -53,12 +59,6 @@ Writes are governed separately: `private` hides a column from responses, it does
 ## Relations don't N+1
 
 Relation fields resolve through a per-request DataLoader, so `posts { author { .. } }` batches the author lookup instead of firing one query per row. The loaders are per-request by construction — a shared cache would serve one caller's unlocked columns to another.
-
-## Install
-
-```bash
-cargo add umbral umbral-graphql
-```
 
 ## See also
 

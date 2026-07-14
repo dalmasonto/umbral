@@ -4,6 +4,15 @@
 
 Interactive API playground UI for umbral-rest. A 3-pane Postman-style UI mounted at `/api/playground/`. Fetches the existing `umbral-openapi` JSON spec at runtime and renders a navigable endpoint tree, request builder, and response viewer.
 
+## Install
+
+```bash
+cargo add umbral-playground
+```
+
+It renders the spec `umbral-openapi` emits over the resources `umbral-rest` registered, so
+install those too: `cargo add umbral-rest umbral-openapi`.
+
 ## Quick start
 
 ```rust
