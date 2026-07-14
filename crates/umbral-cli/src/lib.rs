@@ -337,8 +337,9 @@ fn command_needs_ready(subcommand: Option<&str>) -> bool {
 /// a subprocess. User code should call [`dispatch`] (which reads
 /// `std::env::args_os()` and delegates here).
 ///
-/// The dispatch order is the same as [`dispatch`]: plugin-contributed
-/// commands first via [`umbral_core::cli::dispatch`], then the built-in
+/// The dispatch order is the same as [`dispatch`]: the app's own commands
+/// (`AppBuilder::command`) and the plugin-contributed ones first, via
+/// [`umbral_core::cli::dispatch_with_app_commands`], then the built-in
 /// subcommand set (`serve` / `migrate` / etc.).
 pub async fn dispatch_with_argv(
     app: App,
@@ -379,14 +380,21 @@ pub async fn dispatch_with_argv(
         );
     }
 
-    // Step 1: try plugin-contributed subcommands first. Each registered
-    // plugin's `commands()` is queried; if argv matches one of them
-    // (e.g. `createsuperuser` from `umbral-auth`, `worker` from
-    // `umbral-tasks`), that command's `run` fires and we return. If no
-    // plugin command matches argv, fall through to the built-in
-    // subcommand set below.
-    if !app.plugins().is_empty() {
-        match umbral_core::cli::dispatch(app.plugins(), argv.clone()).await {
+    // Step 1: try the project's own commands and the plugin-contributed
+    // ones first. The App's `AppBuilder::command` registrations come first
+    // (what `umbral startcommand --in root` writes), then each registered
+    // plugin's `commands()` — `createsuperuser` from `umbral-auth`,
+    // `tasks-worker` from `umbral-tasks`. If argv matches one, that
+    // command's `run` fires and we return; otherwise we fall through to
+    // the built-in subcommand set below.
+    if !app.plugins().is_empty() || !app.commands().is_empty() {
+        match umbral_core::cli::dispatch_with_app_commands(
+            app.commands(),
+            app.plugins(),
+            argv.clone(),
+        )
+        .await
+        {
             Ok(umbral_core::cli::DispatchOutcome::Matched(_)) => return Ok(()),
             Ok(umbral_core::cli::DispatchOutcome::Help(msg)) => {
                 // A plugin command's --help was requested (e.g.
@@ -570,9 +578,10 @@ fn unknown_token(argv: &[std::ffi::OsString]) -> Option<String> {
 }
 
 /// Build the merged `(name, about)` catalog: every built-in subcommand
-/// (read off the derived clap `Command` via `CommandFactory`) followed
-/// by every plugin-contributed command. Built-ins are placed first so
-/// they win a name clash in [`umbral_core::cli::render_help`]'s dedup.
+/// (read off the derived clap `Command` via `CommandFactory`), then the
+/// project's own `AppBuilder::command` registrations, then every
+/// plugin-contributed command. Built-ins are placed first so they win a
+/// name clash in [`umbral_core::cli::render_help`]'s dedup.
 fn full_catalog(app: &App) -> Vec<(String, Option<String>)> {
     let mut catalog: Vec<(String, Option<String>)> = Vec::new();
     let root = <Cli as CommandFactory>::command();
@@ -582,7 +591,10 @@ fn full_catalog(app: &App) -> Vec<(String, Option<String>)> {
             sub.get_about().map(|s| s.to_string()),
         ));
     }
-    catalog.extend(umbral_core::cli::command_catalog(app.plugins()));
+    catalog.extend(umbral_core::cli::command_catalog_with_app_commands(
+        app.commands(),
+        app.plugins(),
+    ));
     catalog
 }
 

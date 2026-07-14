@@ -58,6 +58,17 @@ use clap::ArgMatches;
 
 use crate::plugin::Plugin;
 
+/// Re-export of `clap`, the crate [`PluginCommand`] names in its own
+/// public signature (`fn command(&self) -> clap::Command`).
+///
+/// A trait whose surface names a foreign type has to hand that type
+/// out, or every implementor adds its own `clap = "4"` dependency and
+/// gets to discover — at link time, via a type mismatch a page long —
+/// that it resolved a different major version than the framework. Write
+/// `use umbral::cli::clap;` and you are provably on the same clap the
+/// dispatcher parses with.
+pub use clap;
+
 /// Error returned by a plugin command. Boxed so plugins can return
 /// any concrete error type without forcing the trait into a
 /// generic-over-E shape.
@@ -116,25 +127,31 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    // Collect every plugin command, deduplicating by name. The
-    // first-registered wins; subsequent collisions log and are
-    // dropped.
-    let mut commands: Vec<(String, Box<dyn PluginCommand>)> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for plugin in plugins {
-        for cmd in plugin.commands() {
-            let name = cmd.command().get_name().to_string();
-            if !seen.insert(name.clone()) {
-                tracing::warn!(
-                    target: "umbral::cli",
-                    "duplicate plugin command `{name}` from `{}`; ignoring",
-                    plugin.name()
-                );
-                continue;
-            }
-            commands.push((name, cmd));
-        }
-    }
+    dispatch_with_app_commands(&[], plugins, args).await
+}
+
+/// [`dispatch`], plus the commands the *project* registered directly on
+/// its `App` via [`crate::app::AppBuilder::command`].
+///
+/// A project's own management command (`backfill_slugs`, `import_prices`)
+/// belongs to no plugin — it belongs to the binary. Without this, the only
+/// way to add one is to wrap it in a dummy plugin, which is a contract
+/// smell: the plugin trait exists to package a *reusable* unit, not to be
+/// the sole doorway to argv.
+///
+/// App commands are collected first, so on a name clash the project's own
+/// command wins over a plugin's (most-specific layer wins) and a warning
+/// names the plugin that lost.
+pub async fn dispatch_with_app_commands<I, T>(
+    app_commands: &[Box<dyn PluginCommand>],
+    plugins: &[Box<dyn Plugin>],
+    args: I,
+) -> Result<DispatchOutcome, CliError>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let commands = collect_commands(app_commands, plugins);
 
     // Nothing contributed → caller handles everything.
     if commands.is_empty() {
@@ -147,7 +164,7 @@ where
         .subcommand_required(false)
         .arg_required_else_help(false);
     for (_, cmd) in &commands {
-        root = root.subcommand(cmd.command());
+        root = root.subcommand(cmd.get().command());
     }
 
     // Run match. `try_get_matches_from` swallows the std::process::exit
@@ -183,11 +200,77 @@ where
 
     for (cmd_name, cmd) in &commands {
         if cmd_name == &name {
-            cmd.run(&sub_matches).await?;
+            cmd.get().run(&sub_matches).await?;
             return Ok(DispatchOutcome::Matched(name));
         }
     }
     Ok(DispatchOutcome::Unmatched)
+}
+
+/// One collected command, however it got here.
+///
+/// The app registers its commands once on the builder and the `App` owns
+/// them for its lifetime, so those arrive as borrows. A plugin *builds* a
+/// fresh `Box<dyn PluginCommand>` every time `Plugin::commands()` is
+/// called, so those arrive owned. `run` takes `&self`, so neither side
+/// needs to be cloned — this enum is just the seam that lets one list
+/// hold both.
+enum CommandHandle<'a> {
+    Borrowed(&'a dyn PluginCommand),
+    Owned(Box<dyn PluginCommand>),
+}
+
+impl CommandHandle<'_> {
+    fn get(&self) -> &dyn PluginCommand {
+        match self {
+            Self::Borrowed(c) => *c,
+            Self::Owned(c) => c.as_ref(),
+        }
+    }
+}
+
+/// Collect the app's own commands followed by every plugin's, keyed by
+/// the clap name and deduplicated (first-registered wins).
+///
+/// The single place the precedence rule lives: app commands are pushed
+/// before plugin commands, so a project can deliberately shadow a
+/// plugin's command with its own. Both [`dispatch_with_app_commands`]
+/// and [`command_catalog_with_app_commands`] route through here, which
+/// is what keeps the help listing honest about what would actually run.
+fn collect_commands<'a>(
+    app_commands: &'a [Box<dyn PluginCommand>],
+    plugins: &'a [Box<dyn Plugin>],
+) -> Vec<(String, CommandHandle<'a>)> {
+    let mut commands: Vec<(String, CommandHandle<'a>)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for cmd in app_commands {
+        let name = cmd.command().get_name().to_string();
+        if !seen.insert(name.clone()) {
+            tracing::warn!(
+                target: "umbral::cli",
+                "app command `{name}` is registered twice on the App builder; \
+                 ignoring the second",
+            );
+            continue;
+        }
+        commands.push((name, CommandHandle::Borrowed(cmd.as_ref())));
+    }
+    for plugin in plugins {
+        for cmd in plugin.commands() {
+            let name = cmd.command().get_name().to_string();
+            if !seen.insert(name.clone()) {
+                tracing::warn!(
+                    target: "umbral::cli",
+                    "duplicate command `{name}` from plugin `{}`; ignoring (an \
+                     earlier plugin — or the app itself — registered it first)",
+                    plugin.name()
+                );
+                continue;
+            }
+            commands.push((name, CommandHandle::Owned(cmd)));
+        }
+    }
+    commands
 }
 
 /// Collect every plugin-contributed command as `(name, about)` pairs.
@@ -204,29 +287,33 @@ where
 /// still appears (with `None` description); the CLI renders a dash for
 /// it and emits a `debug!` nudging the plugin author to add help text.
 pub fn command_catalog(plugins: &[Box<dyn Plugin>]) -> Vec<(String, Option<String>)> {
-    let mut out: Vec<(String, Option<String>)> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for plugin in plugins {
-        for cmd in plugin.commands() {
-            let clap_cmd = cmd.command();
-            let name = clap_cmd.get_name().to_string();
-            if !seen.insert(name.clone()) {
-                continue;
-            }
-            let about = clap_cmd.get_about().map(|s| s.to_string());
+    command_catalog_with_app_commands(&[], plugins)
+}
+
+/// [`command_catalog`], plus the project's own `AppBuilder::command`
+/// registrations — the listing half of [`dispatch_with_app_commands`].
+///
+/// Shares [`collect_commands`] with the dispatcher, so a command that
+/// lost a name clash is absent from the help for the same reason it
+/// would never have run: it is not in the collected set.
+pub fn command_catalog_with_app_commands(
+    app_commands: &[Box<dyn PluginCommand>],
+    plugins: &[Box<dyn Plugin>],
+) -> Vec<(String, Option<String>)> {
+    collect_commands(app_commands, plugins)
+        .into_iter()
+        .map(|(name, cmd)| {
+            let about = cmd.get().command().get_about().map(|s| s.to_string());
             if about.is_none() {
                 tracing::debug!(
                     target: "umbral::cli",
-                    "plugin command `{name}` (from `{}`) has no `about`; \
-                     it lists with a blank description. Add `.about(...)` so \
-                     users can discover what it does.",
-                    plugin.name()
+                    "command `{name}` has no `about`; it lists with a blank \
+                     description. Add `.about(...)` so users can discover what it does.",
                 );
             }
-            out.push((name, about));
-        }
-    }
-    out
+            (name, about)
+        })
+        .collect()
 }
 
 /// Render the unified command listing shown on help / unknown-command.

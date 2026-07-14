@@ -11,6 +11,7 @@ pub mod backend;
 pub mod backup;
 pub mod check;
 pub mod cli;
+pub mod codegen;
 pub mod cors;
 pub mod db;
 pub mod errors;

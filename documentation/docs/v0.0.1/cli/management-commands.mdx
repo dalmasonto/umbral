@@ -45,6 +45,10 @@ Built-in plugins contribute their own subcommands through the `Plugin::commands(
 
 Each plugin command shares the same `cargo run -- <cmd>` form and is detailed in its own section below.
 
+## Your own subcommands
+
+A backfill, an import, a nightly reconcile — anything you'd reach for a script for. [`umbral startcommand`](./startcommand) scaffolds it with its arguments and registers it, either on your project (`App::builder().commands(...)`) or inside one of your plugins (`Plugin::commands()`). It then runs as `cargo run -- <name>` and lists in `umbral help` alongside everything above.
+
 ## How it works
 
 Your `src/main.rs` (the one `umbral startproject` generates) ends

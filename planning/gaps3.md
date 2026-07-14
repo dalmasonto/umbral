@@ -396,3 +396,6 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
     Postgres is untouched: a real `uuid` column type, bound as a uuid.
 
     Docs corrected (`orm/column-types.mdx` said "36-char canonical text on SQLite", which was never true), and `backend.rs`'s test now asserts `Blob` — it used to pin the lie.
+
+81. [x] `startcommand` — shipped, with the missing contract it needed (`AppBuilder::command`: a project could not own a command without inventing a plugin to carry it) — archived
+

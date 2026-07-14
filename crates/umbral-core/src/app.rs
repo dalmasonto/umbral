@@ -22,6 +22,12 @@ type RouteContextResolver =
 pub struct App {
     router: Router,
     plugins: Vec<Box<dyn Plugin>>,
+    /// Management commands the *project* registered directly, via
+    /// [`AppBuilder::command`] — the ones that belong to the binary
+    /// rather than to any plugin. Handed to
+    /// [`crate::cli::dispatch_with_app_commands`] alongside the plugins'
+    /// own contributions.
+    commands: Vec<Box<dyn crate::cli::PluginCommand>>,
     /// gaps3 #23: when true, `umbral_cli::dispatch` applies pending migrations
     /// before starting the server (the `serve` command only) — so a fresh DB
     /// "just works" WITHOUT running migrate during `makemigrations`/`migrate`
@@ -205,6 +211,17 @@ impl App {
     pub fn plugins(&self) -> &[Box<dyn Plugin>] {
         &self.plugins
     }
+
+    /// Borrow the project's own commands — the ones registered directly on
+    /// the builder via [`AppBuilder::command`] rather than contributed by a
+    /// plugin.
+    ///
+    /// Mirrors [`App::plugins`]: borrowed, not moved, so the App stays
+    /// usable after [`crate::cli::dispatch_with_app_commands`] returns
+    /// `Unmatched` and the caller falls through to its built-ins.
+    pub fn commands(&self) -> &[Box<dyn crate::cli::PluginCommand>] {
+        &self.commands
+    }
 }
 
 /// The fluent entry point for constructing an [`App`].
@@ -225,6 +242,11 @@ pub struct AppBuilder {
     /// gaps3 #46 — collect link-registered models at build time.
     auto_models: bool,
     plugins: Vec<Box<dyn Plugin>>,
+    /// Project-owned management commands, added via [`AppBuilder::command`].
+    /// Kept out of the plugin list on purpose: a command the binary owns
+    /// isn't a reusable unit, and wrapping it in a dummy plugin to reach
+    /// argv would be a workaround for a missing contract, not a design.
+    commands: Vec<Box<dyn crate::cli::PluginCommand>>,
     templates_dir: Option<std::path::PathBuf>,
     slash_redirect: crate::slash::SlashRedirect,
     not_found_template: Option<String>,
@@ -314,6 +336,7 @@ impl Default for AppBuilder {
             models: Vec::new(),
             auto_models: false,
             plugins: Vec::new(),
+            commands: Vec::new(),
             templates_dir: None,
             slash_redirect: crate::slash::SlashRedirect::default(),
             not_found_template: None,
@@ -438,6 +461,59 @@ impl AppBuilder {
     ///
     /// If your models live in a library crate, either `use` it from `main.rs` (so
     /// the linker keeps it) or keep naming them with `.model::<T>()`.
+    /// Register one project-owned management command.
+    ///
+    /// The command shows up in `cargo run -- <name>`, in `umbral help`, and
+    /// under `umbral <name> --help`, exactly like a plugin's. The difference
+    /// is ownership: this one belongs to the binary, so there is no plugin
+    /// to wrap it in and nothing to publish.
+    ///
+    /// ```ignore
+    /// use umbral::cli::{CliError, PluginCommand, clap};
+    ///
+    /// struct BackfillSlugs;
+    ///
+    /// #[umbral::async_trait]
+    /// impl PluginCommand for BackfillSlugs {
+    ///     fn command(&self) -> clap::Command {
+    ///         clap::Command::new("backfill_slugs").about("Fill empty post slugs")
+    ///     }
+    ///     async fn run(&self, _m: &clap::ArgMatches) -> Result<(), CliError> {
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// App::builder().command(BackfillSlugs)
+    /// ```
+    ///
+    /// `umbral startcommand` writes that file for you and wires this call.
+    ///
+    /// On a name clash with a plugin's command, the app's wins — the
+    /// project is the most specific layer — and the losing plugin is named
+    /// in a warning. It does NOT override a framework built-in (`migrate`,
+    /// `serve`, …); `startcommand` rejects those names up front.
+    pub fn command(mut self, command: impl crate::cli::PluginCommand) -> Self {
+        self.commands.push(Box::new(command));
+        self
+    }
+
+    /// Register a whole list of project-owned commands at once — what the
+    /// generated `src/commands/mod.rs` hands back from its `all()` registry.
+    ///
+    /// ```ignore
+    /// App::builder().commands(commands::all())
+    /// ```
+    ///
+    /// That indirection is what makes `startcommand` idempotent: adding a
+    /// second command appends to `all()` and never touches `main.rs` again.
+    /// Rust has no way to discover a module by scanning a directory at
+    /// runtime, so `all()` *is* the auto-detection — a registry the tool
+    /// maintains for you.
+    pub fn commands(mut self, commands: Vec<Box<dyn crate::cli::PluginCommand>>) -> Self {
+        self.commands.extend(commands);
+        self
+    }
+
     pub fn auto_models(mut self) -> Self {
         self.auto_models = true;
         self
@@ -1703,6 +1779,7 @@ impl AppBuilder {
         Ok(App {
             router,
             plugins: sorted_plugins,
+            commands: self.commands,
             auto_migrate_on_serve: self.auto_migrate_on_serve,
             drain_delay: self.drain_delay,
             ready_fired: std::sync::atomic::AtomicBool::new(false),

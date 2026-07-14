@@ -1,0 +1,160 @@
+---
+title: Writing your own command (startcommand)
+description: "`umbral startcommand` scaffolds a management command — with args, options and flags — and registers it, either on your project or inside one of your plugins."
+sidebar_position: 3
+icon: terminal-square
+---
+
+Sooner or later you need a command of your own: backfill a column, import a price sheet, re-index a search table, run a nightly reconcile from cron. `umbral startcommand` writes it and wires it up, so `cargo run -- <name>` works the moment it exits.
+
+```bash
+umbral startcommand
+```
+
+It asks two questions:
+
+<Steps>
+  <Step title="What's it called?">
+    The name you'll type: `backfill_slugs`. This becomes the clap subcommand, the module file, and the `BackfillSlugsCommand` struct.
+  </Step>
+  <Step title="Where does it live?">
+    Either the **project root** — a command that belongs to your binary — or one of **your plugins**, which it lists for you. A plugin's command travels with the plugin; anyone who installs it gets the command too.
+  </Step>
+</Steps>
+
+Skip the prompts with flags, which is what you want in a script or CI:
+
+```bash
+umbral startcommand backfill_slugs --in root
+umbral startcommand reindex --in blog     # `blog` is a plugin under plugins/
+```
+
+## What you get
+
+```text
+src/
+  commands/
+    mod.rs               # the registry: `all()`
+    backfill_slugs.rs    # your command
+  main.rs                # .commands(commands::all())   ← wired for you
+```
+
+The command file is a working example of every argument shape clap gives you — a required positional, a named option with a default and a type, a repeatable option, and a boolean flag:
+
+```rust
+use umbral::cli::{CliError, PluginCommand, clap};
+
+pub struct BackfillSlugsCommand;
+
+#[umbral::async_trait]
+impl PluginCommand for BackfillSlugsCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("backfill_slugs")
+            .about("Fill in empty post slugs")
+            // POSITIONAL, required: `backfill_slugs <slug>`
+            .arg(clap::Arg::new("slug").required(true))
+            // NAMED with a value + default: `--limit 25` / `-l 25`
+            .arg(
+                clap::Arg::new("limit")
+                    .long("limit")
+                    .short('l')
+                    .value_parser(clap::value_parser!(u64))
+                    .default_value("25"),
+            )
+            // REPEATABLE: `--tag a --tag b` collects both
+            .arg(clap::Arg::new("tag").long("tag").action(clap::ArgAction::Append))
+            // FLAG, no value: `--dry-run`
+            .arg(clap::Arg::new("dry-run").long("dry-run").action(clap::ArgAction::SetTrue))
+    }
+
+    async fn run(&self, matches: &clap::ArgMatches) -> Result<(), CliError> {
+        let slug = matches.get_one::<String>("slug").expect("required");
+        let limit = *matches.get_one::<u64>("limit").expect("has a default");
+        let dry_run = matches.get_flag("dry-run");
+
+        // The app is already built: settings loaded, pool open, models
+        // registered. So the ORM works ambiently — no pool to thread through.
+        let posts = Post::objects()
+            .filter(post::SLUG.eq(""))
+            .limit(limit as i64)
+            .fetch()
+            .await?;
+
+        if dry_run {
+            println!("would touch {} post(s)", posts.len());
+            return Ok(());
+        }
+        // ...
+        Ok(())
+    }
+}
+```
+
+Run it:
+
+```bash
+cargo run -- backfill_slugs --help
+cargo run -- backfill_slugs hello-world --limit 5 --tag a --tag b --dry-run
+```
+
+It also shows up in `umbral help`, next to `migrate` and `serve`. Write the `.about(...)` line — a command with no `about` lists as a dash, and nobody finds it.
+
+<Callout type="info">
+Import clap from **`umbral::cli::clap`**, as the generated file does. `PluginCommand` names `clap::Command` in its own signature, so implementing it against a separately-declared `clap` dependency risks landing on a different major version than the dispatcher parses with — and that failure surfaces as a page-long type mismatch, not a friendly error.
+</Callout>
+
+## Adding a second command
+
+Run `startcommand` again. It appends to the registry in `commands/mod.rs` and touches nothing else:
+
+```rust
+pub mod backfill_slugs;
+pub mod import_prices;   // ← appended
+
+pub fn all() -> Vec<Box<dyn PluginCommand>> {
+    vec![
+        Box::new(backfill_slugs::BackfillSlugsCommand),
+        Box::new(import_prices::ImportPricesCommand),   // ← appended
+    ]
+}
+```
+
+<Accordion title="Why a registry function and not real auto-detection?">
+Rust has no runtime module reflection — nothing can walk `commands/` at startup and find the structs in it. The alternatives are a build script that generates the registry or a linker-section trick; both hide the list somewhere you can't read.
+
+`all()` is the registry, and `startcommand` maintains it for you (that's what the `// umbral:startcommand` marker comments are for). You can still edit it by hand: comment a command out and it stops existing, which is exactly the kind of thing a magic registry won't let you do. If you delete the markers, `startcommand` won't guess at your file — it prints the two lines to add and leaves it alone.
+</Accordion>
+
+## Root or plugin?
+
+|  | `--in root` | `--in <plugin>` |
+|---|---|---|
+| Lives in | `src/commands/` | `plugins/<name>/src/commands/` |
+| Registered by | `App::builder().commands(commands::all())` in `main.rs` | `Plugin::commands()` in the plugin's `lib.rs` |
+| Ships with the plugin | No — it's your binary's | Yes — anyone who registers the plugin gets it |
+| Reaches models via | `use crate::{Post, post};` | `use crate::models::{Post, post};` |
+
+A root command needs no plugin at all. `App::builder().command(MyCommand)` registers a single one directly, and that's all the framework asks for:
+
+```rust
+let app = App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .commands(commands::all())   // the whole registry
+    .command(OneOffCommand)      // or just one
+    .build_deferred()?;
+
+umbral_cli::dispatch(app).await
+```
+
+## Names that are already taken
+
+A command you register is dispatched **before** the framework's built-in of the same name. A command called `migrate` wouldn't collide loudly — it would quietly take over, and your migrations would stop applying. So `startcommand` refuses the built-ins (`migrate`, `serve`, `makemigrations`, `dev`, …) and the built-in plugins' commands (`createsuperuser`, `tasks-worker`, `collectstatic`, …) up front, where the fix is free.
+
+Between your own layers, the most specific wins: an app command shadows a plugin command of the same name, and the plugin's is dropped with a warning.
+
+## Where the command runs
+
+By the time `run()` fires, the app is fully built — settings loaded, pool open, every model registered, and each plugin's `on_ready` hook fired. The ORM is live and ambient, so a command reads and writes exactly as a handler does. Return `Err(...)` and the process exits non-zero, which is what a CI step or a cron job is watching for.
+
+See [Management commands](./management-commands) for the built-in subcommands, and `arch.md` §7 plus `docs/specs/02-plugin-contract.md` for the design behind `Plugin::commands()`.

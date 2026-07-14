@@ -11,6 +11,9 @@
 //! - `umbral startplugin <name>` — like `startapp` but writes a
 //!   richer template (example Model with field-type attributes,
 //!   example handler, README) aimed at distributable plugins.
+//! - `umbral startcommand [name] [--in root|<plugin>]` — create a
+//!   management command (`cargo run -- <name>`), interactively asking
+//!   where it should live, and register it there.
 //!
 //! Every other (**management**) command — `serve`, `dev`, `migrate`,
 //! `makemigrations`, `inspectdb`, `worker`, … — is **forwarded** to the
@@ -28,9 +31,10 @@ use clap::{Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "umbral",
-    about = "umbral CLI. Scaffolds projects (startproject/startapp/startplugin) and \
-             runs project-free utilities (maskkeygen) directly; every other command \
-             (serve, migrate, makemigrations, worker, seed_data, …) is forwarded to \
+    about = "umbral CLI. Scaffolds projects, plugins and commands \
+             (startproject/startapp/startplugin/startcommand) and runs project-free \
+             utilities (maskkeygen) directly; every other command (serve, migrate, \
+             makemigrations, worker, seed_data, …) is forwarded to \
              `cargo run -- <command>` in the current project.",
     disable_help_subcommand = true
 )]
@@ -96,6 +100,29 @@ enum Command {
         local: Option<PathBuf>,
     },
 
+    /// Create a management command (`cargo run -- <name>`).
+    ///
+    /// Interactive by default: asks for the command's name, then where it
+    /// lives — the project root, or one of the plugins under `plugins/`
+    /// (they're listed; you pick). It writes `commands/<name>.rs`, keeps a
+    /// `commands/mod.rs` registry, and wires that registry into `main.rs`
+    /// (root) or the plugin's `Plugin::commands()` — so the command is
+    /// runnable the moment it's written, with nothing to register by hand.
+    ///
+    /// Pass `<NAME>` and `--in` to skip the prompts (CI, scripts).
+    Startcommand {
+        /// Command name — what you'll type after `cargo run --`. Prompted
+        /// for if omitted.
+        name: Option<String>,
+        /// Where the command lives: `root` for the project's own binary, or
+        /// a plugin name from `plugins/`. Prompted for if omitted.
+        #[arg(long = "in", value_name = "root|PLUGIN")]
+        target: Option<String>,
+        /// Project root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+
     /// Any non-scaffolding command (`dev`, `migrate`, `makemigrations`,
     /// `serve`, `worker`, …) is captured here and forwarded to the current
     /// project's binary via `cargo run -- <args>`. So `umbral dev` runs
@@ -139,6 +166,80 @@ fn forward_to_project(args: &[String]) -> ExitCode {
     }
 }
 
+/// `umbral startcommand [NAME] [--in root|<plugin>]`.
+///
+/// Anything not passed on the command line is asked for, which is the whole
+/// point of the command: you shouldn't have to know that a plugin's commands
+/// live behind `Plugin::commands()` and a project's behind
+/// `AppBuilder::commands()` in order to write your first one.
+///
+/// Non-interactive when stdin isn't a terminal (a script, CI, a pipe): the
+/// flags become required, and a missing one is an error rather than a
+/// prompt that would block forever on a closed stdin.
+fn run_startcommand(
+    name: Option<String>,
+    target: Option<String>,
+    path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use umbral::codegen::{Target, prompt};
+    use umbral_cli::scaffold::{CommandTarget, scaffold_command};
+
+    // The prompts come from `umbral::codegen::prompt`, the same ones a plugin's
+    // generator uses (`umbral-rest`'s startpermission / startauthentication /
+    // …). One implementation means one behaviour: the menu reads the same, and
+    // the non-TTY rule — never prompt a pipe — holds everywhere rather than in
+    // whichever generator remembered it.
+    let interactive = prompt::is_interactive();
+
+    let name = match name {
+        Some(n) => n,
+        None if interactive => prompt::ask_required("Command name (e.g. backfill_slugs): ")?,
+        None => {
+            return Err("a command name is required when stdin isn't a terminal: \
+                        `umbral startcommand <NAME> --in root`"
+                .into());
+        }
+    };
+    let name = name.trim().to_string();
+
+    let target = match target {
+        Some(t) => Target::parse(&t),
+        None if interactive => prompt::ask_target(path)?,
+        None => {
+            return Err("`--in <root|PLUGIN>` is required when stdin isn't a terminal".into());
+        }
+    };
+
+    // `scaffold_command` predates `codegen::Target` and keeps its own enum;
+    // they say the same thing.
+    let target = match target {
+        Target::Root => CommandTarget::Root,
+        Target::Plugin(p) => CommandTarget::Plugin(p),
+    };
+
+    let report = scaffold_command(&name, &target, path)?;
+
+    println!("Created in `{}`:", report.root.display());
+    for f in &report.files {
+        println!("  {}", f.display());
+    }
+    println!();
+    match &target {
+        CommandTarget::Root => println!(
+            "Registered `{name}` on the App builder (src/main.rs: `.commands(commands::all())`)."
+        ),
+        CommandTarget::Plugin(p) => println!(
+            "Registered `{name}` with the `{p}` plugin (src/lib.rs: `Plugin::commands()`)."
+        ),
+    }
+    println!();
+    println!("Next steps:");
+    for step in &report.next_steps {
+        println!("  {step}");
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     // Non-scaffolding commands are handled in one of two ways:
@@ -159,72 +260,81 @@ fn main() -> ExitCode {
         }
         return forward_to_project(args);
     }
-    let result = match cli.command {
+    // Every arm reports through the same `error: {err}` line below, so they
+    // agree on a boxed error rather than one arm's concrete type.
+    let result: Result<(), Box<dyn std::error::Error>> = match cli.command {
         Command::Startproject { name, path, local } => {
-            umbral_cli::scaffold::scaffold_project(&name, &path, local.as_deref()).map(|r| {
-                println!("Created `{}`:", r.root.display());
-                for f in &r.files {
-                    println!("  {}", f.display());
-                }
-                println!();
-                println!("Next steps:");
-                for step in &r.next_steps {
-                    println!("  {step}");
-                }
-            })
+            umbral_cli::scaffold::scaffold_project(&name, &path, local.as_deref())
+                .map(|r| {
+                    println!("Created `{}`:", r.root.display());
+                    for f in &r.files {
+                        println!("  {}", f.display());
+                    }
+                    println!();
+                    println!("Next steps:");
+                    for step in &r.next_steps {
+                        println!("  {step}");
+                    }
+                })
+                .map_err(Into::into)
         }
         Command::Startapp { name, path, local } => {
-            umbral_cli::scaffold::scaffold_app(&name, &path, local.as_deref()).map(|r| {
-                println!("Created `{}`:", r.root.display());
-                for f in &r.files {
-                    println!("  {}", f.display());
-                }
-                println!();
-                match r.cargo_toml_registered {
-                    Some(true) => println!(
-                        "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
-                    ),
-                    Some(false) => {
-                        println!("Cargo.toml already lists `{name}` — no duplicate added.")
+            umbral_cli::scaffold::scaffold_app(&name, &path, local.as_deref())
+                .map(|r| {
+                    println!("Created `{}`:", r.root.display());
+                    for f in &r.files {
+                        println!("  {}", f.display());
                     }
-                    None => println!(
-                        "Note: could not find a Cargo.toml to update. \
+                    println!();
+                    match r.cargo_toml_registered {
+                        Some(true) => println!(
+                            "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
+                        ),
+                        Some(false) => {
+                            println!("Cargo.toml already lists `{name}` — no duplicate added.")
+                        }
+                        None => println!(
+                            "Note: could not find a Cargo.toml to update. \
                          Add `{name} = {{ path = \"plugins/{name}\" }}` manually."
-                    ),
-                }
-                println!();
-                println!("Next step:");
-                for step in &r.next_steps {
-                    println!("  {step}");
-                }
-            })
+                        ),
+                    }
+                    println!();
+                    println!("Next step:");
+                    for step in &r.next_steps {
+                        println!("  {step}");
+                    }
+                })
+                .map_err(Into::into)
         }
         Command::Startplugin { name, path, local } => {
-            umbral_cli::scaffold::scaffold_plugin(&name, &path, local.as_deref()).map(|r| {
-                println!("Created `{}`:", r.root.display());
-                for f in &r.files {
-                    println!("  {}", f.display());
-                }
-                println!();
-                match r.cargo_toml_registered {
-                    Some(true) => println!(
-                        "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
-                    ),
-                    Some(false) => {
-                        println!("Cargo.toml already lists `{name}` — no duplicate added.")
+            umbral_cli::scaffold::scaffold_plugin(&name, &path, local.as_deref())
+                .map(|r| {
+                    println!("Created `{}`:", r.root.display());
+                    for f in &r.files {
+                        println!("  {}", f.display());
                     }
-                    None => println!(
-                        "Note: could not find a Cargo.toml to update. \
+                    println!();
+                    match r.cargo_toml_registered {
+                        Some(true) => println!(
+                            "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
+                        ),
+                        Some(false) => {
+                            println!("Cargo.toml already lists `{name}` — no duplicate added.")
+                        }
+                        None => println!(
+                            "Note: could not find a Cargo.toml to update. \
                          Add `{name} = {{ path = \"plugins/{name}\" }}` manually."
-                    ),
-                }
-                println!();
-                println!("Next steps:");
-                for step in &r.next_steps {
-                    println!("  {step}");
-                }
-            })
+                        ),
+                    }
+                    println!();
+                    println!("Next steps:");
+                    for step in &r.next_steps {
+                        println!("  {step}");
+                    }
+                })
+                .map_err(Into::into)
         }
+        Command::Startcommand { name, target, path } => run_startcommand(name, target, &path),
         // Handled by the early return above; kept for match exhaustiveness.
         Command::Forward(_) => unreachable!("Forward is dispatched before this match"),
     };

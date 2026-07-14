@@ -35,6 +35,22 @@ pub enum ScaffoldError {
     /// table-name collisions would land at boot. We reject the name
     /// up front to prevent this confusion.
     ReservedName(String),
+    /// The chosen command name is already a framework built-in (`migrate`,
+    /// `serve`, …) or a built-in plugin's command (`createsuperuser`, …).
+    /// Registering it would shadow the real one at dispatch — the plugin/app
+    /// layer is tried before the built-in clap parser — so `migrate` would
+    /// stop migrating. Rejected at scaffold time, where the fix is free.
+    ReservedCommandName(String),
+    /// `startcommand --in <plugin>` named a plugin that isn't under
+    /// `plugins/`. Carries the names that ARE there, so the message can
+    /// list the real choices instead of just saying no.
+    NoSuchPlugin {
+        asked: String,
+        available: Vec<String>,
+    },
+    /// `startcommand` needs a project to put the command in, and this
+    /// directory has no `src/main.rs` (root) / `src/lib.rs` (plugin).
+    NotAProject(PathBuf),
     /// I/O failure during file creation.
     Io(io::Error),
 }
@@ -59,6 +75,49 @@ pub const RESERVED_PLUGIN_NAMES: &[&str] = &[
     "tasks",
 ];
 
+/// Commands shipped by a **built-in plugin**. Unlike the framework's own
+/// subcommands, these can't be read off a clap parser — they only exist
+/// once the plugin is registered on an App, and `startcommand` runs
+/// outside any App. So they're listed.
+///
+/// Adding a command to a built-in plugin? Add its name here, or a user's
+/// `startcommand createsuperuser` will scaffold a command that silently
+/// shadows the real one.
+pub const RESERVED_PLUGIN_COMMAND_NAMES: &[&str] = &[
+    "clearsessions",
+    "collectstatic",
+    "createsuperuser",
+    "gen-client",
+    "migrate_schemas",
+    "tasks-beat",
+    "tasks-worker",
+];
+
+/// Every command name a new command may not take: the framework's own
+/// subcommands plus [`RESERVED_PLUGIN_COMMAND_NAMES`].
+///
+/// The framework half is read off the derived clap parser rather than
+/// hand-listed, so adding a subcommand to `Command` in `lib.rs`
+/// automatically reserves its name here. A hand-maintained copy would
+/// have drifted the first time someone added one.
+///
+/// This matters because dispatch tries app/plugin commands *before* the
+/// built-in parser (`lib.rs`, step 1 vs step 2). A user command named
+/// `migrate` wouldn't collide loudly — it would just quietly take over,
+/// and their migrations would stop applying.
+pub fn reserved_command_names() -> Vec<String> {
+    use clap::CommandFactory;
+    let mut names: Vec<String> = <crate::Cli as CommandFactory>::command()
+        .get_subcommands()
+        .map(|s| s.get_name().to_string())
+        .collect();
+    names.extend(RESERVED_PLUGIN_COMMAND_NAMES.iter().map(|s| s.to_string()));
+    names.push("help".to_string());
+    names.sort();
+    names.dedup();
+    names
+}
+
 impl std::fmt::Display for ScaffoldError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -76,6 +135,35 @@ impl std::fmt::Display for ScaffoldError {
                 "`{s}` is the name of a built-in umbral plugin; pick a different name to avoid conflicts at registration time. Reserved names: {}.",
                 RESERVED_PLUGIN_NAMES.join(", ")
             ),
+            Self::ReservedCommandName(s) => write!(
+                f,
+                "`{s}` is already an umbral command; pick another name. A command you register \
+                 is dispatched BEFORE the built-in of the same name, so this one would shadow \
+                 it. Taken names: {}.",
+                reserved_command_names().join(", ")
+            ),
+            Self::NoSuchPlugin { asked, available } => {
+                if available.is_empty() {
+                    write!(
+                        f,
+                        "no plugin named `{asked}` — this project has no `plugins/` directory yet. \
+                         Create one with `umbral startapp <name>`, or place the command at the \
+                         project root with `--in root`."
+                    )
+                } else {
+                    write!(
+                        f,
+                        "no plugin named `{asked}`. Available: root, {}.",
+                        available.join(", ")
+                    )
+                }
+            }
+            Self::NotAProject(p) => write!(
+                f,
+                "`{}` doesn't look like an umbral project — no `src/main.rs`. cd into your \
+                 project directory, or pass `--path <dir>`.",
+                p.display()
+            ),
             Self::Io(e) => write!(f, "{e}"),
         }
     }
@@ -86,6 +174,23 @@ impl std::error::Error for ScaffoldError {}
 impl From<io::Error> for ScaffoldError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
+    }
+}
+
+/// The generator primitives in `umbral::codegen` fail with their own error;
+/// `startcommand` reports through `ScaffoldError` like the rest of this
+/// module. The variants line up one-for-one — they were the same errors, which
+/// is why `codegen` exists.
+impl From<umbral::codegen::CodegenError> for ScaffoldError {
+    fn from(e: umbral::codegen::CodegenError) -> Self {
+        use umbral::codegen::CodegenError as C;
+        match e {
+            C::InvalidName(s) => Self::InvalidName(s),
+            C::AlreadyExists(p) => Self::AlreadyExists(p),
+            C::NoSuchPlugin { asked, available } => Self::NoSuchPlugin { asked, available },
+            C::NotAProject(p) => Self::NotAProject(p),
+            C::Io(e) => Self::Io(e),
+        }
     }
 }
 
@@ -1628,6 +1733,539 @@ pub async fn hello(Query(params): Query<HelloParams>) -> Json<HelloResponse> {{
     })
 }
 
+// ===================================================================== //
+// startcommand (gaps3 #81)                                              //
+// ===================================================================== //
+
+/// Where a scaffolded management command lives: the project's own binary
+/// (registered on the App builder via `.commands(commands::all())`) or a
+/// plugin under `plugins/<name>/` (returned from its `Plugin::commands()`,
+/// so it travels with the plugin).
+///
+/// This is `umbral::codegen::Target` — the same "root or which plugin?" every
+/// generator asks, including the ones plugins ship (`umbral-rest`'s
+/// `startpermission` and friends). Two enums saying the same thing is one
+/// enum too many.
+pub use umbral::codegen::Target as CommandTarget;
+
+/// The marker line the scaffolder inserts new module declarations above.
+const MODS_MARKER: &str =
+    "// umbral:startcommand — `umbral startcommand` declares new modules above this line.";
+/// The marker line the scaffolder inserts new registry entries above.
+const REGISTRY_MARKER: &str =
+    "// umbral:startcommand — `umbral startcommand` registers new commands above this line.";
+
+/// List the plugins available in this project: every `plugins/<name>/`
+/// directory that holds a `Cargo.toml`.
+///
+/// Reads the disk rather than `main.rs`, so a plugin you scaffolded but
+/// haven't registered yet is still offered as a home for a command. Shared
+/// with every other generator via `umbral::codegen`.
+pub use umbral::codegen::discover_plugins;
+
+/// Write a management command and register it.
+///
+/// Two targets, one shape. Either way the command lands in a
+/// `commands/<name>.rs` next to a `commands/mod.rs` whose `all()` function
+/// is the registry, and the registry is wired into the thing that owns it:
+///
+/// ```text
+/// --in root                        --in <plugin>
+/// src/                             plugins/<plugin>/src/
+///   main.rs   .commands(all())       lib.rs   fn commands() -> all()
+///   commands/                        commands/
+///     mod.rs  pub fn all()             mod.rs  pub fn all()
+///     <name>.rs                        <name>.rs
+/// ```
+///
+/// ## Why a hand-maintained `all()` and not real auto-detection
+///
+/// Rust has no runtime module reflection: nothing can walk `commands/` at
+/// startup and find the structs in it. The choices are a build script that
+/// generates the registry, an inventory-style linker-section crate, or a
+/// registry function the tool maintains. The registry function wins because
+/// it stays *readable and editable by hand* — you can see every command the
+/// app has in one place, reorder them, comment one out — and the scaffolder
+/// keeps it up to date so the common path costs you nothing. The marker
+/// comments are how it finds its insertion points; delete them and the tool
+/// falls back to telling you the two lines to add.
+///
+/// Calling this a second time with a different name appends to the existing
+/// `mod.rs` and touches neither `main.rs` nor the plugin's `lib.rs` again.
+pub fn scaffold_command(
+    name: &str,
+    target: &CommandTarget,
+    project_root: &Path,
+) -> Result<ScaffoldReport, ScaffoldError> {
+    validate_name(name)?;
+
+    if reserved_command_names().iter().any(|r| r == name) {
+        return Err(ScaffoldError::ReservedCommandName(name.to_string()));
+    }
+
+    let module = rust_ident(name);
+    let pascal = pascal_case_from_ident(name);
+    let struct_name = format!("{pascal}Command");
+
+    // Resolve the crate the command lands in, and the file that owns its
+    // registry (main.rs registers via the builder; a plugin via its
+    // `Plugin::commands()` impl). `resolve_target` is shared with every other
+    // generator, including the ones plugins ship.
+    let resolved = umbral::codegen::resolve_target(project_root, target)?;
+    let crate_root = resolved.crate_root.clone();
+    let owner_file = resolved.owner_file.clone();
+
+    let mut files = Vec::new();
+
+    // ---------------------------------------------------------------- //
+    // src/commands/<name>.rs — the command itself. `write_new_file`     //
+    // refuses to overwrite, so a re-run can't eat an existing command.  //
+    // ---------------------------------------------------------------- //
+    umbral::codegen::write_new_file(
+        &crate_root,
+        &format!("src/commands/{module}.rs"),
+        &render_command_file(name, &struct_name, target),
+        &mut files,
+    )?;
+
+    // ---------------------------------------------------------------- //
+    // src/commands/mod.rs — the registry. Created on the first command, //
+    // appended to on every one after.                                   //
+    // ---------------------------------------------------------------- //
+    let mod_rs = crate_root.join("src/commands/mod.rs");
+    let mut next_steps: Vec<String> = Vec::new();
+    if mod_rs.is_file() {
+        let text = fs::read_to_string(&mod_rs)?;
+        match append_to_registry(&text, &module, &struct_name) {
+            Some(updated) => {
+                fs::write(&mod_rs, updated)?;
+                files.push(PathBuf::from("src/commands/mod.rs"));
+            }
+            None => {
+                // The markers are gone — the user restructured the file. Say so
+                // and hand back the exact two lines rather than guessing where
+                // they go and corrupting a file we don't understand.
+                next_steps.push(
+                    "src/commands/mod.rs has no `umbral:startcommand` markers — add by hand:"
+                        .to_string(),
+                );
+                next_steps.push(format!("    pub mod {module};"));
+                next_steps.push(format!(
+                    "    ...and inside `all()`:  Box::new({module}::{struct_name}),"
+                ));
+            }
+        }
+    } else {
+        umbral::codegen::write_new_file(
+            &crate_root,
+            "src/commands/mod.rs",
+            &render_registry_file(&module, &struct_name, target),
+            &mut files,
+        )?;
+    }
+
+    // ---------------------------------------------------------------- //
+    // Register the registry with its owner (once — the second command    //
+    // reuses the same `all()` call).                                     //
+    // ---------------------------------------------------------------- //
+    let owner_text = fs::read_to_string(&owner_file)?;
+    let wiring = match target {
+        CommandTarget::Root => wire_registry_into_main(&owner_text),
+        CommandTarget::Plugin(_) => wire_registry_into_plugin(&owner_text),
+    };
+    match wiring {
+        Wiring::Updated { text, steps } => {
+            fs::write(&owner_file, text)?;
+            next_steps.extend(steps);
+        }
+        Wiring::AlreadyWired => {}
+        Wiring::Manual(steps) => next_steps.extend(steps),
+    }
+
+    next_steps.push(format!("Run it:  cargo run -- {name} --help"));
+
+    Ok(ScaffoldReport {
+        root: crate_root,
+        files,
+        next_steps,
+        cargo_toml_registered: None,
+    })
+}
+
+/// Outcome of registering the `commands::all()` registry with the file
+/// that owns it (`main.rs` for root, the plugin's `lib.rs` otherwise).
+///
+/// `Updated` carries leftover manual steps because the two aren't
+/// exclusive: we can add the `pub mod commands;` line and still be unable
+/// to touch a hand-written `fn commands()` we don't own. Discarding the
+/// half that worked to keep the enum tidy would help nobody.
+enum Wiring {
+    /// The file was edited. `text` is the new content; `steps` is anything
+    /// the edit could NOT do and the user must.
+    Updated { text: String, steps: Vec<String> },
+    /// Already registered — a previous `startcommand` did it. Nothing to do,
+    /// which is exactly what makes the second command free.
+    AlreadyWired,
+    /// The file doesn't match the shape we know how to edit. Rather than
+    /// guess, hand the user the lines to paste.
+    Manual(Vec<String>),
+}
+
+/// Wire `mod commands;` + `.commands(commands::all())` into a project's
+/// `main.rs`.
+///
+/// The builder call is inserted immediately before `.build()` /
+/// `.build_deferred()`, which is the one anchor every umbral `main.rs` has
+/// — the chain ends there by definition.
+fn wire_registry_into_main(text: &str) -> Wiring {
+    let already_mod = text.lines().any(|l| l.trim() == "mod commands;");
+    let already_registered = text.contains(".commands(commands::all())");
+    if already_mod && already_registered {
+        return Wiring::AlreadyWired;
+    }
+
+    let mut out = text.to_string();
+
+    if !already_mod {
+        // Slot it in with the other top-level module declarations so the
+        // file's table of contents stays alphabetical-ish and intact.
+        // Before the first `mod x;` line, so the table of contents at the top
+        // of main.rs stays alphabetical (`commands` sorts before `seed`).
+        match out
+            .lines()
+            .position(|l| l.starts_with("mod ") && l.ends_with(';'))
+        {
+            Some(idx) => out = insert_line_at_before(&out, idx, "mod commands;"),
+            None => {
+                return Wiring::Manual(vec![
+                    "Add to src/main.rs:".to_string(),
+                    "    mod commands;".to_string(),
+                    "    ...and in the App::builder() chain:  .commands(commands::all())"
+                        .to_string(),
+                ]);
+            }
+        }
+    }
+
+    if !already_registered {
+        let Some(idx) = out.lines().position(|l| {
+            l.trim_start().starts_with(".build_deferred()")
+                || l.trim_start().starts_with(".build()")
+        }) else {
+            return Wiring::Manual(vec![
+                "Add to the App::builder() chain in src/main.rs:".to_string(),
+                "    .commands(commands::all())".to_string(),
+            ]);
+        };
+        let indent: String = out
+            .lines()
+            .nth(idx)
+            .map(|l| l.chars().take_while(|c| c.is_whitespace()).collect())
+            .unwrap_or_default();
+        let call = format!(
+            "{indent}// Project-owned management commands (`umbral startcommand`).\n\
+             {indent}.commands(commands::all())"
+        );
+        out = insert_line_at_before(&out, idx, &call);
+    }
+
+    Wiring::Updated {
+        text: out,
+        steps: Vec::new(),
+    }
+}
+
+/// Wire `pub mod commands;` + a `Plugin::commands()` impl into a plugin's
+/// `lib.rs`.
+///
+/// The impl method is inserted at the top of the `impl Plugin for ...`
+/// block. If the plugin already has a `fn commands`, we don't touch it —
+/// a hand-written one may return more than the registry, and silently
+/// rewriting someone's trait impl is exactly the kind of "helpful" edit
+/// that eats work.
+fn wire_registry_into_plugin(text: &str) -> Wiring {
+    let already_mod = text.lines().any(|l| l.trim() == "pub mod commands;");
+    let has_commands_fn = text.contains("fn commands(");
+    if already_mod && has_commands_fn {
+        return Wiring::AlreadyWired;
+    }
+
+    let mut out = text.to_string();
+    let mut steps: Vec<String> = Vec::new();
+
+    if !already_mod {
+        match out
+            .lines()
+            .position(|l| l.starts_with("pub mod ") && l.ends_with(';'))
+        {
+            Some(idx) => out = insert_line_at_before(&out, idx, "pub mod commands;"),
+            None => steps.push("Add to src/lib.rs:  pub mod commands;".to_string()),
+        }
+    }
+
+    if !has_commands_fn {
+        match out.lines().position(|l| l.starts_with("impl Plugin for ")) {
+            Some(idx) => {
+                let method = "\n    fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>> {\n        \
+                     // Every command in `src/commands/` — `umbral startcommand`\n        \
+                     // appends to the registry in `commands/mod.rs`, so this line\n        \
+                     // never needs to change again.\n        \
+                     commands::all()\n    }";
+                out = insert_line_at(&out, idx, method);
+            }
+            None => steps.push(
+                "Add to your `impl Plugin`:  fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>> { commands::all() }"
+                    .to_string(),
+            ),
+        }
+    } else {
+        steps.push(
+            "Your plugin already has a `fn commands()` — make sure it returns \
+             `commands::all()` (or extends it) so the new command is registered."
+                .to_string(),
+        );
+    }
+
+    if out == text {
+        // Nothing we could edit. Everything is a manual step (or, if there are
+        // none, it was already wired).
+        if steps.is_empty() {
+            Wiring::AlreadyWired
+        } else {
+            Wiring::Manual(steps)
+        }
+    } else {
+        Wiring::Updated { text: out, steps }
+    }
+}
+
+/// Insert `line` immediately after line index `idx` of `text`.
+fn insert_line_at(text: &str, idx: usize, line: &str) -> String {
+    let mut out = String::with_capacity(text.len() + line.len() + 1);
+    for (i, l) in text.lines().enumerate() {
+        out.push_str(l);
+        out.push('\n');
+        if i == idx {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Append a module declaration + a registry entry to an existing
+/// `commands/mod.rs`, using the marker comments as insertion points.
+///
+/// Returns `None` when a marker is missing — the caller then reports the
+/// lines to add by hand rather than guessing at a file it doesn't
+/// recognise.
+fn append_to_registry(text: &str, module: &str, struct_name: &str) -> Option<String> {
+    if text
+        .lines()
+        .any(|l| l.trim() == format!("pub mod {module};"))
+    {
+        // Already declared (the command file was deleted but the registry
+        // entry survived). Adding a second `pub mod` would not compile.
+        return Some(text.to_string());
+    }
+    let mods_idx = text.lines().position(|l| l.trim() == MODS_MARKER)?;
+    let with_mod = insert_line_at_before(text, mods_idx, &format!("pub mod {module};"));
+
+    let reg_idx = with_mod.lines().position(|l| l.trim() == REGISTRY_MARKER)?;
+    let entry = format!("        Box::new({module}::{struct_name}),");
+    Some(insert_line_at_before(&with_mod, reg_idx, &entry))
+}
+
+/// Insert `line` immediately *before* line index `idx` of `text`.
+fn insert_line_at_before(text: &str, idx: usize, line: &str) -> String {
+    let mut out = String::with_capacity(text.len() + line.len() + 1);
+    for (i, l) in text.lines().enumerate() {
+        if i == idx {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
+/// The generated `commands/mod.rs` — the registry.
+fn render_registry_file(module: &str, struct_name: &str, target: &CommandTarget) -> String {
+    let (owner, wiring) = match target {
+        CommandTarget::Root => (
+            "this project",
+            "`main.rs` passes `all()` to `App::builder().commands(...)`.",
+        ),
+        CommandTarget::Plugin(_) => (
+            "this plugin",
+            "`lib.rs` returns `all()` from `Plugin::commands()`.",
+        ),
+    };
+    format!(
+        r#"//! Management commands owned by {owner} — one file per command,
+//! and `all()` is the registry that hands them to the framework.
+//!
+//! {wiring}
+//!
+//! Rust can't discover a module by scanning this directory at runtime, so
+//! `all()` IS the auto-detection: `umbral startcommand` appends to it for
+//! you (that's what the marker comments below are for). You can also edit
+//! it by hand — comment a command out and it stops existing, which is
+//! harder to do with a magic registry you can't see.
+
+use umbral::cli::PluginCommand;
+
+pub mod {module};
+{MODS_MARKER}
+
+/// Every command {owner} registers.
+pub fn all() -> Vec<Box<dyn PluginCommand>> {{
+    vec![
+        Box::new({module}::{struct_name}),
+        {REGISTRY_MARKER}
+    ]
+}}
+"#
+    )
+}
+
+/// The generated `commands/<name>.rs` — one command, showing the three arg
+/// shapes clap gives you (positional, named value, flag) and how each is
+/// read back out of `ArgMatches`.
+fn render_command_file(name: &str, struct_name: &str, target: &CommandTarget) -> String {
+    // A plugin's command reaches its own models through `crate::models`;
+    // a root command reaches the project's through `crate::`.
+    let orm_note = match target {
+        CommandTarget::Root => "//     use crate::{Post, post};",
+        CommandTarget::Plugin(_) => "//     use crate::models::{Post, post};",
+    };
+    format!(
+        r#"//! `{name}` — a management command.
+//!
+//! ```bash
+//! cargo run -- {name} --help                       # what it takes
+//! cargo run -- {name} hello --limit 5 --dry-run    # a real run
+//! umbral {name} hello --tag a --tag b              # same thing, via the umbral CLI
+//! ```
+//!
+//! Registered through `commands::all()` in `commands/mod.rs`. It runs against
+//! a fully-built app: settings loaded, pool open, every model registered — so
+//! the ORM works ambiently here, with no pool to thread through.
+
+use umbral::cli::{{CliError, PluginCommand, clap}};
+
+/// The `{name}` command.
+///
+/// A unit struct is enough when the command is stateless. It doesn't have to
+/// be: the trait is object-safe over `&self`, so anything the command needs
+/// configured (a prefix, a client, a channel) can live on the struct and be
+/// passed in at registration — which is exactly why this is a trait and not a
+/// bare `fn` pointer.
+pub struct {struct_name};
+
+#[umbral::async_trait]
+impl PluginCommand for {struct_name} {{
+    /// Declare the command: its name, its help, and its arguments.
+    ///
+    /// This is plain `clap`, so everything clap can do is available here —
+    /// value parsing and validation, defaults, conflicts, subcommands of your
+    /// own. Note the import: `umbral::cli::clap`, the framework's own clap.
+    /// Add `clap` to your Cargo.toml separately and a major-version bump on
+    /// either side turns into a type mismatch a page long.
+    fn command(&self) -> clap::Command {{
+        clap::Command::new("{name}")
+            // Shown next to the command in `umbral help`. Write it — a command
+            // with no `about` lists as a dash and nobody discovers it.
+            .about("TODO: one line on what {name} does")
+            .long_about(
+                "TODO: the longer story, shown on `{name} --help`. What it \
+                 changes, whether it's safe to re-run, what it needs first.",
+            )
+            // POSITIONAL argument — `{name} <slug>`. Required, so clap
+            // rejects the call with a usage error if it's missing and `run`
+            // never sees a half-formed invocation.
+            .arg(
+                clap::Arg::new("slug")
+                    .required(true)
+                    .help("The thing to operate on"),
+            )
+            // NAMED argument with a value and a default — `--limit 25` / `-l 25`.
+            // `value_parser` is what makes it a `u64` on the other side rather
+            // than a string you'd have to parse (and mis-parse) yourself.
+            .arg(
+                clap::Arg::new("limit")
+                    .long("limit")
+                    .short('l')
+                    .value_name("N")
+                    .value_parser(clap::value_parser!(u64))
+                    .default_value("25")
+                    .help("How many rows to touch at most"),
+            )
+            // REPEATABLE named argument — `--tag a --tag b` collects both.
+            // `ArgAction::Append` is the difference between the second `--tag`
+            // overwriting the first and the two accumulating.
+            .arg(
+                clap::Arg::new("tag")
+                    .long("tag")
+                    .value_name("TAG")
+                    .action(clap::ArgAction::Append)
+                    .help("Filter by tag. Repeat for more than one."),
+            )
+            // BOOLEAN flag — `--dry-run`, no value. `SetTrue` is what makes it
+            // a flag rather than an option that demands a value.
+            .arg(
+                clap::Arg::new("dry-run")
+                    .long("dry-run")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Report what would change without writing anything"),
+            )
+    }}
+
+    /// Run the command. `matches` is this subcommand's own `ArgMatches` —
+    /// clap has already validated it against `command()` above, so every
+    /// `get_one` here is reading a value that exists and typechecked.
+    async fn run(&self, matches: &clap::ArgMatches) -> Result<(), CliError> {{
+        let slug = matches
+            .get_one::<String>("slug")
+            .expect("clap enforces `required(true)`");
+        let limit = *matches
+            .get_one::<u64>("limit")
+            .expect("clap fills in `default_value`");
+        let tags: Vec<&String> = matches
+            .get_many::<String>("tag")
+            .map(Iterator::collect)
+            .unwrap_or_default();
+        let dry_run = matches.get_flag("dry-run");
+
+        println!("{name}: slug={{slug}} limit={{limit}} tags={{tags:?}} dry_run={{dry_run}}");
+
+        // The app is already built by the time this runs, so the ORM is live:
+        //
+        {orm_note}
+        //
+        //     let posts = Post::objects()
+        //         .filter(post::PUBLISHED.eq(true))
+        //         .limit(limit as i64)
+        //         .fetch()
+        //         .await?;
+        //
+        //     if dry_run {{
+        //         println!("would touch {{}} post(s)", posts.len());
+        //         return Ok(());
+        //     }}
+        //
+        // `?` just works: `CliError` is a boxed error, so every umbral error
+        // converts into it. Return `Err(...)` and the process exits non-zero,
+        // which is what a CI step or a cron job is watching for.
+
+        Ok(())
+    }}
+}}
+"#
+    )
+}
+
 /// Write a file under `root` at the given relative path. Records the
 /// relative path in `files` for the user-facing report.
 fn write_file(
@@ -2149,5 +2787,294 @@ mod tests {
             scaffold_plugin("foo bar", tmp.path(), None),
             Err(ScaffoldError::InvalidName(_))
         ));
+    }
+
+    // ----------------------------------------------------------------- //
+    // startcommand (gaps3 #81)                                           //
+    // ----------------------------------------------------------------- //
+
+    /// A real scaffolded project to run `startcommand` against — the same
+    /// `main.rs` a user gets from `umbral startproject`, so the wiring
+    /// surgery is exercised against the file it actually has to edit, not a
+    /// fixture written to make the test pass.
+    fn project(tmp: &tempfile::TempDir) -> PathBuf {
+        scaffold_project("demo", tmp.path(), None).expect("scaffold_project");
+        tmp.path().join("demo")
+    }
+
+    fn read(root: &Path, rel: &str) -> String {
+        fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
+    }
+
+    #[test]
+    fn startcommand_root_writes_the_command_and_wires_main() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+
+        let report =
+            scaffold_command("backfill_slugs", &CommandTarget::Root, &root).expect("scaffold");
+        assert!(
+            report
+                .files
+                .contains(&PathBuf::from("src/commands/backfill_slugs.rs"))
+        );
+        assert!(report.files.contains(&PathBuf::from("src/commands/mod.rs")));
+
+        // The command file: right struct, right trait, framework's clap.
+        let cmd = read(&root, "src/commands/backfill_slugs.rs");
+        assert!(cmd.contains("pub struct BackfillSlugsCommand;"), "{cmd}");
+        assert!(
+            cmd.contains("impl PluginCommand for BackfillSlugsCommand"),
+            "{cmd}"
+        );
+        assert!(
+            cmd.contains("use umbral::cli::{CliError, PluginCommand, clap};"),
+            "the generated file must import the framework's clap, not its own: {cmd}"
+        );
+        assert!(
+            cmd.contains(r#"clap::Command::new("backfill_slugs")"#),
+            "{cmd}"
+        );
+
+        // The registry.
+        let registry = read(&root, "src/commands/mod.rs");
+        assert!(registry.contains("pub mod backfill_slugs;"), "{registry}");
+        assert!(
+            registry.contains("Box::new(backfill_slugs::BackfillSlugsCommand),"),
+            "{registry}"
+        );
+
+        // The wiring: main.rs declares the module AND registers the registry.
+        let main_rs = read(&root, "src/main.rs");
+        assert!(
+            main_rs.contains("mod commands;"),
+            "main.rs never declared the module: {main_rs}"
+        );
+        assert!(
+            main_rs.contains(".commands(commands::all())"),
+            "main.rs never registered the command registry: {main_rs}"
+        );
+        // ...and it goes INSIDE the builder chain, before the terminal build.
+        let reg = main_rs.find(".commands(commands::all())").unwrap();
+        let build = main_rs.find(".build_deferred()").unwrap();
+        assert!(
+            reg < build,
+            "`.commands(...)` landed after `.build_deferred()`, which doesn't compile"
+        );
+    }
+
+    /// The whole reason `all()` exists: the SECOND command is free. It
+    /// appends to the registry and touches `main.rs` exactly zero more
+    /// times — no duplicate `mod commands;`, no second `.commands(...)`
+    /// call (which wouldn't compile as a duplicate... it would silently
+    /// register the same list twice).
+    #[test]
+    fn startcommand_second_command_appends_and_leaves_main_alone() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+
+        scaffold_command("backfill_slugs", &CommandTarget::Root, &root).expect("first");
+        let main_after_first = read(&root, "src/main.rs");
+        scaffold_command("import-prices", &CommandTarget::Root, &root).expect("second");
+        let main_after_second = read(&root, "src/main.rs");
+
+        assert_eq!(
+            main_after_first, main_after_second,
+            "the second startcommand edited main.rs again"
+        );
+
+        let registry = read(&root, "src/commands/mod.rs");
+        assert!(registry.contains("pub mod backfill_slugs;"), "{registry}");
+        // A hyphenated command name becomes a snake_case module and a
+        // PascalCase struct, while the CLI name keeps its hyphen.
+        assert!(registry.contains("pub mod import_prices;"), "{registry}");
+        assert!(
+            registry.contains("Box::new(import_prices::ImportPricesCommand),"),
+            "{registry}"
+        );
+        let cmd = read(&root, "src/commands/import_prices.rs");
+        assert!(
+            cmd.contains(r#"clap::Command::new("import-prices")"#),
+            "the clap name should be what the user typed, hyphens and all: {cmd}"
+        );
+
+        assert_eq!(
+            main_after_second
+                .matches(".commands(commands::all())")
+                .count(),
+            1,
+            "main.rs registered the registry twice"
+        );
+        assert_eq!(
+            main_after_second.matches("\nmod commands;").count(),
+            1,
+            "main.rs declared `mod commands;` twice"
+        );
+    }
+
+    #[test]
+    fn startcommand_plugin_writes_the_command_and_wires_the_plugin() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        scaffold_app("blog", &root, None).expect("scaffold_app");
+
+        scaffold_command("reindex", &CommandTarget::Plugin("blog".to_string()), &root)
+            .expect("scaffold");
+
+        let plugin_root = root.join("plugins/blog");
+        let registry = read(&plugin_root, "src/commands/mod.rs");
+        assert!(registry.contains("pub mod reindex;"), "{registry}");
+        assert!(
+            registry.contains("Box::new(reindex::ReindexCommand),"),
+            "{registry}"
+        );
+
+        let lib_rs = read(&plugin_root, "src/lib.rs");
+        assert!(lib_rs.contains("pub mod commands;"), "{lib_rs}");
+        assert!(
+            lib_rs.contains("fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>>"),
+            "the plugin never got a `Plugin::commands()` impl: {lib_rs}"
+        );
+        assert!(
+            lib_rs.contains("commands::all()"),
+            "the impl doesn't return the registry: {lib_rs}"
+        );
+        // The method has to land INSIDE the impl block, not after it.
+        let impl_start = lib_rs.find("impl Plugin for BlogPlugin {").unwrap();
+        let method = lib_rs.find("fn commands(&self)").unwrap();
+        assert!(method > impl_start, "the method landed outside the impl");
+    }
+
+    /// A command name that's already a framework built-in would SHADOW it:
+    /// dispatch tries app/plugin commands before the built-in clap parser.
+    /// `migrate` would stop migrating, silently. Reject it where the fix is
+    /// free.
+    #[test]
+    fn startcommand_rejects_a_builtin_command_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        for taken in ["migrate", "serve", "makemigrations", "dev"] {
+            assert!(
+                matches!(
+                    scaffold_command(taken, &CommandTarget::Root, &root),
+                    Err(ScaffoldError::ReservedCommandName(_))
+                ),
+                "`{taken}` is a built-in and must be rejected"
+            );
+        }
+    }
+
+    /// Same shadowing hazard, but for a command a built-in *plugin* ships.
+    /// These can't be read off a clap parser (they only exist on a built
+    /// App), so they're listed — and the list has to be honoured.
+    #[test]
+    fn startcommand_rejects_a_builtin_plugin_command_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        assert!(matches!(
+            scaffold_command("createsuperuser", &CommandTarget::Root, &root),
+            Err(ScaffoldError::ReservedCommandName(_))
+        ));
+        assert!(matches!(
+            scaffold_command("tasks-worker", &CommandTarget::Root, &root),
+            Err(ScaffoldError::ReservedCommandName(_))
+        ));
+    }
+
+    /// The reserved set is derived from the clap parser, so a subcommand
+    /// added to `Command` in lib.rs reserves its own name with no second
+    /// list to remember to update.
+    #[test]
+    fn reserved_command_names_are_read_off_the_real_parser() {
+        let names = reserved_command_names();
+        for expected in ["migrate", "serve", "typegen", "squashmigrations", "help"] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "`{expected}` missing from the reserved set: {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn startcommand_rejects_an_unknown_plugin_and_lists_the_real_ones() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        scaffold_app("blog", &root, None).expect("scaffold_app");
+
+        let err = scaffold_command("reindex", &CommandTarget::Plugin("blgo".into()), &root)
+            .expect_err("a typo'd plugin name must not scaffold anything");
+        match err {
+            ScaffoldError::NoSuchPlugin { asked, available } => {
+                assert_eq!(asked, "blgo");
+                assert_eq!(available, vec!["blog".to_string()]);
+            }
+            other => panic!("expected NoSuchPlugin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn startcommand_refuses_to_overwrite_an_existing_command() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        scaffold_command("reindex", &CommandTarget::Root, &root).expect("first");
+        assert!(matches!(
+            scaffold_command("reindex", &CommandTarget::Root, &root),
+            Err(ScaffoldError::AlreadyExists(_))
+        ));
+    }
+
+    #[test]
+    fn startcommand_outside_a_project_says_so() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(matches!(
+            scaffold_command("reindex", &CommandTarget::Root, tmp.path()),
+            Err(ScaffoldError::NotAProject(_))
+        ));
+    }
+
+    #[test]
+    fn discover_plugins_lists_plugin_crates_only() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        // A fresh project has an empty `plugins/` (a .gitkeep + README, no crates).
+        assert!(discover_plugins(&root).is_empty());
+
+        scaffold_app("blog", &root, None).expect("scaffold_app");
+        scaffold_app("shop", &root, None).expect("scaffold_app");
+        // A stray directory with no Cargo.toml isn't a plugin and must not be
+        // offered as a home for a command.
+        fs::create_dir_all(root.join("plugins/notacrate")).unwrap();
+
+        assert_eq!(
+            discover_plugins(&root),
+            vec!["blog".to_string(), "shop".to_string()]
+        );
+    }
+
+    /// When a user has restructured `commands/mod.rs` past recognition, the
+    /// tool must not "helpfully" rewrite a file it doesn't understand. It
+    /// writes the command and hands back the two lines to add.
+    #[test]
+    fn startcommand_reports_manual_steps_when_the_registry_markers_are_gone() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        scaffold_command("first", &CommandTarget::Root, &root).expect("first");
+
+        let mod_rs = root.join("src/commands/mod.rs");
+        let mangled = read(&root, "src/commands/mod.rs")
+            .lines()
+            .filter(|l| !l.trim().starts_with("// umbral:startcommand"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&mod_rs, &mangled).unwrap();
+
+        let report = scaffold_command("second", &CommandTarget::Root, &root).expect("second");
+
+        // The registry was NOT touched...
+        assert_eq!(read(&root, "src/commands/mod.rs"), mangled);
+        // ...and the user was told exactly what to add.
+        let steps = report.next_steps.join("\n");
+        assert!(steps.contains("pub mod second;"), "{steps}");
+        assert!(steps.contains("Box::new(second::SecondCommand)"), "{steps}");
     }
 }

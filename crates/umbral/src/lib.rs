@@ -431,7 +431,45 @@ pub mod cli {
     //! }
     //! ```
 
-    pub use umbral_core::cli::{CliError, DispatchOutcome, PluginCommand, dispatch};
+    //! A project's *own* command (one that belongs to the binary, not to
+    //! any plugin) skips the plugin dance entirely: implement
+    //! [`PluginCommand`], hand it to `App::builder().command(...)`, and
+    //! `dispatch` routes to it. `umbral startcommand` scaffolds exactly
+    //! that.
+
+    pub use umbral_core::cli::{
+        CliError, DispatchOutcome, PluginCommand, command_catalog,
+        command_catalog_with_app_commands, dispatch, dispatch_with_app_commands, render_help,
+    };
+
+    /// Re-export of `clap` — the crate [`PluginCommand`] names in its own
+    /// signature (`fn command(&self) -> clap::Command`).
+    ///
+    /// Implement the trait against *this* clap and you cannot land on a
+    /// different major version than the dispatcher that parses your args.
+    /// Nothing else in the facade pulls clap in, so a project that writes no
+    /// commands never sees it.
+    pub use umbral_core::cli::clap;
+}
+
+pub mod codegen {
+    //! Scaffolding primitives for commands that generate code.
+    //!
+    //! A plugin can ship a generator (`umbral-rest` ships `startpermission`,
+    //! `startauthentication`, `startpagination`, `startthrottle`) without
+    //! reaching for `umbral-cli` — which it couldn't anyway, since
+    //! dependencies point inward. Resolve "root or which plugin?", write files
+    //! that never overwrite, and make the two edits a generator is allowed to
+    //! make to a file it doesn't own: declare a module, and insert before a
+    //! marker comment.
+    //!
+    //! See `umbral_core::codegen` for the design notes.
+
+    pub use umbral_core::codegen::{
+        CodegenError, ResolvedTarget, Scaffolded, Target, declare_module, discover_plugins,
+        ensure_dependency, insert_before_marker, pascal_case_from_ident, prompt, resolve_target,
+        to_snake_case, validate_ident, write_new_file,
+    };
 }
 
 pub mod forms {
