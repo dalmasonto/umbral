@@ -377,21 +377,16 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
     - `form_m2m`'s junction tests wrote rows for a parent id that never existed and child ids that were never seeded — legal without an FK, refused by the junction the engine actually emits.
     - M2M with a Uuid-PK child is broken on any real schema — see #79, the one genuine production bug.
 
-79. [ ] **M2M with a Uuid-PK child is broken on SQLite under a real schema** — found by the gaps3 #78 test-schema conversion, and the exact class of bug that conversion exists to expose.
+79. [x] **M2M with a Uuid-PK child is broken on SQLite under a real schema** — FIXED. One function was out of step with the rest of the ORM.
 
-    The framework stores the two sides of the junction in DIFFERENT representations:
+    Everything treats a `SqlType::Uuid` column as a typed uuid: `write::json_to_sea_value` binds `SeaValue::Uuid`, `filter_eq` and `filter_in_strings` bind a parsed `Uuid`, and `m2m.rs` reads `child_id` back with `try_get::<uuid::Uuid>`. `forms_runtime::pk_string_to_sea_value` bound the uuid's TEXT form instead — and the values it produces are exactly the junction's `child_id`s.
 
-    - the ORM writes a `Uuid` primary key as a **BLOB** (sqlx's `Encode<Sqlite> for Uuid` uses `as_bytes()`), even though the migration engine declares the column `TEXT` (`migrate.rs`: `SqlType::Text | SqlType::Uuid => "TEXT"`);
-    - the M2M junction writes `child_id` as the uuid's **TEXT** string — `forms_runtime::pk_string_to_sea_value` maps `SqlType::Uuid` to `sea_query::Value::String` (`forms_runtime.rs:157`).
+    So the junction stored the uuid's text while the child table stored the uuid. The junction a migration emits carries `child_id REFERENCES <child>(<pk>)`, and text can never match that: an M2M whose CHILD has a Uuid PK died with `FOREIGN KEY constraint failed` on every real schema. It only ever "worked" against hand-written test tables that had no foreign key — which is how it survived this long, and exactly what the gaps3 #78 conversion was for.
 
-    The junction table a real migration emits carries the FK:
+    The fix is the one-line shape everything else already uses (`SqlType::Uuid => Value::Uuid`). `crates/umbral-core/tests/form_m2m_non_i64_child.rs` now runs on the derived, FK-bearing schema — it was the last suite kept on a hand-written one — plus a new test that JOINs the junction back to the child table and demands the badges come out, because an insert that succeeds is not the same as a relation that resolves.
 
-        "child_id" TEXT NOT NULL REFERENCES "fmc_badge"("id") ON DELETE CASCADE
+80. [ ] **A `Uuid` column is declared `TEXT` on SQLite and stores a BLOB** — surfaced while fixing #79, and left alone deliberately.
 
-    A TEXT `child_id` can never match a BLOB `id`, so on any migration-created schema an M2M whose CHILD has a Uuid PK fails the insert with `FOREIGN KEY constraint failed`. `crates/umbral-core/tests/form_m2m_non_i64_child.rs` has been passing only because its hand-written junction table had **no FK** — the constraint that would have caught this was never there. That file therefore keeps its hand-written schema for now, with a comment pointing here; it should convert once this is fixed.
+    `migrate.rs` renders `SqlType::Uuid` as `TEXT` (`SqlType::Text | SqlType::Uuid => "TEXT"`), but sqlx encodes a `Uuid` as a BLOB, so the column's declared type and its contents disagree. SQLite's dynamic typing means it works, and it is now at least *consistently* wrong — both sides of a junction store the same thing, which is what #79 fixed. But `CAST(id AS TEXT)` on a uuid PK returns mojibake, and anyone reading the schema is being told something false.
 
-    Two candidate fixes, and the choice is a real decision rather than a typo:
-    - make the junction bind the child PK with the same coercion the child table uses (`pk_string_to_sea_value` returns `Value::Uuid`), so both sides are BLOBs; or
-    - make the ORM store `Uuid` as TEXT everywhere, matching the column type `migrate` actually declares. This is the more honest shape — a `TEXT` column holding blobs is a lie — but it touches every uuid read/write path and needs a data migration story for anyone already storing blobs.
-
-    Postgres is likely unaffected (a real `uuid` column type, and both sides bind as uuid), but that is untested here.
+    The honest fix is to render the column `BLOB` on SQLite (matching what goes in), or to bind uuids as text everywhere (matching what is declared). Either is a data-format decision for existing databases, not a typo: rows already written as blobs would have to be converted, and a half-migrated column would break equality filters silently. Postgres is unaffected — a real `uuid` column type, bound as uuid.

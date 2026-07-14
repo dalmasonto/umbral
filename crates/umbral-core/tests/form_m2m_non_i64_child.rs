@@ -14,31 +14,6 @@
 
 #![allow(dead_code)]
 
-// NOT converted to `create_tables_for_tests()` — deliberately, and this is the
-// interesting one. See gaps3 #79.
-//
-// Converting it swaps these hand-written tables for the schema the migration engine
-// actually emits, which includes the FOREIGN KEY on the junction:
-//
-//     "child_id" TEXT NOT NULL REFERENCES "fmc_badge"("id") ON DELETE CASCADE
-//
-// And then `m2m_form_uuid_pk_child_writes_junction_rows` fails with
-// `FOREIGN KEY constraint failed`, because the framework stores the two sides in
-// DIFFERENT representations:
-//
-//   * the ORM writes a `Uuid` primary key as a BLOB (sqlx's `Encode<Sqlite> for Uuid`
-//     uses `as_bytes()`), even though `migrate` declares the column `TEXT`;
-//   * the M2M junction writes `child_id` as the uuid's TEXT string
-//     (`forms_runtime::pk_string_to_sea_value` maps `SqlType::Uuid` to `Value::String`).
-//
-// A TEXT `child_id` can never match a BLOB `id`, so on any real (migration-created)
-// schema, an M2M whose CHILD has a Uuid PK is broken on SQLite. The hand-written table
-// below has no FK, which is the only reason this suite has been passing.
-//
-// That is a production bug, not a test bug, so it is logged rather than papered over,
-// and this file keeps its hand-written schema until the bug is fixed — at which point
-// it should convert like every other suite.
-
 use std::collections::HashMap;
 use tokio::sync::OnceCell;
 use umbral::forms::FormValidate;
@@ -149,27 +124,14 @@ async fn boot() {
             .build()
             .expect("App::build");
 
-        // String-PK child table + junction.
-        sqlx::query("CREATE TABLE fmc_label (code TEXT PRIMARY KEY, name TEXT NOT NULL)")
-            .execute(&pool)
+        // The schema comes from the models — including the junction's
+        // `child_id REFERENCES fmc_badge(id)`, which is the FK that used to make this
+        // suite impossible to run honestly (gaps3 #79).
+        umbral_core::migrate::create_tables_for_tests()
             .await
-            .expect("create fmc_label");
-        sqlx::query(
-            "CREATE TABLE fmc_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
-        )
-        .execute(&pool)
-        .await
-        .expect("create fmc_post");
-        sqlx::query(
-            "CREATE TABLE fmc_post_labels (\
-                parent_id INTEGER NOT NULL, \
-                child_id TEXT NOT NULL, \
-                PRIMARY KEY (parent_id, child_id)\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create fmc_post_labels junction");
+            .expect("create the test schema");
+
+        // String-PK child table + junction.
 
         for (code, name) in &[("rust", "Rust"), ("go", "Go"), ("ts", "TypeScript")] {
             sqlx::query("INSERT INTO fmc_label (code, name) VALUES (?, ?)")
@@ -181,26 +143,6 @@ async fn boot() {
         }
 
         // Uuid-PK child table + junction.
-        sqlx::query("CREATE TABLE fmc_badge (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
-            .execute(&pool)
-            .await
-            .expect("create fmc_badge");
-        sqlx::query(
-            "CREATE TABLE fmc_entry (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
-        )
-        .execute(&pool)
-        .await
-        .expect("create fmc_entry");
-        sqlx::query(
-            "CREATE TABLE fmc_entry_badges (\
-                parent_id INTEGER NOT NULL, \
-                child_id TEXT NOT NULL, \
-                PRIMARY KEY (parent_id, child_id)\
-            )",
-        )
-        .execute(&pool)
-        .await
-        .expect("create fmc_entry_badges junction");
 
         let badge_a = uuid::Uuid::from_u128(0xAAAA_0001);
         let badge_b = uuid::Uuid::from_u128(0xBBBB_0002);
@@ -234,14 +176,16 @@ async fn junction_string_child_ids(parent_id: i64) -> Vec<String> {
 
 async fn junction_uuid_child_ids(parent_id: i64) -> Vec<String> {
     let pool = db::pool();
-    let rows: Vec<(String,)> = sqlx::query_as(
+    // `child_id` holds a UUID, not the uuid's text — the junction stores the child PK the
+    // same way the child table stores it, which is what lets the FK match at all (gaps3 #79).
+    let rows: Vec<(uuid::Uuid,)> = sqlx::query_as(
         "SELECT child_id FROM fmc_entry_badges WHERE parent_id = ? ORDER BY child_id",
     )
     .bind(parent_id)
     .fetch_all(&pool)
     .await
     .expect("read fmc_entry_badges junction");
-    rows.into_iter().map(|(c,)| c).collect()
+    rows.into_iter().map(|(c,)| c.to_string()).collect()
 }
 
 // ── tests: String-PK child ───────────────────────────────────────────────────
@@ -336,4 +280,46 @@ async fn m2m_form_uuid_pk_child_bad_id_fails_validation() {
         .await
         .expect("count");
     assert_eq!(count, 0, "no parent row on a failed m2m validation");
+}
+
+/// gaps3 #79 — the two sides of the junction must be the SAME representation.
+///
+/// An insert succeeding is not enough: the junction's `child_id` has to actually match the
+/// child table's primary key, or the relation is write-only nonsense. This joins back
+/// through it and demands the badges come out.
+///
+/// It used to be impossible. The ORM stores a `Uuid` PK as a uuid, while
+/// `pk_string_to_sea_value` wrote the junction's `child_id` as the uuid's TEXT form — so
+/// the junction pointed at rows that, as far as the database was concerned, did not exist.
+/// On any migration-created schema (which carries `child_id REFERENCES fmc_badge(id)`) the
+/// write died with `FOREIGN KEY constraint failed`; the suite only ever passed because its
+/// hand-written junction had no foreign key.
+#[tokio::test]
+async fn a_uuid_pk_junction_row_joins_back_to_its_child() {
+    boot().await;
+    let badge_a = uuid::Uuid::from_u128(0xAAAA_0001);
+    let badge_b = uuid::Uuid::from_u128(0xBBBB_0002);
+
+    let entry = Entry::validate(&data_multi_uuid("Join Test", &[badge_a, badge_b]))
+        .await
+        .expect("form validated");
+    let created = Entry::objects().create(entry).await.expect("create entry");
+
+    let names: Vec<(String,)> = sqlx::query_as(
+        "SELECT b.name FROM fmc_entry_badges j \
+         JOIN fmc_badge b ON b.id = j.child_id \
+         WHERE j.parent_id = ? ORDER BY b.name",
+    )
+    .bind(created.id)
+    .fetch_all(&db::pool())
+    .await
+    .expect("join the junction back to the child table");
+
+    let names: Vec<String> = names.into_iter().map(|(n,)| n).collect();
+    assert_eq!(
+        names,
+        vec!["Gold".to_string(), "Silver".to_string()],
+        "the junction's child_id must match the child table's PK — a join through it has to \
+         return the two badges that were selected, not zero rows"
+    );
 }

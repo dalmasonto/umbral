@@ -154,9 +154,28 @@ fn pk_string_to_sea_value(id: &str, ty: crate::orm::SqlType) -> Option<sea_query
             .parse::<i64>()
             .ok()
             .map(|n| sea_query::Value::BigInt(Some(n))),
-        crate::orm::SqlType::Uuid | crate::orm::SqlType::Text => {
-            Some(sea_query::Value::String(Some(Box::new(id.to_string()))))
-        }
+        // A UUID binds as a UUID, not as its string form (gaps3 #79).
+        //
+        // Everything else in the ORM already treats a `SqlType::Uuid` column as a typed
+        // uuid: `write::json_to_sea_value` binds `SeaValue::Uuid`, `filter_eq` /
+        // `filter_in_strings` bind a parsed `Uuid`, and `m2m.rs` reads `child_id` back with
+        // `try_get::<uuid::Uuid>`. This function was the one place that bound the string.
+        //
+        // The values it produces are the junction's `child_id`s, so the junction was storing
+        // the uuid's TEXT form while the child table stored the uuid itself (sqlx encodes a
+        // `Uuid` as a BLOB on SQLite). The junction a migration emits carries
+        // `child_id REFERENCES <child>(<pk>)`, and TEXT can never match that — so an M2M
+        // whose CHILD has a Uuid PK failed with `FOREIGN KEY constraint failed` on every
+        // real schema. It only ever "worked" against hand-written test tables that had no
+        // foreign key.
+        //
+        // A malformed uuid yields `None`, which the caller reports as a missing reference —
+        // the same answer it gives for an id that does not exist, which is what a
+        // non-uuid id IS for a uuid-keyed table.
+        crate::orm::SqlType::Uuid => uuid::Uuid::parse_str(id)
+            .ok()
+            .map(|u| sea_query::Value::Uuid(Some(Box::new(u)))),
+        crate::orm::SqlType::Text => Some(sea_query::Value::String(Some(Box::new(id.to_string())))),
         _ => Some(sea_query::Value::String(Some(Box::new(id.to_string())))),
     }
 }
