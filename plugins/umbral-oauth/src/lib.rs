@@ -205,10 +205,20 @@ impl Plugin for OAuthPlugin {
         "oauth"
     }
 
-    /// Depends on `auth`: the `SocialAccount.user` FK targets
-    /// `auth_user`, so the auth plugin's migration must run first.
+    /// Depends on `auth` and `sessions`.
+    ///
+    /// `auth`: the `SocialAccount.user` FK targets `auth_user`, so the auth
+    /// plugin's migration must run first.
+    ///
+    /// `sessions` (gaps4 #8): the OAuth callback routes require the
+    /// `SessionToken` extension that only the sessions middleware injects
+    /// (routes.rs). Without it, sign-in compiles fine and then fails at
+    /// runtime — the worst time to discover a missing plugin. Declaring the
+    /// dependency turns it into a clear `App::build()` error instead: the
+    /// framework already rejects a `dependencies()` entry that names no
+    /// registered plugin.
     fn dependencies(&self) -> &'static [&'static str] {
-        &["auth"]
+        &["auth", "sessions"]
     }
 
     fn models(&self) -> Vec<ModelMeta> {

@@ -136,3 +136,22 @@ async fn filter_in_strings_empty_input_is_noop() {
         .expect("count");
     assert_eq!(n, 4, "empty filter must not constrain the result set");
 }
+
+#[tokio::test]
+async fn filter_in_strings_all_invalid_values_fail_closed() {
+    // gaps4 #7 — the fail-OPEN bug. Values were SUPPLIED but all fail coercion.
+    // The old behavior dropped the predicate → matched every row. On the admin
+    // bulk-delete path (`.filter_in_strings(pk, ids).delete()`) that is "delete
+    // the whole table". Supplied-but-all-invalid must now match ZERO rows.
+    boot().await;
+    let meta = meta_for("fis_product");
+    let n = DynQuerySet::for_meta(&meta)
+        .filter_in_strings("stock", &["garbage".to_string(), "nonsense".to_string()])
+        .count()
+        .await
+        .expect("count");
+    assert_eq!(
+        n, 0,
+        "a supplied-but-all-invalid IN filter must match zero rows, not every row"
+    );
+}

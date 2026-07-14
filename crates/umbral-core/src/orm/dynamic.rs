@@ -733,7 +733,7 @@ impl<'a> DynQuerySet<'a> {
                     })
                     .collect();
                 if bound.is_empty() {
-                    return self;
+                    return self.fail_closed();
                 }
                 child_id_expr.is_in(bound)
             }
@@ -743,7 +743,7 @@ impl<'a> DynQuerySet<'a> {
                 // pre-existing semantics for every shipped model.
                 let parsed: Vec<i64> = child_ids.iter().filter_map(|s| s.parse().ok()).collect();
                 if parsed.is_empty() {
-                    return self;
+                    return self.fail_closed();
                 }
                 child_id_expr.is_in(parsed)
             }
@@ -770,6 +770,19 @@ impl<'a> DynQuerySet<'a> {
     /// `is_in` lowering — callers can use this for both the "one
     /// selection" and "multi-selection" filter paths and get the
     /// natural SQL in each case.
+    /// Push a predicate no row satisfies and return — the fail-CLOSED answer.
+    ///
+    /// gaps4 #7: a multi-value filter whose values were SUPPLIED but all failed
+    /// coercion must match zero rows, not drop the predicate. Dropping it turns
+    /// "delete rows 999999" (all garbage ids) into "delete every row" — the
+    /// admin bulk-delete/restore/hard-delete paths run `.delete()` on exactly
+    /// this queryset. The single-value `filter_eq_string` already fails closed
+    /// (gaps3 #56); this is its multi-value twin.
+    fn fail_closed(mut self) -> Self {
+        self.where_clauses.push(never_matches());
+        self
+    }
+
     pub fn filter_in_strings(mut self, col: &str, vals: &[String]) -> Self {
         let Some(meta_col) = self.meta.fields.iter().find(|c| c.name == col) else {
             return self;
@@ -788,21 +801,21 @@ impl<'a> DynQuerySet<'a> {
             SqlType::SmallInt | SqlType::Integer => {
                 let parsed: Vec<i32> = vals.iter().filter_map(|s| s.parse().ok()).collect();
                 if parsed.is_empty() {
-                    return self;
+                    return self.fail_closed();
                 }
                 Condition::all().add(expr.is_in(parsed))
             }
             SqlType::BigInt | SqlType::ForeignKey => {
                 let parsed: Vec<i64> = vals.iter().filter_map(|s| s.parse().ok()).collect();
                 if parsed.is_empty() {
-                    return self;
+                    return self.fail_closed();
                 }
                 Condition::all().add(expr.is_in(parsed))
             }
             SqlType::Real | SqlType::Double => {
                 let parsed: Vec<f64> = vals.iter().filter_map(|s| s.parse().ok()).collect();
                 if parsed.is_empty() {
-                    return self;
+                    return self.fail_closed();
                 }
                 Condition::all().add(expr.is_in(parsed))
             }
@@ -823,7 +836,7 @@ impl<'a> DynQuerySet<'a> {
                     .filter_map(|s| uuid::Uuid::parse_str(s).ok())
                     .collect();
                 if parsed.is_empty() {
-                    return self;
+                    return self.fail_closed();
                 }
                 Condition::all().add(expr.is_in(parsed))
             }

@@ -26,9 +26,9 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 
 6. [~] **`Masked<T>` REST read-modify-write double-encrypts.** REVIEWED — no code change. The default dynamic REST path is already safe: the derive auto-marks Masked `secret` (macros lib.rs:1310), so `may_serialize` strips it from every response — the client never receives ciphertext to echo back. The residual is the hand-rolled `Json(typed_model)` path: typed `Serialize` emits ciphertext *by deliberate, tested design* (masked.rs test asserts `!= REDACTED`; the doc directs you to `.hide()` it), and echoing that back re-seals. Changing `Serialize` would fight an intentional decision; the in-process typed update stays safe (Sealed clones through). Residual risk noted, not a default-path bug. (claude C-masked)
 
-7. [ ] **Dynamic IN filters fail open.** All-invalid `__in` filter widens to the whole queryset instead of matching nothing. (codex #22)
+7. [x] **Dynamic IN filters fail open.** FIXED: `filter_in_strings` / `filter_m2m_contains_any` now `fail_closed()` (push `never_matches`) when values were supplied but all failed coercion — the admin bulk delete/restore/hard-delete path could otherwise drop the PK predicate and hit every row. Empty-input stays a no-op. Regression test `filter_in_strings_all_invalid_values_fail_closed`. (codex #22)
 
-8. [ ] **OAuth routes require sessions but the plugin declares only `auth`.** Missing dependency → login flow breaks or state is lost at runtime with no boot error. Fix: declare the dep + boot check. (codex #01)
+8. [x] **OAuth routes require sessions but the plugin declares only `auth`.** FIXED: `OAuthPlugin::dependencies()` now returns `&["auth", "sessions"]`. The framework already errors at `App::build()` on a declared dependency that names no registered plugin, so this converts a runtime sign-in failure into a clear boot error. (codex #01) Missing dependency → login flow breaks or state is lost at runtime with no boot error. Fix: declare the dep + boot check. (codex #01)
 
 9. [ ] **GraphQL mutations lack object-level scope.** Update/delete are table-level, not row/owner scoped — any authenticated caller mutates any row. (codex #02)
 
