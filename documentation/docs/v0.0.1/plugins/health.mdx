@@ -16,6 +16,12 @@ tags: [health, liveness, readiness, probes, kubernetes, plugin]
 Liveness and readiness are split on purpose: a failed dependency (DB down) should pull the instance **out of rotation** (readiness `503`), not **kill the process** (liveness stays `200`) - restarting won't fix a downstream outage.
 </Callout>
 
+## Install
+
+```bash
+cargo add umbral-health
+```
+
 ## Wiring
 
 ```rust

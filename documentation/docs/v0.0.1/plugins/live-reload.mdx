@@ -13,6 +13,12 @@ Save a file, see it in the browser. No `Cmd-R`, no fighting the cache. `umbral-l
 It's **opt-in** and **dev-only**. Add the plugin once; in `Environment::Dev` it mounts a tiny SSE endpoint, watches your files, and injects a small client script into every HTML page. In any other environment it does nothing: no route, no watcher, no injected script.
 </Callout>
 
+## Install
+
+```bash
+cargo add umbral-livereload
+```
+
 ## Enabling it
 
 One line in your app builder:

@@ -7,6 +7,13 @@ icon: api
 
 `umbral-rest` walks the model registry and mounts a JSON CRUD surface for every model you've registered. Add the plugin, get `/api/<table>/` on List + Retrieve + Create + Update + Delete, plus filtering, free-text search, FK expansion (`?include=`), sparse fieldsets (`?fields=`), pagination, and an OpenAPI spec everything else (the playground UI, code generators, third-party clients) reads from.
 
+
+## Install
+
+```bash
+cargo add umbral-rest
+```
+
 ```rust
 use umbral::prelude::*;
 
@@ -27,3 +34,4 @@ The full surface lives in the [**REST**](/docs/v0.0.1/rest) section:
 - [**Bulk endpoints**](/docs/v0.0.1/rest/bulk) - opt-in `.bulk()` create / update / delete, transactional all-or-nothing, max-batch cap, same permissions + denylist as single-object
 
 The plugin contract itself is documented in `arch.md`; the `rest/` folder above covers the everyday consumer surface.
+

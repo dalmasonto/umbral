@@ -15,6 +15,12 @@ tags:
 Schema-per-tenant is **Postgres-only**, and registering `TenantsPlugin` on a non-Postgres pool **fails fast at boot** - `App::build()` returns an error naming the offending backend, rather than letting you discover it later inside a migrate. SQLite has no schemas to isolate tenants with. Point `UMBRAL_DATABASE_URL` at a Postgres.
 </Callout>
 
+## Install
+
+```bash
+cargo add umbral-tenants
+```
+
 ## The running example: a Starknet explorer
 
 Imagine a block explorer API that serves two networks - **Sepolia** (testnet) and **Mainnet**. The two share the same code, but their on-chain data must never mix: a Sepolia transaction must be invisible when you're serving Mainnet. Other data - API keys, a blog - is the same for everyone.

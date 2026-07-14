@@ -9,6 +9,14 @@ tags: [cache, redis, performance, middleware]
 
 umbral's cache plugin (`umbral-cache`) gives you one `Cache` handle over a swappable `CacheBackend` trait, three built-in backends (memory, SQLite, Redis), and a view-level `cache_page` middleware that caches full GET responses for a route subtree.
 
+## Install
+
+```bash
+cargo add umbral-cache
+```
+
+The Redis backend is behind a feature: `cargo add umbral-cache --features redis`.
+
 ## Backends
 
 ### In-memory (development default)

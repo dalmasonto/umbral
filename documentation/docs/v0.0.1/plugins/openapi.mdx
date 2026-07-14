@@ -10,6 +10,14 @@ machine-readable JSON spec. Add it to any app that already uses
 [`umbral-rest`](/docs/v0.0.1/rest) - the OpenAPI plugin depends on REST's
 routes and will not compile without it.
 
+## Install
+
+```bash
+cargo add umbral-openapi
+```
+
+It reads the resources `umbral-rest` registered, so install that too: `cargo add umbral-rest`.
+
 ## Quickstart
 
 ```rust

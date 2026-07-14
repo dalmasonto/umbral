@@ -37,6 +37,14 @@ The single S3 backend (feature `s3`) can serve *both* sides - the media (`"defau
 
 `StoragePlugin::new().static_files(mount, dir)` serves an asset tree at a URL prefix. Two source shapes ship - pick filesystem for dev / single-binary deployments, embedded for plugins that want their UI to travel with the binary.
 
+## Install
+
+```bash
+cargo add umbral-storage
+```
+
+The S3 backend is behind a feature: `cargo add umbral-storage --features s3`.
+
 ## Filesystem mode
 
 `.static_files(mount, dir)` wraps `tower_http::services::ServeDir`. Every file under the directory is reachable at the prefix:

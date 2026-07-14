@@ -6,6 +6,14 @@ sidebar_position: 18
 
 `umbral-playground` mounts an interactive API explorer at `/api/playground/`. It reads the OpenAPI spec produced by `umbral-openapi` and gives you a navigable endpoint tree, a request builder with schema introspection, a response viewer, per-endpoint history, and a per-endpoint stats panel - all in the browser, no extra service to run.
 
+## Install
+
+```bash
+cargo add umbral-playground
+```
+
+It renders the spec `umbral-openapi` emits, so install that (and `umbral-rest`) too.
+
 ## Quick start
 
 ```rust

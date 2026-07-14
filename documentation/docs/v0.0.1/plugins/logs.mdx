@@ -19,6 +19,12 @@ Each row carries `method`, `path`, `status`, `duration_ms`, plus best-effort `us
 Capture is non-blocking by design. The layer stamps the request duration, runs the handler, and spawns the insert - the client never waits on the database write.
 </Callout>
 
+## Install
+
+```bash
+cargo add umbral-logs
+```
+
 ## Wiring
 
 ```rust

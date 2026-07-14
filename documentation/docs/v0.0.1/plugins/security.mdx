@@ -64,6 +64,12 @@ SecurityPlugin::with_config(SecurityConfig {
 })
 ```
 
+## Install
+
+```bash
+cargo add umbral-security
+```
+
 ## Production preset
 
 The defaults are dev-safe: HSTS, CSP, and cross-origin isolation are **off** so local HTTP development works. A default deployment therefore ships with no XSS backstop (no CSP) and no SSL-stripping protection (no HSTS). Instead of hand-assembling those headers, use the one-call preset:

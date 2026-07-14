@@ -10,6 +10,12 @@ your application's existing database as the broker - no Redis, no RabbitMQ, no
 separate infrastructure. A fresh umbral project gets background jobs for the cost
 of one `.plugin(TasksPlugin)` line.
 
+## Install
+
+```bash
+cargo add umbral-tasks
+```
+
 ## What you get from `TasksPlugin::default()`
 
 Registering the plugin creates one migration: a `task_row` table that tracks

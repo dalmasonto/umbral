@@ -9,6 +9,12 @@ icon: cookie
 for creating, reading, and destroying sessions - enough to implement login/logout
 without any additional infrastructure.
 
+## Install
+
+```bash
+cargo add umbral-sessions
+```
+
 ## What you get from `SessionsPlugin::default()`
 
 Registering the plugin creates one migration: a `session` table with columns `id` (the SHA-256 digest of the raw cookie token - the raw token only ever lives in the cookie, so a DB leak can't replay sessions), `user_id` (nullable, the user PK stringified - `TEXT`, not a typed FK, so any PK type round-trips), `data` (JSON string), `created_at`, and `expires_at`. The plugin has no hard dependency on `umbral-auth`; anonymous sessions are valid. The `umbral_session` cookie is set with `Secure`, `HttpOnly`, `SameSite=Lax`, and `Max-Age=1209600` (14 days by default).
@@ -167,10 +173,10 @@ The command is registered by `SessionsPlugin` via `Plugin::commands()` - no extr
 
 `RedisStore` is a **server-side, Redis-backed** session store - a keyed store like `DbStore` (the raw token stays in the cookie; the record lives on the server) but with µs-latency lookups, horizontal scalability, and **server-side TTL eviction**: Redis auto-expires keys when the session's TTL fires, so no `clearsessions` job is needed.
 
-Enable the `redis` cargo feature in your app's `Cargo.toml`:
+Enable the `redis` cargo feature:
 
-```toml
-umbral-sessions = { path = "…", features = ["redis"] }
+```bash
+cargo add umbral-sessions --features redis
 ```
 
 Then connect at boot:
