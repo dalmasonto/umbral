@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.8...umbral-admin-v0.0.9) - 2026-07-14
+
+### Added
+
+- *(admin)* the saved dashboard layout is now read, and draggable
+- *(admin)* CSV export for any widget with rows behind it
+- *(admin)* declarative widget filters for every widget kind
+
+### Other
+
+- *(plugins)* verify the install path for all 22 plugins, end to end
+- *(admin,core)* derive the test schema in 25 more suites, and fix what it exposed
+- derive the test schema from the models in 166 suites (gaps3 #78)
+- install snippets say `cargo add`, so they cannot go stale
+
 ## [0.0.8](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.7...umbral-admin-v0.0.8) - 2026-07-13
 
 ### Added

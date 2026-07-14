@@ -10,7 +10,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.8" }
+umbral = { path = "../../crates/umbral", version = "0.0.9" }
 # The DYNAMIC schema builder is the whole reason this is tractable: umbral's models are
 # known at RUNTIME (the `ModelMeta` registry), not at compile time, so a derive-macro
 # GraphQL crate would not fit. `dynamic-schema` lets us build the types from the registry.

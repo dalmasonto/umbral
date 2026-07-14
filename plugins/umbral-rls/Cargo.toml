@@ -10,7 +10,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.8" }
+umbral = { path = "../../crates/umbral", version = "0.0.9" }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
 tokio = { version = "1", features = ["rt"] }
 tracing = "0.1"

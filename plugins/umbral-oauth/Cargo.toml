@@ -10,9 +10,9 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.8" }
-umbral-auth = { path = "../umbral-auth", version = "0.0.8" }
-umbral-sessions = { path = "../umbral-sessions", version = "0.0.8" }
+umbral = { path = "../../crates/umbral", version = "0.0.9" }
+umbral-auth = { path = "../umbral-auth", version = "0.0.9" }
+umbral-sessions = { path = "../umbral-sessions", version = "0.0.9" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }

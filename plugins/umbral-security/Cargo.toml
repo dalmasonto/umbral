@@ -10,7 +10,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.8" }
+umbral = { path = "../../crates/umbral", version = "0.0.9" }
 tower-http = { version = "0.6", features = ["set-header", "limit", "sensitive-headers"] }
 axum = "0.8"
 http = "1"

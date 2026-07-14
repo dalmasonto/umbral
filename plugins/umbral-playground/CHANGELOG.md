@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-playground-v0.0.8...umbral-playground-v0.0.9) - 2026-07-14
+
+### Other
+
+- *(plugins)* verify the install path for all 22 plugins, end to end
+
 ## [0.0.3](https://github.com/dalmasonto/umbral/compare/umbral-playground-v0.0.2...umbral-playground-v0.0.3) - 2026-06-29
 
 ### Added
