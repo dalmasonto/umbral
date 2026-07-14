@@ -1,0 +1,573 @@
+[
+  {
+    "file": "crates/umbral-core/src/orm/write.rs",
+    "line": 512,
+    "severity": "critical",
+    "category": "duplication-drift",
+    "summary": "Masked sealing is implemented twice — Masked::to_stored() (masked.rs:321) is stateful and idempotent (MaskInner::Sealed passes through untouched), while write::seal_masked_json() is stateless and seals any non-null string on a masked column — so the documented backup/restore round-trip double-encrypts every Masked column.",
+    "failure_scenario": "Model `Contact { api_key: Masked<String> }` holds sealed(\"sk_live_X\"). `dump_fixture::<Contact,_>(\"c.json\")` (fixtures.rs:174) reads via `.unredacted_for_backup()` — whose doc at dynamic.rs:351 says it exists so dumps \"round-trip Masked<T> ciphertext\" — writing `\"api_key\": \"<base64 ct>\"` to the file. `load_fixture::<Contact,_>(\"c.json\")` (fixtures.rs:159) replays it through `DynQuerySet::insert_json`, which hits build_insert_plan (dynamic.rs:3960) -> seal_masked_json -> ambient_seal on the ciphertext string. The row now stores seal(base64(seal(plaintext))). `contact.api_key.reveal()` returns the inner base64 ciphertext string, not \"sk_live_X\", and no error is raised anywhere (seal() accepts arbitrary bytes; open() succeeds on the outer envelope). There is no write-side counterpart to `unredacted_for_backup` (no presealed/skip_seal flag exists in the tree), and crates/umbral-core/tests/fixtures.rs has no Masked column, so nothing catches it."
+  },
+  {
+    "file": "plugins/umbral-admin/src/handlers/inline_edit.rs",
+    "line": 185,
+    "severity": "critical",
+    "category": "privilege-escalation",
+    "summary": "The inline cell-edit endpoint writes any column by name via DynQuerySet::update_one, which applies none of the privileged/noform/readonly mass-assignment guards that every other admin write path enforces, allowing a staff user to self-promote to superuser.",
+    "failure_scenario": "A non-superuser staff user with change_authuser (or ANY staff user in a no-permissions install, where permcheck::require returns Ok) sends `POST /admin/auth_user/<own_id>/cell/is_superuser` with body `is_superuser=1`. cell_edit_post only checks require_staff, permcheck Action::Change, and cfg.readonly_fields (raw configured list, empty by default) — it never checks col.privileged, col.noform, col.noedit, the sensitive-column defaults, or that the field is in inline_edit_fields. It then calls DynQuerySet::update_one(&field, &new_value) (dynamic.rs:1215), which — unlike update_form/update_form_in_tx (dynamic.rs:1305) — has NO is_unauthorized_privileged/noform/skip guard. is_staff/is_superuser on AuthUser are #[umbral(privileged)] (umbral-auth/src/lib.rs:291,295) and AuthPlugin registers the user model in the admin, so the row's is_superuser flips to true and the attacker gains full superuser access. The same path can also overwrite noform columns like password_hash with arbitrary text. This is exactly the audit_2 H3 / WEB-2 mass-assignment escalation that rows.rs::readonly_set + allow_privileged_if (passing user.is_superuser) block on the CRUD/sheet form paths (crud.rs:356, sheet.rs:335); the inline path silently bypasses it."
+  },
+  {
+    "file": "plugins/umbral-admin/src/handlers/inline_edit.rs",
+    "line": 187,
+    "severity": "critical",
+    "category": "authz-mass-assignment",
+    "summary": "The inline cell-edit endpoint (POST /admin/{table}/{id}/cell/{field}) writes any column via DynQuerySet::update_one, bypassing the privileged/noform/noedit/sensitive-column write guards the form path enforces — enabling privilege escalation and account takeover.",
+    "failure_scenario": "A non-superuser staff user who holds only `change_auth_user` (the normal Django-style user-management grant, or ANY staff user when umbral-permissions is not installed, since permcheck::require is then a no-op) sends `POST /admin/auth_user/<id>/cell/is_superuser` with body `is_superuser=true`. cell_edit_post checks only require_staff, permcheck Change, `cfg.readonly_fields` (the raw list, not effective_readonly_fields), and a file/image input-kind refusal — none of which cover `is_superuser`. It then calls DynQuerySet::for_meta(&model).filter_eq_string(pk,id).update_one(\"is_superuser\",\"true\"). update_one (crates/umbral-core/src/orm/dynamic.rs:1215) does NOT consult `privileged`, `noform`, `noedit`, or any skip-set, so the UPDATE runs and the attacker becomes a superuser. The identical POST to `.../cell/password_hash` overwrites the `#[umbral(noform)]` password_hash of any user (including a superuser) with an attacker-known argon2 hash, giving full account takeover. The regular sheet/CRUD form path is safe because it goes through rows.rs::readonly_set (adds noform/noedit/sensitive cols to the skip set) and allow_privileged_if(authorize = who.is_superuser); the inline path replicates none of that. The endpoint also never checks membership in the model's `inline_edit_fields` allowlist, so the UI only exposing certain cells provides no protection against a crafted request."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/column.rs",
+    "line": 1612,
+    "severity": "high",
+    "category": "cross-backend-correctness",
+    "summary": "JsonCol::has_key renders a literal `??` instead of the Postgres jsonb `?` has-key operator, so every has_key query fails on Postgres — the only backend it supports.",
+    "failure_scenario": "`Event::objects().filter(event::PAYLOAD.has_key(\"author\"))` builds the Postgres condition via `Expr::cust(format!(\"\\\"{col}\\\" ?? '{key}'\"))` (lines 1612-1613). The comment justifies doubling `?`→`??` by sea-query's `cust_with_values` tokenizer, but the code uses `Expr::cust`, which produces `SimpleExpr::Custom` — rendered VERBATIM with no tokenization (confirmed: sea-query 0.32.7 query_builder.rs `SimpleExpr::Custom(s) => write!(sql, \"{s}\")`). So the emitted SQL is `\"payload\" ?? 'author'`. sqlx-postgres does not translate `?`, and Postgres defines no `??` operator for jsonb, so the query errors at runtime with `operator does not exist: jsonb ?? unknown`. has_key is documented Postgres-only and its live-Postgres path is never exercised (only SQLite live tests plus a compile-only `_unreachable` fn in json_ops.rs; the rendering test only asserts the SQL `contains(\"?\")`, which `??` trivially satisfies), so the break ships silently. The single-`?` sqlite fallback via `cust_with_values` is correct; only the PG branch is broken. Fix: emit a single `?` with `Expr::cust`, i.e. `\"{col}\" ? '{key}'` (no doubling, since `cust` does not tokenize)."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/dynamic.rs",
+    "line": 1215,
+    "severity": "high",
+    "category": "privilege-escalation",
+    "summary": "DynQuerySet::update_one is the only dynamic write terminal that skips the is_unauthorized_privileged mass-assignment guard that update_form and update_json enforce, so a #[umbral(privileged)] column (is_staff/is_superuser) can be set through it. The admin inline-cell-edit endpoint (cell_edit_post) drives update_one and gates only on cfg.readonly_fields, not on col.privileged / noform / noedit.",
+    "failure_scenario": "A staff user who has the `change_authuser` permission but is NOT a superuser sends POST /admin/auth_user/{their_id}/cell/is_superuser with body `is_superuser=true`. require_staff passes, permcheck Action::Change passes, `is_superuser` is not in cfg.readonly_fields and is not a file/image column, so the handler calls DynQuerySet::for_meta(auth_user).filter_eq_string(id).update_one(\"is_superuser\",\"true\"). update_one contains no privileged/noform/noedit check (unlike update_form/update_json), so it emits UPDATE auth_user SET is_superuser=1 WHERE id=?, promoting the caller to full superuser — the exact mass-assignment escalation the `privileged` guard exists to block and which the admin's full-form save path (update_form + readonly_set) correctly rejects. The same hole lets a staff user overwrite `email` (noedit) or any noform column inline."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/dynamic.rs",
+    "line": 1966,
+    "severity": "high",
+    "category": "cross-backend-divergence",
+    "summary": "On Postgres, the dynamic JSON write-response builders (insert_json, insert_json_in_tx, fetch_one_json_in_tx) emit every column of the row instead of filtering through may_serialize, so #[umbral(secret)] / #[umbral(private)] / Masked<T> columns that SQLite strips are leaked to the client on the primary backend.",
+    "failure_scenario": "A model has a #[umbral(private)] column `cost` (or a #[umbral(secret)] / Masked<T> field such as an API token). A client POSTs a create to the REST auto-CRUD endpoint. `DynQuerySet::insert_json` runs on Postgres, hits the RETURNING * branch at line 1966 which does `for col in &self.meta.fields { out.insert(col.name, decode_pg_to_json(...)) }` with no `may_serialize` filter (contrast the SQLite branch at line 1946 which filters). The REST layer's `apply_overrides` only removes configured hides + HARD_DENIED_FIELDS (password_hash), NOT `col.private`/`col.secret`, so the 201 response body includes `cost` / the token ciphertext. The identical request against SQLite strips them, and a GET on the same row strips them on both backends. Same defect at line 2130 (insert_json_in_tx, used by nested creates) and line 1822 (fetch_one_json_in_tx, used by bulk-PATCH read-back at plugins/umbral-rest/src/lib.rs:3857 and nested upsert at :4302). Fix: filter all three Postgres branches with `.filter(|c| self.may_serialize(c))` exactly like their SQLite twins."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/dynamic.rs",
+    "line": 1966,
+    "severity": "high",
+    "category": "duplication-drift",
+    "summary": "The read-back loops in insert_json / insert_json_in_tx / fetch_one_json_in_tx apply the may_serialize field-policy filter on the SQLite arm but not on the Postgres arm — the two hand-copied backend branches drifted, and the un-filtered copy is the Postgres-first production path.",
+    "failure_scenario": "A model with a `#[umbral(private)]` (or `secret`) column is created/read on Postgres. SQLite arm at dynamic.rs:1946 iterates `self.meta.fields.iter().filter(|c| self.may_serialize(c))` and drops the column; the PG arm at dynamic.rs:1966 (mirror sites: insert_json_in_tx PG arm at 2130, fetch_one_json_in_tx PG arm at 1822) iterates `&self.meta.fields` unfiltered, so the RETURNING * row contains the private/secret value. REST's insert POST returns that row directly (plugins/umbral-rest/src/lib.rs:3571 apply_overrides only strips config-`.hide()`d + HARD_DENIED_FIELDS, not `private`), so the confidential column leaks in the create/bulk-update JSON response on Postgres while the SQLite tests that exercise the same terminal pass. may_serialize's own doc (dynamic.rs:368) states every JSON terminal must route through it, citing the graphql password-hash leak — these three PG arms are the terminals that don't."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/dynamic.rs",
+    "line": 3103,
+    "severity": "high",
+    "category": "stale-special-case",
+    "summary": "The dynamic Postgres decoders (decode_pg_to_json:3103, decode_pg_to_string:2781/2817) route SqlType::Decimal into panic_pg_only_unsupported, whose message asserts the boot check should have rejected the column — but Decimal is a valid Postgres column that passes the boot check; backup.rs decodes it correctly, and these decoders never got the same support.",
+    "failure_scenario": "A model with a `rust_decimal::Decimal` field (e.g. a money/price column) is served over REST or the admin on Postgres. DynQuerySet::fetch_as_json / fetch_as_strings calls decode_pg_to_json / decode_pg_to_string, hits `SqlType::Decimal => panic_pg_only_unsupported(&col.name)` and panics the request (panic_pg_only_unsupported is a `-> !` panic). The boot check (check.rs:1010) classifies Decimal as Postgres-only and passes it ON Postgres, so the panic's 'should have failed boot' premise is false there. backup.rs:794 decodes the same column via `row.try_get::<Decimal, _>(name)?.to_string()` — the dynamic decoders are the stale copy that lumped Decimal into the pg-only-panic bucket instead."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/masked.rs",
+    "line": 388,
+    "severity": "high",
+    "category": "data-loss",
+    "summary": "A `Masked<T>` column is redacted on every read but rendered as a normal editable field on the admin edit form, so saving any row re-seals an empty string and permanently destroys the stored ciphertext (crypto-shreds the secret). The Deserialize \"no-change\" contract that was meant to prevent this is not honored on the write paths.",
+    "failure_scenario": "Model has `phone: Masked<String>` (derive auto-sets secret=true, widget=\"masked\"; it is NOT marked noform/noedit). It is registered in the admin. GET /admin/<t>/<id>/edit calls fetch_rows_filtered -> fetch_as_strings -> visible_select_cols, which excludes the secret column (dynamic.rs:372,385), so row_strings has no `phone`. form_fields_for (view.rs:383) still emits an editable field for `phone` (it is not pk/noform/auto_now/password, and is_sensitive_column at config.rs:555 does not match `phone`), prefilled empty. is_sensitive_column also does not mark it readonly, so it is not in the write skip set (rows.rs:289). A staff user edits an unrelated field and submits; the form body carries `phone=` (empty). build_update_form_query (dynamic.rs:1335) sees the column present and writes it; form_str_to_sea_value (dynamic.rs:3201) calls seal_masked_json, which seals the empty string (write.rs:516 only skips null, not empty) and returns Some(ciphertext-of-\"\"). The row's real encrypted phone/OAuth-refresh-token is overwritten with an encryption of the empty string, silently and irreversibly, on every edit. masked.rs Deserialize (line 388-395) documents a REDACTED->no-change contract to prevent exactly this overwrite, but the dynamic write path (seal_masked_json) never consults it, and empty/blank is not treated as \"leave unchanged\"."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/masked.rs",
+    "line": 389,
+    "severity": "high",
+    "category": "silent-data-loss",
+    "summary": "A Masked<T> value that crosses a serde round-trip (REST read-modify-write) gets re-sealed on write, double-encrypting the ciphertext and permanently losing the plaintext; the REDACTED guard meant to prevent this never fires.",
+    "failure_scenario": "`Serialize` (lines 376-379) emits `to_stored()` — for a DB-loaded value that is `MaskInner::Sealed(ciphertext)`, this is the ciphertext string, NOT the redaction marker. `Deserialize` (lines 387-395) treats any string except the exact literal \"••••••\" as fresh plaintext. Concrete flow: a REST GET serializes a stored Masked field, emitting ciphertext `C1`; the client PUTs the object back unchanged with `phone: C1`; `Deserialize` sees `C1 != REDACTED` and builds `Masked::new(C1)` = `Plain(C1)`; the ORM write path serializes/encodes it, calling `to_stored()` → `ambient_seal(C1)` → `C2 = Enc(C1)`. The column now holds a doubly-encrypted value: `reveal()` decrypts one layer and returns `C1` (the old ciphertext), never the original phone number — the plaintext is unrecoverable. The `if s == REDACTED` guard at line 389 is documented as preventing exactly this echo-back overwrite, but `Serialize` never produces the marker (it produces ciphertext), so the guard is dead for this type's own output and the protection it claims does not exist. In-process typed updates (load model, mutate, save) stay safe because `Sealed` clones through `to_stored` without re-sealing; only the serialize→deserialize hop (the default HTTP read-modify-write) corrupts. Nothing enforces `.hide()`-ing the field, so a visible Masked column silently corrupts on the first client resubmit."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/queryset/mod.rs",
+    "line": 3295,
+    "severity": "high",
+    "category": "duplication-drift",
+    "summary": "update_expr() hand-inlines the soft-delete visibility guard (lines 3295-3301) instead of calling self.implicit_predicates(), the documented \"single seam for implicit filtering\" that every other builder (build_query_for line 625, build_update_for line 3618) routes through. It is a fourth copy of the WHERE deleted_at IS NULL logic that will silently drift.",
+    "failure_scenario": "The implicit_predicates doc (currently stacked above audit_pre) states the next implicit filter — row-level tenant scope — must reach EVERY builder or it is a cross-tenant leak. When a tenant predicate is added to implicit_predicates(), update_values (via build_update_for) and all reads (via build_query_for) get it, but update_expr() — which builds its UPDATE inline and re-implements only the soft-delete branch — will NOT. Result: Post::objects().filter(other_tenant_pred).update_expr(\"views\", F::col(\"views\").add(1)) mutates rows the tenant guard was supposed to exclude, and additionally today ignores the deleted_at guard evolution independently of the canonical seam."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/queryset/tx.rs",
+    "line": 198,
+    "severity": "high",
+    "category": "correctness",
+    "summary": "QuerySetTx::delete() ignores soft_delete_active and performs a real DELETE inside a transaction, whereas the non-transactional QuerySet::delete() rewrites the same call to a soft-delete UPDATE — so the identical .delete() call permanently destroys rows when run inside on_tx().",
+    "failure_scenario": "Given a soft-delete model (`#[umbral(soft_delete)]`), `Model::objects().on_tx(tx).filter(post::ID.eq(id)).delete().await` reaches `QuerySetTx::delete`, which calls `self.qs.build_delete_for(...)` and executes `DELETE FROM table WHERE ...` — a hard delete. The QuerySet carries `soft_delete_active = true` (set in Manager::queryset() from T::SOFT_DELETE and cloned through on_tx), but tx.rs never checks it, unlike QuerySet::delete (mod.rs:3136) which routes to soft_delete_update(). Result: rows the caller expected to be recoverable/soft-deleted are silently and permanently gone whenever the delete happens to run in a transaction. QuerySetTx read terminals and update_values DO honor the soft-delete guard (via build_query_for / build_update_for + implicit_predicates), so only delete diverges — an inconsistent, silent data-loss path."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/write.rs",
+    "line": 502,
+    "severity": "high",
+    "category": "wrong-altitude",
+    "summary": "The encrypt-at-rest signal is carried on Column::widget (a presentation attribute) rather than a dedicated flag; nothing in the tree renders a \"masked\" widget, so is_masked_col is its only consumer, and the derive must special-case widget as non-overridable to compensate (umbral-macros/src/lib.rs:1501-1508).",
+    "failure_scenario": "The derive forces widget=\"masked\" for Masked fields but for every other field kind the author's `#[umbral(widget = ...)]` wins (umbral-macros/src/lib.rs:1507-1515). So `#[umbral(widget = \"masked\")] pub token: String` produces a Column with ty==Text && widget==Some(\"masked\"), making is_masked_col() return true for a plain String field. Dynamic writes (admin form-submit at dynamic.rs:3200, REST insert_json/update_json) then encrypt the value, while the typed path `Contact::objects().create(c)` binds plain String's sqlx Encode and stores plaintext — one column ends up holding a mix of ciphertext and plaintext rows. Reads decode into `String`, so the encrypted rows surface as base64 garbage; and because col.secret is false for a non-Masked field, is_secret_column() lets that ciphertext be serialized to API clients. A dedicated Column::masked bool (or reusing col.secret) removes both the hole and the derive's special case."
+  },
+  {
+    "file": "crates/umbral-macros/src/lib.rs",
+    "line": 4152,
+    "severity": "high",
+    "category": "mass-assignment",
+    "summary": "The #[derive(Form)] skip list omits #[umbral(privileged)], so a model struct reused as a Form accepts privileged fields (is_superuser/is_staff/ownership FKs) from untrusted form input, defeating the documented default-deny mass-assignment guard.",
+    "failure_scenario": "A developer follows two documented patterns: (1) marks a mass-assignment-sensitive field with #[umbral(privileged)] (per its doc: \"Default-deny mass-assignment guard for is_superuser/ownership FKs\"), and (2) reuses one struct as both Model and Form (per expand_form's doc: \"a single struct can serve as BOTH the persisted Model AND the user-submittable Form\"). Example: `#[derive(Model, Form)] struct Account { id: i64, email: String, #[umbral(privileged)] is_admin: bool }`, with a public handler doing `let a = Account::validate(&form).await?; Account::objects().create(a).await?`. expand_form's skip_for_form (lib.rs:4152-4160) and the fields() filter (4604-4611) skip noform/primary_key/auto_now/auto_now_add/masked/reverse but NOT privileged, so `is_admin` is emitted as a normal boolean form field and validate() sets it from the POST body. An attacker submits `is_admin=on`; the typed create path (queryset/write_helpers.rs:89-150) writes struct fields verbatim and enforces privileged nowhere (it only re-stamps auto_user/auto_now, which is why those ARE safe despite the same omission), so is_admin=true persists -> privilege escalation. The two parallel 'derive a write surface from the model' mechanisms disagree: the REST client generator (plugins/umbral-openapi/src/client_gen.rs:896 in_create) and the dynamic JSON/form write path (orm/dynamic.rs is_unauthorized_privileged) both strip privileged by default; only the Form derive lets it through."
+  },
+  {
+    "file": "plugins/umbral-auth/src/login_required.rs",
+    "line": 321,
+    "severity": "high",
+    "category": "duplication-drift",
+    "summary": "umbral-auth's session-read path (current_session_user_pk / SessionRow / hash_token / cookie_from_headers) reads the SQL `session` table directly instead of routing through umbral_sessions' SessionStore, so it silently ignores any non-DB store. It is a stale second copy of session-reading logic: umbral_sessions::current_user_id_str (which umbral_auth::current_user already uses) is store-aware (audit_2 H7) and resolves via active_store(); this copy never got that fix. The file's doc comments (lines 240-242, 358-360) still assert 'umbral-auth must not depend on umbral-sessions (the dep arrow runs the other way)', but the arrow was flipped — umbral-auth now has a real prod dep on umbral-sessions (Cargo.toml:66, even acknowledged at Cargo.toml:47-49), so the whole reason for the private re-implementation is gone.",
+    "failure_scenario": "App boots with SessionsPlugin::default().store(RedisStore::connect(...)) (or CookieStore) — a documented, supported config. A user logs in; the session lives in Redis / the encrypted cookie, never in the SQL `session` table. On the next request to any route guarded by login_required_html(\"/login\"), a LoggedIn<AuthUser> extractor, the SessionAuthentication REST backend (extractors.rs:113 identity_from_session), or OAuth /oauth/{p}/connect|/disconnect (routes.rs:216,372), current_session_user_pk queries the empty SQL `session` table via Manager::<SessionRow> (line 321), gets None, and the request resolves anonymous — 401/302 for every authenticated user. Auth is completely and silently broken for that store, while umbral_auth::current_user (store-aware) still works, so the two paths disagree on whether the same user is logged in. Fix: delegate to umbral_sessions::current_user_id_str / read_session (now a legal dependency) instead of re-reading the table, and delete the stale SessionRow/hash_token/cookie_from_headers copies and false doc claims."
+  },
+  {
+    "file": "plugins/umbral-auth/src/login_required.rs",
+    "line": 330,
+    "severity": "high",
+    "category": "auth-control-bypass",
+    "summary": "The umbral-auth session resolver checks only `expires_at` and ignores the absolute `max_session_age()` cap that `umbral_sessions::read_session` enforces, so sessions past their configured absolute lifetime still authenticate through every umbral-auth extractor.",
+    "failure_scenario": "App runs `SessionsPlugin::default().sliding_expiry().max_session_age(24*60*60)` (documented at lib.rs:300-309 as 'force re-authentication even with sliding expiry') on the default DbStore. A user logs in at T0 (created_at=T0); sliding expiry keeps pushing `expires_at` to now+14d on each request. At T0+48h the session is well past its 24h absolute cap. `umbral_sessions::read_session`/`current_user_id_str` correctly return None (they compare `Utc::now()-created_at` against max_session_age at lib.rs:610-621), and so `permission_required` denies. But `current_session_user_pk` (login_required.rs:330) only checks `row.expires_at < Utc::now()` — expires_at is still 14d out — so it returns the user. Every extractor built on it still authenticates and authorizes the stale/possibly-stolen session: `RequireStaff` (the staff gate), `RequireAuth`, `LoggedIn<AuthUser>`, `resolve_identity`/`OptionalIdentity`/`CurrentIdentity`, `/me`, `/change-password`, and OAuth `connect`/`disconnect`. The absolute-lifetime security control is silently unenforced on the primary auth-extractor surface."
+  },
+  {
+    "file": "plugins/umbral-graphql/src/schema.rs",
+    "line": 439,
+    "severity": "high",
+    "category": "dos",
+    "summary": "GraphQL schema is built with no query depth or complexity/cost limit, so an anonymous caller can amplify one request into tens of thousands of DB queries via field aliases or deeply nested relations.",
+    "failure_scenario": "With any model exposed (e.g. `GraphqlPlugin::default().expose(\"product\")`, publicly readable), an unauthenticated attacker POSTs a single GraphQL document to /graphql such as `{ a: products(limit:200){id} b: products(limit:200){id} ... }` with thousands of aliases (fits well within axum's 2MB default body limit). async-graphql applies no depth or complexity limit by default and none is configured here (no `.limit_depth`/`.limit_complexity` on `Schema::build(...).finish()`), so every alias runs `fetch_list` (a separate DB read of up to MAX_LIMIT=200 rows) concurrently. A ~2MB request yields ~10^4-10^5 list queries returning up to 200 rows each — exhausting the connection pool and buffering huge JSON (memory) from one small anonymous request. Deep alternating relation nesting (posts{author{posts{author{...}}}}) is a second vector: DataLoader batching bounds per-level fan-out but not the number of levels, so each hop is another sequential DB round-trip."
+  },
+  {
+    "file": "plugins/umbral-graphql/src/schema.rs",
+    "line": 456,
+    "severity": "high",
+    "category": "correctness",
+    "summary": "The GraphQL schema is built with no query depth or complexity limit, so a client-chosen cyclic query is unbounded-cost and can DoS the server.",
+    "failure_scenario": "`Schema::build(\"Query\", ...).register(query).finish()` (schema.rs:439-456) never calls `.limit_depth(...)` or `.limit_complexity(...)`, and async-graphql 7.2 defaults both to unlimited. The schema exposes forward FKs (`post.author`) AND inverted reverse FKs (`author.posts`, schema.rs:311-359), so any pair of related models forms a cycle. An anonymous POST of `{ posts { author { posts { author { posts { author { posts { id } } } } } } } }` (nest ~15 levels) makes the executor resolve up to MAX_LIMIT(200) nodes per list level with a fresh DB read per level per branch — resolver/DB work grows geometrically with depth. The module docstring even claims cost is bounded (\"the client picks your query cost — which is exactly why they do not get to pick it without a ceiling\"), but only list *width* is capped; *depth* is not. A single small request exhausts DB connections / memory. Fix: chain `.limit_depth(N)` and `.limit_complexity(N)` (configurable) onto the SchemaBuilder before `.finish()`."
+  },
+  {
+    "file": "plugins/umbral-openapi/src/lib.rs",
+    "line": 1014,
+    "severity": "high",
+    "category": "consistency-drift",
+    "summary": "filter_parameters() iterates model.fields skipping only the primary key, while every sibling schema helper in the same file filters out is_hidden columns — so the generated OpenAPI spec advertises `<hidden_col>__<lookup>` query parameters for columns that are scrubbed from the response, publishing the exact filter oracle to Swagger/codegen.",
+    "failure_scenario": "In the same file the response-property builder (line 531), search_fields helper (line 901) and FK-expansion helper (line 933) all guard with `!umbral_rest::is_hidden(&model.table, &c.name)`. filter_parameters (1012-1027) does not — it emits one parameter per (column, lookup) for every non-PK column. For a table exposing `password_hash`/`cost`/`ssn` that is hidden from the body, the spec still lists `password_hash__startswith`, `cost__gte`, etc. as documented, discoverable filters. The is_hidden guard was added in three of four field-walk sites and missed the fourth; the copies have drifted."
+  },
+  {
+    "file": "plugins/umbral-rest/src/lib.rs",
+    "line": 3062,
+    "severity": "high",
+    "category": "sensitive-data-exposure",
+    "summary": "REST list filtering/search/ordering is built over the model's FULL field list with no hidden/secret/private exclusion, giving an attacker with only list-read access a blind extraction oracle over columns that are stripped from output (e.g. password_hash, #[umbral(secret)] Masked ciphertext, .hide()/private columns).",
+    "failure_scenario": "AuthUser has a Text column `password_hash` protected by `.hide(\"password_hash\")` (or a `#[umbral(secret)]` Masked column). The list handler calls parse_filters(&params, &model.fields, ..) at lib.rs:3062, parse_search(term, &model.fields, ..) at lib.rs:3071, and parse_ordering(s, &model.fields) at lib.rs:3101 — all passing the raw ModelMeta.fields. filtering.rs:190-202 validates only that the field *exists* (`columns.iter().find(|c| c.name == field_name)`); it never consults RestPlugin::is_field_hidden. Output stripping (apply_overrides / unlocked_private) runs on the RETURNED row only, so it does not touch the generated WHERE/ORDER BY. Concrete attack: a caller with the default safe read permission issues `GET /api/auth_user/?password_hash__startswith=$argon2id$v=19$m=65536` — the response contains rows (visible columns only) iff some user's hash begins with that prefix. Since `startswith`/`contains`/`isnull`/`eq` are all permitted on Text columns, the attacker extends the prefix character-by-character (or binary-searches with `__gt`/`__lt`) to reconstruct the full hash / secret without it ever appearing in a response body. `?ordering=password_hash` additionally sorts the visible list by the hidden secret's value, and `?password_hash__isnull=false` confirms presence. The fix is to pass a visibility-filtered column slice (dropping is_field_hidden fields) to parse_filters/parse_search/parse_ordering, or to reject hidden fields inside filtering.rs field validation."
+  },
+  {
+    "file": "plugins/umbral-rest/src/lib.rs",
+    "line": 3062,
+    "severity": "high",
+    "category": "altitude-reuse",
+    "summary": "The list query surface (filter/search/order) validates against the raw model.fields and never consults the field-visibility policy that governs responses (is_field_hidden / secret / private), so a column stripped from every response body is still filterable, orderable, and searchable.",
+    "failure_scenario": "list_impl passes `&model.fields` straight into parse_filters (3062), parse_search (3071) and parse_ordering (3101). None of these consult cfg.is_field_hidden / is_secret_column / private-unlock — the single source of truth used to scrub response bodies (lib.rs:1449-1606). Concrete leak: expose a credential table (`.expose([\"auth_user\"])`, hashes still stripped from the body by HARD_DENIED_FIELDS) and issue `GET /api/auth_user/?password_hash__startswith=$2b$10$ab` — the WHERE clause references the hidden column and rows either come back or don't, a character-by-character oracle over a value that is never in the response. Same for any `.hide(...)` column (`?ssn__gte=...`) and for `#[umbral(secret)]` columns which the ORM never even SELECTs but which remain named in model.fields and therefore reach SQL as `WHERE secret_col LIKE ...`. The visibility mechanism exists and is reused for responses, nested relations, and (in openapi) search/FK params — it was simply never generalized to the query-parameter surface."
+  },
+  {
+    "file": "crates/umbral-core/src/app.rs",
+    "line": 1598,
+    "severity": "low",
+    "category": "middleware-bypass",
+    "summary": "The slash-redirect fallback probes a router snapshot captured BEFORE the global middleware stack / host-guard / body-limit layers are applied, so the probe fully executes the matched GET handler outside those global middlewares.",
+    "failure_scenario": "With `slash_redirect(Append|Strip)` enabled, the snapshot is `router.clone()` taken at phase 5.6, before phase 5.65 installs the app/plugin `Middleware` stack (e.g. a global auth-gate or rate-limit `Middleware`) and before host-guard/body-limit. An anonymous caller hitting `/expensive/` (a 404) triggers `slash_redirect_fallback`, which builds a fresh GET to `/expensive` and calls the pre-middleware snapshot; the real `/expensive` GET handler runs to completion, bypassing any global rate-limit or auth `Middleware`, before the fallback returns only a 308. No response body leaks (probe body is discarded), but side-effectful GET handlers execute and global-middleware throttling is bypassed by simply appending/stripping a trailing slash. Route-level `.layer(permission_required(...))` is unaffected (it is inside the snapshot); only the global stack is bypassed."
+  },
+  {
+    "file": "crates/umbral-core/src/db/route_context.rs",
+    "line": 28,
+    "severity": "low",
+    "category": "doc-drift",
+    "summary": "The session_vars field doc (lines 28-31) describes a PG 'after_acquire' hook that sets the GUCs and an 'after_release' hook that resets them — neither hook exists; the real implementation (db.rs:568) uses a single before_acquire hook that does RESET ALL then set_config.",
+    "failure_scenario": "A maintainer touching RLS/session-var behaviour reads this field's doc and reasons about connection-var leakage via a non-existent after_release reset path, then either 'fixes' the wrong place or trusts a reset that is actually performed at before_acquire of the NEXT acquisition. The correct mechanism is even stated correctly 135 lines lower in the same file (route_context.rs:164 says 'before_acquire hook reads them'), so the field doc contradicts its own module. Update lines 28-31 to describe the before_acquire + RESET ALL flow."
+  },
+  {
+    "file": "crates/umbral-core/src/errors.rs",
+    "line": 630,
+    "severity": "low",
+    "category": "information-disclosure",
+    "summary": "render_error_middleware always puts the handler's response body (`message`) and `request_path` into the template context regardless of environment, unlike the dedicated 500 path which blanks them in prod — so routing 500s through `.error_template(500, ...)` can render a leaky handler body to the client in production.",
+    "failure_scenario": "App is configured with `.disable_default_error_pages().error_template(StatusCode::INTERNAL_SERVER_ERROR, \"my500.html\")` and no `server_error_template`/`on_server_error` hook, so `need_panic_layer` is false and `render_500_middleware` (which blanks `error_display`/`request_path` via `build_500_context` in prod) is never installed. A handler that hand-rolls `(StatusCode::INTERNAL_SERVER_ERROR, format!(\"db error: {e}\"))` reaches `render_error_middleware`; `error_context(status, &message, &path, is_dev_mode())` passes `message` unconditionally, and `my500.html`'s `{{ message }}` renders the raw error text (table/column/SQL fragments) to the client even in Environment::Prod. The dedicated 500 path deliberately blanks this; the general error path does not, weakening the WEB-5 safe-by-default posture."
+  },
+  {
+    "file": "crates/umbral-core/src/forms.rs",
+    "line": 1195,
+    "severity": "low",
+    "category": "silent-data-loss",
+    "summary": "The `Form<T>` extractor (and the `FormValidate`/`Form` trait contract) parses urlencoded bodies into `HashMap<String, String>`, silently collapsing repeated keys to the last value — yet the same module renders multi-value `<select multiple>` inputs via `Field::model_multi_choice`/`render_select(multiple=true)`, whose submissions are then unparseable.",
+    "failure_scenario": "A form declares a multi-select `roles` field rendered by `Field::model_multi_choice`. The user selects \"admin\" and \"editor\", producing the body `roles=admin&roles=editor`. `serde_urlencoded::from_bytes::<HashMap<String,String>>` keeps only the last pair, so the validated data map contains `roles=editor`; the \"admin\" selection is silently dropped with no error. Every multi-value field the framework itself renders (multi-select, repeated checkboxes) loses all but one submitted value, so an M2M-style form can never persist more than one child through this path."
+  },
+  {
+    "file": "crates/umbral-core/src/migrate.rs",
+    "line": 1105,
+    "severity": "low",
+    "category": "doc-drift",
+    "summary": "The 'Build a portable CREATE INDEX ... Closes BUG-4.' doc block that describes create_index_stmt (defined at 1134) is physically attached to comment_on_column_stmt (defined at 1124), whose own doc begins mid-block.",
+    "failure_scenario": "A maintainer reading comment_on_column_stmt's rustdoc (or hovering it in an IDE) sees a paragraph documenting index creation, not column comments; create_index_stmt has no leading doc of its own."
+  },
+  {
+    "file": "crates/umbral-core/src/migrate.rs",
+    "line": 2940,
+    "severity": "low",
+    "category": "duplication",
+    "summary": "The umbral_migrations CREATE TABLE DDL is triplicated across ensure_tracking_table_sqlite (4986), ensure_tracking_table_postgres (5002), and ensure_tracking_table_pg_conn (2940) as byte-identical schema strings.",
+    "failure_scenario": "A change to the tracking-table shape (e.g. adding a column or altering the PK) must be edited in three separate string literals; missing one leaves a divergent schema on whichever path (pool vs pinned-conn vs sqlite) was overlooked, and the drift only surfaces at migrate time on that specific backend/path."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/file_field.rs",
+    "line": 184,
+    "severity": "low",
+    "category": "idor",
+    "summary": "FileField/ImageField Deserialize accepts any client-supplied string as the storage key with no validation or ownership check, so a client that can write a file field can point their record at an arbitrary storage key.",
+    "failure_scenario": "A REST/admin serializer exposes a writable `avatar: ImageField`. A client POSTs `{\"avatar\":\"<another-user's-key>.jpg\"}`; deserialize (file_field.rs:184) stores the raw string as the key with no check that this caller uploaded that key. FileField::url() (line 73) then resolves it, letting the attacker's record reference another user's uploaded file (IDOR). Actual disclosure is gated by the storage backend (umbral-storage defangs `..` on store and ServeDir blocks traversal on serve), so path-traversal is mitigated, but cross-tenant key reuse is not prevented at the field boundary."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/queryset/mod.rs",
+    "line": 528,
+    "severity": "low",
+    "category": "doc-drift",
+    "summary": "The doc block for build_query_for AND the security-contract doc for implicit_predicates (\"the single seam for implicit filtering... the next filter to land here — the row-level tenant scope — must reach every builder or it is a cross-tenant leak\") are orphaned: they are physically stacked above audit_pre (lines 528-547), while implicit_predicates (line 601) and build_query_for (line 614) carry no doc comment at all.",
+    "failure_scenario": "A maintainer adding the promised row-level tenant scope reads audit_pre's docs (where the seam contract now visually lives), does not find the contract on implicit_predicates where the code actually is, and adds the tenant filter to only one builder — the exact cross-tenant leak the misplaced contract warns against (and which the update_expr copy at line 3295 already enables)."
+  },
+  {
+    "file": "crates/umbral-core/src/templates.rs",
+    "line": 443,
+    "severity": "low",
+    "category": "xss",
+    "summary": "safe_url() marks a URL HTML-safe based only on the absence of <>\"'& characters, so a dangerous URL scheme (javascript:, data:) passes through unescaped; it never applies the scheme allowlist that the sibling img filter (url_scheme_is_safe) uses, contradicting its own docstring claim that a hostile value 'keeps its armour'.",
+    "failure_scenario": "media_url(key) is documented to return the raw key verbatim when no Storage backend is registered (register_media_url_function, templates.rs:526-528). A FileField/ImageField value is a user-derived string. If that value is javascript:alert(document.cookie) (e.g. set through a REST serializer that exposes the field as a writable string in an app that never wired StoragePlugin, or a passthrough backend), safe_url() sees no <>\"'& and returns Value::from_safe_string(url), so minijinja emits it UNescaped. The admin data_table.html macro renders it as <a href=\"{{ media_url(val) }}\">, producing a clickable javascript:-scheme link -> stored XSS in a staff-viewed page. The img filter guards this exact case (neutralizes non-http(s) schemes to empty) but safe_url does not, so static()/media_url() output in an href attribute is unprotected against scheme-based injection. Fix: run url_scheme_is_safe() (or reject non-relative/non-http(s)) inside safe_url before marking safe."
+  },
+  {
+    "file": "crates/umbral-macros/src/lib.rs",
+    "line": 3984,
+    "severity": "low",
+    "category": "duplication",
+    "summary": "PascalCase conversion is implemented three times: the canonical to_pascal_case helper (line 3525), an inline split-on-'_' version in expand_task's handle_ident (line 3984), and another inline split-on-'_' version in apply_rename_all (line 5399).",
+    "failure_scenario": "to_pascal_case routes input through to_snake_case first, so a non-snake identifier like `XMLReport` becomes `XmlReport`. The two inline copies (task handle ident builder at 3984, apply_rename_all's PascalCase branch at 5399) split only on '_' and leave `XMLReport` as `XMLReport`. For the common snake_case inputs all three agree, so today the cost is latent, but three copies of the same transform mean a future fix (e.g. handling a new casing) applied to to_pascal_case silently does not reach the task-handle and DTO-rename paths. expand_task and apply_rename_all should call to_pascal_case instead of open-coding it.",
+    "verdict": "CONFIRMED"
+  },
+  {
+    "file": "crates/umbral-macros/src/lib.rs",
+    "line": 5400,
+    "severity": "low",
+    "category": "correctness",
+    "summary": "`apply_rename_all` diverges from serde's real rename for field names with leading/trailing/consecutive underscores (notably kebab-case), so the generated TypeScript client key differs from the server's actual JSON key — the exact wire mismatch `dto_rename_all` claims to prevent.",
+    "failure_scenario": "A DTO with `#[serde(rename_all = \"kebab-case\")]` has a field `type_: String` (trailing underscore, a common keyword-avoidance pattern). serde serializes it as `\"type-\"` (its kebab rule is `name.replace('_', \"-\")`). But `apply_rename_all` computes kebab via `words = name.split('_').filter(non-empty)` then `words.join(\"-\")`, dropping the empty trailing segment and producing `\"type\"`. The generated TS interface declares field `type` while the server emits `type-`, so the generated client — the whole point of `#[derive(Dto)]` — reads `undefined` at runtime. Same class of divergence affects double-underscore names for every style routed through the word-split (camelCase/PascalCase/kebab), which serde treats via a char state machine that preserves those boundaries differently."
+  },
+  {
+    "file": "crates/umbral-macros/src/lib.rs",
+    "line": 687,
+    "severity": "low",
+    "category": "correctness",
+    "summary": "`fk_action_tokens` accepts `on_delete = \"set_null\"` on a non-nullable `ForeignKey<T>` field; nullability is never checked, so the derive emits `FkAction::SetNull` for a NOT NULL column.",
+    "failure_scenario": "A model declares `#[umbral(on_delete = \"set_null\")] pub author: ForeignKey<User>` (non-Option, hence NOT NULL). `fk_action_tokens` only gates on `is_fk_field` (true for both FK and nullable FK) and maps `set_null` -> `FkAction::SetNull` with no nullability check. The migration engine then emits `REFERENCES user(id) ON DELETE SET NULL` against a NOT NULL column. Deleting a referenced User at runtime makes the DB attempt to null the child's FK, violating NOT NULL and erroring (Postgres: 'null value in column violates not-null constraint') instead of the intended behavior. The mistake should be a compile error at the field span but slips through to a runtime delete failure."
+  },
+  {
+    "file": "plugins/umbral-admin/src/rows.rs",
+    "line": 181,
+    "severity": "low",
+    "category": "dead-code",
+    "summary": "fetch_rows_filtered's where_pk: Option and its None -> limit(200) branch are dead — every caller passes Some, and the doc claims 'fetch a single row by primary key' while the None branch would fetch 200.",
+    "failure_scenario": "All four call sites (crud.rs:179/524, sheet.rs:54/122, inline_edit.rs:73) pass Some((&pk.name, &id)); no caller passes None (grep for 'fetch_rows_filtered(&model, None' returns nothing, and GitNexus flags the branch as a 'Never_matches' step). The else { qs.limit(200) } path is unreachable, so the Option wrapper and the 200-row fallback are abandoned scaffolding that a future caller could reach for (passing None to 'fetch one row' would silently return up to 200 rows, contradicting the doc). Simplify the signature to where_pk: (&str, &str) and drop the dead branch."
+  },
+  {
+    "file": "plugins/umbral-auth/src/auth_routes.rs",
+    "line": 113,
+    "severity": "low",
+    "category": "stale-doc",
+    "summary": "Three plugin client_ip helpers (umbral-auth, umbral-rest, umbral-logs) all delegate to `umbral::settings::client_ip` but their doc comments still describe the pre-consolidation behavior ('Takes the first hop of X-Forwarded-For, else X-Real-IP') — neither of which the delegated function actually does.",
+    "failure_scenario": "`umbral::settings::client_ip` → client_ip_with_hops (settings.rs:163-186) reads ONLY the `x-forwarded-for` header, never `x-real-ip`, and takes the `(hops+1)`-th entry from the RIGHT (not 'the first hop'/leftmost). But auth_routes.rs:112-113, umbral-rest/src/lib.rs:710-712, and umbral-logs/src/lib.rs (resolve_ip doc) all still say 'Takes the first hop of X-Forwarded-For, else X-Real-IP'. An operator reading these configures nginx to set `X-Real-IP` expecting the throttle/log to pick it up; it is silently ignored, so throttling keys on the 'unknown' shared bucket. The 'first hop' claim is also actively misleading — the code deliberately does NOT use the forgeable leftmost entry. Per CLAUDE.md the doc-comment surface must match the contract; here it describes a design that was replaced by the audit_2 H9 trusted-proxy-hops policy."
+  },
+  {
+    "file": "plugins/umbral-auth/src/login_required.rs",
+    "line": 242,
+    "severity": "low",
+    "category": "stale-doc-comment",
+    "summary": "Stale doc comments assert a dependency constraint that no longer holds: line 242 ('umbral-auth must not depend on umbral-sessions (the dep arrow runs the other way)') and line 358 ('Lives here because umbral-auth does not depend on umbral-sessions') both contradict Cargo.toml:66, where umbral-auth takes a real prod dependency on umbral-sessions. These false comments are the stated justification for the private hash_token, cookie_from_headers, and SessionRow re-implementations flagged in finding 1, so they actively mislead the next developer into keeping the duplicated, store-blind copies rather than deleting them.",
+    "failure_scenario": "A maintainer reading login_required.rs trusts the comment, concludes the re-implementations are load-bearing to avoid a forbidden cycle, and leaves the direct SQL session read in place — perpetuating the RedisStore/CookieStore auth break in finding 1 instead of routing through the (now legal) umbral_sessions dependency."
+  },
+  {
+    "file": "plugins/umbral-graphql/src/loader.rs",
+    "line": 249,
+    "severity": "low",
+    "category": "correctness",
+    "summary": "Reverse-FK child batching applies a single LIMIT MAX_LIMIT to the whole batched IN(...) query, so children are split arbitrarily across parents rather than each parent getting up to MAX_LIMIT of its own.",
+    "failure_scenario": "A GraphQL list query `{ authors { posts { id } } }` batches all authors' posts into one `WHERE author_id IN (...) LIMIT 200`. When the combined child set exceeds 200 rows, the 200 returned are distributed to whichever parents they happen to belong to; other parents silently show `[]` or a truncated list. This is a data-completeness bug (under-returns, no leak), not an exposure, but it means reverse-relation lists are unreliable on any non-trivial dataset."
+  },
+  {
+    "file": "plugins/umbral-realtime/src/lib.rs",
+    "line": 1526,
+    "severity": "low",
+    "category": "stale-doc",
+    "summary": "The `max_connections` field doc says `None = unlimited (the default)`, but the `Default` impl sets `Some(DEFAULT_MAX_CONNECTIONS)` and a test asserts the cap is on by default.",
+    "failure_scenario": "The field doc at lib.rs:1525-1528 states \"Aggregate live-connection cap across all transports. `None` = unlimited (the default)\". But `RealtimePlugin::default()` (lib.rs:1589) sets `max_connections: Some(DEFAULT_MAX_CONNECTIONS)`, and the test `defaults_ship_a_connection_cap_and_rate_cap` (lib.rs:2472-2477) asserts `p.max_connections == Some(DEFAULT_MAX_CONNECTIONS)`. The doc was not updated when audit_2 realtime #4 flipped the default from unlimited to a 10k cap. A maintainer trusting the field doc would believe realtime ships uncapped and might add a redundant `.max_connections(...)`, or misdiagnose why a deployment is refusing connections with 503 at 10k."
+  },
+  {
+    "file": "plugins/umbral-storage/src/lib.rs",
+    "line": 354,
+    "severity": "low",
+    "category": "stale-doc",
+    "summary": "`accept()`'s doc comment opens with three lines describing the upload-SIZE cap (copy-pasted from `max_size`), while `max_size()` itself carries no doc comment at all.",
+    "failure_scenario": "The doc on `accept` (lib.rs:354-356) begins \"Enforce a hard upload-size cap on the media side (replacing the DEFAULT_MAX_UPLOAD_SIZE default). Self::save rejects bytes longer than this; the streaming path enforces it mid-stream.\" — which describes `max_size`, not `accept` (which restricts MIME types). Meanwhile `pub fn max_size` (lib.rs:387) has no doc comment; its intended documentation was evidently pasted onto `accept`. A developer reading `accept`'s rustdoc is told it enforces a size cap, and a developer reading `max_size`'s rustdoc gets nothing. Fix: move lines 354-356 to `max_size`."
+  },
+  {
+    "file": "plugins/umbral-storage/src/lib.rs",
+    "line": 647,
+    "severity": "low",
+    "category": "authz-key-normalization",
+    "summary": "The media_access authorization callback receives the raw percent-ENCODED request path as the file 'key', but the underlying ServeDir percent-decodes it before serving, so the key the security check sees can differ from the file actually served.",
+    "failure_scenario": "An app uses .media_access(cb) where cb implements a deny-list ownership model (deny keys known to belong to other users, allow otherwise). Victim's file is /media/victim.jpg. A direct GET /media/victim.jpg passes key 'victim.jpg' to cb, which denies. The attacker instead requests GET /media/%76ictim.jpg (%76='v'): the middleware computes key='%76ictim.jpg' (req.uri().path() is not percent-decoded), cb finds no owned file named '%76ictim.jpg' and allows it, then the nested ServeDir percent-decodes the path and serves victim.jpg — bypassing the access check. The callback should be handed the same decoded key ServeDir will resolve so the authorization decision and the served file cannot diverge. Contingent on the app's callback semantics (an allow-list/ownership-required check fails safe), hence low."
+  },
+  {
+    "file": "plugins/umbral-storage/src/media.rs",
+    "line": 266,
+    "severity": "low",
+    "category": "duplication",
+    "summary": "The upload key-generation sequence (sanitise + neutralise + `{uuid}-{name}`) is implemented four times, and `neutralised_upload`'s doc claims to be the single source of truth for FsStorage, which does not call it.",
+    "failure_scenario": "`neutralised_upload` (media.rs:266) is documented as \"Shared by every key-generating backend (`FsStorage`, `S3Storage`) and the deferred-save key generator so the rules can't drift apart\", and S3Storage::store (s3.rs:376) and save_deferred_through (media.rs:1015) do call it. But FsStorage::store (media.rs:438,447,448) and FsStorage::store_stream (media.rs:503,504,505) instead inline `sanitise_filename` then `neutralise_active_content` then `format!(\"{}-{safe_name}\", Uuid::new_v4())` by hand. The key-format template `format!(\"{}-{safe_name}\", uuid::Uuid::new_v4())` is repeated in four places. A future change to the key shape (e.g. adding a timestamp prefix or changing the separator) made in `neutralised_upload` would be picked up by S3 and the deferred path but silently missed by the two FsStorage methods, producing inconsistent keys across backends. The doc comment overstates the sharing it actually provides."
+  },
+  {
+    "file": "crates/umbral-core/src/auth_contract.rs",
+    "line": 176,
+    "severity": "medium",
+    "category": "duplication",
+    "summary": "Identity has two public methods that do the identical job — pk::<T>() (line 122) and user_pk::<T>() (line 176) — both generic over FromStr, both parsing self.user_id, differing only in error type, with doc comments that each claim to be THE canonical replacement for hand-parsing.",
+    "failure_scenario": "pk::<T>() returns Result<T, IdentityPkError> (carries the bad value + target type name); user_pk::<T>() returns Result<T, T::Err> (a bare ParseIntError with no context). Both are live and callers are already split: crates/umbral-core/tests/api_error_in_html_handlers.rs and plugins/umbral-sessions/src/lib.rs:824 point at pk(), while plugins/umbral-auth/src/extractors.rs:168 uses user_pk() and throws its error away via .map_err(|_| StaffReject::BadPk). The two docstrings even disagree on how many times a consumer 'hand-parsed' (pk says ~19x, user_pk says ~8x), both citing gaps3 #57 — the second method is a leftover the refactor never removed. A maintainer wanting the structured error must know to avoid the more obvious 'user_pk' name; the framework will keep accreting callers on both. Collapse to one (keep pk, make user_pk a deprecated alias or delete it)."
+  },
+  {
+    "file": "crates/umbral-core/src/backup.rs",
+    "line": 177,
+    "severity": "medium",
+    "category": "wrong-altitude",
+    "summary": "dump() and load() hardcode pool_dispatched() (default pool) and iterate all registered_models(), bypassing the per-model alias routing (table_alias/model_alias/op_targets_alias, registered_aliases walk) the migration engine uses everywhere else.",
+    "failure_scenario": "A model routed to a non-default DB alias via Model::DATABASE / Plugin::database() (surfaced on ModelMeta::database) is dumped with SELECT * FROM <table> against the default pool at backup.rs:435/498, failing with 'no such table' — or silently reading the wrong rows if a same-named table exists on the default pool. load() at line 209 has the mirror problem, inserting the model's rows into the default pool instead of its real home."
+  },
+  {
+    "file": "crates/umbral-core/src/cors.rs",
+    "line": 356,
+    "severity": "medium",
+    "category": "cors-scoping",
+    "summary": "ScopedCors dispatches with a bare `path.starts_with(prefix)`, so a `cors_for(\"/api\", ...)` policy bleeds onto every sibling path that shares the string prefix rather than the path segment.",
+    "failure_scenario": "App calls `.cors_for(\"/api\", CorsConfig::strict().allow_origin(\"https://trusted.example\").allow_credentials(true))` intending to expose only the JSON API. Because `ScopedCors::call` matches `req.uri().path().starts_with(\"/api\")`, requests to unrelated paths like `/api-admin`, `/apidocs`, or `/apikeys` ALSO receive the CORS allow-origin/allow-credentials headers. If `/api-admin` is a sensitive HTML page that relies on the same-origin policy plus the session cookie, `https://trusted.example` can now read its response cross-origin with the victim's credentials. Fix: require a segment boundary (prefix exact, or followed by `/`)."
+  },
+  {
+    "file": "crates/umbral-core/src/cors.rs",
+    "line": 356,
+    "severity": "medium",
+    "category": "correctness",
+    "summary": "ScopedCorsLayer matches the request path with a bare `starts_with(prefix)`, so a prefix like \"/api\" also applies the API's CORS policy to unrelated sibling paths (/apikeys, /api-docs, /apiary).",
+    "failure_scenario": "An app calls `.cors_for(\"/api\", CorsConfig::strict().allow_origins([...]).allow_credentials(true))` intending to scope credentialed cross-origin access to the REST API. ScopedCors::call does `req.uri().path().starts_with(&*self.prefix)` (line 356) with no path-boundary check, so requests to `/apikeys`, `/api-docs`, `/apiary`, etc. also match and receive the API's Access-Control-Allow-Origin / Allow-Credentials headers. Any route whose path shares the `/api` string prefix but is not under the `/api/` segment unintentionally becomes cross-origin-readable by the allowlisted origins — a CORS mis-scoping. The fix is to require the character after the prefix to be `/` (or end-of-path), i.e. match the path segment boundary rather than a raw string prefix."
+  },
+  {
+    "file": "crates/umbral-core/src/db.rs",
+    "line": 575,
+    "severity": "medium",
+    "category": "race-condition",
+    "summary": "The Postgres per-connection GUC/RLS reset gate `SESSION_VARS_IN_USE` is read and written with `Ordering::Relaxed`, so on a weakly-ordered CPU one request can skip `RESET ALL` and execute under a prior request's leaked session variables (cross-tenant / RLS data leak).",
+    "failure_scenario": "App uses `RouteContext::with_session_var(\"app.tenant_id\", ...)` for Postgres RLS. On core A, a tenant-1 request's `before_acquire` runs `SESSION_VARS_IN_USE.store(true, Relaxed)` and `set_config('app.tenant_id','1',false)` on pooled connection X; X is returned to the pool with the GUC still set (set_config is_local=false persists on the connection). Concurrently on core B, an anonymous request (empty session_vars) acquires the SAME connection X; because the store used Relaxed there is no happens-before edge, so B's `SESSION_VARS_IN_USE.load(Relaxed)` may still observe `false`, skipping the `RESET ALL` branch entirely. B then runs its queries on X with `app.tenant_id` still equal to '1', so an RLS policy reading `current_setting('app.tenant_id')` returns tenant-1's rows to an anonymous/other-tenant caller. The flag is a security gate controlling whether leaked connection state is cleared; Relaxed is too weak an ordering for it (Acquire/Release or SeqCst, or unconditional reset, is required)."
+  },
+  {
+    "file": "crates/umbral-core/src/errors.rs",
+    "line": 513,
+    "severity": "medium",
+    "category": "duplication-drift",
+    "summary": "render_500_middleware and render_error_middleware are near-duplicate response-styling middlewares, but only render_error_middleware honors the `Accept: application/json` guard; render_500_middleware re-renders every non-HTML 500 — including a JSON body — as an HTML page, so a JSON API client gets an HTML 500 in the DEFAULT config.",
+    "failure_scenario": "A REST/JSON app with the default settings (default_error_pages=true → need_panic_layer true at app.rs:1645 → render_500_middleware installed at app.rs:1666). A handler returns the framework's own recommended error type: `ApiError::Database(...)` → into_response() emits status 500 with Content-Type `application/json` and body `{\"code\":\"database_error\",\"error\":\"internal server error\"}` (api_error.rs:185). The client sends `Accept: application/json`. render_500_middleware (errors.rs:521-533) only checks `ct.starts_with(\"text/html\")` — application/json is not HTML — so it captures the body, humanizes it, and re-renders it through the default_500 HTML template, returning `text/html`. The API client that asked for JSON receives an HTML page. render_error_middleware (errors.rs:595-609) does the exact same job for other status codes but returns early on `wants_json`, so 403/429/etc. correctly stay JSON — the two copies have drifted, and the 500 copy is the stale one. Fix: add the same `Accept: application/json` early-return to render_500_middleware."
+  },
+  {
+    "file": "crates/umbral-core/src/errors.rs",
+    "line": 533,
+    "severity": "medium",
+    "category": "correctness",
+    "summary": "render_500_middleware re-renders application/json 500 responses as an HTML page, breaking the JSON error contract for every API handler under the default configuration.",
+    "failure_scenario": "default_error_pages defaults to true (app.rs:346), so App::build installs render_500_middleware over the WHOLE router (app.rs:1666, inside `need_panic_layer`). A handler returns `ApiError::Database(e)` or the REST plugin returns its own 500 — `ApiError::into_response` (api_error.rs:185) emits a JSON body `{\"error\":\"internal server error\",\"code\":\"database_error\"}` with Content-Type `application/json`, status 500. render_500_middleware only passes through responses whose Content-Type `starts_with(\"text/html\")` (line 533); `application/json` fails that test, so the JSON body is discarded and replaced with the HTML 500 template (Content-Type text/html). A REST/fetch client calling `res.json()` now gets an HTML page and fails to parse. The middleware's own docstring says only 'raw text/plain or no-content-type 500s' should be re-rendered, and the sibling `render_error_middleware` (line 595-609) explicitly guards on `Accept: application/json`; this 500 path has neither the text/plain restriction nor an Accept/JSON guard, so it silently converts JSON API errors to HTML by default."
+  },
+  {
+    "file": "crates/umbral-core/src/migrate.rs",
+    "line": 2592,
+    "severity": "medium",
+    "category": "duplication",
+    "summary": "The Postgres per-file apply block is inlined in three functions (run_in_postgres_for_alias_locked:2541, run_tenant_apps_in_postgres_schema:2674, migrate_tenant_apps_into_pg_pool:2834) instead of a shared helper like SQLite's apply_sqlite_migration_tx; the copies have already drifted on DDL rendering.",
+    "failure_scenario": "run_in_postgres_for_alias_locked renders ops via render_operation(op) (ambient backend = default pool's backend) at line 2592, while the two tenant Postgres loops render via render_operation_for(op, \"postgres\") at 2763/2863. On a heterogeneous pool set (SQLite default + Postgres secondary alias, which the per-alias registered_aliases() walk exists to support), the primary alias loop emits SQLite DDL and executes it against the Postgres pool. Any future edit to the tracking-insert or tx handling must be made in 3 hand-synced copies."
+  },
+  {
+    "file": "crates/umbral-core/src/migrate.rs",
+    "line": 3168,
+    "severity": "medium",
+    "category": "state-inconsistency",
+    "summary": "Drift detection is squash-unaware: after a squash migration is applied on a fresh DB, the shadowed original files (kept on disk, no tracking row) are misclassified as `Pending`, so `drift_report().pending()` is non-empty forever and readiness probes block traffic.",
+    "failure_scenario": "A plugin's history is squashed: `0001_squashed_0005` (replaces 0001..0005) plus the five originals all sit on disk (the sanctioned Django-style non-destructive squash). On a fresh database, `squash_plan` marks the squash `Apply` and every original `Skip`, so only `0001_squashed_0005` gets a tracking row; originals 0001..0005 get none. `detect_drift` (lines 3125-3199) never consults `replaces`/shadowing: `max_applied_seq` parses `0001_squashed_0005` -> 1, so on-disk `0002..0005` (seq 2-5 > 1, not in applied set) are classified `Pending` and `0001` as `OutOfOrder`. `DriftReport::pending()` (line 1594) therefore returns 0002..0005 permanently, and umbral-health's readiness probe (`plugins/umbral-health/src/lib.rs:134`) holds traffic off every freshly-booted pod even though the schema is fully migrated; `showmigrations` also prints false `[ ]` pending entries. The actual apply path (`squash_plan`) is correct — only the drift/health/reporting surface is wrong — but that surface is exactly what gates rollout readiness."
+  },
+  {
+    "file": "crates/umbral-core/src/migrate.rs",
+    "line": 4885,
+    "severity": "medium",
+    "category": "cross-backend-divergence",
+    "summary": "Autodetector emits `AddColumn` for a new `#[umbral(unique)]` field with no guard, and the SQLite renderer lowers it to `ALTER TABLE ... ADD COLUMN ... UNIQUE`, which SQLite rejects outright.",
+    "failure_scenario": "A model gains a new `#[umbral(unique)] slug: String` (nullable or not). `diff_columns` reaches the added-column block at ~4885 which only rejects NOT-NULL-without-default; `unique` is not checked, so it emits `AddColumn{column:{unique:true}}`. `build_column_def_sqlite` (~6021) calls `def.unique_key()`, so `render_operation_sqlite` produces `ALTER TABLE \"post\" ADD COLUMN \"slug\" text UNIQUE`. SQLite forbids adding a UNIQUE column via ALTER TABLE and aborts the migration at apply time with `Cannot add a UNIQUE column`. The identical migration applies fine on Postgres, so `makemigrations` yields a file that bricks `migrate` on SQLite (the documented test backend) while passing on Postgres. Contrast with the shared-column path at line 4702, which correctly returns UnsafeAlter for a unique flip on an existing column; the brand-new-column path lacks the same guard."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/column.rs",
+    "line": 138,
+    "severity": "medium",
+    "category": "duplication-drift",
+    "summary": "The hand-copied column catalogue has drifted: IntCol and ForeignKeyCol have in_ + in_subquery, but StrCol/NullableStrCol have neither, and NullableIntCol/UuidCol/NullableUuidCol/NullableForeignKeyCol have in_ but no in_subquery.",
+    "failure_scenario": "`User::objects().filter(user::EMAIL.in_(&[\"a@x\", \"b@x\"]))` does not compile — StrCol (column.rs:138) and NullableStrCol (column.rs:889) expose eq/ne/like/ilike/contains/startswith but no in_ at all, so with String/Uuid PKs now supported end-to-end there is no way to filter a String-keyed column against a list of values; callers must chain `.eq(..) | .eq(..)`. Likewise gap #26's `.in_subquery` exists only on IntCol (column.rs:107) and ForeignKeyCol (column.rs:2583), so subquery filtering silently works only for i64 columns — a subquery over a String-PK or Uuid-PK parent has no callable entry point. Each column type is a ~60-line copy-paste block, so ops added later landed in some copies and not others."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/m2m.rs",
+    "line": 878,
+    "severity": "medium",
+    "category": "comment-contradicts-code",
+    "summary": "pk_seaval_to_json's fallthrough arm renders a Uuid PK with `format!(\"{:?}\", other)` (Debug on the sea_query::Value wrapper), while its own comment claims it uses Uuid's Display for 'the canonical hyphenated form which round-trips cleanly'.",
+    "failure_scenario": "An M2M relation whose parent or child PK is a Uuid (e.g. add/remove/set/clear on a Uuid-keyed model). The typed PK becomes `sea_query::Value::Uuid(Some(u))`, which is not matched by the explicit Int/String arms and falls to `other => json!(format!(\"{:?}\", other))`. The emitted m2m_changed signal payload's id is the string `\"Uuid(Some(936da01f-9abd-4d9d-80c7-02af85c822a8))\"` instead of `\"936da01f-9abd-4d9d-80c7-02af85c822a8\"`, so audit-log / cache-invalidation subscribers receive a malformed, non-round-tripping id, contradicting the comment two lines above."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/masked.rs",
+    "line": 387,
+    "severity": "medium",
+    "category": "wrong-altitude",
+    "summary": "Masked::deserialize's redaction branch claims to implement \"no change\" but implements \"destroy the secret\": it maps the redaction marker to an empty plaintext, which the write path then persists as seal(\"\"). MaskInner has no Unchanged variant, so the deserializer fakes one with the empty string.",
+    "failure_scenario": "The doc-comment at masked.rs:383-386 says the marker \"round-trips to an empty value so a REST client echoing a redacted field back doesn't overwrite the stored ciphertext with `••••••`\". It does not overwrite it with the marker — it overwrites it with the encryption of the empty string. A handler that renders a masked value through Display (the only surface that emits `••••••`, masked.rs:344) into a form or JSON body and PATCHes it back deserializes to MaskInner::Plain(\"\"); the typed update path calls to_stored() -> ambient_seal(\"\") and writes it. The API key is silently destroyed and reveal() returns \"\" — the exact data loss the comment claims to prevent. The fix is an Unchanged variant (or rejecting the marker), not an empty-string stand-in."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/queryset/mod.rs",
+    "line": 1050,
+    "severity": "medium",
+    "category": "wrong-altitude",
+    "summary": "into_subquery() (line 1050) and combine() for union/intersect/except (line 1081) hardcode build_query_for(\"sqlite\"), baking the SQLite variant of every per-backend Predicate into a SelectStatement that is later rendered by whatever pool runs the OUTER query. This bypasses the Predicate cond_for backend-dispatch mechanism these paths sit on top of.",
+    "failure_scenario": "A JSON-path predicate carries a distinct cond_sqlite (json_extract(...)) vs pg cond (col -> 'a' ->> 'b'), produced by column.rs:1540 (.eq) et al. Model::objects().filter(json_col.path(...).eq(\"x\")).union(other) executed against a Postgres pool: combine() renders the branch with \"sqlite\", so the union arm embeds SQLite's json_extract(...) which PostgresQueryBuilder then emits verbatim → Postgres raises 'function json_extract does not exist'. Same for user::ID.in_subquery(qs.filter(json_pred).into_subquery(\"id\")) on Postgres."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/queryset/mod.rs",
+    "line": 1050,
+    "severity": "medium",
+    "category": "cross-backend-divergence",
+    "summary": "into_subquery() and combine() (union/intersect/except) hardcode build_query_for(\"sqlite\") when selecting each predicate's backend variant, baking the SQLite-only SimpleExpr into the AST even when the composed query later executes on Postgres.",
+    "failure_scenario": "A JSON-path predicate carries distinct renderings via Predicate::new_with_sqlite (column.rs:1540): Postgres `col ->> 'b' = $1` vs SQLite `json_extract(col, ?) = ?`. `into_subquery` (mod.rs:1050) and `combine` (mod.rs:1081-1086) call `build_query_for(\"sqlite\")`, which resolves every predicate through cond_for(\"sqlite\") and embeds the SQLite `json_extract(...)` SimpleExpr into the SelectStatement AST. That AST is then rendered with PostgresQueryBuilder at terminal time and executed on the Postgres pool. Concretely, `Item::objects().filter(item::DATA.path([\"a\"]).eq(\"x\")).into_subquery(\"parent_id\")` used in `parent::ID.in_subquery(sub)`, or `qs_a.union(qs_b)` where either side filters on a JSON path, emits `json_extract(...)` to Postgres — which errors with `function json_extract(...) does not exist` (or, if a same-named function exists, silently returns wrong rows). On the framework's Postgres-first primary target these compositions break; plain predicates are unaffected because their cond_sqlite is None."
+  },
+  {
+    "file": "crates/umbral-core/src/orm/queryset/mod.rs",
+    "line": 1841,
+    "severity": "medium",
+    "category": "correctness",
+    "summary": "try_for_each() overwrites any user-supplied LIMIT/OFFSET with its own paging values, so a caller who bounded the query silently walks the entire table.",
+    "failure_scenario": "In try_for_each the per-page query is built as `q.limit(chunk_size as u64).offset(offset)` (mod.rs:1841/1850). build_query_for clones self.query, which already holds any `.limit(n)` / `.offset(m)` the caller set, but these overwrite it unconditionally. So `Model::objects().filter(...).limit(100).try_for_each(500, cb)` does NOT stop after 100 rows — it pages from offset 0 through the whole result set, invoking the callback for every matching row (potentially millions), and a caller-supplied `.offset()` is likewise ignored so rows meant to be skipped are processed. The docstring makes no mention of this, so a bounded export/transform silently becomes a full-table one."
+  },
+  {
+    "file": "crates/umbral-core/src/templates.rs",
+    "line": 840,
+    "severity": "medium",
+    "category": "duplication",
+    "summary": "HTML-escaping is hand-rolled three times within this review scope, and the copies have drifted on the apostrophe: forms.rs:809 emits &#x27;, templates.rs:840 (html_escape_into) emits &#39;, and the CSRF-input escaper at templates.rs:1237 omits the apostrophe entirely.",
+    "failure_scenario": "For a framework whose selling point is 'secure by default / template autoescaping', the single most security-load-bearing primitive exists in three private copies with no shared source of truth. Today all three are individually correct for their context, but a future fix to one (e.g. adding backtick or U+2028 handling after an XSS report) silently leaves the other two vulnerable — exactly the 'one fixed, one not' drift these copies already exhibit on the apostrophe. The CSRF copy at line 1237 already under-escapes (no '); it is safe only by the incidental fact that CSRF tokens are hex. Consolidate into one core html_escape helper that forms.rs, the img/markdown filters, and the CSRF-input builder all call."
+  },
+  {
+    "file": "crates/umbral-macros/src/lib.rs",
+    "line": 1697,
+    "severity": "medium",
+    "category": "duplication-drift",
+    "summary": "The child-side OneToOne<T> -> unique ForeignKey<T> classification rewrite is implemented twice across the two separate passes over `fields` in expand_model, and the second copy's comment admits it is a hand-mirror of the first.",
+    "failure_scenario": "Pass 1 (lines 1234-1239) rewrites `FieldKind::OneToOne(inner)` to `ForeignKey(inner)` + force_unique for column/hydrate/FieldSpec emission. Pass 2 (lines 1697-1702, comment: 'Mirror the rewrite from the first loop') repeats the same rewrite for reverse-FK / reverse-O2O accessor emission. A maintainer who adds a new OneToOne sub-case or changes the rewrite (e.g. also stamping a new flag) in pass 1 but forgets pass 2 desyncs the two: the FK column and hydrate arms get emitted one way while `parent.child()` reverse accessors are classified another way — a silent, expansion-only divergence that no code reviewer sees because nobody reads the generated tokens. The mechanism should be lifted so both passes read one canonical classification for each field.",
+    "verdict": "CONFIRMED"
+  },
+  {
+    "file": "crates/umbral-macros/src/lib.rs",
+    "line": 4937,
+    "severity": "medium",
+    "category": "duplication-drift",
+    "summary": "#[derive(Validate)] and #[derive(Model)] both consume the `#[umbral(...)]` namespace through two SEPARATE parsers (parse_validate_field_attrs vs parse_umbral_field_attr), yet both doc comments claim the vocabulary is identical — and it already diverges.",
+    "failure_scenario": "The Validate module comment (line 4937 'The attribute vocabulary is DELIBERATELY identical to #[derive(Model)]'s ... how a DTO and the model drift apart') and the derive_validate doc (line 5177 'Uses the SAME field attributes as #[derive(Model)]') are both false. Model's parser (parse_umbral_field_attr, ~line 491) accepts `max_length` but NOT `min_length`; Validate's parser (parse_validate_field_attrs, line 4994) accepts both. So a developer trusting the docs and writing `#[umbral(min_length = 1)]` on a Model field gets 'unknown field-level umbral attribute `min_length`'. Worse, `max_length` is accepted by BOTH but means different things: on a Model it is admin-display truncation metadata (field doc line 248 'soft limit. The admin truncates ... 0 means no truncation' — no write-time enforcement), while on a Validate DTO it emits a hard check_max_length rejection. Same spelling, divergent behavior — exactly the drift the comment claims to prevent. The two parsers guarantee this keeps drifting; the fix is one shared attribute parser (or dropping the identical-vocabulary claim).",
+    "verdict": "CONFIRMED"
+  },
+  {
+    "file": "plugins/umbral-admin/src/handlers/actions.rs",
+    "line": 362,
+    "severity": "medium",
+    "category": "duplication",
+    "summary": "check_action_perm is a second, hand-rolled copy of permcheck::require_codename — the same raw-codename permission gate implemented twice, so hardening one leaves the other stale.",
+    "failure_scenario": "permcheck::require_codename (permcheck.rs:136) and check_action_perm (actions.rs:362) both do: no-op when permissions_installed()==false, superuser-pass via has_perm_for_superuser, deny-by-default on DB error, return 403. They differ only in the 403 body string. If a maintainer later hardens the security-relevant deny path in permcheck (e.g. stops treating an absent-permissions plugin as allow, or changes the on-error default), admin actions (run_action/dispatch_action -> check_action_perm) keep the old behavior. The action-execution endpoint — which mutates/deletes rows — is exactly the gate you don't want silently drifting from the model-bound one. Fix: delete check_action_perm and call permcheck::require_codename, optionally parameterizing the 403 message."
+  },
+  {
+    "file": "plugins/umbral-auth/src/login_required.rs",
+    "line": 321,
+    "severity": "medium",
+    "category": "cross-store-divergence",
+    "summary": "`current_session_user_pk` reads the raw `session` DB table via the `SessionRow` ORM model instead of the installed `SessionStore`, so under a stateless `CookieStore` or a `RedisStore` (where no `session` row exists) all umbral-auth extractors resolve authenticated users as anonymous.",
+    "failure_scenario": "App installs `SessionsPlugin::default().store(CookieStore::new())` (stateless session-in-cookie) or a RedisStore. Login succeeds and the browser holds a valid session cookie. On the next request, `current_session_user_pk` runs `Manager::<SessionRow>().filter(id = hash_token(cookie)).first()` against the `session` table (login_required.rs:321-329), which is empty for these stores, so it returns None. Result: `LoggedIn`, `RequireAuth`, `RequireStaff`, `resolve_identity` (and thus `/me`, `/change-password`, OAuth connect/disconnect, umbral-realtime WS auth) all treat the logged-in user as anonymous and 401/redirect — auth is broken for any non-DB store. This is the exact class audit_2 H7 fixed for the `umbral_sessions` helpers (which now route through `active_store()`), but login_required.rs was left on the direct-SQL path; note session_user.rs:65 already uses the store-aware `umbral_sessions::current_user_id_str`, and the stale comment at login_required.rs:359 wrongly claims umbral-auth does not depend on umbral-sessions (Cargo.toml:66 shows it does)."
+  },
+  {
+    "file": "plugins/umbral-auth/src/throttle.rs",
+    "line": 226,
+    "severity": "medium",
+    "category": "dos",
+    "summary": "Login throttle keyed on IP+username degrades to per-username-global in the default config (IP resolves to constant \"unknown\"), letting an unauthenticated attacker lock any targeted account out of its own valid login.",
+    "failure_scenario": "Same root cause: client_ip yields \"unknown\" by default (settings.rs:164 returns None for trusted_proxy_hops==0, no peer-IP fallback), so login_throttle_check(&ip, &username) (auth_routes.rs:657) keys on \"unknown\\0<username>\" (throttle.rs:231, default 5 attempts / 5 min). login_throttle_clear only fires on a SUCCESSFUL login (auth_routes.rs:685), which the victim cannot reach while throttled. An attacker sends 5 failed POST /api/auth/login {username: \"victim\", password: \"x\"} within 5 minutes; the victim then receives 429 on their own correct-credential login for the rest of the window, and repeating the 5 bad attempts each window keeps them locked out indefinitely. The docstring's stated protection (\"one attacker IP can't lock out every account\") is undermined because the IP component is constant, so the lockout is reachable from a single source against any account."
+  },
+  {
+    "file": "plugins/umbral-auth/src/throttle.rs",
+    "line": 243,
+    "severity": "medium",
+    "category": "dos",
+    "summary": "Registration throttle is keyed on client IP alone, but in the default config the resolved IP is the constant \"unknown\", so all registrations share ONE global 10/hour bucket — a trivial site-wide signup DoS.",
+    "failure_scenario": "Default deployment: trusted_proxy_hops defaults to 0, and umbral::settings::client_ip returns None for hops==0 (settings.rs:164) with no ConnectInfo peer-IP fallback, so auth_routes.rs:125 resolves every caller to ip=\"unknown\". register() calls register_throttle_check(&ip) (auth_routes.rs:573), which keys the sliding window on the bare ip string (throttle.rs:248, default register_max=10/hour). An unauthenticated attacker fires 10 POST /api/auth/register requests in a few seconds; the 11th and every subsequent registration from ANY real user site-wide returns 429 (\"too many registration attempts\") for up to an hour. The per-IP isolation the docstring promises (\"defends mass account creation ... keyed per IP\") does not exist by default because the IP dimension is a constant."
+  },
+  {
+    "file": "plugins/umbral-graphql/src/lib.rs",
+    "line": 622,
+    "severity": "medium",
+    "category": "duplication-drift",
+    "summary": "The GraphQL request-context setup is duplicated across three transports and only the POST handler wires identity + private-unlocks; the WS and SSE subscription transports inject neither, so subscription guards documented as 'gated by the same expose_if closure as reads' can never see the caller's identity or unlocks.",
+    "failure_scenario": "The POST handler (579-583) builds `.data(Loaders::new(unlocks)).data(unlocks).data(identity)`. The WS transport mounts `GraphQLSubscription::new(ws_schema)` (616-619) with no data injection, and the SSE transport uses `req.into_inner().data(Loaders::default())` (624-628) — no auth call, no identity, no unlocks. But subscription.rs resolvers read exactly those: `crate::guard(&ctx, e.access.as_ref(), &e.meta)` (167) and `crate::privacy::from_ctx(&ctx)` (179). Result: an authenticated user subscribing to an `.expose_if(...)`/`.subscribable(...)` model is permanently denied (identity is always None over WS/SSE), directly contradicting the doc contract at lib.rs:343-346 and subscription.rs:178-179; and `allow_private_if` unlocks never open over subscriptions (from_ctx falls back to empty). The subscription transports are a stale copy of the POST setup — the identity/unlocks wiring added to POST was never propagated."
+  },
+  {
+    "file": "plugins/umbral-graphql/src/loader.rs",
+    "line": 249,
+    "severity": "medium",
+    "category": "correctness",
+    "summary": "The reverse-FK child loader applies MAX_LIMIT to the whole batched `WHERE fk IN (...)` query instead of per-parent, so children of some parents are silently truncated or omitted — the resolver returns the wrong rows.",
+    "failure_scenario": "`ChildLoader::load` (loader.rs:103-149) coalesces every parent id at one resolution level into a single `fetch_where_in(meta, fk_col, ids, ...)`, which runs one `SELECT ... WHERE fk IN (ids) LIMIT 200` (loader.rs:229-253, `.limit(crate::MAX_LIMIT)`). The 200-row cap is applied across ALL parents combined, not per parent. For `{ authors(limit: 100) { username posts { id } } }` where the 100 authors have 500 posts total, only the first 200 posts (by DB row order) are returned; the ~60 authors whose posts sort later get an empty or partial `posts` list even though they have posts. The response looks valid — no error — so the client silently receives incomplete relation data. Even a single-parent `{ author(id:1) { posts { id } } }` where author 1 has 300 posts silently drops 100, and reverse-FK lists have no cursor/pagination arg to page past the cap. Fix: fetch children per parent (or use a per-parent windowed/lateral query) so each parent's list is independently limited."
+  },
+  {
+    "file": "plugins/umbral-permissions/src/middleware.rs",
+    "line": 106,
+    "severity": "medium",
+    "category": "duplication",
+    "summary": "PermissionRequired re-implements umbral-auth's LoginRequired instead of composing it: the same config fields (login_url, next_param + api()/html()/no_next()), a byte-identical urlencoded() percent-encoder (verified identical to login_required.rs:135), and a duplicate unauth_response() that builds the same 401 JSON {\"error\":\"authentication required\"} with WWW-Authenticate: Bearer and the same 302 next-param redirect as LoginRequired::rejection_response. umbral-permissions already depends on umbral-auth, so it could hold a LoginRequired and delegate the unauthenticated-rejection shape.",
+    "failure_scenario": "A change to the unauth contract in one copy doesn't propagate to the other — e.g. login_required's redirect gains proper RFC-3986 encoding or the 401 body/header shape changes for a client, but permission_required keeps emitting the old shape (or the reverse), so /admin routes gated by permission_required and app routes gated by login_required redirect/deny inconsistently for the same unauthenticated user. The two urlencoded copies (each escaping only 6 chars) drift the moment one is hardened against an unescaped character the other still passes through into the Location header."
+  },
+  {
+    "file": "plugins/umbral-realtime/src/sse.rs",
+    "line": 56,
+    "severity": "medium",
+    "category": "duplication",
+    "summary": "The SSE and WebSocket handshake share ~35 lines of identical, security-relevant connection setup that is copy-pasted rather than extracted, so the two copies can drift.",
+    "failure_scenario": "sse_handler (sse.rs:56-114) and ws_handler (ws.rs:145-190) both run the exact same block verbatim: `let user_id = Realtime::resolver()(headers.clone()).await;`, the `q.groups.split(',')...collect()` parse, the `for g in &requested { if !policy.can_join(user_id, g) { return 403 } }` authorization loop, `register_with_presence(...) else { return 503 }`, and `tokio::spawn(crate::dispatch_presence(presence))`. Because it is duplicated with no shared helper, a change to the join-authorization contract (e.g. hardening `can_join` to also require a non-anonymous user, or adding a per-connection group cap) applied to one transport but not the other silently opens the un-updated transport — a client denied a room over SSE could still join it over WS. Extracting one `Realtime::handshake(headers, groups_param) -> Result<(ConnId, Receiver, PresenceTransitions), Response>` removes the drift surface."
+  },
+  {
+    "file": "plugins/umbral-sessions/src/store.rs",
+    "line": 175,
+    "severity": "medium",
+    "category": "raw-sql-contract-violation",
+    "summary": "DbStore::save hand-rolls INSERT ... ON CONFLICT DO UPDATE as two raw sqlx::query blocks (SQLite `?N` branch + Postgres `$N` branch), the exact plugin raw-SQL / per-backend-placeholder pattern CLAUDE.md forbids. The ORM already exposes Session::objects().upsert(session) (queryset/mod.rs:4592) which conflicts on the PK column, updates every non-PK column present, and dispatches SQLite/Postgres itself on the AMBIENT pool — the very pool DbStore uses. Unlike umbral-cache's raw upsert (justified because it holds an explicit non-ambient pool), DbStore has no such excuse; it is ~40 lines of duplicated dialect SQL the ORM primitive collapses to one call.",
+    "failure_scenario": "A future dialect/placeholder or JSON-upsert fix lands in the ORM's upsert (queryset/mod.rs) but not in this hand-copied SQL (or vice-versa), so DbStore diverges from every other write in the framework; concretely, the raw SQLite/Postgres branches must be kept in lockstep by hand and a Postgres-specific escaping change to the ORM silently skips the session table. The store.rs module doc (line 7) compounds the drift by claiming it 'reproduces the SQL logic from read_session / upsert_session_data_key / destroy_session_by_hash in lib.rs exactly' — two of those three helpers no longer exist in lib.rs (removed when reads were routed through active_store()), so the stated invariant references dead functions."
+  },
+  {
+    "file": "plugins/umbral-storage/src/images.rs",
+    "line": 95,
+    "severity": "medium",
+    "category": "dos-decompression-bomb",
+    "summary": "The built-in thumbnail processor decodes uploaded images with image::load_from_memory and no decode limits, so a 'pixel-flood' upload (small compressed file declaring enormous dimensions) allocates a huge pixel buffer and can OOM-kill the process.",
+    "failure_scenario": "An app registers .accept_images() + .on_upload(thumbnails(...)). An attacker uploads a well-formed ~15 KB PNG whose IHDR declares 30000x30000 (a valid image, passes sniff_content_type's 8-byte magic check and the 25 MiB size cap). The thumbnails processor calls image::load_from_memory(&bytes) with no image::Limits set; the image crate allocates width*height*4 = ~3.6 GB for the decoded RGBA buffer BEFORE any resize/clamp runs (the clamp at line 106 only bounds the OUTPUT, not the decode). The default media-processing concurrency is 8, so a small burst of such uploads allocates tens of GB concurrently and the process is OOM-killed — an upload-triggered denial of service. Fix: set image::Limits (max width/height and max_alloc) via ImageReader::with_limits before decoding, or reject images whose declared dimensions exceed a cap."
+  },
+  {
+    "file": "plugins/umbral-storage/src/lib.rs",
+    "line": 523,
+    "severity": "medium",
+    "category": "correctness",
+    "summary": "StoragePlugin::save/save_stream/save_deferred bypass the upload type allow-list (accept/accept_images), which is only wired into the ambient-storage decorator; size cap is re-applied on these paths but the content-type sniff/allow-list is not.",
+    "failure_scenario": "App built with StoragePlugin::default().media(\"/media\", fs).accept_images(). A call to plugin.save(\"evil.svg\", \"image/svg+xml\", bytes) (or save_stream/save_deferred) routes through save_through(&media.storage, ...) using the RAW backend, skipping TypeLimitedStorage entirely, so the SVG (not in IMAGE_TYPES) is stored despite the allow-list. sniff_content_type / TypeLimitedStorage::check never runs, so a renamed-executable or disallowed type lands, contradicting the gaps3 #51 contract that every upload path inherits the policy. The size cap IS enforced on the same call (media.max_size passed to save_through), making the type-vs-size asymmetry the tell that the type check was dropped on the direct-save API."
+  }
+]
