@@ -3056,10 +3056,24 @@ async fn list_impl(
         throttle_client_ip(&headers).as_deref(),
     )?;
 
+    // gaps4 #4: filter / search / order over the columns this resource may
+    // actually RETURN, not the full model. A column stripped from every
+    // response (secret, hard-denied like `password_hash`, `private` with no
+    // unlock, or `.hide()`d) must not be filterable, searchable, or orderable
+    // either — otherwise `?password_hash__startswith=…` is a blind extraction
+    // oracle: the value leaks through the row count even though it never
+    // appears in a body. Same predicate the response serializer uses.
+    let queryable_fields: Vec<umbral::migrate::Column> = model
+        .fields
+        .iter()
+        .filter(|c| !cfg.is_field_hidden(&table, &c.name))
+        .cloned()
+        .collect();
+
     // Parse query-string filters when this resource has opted in.
     // Filters are ON by default; `filters_disabled` is the opt-out set.
     let filters_on = !cfg.filters_disabled.contains(&table);
-    let mut filter = parse_filters(&params, &model.fields, filters_on)?;
+    let mut filter = parse_filters(&params, &queryable_fields, filters_on)?;
 
     // Free-text search: `?search=<term>` ORs predicates across every
     // searchable column. Default-on, opt-out via
@@ -3068,7 +3082,7 @@ async fn list_impl(
     if !cfg.search_disabled.contains(&table) {
         if let Some(term) = params.get("search") {
             let restrict = cfg.search_fields.get(&table).map(|v| v.as_slice());
-            if let Some(search_cond) = parse_search(term, &model.fields, restrict) {
+            if let Some(search_cond) = parse_search(term, &queryable_fields, restrict) {
                 filter = filter.and(search_cond);
             }
         }
@@ -3098,7 +3112,9 @@ async fn list_impl(
     // dropped (same as DynQuerySet::order_by_col does internally).
     let ordering: Vec<(String, bool)> = params
         .get("ordering")
-        .map(|s| parse_ordering(s, &model.fields))
+        // gaps4 #4: order only over returnable columns — ordering by a hidden
+        // column is the same extraction oracle as filtering by one.
+        .map(|s| parse_ordering(s, &queryable_fields))
         .unwrap_or_default();
 
     // `?include=fk1,fk2` — expand the named FK columns into their

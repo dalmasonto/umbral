@@ -156,7 +156,12 @@ where
                 });
             }
         };
+        // gaps4 #2: a fixture written by `dumpdata` carries each `Masked<T>`
+        // column's sealed ciphertext (dump reads `unredacted_for_backup`).
+        // `.presealed()` binds it verbatim instead of sealing it again — which
+        // would double-encrypt and make the plaintext unrecoverable on restore.
         DynQuerySet::for_meta(&meta)
+            .presealed()
             .insert_json(&obj)
             .await
             .map_err(|source| FixtureError::Write { index, source })?;

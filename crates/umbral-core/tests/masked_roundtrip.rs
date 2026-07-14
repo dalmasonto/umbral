@@ -173,3 +173,105 @@ async fn dynamic_insert_json_seals_masked_column() {
         .expect("row exists");
     assert_eq!(loaded.api_key.reveal().unwrap(), "plaintext-via-json");
 }
+
+#[tokio::test]
+async fn empty_form_value_leaves_masked_ciphertext_unchanged() {
+    // gaps4 #5 — the admin edit crypto-shred. The admin renders a Masked column
+    // as a blank editable field, so a save carries `api_key=""`. That empty
+    // string used to be SEALED and written, destroying the real secret on every
+    // edit. An empty (or redaction-marker) submit must mean "leave unchanged".
+    boot().await;
+
+    let created = Secret::objects()
+        .create(Secret {
+            id: 0,
+            label: "shred-test".to_string(),
+            api_key: Masked::new("sk_live_KEEP_ME"),
+            recovery_code: None,
+        })
+        .await
+        .expect("create");
+
+    let meta = umbral::migrate::model_meta_for_table("masked_secret").expect("meta");
+
+    // An admin form save that touches `label` and carries an EMPTY api_key —
+    // exactly the shape the edit form submits for a redacted Masked field.
+    let mut form = std::collections::HashMap::new();
+    form.insert("label".to_string(), "shred-test-renamed".to_string());
+    form.insert("api_key".to_string(), String::new());
+    umbral::orm::DynQuerySet::for_meta(&meta)
+        .filter_eq_string("id", &created.id.to_string())
+        .update_form(&form, &[])
+        .await
+        .expect("update_form");
+
+    let loaded = Secret::objects()
+        .filter(secret::ID.eq(created.id))
+        .first()
+        .await
+        .expect("query")
+        .expect("row exists");
+    assert_eq!(
+        loaded.label, "shred-test-renamed",
+        "the non-masked field the user actually edited should be saved"
+    );
+    assert_eq!(
+        loaded.api_key.reveal().unwrap(),
+        "sk_live_KEEP_ME",
+        "an empty masked form value must NOT overwrite the stored secret"
+    );
+}
+
+#[tokio::test]
+async fn presealed_insert_stores_ciphertext_verbatim_not_double_sealed() {
+    // gaps4 #2 — the dumpdata->loaddata double-seal. A backup dump writes the
+    // sealed ciphertext (via unredacted_for_backup); a restore must store it
+    // VERBATIM. Sealing it again yields seal(ciphertext), and reveal() then
+    // returns the inner ciphertext, silently losing the plaintext.
+    boot().await;
+
+    // Create a row so we have a real sealed ciphertext to "restore".
+    let created = Secret::objects()
+        .create(Secret {
+            id: 0,
+            label: "backup-src".to_string(),
+            api_key: Masked::new("sk_live_RESTORE_ME"),
+            recovery_code: None,
+        })
+        .await
+        .expect("create");
+
+    // What a dump emits: the stored ciphertext, read unredacted.
+    let meta = umbral::migrate::model_meta_for_table("masked_secret").expect("meta");
+    let dumped = umbral::orm::DynQuerySet::for_meta(&meta)
+        .unredacted_for_backup()
+        .filter_eq_string("id", &created.id.to_string())
+        .fetch_as_json()
+        .await
+        .expect("dump")
+        .into_iter()
+        .next()
+        .expect("row");
+    let ciphertext = dumped.get("api_key").and_then(|v| v.as_str()).expect("ct");
+
+    // Restore it as a NEW row through the presealed insert path (what
+    // load_fixture now uses), then reveal.
+    let restore = serde_json::json!({ "label": "backup-dst", "api_key": ciphertext });
+    umbral::orm::DynQuerySet::for_meta(&meta)
+        .presealed()
+        .insert_json(restore.as_object().unwrap())
+        .await
+        .expect("presealed insert");
+
+    let loaded = Secret::objects()
+        .filter(secret::LABEL.eq("backup-dst"))
+        .first()
+        .await
+        .expect("query")
+        .expect("row exists");
+    assert_eq!(
+        loaded.api_key.reveal().unwrap(),
+        "sk_live_RESTORE_ME",
+        "a presealed restore must round-trip the plaintext, not double-encrypt it"
+    );
+}

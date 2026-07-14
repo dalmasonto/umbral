@@ -232,3 +232,63 @@ async fn insert_form_honors_privileged_when_authorized() {
         "authorized form create must set the privileged flag through"
     );
 }
+
+// gaps4 #1 — the admin inline-cell-edit escalation. `update_one` is the single
+// dynamic write terminal that used to skip the privileged guard, and the admin
+// inline editor drove it: a staff user could POST `is_admin=true` to their own
+// row. These pin the fix at the ORM altitude.
+
+#[tokio::test]
+async fn update_one_refuses_privileged_by_default() {
+    let _guard = test_lock().lock().await;
+    boot().await;
+
+    // A normal, non-privileged row.
+    let row = DynQuerySet::for_meta(&meta())
+        .insert_json(&body("victim", false))
+        .await
+        .expect("insert");
+    let id = pk(&row);
+
+    // The escalation attempt: set the privileged column via the single-field
+    // terminal, with NO `.allow_privileged`.
+    let result = DynQuerySet::for_meta(&meta())
+        .filter_eq_string("id", &id.to_string())
+        .update_one("is_admin", "true")
+        .await;
+
+    assert!(
+        result.is_err(),
+        "update_one must refuse a privileged column without authorization"
+    );
+    assert!(
+        !admin_flag(id).await,
+        "the privileged flag must NOT have been written"
+    );
+}
+
+#[tokio::test]
+async fn update_one_honors_privileged_when_authorized() {
+    let _guard = test_lock().lock().await;
+    boot().await;
+
+    let row = DynQuerySet::for_meta(&meta())
+        .insert_json(&body("promotee", false))
+        .await
+        .expect("insert");
+    let id = pk(&row);
+
+    // An authorized caller (a superuser acting deliberately) opts the column
+    // back in — the same escape hatch the other terminals honor.
+    DynQuerySet::for_meta(&meta())
+        .allow_privileged(&["is_admin"])
+        .filter_eq_string("id", &id.to_string())
+        .update_one("is_admin", "true")
+        .await
+        .expect("authorized update_one should succeed");
+
+    assert!(
+        admin_flag(id).await,
+        "an authorized update_one must write the privileged flag through"
+    );
+}

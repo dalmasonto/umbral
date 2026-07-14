@@ -162,6 +162,19 @@ pub(crate) async fn cell_edit_post(
     if cfg.is_some_and(|c| c.readonly_fields.contains(&field)) {
         return (StatusCode::FORBIDDEN, "field is read-only").into_response();
     }
+    // gaps4 #1: a privileged / noform / noedit column is never inline-editable.
+    // The full-form save path already refuses these (rows.rs skip set); this path
+    // used to check only `readonly_fields`, so a staff user could inline-edit
+    // `is_superuser`. Refuse here for a clean 403, and `update_one` refuses again
+    // underneath as defense in depth.
+    if col.privileged || col.noform || col.noedit {
+        return (
+            StatusCode::FORBIDDEN,
+            "field is not editable inline; privileged or read-only columns must go \
+             through the change form",
+        )
+            .into_response();
+    }
     // Wave 4: reject inline edits of file/image columns (see
     // `cell_edit_get`). A urlencoded cell POST would null the stored key.
     if matches!(input_kind(col), "file" | "image") {

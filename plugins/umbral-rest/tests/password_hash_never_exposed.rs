@@ -157,3 +157,45 @@ async fn is_hidden_reports_true_for_hard_denied_password_hash() {
          be reflected in the public API that OpenAPI reads"
     );
 }
+
+/// gaps4 #4 — the filter/search/order extraction oracle. A column stripped from
+/// every response must not be filterable either: otherwise a client binary-
+/// searches its value through the row count of `?password_hash__startswith=…`.
+/// The fix builds the filter surface over returnable columns only, so a hidden
+/// column reads as an unknown field (400) — and the error must not enumerate it.
+#[tokio::test]
+async fn hidden_column_cannot_be_used_as_a_filter_oracle() {
+    let router = boot().await.clone();
+
+    let (status, body) = get_json(router, "/api/auth_user_stub/?password_hash__startswith=x").await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "filtering on a hidden column must be rejected, not silently applied: {body}"
+    );
+    let error = body["error"].as_str().unwrap_or("");
+    assert!(
+        error.contains("unknown field"),
+        "expected 'unknown field', got: `{error}`"
+    );
+    // The error echoes the caller's own requested key (fine — they typed it),
+    // but the enumerated "valid fields are: …" list must NOT include the hidden
+    // column. That enumeration was the oracle's other half: free disclosure of
+    // every secret column name.
+    let valid_list = error.split("valid fields are:").nth(1).unwrap_or("");
+    assert!(
+        !valid_list.contains("password_hash"),
+        "the enumerated valid-fields list must not disclose the hidden column: `{error}`"
+    );
+}
+
+/// Ordering by a hidden column is the same oracle (row order leaks the value).
+#[tokio::test]
+async fn hidden_column_cannot_be_used_for_ordering() {
+    let router = boot().await.clone();
+    // Unknown ordering fields are silently dropped, so this must succeed with a
+    // normal page — the point is that the hidden column does NOT shape the SQL
+    // ORDER BY. A 200 with rows present proves it was ignored, not honored.
+    let (status, body) = get_json(router, "/api/auth_user_stub/?ordering=password_hash").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+}

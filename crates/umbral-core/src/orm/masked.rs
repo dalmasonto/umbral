@@ -49,7 +49,7 @@ use crypto_box::{
 use rand_core::OsRng;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-const REDACTED: &str = "••••••";
+pub(crate) const REDACTED: &str = "••••••";
 const B64: base64::engine::general_purpose::GeneralPurpose =
     base64::engine::general_purpose::STANDARD;
 

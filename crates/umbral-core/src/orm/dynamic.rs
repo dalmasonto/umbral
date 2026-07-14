@@ -157,6 +157,11 @@ pub struct DynQuerySet<'a> {
     /// Bypass the read-side field policy entirely. Database dumps only; see
     /// [`DynQuerySet::unredacted_for_backup`].
     unredacted: bool,
+    /// The write-side twin of [`Self::unredacted`]: the incoming values for
+    /// `Masked` columns are ALREADY sealed ciphertext, so bind them verbatim
+    /// instead of sealing again. Database RESTORE only; see
+    /// [`DynQuerySet::presealed`]. gaps4 #2.
+    presealed: bool,
 }
 
 /// Turn a string that arrived from a URL, a form or an identity into a correctly-TYPED
@@ -314,6 +319,7 @@ impl<'a> DynQuerySet<'a> {
             allow_privileged: Vec::new(),
             allow_private: Vec::new(),
             unredacted: false,
+            presealed: false,
         }
     }
 
@@ -357,6 +363,22 @@ impl<'a> DynQuerySet<'a> {
     /// is the bug.
     pub fn unredacted_for_backup(mut self) -> Self {
         self.unredacted = true;
+        self
+    }
+
+    /// The write-side twin of [`Self::unredacted_for_backup`], for RESTORE.
+    ///
+    /// A `dumpdata` writes each `Masked<T>` column's sealed ciphertext (via
+    /// `unredacted_for_backup`). A `loaddata` must store that ciphertext
+    /// VERBATIM — sealing it again produces `seal(ciphertext)`, and `reveal()`
+    /// then returns the inner ciphertext, not the plaintext: the secret is
+    /// silently unrecoverable. This flag tells the insert path the masked
+    /// values are already at-rest form. gaps4 #2.
+    ///
+    /// Named to be jarring in a request handler, exactly like its read twin:
+    /// `grep -rn presealed` should return the restore code and nothing else.
+    pub fn presealed(mut self) -> Self {
+        self.presealed = true;
         self
     }
 
@@ -1217,6 +1239,26 @@ impl<'a> DynQuerySet<'a> {
         let Some(col_meta) = self.meta.fields.iter().find(|c| c.name == col) else {
             return Ok(0);
         };
+        // gaps4 #1: default-deny the write-safety flags every OTHER dynamic write
+        // terminal enforces. `update_one` was the only one that skipped them, and
+        // the admin inline-cell-edit endpoint drives it — so a staff user could
+        // POST `is_superuser=true` to their own row and escalate. A privileged
+        // column needs `.allow_privileged(...)`; a `noform`/`noedit` column is not
+        // writable from an untrusted single-field request at all. Refuse loudly
+        // (not a silent no-op) so the caller sees a 4xx rather than a false "saved".
+        if is_unauthorized_privileged(col_meta, &self.allow_privileged) {
+            return Err(DynError::Write(WriteError::Validator {
+                field: col_meta.name.clone(),
+                message: "privileged column: not writable without explicit authorization"
+                    .to_string(),
+            }));
+        }
+        if col_meta.noform || col_meta.noedit {
+            return Err(DynError::Write(WriteError::Validator {
+                field: col_meta.name.clone(),
+                message: "column is not editable (noform/noedit)".to_string(),
+            }));
+        }
         let sea_value = match form_str_to_sea_value(col_meta, value) {
             Ok(v) => v,
             // gaps2 #12: per-field validator failure (see `update_form`).
@@ -1335,6 +1377,18 @@ impl<'a> DynQuerySet<'a> {
             let Some(raw) = form.get(&col.name) else {
                 continue;
             };
+            // gaps4 #5: a Masked column submitted EMPTY or as the redaction
+            // marker means "leave the stored secret unchanged" — never re-seal.
+            // The admin edit form renders a Masked field as an editable (blank)
+            // input, so every save used to carry `field=""`, which sealed the
+            // empty string and crypto-shredded the real ciphertext. This honors
+            // the same no-change contract `Masked`'s own `Deserialize` does,
+            // but on the dynamic form path that never consulted it.
+            if crate::orm::write::is_masked_col(col)
+                && (raw.trim().is_empty() || raw == crate::orm::masked::REDACTED)
+            {
+                continue;
+            }
             let sea_value = match form_str_to_sea_value(col, raw) {
                 Ok(v) => v,
                 // gaps2 #12: emit a structured per-field validator
@@ -1819,7 +1873,10 @@ impl<'a> DynQuerySet<'a> {
                 match row {
                     Some(row) => {
                         let mut entry = serde_json::Map::new();
-                        for col in &self.meta.fields {
+                        // gaps4 #3: filter through the field-visibility policy, exactly like the
+                        // SQLite twin above. The PG arm used to iterate every column, leaking
+                        // secret/private/Masked values on the production backend.
+                        for col in self.meta.fields.iter().filter(|c| self.may_serialize(c)) {
                             entry.insert(col.name.clone(), decode_pg_to_json(&row, col)?);
                         }
                         Some(entry)
@@ -1871,7 +1928,7 @@ impl<'a> DynQuerySet<'a> {
             mut q,
             pk_name,
             pk_ty,
-        } = build_insert_plan(self.meta, body)?;
+        } = build_insert_plan(self.meta, body, self.presealed)?;
 
         // gaps #77: fire `pre_save:<table>` for the dynamic-write
         // path so REST endpoints and admin form submits surface in
@@ -1963,7 +2020,10 @@ impl<'a> DynQuerySet<'a> {
                         .fetch_one(&mut **inner)
                         .await
                         .map_err(|e| classify_or_sqlx(e, body))?;
-                    for col in &self.meta.fields {
+                    // gaps4 #3: filter through the field-visibility policy, exactly like the
+                    // SQLite twin above. The PG arm used to iterate every column, leaking
+                    // secret/private/Masked values on the production backend.
+                    for col in self.meta.fields.iter().filter(|c| self.may_serialize(c)) {
                         out.insert(col.name.clone(), decode_pg_to_json(&row, col)?);
                     }
                 }
@@ -2065,7 +2125,7 @@ impl<'a> DynQuerySet<'a> {
             mut q,
             pk_name,
             pk_ty,
-        } = build_insert_plan(self.meta, body)?;
+        } = build_insert_plan(self.meta, body, self.presealed)?;
 
         match tx.backend_name() {
             "sqlite" => {
@@ -2127,7 +2187,10 @@ impl<'a> DynQuerySet<'a> {
                         .fetch_one(&mut **inner)
                         .await
                         .map_err(|e| classify_or_sqlx(e, body))?;
-                    for col in &self.meta.fields {
+                    // gaps4 #3: filter through the field-visibility policy, exactly like the
+                    // SQLite twin above. The PG arm used to iterate every column, leaking
+                    // secret/private/Masked values on the production backend.
+                    for col in self.meta.fields.iter().filter(|c| self.may_serialize(c)) {
                         out.insert(col.name.clone(), decode_pg_to_json(&row, col)?);
                     }
                 }
@@ -3901,6 +3964,7 @@ struct InsertPlan {
 fn build_insert_plan(
     meta: &crate::migrate::ModelMeta,
     body: &serde_json::Map<String, serde_json::Value>,
+    presealed: bool,
 ) -> Result<InsertPlan, crate::orm::write::WriteError> {
     use crate::orm::write::{WriteError, is_default_pk};
 
@@ -3958,7 +4022,13 @@ fn build_insert_plan(
         let cleaned_json = crate::orm::cleaners::apply(&meta.table, &col.name, json)?;
         let json = cleaned_json.as_ref().unwrap_or(json);
         // Masked columns: seal the plaintext before binding (audit_2 core-orm C1).
-        let sealed = crate::orm::write::seal_masked_json(col, json)?;
+        // gaps4 #2: unless the values are already sealed (a backup RESTORE), in
+        // which case sealing again double-encrypts and loses the plaintext.
+        let sealed = if presealed {
+            None
+        } else {
+            crate::orm::write::seal_masked_json(col, json)?
+        };
         let sea_value = crate::orm::write::json_to_sea_value(
             col.ty,
             sealed.as_ref().unwrap_or(json),
