@@ -173,63 +173,14 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    // `reserved` is the framework binary's own subcommand set (`migrate`,
-    // `serve`, …). Only the binary knows it, so it passes it in; a command
-    // that would shadow one is dropped here rather than silently winning.
-    let commands = collect_commands(app_commands, plugins, reserved);
-
-    // Nothing contributed → caller handles everything.
-    if commands.is_empty() {
-        return Ok(DispatchOutcome::Unmatched);
-    }
-
-    let mut root = clap::Command::new("umbral")
-        .about("umbral plugin subcommands")
-        .disable_help_subcommand(true)
-        .subcommand_required(false)
-        .arg_required_else_help(false);
-    for (_, cmd) in &commands {
-        root = root.subcommand(cmd.get().command());
-    }
-
-    // Run match. `try_get_matches_from` swallows the std::process::exit
-    // clap usually does on parse error / --help.
-    let owned: Vec<OsString> = args.into_iter().map(|t| t.into()).collect();
-    let matches = match root.clone().try_get_matches_from(owned) {
-        Ok(m) => m,
-        Err(e) => {
-            // --help / --version / parse errors. For --help we surface
-            // the rendered text so the caller can print it. For
-            // "subcommand not one of mine" — InvalidSubcommand /
-            // UnknownArgument — we return Unmatched so the caller's
-            // own clap parser (umbral-cli's built-in subcommands like
-            // serve / migrate / dev) gets a chance to match. Without
-            // this, `cargo run -- dev` errors out at this layer
-            // because plugin-dispatch claims authority over argv but
-            // doesn't know what `dev` is, and `dev` is a built-in.
-            return match e.kind() {
-                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
-                    Ok(DispatchOutcome::Help(e.render().to_string()))
-                }
-                clap::error::ErrorKind::InvalidSubcommand
-                | clap::error::ErrorKind::UnknownArgument => Ok(DispatchOutcome::Unmatched),
-                _ => Err(Box::new(e)),
-            };
-        }
-    };
-
-    let (name, sub_matches) = match matches.subcommand() {
-        Some((n, m)) => (n.to_string(), m.clone()),
-        None => return Ok(DispatchOutcome::Unmatched),
-    };
-
-    for (cmd_name, cmd) in &commands {
-        if cmd_name == &name {
-            cmd.get().run(&sub_matches).await?;
-            return Ok(DispatchOutcome::Matched(name));
-        }
-    }
-    Ok(DispatchOutcome::Unmatched)
+    // A one-shot convenience. A caller that ALSO needs the catalog or a
+    // readiness answer should build a `CommandSet` once and ask it all three
+    // questions: collecting is what runs every plugin's command constructors,
+    // builds their clap parsers, and prints the built-in-shadow warning — so
+    // collecting per-question printed that warning per-question too.
+    CommandSet::collect(app_commands, plugins, reserved)
+        .dispatch(args)
+        .await
 }
 
 /// One collected command, however it got here.
@@ -254,6 +205,125 @@ impl CommandHandle<'_> {
     }
 }
 
+/// The registered commands, collected once.
+///
+/// Collecting is not free and it is not idempotent-looking: it runs every
+/// plugin's `commands()` constructor, builds a `clap::Command` per command
+/// (help prose and all), and PRINTS the built-in-shadow warning. Doing that
+/// two or three times per invocation — once for the readiness check, once to
+/// dispatch, once more for the help catalog — meant a user with a shadowing
+/// command saw the same scary warning twice, which reads like two problems.
+///
+/// So: collect once, then ask it questions.
+pub struct CommandSet<'a> {
+    entries: Vec<Entry<'a>>,
+}
+
+struct Entry<'a> {
+    name: String,
+    /// Built once, here. Every consumer reads it rather than rebuilding it.
+    clap: clap::Command,
+    handle: CommandHandle<'a>,
+}
+
+impl<'a> CommandSet<'a> {
+    /// Collect the app's own commands followed by every plugin's, dropping any
+    /// that shadow a framework built-in named in `reserved`.
+    pub fn collect(
+        app_commands: &'a [Box<dyn PluginCommand>],
+        plugins: &'a [Box<dyn Plugin>],
+        reserved: &[&str],
+    ) -> Self {
+        Self {
+            entries: collect_commands(app_commands, plugins, reserved),
+        }
+    }
+
+    /// Nothing registered — the caller handles everything itself.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Does the command named `name` need a live app? `None` if nothing
+    /// registered that name (the caller's own built-in rules then decide).
+    pub fn needs_ready(&self, name: &str) -> Option<bool> {
+        self.entries
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| e.handle.get().needs_ready())
+    }
+
+    /// `(name, about)` for every registered command — the listing half of
+    /// `umbral help`. Shares this collection with dispatch, so the help can
+    /// never advertise a command that would not actually run.
+    pub fn catalog(&self) -> Vec<(String, Option<String>)> {
+        self.entries
+            .iter()
+            .map(|e| {
+                let about = e.clap.get_about().map(|s| s.to_string());
+                if about.is_none() {
+                    tracing::debug!(
+                        target: "umbral::cli",
+                        "command `{}` has no `about`; it lists with a blank description. \
+                         Add `.about(...)` so users can discover what it does.",
+                        e.name,
+                    );
+                }
+                (e.name.clone(), about)
+            })
+            .collect()
+    }
+
+    /// Route `args` to the matching command.
+    pub async fn dispatch<I, T>(&self, args: I) -> Result<DispatchOutcome, CliError>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        if self.entries.is_empty() {
+            return Ok(DispatchOutcome::Unmatched);
+        }
+
+        let mut root = clap::Command::new("umbral")
+            .about("umbral plugin subcommands")
+            .disable_help_subcommand(true)
+            .subcommand_required(false)
+            .arg_required_else_help(false);
+        for entry in &self.entries {
+            root = root.subcommand(entry.clap.clone());
+        }
+
+        let owned: Vec<OsString> = args.into_iter().map(|t| t.into()).collect();
+        let matches = match root.clone().try_get_matches_from(owned) {
+            Ok(m) => m,
+            Err(e) => {
+                return match e.kind() {
+                    clap::error::ErrorKind::DisplayHelp
+                    | clap::error::ErrorKind::DisplayVersion => {
+                        Ok(DispatchOutcome::Help(e.render().to_string()))
+                    }
+                    clap::error::ErrorKind::InvalidSubcommand
+                    | clap::error::ErrorKind::UnknownArgument => Ok(DispatchOutcome::Unmatched),
+                    _ => Err(Box::new(e)),
+                };
+            }
+        };
+
+        let (name, sub_matches) = match matches.subcommand() {
+            Some((n, m)) => (n.to_string(), m.clone()),
+            None => return Ok(DispatchOutcome::Unmatched),
+        };
+
+        for entry in &self.entries {
+            if entry.name == name {
+                entry.handle.get().run(&sub_matches).await?;
+                return Ok(DispatchOutcome::Matched(name));
+            }
+        }
+        Ok(DispatchOutcome::Unmatched)
+    }
+}
+
 /// Collect the app's own commands followed by every plugin's, keyed by
 /// the clap name and deduplicated (first-registered wins).
 ///
@@ -266,8 +336,8 @@ fn collect_commands<'a>(
     app_commands: &'a [Box<dyn PluginCommand>],
     plugins: &'a [Box<dyn Plugin>],
     reserved: &[&str],
-) -> Vec<(String, CommandHandle<'a>)> {
-    let mut commands: Vec<(String, CommandHandle<'a>)> = Vec::new();
+) -> Vec<Entry<'a>> {
+    let mut commands: Vec<Entry<'a>> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // A command whose name is a framework built-in is DROPPED, not run.
@@ -297,8 +367,12 @@ fn collect_commands<'a>(
         true
     };
 
+    // Each `clap::Command` is built ONCE here and carried on the entry. It used
+    // to be built to read `.get_name()` and then thrown away, and rebuilt by
+    // every consumer — three times per invocation for prose that was discarded.
     for cmd in app_commands {
-        let name = cmd.command().get_name().to_string();
+        let clap = cmd.command();
+        let name = clap.get_name().to_string();
         if shadow(&name, "the app") {
             continue;
         }
@@ -310,11 +384,16 @@ fn collect_commands<'a>(
             );
             continue;
         }
-        commands.push((name, CommandHandle::Borrowed(cmd.as_ref())));
+        commands.push(Entry {
+            name,
+            clap,
+            handle: CommandHandle::Borrowed(cmd.as_ref()),
+        });
     }
     for plugin in plugins {
         for cmd in plugin.commands() {
-            let name = cmd.command().get_name().to_string();
+            let clap = cmd.command();
+            let name = clap.get_name().to_string();
             if shadow(&name, &format!("plugin `{}`", plugin.name())) {
                 continue;
             }
@@ -327,7 +406,11 @@ fn collect_commands<'a>(
                 );
                 continue;
             }
-            commands.push((name, CommandHandle::Owned(cmd)));
+            commands.push(Entry {
+                name,
+                clap,
+                handle: CommandHandle::Owned(cmd),
+            });
         }
     }
     commands
@@ -345,10 +428,7 @@ pub fn command_needs_ready(
     name: &str,
     reserved: &[&str],
 ) -> Option<bool> {
-    collect_commands(app_commands, plugins, reserved)
-        .iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, cmd)| cmd.get().needs_ready())
+    CommandSet::collect(app_commands, plugins, reserved).needs_ready(name)
 }
 
 /// Collect every plugin-contributed command as `(name, about)` pairs.
@@ -379,20 +459,7 @@ pub fn command_catalog_with_app_commands(
     plugins: &[Box<dyn Plugin>],
     reserved: &[&str],
 ) -> Vec<(String, Option<String>)> {
-    collect_commands(app_commands, plugins, reserved)
-        .into_iter()
-        .map(|(name, cmd)| {
-            let about = cmd.get().command().get_about().map(|s| s.to_string());
-            if about.is_none() {
-                tracing::debug!(
-                    target: "umbral::cli",
-                    "command `{name}` has no `about`; it lists with a blank \
-                     description. Add `.about(...)` so users can discover what it does.",
-                );
-            }
-            (name, about)
-        })
-        .collect()
+    CommandSet::collect(app_commands, plugins, reserved).catalog()
 }
 
 /// Render the unified command listing shown on help / unknown-command.

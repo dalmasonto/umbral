@@ -101,6 +101,13 @@ pub enum CodegenError {
 impl std::fmt::Display for CodegenError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidName(s) if RUST_KEYWORDS.contains(&s.replace('-', "_").as_str()) => {
+                write!(
+                    f,
+                    "`{s}` is a Rust keyword, so it cannot be a module name — the generated \
+                     `mod {s};` would not parse. Pick another name."
+                )
+            }
             Self::InvalidName(s) => write!(
                 f,
                 "invalid name `{s}`: must be ASCII alphanumeric, underscore or hyphen, \
@@ -299,6 +306,23 @@ pub fn declare_module(text: &str, decl: &str) -> Option<String> {
     Some(insert_line_before(text, idx, decl))
 }
 
+/// [`insert_before_marker`], but a no-op when `line` is already in the file.
+///
+/// The idempotency is the whole game for a registry a generator appends to: a
+/// blind insert turns a re-run into a duplicate `pub mod x;`, and a duplicate
+/// module declaration does not compile. Both `startcommand` and the REST class
+/// generators independently grew their own copy of this guard — which is the
+/// signal that it belonged here.
+///
+/// `Some(text)` unchanged when the line is present; `None` only when the marker
+/// itself is gone (the caller then declines and reports).
+pub fn insert_before_marker_once(text: &str, marker: &str, line: &str) -> Option<String> {
+    if text.lines().any(|l| l.trim() == line.trim()) {
+        return Some(text.to_string());
+    }
+    insert_before_marker(text, marker, line)
+}
+
 /// Insert `line` immediately before the line that equals `marker` (trimmed).
 ///
 /// Marker comments are how a generator finds its insertion point without
@@ -433,7 +457,7 @@ pub fn insert_line_before(text: &str, idx: usize, line: &str) -> String {
 }
 
 /// Insert `line` after line index `idx`, preserving the file's line style.
-fn insert_line_after(text: &str, idx: usize, line: &str) -> String {
+pub fn insert_line_after(text: &str, idx: usize, line: &str) -> String {
     insert_line_before(text, idx + 1, line)
 }
 

@@ -110,13 +110,8 @@ pub const RESERVED_PLUGIN_COMMAND_NAMES: &[&str] = &[
 /// `migrate` wouldn't collide loudly — it would just quietly take over,
 /// and their migrations would stop applying.
 pub fn reserved_command_names() -> Vec<String> {
-    use clap::CommandFactory;
-    let mut names: Vec<String> = <crate::Cli as CommandFactory>::command()
-        .get_subcommands()
-        .map(|s| s.get_name().to_string())
-        .collect();
+    let mut names = crate::builtin_command_names();
     names.extend(RESERVED_PLUGIN_COMMAND_NAMES.iter().map(|s| s.to_string()));
-    names.push("help".to_string());
     names.sort();
     names.dedup();
     names
@@ -230,27 +225,16 @@ pub struct ScaffoldReport {
     pub registered: Option<bool>,
 }
 
-/// Validate a name is acceptable as a Rust crate identifier.
+/// Validate a name is acceptable as a Rust crate / module identifier.
 ///
-/// Rules: ASCII alphanumeric + `_` + `-`, can't start with a digit,
-/// can't be empty. Same rules `cargo new` uses. Crates with hyphens
-/// have to use `_` in their Rust identifiers, but Cargo handles the
-/// translation transparently — the user can pick either form.
+/// Delegates to `umbral::codegen::validate_ident` — the same check every other
+/// generator makes. This used to be a private copy of those rules WITHOUT the
+/// Rust-keyword guard, which meant `umbral startcommand move` sailed through
+/// validation and wrote `pub mod move;` into the user's registry: a syntax
+/// error in a file they never touched. The copy also drifted from the one the
+/// codegen tests assert on, so the suite read greener than the CLI shipped.
 fn validate_name(name: &str) -> Result<(), ScaffoldError> {
-    if name.is_empty() {
-        return Err(ScaffoldError::InvalidName(String::new()));
-    }
-    let first = name.chars().next().unwrap();
-    if first.is_ascii_digit() {
-        return Err(ScaffoldError::InvalidName(name.to_string()));
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(ScaffoldError::InvalidName(name.to_string()));
-    }
-    Ok(())
+    umbral::codegen::validate_ident(name).map_err(Into::into)
 }
 
 // `pascal_case` replaced by `umbral_casing::pascal_case_from_ident` (imported
@@ -1253,8 +1237,12 @@ pub fn scaffold_app(
     project_root: &Path,
     local_umbral_repo: Option<&Path>,
 ) -> Result<ScaffoldReport, ScaffoldError> {
-    validate_name(name)?;
-
+    // The reserved-name check comes FIRST. Some built-in plugin names (`static`)
+    // are also Rust keywords, so the identifier check would refuse them too —
+    // but with "invalid name", when the useful thing to say is "that is a
+    // built-in umbral plugin, and here are the reserved names". Same refusal,
+    // better message.
+    //
     // Reject names that collide with built-in umbral plugins. Both crates
     // would compile, but the user could never register both via
     // `.plugin(...)` without aliasing — and the table-name conflicts
@@ -1263,6 +1251,8 @@ pub fn scaffold_app(
     if RESERVED_PLUGIN_NAMES.contains(&normalized.as_str()) {
         return Err(ScaffoldError::ReservedName(name.to_string()));
     }
+
+    validate_name(name)?;
 
     let plugins_dir = project_root.join("plugins");
     let root = plugins_dir.join(name);
@@ -1480,12 +1470,13 @@ pub fn scaffold_plugin(
     project_root: &Path,
     local_umbral_repo: Option<&Path>,
 ) -> Result<ScaffoldReport, ScaffoldError> {
-    validate_name(name)?;
-
+    // Reserved first, then the identifier rules — see `scaffold_app`.
     let normalized = name.replace('-', "_");
     if RESERVED_PLUGIN_NAMES.contains(&normalized.as_str()) {
         return Err(ScaffoldError::ReservedName(name.to_string()));
     }
+
+    validate_name(name)?;
 
     let plugins_dir = project_root.join("plugins");
     let root = plugins_dir.join(name);
@@ -1817,11 +1808,13 @@ pub fn scaffold_command(
     target: &CommandTarget,
     project_root: &Path,
 ) -> Result<ScaffoldReport, ScaffoldError> {
-    validate_name(name)?;
-
+    // Reserved first: `migrate` and friends deserve the "that is already an
+    // umbral command" message rather than a generic identifier complaint.
     if reserved_command_names().iter().any(|r| r == name) {
         return Err(ScaffoldError::ReservedCommandName(name.to_string()));
     }
+
+    validate_name(name)?;
 
     let module = rust_ident(name);
     let pascal = pascal_case_from_ident(name);
@@ -2107,18 +2100,12 @@ fn wire_registry_into_plugin(text: &str) -> Wiring {
     }
 }
 
-/// Insert `line` immediately after line index `idx` of `text`.
+/// Insert `line` immediately after line index `idx` of `text`, preserving the
+/// file's line endings. Delegates to the shared primitive: the hand-rolled copy
+/// emitted `\n` unconditionally, so wiring a method into a CRLF `lib.rs`
+/// rewrote every line of it in the user's next diff.
 fn insert_line_at(text: &str, idx: usize, line: &str) -> String {
-    let mut out = String::with_capacity(text.len() + line.len() + 1);
-    for (i, l) in text.lines().enumerate() {
-        out.push_str(l);
-        out.push('\n');
-        if i == idx {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out
+    umbral::codegen::insert_line_after(text, idx, line)
 }
 
 /// Append a module declaration + a registry entry to an existing
@@ -2343,14 +2330,12 @@ fn write_file(
     rel_path: &str,
     contents: &str,
     files: &mut Vec<PathBuf>,
-) -> io::Result<()> {
-    let full = root.join(rel_path);
-    if let Some(parent) = full.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&full, contents)?;
-    files.push(PathBuf::from(rel_path));
-    Ok(())
+) -> Result<(), ScaffoldError> {
+    // `write_new_file` refuses to overwrite. The scaffolders that call this all
+    // create a fresh directory first, so nothing should be in the way — and if
+    // something IS, silently clobbering it is the last thing a generator should
+    // do.
+    umbral::codegen::write_new_file(root, rel_path, contents, files).map_err(Into::into)
 }
 
 /// Attempt to register `<name> = { path = "plugins/<name>" }` under
@@ -2369,49 +2354,22 @@ fn write_file(
 /// a dep of umbral-cli; if it's added later this function is the right
 /// place to switch to it.
 pub fn register_dep_in_cargo_toml(cargo_toml_path: &Path, name: &str) -> io::Result<bool> {
-    let text = fs::read_to_string(cargo_toml_path)?;
-
-    // The dep line we want present. Match on `name =` to catch both
-    // quoted and unquoted forms that `cargo new` might emit.
-    let dep_key = format!("{name} =");
-    if text.lines().any(|l| l.trim_start().starts_with(&dep_key)) {
-        // Already registered — nothing to do.
-        return Ok(false);
-    }
-
-    // Find the `[dependencies]` section header and insert immediately after it.
-    // We insert after the header line itself so the new dep sits at the top of
-    // the block, before any existing deps. This is the least-surprising position:
-    // the user can re-order freely after.
-    let dep_line = format!("{name} = {{ path = \"plugins/{name}\" }}\n");
-
-    let mut out = String::with_capacity(text.len() + dep_line.len());
-    let mut inserted = false;
-
-    for line in text.split_inclusive('\n') {
-        out.push_str(line);
-        // Match `[dependencies]` exactly (trimmed), not `[dev-dependencies]`
-        // or `[build-dependencies]`.
-        if !inserted && line.trim() == "[dependencies]" {
-            out.push_str(&dep_line);
-            inserted = true;
-        }
-    }
-
-    if !inserted {
-        // No `[dependencies]` section found — append one at the end so the
-        // manifest stays valid rather than silently failing.
-        if !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str("\n[dependencies]\n");
-        out.push_str(&dep_line);
-    }
-
-    fs::write(cargo_toml_path, &out)?;
-    Ok(true)
+    // Delegates to `umbral::codegen::ensure_dependency`. The copy that used to
+    // live here matched `<name> =` on ANY line, so a crate listed under
+    // `[dev-dependencies]` read as already-present (and the dep was never
+    // added), and it never recognised the `[dependencies.<name>]` table form
+    // (so it appended a duplicate key and cargo refused the manifest). Both are
+    // fixed in the shared primitive, and both were being shipped from here.
+    umbral::codegen::ensure_dependency(
+        cargo_toml_path,
+        name,
+        &format!("{{ path = \"plugins/{name}\" }}"),
+    )
+    .map_err(|e| match e {
+        umbral::codegen::CodegenError::Io(e) => e,
+        other => io::Error::new(io::ErrorKind::InvalidData, other.to_string()),
+    })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3013,6 +2971,27 @@ mod tests {
         let impl_start = lib_rs.find("impl Plugin for BlogPlugin {").unwrap();
         let method = lib_rs.find("fn commands(&self)").unwrap();
         assert!(method > impl_start, "the method landed outside the impl");
+    }
+
+    /// `umbral startcommand move` used to sail through validation and write
+    /// `pub mod move;` into the registry — a syntax error in a file the user
+    /// never touched. `scaffold_command` was still calling a private copy of
+    /// the name rules that predated the keyword guard, so the codegen test
+    /// asserting the correct behaviour passed while the CLI shipped the wrong
+    /// one. Found by the pre-0.0.10 review sweep.
+    #[test]
+    fn startcommand_rejects_a_rust_keyword_as_a_command_name() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        for kw in ["move", "type", "match"] {
+            assert!(
+                matches!(
+                    scaffold_command(kw, &CommandTarget::Root, &root),
+                    Err(ScaffoldError::InvalidName(_))
+                ),
+                "`{kw}` is a Rust keyword — `pub mod {kw};` does not parse"
+            );
+        }
     }
 
     /// A command name that's already a framework built-in would SHADOW it:

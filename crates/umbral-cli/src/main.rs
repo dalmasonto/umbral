@@ -181,8 +181,10 @@ fn run_startcommand(
     target: Option<String>,
     path: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use umbral::codegen::{Target, prompt};
-    use umbral_cli::scaffold::{CommandTarget, scaffold_command};
+    // `CommandTarget` IS `codegen::Target` (a re-export), so there is nothing to
+    // convert between them.
+    use umbral::codegen::{Target as CommandTarget, prompt};
+    use umbral_cli::scaffold::scaffold_command;
 
     // The prompts come from `umbral::codegen::prompt`, the same ones a plugin's
     // generator uses (`umbral-rest`'s startpermission / startauthentication /
@@ -203,18 +205,11 @@ fn run_startcommand(
     let name = name.trim().to_string();
 
     let target = match target {
-        Some(t) => Target::parse(&t),
+        Some(t) => CommandTarget::parse(&t),
         None if interactive => prompt::ask_target(path)?,
         None => {
             return Err("`--in <root|PLUGIN>` is required when stdin isn't a terminal".into());
         }
-    };
-
-    // `scaffold_command` predates `codegen::Target` and keeps its own enum;
-    // they say the same thing.
-    let target = match target {
-        Target::Root => CommandTarget::Root,
-        Target::Plugin(p) => CommandTarget::Plugin(p),
     };
 
     let report = scaffold_command(&name, &target, path)?;
@@ -247,6 +242,43 @@ fn run_startcommand(
     Ok(())
 }
 
+/// Print what a scaffolder wrote: the files, what got registered, and what the
+/// user still has to do.
+///
+/// One printer, because there was one report. The three scaffolding arms were
+/// three copies of this block (two of them byte-identical apart from
+/// "Next step:" vs "Next steps:"), so any change to the output was a
+/// four-place edit.
+fn print_report(r: &umbral_cli::scaffold::ScaffoldReport, name: &str, wants_dep: bool) {
+    println!("Created `{}`:", r.root.display());
+    for f in &r.files {
+        println!("  {}", f.display());
+    }
+    println!();
+    // `wants_dep` distinguishes "this scaffolder does not register a dependency
+    // at all" (startproject) from "it tried and found no Cargo.toml" — both of
+    // which `cargo_toml_registered` spells `None`. That overloading is worth
+    // collapsing into one enum; noted for the next pass rather than churned
+    // through the tests tonight.
+    if wants_dep {
+        match r.cargo_toml_registered {
+            Some(true) => {
+                println!("Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml.")
+            }
+            Some(false) => println!("Cargo.toml already lists `{name}` — no duplicate added."),
+            None => println!(
+                "Note: could not find a Cargo.toml to update. \
+                 Add `{name} = {{ path = \"plugins/{name}\" }}` manually."
+            ),
+        }
+        println!();
+    }
+    println!("Next steps:");
+    for step in &r.next_steps {
+        println!("  {step}");
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     // Non-scaffolding commands are handled in one of two ways:
@@ -272,73 +304,17 @@ fn main() -> ExitCode {
     let result: Result<(), Box<dyn std::error::Error>> = match cli.command {
         Command::Startproject { name, path, local } => {
             umbral_cli::scaffold::scaffold_project(&name, &path, local.as_deref())
-                .map(|r| {
-                    println!("Created `{}`:", r.root.display());
-                    for f in &r.files {
-                        println!("  {}", f.display());
-                    }
-                    println!();
-                    println!("Next steps:");
-                    for step in &r.next_steps {
-                        println!("  {step}");
-                    }
-                })
+                .map(|r| print_report(&r, &name, false))
                 .map_err(Into::into)
         }
         Command::Startapp { name, path, local } => {
             umbral_cli::scaffold::scaffold_app(&name, &path, local.as_deref())
-                .map(|r| {
-                    println!("Created `{}`:", r.root.display());
-                    for f in &r.files {
-                        println!("  {}", f.display());
-                    }
-                    println!();
-                    match r.cargo_toml_registered {
-                        Some(true) => println!(
-                            "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
-                        ),
-                        Some(false) => {
-                            println!("Cargo.toml already lists `{name}` — no duplicate added.")
-                        }
-                        None => println!(
-                            "Note: could not find a Cargo.toml to update. \
-                         Add `{name} = {{ path = \"plugins/{name}\" }}` manually."
-                        ),
-                    }
-                    println!();
-                    println!("Next step:");
-                    for step in &r.next_steps {
-                        println!("  {step}");
-                    }
-                })
+                .map(|r| print_report(&r, &name, true))
                 .map_err(Into::into)
         }
         Command::Startplugin { name, path, local } => {
             umbral_cli::scaffold::scaffold_plugin(&name, &path, local.as_deref())
-                .map(|r| {
-                    println!("Created `{}`:", r.root.display());
-                    for f in &r.files {
-                        println!("  {}", f.display());
-                    }
-                    println!();
-                    match r.cargo_toml_registered {
-                        Some(true) => println!(
-                            "Registered `{name} = {{ path = \"plugins/{name}\" }}` in Cargo.toml."
-                        ),
-                        Some(false) => {
-                            println!("Cargo.toml already lists `{name}` — no duplicate added.")
-                        }
-                        None => println!(
-                            "Note: could not find a Cargo.toml to update. \
-                         Add `{name} = {{ path = \"plugins/{name}\" }}` manually."
-                        ),
-                    }
-                    println!();
-                    println!("Next steps:");
-                    for step in &r.next_steps {
-                        println!("  {step}");
-                    }
-                })
+                .map(|r| print_report(&r, &name, true))
                 .map_err(Into::into)
         }
         Command::Startcommand { name, target, path } => run_startcommand(name, target, &path),

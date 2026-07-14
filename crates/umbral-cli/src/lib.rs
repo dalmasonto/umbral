@@ -319,14 +319,21 @@ fn subcommand_name(argv: &[std::ffi::OsString]) -> Option<String> {
 /// plugin-contributed command (`createsuperuser`, `worker`, an app's own
 /// `seed_orm_data`) — runs against a database that is expected to be migrated
 /// already, so the hooks fire first, exactly as they did before the split.
-fn command_needs_ready(subcommand: Option<&str>) -> bool {
+fn builtin_needs_ready(subcommand: Option<&str>) -> bool {
     match subcommand {
         // Bare `umbral` / `umbral --addr …` defaults to serve.
         None => false,
+        // INVARIANT: every name here must be one of THIS binary's own clap
+        // subcommands (see `builtin_command_names`). A plugin's command must
+        // never appear — it answers for itself via `PluginCommand::needs_ready`,
+        // which is consulted first, so a name listed here that belongs to a
+        // plugin is simply dead and misleading. `gen-client` (umbral-openapi)
+        // used to be in this list; the moment `needs_ready` landed, the list
+        // stopped being consulted for it and it silently started firing
+        // `on_ready` again. It now declares `needs_ready() -> false` itself.
         Some(
             "serve" | "migrate" | "makemigrations" | "showmigrations" | "checkmigrations"
-            | "squashmigrations" | "inspectdb" | "typegen" | "gen-client" | "maskkeygen" | "dev"
-            | "help",
+            | "squashmigrations" | "inspectdb" | "typegen" | "maskkeygen" | "dev" | "help",
         ) => false,
         Some(_) => true,
     }
@@ -368,19 +375,24 @@ pub async fn dispatch_with_argv(
     let builtins = builtin_command_names();
     let reserved: Vec<&str> = builtins.iter().map(String::as_str).collect();
 
+    // Collect the registered commands ONCE. Collecting runs every plugin's
+    // command constructors, builds each command's clap parser, and prints the
+    // built-in-shadow warning — so asking the three questions below via three
+    // separate collections printed that warning three times and rebuilt every
+    // parser three times. One `CommandSet`, three questions.
+    let commands = umbral_core::cli::CommandSet::collect(app.commands(), app.plugins(), &reserved);
+
     // A registered command gets to say whether it needs a live app
     // (`PluginCommand::needs_ready`). A code generator like `startpermission`
     // says no: firing `on_ready` would run every plugin's seeding/backfill
     // before writing a file, and on a fresh checkout that fails against tables
-    // `migrate` has not created yet. Only if no registered command claims the
-    // name do we fall back to the built-in list, which structurally cannot know
-    // about a plugin's offline commands.
+    // `migrate` has not created yet. Only if NO registered command claims the
+    // name do we fall back to `builtin_needs_ready`, which speaks only for this
+    // binary's own subcommands.
     let needs_ready = subcommand
         .as_deref()
-        .and_then(|name| {
-            umbral_core::cli::command_needs_ready(app.commands(), app.plugins(), name, &reserved)
-        })
-        .unwrap_or_else(|| command_needs_ready(subcommand.as_deref()));
+        .and_then(|name| commands.needs_ready(name))
+        .unwrap_or_else(|| builtin_needs_ready(subcommand.as_deref()));
 
     if needs_ready {
         app.ready()?;
@@ -404,15 +416,8 @@ pub async fn dispatch_with_argv(
     // `tasks-worker` from `umbral-tasks`. If argv matches one, that
     // command's `run` fires and we return; otherwise we fall through to
     // the built-in subcommand set below.
-    if !app.plugins().is_empty() || !app.commands().is_empty() {
-        match umbral_core::cli::dispatch_with_app_commands(
-            app.commands(),
-            app.plugins(),
-            &reserved,
-            argv.clone(),
-        )
-        .await
-        {
+    if !commands.is_empty() {
+        match commands.dispatch(argv.clone()).await {
             Ok(umbral_core::cli::DispatchOutcome::Matched(_)) => return Ok(()),
             Ok(umbral_core::cli::DispatchOutcome::Help(msg)) => {
                 // A plugin command's --help was requested (e.g.

@@ -1349,6 +1349,20 @@ struct GenClientCommand;
 
 #[async_trait::async_trait]
 impl umbral::cli::PluginCommand for GenClientCommand {
+    /// Reads the registry and writes two files. No database, no live app.
+    ///
+    /// This used to be spelled as an entry in `umbral-cli`'s hardcoded
+    /// "doesn't need a live app" name list — which worked only for as long as
+    /// that list was the only mechanism. `PluginCommand::needs_ready` now
+    /// answers first (a plugin command's own knowledge beats the CLI's copy of
+    /// it), so a command that stayed silent here would default to `true` and
+    /// fire every plugin's `on_ready` — seeding content and backfilling rows
+    /// before generating a client. That's gaps3 #41, and the fix is for the
+    /// command to say what it needs.
+    fn needs_ready(&self) -> bool {
+        false
+    }
+
     fn command(&self) -> clap::Command {
         clap::Command::new("gen-client")
             .about("Generate a typed client (client.js + client.d.ts) for the REST API")
