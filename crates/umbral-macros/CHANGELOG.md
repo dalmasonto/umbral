@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.8...umbral-macros-v0.0.9) - 2026-07-14
+
+### Other
+
+- finish the schema conversion — 205 suites derive from the models (gaps3 #78)
+
 ## [0.0.8](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.7...umbral-macros-v0.0.8) - 2026-07-13
 
 ### Added

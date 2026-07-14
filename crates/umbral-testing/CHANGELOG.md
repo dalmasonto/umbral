@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-testing-v0.0.8...umbral-testing-v0.0.9) - 2026-07-14
+
+### Added
+
+- *(testing)* derive the test schema from the models, and boot in one line
+
+### Other
+
+- derive the test schema from the models in 166 suites (gaps3 #78)
+- install snippets say `cargo add`, so they cannot go stale
+
 ## [0.0.6](https://github.com/dalmasonto/umbral/compare/umbral-testing-v0.0.5...umbral-testing-v0.0.6) - 2026-07-07
 
 ### Other

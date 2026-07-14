@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-permissions-v0.0.8...umbral-permissions-v0.0.9) - 2026-07-14
+
+### Other
+
+- install snippets say `cargo add`, so they cannot go stale
+
 ## [0.0.7](https://github.com/dalmasonto/umbral/compare/umbral-permissions-v0.0.6...umbral-permissions-v0.0.7) - 2026-07-12
 
 ### Added

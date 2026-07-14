@@ -13,7 +13,7 @@ proc-macro = true
 
 [dependencies]
 # Shared casing helpers — no deps, safe to use from a proc-macro crate.
-umbral-casing = { path = "../umbral-casing", version = "0.0.8" }
+umbral-casing = { path = "../umbral-casing", version = "0.0.9" }
 # Standard proc-macro toolkit. syn parses the input; quote emits the
 # output tokens; proc-macro2 bridges the proc_macro / syn type space.
 proc-macro2 = "1"
