@@ -44,7 +44,9 @@ pub fn reports_view() -> AdminView {
         .section(
             WidgetSection::new("Trends")
                 .subtitle("Submissions + discussion activity over the last week")
-                .widget(rekey(submissions_chart(), "rpt_submissions_chart").with_default_period("7d"))
+                .widget(
+                    rekey(submissions_chart(), "rpt_submissions_chart").with_default_period("7d"),
+                )
                 .widget(rekey(activity_chart(), "rpt_activity_chart").with_default_period("7d")),
         )
         .section(

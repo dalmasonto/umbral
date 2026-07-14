@@ -42,6 +42,7 @@ pub fn source_mix_donut() -> Widget {
         default_span: Span { cols: 4, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let counts = plugin_counts("source").await;
             let pairs = ordered_pairs(
@@ -62,6 +63,7 @@ pub fn status_mix_donut() -> Widget {
         default_span: Span { cols: 4, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let counts = plugin_counts("status").await;
             let pairs = ordered_pairs(
@@ -102,6 +104,7 @@ pub fn submissions_chart() -> Widget {
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
         default_period: Some("7d"),
+        filters: Vec::new(),
         data: WidgetDataFn::with_params(|_user, params| async move {
             let days = params.period_days().unwrap_or(7);
             let trail = daily_plugins_trail(days).await;
@@ -131,6 +134,7 @@ pub fn activity_chart() -> Widget {
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
         default_period: Some("7d"),
+        filters: Vec::new(),
         data: WidgetDataFn::with_params(|_user, params| async move {
             let days = params.period_days().unwrap_or(7);
             let (plugins, comments) =
@@ -165,6 +169,7 @@ pub fn submissions_bar() -> Widget {
         default_span: Span { cols: 4, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let weeks = 8;
             let trail = weekly_plugins_trail(weeks).await;
@@ -203,6 +208,7 @@ pub fn status_maturity_heatmap() -> Widget {
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             // Canonical orders so the grid axes stay stable regardless of
             // which combinations currently have rows.

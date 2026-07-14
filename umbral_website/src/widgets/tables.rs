@@ -22,6 +22,7 @@ pub fn recent_plugins_table() -> Widget {
         default_span: Span { cols: 6, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let columns = vec![
                 TableColumn {
@@ -67,6 +68,7 @@ pub fn recent_activity_feed() -> Widget {
         default_span: Span { cols: 6, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let items: Vec<FeedItem> = pd::Plugin::objects()
                 .order_by(plugin::CREATED_AT.desc())

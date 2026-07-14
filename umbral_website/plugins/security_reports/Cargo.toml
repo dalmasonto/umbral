@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umbral = "0.0.7"
-umbral-auth = "0.0.7"
+umbral = "0.0.9"
+umbral-auth = "0.0.9"
 accounts = { path = "../accounts" }
 plugin_directory = { path = "../plugin_directory" }
 serde = { version = "1", features = ["derive"] }

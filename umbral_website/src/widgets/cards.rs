@@ -7,7 +7,9 @@
 //! to "12.4K" when the column gets narrow.
 
 use plugin_directory::models::{self as pd, plugin};
-use umbral_admin::{CardPayload, KpiPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+use umbral_admin::{
+    CardPayload, KpiPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
+};
 
 use super::aggregates::{
     comments_between, daily_comments_trail, daily_plugins_trail, plugins_between,
@@ -24,6 +26,7 @@ pub fn total_plugins_card() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
             let month_ago = now - chrono::Duration::days(30);
@@ -57,6 +60,7 @@ pub fn pending_review_card() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let pending = pd::Plugin::objects()
                 .filter(plugin::MODERATION.eq("pending"))
@@ -83,6 +87,7 @@ pub fn discussion_notes_card() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
             let month_ago = now - chrono::Duration::days(30);
@@ -120,6 +125,7 @@ pub fn featured_card() -> Widget {
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let featured = pd::Plugin::objects()
                 .filter(plugin::FEATURED.eq(true))
@@ -147,6 +153,7 @@ pub fn shipped_kpi() -> Widget {
         default_span: Span { cols: 4, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let shipped = pd::Plugin::objects()
                 .filter(plugin::STATUS.eq("shipped"))

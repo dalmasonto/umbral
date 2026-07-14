@@ -22,6 +22,7 @@ pub fn audit_coverage_radial() -> Widget {
         default_span: Span { cols: 4, rows: 2 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let counts = plugin_counts("audit_status").await;
             let total: f64 = counts.iter().map(|(_, n)| *n).sum();
@@ -60,6 +61,7 @@ pub fn plugins_by_maturity() -> Widget {
         default_span: Span { cols: 4, rows: 3 },
         permission: None,
         default_period: None,
+        filters: Vec::new(),
         data: WidgetDataFn::new(|_user| async move {
             let mut pairs = plugin_counts("maturity").await;
             pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
