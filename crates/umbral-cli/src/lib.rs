@@ -365,7 +365,24 @@ pub async fn dispatch_with_argv(
     // migrations. `App::ready` is idempotent, so this is a no-op if the caller
     // used `App::build()`.
     let subcommand = subcommand_name(&argv);
-    if command_needs_ready(subcommand.as_deref()) {
+    let builtins = builtin_command_names();
+    let reserved: Vec<&str> = builtins.iter().map(String::as_str).collect();
+
+    // A registered command gets to say whether it needs a live app
+    // (`PluginCommand::needs_ready`). A code generator like `startpermission`
+    // says no: firing `on_ready` would run every plugin's seeding/backfill
+    // before writing a file, and on a fresh checkout that fails against tables
+    // `migrate` has not created yet. Only if no registered command claims the
+    // name do we fall back to the built-in list, which structurally cannot know
+    // about a plugin's offline commands.
+    let needs_ready = subcommand
+        .as_deref()
+        .and_then(|name| {
+            umbral_core::cli::command_needs_ready(app.commands(), app.plugins(), name, &reserved)
+        })
+        .unwrap_or_else(|| command_needs_ready(subcommand.as_deref()));
+
+    if needs_ready {
         app.ready()?;
     } else if app.ready_already_fired() && !matches!(subcommand.as_deref(), None | Some("serve")) {
         // The caller built with `App::build()`, so the hooks fired before argv
@@ -391,6 +408,7 @@ pub async fn dispatch_with_argv(
         match umbral_core::cli::dispatch_with_app_commands(
             app.commands(),
             app.plugins(),
+            &reserved,
             argv.clone(),
         )
         .await
@@ -591,11 +609,32 @@ fn full_catalog(app: &App) -> Vec<(String, Option<String>)> {
             sub.get_about().map(|s| s.to_string()),
         ));
     }
+    let builtins = builtin_command_names();
+    let reserved: Vec<&str> = builtins.iter().map(String::as_str).collect();
     catalog.extend(umbral_core::cli::command_catalog_with_app_commands(
         app.commands(),
         app.plugins(),
+        &reserved,
     ));
     catalog
+}
+
+/// The framework binary's own subcommands — `serve`, `migrate`, `makemigrations`,
+/// … — read off the derived clap parser rather than hand-listed, so a new
+/// subcommand reserves its own name with nothing to remember.
+///
+/// These names are **unavailable** to an app or plugin command. Dispatch tries
+/// registered commands before the built-in parser, so a command named `migrate`
+/// would not collide loudly — it would quietly take over, and the next deploy
+/// would apply zero migrations and exit 0. `collect_commands` drops any command
+/// that lands on one of these, and says so.
+pub fn builtin_command_names() -> Vec<String> {
+    let mut names: Vec<String> = <Cli as CommandFactory>::command()
+        .get_subcommands()
+        .map(|s| s.get_name().to_string())
+        .collect();
+    names.push("help".to_string());
+    names
 }
 
 /// Render the full help screen (built-ins + plugin commands), for

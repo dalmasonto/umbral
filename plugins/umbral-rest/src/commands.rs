@@ -97,11 +97,19 @@ impl Class {
     /// The builder line(s) that put the class to work. The generator can't
     /// write these: only you know which resource a permission guards, and a
     /// `main.rs` builder chain is not a thing to rewrite by regex.
-    fn registration(&self, pascal: &str, dir: &str, is_root: bool) -> Vec<String> {
-        let import = if is_root {
-            format!("use crate::{dir}::{pascal};")
-        } else {
-            format!("use {dir}::{pascal};   // from this plugin's crate")
+    fn registration(&self, pascal: &str, dir: &str, target: &Target) -> Vec<String> {
+        // The import has to name the CRATE the class lives in. A class in
+        // `plugins/blog` is `blog::permissions::IsOwner` from main.rs — the old
+        // hint printed a bare `use permissions::IsOwner;`, which resolves to a
+        // module of the *binary* that doesn't exist. A next step that doesn't
+        // compile is worse than no next step: the user pastes it before they
+        // read it.
+        let import = match target {
+            Target::Root => format!("use crate::{dir}::{pascal};"),
+            Target::Plugin(plugin) => {
+                let krate = plugin.replace('-', "_");
+                format!("use {krate}::{dir}::{pascal};   // from the `{plugin}` plugin crate")
+            }
         };
         // How the class is CONSTRUCTED, which is not always its bare name: a
         // throttle carries its rate limiters, so it has a `new()`. Printing
@@ -189,10 +197,16 @@ pub fn scaffold_class(
     let mod_path = resolved.crate_root.join(&mod_rel);
     if mod_path.is_file() {
         let text = std::fs::read_to_string(&mod_path)?;
-        let updated = insert_before_marker(&text, MODS_MARKER, &format!("pub mod {module};"))
-            .and_then(|t| {
-                insert_before_marker(&t, EXPORTS_MARKER, &format!("pub use {module}::{pascal};"))
-            });
+        // Each line is inserted only if it is not already there. Deleting a
+        // class file and re-running is a thing people do (`rm` it, start over),
+        // and `write_new_file` then succeeds because the file is gone — but the
+        // mod.rs still declares it. Blindly inserting produced a SECOND
+        // `pub mod is_owner;` and a second `pub use`, and the crate stopped
+        // compiling (E0428 / E0252) inside a file the generator owns.
+        let mod_line = format!("pub mod {module};");
+        let use_line = format!("pub use {module}::{pascal};");
+        let updated = add_line_once(&text, MODS_MARKER, &mod_line)
+            .and_then(|t| add_line_once(&t, EXPORTS_MARKER, &use_line));
         match updated {
             Some(text) => {
                 std::fs::write(&mod_path, text)?;
@@ -259,13 +273,26 @@ pub fn scaffold_class(
         }
     }
 
-    next_steps.extend(class.registration(&pascal, dir, resolved.is_root));
+    next_steps.extend(class.registration(&pascal, dir, target));
 
     Ok(Scaffolded {
         root: resolved.crate_root,
         files,
         next_steps,
     })
+}
+
+/// Insert `line` above `marker` — unless it is already in the file.
+///
+/// The idempotency is the point: a generator that appends unconditionally turns
+/// a re-run into a duplicate declaration, and a duplicate `pub mod` does not
+/// compile. `Some(text unchanged)` when the line is already present, `None` only
+/// when the marker itself is gone (the caller then declines and reports).
+fn add_line_once(text: &str, marker: &str, line: &str) -> Option<String> {
+    if text.lines().any(|l| l.trim() == line) {
+        return Some(text.to_string());
+    }
+    insert_before_marker(text, marker, line)
 }
 
 /// The generated `<dir>/mod.rs` — module list + re-exports, both marker-driven
@@ -676,6 +703,17 @@ impl PluginCommand for ClassCommand {
             )
     }
 
+    /// A code generator touches the filesystem, not the database.
+    ///
+    /// Left at the default `true`, dispatch fires every plugin's `on_ready`
+    /// before this runs — seeding content and backfilling rows as a side effect
+    /// of writing a file. On a fresh checkout that fails outright, against
+    /// tables `migrate` has not created yet, and the command dies before
+    /// writing the file it exists to write.
+    fn needs_ready(&self) -> bool {
+        false
+    }
+
     async fn run(&self, matches: &clap::ArgMatches) -> Result<(), CliError> {
         let class = self.0;
         let project_root = PathBuf::from(
@@ -941,6 +979,74 @@ mod tests {
                 assert_eq!(available, vec!["blog".to_string()]);
             }
             other => panic!("expected NoSuchPlugin, got {other:?}"),
+        }
+    }
+
+    // ----------------------------------------------------------------- //
+    // Regressions found by the pre-0.0.10 review sweep                    //
+    // ----------------------------------------------------------------- //
+
+    /// Deleting a class file and re-running is a thing people do. The mod.rs
+    /// still declares the module, `write_new_file` succeeds because the file is
+    /// gone, and a blind insert then wrote a SECOND `pub mod is_owner;` and a
+    /// second `pub use` — E0428/E0252, in a file the generator owns.
+    #[test]
+    fn re_running_after_deleting_the_class_does_not_duplicate_the_declarations() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+
+        scaffold_class(Class::Permission, "IsOwner", &Target::Root, &root).expect("first");
+        std::fs::remove_file(root.join("src/permissions/is_owner.rs")).unwrap();
+        scaffold_class(Class::Permission, "IsOwner", &Target::Root, &root).expect("re-run");
+
+        let mod_rs = read(&root, "src/permissions/mod.rs");
+        assert_eq!(
+            mod_rs.matches("pub mod is_owner;").count(),
+            1,
+            "duplicate module declaration — the crate would not compile:\n{mod_rs}"
+        );
+        assert_eq!(
+            mod_rs.matches("pub use is_owner::IsOwner;").count(),
+            1,
+            "duplicate re-export — the crate would not compile:\n{mod_rs}"
+        );
+    }
+
+    /// The printed import must name the plugin CRATE. `use permissions::IsOwner;`
+    /// resolves to a module of the binary that does not exist — a next step the
+    /// user pastes before reading, and which cannot compile.
+    #[test]
+    fn a_plugin_class_prints_an_import_that_names_the_crate() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        plugin(&root, "blog");
+
+        let report = scaffold_class(
+            Class::Permission,
+            "IsOwner",
+            &Target::Plugin("blog".into()),
+            &root,
+        )
+        .expect("scaffold");
+
+        let steps = report.next_steps.join("\n");
+        assert!(
+            steps.contains("use blog::permissions::IsOwner;"),
+            "the import hint doesn't name the plugin crate:\n{steps}"
+        );
+    }
+
+    /// A generator writes files; it must not fire `on_ready` (which seeds
+    /// content and backfills rows) as a side effect — and on a fresh checkout
+    /// that would fail against tables `migrate` hasn't created yet.
+    #[test]
+    fn the_generators_do_not_need_a_live_app() {
+        for cmd in all() {
+            assert!(
+                !cmd.needs_ready(),
+                "`{}` is a code generator and must not require a live app",
+                cmd.command().get_name()
+            );
         }
     }
 

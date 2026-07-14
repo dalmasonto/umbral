@@ -136,7 +136,8 @@ async fn app_command_runs_wins_its_clash_and_lists() {
         .expect("build_deferred with figment defaults");
 
     // (3) Listed — checked before dispatch consumes the App.
-    let catalog = umbral::cli::command_catalog_with_app_commands(app.commands(), app.plugins());
+    let catalog =
+        umbral::cli::command_catalog_with_app_commands(app.commands(), app.plugins(), &[]);
     assert!(
         catalog.iter().any(|(name, about)| name == "backfill_slugs"
             && about.as_deref() == Some("Fill in empty post slugs")),

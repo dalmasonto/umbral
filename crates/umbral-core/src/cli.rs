@@ -87,6 +87,27 @@ pub trait PluginCommand: Send + Sync + 'static {
     /// `self.command()`; `matches` is the per-subcommand
     /// `ArgMatches` (not the top-level one).
     async fn run(&self, matches: &ArgMatches) -> Result<(), CliError>;
+
+    /// Whether this command needs a *live* application — pools open, schema
+    /// migrated, every plugin's `on_ready` fired.
+    ///
+    /// Default `true`, which is right for almost everything: a command that
+    /// touches data wants the app up.
+    ///
+    /// Return `false` for a command that only touches the filesystem — a code
+    /// generator, a linter, a config dump. `on_ready` hooks seed content and
+    /// backfill rows, so firing them for `startpermission` means a pure
+    /// codegen command writes to the database, and on a fresh checkout it
+    /// fails against tables `migrate` has not created yet — before writing the
+    /// file it exists to write.
+    ///
+    /// The framework's own schema commands (`migrate`, `makemigrations`, …)
+    /// are excluded by name in `umbral-cli`; that list structurally cannot
+    /// know about a plugin's offline commands, which is why the plugin gets to
+    /// declare it here.
+    fn needs_ready(&self) -> bool {
+        true
+    }
 }
 
 /// Outcome of a dispatch call. Lets the caller decide what to do when
@@ -127,7 +148,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    dispatch_with_app_commands(&[], plugins, args).await
+    dispatch_with_app_commands(&[], plugins, &[], args).await
 }
 
 /// [`dispatch`], plus the commands the *project* registered directly on
@@ -145,13 +166,17 @@ where
 pub async fn dispatch_with_app_commands<I, T>(
     app_commands: &[Box<dyn PluginCommand>],
     plugins: &[Box<dyn Plugin>],
+    reserved: &[&str],
     args: I,
 ) -> Result<DispatchOutcome, CliError>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let commands = collect_commands(app_commands, plugins);
+    // `reserved` is the framework binary's own subcommand set (`migrate`,
+    // `serve`, …). Only the binary knows it, so it passes it in; a command
+    // that would shadow one is dropped here rather than silently winning.
+    let commands = collect_commands(app_commands, plugins, reserved);
 
     // Nothing contributed → caller handles everything.
     if commands.is_empty() {
@@ -240,11 +265,43 @@ impl CommandHandle<'_> {
 fn collect_commands<'a>(
     app_commands: &'a [Box<dyn PluginCommand>],
     plugins: &'a [Box<dyn Plugin>],
+    reserved: &[&str],
 ) -> Vec<(String, CommandHandle<'a>)> {
     let mut commands: Vec<(String, CommandHandle<'a>)> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // A command whose name is a framework built-in is DROPPED, not run.
+    //
+    // The dispatcher tries these commands before the built-in parser, so
+    // without this a command named `migrate` doesn't collide loudly — it
+    // quietly takes over, `cargo run -- migrate` runs the wrong thing, and the
+    // deploy ships an un-migrated schema with a zero exit code. Nobody finds
+    // that until production. The built-in wins; the shadow is refused out loud.
+    let shadow = |name: &str, source: &str| {
+        if !reserved.contains(&name) {
+            return false;
+        }
+        // eprintln, not just tracing: this must be visible in a plain
+        // `cargo run` with no subscriber configured, because the thing it is
+        // warning about is that a framework command has stopped working.
+        eprintln!(
+            "warning: {source} registers a command named `{name}`, which is a framework \
+             built-in. The built-in wins and the registered one is IGNORED — rename it. \
+             (Without this, `{name}` would silently run your command instead of the \
+             framework's.)"
+        );
+        tracing::warn!(
+            target: "umbral::cli",
+            "{source} command `{name}` shadows a framework built-in; ignoring it",
+        );
+        true
+    };
+
     for cmd in app_commands {
         let name = cmd.command().get_name().to_string();
+        if shadow(&name, "the app") {
+            continue;
+        }
         if !seen.insert(name.clone()) {
             tracing::warn!(
                 target: "umbral::cli",
@@ -258,6 +315,9 @@ fn collect_commands<'a>(
     for plugin in plugins {
         for cmd in plugin.commands() {
             let name = cmd.command().get_name().to_string();
+            if shadow(&name, &format!("plugin `{}`", plugin.name())) {
+                continue;
+            }
             if !seen.insert(name.clone()) {
                 tracing::warn!(
                     target: "umbral::cli",
@@ -271,6 +331,24 @@ fn collect_commands<'a>(
         }
     }
     commands
+}
+
+/// Does the command named `name` need a live app (pools, migrated schema,
+/// `on_ready` fired)?
+///
+/// `None` means no app or plugin registered that name — the framework binary's
+/// own built-in list decides. `Some(false)` is a command that declared itself
+/// offline via [`PluginCommand::needs_ready`], e.g. a code generator.
+pub fn command_needs_ready(
+    app_commands: &[Box<dyn PluginCommand>],
+    plugins: &[Box<dyn Plugin>],
+    name: &str,
+    reserved: &[&str],
+) -> Option<bool> {
+    collect_commands(app_commands, plugins, reserved)
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, cmd)| cmd.get().needs_ready())
 }
 
 /// Collect every plugin-contributed command as `(name, about)` pairs.
@@ -287,7 +365,7 @@ fn collect_commands<'a>(
 /// still appears (with `None` description); the CLI renders a dash for
 /// it and emits a `debug!` nudging the plugin author to add help text.
 pub fn command_catalog(plugins: &[Box<dyn Plugin>]) -> Vec<(String, Option<String>)> {
-    command_catalog_with_app_commands(&[], plugins)
+    command_catalog_with_app_commands(&[], plugins, &[])
 }
 
 /// [`command_catalog`], plus the project's own `AppBuilder::command`
@@ -299,8 +377,9 @@ pub fn command_catalog(plugins: &[Box<dyn Plugin>]) -> Vec<(String, Option<Strin
 pub fn command_catalog_with_app_commands(
     app_commands: &[Box<dyn PluginCommand>],
     plugins: &[Box<dyn Plugin>],
+    reserved: &[&str],
 ) -> Vec<(String, Option<String>)> {
-    collect_commands(app_commands, plugins)
+    collect_commands(app_commands, plugins, reserved)
         .into_iter()
         .map(|(name, cmd)| {
             let about = cmd.get().command().get_about().map(|s| s.to_string());

@@ -157,8 +157,23 @@ pub struct Scaffolded {
     pub next_steps: Vec<String>,
 }
 
+/// Rust keywords that cannot be a module name. A command called `move` would
+/// generate `pub mod move;`, which does not parse — and the user would be
+/// staring at a syntax error in a file they did not write.
+const RUST_KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
+    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
+    "ref", "return", "self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use",
+    "where", "while", "abstract", "become", "box", "do", "final", "macro", "override", "priv",
+    "try", "typeof", "unsized", "virtual", "yield",
+];
+
 /// Validate a name as a Rust identifier stem: ASCII alphanumeric, `_`, `-`,
-/// not starting with a digit, not empty.
+/// not starting with a digit, not empty, not a Rust keyword.
+///
+/// This is also the **only** thing standing between a `--in` argument and the
+/// filesystem, so it has to reject anything that could be a path: `/`, `\`,
+/// `.` and `..` all fail the alphanumeric test. See [`resolve_target`].
 pub fn validate_ident(name: &str) -> Result<(), CodegenError> {
     if name.is_empty() {
         return Err(CodegenError::InvalidName(String::new()));
@@ -170,6 +185,9 @@ pub fn validate_ident(name: &str) -> Result<(), CodegenError> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
+        return Err(CodegenError::InvalidName(name.to_string()));
+    }
+    if RUST_KEYWORDS.contains(&name.replace('-', "_").as_str()) {
         return Err(CodegenError::InvalidName(name.to_string()));
     }
     Ok(())
@@ -215,6 +233,17 @@ pub fn resolve_target(
             })
         }
         Target::Plugin(name) => {
+            // Validate BEFORE joining. `Path::join` with an absolute component
+            // throws the base away — `join("plugins").join("/home/me/other")`
+            // is `/home/me/other` — so an unvalidated `--in` would let a
+            // generator write into, and rewrite the lib.rs and Cargo.toml of,
+            // a crate outside this project entirely. `..` traverses out the
+            // same way. `validate_ident` rejects `/`, `\`, `.` and `..`
+            // because none of them are alphanumeric, which is exactly the
+            // property we need here: a plugin name is an identifier, never a
+            // path, and the one place that was assumed rather than checked is
+            // the one place it mattered.
+            validate_ident(name)?;
             let crate_root = project_root.join("plugins").join(name);
             let owner_file = crate_root.join("src/lib.rs");
             if !owner_file.is_file() {
@@ -298,11 +327,41 @@ pub fn insert_before_marker(text: &str, marker: &str, line: &str) -> Option<Stri
 /// the existing manifest all survive.
 pub fn ensure_dependency(cargo_toml: &Path, name: &str, spec: &str) -> Result<bool, CodegenError> {
     let text = fs::read_to_string(cargo_toml)?;
+
+    // The presence check has to be SECTION-AWARE, and it has to know both
+    // spellings of a dependency. Getting either wrong breaks the user's build:
+    //
+    //   - Section-blind: a crate listed under `[dev-dependencies]` (for its
+    //     tests) would read as "already a dependency", we'd add nothing, and
+    //     the code we just generated would fail with `unresolved import` — the
+    //     exact failure this function exists to prevent.
+    //   - Form-blind: the table form (`[dependencies.umbral-rest]`) doesn't
+    //     match `umbral-rest =`, so we'd append a second `umbral-rest = "..."`
+    //     key and cargo would refuse to parse the manifest at all.
     let key = format!("{name} =");
-    if text.lines().any(|l| l.trim_start().starts_with(&key)) {
-        return Ok(false);
+    let table_header = format!("[dependencies.{name}]");
+    let mut in_dependencies = false;
+    let mut deps_header_idx: Option<usize> = None;
+
+    for (idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            // A `[dependencies.<name>]` header IS the dependency, in table form.
+            if trimmed == table_header {
+                return Ok(false);
+            }
+            in_dependencies = trimmed == "[dependencies]";
+            if in_dependencies {
+                deps_header_idx = Some(idx);
+            }
+            continue;
+        }
+        if in_dependencies && trimmed.starts_with(&key) {
+            return Ok(false);
+        }
     }
-    let Some(idx) = text.lines().position(|l| l.trim() == "[dependencies]") else {
+
+    let Some(idx) = deps_header_idx else {
         return Err(CodegenError::Io(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("`{}` has no [dependencies] section", cargo_toml.display()),
@@ -313,32 +372,69 @@ pub fn ensure_dependency(cargo_toml: &Path, name: &str, spec: &str) -> Result<bo
     Ok(true)
 }
 
-/// Insert `line` before line index `idx`.
-fn insert_line_before(text: &str, idx: usize, line: &str) -> String {
-    let mut out = String::with_capacity(text.len() + line.len() + 1);
-    for (i, l) in text.lines().enumerate() {
-        if i == idx {
-            out.push_str(line);
-            out.push('\n');
-        }
-        out.push_str(l);
-        out.push('\n');
-    }
-    out
+/// How a file terminates its lines, and whether it ends with one.
+///
+/// A generator edits a file it does not own, so it must give back what it was
+/// given: rebuilding a CRLF file with `\n` rewrites every line in the diff, and
+/// appending a newline to a file that had none is a change the user never made.
+/// Neither breaks the build — which is exactly why they'd survive review and
+/// show up as noise in someone's next `git diff`.
+struct LineStyle {
+    ending: &'static str,
+    trailing_newline: bool,
 }
 
-/// Insert `line` after line index `idx`.
-fn insert_line_after(text: &str, idx: usize, line: &str) -> String {
-    let mut out = String::with_capacity(text.len() + line.len() + 1);
-    for (i, l) in text.lines().enumerate() {
-        out.push_str(l);
-        out.push('\n');
-        if i == idx {
-            out.push_str(line);
-            out.push('\n');
+impl LineStyle {
+    /// Sniff the style of an existing file. CRLF if the first terminator is
+    /// `\r\n` — mixed endings are pathological and we follow the majority-of-one.
+    fn of(text: &str) -> Self {
+        let ending = match text.find('\n') {
+            Some(i) if i > 0 && text.as_bytes()[i - 1] == b'\r' => "\r\n",
+            _ => "\n",
+        };
+        Self {
+            ending,
+            trailing_newline: text.is_empty() || text.ends_with('\n'),
         }
     }
-    out
+
+    /// Re-emit `lines` in this style.
+    fn join(&self, lines: &[&str]) -> String {
+        let mut out = String::new();
+        for (i, l) in lines.iter().enumerate() {
+            out.push_str(l);
+            let last = i + 1 == lines.len();
+            if !last || self.trailing_newline {
+                out.push_str(self.ending);
+            }
+        }
+        out
+    }
+}
+
+/// Insert `line` before line index `idx`, preserving the file's line endings
+/// and its trailing-newline habit.
+///
+/// `line` may itself be several lines (a generated method body); each is
+/// re-emitted in the target file's style, so a multi-line insert into a CRLF
+/// file doesn't leave bare `\n` behind.
+///
+/// Prefer [`declare_module`] or [`insert_before_marker`] — they find their own
+/// anchor and decline when the file isn't what they expected. Reach for this
+/// only when the caller has located the line itself.
+pub fn insert_line_before(text: &str, idx: usize, line: &str) -> String {
+    let style = LineStyle::of(text);
+    let mut lines: Vec<&str> = text.lines().collect();
+    let idx = idx.min(lines.len());
+    for (offset, inserted) in line.lines().enumerate() {
+        lines.insert(idx + offset, inserted);
+    }
+    style.join(&lines)
+}
+
+/// Insert `line` after line index `idx`, preserving the file's line style.
+fn insert_line_after(text: &str, idx: usize, line: &str) -> String {
+    insert_line_before(text, idx + 1, line)
 }
 
 /// Terminal prompts for a generator that asks before it writes.
@@ -536,6 +632,136 @@ mod tests {
             "one",
             "the existing file was clobbered"
         );
+    }
+
+    /// The `--in` argument reaches `Path::join`, and `join` with an ABSOLUTE
+    /// path throws the base away. Unvalidated, `--in /home/me/other-project`
+    /// would make a generator write into — and rewrite the lib.rs and
+    /// Cargo.toml of — an unrelated crate. `..` traverses out the same way.
+    #[test]
+    fn resolve_target_refuses_a_plugin_name_that_escapes_the_project() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("project");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+
+        // The "other project" a path escape would land in — a real crate, so
+        // the only thing that can save it is the name check.
+        let outside = tmp.path().join("other");
+        fs::create_dir_all(outside.join("src")).unwrap();
+        fs::write(outside.join("Cargo.toml"), "[package]\n").unwrap();
+        fs::write(outside.join("src/lib.rs"), "// someone else's code\n").unwrap();
+
+        for escape in [
+            outside.display().to_string(), // absolute — join() discards the base
+            "../other".to_string(),        // traversal
+            "..".to_string(),
+            "foo/bar".to_string(),
+            "foo\\bar".to_string(),
+        ] {
+            let err = resolve_target(&root, &Target::Plugin(escape.clone()))
+                .expect_err(&format!("`--in {escape}` must not resolve"));
+            assert!(
+                matches!(err, CodegenError::InvalidName(_)),
+                "`--in {escape}` gave {err:?}, expected InvalidName"
+            );
+        }
+
+        // And the file it would have written is not there.
+        assert_eq!(
+            fs::read_to_string(outside.join("src/lib.rs")).unwrap(),
+            "// someone else's code\n"
+        );
+    }
+
+    /// `pub mod move;` doesn't parse. A generator that emits it hands the user
+    /// a syntax error in a file they didn't write.
+    #[test]
+    fn validate_ident_rejects_rust_keywords() {
+        for kw in ["move", "type", "match", "struct", "self", "impl"] {
+            assert!(
+                matches!(validate_ident(kw), Err(CodegenError::InvalidName(_))),
+                "`{kw}` is a Rust keyword and cannot be a module name"
+            );
+        }
+        // Not keywords, just near them.
+        assert!(validate_ident("move_rows").is_ok());
+        assert!(validate_ident("typegen").is_ok());
+    }
+
+    /// A dep under `[dev-dependencies]` is NOT a dependency of the code we
+    /// just generated. Reading it as one leaves the crate with an unresolved
+    /// import — the exact failure `ensure_dependency` exists to prevent.
+    #[test]
+    fn ensure_dependency_is_section_aware() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest = tmp.path().join("Cargo.toml");
+        fs::write(
+            &manifest,
+            "[package]\nname = \"blog\"\n\n[dependencies]\numbral = \"1\"\n\n\
+             [dev-dependencies]\numbral-rest = \"0.0.9\"\n",
+        )
+        .unwrap();
+
+        assert!(
+            ensure_dependency(&manifest, "umbral-rest", "\"0.0.10\"").unwrap(),
+            "a dev-dependency must not count as a dependency"
+        );
+        let text = fs::read_to_string(&manifest).unwrap();
+        // Added under [dependencies], and the dev-dependency is untouched.
+        let deps_at = text.find("[dependencies]").unwrap();
+        let dev_at = text.find("[dev-dependencies]").unwrap();
+        let added_at = text.find("umbral-rest = \"0.0.10\"").unwrap();
+        assert!(
+            deps_at < added_at && added_at < dev_at,
+            "the dep landed outside [dependencies]:\n{text}"
+        );
+    }
+
+    /// The table form IS the dependency. Not recognising it means appending a
+    /// second key — and cargo then refuses to parse the manifest at all.
+    #[test]
+    fn ensure_dependency_recognises_the_table_form() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest = tmp.path().join("Cargo.toml");
+        let original = "[package]\nname = \"blog\"\n\n[dependencies]\numbral = \"1\"\n\n\
+             [dependencies.umbral-rest]\nversion = \"0.0.9\"\nfeatures = [\"x\"]\n";
+        fs::write(&manifest, original).unwrap();
+
+        assert!(
+            !ensure_dependency(&manifest, "umbral-rest", "\"0.0.10\"").unwrap(),
+            "the table form must read as already-present"
+        );
+        assert_eq!(
+            fs::read_to_string(&manifest).unwrap(),
+            original,
+            "a duplicate key was written; cargo would refuse this manifest"
+        );
+    }
+
+    /// A generator edits files it does not own. Handing back LF for a CRLF file
+    /// rewrites every line in the user's next diff.
+    #[test]
+    fn edits_preserve_crlf_and_a_missing_trailing_newline() {
+        let crlf = "//! doc\r\n\r\nmod seed;\r\nmod views;\r\n";
+        let out = declare_module(crlf, "mod commands;").expect("insert");
+        assert!(out.contains("mod commands;\r\nmod seed;"), "{out:?}");
+        assert!(
+            !out.contains("mod commands;\nmod seed;"),
+            "LF leaked in: {out:?}"
+        );
+
+        // No trailing newline in, none out.
+        let no_nl = "mod seed;\nmod views;";
+        let out = declare_module(no_nl, "mod commands;").expect("insert");
+        assert!(
+            !out.ends_with('\n'),
+            "a trailing newline was added to a file that had none: {out:?}"
+        );
+
+        // A multi-line insert into a CRLF file stays CRLF throughout.
+        let out = insert_before_marker("a\r\n// MARK\r\n", "// MARK", "one\ntwo").expect("marker");
+        assert_eq!(out, "a\r\none\r\ntwo\r\n// MARK\r\n");
     }
 
     #[test]

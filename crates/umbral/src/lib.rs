@@ -467,8 +467,8 @@ pub mod codegen {
 
     pub use umbral_core::codegen::{
         CodegenError, ResolvedTarget, Scaffolded, Target, declare_module, discover_plugins,
-        ensure_dependency, insert_before_marker, pascal_case_from_ident, prompt, resolve_target,
-        to_snake_case, validate_ident, write_new_file,
+        ensure_dependency, insert_before_marker, insert_line_before, pascal_case_from_ident,
+        prompt, resolve_target, to_snake_case, validate_ident, write_new_file,
     };
 }
 

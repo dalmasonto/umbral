@@ -427,14 +427,6 @@ impl AppBuilder {
         self
     }
 
-    /// Register a model with the app's migration engine.
-    ///
-    /// Called once per model the user wants the M5 `makemigrations` /
-    /// `migrate` commands to track. Captures the model's `NAME` /
-    /// `TABLE` / `FIELDS` constants into an owned `ModelMeta` so the
-    /// migration code can iterate without naming concrete `T` at the
-    /// call site. M7's Plugin contract will replace this with
-    /// `Plugin::models()` discovered through the plugin registry.
     /// Register every `#[derive(Model)]` type the binary links, instead of naming
     /// each one (gaps3 #46).
     ///
@@ -461,6 +453,24 @@ impl AppBuilder {
     ///
     /// If your models live in a library crate, either `use` it from `main.rs` (so
     /// the linker keeps it) or keep naming them with `.model::<T>()`.
+    pub fn auto_models(mut self) -> Self {
+        self.auto_models = true;
+        self
+    }
+
+    /// Register a model with the app's migration engine.
+    ///
+    /// Called once per model the user wants the M5 `makemigrations` /
+    /// `migrate` commands to track. Captures the model's `NAME` /
+    /// `TABLE` / `FIELDS` constants into an owned `ModelMeta` so the
+    /// migration code can iterate without naming concrete `T` at the
+    /// call site. M7's Plugin contract will replace this with
+    /// `Plugin::models()` discovered through the plugin registry.
+    pub fn model<T: Model>(mut self) -> Self {
+        self.models.push(ModelMeta::for_::<T>());
+        self
+    }
+
     /// Register one project-owned management command.
     ///
     /// The command shows up in `cargo run -- <name>`, in `umbral help`, and
@@ -490,8 +500,14 @@ impl AppBuilder {
     ///
     /// On a name clash with a plugin's command, the app's wins — the
     /// project is the most specific layer — and the losing plugin is named
-    /// in a warning. It does NOT override a framework built-in (`migrate`,
-    /// `serve`, …); `startcommand` rejects those names up front.
+    /// in a warning.
+    ///
+    /// A framework built-in (`migrate`, `serve`, …) cannot be overridden: the
+    /// dispatcher drops any registered command that lands on one of those
+    /// names and prints a warning telling you to rename it. That is enforced
+    /// in `cli::collect_commands`, not merely checked by `startcommand` —
+    /// a command named `migrate` would otherwise quietly take over, and the
+    /// next deploy would apply zero migrations and exit 0.
     pub fn command(mut self, command: impl crate::cli::PluginCommand) -> Self {
         self.commands.push(Box::new(command));
         self
@@ -511,16 +527,6 @@ impl AppBuilder {
     /// maintains for you.
     pub fn commands(mut self, commands: Vec<Box<dyn crate::cli::PluginCommand>>) -> Self {
         self.commands.extend(commands);
-        self
-    }
-
-    pub fn auto_models(mut self) -> Self {
-        self.auto_models = true;
-        self
-    }
-
-    pub fn model<T: Model>(mut self) -> Self {
-        self.models.push(ModelMeta::for_::<T>());
         self
     }
 

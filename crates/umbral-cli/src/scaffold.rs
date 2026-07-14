@@ -216,6 +216,18 @@ pub struct ScaffoldReport {
     /// `Some(true)` = dep added, `Some(false)` = dep already present
     /// (idempotent — no duplicate written).
     pub cargo_toml_registered: Option<bool>,
+    /// Whether the thing that was scaffolded is actually **registered** — the
+    /// owner file (`main.rs` / the plugin's `lib.rs`) now reaches it.
+    ///
+    /// `false` when the tool could not edit the owner file and handed the user
+    /// the lines instead. The caller MUST consult this before printing a
+    /// success line: `startcommand` used to announce "Registered `x` on the App
+    /// builder" purely because the user asked for `--in root`, whether or not
+    /// it had managed to wire anything. The user read the success line, ran the
+    /// command, and got `unknown command` — the CLI asserted a registration it
+    /// knew it had not performed. `None` for scaffolders where registration
+    /// isn't a concept (`startproject`).
+    pub registered: Option<bool>,
 }
 
 /// Validate a name is acceptable as a Rust crate identifier.
@@ -1212,6 +1224,8 @@ first thing a `default-src 'self'` Content-Security-Policy blocks.
         files,
         next_steps,
         cargo_toml_registered: None,
+        // `startproject` has nothing to register itself with — it IS the project.
+        registered: None,
     })
 }
 
@@ -1438,6 +1452,7 @@ pub fn router() -> Router {{
         files,
         next_steps,
         cargo_toml_registered,
+        registered: None,
     })
 }
 
@@ -1734,6 +1749,7 @@ pub async fn hello(Query(params): Query<HelloParams>) -> Json<HelloResponse> {{
         files,
         next_steps,
         cargo_toml_registered,
+        registered: None,
     })
 }
 
@@ -1877,22 +1893,38 @@ pub fn scaffold_command(
         CommandTarget::Root => wire_registry_into_main(&owner_text),
         CommandTarget::Plugin(_) => wire_registry_into_plugin(&owner_text),
     };
-    match wiring {
+    // `registered` is the truth the CLI prints. A partial edit (we added the
+    // module but could not find the builder chain) counts as NOT registered:
+    // the command does not run until the user pastes the remaining line.
+    let registered = match wiring {
         Wiring::Updated { text, steps } => {
             fs::write(&owner_file, text)?;
+            let complete = steps.is_empty();
             next_steps.extend(steps);
+            complete
         }
-        Wiring::AlreadyWired => {}
-        Wiring::Manual(steps) => next_steps.extend(steps),
-    }
+        Wiring::AlreadyWired => true,
+        Wiring::Manual(steps) => {
+            next_steps.extend(steps);
+            false
+        }
+    };
 
-    next_steps.push(format!("Run it:  cargo run -- {name} --help"));
+    if registered {
+        next_steps.push(format!("Run it:  cargo run -- {name} --help"));
+    } else {
+        next_steps.push(format!(
+            "Then run it:  cargo run -- {name} --help   (after the steps above — \
+             it is NOT registered yet)"
+        ));
+    }
 
     Ok(ScaffoldReport {
         root: crate_root,
         files,
         next_steps,
         cargo_toml_registered: None,
+        registered: Some(registered),
     })
 }
 
@@ -1929,54 +1961,79 @@ fn wire_registry_into_main(text: &str) -> Wiring {
     }
 
     let mut out = text.to_string();
+    let mut steps: Vec<String> = Vec::new();
 
     if !already_mod {
-        // Slot it in with the other top-level module declarations so the
-        // file's table of contents stays alphabetical-ish and intact.
         // Before the first `mod x;` line, so the table of contents at the top
         // of main.rs stays alphabetical (`commands` sorts before `seed`).
-        match out
-            .lines()
-            .position(|l| l.starts_with("mod ") && l.ends_with(';'))
-        {
-            Some(idx) => out = insert_line_at_before(&out, idx, "mod commands;"),
-            None => {
-                return Wiring::Manual(vec![
-                    "Add to src/main.rs:".to_string(),
-                    "    mod commands;".to_string(),
-                    "    ...and in the App::builder() chain:  .commands(commands::all())"
-                        .to_string(),
-                ]);
-            }
+        match umbral::codegen::declare_module(&out, "mod commands;") {
+            Some(text) => out = text,
+            None => steps.push("Add to src/main.rs:  mod commands;".to_string()),
         }
     }
 
     if !already_registered {
-        let Some(idx) = out.lines().position(|l| {
-            l.trim_start().starts_with(".build_deferred()")
-                || l.trim_start().starts_with(".build()")
-        }) else {
-            return Wiring::Manual(vec![
-                "Add to the App::builder() chain in src/main.rs:".to_string(),
-                "    .commands(commands::all())".to_string(),
-            ]);
-        };
-        let indent: String = out
-            .lines()
-            .nth(idx)
-            .map(|l| l.chars().take_while(|c| c.is_whitespace()).collect())
-            .unwrap_or_default();
-        let call = format!(
-            "{indent}// Project-owned management commands (`umbral startcommand`).\n\
-             {indent}.commands(commands::all())"
-        );
-        out = insert_line_at_before(&out, idx, &call);
+        match builder_terminal_line(&out) {
+            Some(idx) => {
+                let indent: String = out
+                    .lines()
+                    .nth(idx)
+                    .map(|l| l.chars().take_while(|c| c.is_whitespace()).collect())
+                    .unwrap_or_default();
+                let call = format!(
+                    "{indent}// Project-owned management commands (`umbral startcommand`).\n\
+                     {indent}.commands(commands::all())"
+                );
+                out = insert_line_at_before(&out, idx, &call);
+            }
+            None => steps.push(
+                "Add to the App::builder() chain in src/main.rs:  .commands(commands::all())"
+                    .to_string(),
+            ),
+        }
     }
 
-    Wiring::Updated {
-        text: out,
-        steps: Vec::new(),
+    if out == text {
+        if steps.is_empty() {
+            Wiring::AlreadyWired
+        } else {
+            Wiring::Manual(steps)
+        }
+    } else {
+        // Whatever we DID manage to edit is written, and whatever we could not
+        // is reported. The old code returned `Manual` from inside the second
+        // branch and dropped `out` on the floor — so a `mod commands;` line it
+        // had already inserted vanished, and the steps it printed never
+        // mentioned it. The user pasted the one line they were given and got
+        // `failed to resolve: use of undeclared module `commands``.
+        Wiring::Updated { text: out, steps }
     }
+}
+
+/// The line index of the `.build()` / `.build_deferred()` that TERMINATES the
+/// `App::builder()` chain — the only safe place to hang `.commands(...)`.
+///
+/// Anchoring on the first `.build()` in the file is wrong, and not
+/// hypothetically: a `main.rs` that builds anything else first —
+/// `reqwest::Client::builder()…​.build()?`, a `tracing` subscriber, a
+/// `SqlitePoolOptions` — hands us that chain's terminal instead, and we splice
+/// `.commands(commands::all())` into a type that has no such method. The user's
+/// main.rs stops compiling, in a place they never touched, and the tool reports
+/// success.
+///
+/// So: find `App::builder()` first, and take the first terminal at or after it.
+/// No `App::builder()` (a project that wires the app elsewhere) → `None`, and
+/// the caller prints the line to add by hand rather than guessing.
+fn builder_terminal_line(text: &str) -> Option<usize> {
+    let builder_at = text.lines().position(|l| l.contains("App::builder()"))?;
+    text.lines()
+        .enumerate()
+        .skip(builder_at)
+        .find(|(_, l)| {
+            let t = l.trim_start();
+            t.starts_with(".build_deferred()") || t.starts_with(".build()")
+        })
+        .map(|(idx, _)| idx)
 }
 
 /// Wire `pub mod commands;` + a `Plugin::commands()` impl into a plugin's
@@ -1998,17 +2055,24 @@ fn wire_registry_into_plugin(text: &str) -> Wiring {
     let mut steps: Vec<String> = Vec::new();
 
     if !already_mod {
-        match out
-            .lines()
-            .position(|l| l.starts_with("pub mod ") && l.ends_with(';'))
-        {
-            Some(idx) => out = insert_line_at_before(&out, idx, "pub mod commands;"),
+        match umbral::codegen::declare_module(&out, "pub mod commands;") {
+            Some(text) => out = text,
             None => steps.push("Add to src/lib.rs:  pub mod commands;".to_string()),
         }
     }
 
     if !has_commands_fn {
-        match out.lines().position(|l| l.starts_with("impl Plugin for ")) {
+        // The header must OPEN the block on this line. `impl Plugin for X` with
+        // its `{` on a following line (a `where` clause, or just rustfmt on a
+        // long header) would otherwise get the method spliced in *before* the
+        // brace, and the plugin's lib.rs would stop parsing — a syntax error
+        // inside code the user never touched, which is precisely the "generator
+        // that guesses at a file it doesn't recognise" this module's docs
+        // promise not to be.
+        match out
+            .lines()
+            .position(|l| l.starts_with("impl Plugin for ") && l.trim_end().ends_with('{'))
+        {
             Some(idx) => {
                 let method = "\n    fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>> {\n        \
                      // Every command in `src/commands/` — `umbral startcommand`\n        \
@@ -2064,34 +2128,36 @@ fn insert_line_at(text: &str, idx: usize, line: &str) -> String {
 /// lines to add by hand rather than guessing at a file it doesn't
 /// recognise.
 fn append_to_registry(text: &str, module: &str, struct_name: &str) -> Option<String> {
-    if text
-        .lines()
-        .any(|l| l.trim() == format!("pub mod {module};"))
-    {
-        // Already declared (the command file was deleted but the registry
-        // entry survived). Adding a second `pub mod` would not compile.
-        return Some(text.to_string());
-    }
-    let mods_idx = text.lines().position(|l| l.trim() == MODS_MARKER)?;
-    let with_mod = insert_line_at_before(text, mods_idx, &format!("pub mod {module};"));
+    // The two halves are checked INDEPENDENTLY. They can legitimately drift
+    // apart — delete a command file and re-run, or hand-add the `pub mod` line —
+    // and the old code took the presence of the module declaration as proof
+    // that the registry entry existed too. It returned the text unchanged, so
+    // `all()` never got the command, while the CLI cheerfully printed
+    // "Registered". `cargo run -- <name>` then answered "unknown command" for a
+    // command the tool had just claimed to wire up.
+    let mod_line = format!("pub mod {module};");
+    let entry = format!("Box::new({module}::{struct_name}),");
 
-    let reg_idx = with_mod.lines().position(|l| l.trim() == REGISTRY_MARKER)?;
-    let entry = format!("        Box::new({module}::{struct_name}),");
-    Some(insert_line_at_before(&with_mod, reg_idx, &entry))
+    let mut out = text.to_string();
+
+    if !out.lines().any(|l| l.trim() == mod_line) {
+        out = umbral::codegen::insert_before_marker(&out, MODS_MARKER, &mod_line)?;
+    }
+    if !out.lines().any(|l| l.trim() == entry) {
+        out = umbral::codegen::insert_before_marker(
+            &out,
+            REGISTRY_MARKER,
+            &format!("        {entry}"),
+        )?;
+    }
+    Some(out)
 }
 
-/// Insert `line` immediately *before* line index `idx` of `text`.
+/// Insert `line` immediately *before* line index `idx` of `text`, preserving
+/// the file's line endings. Delegates to the shared codegen primitive so
+/// `startcommand` and a plugin's generator treat a user's file identically.
 fn insert_line_at_before(text: &str, idx: usize, line: &str) -> String {
-    let mut out = String::with_capacity(text.len() + line.len() + 1);
-    for (i, l) in text.lines().enumerate() {
-        if i == idx {
-            out.push_str(line);
-            out.push('\n');
-        }
-        out.push_str(l);
-        out.push('\n');
-    }
-    out
+    umbral::codegen::insert_line_before(text, idx, line)
 }
 
 /// The generated `commands/mod.rs` — the registry.
@@ -3053,6 +3119,179 @@ mod tests {
             discover_plugins(&root),
             vec!["blog".to_string(), "shop".to_string()]
         );
+    }
+
+    // ----------------------------------------------------------------- //
+    // Regressions found by the pre-0.0.10 review sweep                    //
+    // ----------------------------------------------------------------- //
+
+    /// The `.build()` anchor must belong to the **App** chain. A main.rs that
+    /// builds anything else first (an HTTP client, a subscriber, a pool) used
+    /// to capture the insertion: `.commands(commands::all())` was spliced into
+    /// `reqwest::Client::builder()`, which has no such method. The user's
+    /// main.rs stopped compiling — in code they never wrote — and the tool
+    /// printed "Registered".
+    #[test]
+    fn startcommand_does_not_splice_into_someone_elses_builder_chain() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+
+        let main_rs = root.join("src/main.rs");
+        let original = read(&root, "src/main.rs");
+        // A second builder chain, ABOVE the App's, whose terminal `.build()?`
+        // is the first one in the file.
+        let with_client = original.replace(
+            "    let settings = Settings::from_env()?;",
+            "    let client = reqwest::Client::builder()\n\
+             \x20       .timeout(Duration::from_secs(5))\n\
+             \x20       .build()?;\n\n\
+             \x20   let settings = Settings::from_env()?;",
+        );
+        assert_ne!(with_client, original, "fixture did not apply");
+        fs::write(&main_rs, &with_client).unwrap();
+
+        scaffold_command("import_prices", &CommandTarget::Root, &root).expect("scaffold");
+
+        let after = read(&root, "src/main.rs");
+        let commands_at = after.find(".commands(commands::all())").expect("wired");
+        let client_build_at = after.find(".build()?;").expect("client chain still there");
+        let app_builder_at = after.find("App::builder()").expect("app chain still there");
+
+        assert!(
+            commands_at > client_build_at,
+            "`.commands(...)` was spliced into the reqwest chain:\n{after}"
+        );
+        assert!(
+            commands_at > app_builder_at,
+            "`.commands(...)` landed outside the App::builder() chain:\n{after}"
+        );
+    }
+
+    /// No `App::builder()` to anchor on → decline, and say so. The command file
+    /// is still written; the user is told the two lines to add.
+    #[test]
+    fn startcommand_declines_when_there_is_no_app_builder_chain() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        fs::write(
+            root.join("src/main.rs"),
+            "mod seed;\n\nfn main() {\n    println!(\"no app here\");\n}\n",
+        )
+        .unwrap();
+
+        let report = scaffold_command("backfill", &CommandTarget::Root, &root).expect("scaffold");
+
+        assert_eq!(
+            report.registered,
+            Some(false),
+            "the tool must not claim a registration it could not perform"
+        );
+        let steps = report.next_steps.join("\n");
+        assert!(steps.contains(".commands(commands::all())"), "{steps}");
+        assert!(root.join("src/commands/backfill.rs").is_file());
+    }
+
+    /// A partially-wired file must keep the edit it DID make, and the steps must
+    /// name what it could not. The old code inserted `mod commands;` into a
+    /// local copy, then returned `Manual` and threw the copy away — while
+    /// printing only the `.commands(...)` line. The user pasted it and got
+    /// `failed to resolve: use of undeclared module `commands``.
+    #[test]
+    fn startcommand_keeps_the_module_declaration_it_managed_to_add() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        // Has a `mod x;` line (so the module CAN be declared) but no App chain
+        // (so the builder call cannot be inserted).
+        fs::write(
+            root.join("src/main.rs"),
+            "mod seed;\n\nfn main() {\n    println!(\"no app\");\n}\n",
+        )
+        .unwrap();
+
+        let report = scaffold_command("backfill", &CommandTarget::Root, &root).expect("scaffold");
+
+        let after = read(&root, "src/main.rs");
+        assert!(
+            after.contains("mod commands;"),
+            "the module declaration the tool made was thrown away: {after}"
+        );
+        assert_eq!(report.registered, Some(false));
+        assert!(
+            report
+                .next_steps
+                .join("\n")
+                .contains(".commands(commands::all())"),
+            "the user was not told the one step that remained"
+        );
+    }
+
+    /// A multi-line `impl Plugin for X` header (a `where` clause, or rustfmt
+    /// wrapping a long one) must not get the method spliced in before its `{`.
+    #[test]
+    fn startcommand_declines_a_plugin_impl_whose_brace_is_on_the_next_line() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        scaffold_app("blog", &root, None).expect("scaffold_app");
+
+        let lib_rs = root.join("plugins/blog/src/lib.rs");
+        fs::write(
+            &lib_rs,
+            "pub mod models;\n\npub struct BlogPlugin;\n\n\
+             impl Plugin for BlogPlugin\nwhere\n    Self: Send,\n{\n    \
+             fn name(&self) -> &'static str {\n        \"blog\"\n    }\n}\n",
+        )
+        .unwrap();
+
+        let report = scaffold_command("reindex", &CommandTarget::Plugin("blog".to_string()), &root)
+            .expect("scaffold");
+
+        let after = read(&root, "plugins/blog/src/lib.rs");
+        // The impl header is untouched: no method between it and its `where`.
+        assert!(
+            after.contains("impl Plugin for BlogPlugin\nwhere\n    Self: Send,\n{"),
+            "the generator spliced a method into a multi-line impl header:\n{after}"
+        );
+        assert_eq!(report.registered, Some(false));
+        assert!(
+            report.next_steps.join("\n").contains("fn commands"),
+            "the user was not told to add the method by hand"
+        );
+    }
+
+    /// The module declaration and the `all()` entry are checked INDEPENDENTLY.
+    /// The old early-return took "`pub mod x;` is present" as proof the registry
+    /// entry was too, skipped it, and still reported success — so `all()` never
+    /// returned the command and `cargo run -- x` said "unknown command".
+    #[test]
+    fn startcommand_repairs_a_registry_missing_only_its_entry() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = project(&tmp);
+        scaffold_command("backfill", &CommandTarget::Root, &root).expect("first");
+
+        // Simulate the drift: the module is declared, the entry is gone.
+        let mod_rs = root.join("src/commands/mod.rs");
+        let text = read(&root, "src/commands/mod.rs")
+            .lines()
+            .filter(|l| !l.contains("Box::new(backfill::BackfillCommand)"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&mod_rs, format!("{text}\n")).unwrap();
+        fs::remove_file(root.join("src/commands/backfill.rs")).unwrap();
+
+        let report = scaffold_command("backfill", &CommandTarget::Root, &root).expect("re-run");
+
+        let registry = read(&root, "src/commands/mod.rs");
+        assert_eq!(
+            registry.matches("pub mod backfill;").count(),
+            1,
+            "duplicate module declaration:\n{registry}"
+        );
+        assert!(
+            registry.contains("Box::new(backfill::BackfillCommand),"),
+            "the registry entry was never restored, but the command reports as \
+             registered:\n{registry}"
+        );
+        assert_eq!(report.registered, Some(true));
     }
 
     /// When a user has restructured `commands/mod.rs` past recognition, the

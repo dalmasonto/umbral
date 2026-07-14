@@ -224,11 +224,18 @@ fn run_startcommand(
         println!("  {}", f.display());
     }
     println!();
-    match &target {
-        CommandTarget::Root => println!(
+    // Report what was ACTUALLY wired, not what was asked for. Announcing
+    // "Registered" for a command the tool failed to register is how a user ends
+    // up running `cargo run -- <name>`, getting `unknown command`, and trusting
+    // the tool less than they trust the error.
+    match (&target, report.registered) {
+        (_, Some(false)) => {
+            println!("NOT registered yet — the steps below are the ones I could not do for you.")
+        }
+        (CommandTarget::Root, _) => println!(
             "Registered `{name}` on the App builder (src/main.rs: `.commands(commands::all())`)."
         ),
-        CommandTarget::Plugin(p) => println!(
+        (CommandTarget::Plugin(p), _) => println!(
             "Registered `{name}` with the `{p}` plugin (src/lib.rs: `Plugin::commands()`)."
         ),
     }
