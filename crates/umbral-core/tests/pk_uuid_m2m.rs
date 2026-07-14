@@ -137,3 +137,53 @@ async fn m2m_add_and_prefetch_on_a_uuid_pk_parent() {
     jnames.sort();
     assert_eq!(jnames, vec!["ada", "alan"]);
 }
+
+/// gaps3 #80 — the column must be declared as what it actually stores.
+///
+/// SQLite has no uuid type, and sqlx encodes a `Uuid` as its 16 raw bytes there. The column
+/// therefore holds a BLOB whatever the DDL calls it. umbral used to declare it `TEXT`, which
+/// was simply false: `CAST(id AS TEXT)` on a uuid PK returned mojibake, and anyone reading
+/// the schema — a person, `inspectdb`, another tool — was told the wrong thing.
+///
+/// The alternative (store the hyphenated text, matching the old declaration) is not
+/// available: sqlx's SQLite decoder reads uuids ONLY from those raw bytes and fails on the
+/// 36-char text with `ParseByteLength { len: 36 }`, so every typed read through
+/// `#[derive(FromRow)]` would break.
+///
+/// So: declaration and storage have to agree, and this asserts they do — on the parent's PK
+/// and on the junction column that references it, which is the pair that has to match for
+/// the FOREIGN KEY to resolve at all (gaps3 #79).
+#[tokio::test]
+async fn a_uuid_column_is_declared_as_what_it_stores() {
+    boot().await;
+    let pool = umbral_core::db::pool();
+
+    let lab = Lab {
+        id: lab_id(0xDEC0_0001),
+        name: "Declared".into(),
+        members: Default::default(),
+    };
+    Lab::objects().create(lab).await.expect("create lab");
+
+    // What the schema SAYS.
+    let ddl: (String,) = sqlx::query_as("SELECT sql FROM sqlite_master WHERE name = 'pkm2m_lab'")
+        .fetch_one(&pool)
+        .await
+        .expect("read the declared schema");
+    assert!(
+        ddl.0.to_lowercase().contains("\"id\" blob"),
+        "a uuid PK must be DECLARED blob — sqlx stores it as raw bytes, so `TEXT` would be a \
+         lie the schema tells its reader; got: {}",
+        ddl.0
+    );
+
+    // What the column HOLDS.
+    let stored: (String,) = sqlx::query_as("SELECT typeof(id) FROM pkm2m_lab LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .expect("read the stored type");
+    assert_eq!(
+        stored.0, "blob",
+        "and it must actually STORE a blob — the declaration is only honest if it matches"
+    );
+}

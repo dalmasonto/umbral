@@ -385,8 +385,14 @@ _Entries #15–#25 harvested from the web3clubs_fc backend (a live consumer; see
 
     The fix is the one-line shape everything else already uses (`SqlType::Uuid => Value::Uuid`). `crates/umbral-core/tests/form_m2m_non_i64_child.rs` now runs on the derived, FK-bearing schema — it was the last suite kept on a hand-written one — plus a new test that JOINs the junction back to the child table and demands the badges come out, because an insert that succeeds is not the same as a relation that resolves.
 
-80. [ ] **A `Uuid` column is declared `TEXT` on SQLite and stores a BLOB** — surfaced while fixing #79, and left alone deliberately.
+80. [x] **A `Uuid` column is declared `TEXT` on SQLite and stores a BLOB** — FIXED by declaring what is actually stored: the column is now `BLOB`.
 
-    `migrate.rs` renders `SqlType::Uuid` as `TEXT` (`SqlType::Text | SqlType::Uuid => "TEXT"`), but sqlx encodes a `Uuid` as a BLOB, so the column's declared type and its contents disagree. SQLite's dynamic typing means it works, and it is now at least *consistently* wrong — both sides of a junction store the same thing, which is what #79 fixed. But `CAST(id AS TEXT)` on a uuid PK returns mojibake, and anyone reading the schema is being told something false.
+    The choice was forced, and I checked rather than guessed. sqlx encodes a `Uuid` as its 16 raw bytes on SQLite and its decoder reads **only** those bytes back — hand it the 36-char hyphenated text and it fails with `ParseByteLength { len: 36 }` (verified with a probe). So "store the text and keep the old TEXT declaration" was never available: every typed read through `#[derive(FromRow)]` decodes a `Uuid` field via sqlx, and all of them would have broken. The value in the column is a blob however the column is labelled, and labelling it `TEXT` was simply false — `CAST(id AS TEXT)` on a uuid PK returned mojibake, and anyone reading the schema (a person, `inspectdb`, another tool) was told the wrong thing.
 
-    The honest fix is to render the column `BLOB` on SQLite (matching what goes in), or to bind uuids as text everywhere (matching what is declared). Either is a data-format decision for existing databases, not a typo: rows already written as blobs would have to be converted, and a half-migrated column would break equality filters silently. Postgres is unaffected — a real `uuid` column type, bound as uuid.
+    Changed in two places that both claimed TEXT: `SqliteBackend::map_type` (`ColumnType::Blob`) and the junction's `m2m_pk_sql_type_sqlite` — the latter matters because a junction's `child_id` must be declared as whatever the CHILD's PK actually is, or the `REFERENCES` clause points at a column of a different type (that pairing is what #79 fixed).
+
+    **No data migration, and no spurious `ALTER`.** Existing rows already hold blobs, and SQLite's affinity rules never converted them. The migration snapshot stores `ty: SqlType`, not the rendered SQL, so an existing model produces no diff — only newly-created tables get the new declaration. An old database keeps a `TEXT`-labelled column holding blobs, which works exactly as before.
+
+    Postgres is untouched: a real `uuid` column type, bound as a uuid.
+
+    Docs corrected (`orm/column-types.mdx` said "36-char canonical text on SQLite", which was never true), and `backend.rs`'s test now asserts `Blob` — it used to pin the lie.

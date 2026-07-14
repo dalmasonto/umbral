@@ -1229,7 +1229,11 @@ fn m2m_pk_sql_type_sqlite(ty: crate::orm::SqlType) -> &'static str {
     use crate::orm::SqlType;
     match ty {
         SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => "INTEGER",
-        SqlType::Text | SqlType::Uuid => "TEXT",
+        // A junction's `child_id` must be declared as whatever the CHILD's primary key
+        // actually is, or the `REFERENCES` clause points at a column of a different type.
+        // sqlx stores a `Uuid` as its 16 raw bytes on SQLite, so that is BLOB (gaps3 #80).
+        SqlType::Uuid => "BLOB",
+        SqlType::Text => "TEXT",
         // The macro-side classifier only sets these for PK columns
         // when the user wrote a non-standard PK type. If we ever
         // see one here that doesn't make sense as a junction column

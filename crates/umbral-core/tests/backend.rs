@@ -80,15 +80,21 @@ fn postgres_maps_uuid_to_uuid_column_type() {
     );
 }
 
-/// SQLite has no native UUID type, so `SqlType::Uuid` should land on
-/// `Text`. That mirrors `supports(UuidNative) == false` and matches how
-/// the existing `type_catalogue.rs` roundtrip stores Uuids on SQLite.
+/// SQLite has no native UUID type, so `SqlType::Uuid` lands on `Blob` — the column is
+/// declared as what is actually stored in it (gaps3 #80).
+///
+/// This used to assert `Text`, and it was wrong: sqlx encodes a `Uuid` as its 16 raw bytes
+/// on SQLite and its decoder reads only those bytes back (hand it the 36-char hyphenated
+/// text and it fails with `ParseByteLength { len: 36 }`). The value in the column was a blob
+/// however the column was declared, so calling it TEXT told the reader something false —
+/// `CAST(id AS TEXT)` on a uuid PK returned mojibake.
 #[test]
-fn sqlite_maps_uuid_to_text_column_type() {
+fn sqlite_maps_uuid_to_blob_column_type() {
     let mapped = SqliteBackend.map_type(SqlType::Uuid);
     assert!(
-        matches!(mapped, sea_query::ColumnType::Text),
-        "SqliteBackend.map_type(Uuid) should be ColumnType::Text, got {mapped:?}",
+        matches!(mapped, sea_query::ColumnType::Blob),
+        "SqliteBackend.map_type(Uuid) should be ColumnType::Blob — sqlx stores a Uuid as \
+         raw bytes there, so declaring TEXT would be a lie; got {mapped:?}",
     );
 }
 

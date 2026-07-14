@@ -24,7 +24,7 @@ The cross-backend types compile and run against both Postgres and SQLite. The Po
 | `chrono::NaiveDate` | `Date` | `DATE` | `TEXT` (ISO 8601) |
 | `chrono::NaiveTime` | `Time` | `TIME` | `TEXT` (ISO 8601) |
 | `chrono::DateTime<Utc>` | `Timestamptz` | `TIMESTAMP WITH TIME ZONE` | `TEXT` (ISO 8601) |
-| `uuid::Uuid` | `Uuid` | `UUID` | `TEXT` (36-char canonical) |
+| `uuid::Uuid` | `Uuid` | `UUID` | `BLOB` (the 16 raw bytes) |
 | `serde_json::Value` | `Json` | `JSONB` | `TEXT` (JSON-as-string) |
 | `Vec<u8>` | `Bytes` | `BYTEA` | `BLOB` |
 | `Vec<T>` (Postgres-only, `T` ≠ `u8`) | `Array(T)` | `T[]` | - (boot fails) |
@@ -530,7 +530,7 @@ Every type in the [Quick lookup](#quick-lookup) above the divider works on both 
 |------|-------------------|
 | `String` → `TEXT` | Same on both. |
 | `chrono::*` | sqlx encodes / decodes ISO 8601 on SQLite, native types on Postgres. |
-| `uuid::Uuid` | Native on Postgres, 36-char canonical text on SQLite. The Rust type sees `Uuid` either way. |
+| `uuid::Uuid` | Native on Postgres. On SQLite there is no uuid type, and sqlx encodes a `Uuid` as its 16 raw bytes, so the column is declared `BLOB` — what it is actually storing. The Rust type sees `Uuid` either way; note that `CAST(id AS TEXT)` in a `sqlite3` shell will therefore show bytes, not the hyphenated form. |
 | `bool` | Native on Postgres; `0` / `1` storage on SQLite with sqlx encoding both as `bool`. |
 | `serde_json::Value` | `JSONB` on Postgres, `TEXT` on SQLite. The JSON operator surface picks the dialect-correct rendering at query time. |
 | `Vec<u8>` | `BLOB` on SQLite, `BYTEA` on Postgres. Cross-backend by sqlx encoding; admin renders as a text input with hex / array wire shape. |

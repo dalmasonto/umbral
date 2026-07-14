@@ -89,8 +89,8 @@ pub enum BackendFeature {
     FullTextSearch,
     /// CIDR / INET / MACADDR network address column types. Postgres only.
     CidrInet,
-    /// Native `UUID` column type. Postgres only; SQLite encodes UUIDs as
-    /// `TEXT` instead.
+    /// Native `UUID` column type. Postgres only. SQLite has no uuid type: sqlx encodes a
+    /// `Uuid` as its 16 raw bytes there, so umbral declares the column `BLOB` (gaps3 #80).
     UuidNative,
     /// Native `BOOLEAN` column type. Postgres + SQLite (since 3.23); MySQL
     /// historically encodes as TINYINT.
@@ -269,7 +269,18 @@ impl DatabaseBackend for SqliteBackend {
             SqlType::Date => ColumnType::Date,
             SqlType::Time => ColumnType::Time,
             SqlType::Timestamptz => ColumnType::TimestampWithTimeZone,
-            SqlType::Uuid => ColumnType::Text,
+            // BLOB, not TEXT (gaps3 #80). sqlx encodes a `Uuid` as its 16 raw bytes on
+            // SQLite, and its decoder reads ONLY those bytes back — hand it the 36-char
+            // hyphenated text and it fails with `ParseByteLength { len: 36 }`. So the
+            // value in the column is a blob whatever we call it, and calling it TEXT was
+            // simply a lie: `CAST(id AS TEXT)` returned mojibake and anyone reading the
+            // schema was misinformed.
+            //
+            // Declaring BLOB changes no data — the rows already hold blobs — and SQLite's
+            // affinity rules never converted them anyway. The alternative (store the text
+            // and match the old declaration) would break every typed read, because
+            // `#[derive(FromRow)]` decodes a `Uuid` field through sqlx.
+            SqlType::Uuid => ColumnType::Blob,
             // ForeignKey stored as BIGINT; the REFERENCES clause is
             // appended by the migration engine separately.
             SqlType::ForeignKey => ColumnType::BigInteger,
