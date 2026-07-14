@@ -694,6 +694,22 @@ impl Plugin for StoragePlugin {
             media::set_processors(Arc::new(self.processors.clone()));
         }
 
+        // gaps4 #17: media served with NO access gate is public — anyone who
+        // knows or guesses a key gets the file (an IDOR for private uploads:
+        // invoices, IDs, tenant documents). Say so at boot, the same way REST
+        // warns about anonymous-readable resources, so the operator makes the
+        // public-vs-private call deliberately rather than by omission.
+        if self.media.is_some() && self.media_access.is_none() {
+            tracing::warn!(
+                target: "umbral::storage",
+                "umbral-storage: media is served with NO access policy — every uploaded \
+                 file is world-readable to anyone with its URL. If uploads are private \
+                 (user documents, invoices, tenant files), gate them with \
+                 `StoragePlugin::media_access(...)`. Ignore this if the media mount is \
+                 intentionally public (avatars, public assets)."
+            );
+        }
+
         // Register the media backend as the ambient "default" instance,
         // wrapped in MediaTracking (so the admin/form upload path records a
         // media_file row) and, when a cap is set, SizeLimitedStorage.

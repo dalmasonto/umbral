@@ -26,14 +26,23 @@
 //! loosen with `.exclude(["sensitive_thing"])`. The builder is
 //! chainable.
 //!
-//! ## Auth
+//! ## Auth & permissions (safe by default)
 //!
-//! v1 ships no built-in auth gate — every exposed route is open.
-//! Apps that need authenticated CRUD wrap the umbral-rest router
-//! with a tower layer (or write their own handler that delegates
-//! after the auth check). A future round adds optional
-//! `RestPlugin::require_staff()` that mirrors umbral-admin's Basic
-//! Auth gate.
+//! The default permission is **`ReadOnly`**, not open: anonymous callers
+//! may `GET` (list/retrieve) an exposed resource, but every write
+//! (`POST`/`PUT`/`PATCH`/`DELETE`) returns `403` until the app opts in.
+//! Grant writes with `RestPlugin::default_permission(...)` or a
+//! per-resource `ResourceConfig::permission(IsAuthenticated / IsStaff /
+//! …)`. Authentication backends attach via `RestPlugin::authenticate(...)`.
+//!
+//! Layered on top of that: `password_hash` and the other
+//! `HARD_DENIED_FIELDS` are stripped from every response un-overridably;
+//! `#[umbral(secret)]` / unlocked-`private` columns are stripped too, and
+//! (gaps4 #4) can't be used as a filter/search/order oracle; responses
+//! default to `no-store`; object scopes (`owned_by` / `object_scope`) and
+//! throttles (`default_throttle`) are available per resource. A boot
+//! warning fires for any resource left anonymously writable or readable in
+//! a way that looks unintended.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};

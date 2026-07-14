@@ -408,12 +408,16 @@ impl CacheBackend for SqliteBackend {
 /// is stored natively via Redis `SETEX` when a duration is supplied, so
 /// expiry is handled server-side and does not require a background sweep.
 ///
-/// `clear()` uses `FLUSHDB` which removes ALL keys in the selected
-/// database — use a dedicated Redis database (e.g. `/1`) when sharing
-/// a Redis instance with other data.
+/// gaps4 #21: every key is namespaced under [`Self::DEFAULT_PREFIX`], and
+/// `clear()` deletes only keys under that prefix (via `SCAN` + `UNLINK`) — NOT
+/// `FLUSHDB`, which would wipe every co-tenant of a shared Redis (sessions,
+/// rate limits, queues, another app). Point the backend at its own logical DB
+/// too if you can, but the prefix means a shared DB is no longer a data-loss
+/// footgun.
 #[cfg(feature = "redis")]
 pub struct RedisBackend {
     client: redis::aio::ConnectionManager,
+    prefix: String,
 }
 
 #[cfg(feature = "redis")]
@@ -424,11 +428,30 @@ impl RedisBackend {
     /// `url` form: `redis://[user:pass@]host:port/[db]`
     /// Example: `redis://localhost:6379/0`
     pub async fn connect(url: &str) -> Result<Self, CacheError> {
+        Self::connect_with_prefix(url, Self::DEFAULT_PREFIX).await
+    }
+
+    /// The key namespace. Every entry is stored as `<prefix><key>`, and
+    /// `clear()` deletes exactly `<prefix>*`.
+    pub const DEFAULT_PREFIX: &'static str = "umbral:cache:";
+
+    /// [`Self::connect`] with a custom key prefix — set one per app when
+    /// several umbral apps share one Redis DB so their caches don't collide
+    /// and each `clear()` stays scoped to its own app.
+    pub async fn connect_with_prefix(url: &str, prefix: &str) -> Result<Self, CacheError> {
         let client = redis::Client::open(url).map_err(CacheError::Redis)?;
         let manager = redis::aio::ConnectionManager::new(client)
             .await
             .map_err(CacheError::Redis)?;
-        Ok(Self { client: manager })
+        Ok(Self {
+            client: manager,
+            prefix: prefix.to_string(),
+        })
+    }
+
+    /// Namespace a caller key under this backend's prefix.
+    fn k(&self, key: &str) -> String {
+        format!("{}{key}", self.prefix)
     }
 }
 
@@ -438,19 +461,23 @@ impl CacheBackend for RedisBackend {
     async fn get(&self, key: &str) -> Option<Vec<u8>> {
         use redis::AsyncCommands;
         let mut conn = self.client.clone();
-        conn.get::<_, Option<Vec<u8>>>(key).await.ok().flatten()
+        conn.get::<_, Option<Vec<u8>>>(self.k(key))
+            .await
+            .ok()
+            .flatten()
     }
 
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) {
         use redis::AsyncCommands;
         let mut conn = self.client.clone();
+        let key = self.k(key);
         // BROKEN-12: log swallowed errors — a dead Redis that no-ops every
         // write should not be silent (the trait doc promised "and log them").
         let res: Result<(), _> = if let Some(dur) = ttl {
             let secs = dur.as_secs().max(1);
-            conn.set_ex(key, value, secs).await
+            conn.set_ex(&key, value, secs).await
         } else {
-            conn.set(key, value).await
+            conn.set(&key, value).await
         };
         if let Err(e) = res {
             tracing::warn!(error = %e, key, "umbral-cache: Redis cache set failed (swallowed)");
@@ -460,17 +487,46 @@ impl CacheBackend for RedisBackend {
     async fn delete(&self, key: &str) {
         use redis::AsyncCommands;
         let mut conn = self.client.clone();
-        if let Err(e) = conn.del::<_, ()>(key).await {
+        let key = self.k(key);
+        if let Err(e) = conn.del::<_, ()>(&key).await {
             tracing::warn!(error = %e, key, "umbral-cache: Redis cache delete failed (swallowed)");
         }
     }
 
     async fn clear(&self) {
+        // gaps4 #21: delete only THIS cache's keys, never `FLUSHDB`. SCAN the
+        // keyspace for `<prefix>*` in batches and UNLINK (non-blocking DEL) each
+        // batch, so a Redis DB shared with sessions / rate-limits / another app
+        // keeps its unrelated keys.
+        use redis::AsyncCommands;
         let mut conn = self.client.clone();
-        // FLUSHDB removes all keys in the currently selected database.
-        // Document this prominently: use a dedicated Redis DB for cache.
-        if let Err(e) = redis::cmd("FLUSHDB").query_async::<()>(&mut conn).await {
-            tracing::warn!(error = %e, "umbral-cache: Redis cache clear failed (swallowed)");
+        let pattern = format!("{}*", self.prefix);
+        let mut cursor: u64 = 0;
+        loop {
+            let scan: redis::RedisResult<(u64, Vec<String>)> = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(512)
+                .query_async(&mut conn)
+                .await;
+            let (next, keys) = match scan {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "umbral-cache: Redis cache clear SCAN failed (swallowed)");
+                    return;
+                }
+            };
+            if !keys.is_empty() {
+                if let Err(e) = conn.unlink::<_, ()>(keys).await {
+                    tracing::warn!(error = %e, "umbral-cache: Redis cache clear UNLINK failed (swallowed)");
+                }
+            }
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
         }
     }
 }
