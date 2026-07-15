@@ -117,7 +117,11 @@ async fn first_sse_event(user: Option<&str>, query: &str) -> serde_json::Value {
         .oneshot(req.body(Body::from(body)).unwrap())
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::OK, "the SSE route should answer 200");
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "the SSE route should answer 200"
+    );
 
     let mut stream = res.into_body().into_data_stream();
 
@@ -172,11 +176,7 @@ async fn authenticated_sse_subscriber_sees_the_unlocked_private_column() {
 /// to null — the default, empty context is the safe direction to be wrong in.
 #[tokio::test]
 async fn anonymous_sse_subscriber_gets_the_private_column_redacted() {
-    let out = first_sse_event(
-        None,
-        r#"subscription { sc_tickerChanged { symbol cost } }"#,
-    )
-    .await;
+    let out = first_sse_event(None, r#"subscription { sc_tickerChanged { symbol cost } }"#).await;
     assert!(out.get("errors").is_none(), "{out}");
     assert_eq!(out["data"]["sc_tickerChanged"]["symbol"], "ACME");
     assert!(

@@ -48,9 +48,7 @@ use std::sync::Arc;
 
 use async_graphql::dynamic::Schema;
 use async_graphql::http::GraphiQLSource;
-use async_graphql_axum::{
-    GraphQLProtocol, GraphQLRequest, GraphQLResponse, GraphQLWebSocket,
-};
+use async_graphql_axum::{GraphQLProtocol, GraphQLRequest, GraphQLResponse, GraphQLWebSocket};
 use axum::response::{Html, IntoResponse};
 use futures_util::StreamExt;
 use umbral::migrate::ModelMeta;
@@ -664,11 +662,11 @@ impl Plugin for GraphqlPlugin {
                     async move {
                         let (identity, unlocks, loaders) =
                             resolve_request_ctx(&headers, &auth, &exposed).await;
-                        let inner = req
-                            .into_inner()
-                            .data(loaders)
-                            .data(unlocks)
-                            .data::<Option<umbral::auth::Identity>>(identity);
+                        let inner = req.into_inner().data(loaders).data(unlocks).data::<Option<
+                            umbral::auth::Identity,
+                        >>(
+                            identity
+                        );
                         GraphQLResponse::from(schema.execute(inner).await).into_response()
                     }
                 },
@@ -750,11 +748,11 @@ impl Plugin for GraphqlPlugin {
                         async move {
                             let (identity, unlocks, loaders) =
                                 resolve_request_ctx(&headers, &auth, &exposed).await;
-                            let inner = req
-                                .into_inner()
-                                .data(loaders)
-                                .data(unlocks)
-                                .data::<Option<umbral::auth::Identity>>(identity);
+                            let inner = req.into_inner().data(loaders).data(unlocks).data::<Option<
+                                umbral::auth::Identity,
+                            >>(
+                                identity
+                            );
                             let stream = schema.execute_stream(inner);
                             axum::response::Sse::new(stream.map(|res| {
                                 axum::response::sse::Event::default()

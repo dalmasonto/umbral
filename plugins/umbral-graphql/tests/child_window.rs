@@ -59,11 +59,7 @@ async fn boot() -> axum::Router {
             .database("default", pool)
             .model::<CwAuthor>()
             .model::<CwPost>()
-            .plugin(
-                GraphqlPlugin::new()
-                    .expose("cw_author")
-                    .expose("cw_post"),
-            )
+            .plugin(GraphqlPlugin::new().expose("cw_author").expose("cw_post"))
             .build()
             .expect("build");
 
@@ -113,7 +109,9 @@ async fn gql(query: &str) -> serde_json::Value {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(res.into_body(), 1 << 22).await.unwrap();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 22)
+        .await
+        .unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
 
