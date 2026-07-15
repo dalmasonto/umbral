@@ -128,3 +128,41 @@ async fn try_for_each_with_empty_filter_is_a_noop() {
         .expect("empty filter is a no-op");
     assert_eq!(count.load(Ordering::Relaxed), 0);
 }
+
+#[tokio::test]
+async fn try_for_each_honors_a_caller_limit_as_a_total_cap() {
+    // gaps4 #27 — a bounded scan must stay bounded. `.limit(10)` used to be
+    // overwritten by try_for_each's own chunk paging, silently walking all 25
+    // rows. The caller's limit is now a total cap.
+    boot().await;
+    let count = AtomicUsize::new(0);
+    Item::objects()
+        .limit(10)
+        .try_for_each(4, |_item| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Ok::<(), String>(())
+        })
+        .await
+        .expect("iterate");
+    assert_eq!(
+        count.load(Ordering::Relaxed),
+        10,
+        "a caller .limit(10) must cap iteration at 10 rows, not walk the whole table"
+    );
+}
+
+#[tokio::test]
+async fn try_for_each_limit_not_a_multiple_of_chunk_size() {
+    // The cap can fall mid-chunk: limit 7 with chunk 4 → 4 then 3, stop.
+    boot().await;
+    let count = AtomicUsize::new(0);
+    Item::objects()
+        .limit(7)
+        .try_for_each(4, |_item| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Ok::<(), String>(())
+        })
+        .await
+        .expect("iterate");
+    assert_eq!(count.load(Ordering::Relaxed), 7);
+}

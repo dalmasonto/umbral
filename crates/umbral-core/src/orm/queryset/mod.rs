@@ -233,6 +233,12 @@ pub struct QuerySet<T> {
     /// serializing on its lock. A no-op on SQLite (no such clause; its
     /// single-writer model needs none). Set via [`Self::for_update_skip_locked`].
     pub(crate) for_update_skip_locked: bool,
+    /// gaps4 #27: the caller-supplied `.limit(n)`, tracked separately from the
+    /// sea-query statement (which doesn't expose reading its own LIMIT back).
+    /// `try_for_each` needs it: without it, chunked iteration overwrote the
+    /// statement's LIMIT with its own paging value and silently walked the
+    /// whole table for a caller who had bounded the scan.
+    pub(crate) user_limit: Option<u64>,
     _phantom: PhantomData<T>,
 }
 
@@ -261,6 +267,7 @@ impl<T> Clone for QuerySet<T> {
             join_related: self.join_related.clone(),
             annotations: self.annotations.clone(),
             annotation_order: self.annotation_order.clone(),
+            user_limit: self.user_limit,
             for_update_skip_locked: self.for_update_skip_locked,
             _phantom: PhantomData,
         }
@@ -430,6 +437,7 @@ impl<T> QuerySet<T> {
             annotations: Vec::new(),
             annotation_order: Vec::new(),
             for_update_skip_locked: false,
+            user_limit: None,
             _phantom: PhantomData,
         }
     }
@@ -780,6 +788,7 @@ impl<T> QuerySet<T> {
     /// Set LIMIT.
     pub fn limit(mut self, n: u64) -> Self {
         self.query.limit(n);
+        self.user_limit = Some(n);
         self
     }
 
@@ -1833,12 +1842,27 @@ impl<T: Model> QuerySet<T> {
     {
         let chunk_size = chunk_size.max(1);
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
+        // gaps4 #27: honor a caller `.limit(n)` as a TOTAL cap across the whole
+        // scan. `try_for_each` manages its own LIMIT/OFFSET paging, and it used
+        // to overwrite the statement's LIMIT unconditionally — so a caller who
+        // wrote `.limit(100).try_for_each(...)` silently walked the entire
+        // table. Tracked separately because sea-query won't hand its LIMIT back.
+        let total_cap = self.user_limit;
+        let mut seen: u64 = 0;
         let mut offset: u64 = 0;
         loop {
+            // Never fetch more than the remaining cap allows.
+            let this_chunk = match total_cap {
+                Some(cap) => (chunk_size as u64).min(cap.saturating_sub(seen)),
+                None => chunk_size as u64,
+            };
+            if this_chunk == 0 {
+                break;
+            }
             let mut rows: Vec<T> = match &pool {
                 DbPool::Sqlite(pg) => {
                     let mut q = self.build_query_for("sqlite");
-                    q.limit(chunk_size as u64).offset(offset);
+                    q.limit(this_chunk).offset(offset);
                     let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                     sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                         .fetch_all(pg)
@@ -1847,7 +1871,7 @@ impl<T: Model> QuerySet<T> {
                 }
                 DbPool::Postgres(pg) => {
                     let mut q = self.build_query_for("postgres");
-                    q.limit(chunk_size as u64).offset(offset);
+                    q.limit(this_chunk).offset(offset);
                     let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                     sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                         .fetch_all(pg)
@@ -1862,7 +1886,10 @@ impl<T: Model> QuerySet<T> {
             for row in rows.drain(..) {
                 callback(row).map_err(TryForEachError::Callback)?;
             }
-            if fetched < chunk_size {
+            seen += fetched as u64;
+            // A short read (fewer than we asked for) means the source is
+            // exhausted; and once we've hit the cap there's nothing more to do.
+            if (fetched as u64) < this_chunk {
                 break;
             }
             offset += fetched as u64;
