@@ -1,5 +1,6 @@
 {
-  "label": "Deployment",
-  "position": 14,
-  "collapsed": true
+    "label": "Deployment",
+    "position": 14,
+    "collapsed": true,
+    "tab_group": "operations"
 }

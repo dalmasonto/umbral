@@ -1,5 +1,6 @@
 {
     "label": "ORM",
     "position": 3,
-    "collapsed": false
+    "collapsed": false,
+    "tab_group": "data"
 }

@@ -1,5 +1,6 @@
 {
-  "label": "Testing",
-  "position": 11,
-  "collapsed": true
+    "label": "Testing",
+    "position": 11,
+    "collapsed": true,
+    "tab_group": "operations"
 }

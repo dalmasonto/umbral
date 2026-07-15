@@ -1,5 +1,6 @@
 {
     "label": "Auth",
     "position": 6,
-    "collapsed": false
+    "collapsed": false,
+    "tab_group": "plugins"
 }

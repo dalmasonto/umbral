@@ -1,5 +1,6 @@
 {
-  "label": "Realtime",
-  "position": 12,
-  "collapsed": true
+    "label": "Realtime",
+    "position": 12,
+    "collapsed": true,
+    "tab_group": "web"
 }

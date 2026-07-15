@@ -1,5 +1,6 @@
 {
     "label": "Admin",
     "position": 7,
-    "collapsed": false
+    "collapsed": false,
+    "tab_group": "plugins"
 }

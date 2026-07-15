@@ -29,7 +29,14 @@
     "showBreadcrumbs": true,
     "showTableOfContents": true,
     "tocPosition": "right",
-    "tocMaxDepth": 3
+    "tocMaxDepth": 3,
+    "tabGroups": [
+      { "id": "guides", "label": "Guides", "icon": "book-open" },
+      { "id": "data", "label": "Data", "icon": "database" },
+      { "id": "web", "label": "Web", "icon": "globe" },
+      { "id": "plugins", "label": "Plugins", "icon": "puzzle" },
+      { "id": "operations", "label": "Operations", "icon": "server" }
+    ]
   },
   "social": {
     "github": "https://github.com/dalmasonto/umbral"

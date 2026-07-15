@@ -1,5 +1,6 @@
 {
     "label": "Backends",
     "position": 5,
-    "collapsed": false
+    "collapsed": false,
+    "tab_group": "data"
 }

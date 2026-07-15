@@ -1,5 +1,6 @@
 {
-  "label": "Observability",
-  "position": 13,
-  "collapsed": true
+    "label": "Observability",
+    "position": 13,
+    "collapsed": true,
+    "tab_group": "operations"
 }

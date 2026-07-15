@@ -1,1 +1,6 @@
-{ "label": "GraphQL", "position": 9, "collapsed": true }
+{
+    "label": "GraphQL",
+    "position": 9,
+    "collapsed": true,
+    "tab_group": "web"
+}

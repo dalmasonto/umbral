@@ -1,5 +1,6 @@
 {
     "label": "Migrations",
     "position": 4,
-    "collapsed": false
+    "collapsed": false,
+    "tab_group": "data"
 }
