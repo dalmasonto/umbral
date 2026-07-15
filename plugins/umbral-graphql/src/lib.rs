@@ -219,6 +219,9 @@ pub struct GraphqlPlugin {
     private_unlocks: Vec<(String, String, AccessFn)>,
     subscribable: Vec<String>,
     hidden: Vec<(String, String)>,
+    /// gaps4 #9: `(table, owner_column)` — row-level mutation scope. A mutation
+    /// on a listed table also filters `WHERE owner_column = <caller's pk>`.
+    owned_by: Vec<(String, String)>,
     graphiql: Option<bool>,
     auth: Option<Arc<dyn umbral::auth::Authentication>>,
     /// Query depth / complexity budget (gaps4 #10). `None` uses the
@@ -326,6 +329,36 @@ impl GraphqlPlugin {
         access: impl Fn(Option<&umbral::auth::Identity>) -> bool + Send + Sync + 'static,
     ) -> Self {
         self.writable.push((table.into(), Arc::new(access)));
+        self
+    }
+
+    /// Scope mutations on a model to the caller's OWN rows (gaps4 #9).
+    ///
+    /// `owner_column` is the column that holds the owning user's primary key
+    /// (e.g. `"author"` on a post, `"user"` on an order). With it set, an
+    /// `update`/`delete` mutation on this model runs
+    /// `WHERE <pk> = <id> AND <owner_column> = <caller's pk>`, so an
+    /// authenticated caller can only mutate rows they own — even though the
+    /// model is `mutable`. A caller trying to update someone else's row simply
+    /// affects zero rows (the mutation returns `null` / `false`), which leaks
+    /// nothing about whether that row exists.
+    ///
+    /// Without this, `mutable` is TABLE-level: any authorized caller may update
+    /// or delete any row by guessing its id. Reach for this on any user- or
+    /// tenant-owned record.
+    ///
+    /// ```rust,ignore
+    /// GraphqlPlugin::new()
+    ///     .expose("post").mutable("post")
+    ///     .owned_by("post", "author")   // a user edits only their own posts
+    ///     .authenticate(session_auth)
+    /// ```
+    ///
+    /// Needs [`Self::authenticate`]: an owner scope with no identity denies
+    /// every mutation (there is no "self" to match), which is the safe default.
+    /// Complements Postgres RLS rather than replacing it — belt and suspenders.
+    pub fn owned_by(mut self, table: impl Into<String>, owner_column: impl Into<String>) -> Self {
+        self.owned_by.push((table.into(), owner_column.into()));
         self
     }
 
@@ -498,6 +531,11 @@ impl GraphqlPlugin {
                         .filter(|(t, _)| t == table)
                         .map(|(_, f)| f.clone())
                         .collect(),
+                    owner_field: self
+                        .owned_by
+                        .iter()
+                        .find(|(t, _)| t == table)
+                        .map(|(_, col)| col.clone()),
                 }),
                 None => {
                     // A typo here silently produces a schema missing the type you thought

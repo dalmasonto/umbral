@@ -58,6 +58,12 @@ pub struct Exposed {
     /// `#[umbral(private)]` columns this model can unlock, and for whom.
     /// See [`crate::GraphqlPlugin::allow_private_if`].
     pub private_unlocks: Vec<(String, AccessFn)>,
+    /// gaps4 #9: the owner column for row-level mutation scope. `Some("author")`
+    /// means an `update`/`delete` also filters `WHERE author = <caller's pk>`,
+    /// so a client can only mutate its OWN rows even when the table is mutable.
+    /// `None` = table-level (any authorized caller may mutate any row — the
+    /// prior behaviour). See [`crate::GraphqlPlugin::owned_by`].
+    pub owner_field: Option<String>,
 }
 
 /// Whether a column appears in the schema at all.

@@ -89,6 +89,7 @@ fn schema() -> async_graphql::dynamic::Schema {
         writable: None,
         private_unlocks: Vec::new(),
         subscribable: true,
+        owner_field: None,
     }])
     .expect("schema")
 }
@@ -251,6 +252,7 @@ async fn a_model_that_did_not_opt_in_is_not_subscribable() {
         writable: None,
         private_unlocks: Vec::new(),
         subscribable: false,
+        owner_field: None,
     }])
     .expect("schema");
 

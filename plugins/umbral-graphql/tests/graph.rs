@@ -367,6 +367,7 @@ async fn expose_if_denies_anonymous_and_admits_staff() {
         writable: None,
         private_unlocks: Vec::new(),
         subscribable: false,
+        owner_field: None,
         access: Some(std::sync::Arc::new(
             |id: Option<&umbral::auth::Identity>| id.is_some_and(|i| i.is_staff),
         )),
@@ -475,6 +476,7 @@ async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
             writable: None,
             private_unlocks: Vec::new(),
             subscribable: false,
+            owner_field: None,
         },
         Exposed {
             meta: post.clone(),
@@ -484,6 +486,7 @@ async fn hiding_a_foreign_key_removes_the_relation_both_ways() {
             writable: None,
             private_unlocks: Vec::new(),
             subscribable: false,
+            owner_field: None,
         },
     ])
     .expect("schema");

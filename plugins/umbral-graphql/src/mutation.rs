@@ -208,8 +208,19 @@ pub(crate) fn build(exposed: &[Exposed]) -> Option<(Object, Vec<InputObject>)> {
                         let body = body_from_args(&data.object()?, &e)?;
                         let pk = crate::loader::pk_name(&e.meta);
 
-                        let n = DynQuerySet::for_meta(&e.meta)
-                            .filter_eq_string(&pk, &id)
+                        // gaps4 #9: row-level ownership scope. When set, the
+                        // UPDATE also requires the row's owner column to equal
+                        // the caller's pk, so a client can only edit its own
+                        // rows. Anonymous + owner-scoped affects zero rows.
+                        let mut qs = DynQuerySet::for_meta(&e.meta).filter_eq_string(&pk, &id);
+                        match owner_scope(&ctx, &e) {
+                            OwnerScope::Unscoped => {}
+                            OwnerScope::Owner { column, pk } => {
+                                qs = qs.filter_eq_string(&column, &pk);
+                            }
+                            OwnerScope::DenyAnonymous => return Ok(None),
+                        }
+                        let n = qs
                             .update_json(&body)
                             .await
                             .map_err(|err| async_graphql::Error::new(err.to_string()))?;
@@ -248,8 +259,18 @@ pub(crate) fn build(exposed: &[Exposed]) -> Option<(Object, Vec<InputObject>)> {
                         // filter_eq_string FAILS CLOSED on a type mismatch (gaps3 #56): a
                         // non-numeric id against an integer pk yields `1=0`, never a
                         // predicate-less DELETE that empties the table.
-                        let n = DynQuerySet::for_meta(&e.meta)
-                            .filter_eq_string(&pk, &id)
+                        let mut qs = DynQuerySet::for_meta(&e.meta).filter_eq_string(&pk, &id);
+                        // gaps4 #9: scope the DELETE to the caller's own rows.
+                        match owner_scope(&ctx, &e) {
+                            OwnerScope::Unscoped => {}
+                            OwnerScope::Owner { column, pk } => {
+                                qs = qs.filter_eq_string(&column, &pk);
+                            }
+                            OwnerScope::DenyAnonymous => {
+                                return Ok(Some(async_graphql::Value::Boolean(false)));
+                            }
+                        }
+                        let n = qs
                             .delete()
                             .await
                             .map_err(|err| async_graphql::Error::new(err.to_string()))?;
@@ -264,6 +285,37 @@ pub(crate) fn build(exposed: &[Exposed]) -> Option<(Object, Vec<InputObject>)> {
     }
 
     Some((mutation, inputs))
+}
+
+/// The outcome of resolving a model's row-level ownership scope for a request.
+enum OwnerScope {
+    /// The model isn't owner-scoped — mutate by primary key alone (the prior,
+    /// table-level behaviour).
+    Unscoped,
+    /// Owner-scoped: also require `owner_column = <this pk>`.
+    Owner { column: String, pk: String },
+    /// Owner-scoped but the caller is anonymous — there is no "self" to match,
+    /// so the mutation must affect zero rows. Denying (not erroring) leaks
+    /// nothing about whether the target row exists.
+    DenyAnonymous,
+}
+
+/// gaps4 #9: resolve the row-level mutation scope for `e` against the caller's
+/// identity in `ctx`.
+fn owner_scope(ctx: &async_graphql::dynamic::ResolverContext<'_>, e: &Exposed) -> OwnerScope {
+    let Some(column) = e.owner_field.clone() else {
+        return OwnerScope::Unscoped;
+    };
+    // The caller's own primary key, stringified — the same shape
+    // `filter_eq_string` binds and the same `user_id` the ORM/session store use.
+    match ctx
+        .data_opt::<Option<umbral::auth::Identity>>()
+        .and_then(|o| o.as_ref())
+        .map(|id| id.user_id.clone())
+    {
+        Some(pk) => OwnerScope::Owner { column, pk },
+        None => OwnerScope::DenyAnonymous,
+    }
 }
 
 /// The model this mutation writes, for the error message.
