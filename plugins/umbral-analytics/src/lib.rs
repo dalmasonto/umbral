@@ -158,10 +158,36 @@ impl AnalyticsClient {
     /// the path starts with any configured exclusion prefix, so sensitive
     /// routes never ship their path to the analytics host.
     pub fn should_capture_path(&self, path: &str) -> bool {
+        // Excluding a whole route family is the operator's call; the scrubber
+        // (gaps4 #22) is the universal default that makes even a captured path
+        // safe to ship.
         !self
             .exclude_prefixes
             .iter()
             .any(|p| path.starts_with(p.as_str()))
+    }
+
+    /// Scrub identifying / secret segments out of a request path before it
+    /// ships to a third-party analytics host (gaps4 #22).
+    ///
+    /// URLs routinely carry data that must not leave the trust boundary: a
+    /// password-reset token, a per-user email, a private object id. Raw paths
+    /// also make analytics worse — `/orders/8412` and `/orders/8830` are two
+    /// rows where you wanted one route. This replaces each dynamic-looking
+    /// segment with a typed placeholder, so `/users/ada@x.com/orders/8412`
+    /// becomes `/users/:email/orders/:id`.
+    ///
+    /// Applied to EVERY auto-captured pageview, so it's safe by default rather
+    /// than opt-in.
+    pub fn scrub_path(path: &str) -> String {
+        // Map each segment through the scrubber and rejoin. `split('/')`
+        // preserves empties for leading/trailing/internal slashes, so a rejoin
+        // reproduces the exact slash structure — an empty segment scrubs to
+        // empty and the join re-inserts its slash.
+        path.split('/')
+            .map(scrub_segment)
+            .collect::<Vec<_>>()
+            .join("/")
     }
 
     /// Build the PostHog `/capture/` JSON payload.
@@ -226,6 +252,45 @@ impl AnalyticsClient {
             }
         });
     }
+}
+
+/// Classify one path segment and return either it unchanged or a typed
+/// placeholder. gaps4 #22 — the per-segment worker behind
+/// [`AnalyticsClient::scrub_path`].
+fn scrub_segment(seg: &str) -> &str {
+    if seg.is_empty() {
+        return seg;
+    }
+    // Email — anything with an `@` and a dot after it.
+    if seg.contains('@') {
+        return ":email";
+    }
+    // UUID — 8-4-4-4-12 hex.
+    if seg.len() == 36
+        && seg.as_bytes().iter().enumerate().all(|(i, &b)| match i {
+            8 | 13 | 18 | 23 => b == b'-',
+            _ => b.is_ascii_hexdigit(),
+        })
+    {
+        return ":uuid";
+    }
+    // Pure integer id.
+    if seg.bytes().all(|b| b.is_ascii_digit()) {
+        return ":id";
+    }
+    // Token-like: long and high-entropy-ish (mixed alnum, or contains the
+    // base64url/`.`/`_`/`-` alphabet). Catches reset tokens, API keys, JWT-ish
+    // blobs. A short slug like `my-post-title` stays put.
+    if seg.len() >= 24
+        && seg
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'='))
+        && seg.bytes().any(|b| b.is_ascii_digit())
+        && seg.bytes().any(|b| b.is_ascii_alphabetic())
+    {
+        return ":token";
+    }
+    seg
 }
 
 // ── Free functions (ambient API) ──────────────────────────────────────────────
@@ -296,11 +361,16 @@ async fn pageview_middleware(
         // Don't ship the path of a sensitive route (reset tokens, per-user
         // paths) to the third-party analytics host (audit_2 #4).
         if client.should_capture_path(&path) {
+            // gaps4 #22: scrub identifying / secret segments (reset tokens,
+            // emails, object ids) before the path leaves the trust boundary,
+            // and so route analytics aggregate `/orders/:id` instead of one
+            // row per order.
+            let scrubbed = AnalyticsClient::scrub_path(&path);
             let props = json!({
-                "path": path,
+                "path": scrubbed,
                 "method": method,
                 "status": status,
-                "$current_url": path,
+                "$current_url": scrubbed,
             });
             client.capture_fire_and_forget("anonymous", "$pageview", props);
         }
@@ -548,5 +618,32 @@ mod tests {
         // With no exclusions everything is captured.
         let open = AnalyticsClient::new("k", "https://h");
         assert!(open.should_capture_path("/reset-password/abc"));
+    }
+
+    #[test]
+    fn scrub_path_replaces_identifying_segments() {
+        use super::AnalyticsClient;
+        // ids, uuids, emails, tokens -> typed placeholders; static segments stay.
+        assert_eq!(AnalyticsClient::scrub_path("/orders/8412"), "/orders/:id");
+        assert_eq!(
+            AnalyticsClient::scrub_path("/users/ada@example.com/orders/9"),
+            "/users/:email/orders/:id"
+        );
+        assert_eq!(
+            AnalyticsClient::scrub_path("/t/550e8400-e29b-41d4-a716-446655440000"),
+            "/t/:uuid"
+        );
+        assert_eq!(
+            AnalyticsClient::scrub_path("/reset-password/aB3xK9zLmQ7pR2tV5wY8nC1dE4fG6hJ0"),
+            "/reset-password/:token"
+        );
+        // A human slug survives — not every segment is dynamic.
+        assert_eq!(
+            AnalyticsClient::scrub_path("/blog/my-first-post"),
+            "/blog/my-first-post"
+        );
+        // Root and trailing slash structure is preserved.
+        assert_eq!(AnalyticsClient::scrub_path("/"), "/");
+        assert_eq!(AnalyticsClient::scrub_path("/orders/8412/"), "/orders/:id/");
     }
 }
