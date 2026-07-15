@@ -132,7 +132,12 @@ pub struct StoragePlugin {
 #[derive(Clone)]
 struct MediaSide {
     mount: String,
-    dir: PathBuf,
+    /// gaps4 #18: `Some` only for the LOCAL filesystem backend (`media()`),
+    /// where a `ServeDir` serves `<dir>/<key>`. `None` for a custom / S3
+    /// backend, which serves its own URLs — mounting a `ServeDir` over
+    /// `PathBuf::from(mount)` there would expose whatever unrelated local
+    /// directory happens to sit at that path.
+    dir: Option<PathBuf>,
     storage: Arc<dyn Storage>,
     max_size: Option<u64>,
     /// gaps3 #51 — the accepted upload types. `None` = accept anything (the
@@ -287,7 +292,7 @@ impl StoragePlugin {
         let storage: Arc<dyn Storage> = Arc::new(FsStorage::new(mount.clone(), dir.clone()));
         self.media = Some(MediaSide {
             mount,
-            dir,
+            dir: Some(dir),
             storage,
             max_size: Some(DEFAULT_MAX_UPLOAD_SIZE),
             accept: None,
@@ -307,7 +312,8 @@ impl StoragePlugin {
     ) -> Self {
         let mount = mount.into();
         self.media = Some(MediaSide {
-            dir: PathBuf::from(&mount),
+            // gaps4 #18: custom/S3 backend serves its own URLs — no local ServeDir.
+            dir: None,
             mount,
             storage,
             max_size: Some(DEFAULT_MAX_UPLOAD_SIZE),
@@ -323,7 +329,8 @@ impl StoragePlugin {
     pub fn media_s3(mut self, mount: impl Into<String>, s3: S3Storage) -> Self {
         let mount = mount.into();
         self.media = Some(MediaSide {
-            dir: PathBuf::from(&mount),
+            // gaps4 #18: custom/S3 backend serves its own URLs — no local ServeDir.
+            dir: None,
             mount,
             storage: Arc::new(s3),
             max_size: Some(DEFAULT_MAX_UPLOAD_SIZE),
@@ -339,9 +346,18 @@ impl StoragePlugin {
     pub fn public_base(mut self, base: impl Into<String>) -> Self {
         let base = base.into();
         if let Some(media) = self.media.as_mut() {
-            media.storage = Arc::new(
-                FsStorage::new(media.mount.clone(), media.dir.clone()).with_public_base(base),
-            );
+            // gaps4 #18: only meaningful for the FS backend (dir: Some). A
+            // custom/S3 backend builds its own URLs; rebuilding an FsStorage
+            // over the mount would be wrong.
+            if let Some(dir) = media.dir.clone() {
+                media.storage =
+                    Arc::new(FsStorage::new(media.mount.clone(), dir).with_public_base(base));
+            } else {
+                tracing::warn!(
+                    "umbral-storage: public_base() applies only to the filesystem media \
+                     backend; ignoring it for the custom/S3 backend (which builds its own URLs)."
+                );
+            }
         } else {
             tracing::warn!(
                 "umbral-storage: public_base() called before a media side was configured; \
@@ -476,7 +492,7 @@ impl StoragePlugin {
 
     /// The media on-disk directory, if a media side is configured.
     pub fn media_dir(&self) -> Option<&Path> {
-        self.media.as_ref().map(|m| m.dir.as_path())
+        self.media.as_ref().and_then(|m| m.dir.as_deref())
     }
 
     /// The media storage backend (before the `MediaTracking` decorator is
@@ -609,20 +625,28 @@ impl Plugin for StoragePlugin {
         // but a media dir writable by another process could contain a
         // symlink pointing outside the root — audit `plugin-storage-tasks`
         // #8).
-        if let Some(media) = &self.media {
-            if !media.dir.exists() {
+        // gaps4 #18: only the LOCAL filesystem backend mounts a `ServeDir`. A
+        // custom / S3 backend (`dir: None`) serves its own URLs; mounting a
+        // `ServeDir` over `PathBuf::from(mount)` there would serve whatever
+        // unrelated directory happens to exist at that path on the local disk.
+        if let Some((media, dir)) = self
+            .media
+            .as_ref()
+            .and_then(|m| m.dir.clone().map(|d| (m, d)))
+        {
+            if !dir.exists() {
                 tracing::warn!(
                     "umbral-storage: media directory `{}` does not exist; requests under `{}` \
                      will return 404",
-                    media.dir.display(),
+                    dir.display(),
                     media.mount
                 );
             }
             let mount = media.mount.trim_end_matches('/').to_string();
             let serve = tower::ServiceBuilder::new()
                 .map_response(|resp: http::Response<_>| resp.map(axum::body::Body::new))
-                .service(ServeDir::new(&media.dir));
-            let guarded = static_serve::SymlinkGuardService::new(media.dir.clone(), serve);
+                .service(ServeDir::new(&dir));
+            let guarded = static_serve::SymlinkGuardService::new(dir.clone(), serve);
             let svc = tower::ServiceBuilder::new()
                 .layer(SetResponseHeaderLayer::if_not_present(
                     HeaderName::from_static("x-content-type-options"),
