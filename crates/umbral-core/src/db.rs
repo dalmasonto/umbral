@@ -523,6 +523,34 @@ impl PoolConfig {
 static SESSION_VARS_IN_USE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// gaps4 #16: every GUC name umbra has ever set via a `RouteContext` session
+/// var. On connection checkout we reset only THESE (the ones the current
+/// request isn't re-setting), instead of `RESET ALL`. `RESET ALL` also wiped
+/// app- and operator-managed GUCs (`ALTER ROLE/DATABASE SET`, anything the app
+/// set at connect time) on every acquire — collateral damage. Scoping the reset
+/// to umbra's own names keeps tenant/RLS isolation intact (a stale
+/// `app.tenant` from a prior request on the pooled connection is still cleared)
+/// while leaving everything else alone.
+static UMBRAL_GUC_NAMES: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// A GUC name is safe to interpolate into `RESET <name>` (sqlx can't bind an
+/// identifier). Names come from framework code, never user input, but validate
+/// anyway: letters/digits/underscore, one optional `namespace.` prefix.
+fn is_valid_guc_name(name: &str) -> bool {
+    fn ident(s: &str) -> bool {
+        !s.is_empty()
+            && s.bytes()
+                .next()
+                .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+            && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    }
+    match name.split_once('.') {
+        Some((ns, key)) => ident(ns) && ident(key),
+        None => ident(name),
+    }
+}
+
 /// PERF-5 / gaps2 #91: bare `PgPool::connect` uses sqlx's defaults with
 /// **no acquire timeout**, so a saturated pool blocks request tasks
 /// forever. We always apply the full set of pool knobs — `max_connections`,
@@ -573,7 +601,35 @@ fn pg_pool_options() -> sqlx::postgres::PgPoolOptions {
                     SESSION_VARS_IN_USE.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
                 if SESSION_VARS_IN_USE.load(std::sync::atomic::Ordering::Relaxed) {
-                    sqlx::query("RESET ALL").execute(&mut *conn).await?;
+                    // gaps4 #16: clear only umbra's OWN stale GUCs — the names a
+                    // PRIOR request set on this pooled connection that THIS
+                    // request isn't re-setting — instead of `RESET ALL` (which
+                    // also wiped app/operator-managed GUCs). In the common case
+                    // (every request sets the same names) this resets nothing:
+                    // the `set_config` below overwrites them.
+                    let current: std::collections::HashSet<&str> =
+                        vars.iter().map(|(n, _)| n.as_str()).collect();
+                    let stale: Vec<String> = {
+                        let mut guard = UMBRAL_GUC_NAMES.lock().unwrap();
+                        let seen = guard.get_or_insert_with(std::collections::HashSet::new);
+                        let stale = seen
+                            .iter()
+                            .filter(|n| !current.contains(n.as_str()))
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        for (name, _) in vars {
+                            seen.insert(name.clone());
+                        }
+                        stale
+                    };
+                    for name in stale {
+                        // Identifier can't be bound; validated framework-owned name.
+                        if is_valid_guc_name(&name) {
+                            sqlx::query(&format!("RESET {name}"))
+                                .execute(&mut *conn)
+                                .await?;
+                        }
+                    }
                     for (name, value) in vars {
                         sqlx::query("SELECT set_config($1, $2, false)")
                             .bind(name)
@@ -1051,6 +1107,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valid_guc_names_are_accepted_and_injection_is_rejected() {
+        // gaps4 #16 — these names get interpolated into `RESET <name>`, so the
+        // validator is the safety boundary. Real framework GUC names pass;
+        // anything that could break out is refused.
+        assert!(is_valid_guc_name("app.user_id"));
+        assert!(is_valid_guc_name("app.tenant"));
+        assert!(is_valid_guc_name("my_var"));
+        // Injection / malformed shapes must fail.
+        assert!(!is_valid_guc_name("app.user_id; DROP TABLE users"));
+        assert!(!is_valid_guc_name("app.user_id, other"));
+        assert!(!is_valid_guc_name("app.user id"));
+        assert!(!is_valid_guc_name("a.b.c"));
+        assert!(!is_valid_guc_name(""));
+        assert!(!is_valid_guc_name("1bad"));
+        assert!(!is_valid_guc_name("app."));
+    }
 
     // `pool` and `pool_for` read the process-wide `POOLS` `OnceLock`, which
     // can only be set once per process. Under cargo test's parallel runner
