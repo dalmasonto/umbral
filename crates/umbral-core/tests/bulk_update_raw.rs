@@ -162,3 +162,45 @@ async fn raw_supports_zero_rows() {
         .expect("raw empty fetch");
     assert!(rows.is_empty());
 }
+
+#[tokio::test]
+async fn raw_with_binds_parameters_safely() {
+    // gaps4 #24 — `raw_with` binds values instead of concatenating them, so an
+    // attacker-controlled value can't break out of the query. `?` on SQLite.
+    let _g = SERIALISE.lock().await;
+    boot().await;
+    truncate().await;
+    Post::objects()
+        .create(Post {
+            id: 0,
+            title: "bound".to_string(),
+            view_count: 7,
+        })
+        .await
+        .expect("seed");
+
+    // A value that WOULD be an injection if concatenated ("7 OR 1=1") is bound
+    // as a literal string operand and matches nothing — no breakout.
+    let evil: Vec<Post> = Post::objects()
+        .raw_with(
+            "SELECT * FROM bu_post WHERE title = ?",
+            vec![sea_query::Value::from("bound' OR '1'='1")],
+        )
+        .await
+        .expect("raw_with");
+    assert!(
+        evil.is_empty(),
+        "a bound value must not break out of the query"
+    );
+
+    // The honest bound query returns the row.
+    let rows: Vec<Post> = Post::objects()
+        .raw_with(
+            "SELECT * FROM bu_post WHERE view_count = ?",
+            vec![sea_query::Value::from(7_i32)],
+        )
+        .await
+        .expect("raw_with");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "bound");
+}

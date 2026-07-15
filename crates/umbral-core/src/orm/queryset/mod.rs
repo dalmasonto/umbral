@@ -4853,6 +4853,54 @@ impl<T: Model> Manager<T> {
         }
     }
 
+    /// Like [`Self::raw`] but with BOUND parameters (gaps4 #24).
+    ///
+    /// `raw` sends its string verbatim and has no way to bind user input — the
+    /// caller is on their own for escaping, which is an injection waiting to
+    /// happen. `raw_with` binds each `values[i]` as a real parameter, so the
+    /// placeholders in `sql` (`?` on SQLite, `$1..$N` on Postgres) carry data
+    /// safely. Values are the framework's own `sea_query::Value`, so the same
+    /// call is portable across both backends.
+    ///
+    /// ```ignore
+    /// use umbral::db::query::Value;  // sea_query::Value
+    /// let rows: Vec<Report> = Report::objects()
+    ///     .raw_with(
+    ///         "SELECT * FROM report WHERE region = ? AND year >= ?",
+    ///         vec![Value::from(region), Value::from(year)],
+    ///     )
+    ///     .await?;
+    /// ```
+    ///
+    /// Still a low-level escape hatch: it skips `select_related` /
+    /// `prefetch_related`, and (like `raw`) routes to the READ pool — a raw
+    /// statement that WRITES under a read/write split must pin the write pool
+    /// with `.on(&pool)` / `.on_pg(&pool)`.
+    pub async fn raw_with(
+        &self,
+        sql: &str,
+        values: Vec<sea_query::Value>,
+    ) -> Result<Vec<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let bound = sea_query_binder::SqlxValues(sea_query::Values(values));
+        let pool = resolve_pool::<T>(None, crate::db::RouteOp::Read);
+        match pool {
+            DbPool::Sqlite(pool) => {
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(sql, bound)
+                    .fetch_all(&pool)
+                    .await
+            }
+            DbPool::Postgres(pool) => {
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(sql, bound)
+                    .fetch_all(&pool)
+                    .await
+            }
+        }
+    }
+
     /// `bulk_create` against an explicit Postgres pool.
     pub async fn bulk_create_pg(
         &self,

@@ -235,6 +235,14 @@ pub mod db {
         pool_for_dispatched, refresh_view, register_tenant_pool, registered_aliases, route_context,
         router, transaction, transaction_on, transaction_pg, transaction_sqlite,
     };
+
+    /// The bound-parameter value type for [`crate::orm`]'s `raw_with` escape
+    /// hatch (gaps4 #24). `Value::from(x)` accepts any bindable scalar, so a
+    /// hand-written `raw_with("… WHERE x = ?", vec![Value::from(x)])` binds its
+    /// inputs instead of concatenating them.
+    pub mod query {
+        pub use umbral_core::_sea_query::Value;
+    }
 }
 
 /// Run an async closure inside a database transaction against the ambient pool.
