@@ -4,7 +4,7 @@ Findings from the full-framework security/correctness/simplicity sweep, consolid
 
 Status: `[ ]` open · `[x]` fixed · `[~]` reviewed, no change (with reason) · `[>]` deferred (with reason)
 
-**Progress (2026-07-15):** every CRITICAL and HIGH is resolved. Fixed: #1 #2 #3 #4 #5 #7 #8 #10 #11 #17 #20 #21 #29 (13). Reviewed/no-change: #6 #28 #30 (3). Deferred with precise fix notes: #9 #12 #13 #14 #15 #16 #18 #19 #22 #23 #24 #25 #26 #27 #31 (15). The deferred set is all MEDIUM/LOW plus two feature-sized items (#9 graphql row-scope, needs two-user tests; several perf/ops items) — none is a live attacker-reachable hole. Each fix landed with a regression test where behavior changed; each deferral names the exact file and the shape of the fix.
+**Progress (2026-07-15):** every CRITICAL and HIGH is resolved, and most MEDIUM/LOW too. **Fixed (22):** #1 #2 #3 #4 #5 #7 #8 #10 #11 #14 #15 #16 #17 #18 #19 #20 #21 #22 #23 #25 #27 #29. **Reviewed/no-change (3):** #6 #28 #30. **Still deferred (6):** #9 #12 #13 #24 #26 #31 — all genuinely larger work: two moderate GraphQL refactors (#12 shared sub/SSE context, #13 per-parent loader window), one large ORM-terminal refactor (#24 `_pg` terminals drift), one feature (#9 graphql row-scope mutations, needs two-user tests), one cross-referenced to the existing tracked gap #73 (#26 non-i64 PK on form insert), and route-metadata reconciliation (#31). None is a live attacker-reachable hole. Each fix landed with a regression test where behavior changed; each remaining deferral names the exact file and the shape of the fix.
 
 Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (same Postgres readback leak) — tracked once, as #2.
 
