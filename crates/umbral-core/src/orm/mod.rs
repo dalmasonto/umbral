@@ -128,7 +128,7 @@ pub use dynamic::{
 pub use expr::{F, FColExt, FExpr, Q};
 pub use file_field::{FileField, ImageField};
 pub use foreign_key::ForeignKey;
-pub use m2m::{M2M, load_junction_selection, set_junction_dynamic};
+pub use m2m::{M2M, load_junction_selection, set_junction_dynamic, set_junction_dynamic_in_tx};
 pub use masked::{MaskError, MaskKeyring, Masked, set_mask_keyring};
 pub use model::{
     ArrayElement, FieldSpec, FkAction, HydrateRelated, M2MRelationSpec, Model,

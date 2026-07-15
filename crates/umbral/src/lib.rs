@@ -687,8 +687,9 @@ pub mod orm {
         PrimaryKey, Q, QuerySet, QuerySetTx, ReverseError, ReverseFkRelationSpec, ReverseRelations,
         ReverseSet, Search, SearchHit, Searchable, Slug, SqlType, TryForEachError, TsVector, Url,
         ValidatorError, column, decode_to_string, escape_like_literal, import_table_rows,
-        load_junction_selection, never_matches, pk_key, set_junction_dynamic, set_mask_keyring,
-        typed_cmp_condition, typed_eq_condition, typed_json_value, validate_text_format, write,
+        load_junction_selection, never_matches, pk_key, set_junction_dynamic,
+        set_junction_dynamic_in_tx, set_mask_keyring, typed_cmp_condition, typed_eq_condition,
+        typed_json_value, validate_text_format, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the

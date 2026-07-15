@@ -86,6 +86,26 @@ async fn apply_m2m_selections(
     parent_pk_str: &str,
     multi_form: &[(String, String)],
 ) -> Result<(), sqlx::Error> {
+    // Standalone entry (the sheet-create flow): wrap the tx-aware core in its
+    // own transaction. The admin change form folds M2M into the PARENT tx via
+    // `apply_m2m_selections_in_tx` instead — see `save_parent_and_inlines`.
+    let mut tx = umbral::db::begin().await?;
+    apply_m2m_selections_in_tx(parent, parent_pk_str, multi_form, &mut tx).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// gaps4 #14: apply the form's M2M selections on an EXISTING transaction, so
+/// they commit or roll back with the parent + inline writes as one unit. The
+/// admin change form used to save the parent in a tx, commit, then write M2M in
+/// a second tx — a failure there left the parent updated but the relations not,
+/// an observable partial write with no clean rollback.
+async fn apply_m2m_selections_in_tx(
+    parent: &umbral::migrate::ModelMeta,
+    parent_pk_str: &str,
+    multi_form: &[(String, String)],
+    tx: &mut umbral::db::Transaction,
+) -> Result<(), sqlx::Error> {
     if parent.m2m_relations.is_empty() {
         return Ok(());
     }
@@ -141,11 +161,11 @@ async fn apply_m2m_selections(
             }
         }
         let junction_table = format!("{}_{}", parent.table, rel.field_name);
-        umbral::orm::set_junction_dynamic(
+        umbral::orm::set_junction_dynamic_in_tx(
             &junction_table,
             parent_value.clone(),
             child_values,
-            Some(parent.name.as_str()),
+            tx,
         )
         .await?;
     }
@@ -355,13 +375,10 @@ pub(crate) async fn create(
     let saved =
         save_parent_and_inlines(&model, None, &form, cfg, &multi_form, user.is_superuser).await;
     match saved {
-        Ok(new_pk) => {
-            // BUG-16 admin: with the parent committed, apply any M2M
-            // selections from the form. M2M runs in its own
-            // transaction (follow-up: fold it into the parent tx).
-            if let Err(e) = apply_m2m_selections(&model, &new_pk, &multi_form).await {
-                return AdminError::Sqlx(e).into_response();
-            }
+        Ok(_) => {
+            // gaps4 #14: M2M is now written inside `save_parent_and_inlines`'
+            // transaction, so there is nothing to apply post-commit — the save
+            // is atomic across parent + inlines + relations.
             crate::models::log(
                 user.id,
                 "create",
@@ -487,6 +504,13 @@ async fn save_parent_and_inlines(
     };
 
     crate::inlines::save_inlines_in_tx(&mut tx, model, &parent_pk, cfg, multi_form).await?;
+
+    // gaps4 #14: M2M selections join the SAME transaction as the parent + inline
+    // writes, so a junction failure rolls the whole save back instead of leaving
+    // the parent persisted with its relations half-written.
+    apply_m2m_selections_in_tx(model, &parent_pk, multi_form, &mut tx)
+        .await
+        .map_err(AdminError::Sqlx)?;
 
     tx.commit().await.map_err(AdminError::Sqlx)?;
     Ok(parent_pk)
@@ -696,11 +720,9 @@ pub(crate) async fn update(
     .await;
     match saved {
         Ok(_) => {
-            // BUG-16 admin: replace this parent's M2M selections in
-            // each auto-generated junction table to match the form.
-            if let Err(e) = apply_m2m_selections(&model, &id, &multi_form).await {
-                return AdminError::Sqlx(e).into_response();
-            }
+            // gaps4 #14: M2M selections are replaced inside the parent UPDATE's
+            // transaction (see `save_parent_and_inlines`), so the whole edit —
+            // parent, inlines, relations — commits or rolls back as one unit.
             // gaps3 #59: the pk is text. Parsing it to i64 discarded it for every
             // Uuid/String-keyed model — the audit row named the table but not the row.
             let object_id = Some(id.clone());
