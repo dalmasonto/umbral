@@ -175,13 +175,31 @@ impl AuthToken {
         Ok(())
     }
 
+    /// How stale `last_used_at` must be before a bump actually writes.
+    ///
+    /// gaps4 #15: without this, every authenticated bearer request issued a
+    /// `last_used_at` UPDATE — a write on every read, and the hottest write in
+    /// a token-auth API. The column exists so cleanup jobs can prune stale
+    /// tokens; minute-granularity is ample for that, and coalescing turns
+    /// "a write per request" into "at most one write per minute per token".
+    const TOUCH_COALESCE: chrono::Duration = chrono::Duration::seconds(60);
+
     /// Best-effort `last_used_at` bump. Called by
     /// [`crate::BearerAuthentication`] after a successful lookup so
     /// the column is fresh for cleanup jobs. Failures here are
     /// swallowed — a stat update should never fail the request that
     /// triggered it.
+    ///
+    /// Coalesced (gaps4 #15): the write is skipped when the stored value is
+    /// already within [`Self::TOUCH_COALESCE`] of now, so a busy token isn't
+    /// re-written on every request.
     pub(crate) async fn touch_last_used(&self) {
         let now = Utc::now();
+        if let Some(prev) = self.last_used_at {
+            if now.signed_duration_since(prev) < Self::TOUCH_COALESCE {
+                return;
+            }
+        }
         let mut delta = serde_json::Map::new();
         delta.insert("last_used_at".to_string(), serde_json::json!(now));
         let _ = AuthToken::objects()

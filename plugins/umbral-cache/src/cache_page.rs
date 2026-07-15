@@ -70,8 +70,21 @@ use crate::Cache;
 /// for `ttl`.
 ///
 /// Mount it with `Router::layer(cache_page(Duration::from_secs(60)))`.
+/// Default ceiling on a cacheable response body (gaps4 #23). A response larger
+/// than this is served normally but NOT stored — a page cache exists to make
+/// small hot pages cheap, and letting a multi-megabyte response in bloats the
+/// store (or a shared Redis), evicts many useful entries for one, and risks
+/// memory pressure. 1 MiB comfortably covers HTML pages and JSON list
+/// responses; raise it with `CachePageLayer::max_object_bytes` if you cache
+/// something legitimately larger.
+pub const DEFAULT_MAX_OBJECT_BYTES: usize = 1024 * 1024;
+
 pub fn cache_page(ttl: Duration) -> CachePageLayer {
-    CachePageLayer { ttl, cache: None }
+    CachePageLayer {
+        ttl,
+        cache: None,
+        max_object_bytes: DEFAULT_MAX_OBJECT_BYTES,
+    }
 }
 
 // ── Layer ────────────────────────────────────────────────────────────────────
@@ -84,6 +97,8 @@ pub struct CachePageLayer {
     // An explicit cache can be injected for testing; production code
     // reads the ambient handle via `crate::ambient()`.
     cache: Option<Arc<Cache>>,
+    /// Responses larger than this are not stored (gaps4 #23).
+    max_object_bytes: usize,
 }
 
 impl CachePageLayer {
@@ -91,6 +106,13 @@ impl CachePageLayer {
     /// where the ambient cache isn't initialised.
     pub fn with_cache(mut self, cache: Cache) -> Self {
         self.cache = Some(Arc::new(cache));
+        self
+    }
+
+    /// Cap the size of a cacheable response body. A larger response is served
+    /// normally but not stored. Defaults to [`DEFAULT_MAX_OBJECT_BYTES`].
+    pub fn max_object_bytes(mut self, bytes: usize) -> Self {
+        self.max_object_bytes = bytes;
         self
     }
 }
@@ -103,6 +125,7 @@ impl<S> Layer<S> for CachePageLayer {
             inner,
             ttl: self.ttl,
             cache: self.cache.clone(),
+            max_object_bytes: self.max_object_bytes,
         }
     }
 }
@@ -115,6 +138,7 @@ pub struct CachePageService<S> {
     inner: S,
     ttl: Duration,
     cache: Option<Arc<Cache>>,
+    max_object_bytes: usize,
 }
 
 impl<S> Service<Request<Body>> for CachePageService<S>
@@ -135,6 +159,7 @@ where
         let mut inner = self.inner.clone();
         let ttl = self.ttl;
         let explicit_cache = self.cache.clone();
+        let max_object_bytes = self.max_object_bytes;
 
         Box::pin(async move {
             // Only attempt to cache GET and HEAD
@@ -217,7 +242,18 @@ where
                 }
             };
 
-            if !should_skip {
+            // gaps4 #23: never STORE an oversized body. It is still served in
+            // full below; it just doesn't get to evict a store's worth of small
+            // hot pages (or bloat a shared Redis) for one large response.
+            let too_large = body_bytes.len() > max_object_bytes;
+            if too_large {
+                tracing::debug!(
+                    size = body_bytes.len(),
+                    cap = max_object_bytes,
+                    "cache_page: response exceeds the cacheable size cap; serving but not storing"
+                );
+            }
+            if !should_skip && !too_large {
                 if let Some(cache) = explicit_cache.as_deref().or_else(|| crate::ambient()) {
                     let serialised = serialise_cached_response(&parts, &body_bytes);
                     cache.set_bytes_raw(&cache_key, serialised, Some(ttl)).await;

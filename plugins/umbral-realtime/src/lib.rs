@@ -648,7 +648,7 @@ impl Broker for InProcessBroker {
 /// (not a direct local dispatch), so a connection is never double-served.
 #[cfg(feature = "redis")]
 pub struct RedisBroker {
-    tx: tokio::sync::mpsc::UnboundedSender<Envelope>,
+    tx: tokio::sync::mpsc::Sender<Envelope>,
 }
 
 #[cfg(feature = "redis")]
@@ -656,11 +656,19 @@ impl RedisBroker {
     /// The pub/sub channel every umbral instance shares.
     const CHANNEL: &'static str = "umbral:realtime:events";
 
+    /// gaps4 #19: the handoff to the Redis pump is BOUNDED. It used to be an
+    /// unbounded channel, so if Redis stalled or went away the pump stopped
+    /// draining and the queue grew without limit — a slow dependency turning
+    /// into an OOM. Realtime events are ephemeral (a dropped one is a missed
+    /// live update, not lost data), so a full queue drops the newest with a
+    /// warning rather than blocking the request handler or growing forever.
+    const QUEUE_CAP: usize = 4096;
+
     /// Connect to `url` and spawn the background pump (publish + subscribe).
     /// Spawned rather than awaited so it slots into the synchronous
     /// `Plugin::on_ready`; the pump owns the connections.
     pub fn start(url: String, registry: Arc<Registry>) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = tokio::sync::mpsc::channel(Self::QUEUE_CAP);
         tokio::spawn(Self::pump(url, registry, rx));
         Self { tx }
     }
@@ -670,7 +678,7 @@ impl RedisBroker {
     async fn pump(
         url: String,
         registry: Arc<Registry>,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<Envelope>,
+        mut rx: tokio::sync::mpsc::Receiver<Envelope>,
     ) {
         loop {
             match Self::run_once(&url, &registry, &mut rx).await {
@@ -689,7 +697,7 @@ impl RedisBroker {
     async fn run_once(
         url: &str,
         registry: &Arc<Registry>,
-        rx: &mut tokio::sync::mpsc::UnboundedReceiver<Envelope>,
+        rx: &mut tokio::sync::mpsc::Receiver<Envelope>,
     ) -> Result<(), redis::RedisError> {
         use futures_util::StreamExt;
 
@@ -743,9 +751,24 @@ impl RedisBroker {
 #[async_trait::async_trait]
 impl Broker for RedisBroker {
     async fn publish(&self, env: Envelope) {
-        // Hand off to the pump without blocking the request handler. If the
-        // pump is gone (process shutting down) the send is silently dropped.
-        let _ = self.tx.send(env);
+        // Hand off to the pump without blocking the request handler.
+        // `try_send`, not `send().await`: a full queue must never make a
+        // request wait on a stalled Redis. gaps4 #19: on overflow, drop the
+        // newest event and warn (rate-limited by tracing) — a missed live
+        // update, not lost data. A closed channel (pump gone at shutdown) is
+        // silently ignored as before.
+        use tokio::sync::mpsc::error::TrySendError;
+        match self.tx.try_send(env) {
+            Ok(()) | Err(TrySendError::Closed(_)) => {}
+            Err(TrySendError::Full(_)) => {
+                tracing::warn!(
+                    target: "umbral::realtime",
+                    cap = Self::QUEUE_CAP,
+                    "realtime redis broker queue is full — dropping an outbound event. \
+                     Redis is slow or unreachable, or publish volume exceeds throughput."
+                );
+            }
+        }
     }
 }
 
