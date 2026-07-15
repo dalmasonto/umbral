@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.9...umbral-cli-v0.0.10) - 2026-07-15
+
+### Added
+
+- *(rest)* scaffold permission/auth/pagination/throttle classes
+- *(cli)* add `umbral startcommand` and app-owned commands
+
+### Fixed
+
+- *(codegen)* close 10 defects found by the pre-0.0.10 review sweep
+
+### Other
+
+- *(cli)* compile what the generators emit, in CI
+- *(cli)* finish the codegen migration; collect commands once
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.8...umbral-cli-v0.0.9) - 2026-07-14
 
 ### Other

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-graphql-v0.0.9...umbral-graphql-v0.0.10) - 2026-07-15
+
+### Added
+
+- *(graphql)* row-level mutation scope via owned_by (gaps4 #9)
+
+### Fixed
+
+- *(graphql)* window reverse-FK child lists per parent (gaps4 #13)
+- *(graphql)* carry per-request context across SSE and WebSocket (gaps4 #12)
+- *(graphql)* apply a default query depth/complexity budget
+
+### Other
+
+- *(graphql)* rustfmt the gaps4 #12/#13 additions
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-graphql-v0.0.8...umbral-graphql-v0.0.9) - 2026-07-14
 
 ### Fixed

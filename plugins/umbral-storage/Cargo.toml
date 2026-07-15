@@ -25,7 +25,7 @@ images = ["dep:image"]
 # Optional: only compiled with the `images` feature. Default features off — we
 # want the common web codecs, not every format the crate can decode.
 image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg", "gif", "webp"] }
-umbral = { path = "../../crates/umbral", version = "0.0.9" }
+umbral = { path = "../../crates/umbral", version = "0.0.10" }
 # Optional S3 backend (rust-s3). `blocking` so the synchronous collect path
 # can upload without an async runtime; default features off to keep the dep
 # lean. Only built under the `s3` feature.

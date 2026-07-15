@@ -9,8 +9,8 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral-core = { path = "../umbral-core", version = "0.0.9" }
-umbral-macros = { path = "../umbral-macros", version = "0.0.9" }
+umbral-core = { path = "../umbral-core", version = "0.0.10" }
+umbral-macros = { path = "../umbral-macros", version = "0.0.10" }
 # Re-exported by the facade as `umbral::templates::context!` so user
 # crates don't need a direct minijinja dep just to build a render
 # context. The engine itself lives in umbral-core; this is the macro

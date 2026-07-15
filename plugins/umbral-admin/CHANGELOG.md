@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.9...umbral-admin-v0.0.10) - 2026-07-15
+
+### Fixed
+
+- *(orm)* return the new PK in true shape from insert_form (gaps4 #26)
+- *(admin)* write M2M selections inside the parent save transaction (gaps4 #14)
+- *(security)* close the confirmed review_3 critical/high findings
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.8...umbral-admin-v0.0.9) - 2026-07-14
 
 ### Added

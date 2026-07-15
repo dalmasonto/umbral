@@ -10,7 +10,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-umbral = { path = "../../crates/umbral", version = "0.0.9" }
+umbral = { path = "../../crates/umbral", version = "0.0.10" }
 axum = "0.8"
 # `tracing::warn!` on the no-app-name fallback (gap #71).
 tracing = "0.1"

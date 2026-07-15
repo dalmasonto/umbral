@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.9...umbral-core-v0.0.10) - 2026-07-15
+
+### Added
+
+- *(plugin)* drift-free route metadata via routes_builder (gaps4 #31)
+- *(orm)* add raw_with bound-parameter escape hatch (gaps4 #25)
+- *(cli)* add `umbral startcommand` and app-owned commands
+
+### Fixed
+
+- *(orm)* return the new PK in true shape from insert_form (gaps4 #26)
+- *(orm)* guard the low-level _pg terminals against silent hydration skips
+- *(db)* reset only umbra's own GUCs on PG checkout, not RESET ALL (gaps4 #16)
+- *(orm)* try_for_each honors a caller .limit() as a total cap (gaps4 #27)
+- *(admin)* write M2M selections inside the parent save transaction (gaps4 #14)
+- *(orm,oauth)* fail-closed IN filters; declare OAuth's sessions dep
+- *(security)* close the confirmed review_3 critical/high findings
+- *(codegen)* close 10 defects found by the pre-0.0.10 review sweep
+
+### Other
+
+- *(cli)* finish the codegen migration; collect commands once
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.8...umbral-core-v0.0.9) - 2026-07-14
 
 ### Fixed

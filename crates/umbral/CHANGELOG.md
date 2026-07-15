@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.9...umbral-v0.0.10) - 2026-07-15
+
+### Added
+
+- *(orm)* add raw_with bound-parameter escape hatch (gaps4 #25)
+- *(cli)* add `umbral startcommand` and app-owned commands
+
+### Fixed
+
+- *(orm)* return the new PK in true shape from insert_form (gaps4 #26)
+- *(admin)* write M2M selections inside the parent save transaction (gaps4 #14)
+- *(codegen)* close 10 defects found by the pre-0.0.10 review sweep
+
+### Other
+
+- *(cli)* finish the codegen migration; collect commands once
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.8...umbral-v0.0.9) - 2026-07-14
 
 ### Other
