@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use umbral::migrate::{Column, ModelMeta};
-use umbral::orm::{DynQuerySet, SqlType};
+use umbral::orm::DynQuerySet;
 
 use crate::AdminError;
 use crate::config::AdminConfig;
@@ -226,16 +226,14 @@ pub(crate) async fn insert_row_in_tx(
     };
 
     let skip = readonly_set(model, cfg);
-    let new_int_pk = allow_privileged_if(DynQuerySet::for_meta(model), model, authorize_privileged)
+    // gaps4 #26: the ORM now returns the new row's PK in its true shape for every
+    // PK type, so the old `match pk_col { non-integer => read it back out of the
+    // form }` workaround is gone — an integer PK, a String PK, and a Uuid PK all
+    // come back correct straight from the insert.
+    let new_pk = allow_privileged_if(DynQuerySet::for_meta(model), model, authorize_privileged)
         .insert_form_in_tx(tx, form, &skip)
         .await?;
-    let pk_col = model.fields.iter().find(|c| c.primary_key);
-    Ok(match pk_col {
-        Some(c) if !matches!(c.ty, SqlType::SmallInt | SqlType::Integer | SqlType::BigInt) => {
-            form.get(&c.name).cloned().unwrap_or_default()
-        }
-        _ => new_int_pk.to_string(),
-    })
+    Ok(new_pk.to_string())
 }
 
 /// Transaction-aware sibling of [`update_row`].
@@ -319,6 +317,7 @@ fn readonly_set(model: &ModelMeta, cfg: Option<&AdminConfig>) -> Vec<String> {
 #[cfg(test)]
 mod readonly_set_tests {
     use super::*;
+    use umbral::orm::SqlType;
 
     /// Build a bare column with just the flags the readonly-set logic
     /// reads. Every other field is an inert default — the function under

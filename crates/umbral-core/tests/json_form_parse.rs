@@ -76,7 +76,9 @@ async fn json_object_form_input_round_trips_as_object() {
     let id = DynQuerySet::for_meta(&meta())
         .insert_form(&form, &[])
         .await
-        .expect("insert");
+        .expect("insert")
+        .as_i64()
+        .expect("integer PK");
 
     let row = Event::objects()
         .filter(event::ID.eq(id))
@@ -112,7 +114,9 @@ async fn json_array_form_input_round_trips_as_array() {
     let id = DynQuerySet::for_meta(&meta())
         .insert_form(&form, &[])
         .await
-        .expect("insert");
+        .expect("insert")
+        .as_i64()
+        .expect("integer PK");
     let row = Event::objects()
         .filter(event::ID.eq(id))
         .first()
@@ -143,7 +147,9 @@ async fn empty_object_form_input_parses_to_empty_object() {
     let id = DynQuerySet::for_meta(&meta())
         .insert_form(&form, &[])
         .await
-        .expect("insert");
+        .expect("insert")
+        .as_i64()
+        .expect("integer PK");
     let row = Event::objects()
         .filter(event::ID.eq(id))
         .first()
@@ -196,7 +202,9 @@ async fn json_scalar_form_input_parses() {
     let id = DynQuerySet::for_meta(&meta())
         .insert_form(&form, &[])
         .await
-        .expect("insert");
+        .expect("insert")
+        .as_i64()
+        .expect("integer PK");
     let row = Event::objects()
         .filter(event::ID.eq(id))
         .first()

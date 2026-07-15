@@ -121,7 +121,9 @@ async fn insert_form_in_tx_commits_parent_and_child() {
     let parent_pk = DynQuerySet::for_meta(&order_meta())
         .insert_form_in_tx(&mut tx, &form(&[("reference", "COMMIT-1")]), &[])
         .await
-        .expect("parent insert");
+        .expect("parent insert")
+        .as_i64()
+        .expect("integer PK");
     assert!(parent_pk > 0, "auto-increment PK should come back > 0");
 
     let child_pk = DynQuerySet::for_meta(&item_meta())
@@ -131,7 +133,9 @@ async fn insert_form_in_tx_commits_parent_and_child() {
             &[],
         )
         .await
-        .expect("child insert");
+        .expect("child insert")
+        .as_i64()
+        .expect("integer PK");
     assert!(child_pk > 0);
 
     tx.commit().await.expect("commit");
@@ -162,7 +166,9 @@ async fn insert_form_in_tx_rolls_back_uncommitted_row() {
     let pk = DynQuerySet::for_meta(&order_meta())
         .insert_form_in_tx(&mut tx, &form(&[("reference", "ROLLBACK-ME")]), &[])
         .await
-        .expect("insert on tx");
+        .expect("insert on tx")
+        .as_i64()
+        .expect("integer PK");
     assert!(pk > 0);
 
     // Drop the tx by rolling it back instead of committing.
@@ -292,7 +298,9 @@ async fn validation_error_surfaces_from_in_tx_and_rolls_back() {
     let parent_pk = DynQuerySet::for_meta(&order_meta())
         .insert_form_in_tx(&mut tx, &form(&[("reference", "VAL-PARENT")]), &[])
         .await
-        .expect("parent insert");
+        .expect("parent insert")
+        .as_i64()
+        .expect("integer PK");
     assert!(parent_pk > 0);
 
     // Child FK points at a parent id that does not exist → error.

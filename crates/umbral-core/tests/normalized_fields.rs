@@ -147,7 +147,9 @@ async fn insert_form_normalizes_flagged_field() {
     let pk_val = DynQuerySet::for_meta(&meta())
         .insert_form(&form, &[])
         .await
-        .expect("insert_form");
+        .expect("insert_form")
+        .as_i64()
+        .expect("integer PK");
     let (email, _) = read(pk_val).await;
 
     assert_eq!(

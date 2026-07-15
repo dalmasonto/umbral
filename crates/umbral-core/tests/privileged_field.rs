@@ -201,7 +201,9 @@ async fn insert_form_strips_privileged_by_default() {
     let new_pk = DynQuerySet::for_meta(&meta())
         .insert_form_in_tx(&mut tx, &form, &[])
         .await
-        .expect("insert form");
+        .expect("insert form")
+        .as_i64()
+        .expect("integer PK");
     tx.commit().await.expect("commit");
 
     assert!(
@@ -224,7 +226,9 @@ async fn insert_form_honors_privileged_when_authorized() {
         .allow_privileged(&["is_admin"])
         .insert_form_in_tx(&mut tx, &form, &[])
         .await
-        .expect("insert form");
+        .expect("insert form")
+        .as_i64()
+        .expect("integer PK");
     tx.commit().await.expect("commit");
 
     assert!(

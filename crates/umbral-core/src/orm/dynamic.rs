@@ -1467,44 +1467,55 @@ impl<'a> DynQuerySet<'a> {
     /// map. Auto-increment integer PKs are omitted when the form value
     /// is missing or empty (SQLite hands out the next id). Form keys
     /// that don't match a column are ignored. `skip` lets the caller
-    /// drop fields the admin pre-filtered. Returns `last_insert_rowid`.
+    /// drop fields the admin pre-filtered. Returns the new row's primary key in
+    /// its true shape (see [`InsertedPk`]) — an integer PK comes back as
+    /// [`InsertedPk::Int`], a String/Uuid PK as [`InsertedPk::Text`] (no more
+    /// silent `0`), and an empty insert as [`InsertedPk::None`].
     pub async fn insert_form(
         self,
         form: &HashMap<String, String>,
         skip: &[String],
-    ) -> Result<i64, DynError> {
+    ) -> Result<InsertedPk, DynError> {
         self.ensure_writable()?;
         let Some(mut q) = self.build_insert_form_query(form, skip)? else {
-            return Ok(0);
+            return Ok(InsertedPk::None);
         };
+        let pk_col = self.meta.fields.iter().find(|c| c.primary_key);
 
         match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
             DbPool::Sqlite(pool) => {
-                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, vals).execute(&pool).await?;
-                Ok(res.last_insert_rowid())
+                // Integer PK: `last_insert_rowid` IS the PK, no RETURNING needed.
+                // Non-integer PK (String/Uuid): the rowid is NOT the key, so ask
+                // the row to hand its real PK back and decode it in true shape.
+                match pk_col {
+                    Some(pk) if !pk_is_integer(pk) => {
+                        q.returning_col(Alias::new(&pk.name));
+                        let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                        let row = sqlx::query_with(&sql, vals).fetch_one(&pool).await?;
+                        Ok(InsertedPk::Text(decode_to_string(&row, pk)?))
+                    }
+                    _ => {
+                        let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                        let res = sqlx::query_with(&sql, vals).execute(&pool).await?;
+                        Ok(InsertedPk::Int(res.last_insert_rowid()))
+                    }
+                }
             }
             DbPool::Postgres(pool) => {
-                // Postgres doesn't have last_insert_rowid; we ask for
-                // RETURNING the PK and read it back. Falls back to 0
-                // when the model has no integer PK (e.g. UUID PKs) —
-                // the caller's flow needs to skip relying on the
-                // return value in that case.
-                let pk_name = self
-                    .meta
-                    .fields
-                    .iter()
-                    .find(|c| c.primary_key)
-                    .map(|c| c.name.clone());
-                if let Some(pk) = pk_name {
-                    q.returning_col(Alias::new(&pk));
-                    let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                    let row = sqlx::query_with(&sql, vals).fetch_one(&pool).await?;
-                    Ok(row.try_get::<i64, _>(pk.as_str()).unwrap_or(0))
-                } else {
-                    let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                    let _ = sqlx::query_with(&sql, vals).execute(&pool).await?;
-                    Ok(0)
+                // Postgres has no last_insert_rowid; RETURNING the PK is the only
+                // way, and it also lets a non-integer PK come back in true shape.
+                match pk_col {
+                    Some(pk) => {
+                        q.returning_col(Alias::new(&pk.name));
+                        let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                        let row = sqlx::query_with(&sql, vals).fetch_one(&pool).await?;
+                        Ok(pg_inserted_pk(&row, pk)?)
+                    }
+                    None => {
+                        let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                        let _ = sqlx::query_with(&sql, vals).execute(&pool).await?;
+                        Ok(InsertedPk::None)
+                    }
                 }
             }
         }
@@ -1608,39 +1619,48 @@ impl<'a> DynQuerySet<'a> {
         tx: &mut crate::db::Transaction,
         form: &HashMap<String, String>,
         skip: &[String],
-    ) -> Result<i64, DynError> {
+    ) -> Result<InsertedPk, DynError> {
         self.ensure_writable()?;
         let Some(mut q) = self.build_insert_form_query(form, skip)? else {
-            return Ok(0);
+            return Ok(InsertedPk::None);
         };
+        let pk_col = self.meta.fields.iter().find(|c| c.primary_key);
 
         match tx.backend_name() {
             "sqlite" => {
-                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
                 let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
-                let res = sqlx::query_with(&sql, vals).execute(&mut **inner).await?;
-                Ok(res.last_insert_rowid())
+                // Same split as the pool path: integer PK via last_insert_rowid,
+                // non-integer PK via RETURNING so it keeps its true shape.
+                match pk_col {
+                    Some(pk) if !pk_is_integer(pk) => {
+                        q.returning_col(Alias::new(&pk.name));
+                        let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                        let row = sqlx::query_with(&sql, vals).fetch_one(&mut **inner).await?;
+                        Ok(InsertedPk::Text(decode_to_string(&row, pk)?))
+                    }
+                    _ => {
+                        let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                        let res = sqlx::query_with(&sql, vals).execute(&mut **inner).await?;
+                        Ok(InsertedPk::Int(res.last_insert_rowid()))
+                    }
+                }
             }
             _ => {
-                // Postgres has no last_insert_rowid; RETURNING the PK
-                // mirrors the pool path exactly, including the `0`
-                // fallback for a non-integer PK.
-                let pk_name = self
-                    .meta
-                    .fields
-                    .iter()
-                    .find(|c| c.primary_key)
-                    .map(|c| c.name.clone());
+                // Postgres has no last_insert_rowid; RETURNING the PK mirrors the
+                // pool path exactly and preserves a non-integer PK's shape.
                 let inner = tx.as_pg_mut().expect("postgres backend_name");
-                if let Some(pk) = pk_name {
-                    q.returning_col(Alias::new(&pk));
-                    let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                    let row = sqlx::query_with(&sql, vals).fetch_one(&mut **inner).await?;
-                    Ok(row.try_get::<i64, _>(pk.as_str()).unwrap_or(0))
-                } else {
-                    let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                    let _ = sqlx::query_with(&sql, vals).execute(&mut **inner).await?;
-                    Ok(0)
+                match pk_col {
+                    Some(pk) => {
+                        q.returning_col(Alias::new(&pk.name));
+                        let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                        let row = sqlx::query_with(&sql, vals).fetch_one(&mut **inner).await?;
+                        Ok(pg_inserted_pk(&row, pk)?)
+                    }
+                    None => {
+                        let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                        let _ = sqlx::query_with(&sql, vals).execute(&mut **inner).await?;
+                        Ok(InsertedPk::None)
+                    }
                 }
             }
         }
@@ -2653,6 +2673,74 @@ impl<'a> DynQuerySet<'a> {
         } else {
             Ok(parent_pks.len() as u64)
         }
+    }
+}
+
+/// The primary key of a freshly-inserted row, in its TRUE shape.
+///
+/// gaps4 #26 / gap #73: `insert_form` used to return a bare `i64` and hand back
+/// `0` the moment a model's PK wasn't an integer (String / Uuid). That `0` is a
+/// silent lie — a caller that redirects to `…/edit/{pk}` or wires a child to the
+/// new parent would use `0` and address the wrong row (or none). This preserves
+/// the shape so a non-integer PK round-trips out of the write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InsertedPk {
+    /// An auto-increment / integer PK (`last_insert_rowid` on SQLite, `RETURNING`
+    /// on Postgres).
+    Int(i64),
+    /// A String or Uuid PK, in its canonical text form.
+    Text(String),
+    /// No PK could be determined — an empty insert (no column survived the
+    /// `skip` filter) or a table with no primary key.
+    None,
+}
+
+impl InsertedPk {
+    /// The integer PK, if this row has one. `None` for a String/Uuid PK or an
+    /// empty insert — a caller that needs an integer must decide what a
+    /// non-integer PK means for it rather than silently reading `0`.
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Self::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// True when no PK was produced (empty insert / keyless table).
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+impl std::fmt::Display for InsertedPk {
+    /// The canonical identifier text — what a redirect URL or a child FK wants.
+    /// `None` renders empty, matching the old `0`-means-nothing callers that
+    /// checked for an empty string.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Int(n) => write!(f, "{n}"),
+            Self::Text(s) => f.write_str(s),
+            Self::None => Ok(()),
+        }
+    }
+}
+
+/// Is this PK column an auto-increment / integer type (vs. String / Uuid)?
+fn pk_is_integer(col: &Column) -> bool {
+    matches!(
+        col.ty,
+        SqlType::SmallInt | SqlType::Integer | SqlType::BigInt
+    )
+}
+
+/// Read a Postgres `RETURNING <pk>` cell into an [`InsertedPk`] of the right
+/// shape: [`InsertedPk::Int`] for an integer PK, [`InsertedPk::Text`] (decoded
+/// per the column's declared type) for a String/Uuid PK.
+fn pg_inserted_pk(row: &sqlx::postgres::PgRow, pk: &Column) -> Result<InsertedPk, DynError> {
+    if pk_is_integer(pk) {
+        Ok(InsertedPk::Int(row.try_get::<i64, _>(pk.name.as_str())?))
+    } else {
+        Ok(InsertedPk::Text(decode_pg_to_string(row, pk)?))
     }
 }
 

@@ -213,7 +213,9 @@ async fn fk_id_as_form_string_via_insert_form_links_parent() {
     let child_id = DynQuerySet::for_meta(&meta)
         .insert_form(&form, &[])
         .await
-        .expect("insert child with string FK id via insert_form");
+        .expect("insert child with string FK id via insert_form")
+        .as_i64()
+        .expect("integer PK");
 
     let child = Child::objects()
         .filter(child::ID.eq(child_id))
