@@ -1289,6 +1289,46 @@ fn only_with_typed_terminal_error(terminal: &'static str) -> sqlx::Error {
     ))
 }
 
+/// gaps4 #24: the `_pg` explicit-pool terminals are LOW-LEVEL — they build and
+/// run the base query and nothing else. Unlike the generic `fetch` / `first` /
+/// `get`, they do NOT apply `select_related` / `prefetch_related` /
+/// `join_related` hydration, `.only()` validation, or M2M parent-id seeding.
+///
+/// Silently ignoring a chained `.select_related(...)` and handing back
+/// un-hydrated rows is the worst outcome — the caller debugs the wrong thing.
+/// So a `_pg` terminal REFUSES when one of those features is set, naming it and
+/// pointing at the generic terminal (which routes to the right backend via the
+/// ambient pool / `DatabaseRouter` anyway).
+fn guard_pg_terminal_unsupported(
+    terminal: &'static str,
+    select_related: &[String],
+    prefetch_related: &[String],
+    join_related: &[JoinReq],
+    only_cols: &Option<Vec<String>>,
+) -> Result<(), sqlx::Error> {
+    let feature = if only_cols.is_some() {
+        // `.only()` already has its own dedicated error on the generic path;
+        // reuse it so the two terminals give the same message.
+        return Err(only_with_typed_terminal_error(terminal));
+    } else if !select_related.is_empty() {
+        "select_related"
+    } else if !prefetch_related.is_empty() {
+        "prefetch_related"
+    } else if !join_related.is_empty() {
+        "join_related"
+    } else {
+        return Ok(());
+    };
+    Err(sqlx::Error::Protocol(format!(
+        "umbral::orm::{terminal}: `.{feature}(...)` is not applied by the low-level \
+         `_pg` terminals — they run the base query only, with no relation hydration. \
+         Silently returning un-hydrated rows would be worse, so this is refused. Use \
+         the generic `.{}(...)` terminal instead (it routes to Postgres through the \
+         ambient pool / DatabaseRouter and DOES hydrate), or drop `.{feature}(...)`.",
+        terminal.trim_end_matches("_pg"),
+    )))
+}
+
 fn resolve_pool<T: Model>(explicit: Option<DbPool>, op: crate::db::RouteOp) -> DbPool {
     if let Some(pool) = explicit {
         return pool;
@@ -3655,6 +3695,15 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // gaps4 #24: refuse a chained hydration feature this low-level terminal
+        // would silently drop, rather than hand back un-hydrated rows.
+        guard_pg_terminal_unsupported(
+            "fetch_pg",
+            &self.select_related,
+            &self.prefetch_related,
+            &self.join_related,
+            &self.only_cols,
+        )?;
         let q = self.build_query_for("postgres");
         let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
         sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
@@ -3667,6 +3716,13 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        guard_pg_terminal_unsupported(
+            "first_pg",
+            &self.select_related,
+            &self.prefetch_related,
+            &self.join_related,
+            &self.only_cols,
+        )?;
         self.query.limit(1);
         let q = self.build_query_for("postgres");
         let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
@@ -4678,6 +4734,17 @@ impl<T: Model> Manager<T> {
     /// counterpart of [`Self::create`] for models with Postgres-only
     /// field types (Array, Inet, MacAddr, FullText), whose `FromRow`
     /// impl exists only for `PgRow`.
+    ///
+    /// **Low-level escape hatch (gaps4 #24).** Unlike [`Self::create`], this
+    /// serializes + inserts + returns the row and NOTHING ELSE: it does not run
+    /// validation, does not classify a DB error into a structured
+    /// [`WriteError`], does not write form-staged **M2M** junctions, and does
+    /// not fire `post_save` **signals** or record an **audit** entry. For a
+    /// model with M2M relations, `#[umbral(audited)]`, or registered signal
+    /// handlers, prefer the generic [`Self::create`] — it routes to Postgres
+    /// through the ambient pool / `DatabaseRouter` and runs the full lifecycle.
+    /// Reach for `create_pg` only for a Postgres-only-typed model that has none
+    /// of those, or when you explicitly want the bare insert.
     pub async fn create_pg(
         &self,
         instance: T,
