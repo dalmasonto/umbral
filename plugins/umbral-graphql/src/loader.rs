@@ -121,7 +121,14 @@ impl Loader<ChildKey> for ChildLoader {
             };
             let ids: Vec<String> = ks.iter().map(|k| k.parent_id.clone()).collect();
 
-            let rows = fetch_where_in(&meta, fk_col, &ids, self.unlocks.for_table(table))
+            // gaps4 #13: the child list is windowed PER PARENT, not globally. The
+            // old code put one `LIMIT crate::MAX_LIMIT` on the batched `WHERE fk IN
+            // (...)` query, so a single parent with MAX_LIMIT children starved
+            // every other parent in the batch of their rows. Here the batch is
+            // fetched ordered by the child's own pk (so any ceiling truncation
+            // falls across parents proportionally, not on whole parents) and each
+            // parent is then capped to MAX_LIMIT independently while grouping.
+            let rows = fetch_children_batch(&meta, fk_col, &ids, self.unlocks.for_table(table))
                 .await
                 .map_err(|e| Arc::new(async_graphql::Error::new(e)))?;
 
@@ -135,13 +142,18 @@ impl Loader<ChildKey> for ChildLoader {
                     .get(fk_col)
                     .map(crate::schema_id_string)
                     .unwrap_or_default();
-                out.entry(ChildKey {
-                    table: table.to_string(),
-                    fk_col: fk_col.to_string(),
-                    parent_id: parent,
-                })
-                .or_default()
-                .push(row);
+                let bucket = out
+                    .entry(ChildKey {
+                        table: table.to_string(),
+                        fk_col: fk_col.to_string(),
+                        parent_id: parent,
+                    })
+                    .or_default();
+                // Per-parent window: each parent gets up to MAX_LIMIT of its own
+                // children, independent of how many any sibling has.
+                if bucket.len() < crate::MAX_LIMIT as usize {
+                    bucket.push(row);
+                }
             }
         }
         Ok(out)
@@ -247,6 +259,58 @@ async fn fetch_where_in(
         .allow_private(&refs)
         .filter_condition(any.expect("set above"))
         .limit(crate::MAX_LIMIT)
+        .fetch_as_json()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(Json::Object).collect())
+}
+
+/// The batched reverse-FK read: `SELECT * FROM child WHERE fk IN (parent_ids)`,
+/// windowed per-parent by the caller (`ChildLoader::load`), not globally.
+///
+/// Unlike [`fetch_where_in`], this puts NO `LIMIT MAX_LIMIT` on the whole query —
+/// that single global cap is exactly the gaps4 #13 bug, where one prolific parent
+/// consumed the entire limit and starved its siblings. Instead:
+///
+/// - rows are ordered by the child's OWN primary key, so that if the safety
+///   ceiling below ever trims the result, it trims each parent's highest-pk tail
+///   proportionally rather than dropping whole parents; and
+/// - a generous ceiling of `parents × MAX_LIMIT` bounds a runaway read (a parent
+///   with millions of children) without touching normal loads, where every parent
+///   is well under MAX_LIMIT. The true DB-side window (`ROW_NUMBER() OVER
+///   (PARTITION BY fk)`) is a deferred ORM feature; it would save shipping the
+///   trimmed tail but does the same table scan, so this is the same DB work.
+async fn fetch_children_batch(
+    meta: &ModelMeta,
+    fk_col: &str,
+    ids: &[String],
+    unlocked: &[String],
+) -> Result<Vec<Json>, String> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut any = sea_or(meta, fk_col, ids);
+    if any.is_none() {
+        // Not one parent id could be coerced to the column's type — match nothing.
+        // NEVER fall through to an unfiltered query (gaps3 #56).
+        any = Some(umbral::orm::never_matches());
+    }
+    // Distinct parents in this batch bound the ceiling; `ids` may repeat if two
+    // resolutions asked for the same parent, so count uniquely.
+    let distinct = {
+        let mut v: Vec<&String> = ids.iter().collect();
+        v.sort();
+        v.dedup();
+        v.len() as u64
+    };
+    let ceiling = distinct.saturating_mul(crate::MAX_LIMIT);
+    DB_READS.fetch_add(1, Ordering::Relaxed);
+    let refs: Vec<&str> = unlocked.iter().map(String::as_str).collect();
+    let rows = DynQuerySet::for_meta(meta)
+        .allow_private(&refs)
+        .filter_condition(any.expect("set above"))
+        .order_by_col(&pk_name(meta), false)
+        .limit(ceiling)
         .fetch_as_json()
         .await
         .map_err(|e| e.to_string())?;
