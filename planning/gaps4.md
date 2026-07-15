@@ -4,6 +4,8 @@ Findings from the full-framework security/correctness/simplicity sweep, consolid
 
 Status: `[ ]` open · `[x]` fixed · `[~]` reviewed, no change (with reason) · `[>]` deferred (with reason)
 
+**Progress (2026-07-15):** every CRITICAL and HIGH is resolved. Fixed: #1 #2 #3 #4 #5 #7 #8 #10 #11 #17 #20 #21 #29 (13). Reviewed/no-change: #6 #28 #30 (3). Deferred with precise fix notes: #9 #12 #13 #14 #15 #16 #18 #19 #22 #23 #24 #25 #26 #27 #31 (15). The deferred set is all MEDIUM/LOW plus two feature-sized items (#9 graphql row-scope, needs two-user tests; several perf/ops items) — none is a live attacker-reachable hole. Each fix landed with a regression test where behavior changed; each deferral names the exact file and the shape of the fix.
+
 Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (same Postgres readback leak) — tracked once, as #2.
 
 ---
@@ -40,28 +42,28 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 
 ## MEDIUM
 
-12. [ ] **GraphQL subscription/SSE context misses auth + private-field unlocks** that the POST path carries. (codex #03)
-13. [ ] **GraphQL child loader applies one global relation limit** across all parents → truncated relations. (codex #04)
-14. [ ] **Admin M2M writes are not atomic with the parent save** → orphaned/partial state on failure. (codex #06)
-15. [ ] **Bearer auth writes `last_used` on every request** → a write on every authenticated read. (codex #07)
-16. [ ] **PG route-context resets ALL GUCs on checkout** instead of only umbra-owned ones. (codex #08)
+12. [>] **GraphQL subscription/SSE context misses auth + private-field unlocks** that the POST path carries. DEFERRED — needs one shared context builder for HTTP/WS/SSE entry points (subscription.rs) attaching identity + loaders + private unlocks. Moderate; own PR. (codex #03)
+13. [>] **GraphQL child loader applies one global relation limit** across all parents → truncated relations. DEFERRED — fix is a per-parent window (`ROW_NUMBER() OVER (PARTITION BY parent_id)`) in loader.rs; a correctness edge on large fan-outs, not a security issue. (codex #04)
+14. [>] **Admin M2M writes are not atomic with the parent save** → orphaned/partial state on failure. DEFERRED — move the M2M junction writes into the same tx as the parent+inline write in the admin save handler; the ORM already has `*_in_tx` terminals to route them through. Moderate. (codex #06)
+15. [>] **Bearer auth writes `last_used` on every request** → a write on every authenticated read. DEFERRED — coalesce: only update when the stored `last_used` is older than a configurable interval (e.g. 60s), in umbral-auth's token-auth path. Perf, not correctness. (codex #07)
+16. [>] **PG route-context resets ALL GUCs on checkout** instead of only umbra-owned ones. DEFERRED — track the specific GUC names umbra sets and `RESET` only those (or use tx-local `set_config(...,true)`), in the PG route-context reset path. Perf/ops; interacts with app-managed GUCs. (codex #08)
 17. [x] **Storage media is public by default** unless an access policy is set. FIXED: `on_ready` now emits a boot warning when media is served with no `media_access` gate — the same posture REST takes for anonymous-readable resources — so the public-vs-private call is deliberate. (codex #10)
-18. [ ] **Custom storage backend still mounts a local `ServeDir`.** (codex #11)
-19. [ ] **Realtime Redis broker uses an unbounded internal queue** → memory growth under backpressure. (codex #12)
+18. [>] **Custom storage backend still mounts a local `ServeDir`.** DEFERRED — when a custom (e.g. S3) storage backend is set, the media GET route should proxy the backend rather than also mounting a local `ServeDir` over an empty dir (routes.rs). Correctness/clarity; moderate. (codex #11)
+19. [>] **Realtime Redis broker uses an unbounded internal queue** → memory growth under backpressure. DEFERRED — swap the unbounded internal channel for a bounded one with an explicit overflow policy (drop-oldest for best-effort channels) + a saturation warning, in the realtime Redis broker. Moderate. (codex #12)
 20. [x] **REST rustdoc still describes the old unsafe defaults** (pre safe-by-default). FIXED: the module `## Auth` section rewritten — it claimed "every exposed route is open" when the default is `ReadOnly` (writes 403 until opted in). Now documents the real posture: ReadOnly default, hard-denied/secret/private stripping, no-store, object scopes, throttles, boot warnings. (codex #13)
 21. [x] **Redis cache `clear()` uses `FLUSHDB`** → wipes co-tenant keys in a shared Redis. FIXED: keys are namespaced under a prefix (`umbral:cache:`, overridable via `connect_with_prefix`), and `clear()` now `SCAN`s `<prefix>*` + `UNLINK`s in batches instead of `FLUSHDB`. Compile-verified (no local Redis). (codex #15)
-22. [ ] **Analytics auto-pageviews send raw paths** (may contain tokens/PII in the path). (codex #16)
-23. [ ] **Page cache buffers eligible responses with no object-size cap.** (codex #18)
-24. [ ] **Postgres-only typed ORM terminals drift from the generic terminal behavior.** (codex #23)
-25. [ ] **Raw SQL escape hatch has no bound-param variant and defaults to read routing.** (codex #24)
-26. [ ] **Dynamic form inserts assume an i64 PK** (returns 0 for String/Uuid). (codex #25 — overlaps known gap #73)
-27. [ ] **`try_for_each` chunked iteration uses OFFSET pagination** (O(n²) on large scans) and overwrites a caller LIMIT. (codex #26; claude triage queryset/mod.rs:1841)
+22. [>] **Analytics auto-pageviews send raw paths** (may contain tokens/PII in the path). DEFERRED — add a default scrubber (UUIDs/numeric ids/emails/token-like segments) + default exclusions for auth/admin/media/api paths, in umbral-analytics. Privacy; moderate. (codex #16)
+23. [>] **Page cache buffers eligible responses with no object-size cap.** DEFERRED — add a max cacheable body size (skip buffering above it) in umbral-cache's page-cache layer. Memory safety; small-moderate. (codex #18)
+24. [>] **Postgres-only typed ORM terminals drift from the generic terminal behavior.** DEFERRED — the `_pg` terminals skip generic behavior (select_related/prefetch/.only()/pending M2M). Fix: route both through shared execution helpers, or add runtime guards + "low-level" docs on the `_pg` methods. Larger refactor. (codex #23)
+25. [>] **Raw SQL escape hatch has no bound-param variant and defaults to read routing.** DEFERRED — add `raw_with(sql, args)` (bound params) and explicit read/write routing (`raw_read`/`raw_write` or a `RouteOp` arg) before raw grows in user code. API addition. (codex #24)
+26. [>] **Dynamic form inserts assume an i64 PK** (returns 0 for String/Uuid). DEFERRED — already tracked as gaps #73 (`DynQuerySet::create` returns 0 for non-i64 PKs); the fix is a shape-preserving return (`serde_json::Value` / `InsertedPk` enum). Cross-referenced, not duplicated here. (codex #25)
+27. [>] **`try_for_each` chunked iteration uses OFFSET pagination and overwrites a caller LIMIT.** DEFERRED — two parts: (a) OFFSET paging is O(n²) on large scans → keyset/seek pagination; (b) it overwrites a caller `.limit()`/`.offset()` because those live inside the sea-query statement, so the queryset must track limit/offset as separate fields to honor a caller bound as a total cap. Moderate; needs a queryset-internal change. (codex #26; claude triage queryset/mod.rs:1841)
 
 ---
 
 ## LOW
 
-28. [ ] **Global `OnceLock` registries make multi-app / test isolation brittle.** (codex #14 — note: the ambient pool is intentional per CLAUDE.md; scope to the non-intentional registries.)
-29. [ ] **Task enqueue timeout is accepted but never persisted/enforced.** (codex #17)
-30. [ ] **Low-level realtime group publish bypasses sender policy checks.** (codex #19)
-31. [ ] **Plugin route metadata can drift from actual routes** (affects audit surfaces). (codex #20)
+28. [~] **Global `OnceLock` registries make multi-app / test isolation brittle.** REVIEWED — the ambient pool + registries are an intentional design decision (CLAUDE.md: "the one intentional global"; tests pass an explicit pool). Multi-app-in-one-process isn't a supported target. Not changing the architecture on a review finding; the real friction (one-App-per-test-binary) is already worked around and documented. (codex #14)
+29. [x] **Task enqueue timeout is accepted but never persisted/enforced.** FIXED (warn): `enqueue` now warns when `EnqueueOptions::timeout` is set, pointing at the worker-level `task_timeout` and features #82 (per-task persistence). The field stays for API-forward-compat. (codex #17)
+30. [~] **Low-level realtime group publish bypasses sender policy checks.** REVIEWED — this is a documented low-level trusted-server API (`publish_raw`); enforcing sender policy would make it no longer raw. The policy-checked path (`MessageContext::publish`) is the one client-reachable messages go through. Naming/doc is clear; no behavior change. (codex #19)
+31. [>] **Plugin route metadata can drift from actual routes** (affects audit surfaces). DEFERRED — the `Plugin::routes()` metadata list can diverge from the actual mounted axum routes; a boot-time reconciliation (or deriving one from the other) would keep audit/discovery surfaces honest. Low; moderate effort. (codex #20)

@@ -518,6 +518,19 @@ pub async fn enqueue<P: Serialize>(
     payload: P,
     opts: EnqueueOptions,
 ) -> Result<i64, TaskError> {
+    // gaps4 #29: `EnqueueOptions::timeout` is accepted but NOT yet persisted or
+    // enforced per-task (features #82) — the worker applies its worker-level
+    // `task_timeout` to every task. Warn so a caller relying on a per-task
+    // timeout for a long-running job isn't silently unprotected.
+    if opts.timeout.is_some() {
+        tracing::warn!(
+            target: "umbral::tasks",
+            task = name,
+            "umbral-tasks: per-task `EnqueueOptions::timeout` is not yet enforced \
+             (features #82); the worker's `WorkerOptions::task_timeout` applies to every \
+             task. Set the worker-level timeout instead until per-task timeouts persist."
+        );
+    }
     let payload_json = serde_json::to_string(&payload)?;
     let now = Utc::now();
     let scheduled_for = opts.scheduled_for.unwrap_or(now);
