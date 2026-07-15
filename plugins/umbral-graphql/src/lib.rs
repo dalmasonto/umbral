@@ -48,7 +48,9 @@ use std::sync::Arc;
 
 use async_graphql::dynamic::Schema;
 use async_graphql::http::GraphiQLSource;
-use async_graphql_axum::{GraphQLRequest, GraphQLResponse, GraphQLSubscription};
+use async_graphql_axum::{
+    GraphQLProtocol, GraphQLRequest, GraphQLResponse, GraphQLWebSocket,
+};
 use axum::response::{Html, IntoResponse};
 use futures_util::StreamExt;
 use umbral::migrate::ModelMeta;
@@ -159,6 +161,39 @@ async fn csrf_content_type_guard(
             .into_response();
     }
     next.run(req).await
+}
+
+/// gaps4 #12: resolve the per-request GraphQL context — identity, the
+/// `private`-column unlocks that identity earns, and a fresh per-caller loader
+/// keyed to those unlocks.
+///
+/// ONE builder for all three transports (POST, SSE, WebSocket). Before this the
+/// POST path resolved the full context while SSE injected a bare default loader
+/// and WebSocket injected nothing — so an authenticated subscription couldn't
+/// authenticate and a private field a query would unlock stayed hidden over a
+/// subscription. A subscription IS a read; it must see the same context a query
+/// does.
+async fn resolve_request_ctx(
+    headers: &umbral::web::HeaderMap,
+    auth: &Option<Arc<dyn umbral::auth::Authentication>>,
+    exposed: &[Exposed],
+) -> (
+    Option<umbral::auth::Identity>,
+    Arc<privacy::PrivateUnlocks>,
+    loader::Loaders,
+) {
+    let identity: Option<umbral::auth::Identity> = match auth {
+        Some(a) => a.authenticate(headers).await,
+        None => None,
+    };
+    // Which `private` columns THIS caller unlocked — computed here because this
+    // is the only place the identity exists; the schema is built once at boot.
+    let unlocks = Arc::new(privacy::PrivateUnlocks::resolve(exposed, identity.as_ref()));
+    // Fresh loaders PER request/connection, keyed to this caller's unlocks. A
+    // shared cache would serve one caller's rows — and now their UNLOCKED
+    // columns — to another.
+    let loaders = loader::Loaders::new(unlocks.clone());
+    (identity, unlocks, loaders)
 }
 
 /// Guard a top-level query field.
@@ -627,24 +662,11 @@ impl Plugin for GraphqlPlugin {
                     let auth = auth.clone();
                     let exposed = post_exposed.clone();
                     async move {
-                        let identity: Option<umbral::auth::Identity> = match &auth {
-                            Some(a) => a.authenticate(&headers).await,
-                            None => None,
-                        };
-                        // Which `private` columns THIS caller unlocked. Computed here because
-                        // this is the only place the identity exists; the schema is built once
-                        // at boot and cannot know who is asking.
-                        let unlocks = Arc::new(privacy::PrivateUnlocks::resolve(
-                            &exposed,
-                            identity.as_ref(),
-                        ));
-                        // Fresh loaders PER REQUEST. A shared cache would serve one caller's
-                        // rows to another — a data leak wearing a performance costume. And now
-                        // it would serve one caller's UNLOCKED columns to another, which is the
-                        // same leak with a permission bypass on top.
+                        let (identity, unlocks, loaders) =
+                            resolve_request_ctx(&headers, &auth, &exposed).await;
                         let inner = req
                             .into_inner()
-                            .data(loader::Loaders::new(unlocks.clone()))
+                            .data(loaders)
                             .data(unlocks)
                             .data::<Option<umbral::auth::Identity>>(identity);
                         GraphQLResponse::from(schema.execute(inner).await).into_response()
@@ -678,28 +700,71 @@ impl Plugin for GraphqlPlugin {
             .then(|| format!("{path}/ws"));
 
         if exposed.iter().any(|e| e.subscribable) {
+            // gaps4 #12: both subscription transports carry the SAME per-request
+            // context (identity + private unlocks + per-caller loaders) the POST
+            // query path does, resolved from the connection/request headers.
             let ws_schema = schema.clone();
+            let ws_auth = self.auth.clone();
+            let ws_exposed = Arc::new(exposed.clone());
             router = router.route(
                 &format!("{path}/ws"),
-                axum::routing::get_service(GraphQLSubscription::new(ws_schema)),
+                axum::routing::get(
+                    move |headers: umbral::web::HeaderMap,
+                          protocol: GraphQLProtocol,
+                          upgrade: axum::extract::ws::WebSocketUpgrade| {
+                        let schema = ws_schema.clone();
+                        let auth = ws_auth.clone();
+                        let exposed = ws_exposed.clone();
+                        async move {
+                            // Resolve identity from the UPGRADE request's headers
+                            // (a WS upgrade is a GET — a session cookie / bearer
+                            // rides along), then hand the context to the socket.
+                            let (identity, unlocks, loaders) =
+                                resolve_request_ctx(&headers, &auth, &exposed).await;
+                            let mut data = async_graphql::Data::default();
+                            data.insert(loaders);
+                            data.insert(unlocks);
+                            data.insert::<Option<umbral::auth::Identity>>(identity);
+                            upgrade
+                                .protocols(async_graphql::http::ALL_WEBSOCKET_PROTOCOLS)
+                                .on_upgrade(move |stream| {
+                                    GraphQLWebSocket::new(stream, schema, protocol)
+                                        .with_data(data)
+                                        .serve()
+                                })
+                        }
+                    },
+                ),
             );
 
             let sse_schema = schema.clone();
+            let sse_auth = self.auth.clone();
+            let sse_exposed = Arc::new(exposed.clone());
             router = router.route(
                 &format!("{path}/sse"),
-                axum::routing::post(move |req: GraphQLRequest| {
-                    let schema = sse_schema.clone();
-                    async move {
-                        let stream = schema
-                            .execute_stream(req.into_inner().data(loader::Loaders::default()));
-                        axum::response::Sse::new(stream.map(|res| {
-                            axum::response::sse::Event::default()
-                                .json_data(res)
-                                .map_err(|e| e.to_string())
-                        }))
-                        .keep_alive(axum::response::sse::KeepAlive::default())
-                    }
-                }),
+                axum::routing::post(
+                    move |headers: umbral::web::HeaderMap, req: GraphQLRequest| {
+                        let schema = sse_schema.clone();
+                        let auth = sse_auth.clone();
+                        let exposed = sse_exposed.clone();
+                        async move {
+                            let (identity, unlocks, loaders) =
+                                resolve_request_ctx(&headers, &auth, &exposed).await;
+                            let inner = req
+                                .into_inner()
+                                .data(loaders)
+                                .data(unlocks)
+                                .data::<Option<umbral::auth::Identity>>(identity);
+                            let stream = schema.execute_stream(inner);
+                            axum::response::Sse::new(stream.map(|res| {
+                                axum::response::sse::Event::default()
+                                    .json_data(res)
+                                    .map_err(|e| e.to_string())
+                            }))
+                            .keep_alive(axum::response::sse::KeepAlive::default())
+                        }
+                    },
+                ),
             );
         }
 
