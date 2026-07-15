@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.9...umbral-openapi-v0.0.10) - 2026-07-15
+
+### Other
+
+- *(cli)* finish the codegen migration; collect commands once
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.8...umbral-openapi-v0.0.9) - 2026-07-14
 
 ### Fixed

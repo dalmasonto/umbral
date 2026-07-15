@@ -13,7 +13,7 @@ rust-version.workspace = true
 publish = true
 
 [dependencies]
-umbral = { path = "../umbral", version = "0.0.9" }
+umbral = { path = "../umbral", version = "0.0.10" }
 axum = "0.8"
 http = "1"
 http-body-util = "0.1"
@@ -32,5 +32,5 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 # Proves the claim that a plugin's OWN models get their tables created by
 # `boot`/`create_tables` without the test listing them. Dev-only: umbral-testing
 # is not a plugin and must not carry auth into anyone's release build.
-umbral-auth = { path = "../../plugins/umbral-auth", version = "0.0.9" }
+umbral-auth = { path = "../../plugins/umbral-auth", version = "0.0.10" }
 chrono = { version = "0.4", features = ["serde"] }

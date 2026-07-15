@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.9...umbral-storage-v0.0.10) - 2026-07-15
+
+### Fixed
+
+- *(storage)* don't mount a local ServeDir for a custom backend (gaps4 #18)
+- *(cache,storage,rest)* scoped Redis clear; media warning; doc drift
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.8...umbral-storage-v0.0.9) - 2026-07-14
 
 ### Other

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-tenants-v0.0.9...umbral-tenants-v0.0.10) - 2026-07-15
+
+### Fixed
+
+- *(tenants)* audit-log the shared/tenant split at boot (gaps4 #11)
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-tenants-v0.0.8...umbral-tenants-v0.0.9) - 2026-07-14
 
 ### Other
