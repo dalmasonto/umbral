@@ -170,8 +170,58 @@ pub trait Plugin: Send + Sync + 'static {
     /// hand-written one passed to `AppBuilder::routes()`. Plugins
     /// choose their own path prefixes (spec 02 §"What a plugin can
     /// contribute": routes are flat, not auto-prefixed).
+    ///
+    /// **Drift warning.** This method and [`route_paths`] are two
+    /// independent lists; nothing forces them to agree, so a route
+    /// mounted here but not declared in `route_paths()` is invisible to
+    /// every audit / discovery surface (the dev 404 page, the ungated-
+    /// route audit, future OpenAPI security annotations). For routes
+    /// whose accuracy matters to those surfaces, implement
+    /// [`routes_builder`] instead — it records each path AS you mount
+    /// it, so the registry cannot drift from what's actually served.
+    ///
+    /// [`route_paths`]: Plugin::route_paths
+    /// [`routes_builder`]: Plugin::routes_builder
     fn routes(&self) -> Router {
         Router::new()
+    }
+
+    /// The drift-free alternative to [`routes`] + [`route_paths`]
+    /// (gaps4 #31): mount routes through the recording [`Routes`]
+    /// builder and the framework takes BOTH the axum router and the
+    /// declared [`RouteSpec`]s from that ONE source, so the route
+    /// registry can never fall out of sync with what's mounted.
+    ///
+    /// ```ignore
+    /// fn routes_builder(&self) -> Option<umbral::routes::Routes> {
+    ///     Some(
+    ///         Routes::new()
+    ///             .get("/health", health)          // path recorded as it mounts
+    ///             .post("/api/thing", create_thing) //   "        "       "
+    ///     )
+    /// }
+    /// ```
+    ///
+    /// When this returns `Some`, the framework uses the builder's
+    /// router for merging AND its specs for the registry, and it
+    /// **ignores** this plugin's [`routes`] / [`route_paths`] entirely
+    /// — implement one mechanism or the other, never both. Returning
+    /// `None` (the default) keeps the legacy two-method pair.
+    ///
+    /// The one residual: paths inside a router merged via
+    /// [`Routes::with_router`] (or an axum `nest`) still aren't
+    /// recorded — axum exposes no route-table introspection — so those
+    /// escape-hatch paths carry the same drift caveat as `routes()`.
+    /// Everything mounted through the builder's own `get/post/route/…`
+    /// methods is recorded, including per-route `.layer(...)`.
+    ///
+    /// [`routes`]: Plugin::routes
+    /// [`route_paths`]: Plugin::route_paths
+    /// [`Routes`]: crate::routes::Routes
+    /// [`Routes::with_router`]: crate::routes::Routes::with_router
+    /// [`RouteSpec`]: crate::routes::RouteSpec
+    fn routes_builder(&self) -> Option<crate::routes::Routes> {
+        None
     }
 
     /// Declared URL routes this plugin contributes — a companion to
@@ -189,9 +239,12 @@ pub trait Plugin: Send + Sync + 'static {
     /// `(&["GET", "POST"][..], "/api/post").into()`.
     ///
     /// Default empty. Mismatch with the real `routes()` is a stale-
-    /// list bug, not a correctness bug.
+    /// list bug, not a correctness bug — but if you'd rather it be
+    /// impossible than merely benign, implement [`routes_builder`]
+    /// (gaps4 #31), which derives this list from the routes you mount.
     ///
     /// [`routes`]: Plugin::routes
+    /// [`routes_builder`]: Plugin::routes_builder
     /// [`RouteSpec`]: crate::routes::RouteSpec
     fn route_paths(&self) -> Vec<crate::routes::RouteSpec> {
         Vec::new()

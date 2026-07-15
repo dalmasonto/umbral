@@ -1361,10 +1361,25 @@ impl AppBuilder {
             crate::migrate::APP_PLUGIN_NAME.to_string(),
             std::mem::take(&mut self.route_paths),
         );
+        // gaps4 #31: when a plugin implements the recording `routes_builder()`,
+        // its router AND its declared specs come from that ONE source, so the
+        // registry cannot drift from what's mounted. Call it once here, record
+        // the specs now, and stash the router for the merge loop below (so a
+        // legacy plugin's `routes()` side-effects still fire at their original
+        // point, and a builder plugin's router is never rebuilt twice).
+        let mut builder_routers: HashMap<String, Router> = HashMap::new();
         for plugin in &sorted_plugins {
+            let specs = match plugin.routes_builder() {
+                Some(builder) => {
+                    let (router, specs) = builder.into_parts();
+                    builder_routers.insert(plugin.name().to_string(), router);
+                    specs
+                }
+                None => plugin.route_paths(),
+            };
             route_registry
                 .by_plugin
-                .insert(plugin.name().to_string(), plugin.route_paths());
+                .insert(plugin.name().to_string(), specs);
         }
         crate::routes::init(route_registry);
 
@@ -1460,7 +1475,13 @@ impl AppBuilder {
             Router::new().fallback(|| async { "umbral is running, but no routes are registered." })
         });
         for plugin in &sorted_plugins {
-            router = router.merge(plugin.routes());
+            // gaps4 #31: a plugin that provided a `routes_builder()` had its
+            // router built above (drift-free with its specs); reuse it. Everyone
+            // else mounts through the legacy `routes()`, unchanged.
+            let plugin_router = builder_routers
+                .remove(plugin.name())
+                .unwrap_or_else(|| plugin.routes());
+            router = router.merge(plugin_router);
             // Phase 5.4 — mount the plugin's `include_bytes!`-embedded
             // assets. Each StaticFile becomes a GET route serving the
             // body with the supplied content-type + cache-control.
