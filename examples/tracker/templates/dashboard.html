@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+
+  <div class="flex flex-wrap items-end justify-between gap-4">
+    <div>
+      <h1 class="text-3xl font-bold tracking-tight text-ink">Dashboard</h1>
+      <p class="mt-1.5 text-muted">
+        Signed in as <span class="font-medium text-ink-2">{{ user.username }}</span>
+      </p>
+    </div>
+    <a href="/admin/post/add/"
+       class="inline-flex items-center rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-accent-2">
+      New post
+    </a>
+  </div>
+
+  <section class="mt-10">
+    <h2 class="text-xs font-semibold uppercase tracking-widest text-faint">Your posts</h2>
+
+    {% if my_posts %}
+      <ul class="mt-4 divide-y divide-hairline overflow-hidden rounded-xl border border-hairline bg-surface">
+        {% for post in my_posts %}
+          <li class="flex items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-surface-2">
+            <span class="font-medium text-ink">{{ post.title }}</span>
+            {% if post.published %}
+              <span class="shrink-0 rounded-full bg-ok-soft px-2.5 py-0.5 text-xs font-medium text-ok">published</span>
+            {% else %}
+              <span class="shrink-0 rounded-full bg-warn-soft px-2.5 py-0.5 text-xs font-medium text-warn">draft</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="mt-4 rounded-xl border border-dashed border-hairline-2 bg-surface px-6 py-12 text-center">
+        <p class="font-medium text-ink-2">No posts yet.</p>
+        <p class="mx-auto mt-1.5 max-w-sm text-sm text-muted">
+          Create one in the admin, or POST to
+          <code class="whitespace-nowrap rounded border border-hairline-2 bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-ink-2">/api/post</code>.
+        </p>
+        <a href="https://dalmasonto.github.io/umbral/docs/v0.0.1/rest/index" target="_blank" rel="noopener"
+           class="mt-4 inline-flex text-sm font-medium text-accent-2 hover:text-accent">Read the REST docs →</a>
+      </div>
+    {% endif %}
+  </section>
+
+{% endblock %}

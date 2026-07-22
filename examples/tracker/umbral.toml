@@ -1,0 +1,15 @@
+# umbral settings for tracker.
+# Environment variables (UMBRAL_*) override these at runtime.
+# See umbral::settings for the full schema.
+
+database_url = "sqlite://tracker.db?mode=rwc"
+
+# Bind address for `cargo run -- serve`.
+# Override via UMBRAL_BIND_ADDR or the --addr flag.
+bind_addr = "127.0.0.1:8000"
+
+environment = "Dev"
+
+# A random dev-only key, unique to this project. CHANGE THIS IN PRODUCTION —
+# the framework errors at boot if a dev key is used with environment = "Prod".
+secret_key = "2db4b87facf728ef765d5b6d6cc140885e9246751b7021adcf7b14613e1f1296"

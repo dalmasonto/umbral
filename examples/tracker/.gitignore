@@ -1,0 +1,4 @@
+/target
+/tracker.db*
+.env
+Cargo.lock

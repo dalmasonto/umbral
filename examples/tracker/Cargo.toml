@@ -1,0 +1,52 @@
+[package]
+name = "tracker"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+projects = { path = "plugins/projects" }
+
+# ----- Framework core (always required) ------------------------------------
+umbral         = { path = "../../crates/umbral" }
+umbral-cli     = { path = "../../crates/umbral-cli" }
+
+# ----- Active by default ---------------------------------------------------
+# What the generated `src/main.rs` wires in. Comment any of these out only
+# if you also remove the matching `.plugin(...)` line.
+umbral-auth     = { path = "../../plugins/umbral-auth" }
+umbral-sessions = { path = "../../plugins/umbral-sessions" }
+umbral-admin    = { path = "../../plugins/umbral-admin" }
+umbral-rest     = { path = "../../plugins/umbral-rest" }
+umbral-openapi  = { path = "../../plugins/umbral-openapi" }
+umbral-security = { path = "../../plugins/umbral-security" }
+umbral-graphql  = { path = "../../plugins/umbral-graphql" }
+umbral-playground = { path = "../../plugins/umbral-playground" }
+# Observability init helper (structured JSON logging). Enable the `otel`
+# feature to ALSO export OpenTelemetry traces over OTLP to a collector
+# (Jaeger/Tempo/Honeycomb): `umbral-logs = { version = "0.0.10", features = ["otel"] }`.
+umbral-logs     = { path = "../../plugins/umbral-logs" }
+# Serves ./static at /static — including the compiled Tailwind bundle this
+# project ships. Not optional: the SecurityPlugin's CSP blocks third-party
+# script/style CDNs, so an app must serve its own assets.
+umbral-storage  = { path = "../../plugins/umbral-storage" }
+
+# ----- Available built-ins (uncomment + register in main.rs to enable) -----
+# umbral-playground   = { path = "../../plugins/umbral-playground" }  # Interactive API playground UI (think mini-Postman) at /playground/.
+# umbral-tasks        = { path = "../../plugins/umbral-tasks" }  # DB-backed background task queue with a worker process.
+# umbral-permissions  = { path = "../../plugins/umbral-permissions" }  # ContentType + Group + Permission model.
+# umbral-rls          = { path = "../../plugins/umbral-rls" }  # Postgres row-level security policy registration.
+# umbral-cache        = { path = "../../plugins/umbral-cache" }  # Per-request caching helper.
+# umbral-email        = { path = "../../plugins/umbral-email" }  # SMTP + MIME email composer + sender.
+# umbral-signals      = { path = "../../plugins/umbral-signals" }  # Pre/post save/delete signal dispatch.
+# umbral-livereload   = { path = "../../plugins/umbral-livereload" }  # Dev-only browser live-reload (SSE push + file watcher). Add `.plugin(LiveReloadPlugin::new())`.
+
+# ----- Third-party + framework runtime deps --------------------------------
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }
+
+# Once you `umbral startapp <plugin>` or `umbral startplugin <plugin>`, add
+# the plugin crate here:
+# tracker-posts = { path = "plugins/posts" }

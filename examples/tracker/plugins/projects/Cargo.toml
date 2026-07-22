@@ -1,0 +1,11 @@
+[package]
+name = "projects"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+umbral = { path = "../../../../crates/umbral" }
+umbral-auth = { path = "../../../../plugins/umbral-auth" }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+chrono = { version = "0.4", features = ["serde"] }

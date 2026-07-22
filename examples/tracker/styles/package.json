@@ -1,0 +1,12 @@
+{
+  "name": "tracker-css",
+  "private": true,
+  "description": "Tailwind build for this umbral app. Output: ../static/css/app.css",
+  "scripts": {
+    "build": "tailwindcss -c tailwind.config.js -i input.css -o ../static/css/app.css --minify",
+    "watch": "tailwindcss -c tailwind.config.js -i input.css -o ../static/css/app.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.0"
+  }
+}
