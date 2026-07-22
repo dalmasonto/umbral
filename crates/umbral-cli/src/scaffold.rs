@@ -1550,7 +1550,9 @@ In `src/main.rs`:
 let app = umbral::App::builder()
     .plugin({crate_name}::{pascal}Plugin::default())
     // ... your other plugins
-    .build()?;
+    .build_deferred()?;   // build_deferred + dispatch: lets `dispatch` fire
+
+umbral_cli::dispatch(app).await   // on_ready AFTER a management command runs
 ```
 
 Then:
