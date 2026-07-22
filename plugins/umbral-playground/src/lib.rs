@@ -1,8 +1,23 @@
 //! umbral-playground — interactive API playground UI for umbral-rest.
 //!
-//! MVP: a 3-pane React UI mounted at `/api/playground/`, fetching the
-//! existing `umbral-openapi` JSON spec at runtime. See the design spec
-//! at `docs/superpowers/specs/2026-06-02-rest-playground-design.md`.
+//! A 3-pane React console that fetches the `umbral-openapi` JSON spec at
+//! runtime. See the design spec at
+//! `docs/superpowers/specs/2026-06-02-rest-playground-design.md`.
+//!
+//! # Where to find it
+//!
+//! By default the console is served at **`/api/playground/`** — note the
+//! trailing slash. It answers *only* on that slash form: because the
+//! default path sits under `/api`, which `umbral-rest` owns, the no-slash
+//! `/api/playground` is matched by REST's `/api/{table}` route and 404s
+//! (and `slash_redirect` can't rescue it — see [`PlaygroundPlugin::new`]).
+//!
+//! So either type the trailing slash (`/api/playground/`), or move the
+//! console off the `/api` namespace with [`PlaygroundPlugin::at`]:
+//!
+//! ```ignore
+//! PlaygroundPlugin::new("my-app").at("/playground")  // now at /playground/
+//! ```
 
 use std::path::PathBuf;
 
@@ -67,6 +82,33 @@ impl PlaygroundPlugin {
     /// don't share history, theme, or saved settings. A short
     /// project-style slug is the usual choice (`"shop"`, `"crm"`,
     /// `"my-blog"`). Closes gap #71.
+    ///
+    /// # The console URL has a trailing slash
+    ///
+    /// The console is served at `<base_path>/` — with the default base
+    /// path that is **`/api/playground/`**, note the trailing slash. The
+    /// default sits under `/api`, which the [`RestPlugin`] owns, and REST
+    /// registers a bare `/api/{table}` route — so visiting
+    /// `/api/playground` *without* the slash matches that route, is read
+    /// by REST as an unknown resource, and returns a **404 from REST**,
+    /// not the console.
+    ///
+    /// Note that `slash_redirect(SlashRedirect::Append)` does **not** fix
+    /// this: slash-redirect is a *fallback*, and it only runs on a true
+    /// route-miss. Here `/api/playground` *matches* REST's `/api/{table}`
+    /// route and that handler returns the 404, so the fallback never runs.
+    /// Two things that do work:
+    ///
+    /// 1. Just use the trailing-slash URL — the console is at
+    ///    **`/api/playground/`**. The no-slash form is the only broken one.
+    /// 2. Mount the console off the `/api` namespace so REST can't claim
+    ///    it, then open `/playground/` (and with slash-redirect on,
+    ///    `/playground` forwards to it, because nothing else matches):
+    ///    ```ignore
+    ///    PlaygroundPlugin::new("my-app").at("/playground")
+    ///    ```
+    ///
+    /// [`RestPlugin`]: https://docs.rs/umbral-rest
     pub fn new(app_name: impl Into<String>) -> Self {
         Self::with_defaults(app_name)
     }
@@ -92,6 +134,15 @@ impl PlaygroundPlugin {
     }
 
     /// Mount under a different path. Trailing slashes are normalised.
+    ///
+    /// The console is served at `<path>/` (with a trailing slash).
+    /// Mounting it OFF the `/api` namespace — e.g. `.at("/playground")` —
+    /// also sidesteps the [`RestPlugin`] claiming `/api/playground` as an
+    /// unknown resource and returning a 404 for the no-slash URL. See
+    /// [`new`](Self::new) for the full explanation and the slash-redirect
+    /// alternative.
+    ///
+    /// [`RestPlugin`]: https://docs.rs/umbral-rest
     pub fn at(mut self, path: impl Into<String>) -> Self {
         let trimmed = path.into().trim_end_matches('/').to_string();
         self.base_path = if trimmed.is_empty() {
