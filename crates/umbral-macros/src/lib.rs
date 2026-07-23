@@ -4853,6 +4853,20 @@ fn expand_choices(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
 
+        // gaps4 #39 — let a typed choices column accept the variant in filters:
+        // `status::STATUS.eq(TaskStatus::InProgress)` resolves because
+        // `StrCol::eq<S: Into<String>>` now sees `TaskStatus: Into<String>`,
+        // serialized through the SAME `ChoiceField::as_str` mapping the write
+        // path uses (so `#[choices(rename_all = ...)]` stays single-sourced).
+        // Non-breaking: `.eq("in_progress")` still works.
+        impl ::core::convert::From<#enum_name> for ::std::string::String {
+            fn from(v: #enum_name) -> ::std::string::String {
+                ::std::string::String::from(
+                    <#enum_name as ::umbral::orm::ChoiceField>::as_str(&v),
+                )
+            }
+        }
+
         // sqlx Type impls — round-trip as TEXT on both backends. `compatible` is
         // delegated to `String` so the column may be any string type: a Choices
         // migration emits `VARCHAR(n)`, and on Postgres sqlx rejects a bare

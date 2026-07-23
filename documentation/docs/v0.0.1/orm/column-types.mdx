@@ -357,12 +357,17 @@ That's the whole setup. `Post { status: PostStatus::Draft, .. }` round-trips thr
 
 The `default = "..."` is required when you add the `status` column to an existing populated table - both Postgres and SQLite reject `ALTER TABLE ADD COLUMN` for a NOT NULL column without a default. It also doubles as the value the DB uses on any future `INSERT` that omits the column.
 
-**Filtering by a choice value.** The column constant filters on the **stored string**: the `rename_all`'d variant text, not the Rust path:
+**Filtering by a choice value.** The column constant accepts the **enum variant** directly - the type-safe form - and still accepts the raw stored string for dynamic callers. Both bind the same `rename_all`'d text, because the variant serializes through the same `ChoiceField::as_str` mapping the write path uses, so `#[choices(rename_all = ...)]` stays single-sourced and you never restate the DB literal:
 
 ```rust
-// All published posts. `"published"` is the DB literal for
-// PostStatus::Published under `rename_all = "lowercase"`.
+// All published posts - pass the variant, not a string literal.
 let live = Post::objects()
+    .filter(post::STATUS.eq(PostStatus::Published))
+    .fetch()
+    .await?;
+
+// The stored-string form still works (e.g. a value computed at runtime).
+let also_live = Post::objects()
     .filter(post::STATUS.eq("published"))
     .fetch()
     .await?;
@@ -370,7 +375,10 @@ let live = Post::objects()
 // Membership across several states: OR the equalities with a Q object.
 use umbral::orm::Q;
 let active = Post::objects()
-    .filter(Q::or(post::STATUS.eq("review"), post::STATUS.eq("published")))
+    .filter(Q::or(
+        post::STATUS.eq(PostStatus::Review),
+        post::STATUS.eq(PostStatus::Published),
+    ))
     .fetch()
     .await?;
 ```
