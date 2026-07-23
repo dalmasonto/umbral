@@ -85,6 +85,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .expose(Task::table_name())
                 .expose(Label::table_name())
                 .expose(Comment::table_name())
+                // The user model, so `task { assignee { username } }` and
+                // `comment { author { username } }` resolve to an OBJECT. An FK
+                // whose target is not exposed degrades to a bare id String —
+                // the field still exists, it just has no subfields to select.
+                .expose(AuthUser::table_name())
+                // ...but only `id` + `username` of it. `hide` is a denylist, so
+                // every other column is named here explicitly. Adding a column
+                // to AuthUser therefore EXPOSES it by default — a new field on
+                // the user model needs a matching line below.
+                //
+                // `password_hash` is deliberately absent: it is denied in core
+                // (`umbral::orm::HARD_DENIED_FIELDS`) and no `expose` here can
+                // bring it back, on any transport.
+                .hide(
+                    AuthUser::table_name(),
+                    [
+                        "email",
+                        "is_active",
+                        "is_staff",
+                        "is_superuser",
+                        "date_joined",
+                        "last_login",
+                        "email_verified_at",
+                    ],
+                )
                 // Table-level write gate: anyone may READ tasks, but only a
                 // signed-in staff member may create / update / delete one.
                 .mutable_if(Task::table_name(), |id| id.is_some_and(|i| i.is_staff))
