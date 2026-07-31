@@ -1081,29 +1081,45 @@ impl From<umbral::orm::write::WriteError> for AuthError {
 // any custom handler.
 // =========================================================================
 
-/// Log the current request's user out: destroy the session row and emit a
-/// clearing Set-Cookie on `resp`.
+/// Log the current request's user out: destroy the session row, emit a
+/// clearing Set-Cookie on `resp`, and revoke the bearer token the request
+/// presented (if any).
 ///
 /// This is the single reusable logout — both built-in surfaces (the JSON
 /// `/auth/logout` route, the HTML auth forms) and any custom handler call
 /// this rather than reaching for `umbral_sessions::logout` directly.
 ///
-/// Does NOT revoke bearer tokens (those are explicit-revoke; use
-/// [`crate::token::AuthToken::revoke`]).
+/// Only the token in this request's `Authorization: Bearer` header is
+/// revoked — logout means "end THIS credential", so the user's other
+/// devices/tokens stay signed in. Revoking every token for the user is the
+/// password-reset sweep's job, not logout's. The HTML form surface carries
+/// no `Authorization` header, so this is a no-op there.
 ///
 /// # Errors
 ///
 /// Returns [`AuthError::Session`] if the underlying session destruction
-/// fails (e.g. DB unreachable). The clearing Set-Cookie is still written
-/// to `resp` by `umbral_sessions::logout` before the error is returned, so
-/// the client-side cookie is cleared even on failure.
+/// fails (e.g. DB unreachable), or the token-revocation error when the
+/// session half succeeded but the token delete failed. The clearing
+/// Set-Cookie is still written to `resp` by `umbral_sessions::logout`
+/// before the error is returned, so the client-side cookie is cleared even
+/// on failure. Both halves always run — a failure in one never skips the
+/// other.
 pub async fn logout(
     req: &umbral::web::HeaderMap,
     resp: &mut umbral::web::HeaderMap,
 ) -> Result<(), AuthError> {
-    umbral_sessions::logout(req, resp)
+    let token_result = match parse_bearer_header(req) {
+        Some(plaintext) => token::AuthToken::objects()
+            .filter(token::auth_token::KEY_HASH.eq(digest_token(plaintext)))
+            .delete()
+            .await
+            .map(|_| ()),
+        None => Ok(()),
+    };
+    let session_result = umbral_sessions::logout(req, resp)
         .await
-        .map_err(|e| AuthError::Session(e.to_string()))
+        .map_err(|e| AuthError::Session(e.to_string()));
+    session_result.and(token_result.map_err(AuthError::from))
 }
 
 // =========================================================================

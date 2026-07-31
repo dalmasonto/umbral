@@ -438,3 +438,63 @@ async fn json_resend_verification_returns_202_for_verified_user() {
          (anti-enumeration: never reveal verified state)"
     );
 }
+
+/// gaps4 #32: `POST /api/auth/logout` must revoke the bearer token the
+/// request presented. Before the fix, logout only destroyed the session
+/// row, so the 204 was a lie for token clients — the same token kept
+/// resolving `/me` forever.
+#[tokio::test]
+async fn logout_revokes_the_presented_bearer_token() {
+    use tower::ServiceExt;
+    let (router, _rec) = boot_app_with_recorder().await;
+
+    async fn with_bearer(
+        router: &Router,
+        method: &str,
+        uri: &str,
+        token: &str,
+    ) -> axum::http::StatusCode {
+        let req = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        router.clone().oneshot(req).await.unwrap().status()
+    }
+
+    let reg = r#"{"username":"tokuser","email":"tok@example.test","password":"G00d$Pass!"}"#;
+    assert_eq!(
+        post(&router, "/api/auth/register", reg).await,
+        axum::http::StatusCode::CREATED,
+        "register the fixture user"
+    );
+
+    let (status, body) = post_full(
+        &router,
+        "/api/auth/login",
+        r#"{"username":"tokuser","password":"G00d$Pass!"}"#,
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "login: {body}");
+    let parsed: serde_json::Value = serde_json::from_str(&body).expect("LoginOut json");
+    let token = parsed["token"].as_str().expect("login returns the token");
+
+    assert_eq!(
+        with_bearer(&router, "GET", "/api/auth/me", token).await,
+        axum::http::StatusCode::OK,
+        "the fresh token must resolve /me"
+    );
+
+    assert_eq!(
+        with_bearer(&router, "POST", "/api/auth/logout", token).await,
+        axum::http::StatusCode::NO_CONTENT,
+        "logout with the bearer token returns 204"
+    );
+
+    assert_eq!(
+        with_bearer(&router, "GET", "/api/auth/me", token).await,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "the revoked token must no longer resolve /me — logout revokes the presented bearer token"
+    );
+}

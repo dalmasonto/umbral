@@ -428,10 +428,10 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
                 "post": {
                     "tags": [tag],
                     "operationId": "auth_logout",
-                    "summary": "Clear the session cookie + destroy the session row.",
-                    "description": "Does NOT revoke bearer tokens — those stay valid until explicitly revoked.",
+                    "summary": "Clear the session cookie, destroy the session row, and revoke the presented bearer token.",
+                    "description": "Revokes the token in this request's `Authorization: Bearer` header (other tokens for the user stay valid). Always 204, even for an anonymous caller.",
                     "responses": {
-                        "204": {"description": "Session cleared."}
+                        "204": {"description": "Session cleared and presented bearer token revoked."}
                     }
                 }
             }),
@@ -722,17 +722,17 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
     response
 }
 
-/// `POST {prefix}/logout` — clear the session cookie + destroy
-/// the row. 204. Does NOT revoke bearer tokens.
+/// `POST {prefix}/logout` — clear the session cookie, destroy the session
+/// row, and revoke the bearer token the request presented (if any). 204.
 ///
 /// Delegates to [`crate::logout`], the single reusable logout that both
 /// built-in surfaces and custom handlers share. On error the route still
 /// returns 204 (the client-side cookie is always cleared) and logs the
-/// session-layer failure at error level.
+/// failure at error level.
 async fn logout(headers: HeaderMap) -> Response {
     let mut response = StatusCode::NO_CONTENT.into_response();
     if let Err(e) = crate::logout(&headers, response.headers_mut()).await {
-        tracing::error!("umbral-auth: logout session error: {e}");
+        tracing::error!("umbral-auth: logout error: {e}");
     }
     response
 }
