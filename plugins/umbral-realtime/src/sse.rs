@@ -20,7 +20,7 @@ use http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::{ConnId, DEFAULT_BUFFER, Event, Realtime, Registry};
+use crate::{ConnId, DEFAULT_BUFFER, Delivery, Realtime, Registry};
 
 /// Render one [`Event`] as an SSE frame. Every event ships under a SINGLE
 /// `event: u` type with a channel-tagged envelope `{"c":channel,"e":name,"d":data}`
@@ -29,22 +29,18 @@ use crate::{ConnId, DEFAULT_BUFFER, Event, Realtime, Registry};
 /// channel to the interested tabs. The `id:` line still carries the monotonic
 /// `seq` so the browser echoes it back as `Last-Event-ID` on reconnect — the
 /// hook the replay buffer keys off (unchanged).
-fn sse_frame(ev: Event) -> SseEvent {
+fn sse_frame(ev: &Delivery) -> SseEvent {
     SseEvent::default()
         .id(ev.seq.to_string())
         .event(ENVELOPE_EVENT)
-        .data(envelope_json(&ev.channel, &ev.event, &ev.data))
+        // Rendered once per dispatch and SHARED by every SSE recipient
+        // (gaps4 #38); this connection only memcpys the finished string.
+        .data(ev.sse_envelope_json())
 }
 
 /// The single SSE `event:` type every frame ships under, so one client
 /// listener catches every event regardless of channel.
 const ENVELOPE_EVENT: &str = "u";
-
-/// Build the channel-tagged envelope payload `{"c":channel,"e":name,"d":data}`
-/// carried in an enveloped frame's `data:` line. Compact JSON.
-fn envelope_json(channel: &str, event: &str, data: &serde_json::Value) -> String {
-    serde_json::json!({ "c": channel, "e": event, "d": data }).to_string()
-}
 
 /// `?groups=chat:123,presence` — the rooms a client joins at handshake.
 #[derive(Deserialize)]
@@ -113,10 +109,15 @@ pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -
     // Spawned so the handshake response isn't blocked on the broadcast.
     tokio::spawn(crate::dispatch_presence(presence));
 
-    let backlog: VecDeque<Event> = match last_event_id {
+    // Replayed events are per-connection (one reconnecting client), so each
+    // gets its own un-shared Delivery wrapper — the shared-render win only
+    // matters on the fan-out path.
+    let backlog: VecDeque<Delivery> = match last_event_id {
         Some(id) => registry
             .replay_since(id, user_id.as_deref(), &groups)
-            .into(),
+            .into_iter()
+            .map(Delivery::new)
+            .collect(),
         None => VecDeque::new(),
     };
 
@@ -160,8 +161,8 @@ impl Drop for ConnGuard {
 /// events, oldest→newest), then the connection's live channel — so a
 /// resumed client catches up in order before any new event.
 struct SseConn {
-    backlog: VecDeque<Event>,
-    rx: mpsc::Receiver<Event>,
+    backlog: VecDeque<Delivery>,
+    rx: mpsc::Receiver<Arc<Delivery>>,
     _guard: ConnGuard,
 }
 
@@ -173,10 +174,10 @@ impl Stream for SseConn {
         let this = self.get_mut();
         // Drain replayed events first, in order, before the live stream.
         if let Some(ev) = this.backlog.pop_front() {
-            return Poll::Ready(Some(Ok(sse_frame(ev))));
+            return Poll::Ready(Some(Ok(sse_frame(&ev))));
         }
         match this.rx.poll_recv(cx) {
-            Poll::Ready(Some(ev)) => Poll::Ready(Some(Ok(sse_frame(ev)))),
+            Poll::Ready(Some(ev)) => Poll::Ready(Some(Ok(sse_frame(&ev)))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
@@ -186,6 +187,20 @@ impl Stream for SseConn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Event;
+
+    /// The production envelope, exactly as an SSE recipient receives it —
+    /// through the shared Delivery render cache.
+    fn envelope_json(channel: &str, event: &str, data: &serde_json::Value) -> String {
+        Delivery::new(Event {
+            event: event.to_string(),
+            data: data.clone(),
+            channel: channel.to_string(),
+            seq: 0,
+        })
+        .sse_envelope_json()
+        .to_string()
+    }
 
     #[test]
     fn frame_ships_under_a_single_event_type() {
@@ -229,12 +244,12 @@ mod tests {
         // The id: line still carries the monotonic seq so Last-Event-ID replay
         // is unchanged. Build the frame and confirm it round-trips the seq via
         // the same path the stream uses (sse_frame).
-        let frame = sse_frame(Event {
+        let frame = sse_frame(&Delivery::new(Event {
             event: "x".into(),
             data: serde_json::json!({}),
             channel: "chat:1".into(),
             seq: 7,
-        });
+        }));
         // axum's SseEvent doesn't expose its id, but `data` must be the
         // envelope; assert the envelope path is what was set.
         let _ = frame; // construction must not panic on the new envelope path

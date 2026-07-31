@@ -48,7 +48,8 @@ async fn registry_stays_fast_and_non_starving_at_10k() {
     // (2) Register N connections. Keep every Receiver alive (dropping a
     // receiver closes the channel, which would let try_send fail). Half are
     // broadcast-only (no group, no user); half join one of GROUPS groups.
-    let mut receivers: Vec<tokio::sync::mpsc::Receiver<Event>> = Vec::with_capacity(N);
+    let mut receivers: Vec<tokio::sync::mpsc::Receiver<std::sync::Arc<umbral_realtime::Delivery>>> =
+        Vec::with_capacity(N);
     let mut conn_ids: Vec<ConnId> = Vec::with_capacity(N);
     // Track how many connections landed in group "g42" so the group-dispatch
     // assertion is exact rather than hard-coded.

@@ -34,10 +34,12 @@ fn group_set(g: &str) -> HashSet<String> {
     s
 }
 
-fn drain(rx: &mut tokio::sync::mpsc::Receiver<Event>) -> Vec<String> {
+fn drain(
+    rx: &mut tokio::sync::mpsc::Receiver<std::sync::Arc<umbral_realtime::Delivery>>,
+) -> Vec<String> {
     let mut names = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        names.push(ev.event);
+        names.push(ev.event.clone());
     }
     names
 }

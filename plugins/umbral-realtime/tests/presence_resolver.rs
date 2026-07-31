@@ -57,7 +57,7 @@ async fn custom_resolver_projects_exactly_what_it_returns() {
         .expect("conn admitted");
     dispatch_presence(transitions).await;
 
-    let mut events: Vec<Event> = Vec::new();
+    let mut events: Vec<std::sync::Arc<umbral_realtime::Delivery>> = Vec::new();
     while let Ok(ev) = sub.try_recv() {
         events.push(ev);
     }

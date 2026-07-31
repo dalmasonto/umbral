@@ -59,7 +59,9 @@ async fn boot(plugin: RealtimePlugin) {
 /// Register a sink in `group`, bypassing the handshake policy (the transports
 /// apply it; here we just need a receiver in the group to read what dispatch
 /// delivered).
-async fn watch(group: &str) -> tokio::sync::mpsc::Receiver<umbral_realtime::Event> {
+async fn watch(
+    group: &str,
+) -> tokio::sync::mpsc::Receiver<std::sync::Arc<umbral_realtime::Delivery>> {
     let mut groups = HashSet::new();
     groups.insert(group.to_string());
     let (_id, rx) = Realtime::registry()

@@ -132,6 +132,70 @@ pub struct Event {
     pub seq: u64,
 }
 
+/// One dispatched [`Event`] as it travels down a connection's outbound
+/// channel, plus lazily-rendered per-transport wire frames SHARED by every
+/// recipient (gaps4 #38).
+///
+/// [`Registry::dispatch`] used to `try_send(event.clone())` per subscriber —
+/// a deep recursive clone of the JSON payload per connection — and each
+/// transport then re-serialized the same JSON to text once per connection. A
+/// 10k broadcast paid 10k `Value` trees + 10k serializations. Dispatch now
+/// allocates ONE `Arc<Delivery>` and every `try_send` is a refcount bump;
+/// the first SSE recipient renders the SSE frame once into the shared cache
+/// (likewise WS), and every other connection memcpys the finished string.
+///
+/// Derefs to [`Event`], so a receiver reads `delivery.channel` / `.event` /
+/// `.data` exactly as it read the plain event before. (The wrapped event is
+/// deliberately a private `inner` field — a public `event: Event` would
+/// shadow `Event::event`, the event NAME, through the deref.)
+#[derive(Debug)]
+pub struct Delivery {
+    inner: Event,
+    sse_json: OnceLock<String>,
+    ws_json: OnceLock<String>,
+}
+
+impl Delivery {
+    /// Wrap an event for delivery. The render caches start empty; each
+    /// transport fills its own on first use.
+    pub fn new(event: Event) -> Self {
+        Self {
+            inner: event,
+            sse_json: OnceLock::new(),
+            ws_json: OnceLock::new(),
+        }
+    }
+
+    /// The SSE envelope payload `{"c":channel,"e":name,"d":data}` (compact
+    /// JSON), rendered once and shared by every SSE recipient of this
+    /// dispatch. The single shared `EventSource` routes by the `c` tag.
+    pub fn sse_envelope_json(&self) -> &str {
+        self.sse_json.get_or_init(|| {
+            serde_json::json!({
+                "c": self.inner.channel,
+                "e": self.inner.event,
+                "d": self.inner.data,
+            })
+            .to_string()
+        })
+    }
+
+    /// The WS text frame `{"event":name,"data":data}` (compact JSON),
+    /// rendered once and shared by every WS recipient of this dispatch.
+    pub fn ws_frame_json(&self) -> &str {
+        self.ws_json.get_or_init(|| {
+            serde_json::json!({ "event": self.inner.event, "data": self.inner.data }).to_string()
+        })
+    }
+}
+
+impl std::ops::Deref for Delivery {
+    type Target = Event;
+    fn deref(&self) -> &Event {
+        &self.inner
+    }
+}
+
 /// Who an [`Event`] is addressed to.
 ///
 /// `Serialize`/`Deserialize` so an [`Envelope`] can cross a process
@@ -177,7 +241,7 @@ pub struct Envelope {
 // =========================================================================
 
 struct ConnEntry {
-    tx: mpsc::Sender<Event>,
+    tx: mpsc::Sender<Arc<Delivery>>,
     user_id: Option<String>,
     groups: HashSet<String>,
 }
@@ -264,7 +328,7 @@ impl Registry {
         user_id: Option<String>,
         groups: HashSet<String>,
         buffer: usize,
-    ) -> Option<(ConnId, mpsc::Receiver<Event>)> {
+    ) -> Option<(ConnId, mpsc::Receiver<Arc<Delivery>>)> {
         let mut inner = self.inner.write().await;
         if let Some(max) = self.max_connections
             && inner.conns.len() >= max
@@ -331,7 +395,7 @@ impl Registry {
         user_id: Option<String>,
         groups: HashSet<String>,
         buffer: usize,
-    ) -> Option<(ConnId, mpsc::Receiver<Event>, PresenceTransitions)> {
+    ) -> Option<(ConnId, mpsc::Receiver<Arc<Delivery>>, PresenceTransitions)> {
         let mut inner = self.inner.write().await;
         if let Some(max) = self.max_connections
             && inner.conns.len() >= max
@@ -480,7 +544,7 @@ impl Registry {
         // register/unregister (which take the write lock) wait behind a
         // broadcast; cloning the `mpsc::Sender`s (cheap — an Arc bump each) and
         // releasing the guard keeps the registry available throughout the send.
-        let senders: Vec<mpsc::Sender<Event>> = {
+        let senders: Vec<mpsc::Sender<Arc<Delivery>>> = {
             let inner = self.inner.read().await;
             let ids: Vec<ConnId> = match target {
                 TargetKind::User(uid) => inner
@@ -502,10 +566,13 @@ impl Registry {
 
         // Lock is dropped. `try_send` stays non-blocking: a connection whose
         // bounded channel is full drops this one message (correct per-conn
-        // backpressure) and never stalls the broadcaster.
+        // backpressure) and never stalls the broadcaster. ONE `Arc<Delivery>`
+        // is allocated per dispatch; each send is a refcount bump, not a deep
+        // clone of the JSON payload (gaps4 #38).
+        let delivery = Arc::new(Delivery::new(event));
         let mut delivered = 0;
         for tx in senders {
-            if tx.try_send(event.clone()).is_ok() {
+            if tx.try_send(delivery.clone()).is_ok() {
                 delivered += 1;
             }
         }
@@ -2107,7 +2174,7 @@ mod tests {
         Some(id.to_string())
     }
 
-    async fn recv(rx: &mut mpsc::Receiver<Event>) -> Option<Event> {
+    async fn recv(rx: &mut mpsc::Receiver<Arc<Delivery>>) -> Option<Arc<Delivery>> {
         // Events dispatch synchronously into the channel, so a try_recv is
         // enough once dispatch has returned.
         rx.try_recv().ok()
@@ -2120,6 +2187,56 @@ mod tests {
             channel: String::new(),
             seq: 0,
         }
+    }
+
+    /// gaps4 #38: fan-out shares ONE payload. Every subscriber receives the
+    /// SAME `Arc<Delivery>` (a refcount bump per send, not a deep JSON
+    /// clone), and the per-transport wire frame is rendered once into the
+    /// shared cache — the second recipient gets the identical `&str`.
+    #[tokio::test]
+    async fn dispatch_shares_one_delivery_across_subscribers() {
+        let reg = Registry::default();
+        let (_a, mut rx_a) = reg
+            .register(None, HashSet::from(["g:1".to_string()]), 8)
+            .await
+            .unwrap();
+        let (_b, mut rx_b) = reg
+            .register(None, HashSet::from(["g:1".to_string()]), 8)
+            .await
+            .unwrap();
+
+        let delivered = reg
+            .dispatch(
+                &TargetKind::Group("g:1".to_string()),
+                reg_event("tick", serde_json::json!({ "n": 1 })),
+            )
+            .await;
+        assert_eq!(delivered, 2);
+
+        let ev_a = recv(&mut rx_a).await.unwrap();
+        let ev_b = recv(&mut rx_b).await.unwrap();
+        assert!(
+            Arc::ptr_eq(&ev_a, &ev_b),
+            "both subscribers hold the same allocation — no per-subscriber deep clone"
+        );
+
+        // The SSE envelope renders once; both recipients read the same cached
+        // string (same address), and it carries the stamped channel.
+        let first = ev_a.sse_envelope_json();
+        let second = ev_b.sse_envelope_json();
+        assert!(
+            std::ptr::eq(first, second),
+            "the SSE frame is rendered once and shared"
+        );
+        let v: serde_json::Value = serde_json::from_str(first).unwrap();
+        assert_eq!(v["c"], "g:1");
+        assert_eq!(v["e"], "tick");
+        assert_eq!(v["d"], serde_json::json!({ "n": 1 }));
+
+        // Same for the WS frame — and reading it did not disturb the SSE cache.
+        let ws: serde_json::Value = serde_json::from_str(ev_a.ws_frame_json()).unwrap();
+        assert_eq!(ws["event"], "tick");
+        assert_eq!(ws["data"], serde_json::json!({ "n": 1 }));
     }
 
     #[tokio::test]

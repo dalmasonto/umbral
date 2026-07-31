@@ -47,7 +47,9 @@ fn group_set(g: &str) -> HashSet<String> {
 
 /// A passive anonymous subscriber sink in `group` (anonymous → never itself
 /// produces presence), to read what dispatch delivered.
-async fn watch(group: &str) -> tokio::sync::mpsc::Receiver<Event> {
+async fn watch(
+    group: &str,
+) -> tokio::sync::mpsc::Receiver<std::sync::Arc<umbral_realtime::Delivery>> {
     let (_id, rx, _t) = Realtime::registry()
         .register_with_presence(None, group_set(group), DEFAULT_BUFFER)
         .await
@@ -74,10 +76,12 @@ async fn disconnect(registry: &Registry, id: u64) {
 }
 
 /// Drain every queued event off `rx` as `(event_name, data)`.
-fn drain(rx: &mut tokio::sync::mpsc::Receiver<Event>) -> Vec<(String, serde_json::Value)> {
+fn drain(
+    rx: &mut tokio::sync::mpsc::Receiver<std::sync::Arc<umbral_realtime::Delivery>>,
+) -> Vec<(String, serde_json::Value)> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        out.push((ev.event, ev.data));
+        out.push((ev.event.clone(), ev.data.clone()));
     }
     out
 }

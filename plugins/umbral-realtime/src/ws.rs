@@ -17,7 +17,7 @@ use http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::{ConnId, DEFAULT_BUFFER, Event, MessageContext, MessageHandler, Realtime, Registry};
+use crate::{ConnId, DEFAULT_BUFFER, MessageContext, MessageHandler, Realtime, Registry};
 
 /// `?groups=chat:123,presence` — the rooms a client joins at handshake.
 #[derive(Deserialize)]
@@ -196,7 +196,7 @@ pub(crate) async fn ws_handler(
 async fn handle_socket(
     socket: WebSocket,
     conn_id: ConnId,
-    mut rx: mpsc::Receiver<Event>,
+    mut rx: mpsc::Receiver<std::sync::Arc<crate::Delivery>>,
     user_id: Option<String>,
     registry: Arc<Registry>,
     handler: Arc<dyn MessageHandler>,
@@ -211,7 +211,9 @@ async fn handle_socket(
     // Outbound: drain the connection's channel into JSON text frames.
     let outbound = async {
         while let Some(ev) = rx.recv().await {
-            let frame = serde_json::json!({ "event": ev.event, "data": ev.data }).to_string();
+            // Rendered once per dispatch and SHARED by every WS recipient
+            // (gaps4 #38); this connection only memcpys the finished string.
+            let frame = ev.ws_frame_json().to_owned();
             if tx.send(Message::Text(frame.into())).await.is_err() {
                 break;
             }
