@@ -19,9 +19,11 @@ fn the_default_label_tracks_the_real_crate_version() {
 
     // The literal that was in the templates. If the workspace is ever genuinely at 0.0.1
     // again this assert is wrong, but it is the exact failure we are guarding against:
-    // a version string that says 0.0.1 while the crate says something else.
+    // a version string that says 0.0.1 while the crate says something else. Compare the
+    // WHOLE label, not a substring — `contains("v0.0.1")` started matching the moment
+    // the workspace hit v0.0.10.
     assert!(
-        !label.contains("v0.0.1") || env!("CARGO_PKG_VERSION") == "0.0.1",
+        label != "umbral v0.0.1" || env!("CARGO_PKG_VERSION") == "0.0.1",
         "the label claims v0.0.1 while the crate is at {}",
         env!("CARGO_PKG_VERSION")
     );
