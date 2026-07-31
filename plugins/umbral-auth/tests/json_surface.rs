@@ -292,8 +292,8 @@ async fn json_verify_and_reset_endpoints() {
         unknown_body, known_body,
         "the 202 body must not distinguish known from unknown emails"
     );
-    let parsed: serde_json::Value = serde_json::from_str(&unknown_body)
-        .expect("password-forgot 202 must carry a JSON body");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&unknown_body).expect("password-forgot 202 must carry a JSON body");
     assert!(
         parsed["detail"].as_str().is_some_and(|d| !d.is_empty()),
         "the 202 body carries a non-empty `detail` message; got: {unknown_body}"
