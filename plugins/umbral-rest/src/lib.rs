@@ -717,6 +717,81 @@ impl RestPlugin {
         }
     }
 
+    /// gaps4 #37: the WRITE-side twin of [`Self::object_scope_hook`] — a
+    /// create must not plant a row into a scope the caller cannot read.
+    ///
+    /// The read side turns the [`ScopeDecision`] into a SQL filter; a create
+    /// has no row to filter yet, so this checks the decision against the
+    /// BODY's scoped column value instead: for `RestrictIn(col, allowed)`
+    /// the body's `col` must be in `allowed`, for `Restrict(pairs)` each
+    /// `(col, val)` must match exactly, and `None` refuses every create.
+    /// Without this, a caller scoped OUT of project Q could still
+    /// `POST { project: Q }` — and when the scoped table is itself
+    /// access-granting (a membership row the read scope then honours), that
+    /// create bootstraps read access: privilege escalation, not just a
+    /// write-IDOR.
+    ///
+    /// Runs AFTER `inject_owner_field` / `inject_parent`, so server-injected
+    /// values participate — an `owned_by` scope is satisfied by the injected
+    /// owner column automatically.
+    ///
+    /// Every denial is the same 404 shape regardless of whether the target
+    /// value exists, is foreign, or is absent from the body — no oracle
+    /// (mirrors the read side, where an out-of-scope row 404s).
+    async fn object_scope_allows_create(
+        &self,
+        table: &str,
+        identity: Option<&Identity>,
+        body: &serde_json::Map<String, Value>,
+    ) -> Result<(), ApiError> {
+        let Some(hook) = self.object_scopes.get(table) else {
+            return Ok(());
+        };
+        let deny = |col: &str| -> ApiError {
+            ApiError::NotFound(format!("no `{col}` in scope for a create in {table}"))
+        };
+        match hook(identity.cloned()).await {
+            crate::resource::ScopeDecision::All => Ok(()),
+            crate::resource::ScopeDecision::None => {
+                Err(ApiError::NotFound(format!("no create scope in {table}")))
+            }
+            crate::resource::ScopeDecision::Restrict(pairs) => {
+                // Empty pairs = the hook added no constraint — mirror the
+                // read side's `Unconstrained`, not a deny.
+                for (col, val) in pairs {
+                    let matches = body
+                        .get(&col)
+                        .and_then(json_pk_to_string)
+                        .is_some_and(|got| got == val);
+                    if !matches {
+                        return Err(deny(&col));
+                    }
+                }
+                Ok(())
+            }
+            crate::resource::ScopeDecision::RestrictIn(col, values) => {
+                // Empty membership refuses every create, exactly as it
+                // returns no rows on the read side.
+                let Some(got) = body.get(&col).and_then(|v| json_pk_to_string(v)) else {
+                    return Err(deny(&col));
+                };
+                // Normalize the allowed set the same way the read filter
+                // binds it (typed by the column), so `1` vs `"1"` can't
+                // diverge between the two sides.
+                let col_ty = umbral::migrate::model_meta_for_table(table)
+                    .and_then(|m| m.fields.iter().find(|c| c.name == col).map(|c| c.ty));
+                let in_scope = match typed_restrict_in_values(col_ty, values) {
+                    TypedScopeValues::Deny => false,
+                    TypedScopeValues::Ints(ints) => {
+                        got.trim().parse::<i64>().is_ok_and(|g| ints.contains(&g))
+                    }
+                    TypedScopeValues::Strings(vals) => vals.contains(&got),
+                };
+                if in_scope { Ok(()) } else { Err(deny(&col)) }
+            }
+        }
+    }
+
     /// Run every applicable throttle for `(table, action)` after auth has
     /// resolved, before the handler. Returns
     /// `Err(ApiError::Throttled { retry_after })` on the FIRST denial so
@@ -3638,6 +3713,12 @@ async fn create_impl(
     // best confused and at worst an attempt to plant a row under someone else's parent.
     inject_parent(&model, parent_scope.as_ref(), &mut body)?;
 
+    // gaps4 #37: a create must not plant a row into a scope the caller cannot
+    // read. Runs after the injections so server-injected owner/parent values
+    // participate in the decision.
+    cfg.object_scope_allows_create(&table, identity.as_ref(), &body)
+        .await?;
+
     // Flat path (the common case) — unchanged, zero overhead. The ORM owns
     // pre-validation + constraint classification + noform-stripping;
     // `insert_json` returns a structured `WriteError` that
@@ -3712,6 +3793,11 @@ async fn bulk_create(
         // gaps3 #29 item 2: per item, same rule as single create — bulk can't be used
         // to plant a child under a different parent than the URL names.
         inject_parent(&model, parent_scope, &mut body)?;
+        // gaps4 #37: per item, same rule as single create — bulk can't be
+        // used to plant a row into a scope the caller cannot read.
+        cfg.object_scope_allows_create(table, identity, &body)
+            .await
+            .map_err(|e| bulk_item_error(idx, "create", e))?;
         let mut row = as_user(
             identity,
             umbral::orm::DynQuerySet::for_meta(&model).insert_json_in_tx(&body, &mut tx),
@@ -3776,6 +3862,19 @@ async fn bulk_update(
     check_bulk_size(items.len())?;
     let pk = pk_column(&model)?.name.clone();
 
+    // gaps4 #37 (same class): the single-object PATCH ANDs the resource's
+    // object scope into its WHERE; the bulk path updated by bare PK, so an
+    // out-of-scope row was writable by id. Resolve the scope once and attach
+    // it to every item — an out-of-scope PK then reads as "no row" (the same
+    // no-oracle 404 a nonexistent PK gets).
+    let scope_cond = match cfg.object_scope(&table, identity.as_ref(), None).await {
+        ObjectScopeOutcome::DenyAll => {
+            return Err(ApiError::NotFound(format!("no rows in scope in {table}")));
+        }
+        ObjectScopeOutcome::Filter(cond) => Some(cond),
+        ObjectScopeOutcome::Unconstrained => None,
+    };
+
     let mut tx = umbral::db::begin().await?;
     let mut updated: Vec<Value> = Vec::with_capacity(items.len());
     for (idx, item) in items.into_iter().enumerate() {
@@ -3796,11 +3895,14 @@ async fn bulk_update(
         // SAME hidden-field denylist as single update.
         cfg.strip_hidden_for_write(&table, identity.as_ref(), &mut body);
 
+        let mut update_qs =
+            umbral::orm::DynQuerySet::for_meta(&model).filter_eq_string(&pk, &pk_str);
+        if let Some(c) = &scope_cond {
+            update_qs = update_qs.filter_condition(c.clone());
+        }
         let affected = as_user(
             identity.as_ref(),
-            umbral::orm::DynQuerySet::for_meta(&model)
-                .filter_eq_string(&pk, &pk_str)
-                .update_json_in_tx(&body, &mut tx),
+            update_qs.update_json_in_tx(&body, &mut tx),
         )
         .await
         .map_err(|e| bulk_item_error(idx, "update", e.into()))?;
@@ -3874,15 +3976,28 @@ async fn bulk_delete(
     check_bulk_size(ids.len())?;
     let pk = pk_column(&model)?.name.clone();
 
+    // gaps4 #37 (same class): scope the bulk delete exactly like the
+    // single-object DELETE — an out-of-scope id matches nothing (and is
+    // silently skipped, the same behavior a nonexistent id already gets).
+    let scope_cond = match cfg.object_scope(&table, identity.as_ref(), None).await {
+        ObjectScopeOutcome::DenyAll => {
+            return Err(ApiError::NotFound(format!("no rows in scope in {table}")));
+        }
+        ObjectScopeOutcome::Filter(cond) => Some(cond),
+        ObjectScopeOutcome::Unconstrained => None,
+    };
+
     let mut tx = umbral::db::begin().await?;
     for (idx, id) in ids.into_iter().enumerate() {
         let pk_str = json_pk_to_string(&id).ok_or_else(|| {
             ApiError::BadInput(format!("bulk delete id at index {idx} is invalid"))
         })?;
-        umbral::orm::DynQuerySet::for_meta(&model)
-            .filter_eq_string(&pk, &pk_str)
-            .delete_in_tx(&mut tx)
-            .await?;
+        let mut delete_qs =
+            umbral::orm::DynQuerySet::for_meta(&model).filter_eq_string(&pk, &pk_str);
+        if let Some(c) = &scope_cond {
+            delete_qs = delete_qs.filter_condition(c.clone());
+        }
+        delete_qs.delete_in_tx(&mut tx).await?;
     }
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
@@ -4091,6 +4206,13 @@ async fn insert_nested_tree(
                 .strip_hidden_for_write(&child.table, ctx.identity, &mut child_body);
             ctx.check_child_perm(&child.table, &Action::Create)?;
             child_body.insert(fk.clone(), pk_value.clone());
+            // gaps4 #37: the child table's own create scope — checked AFTER
+            // the FK injection so the parent link participates. A nested
+            // payload must not plant a child row into a scope the caller
+            // cannot read, any more than the child's direct endpoint would.
+            ctx.cfg
+                .object_scope_allows_create(&child.table, ctx.identity, &child_body)
+                .await?;
             // `Box::pin` breaks the otherwise-infinitely-sized async recursion.
             let crow = Box::pin(insert_nested_tree(
                 ctx,
@@ -4374,9 +4496,9 @@ async fn upsert_nested_child(
     ctx.check_child_perm(&meta.table, &Action::Update)?;
 
     // Ownership gate: the row must exist AND belong to THIS parent. Checked
-    // explicitly because `update_json_in_tx`'s return is
-    // `matched.max(1 if any SET cols)` — it reports 1 even on a 0-row match,
-    // so a cross-parent pk would silently no-op instead of 404.
+    // as an explicit read (not via the update's affected count) so the 404
+    // can name the cross-parent case, and so a body with no scalar columns
+    // still verifies ownership before recursing into grandchildren.
     let owned = umbral::orm::DynQuerySet::for_meta(meta)
         .filter_eq_string(&pk_col, &pk_str)
         .filter_eq_string(parent.fk_col, parent.pk_str)

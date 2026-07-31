@@ -82,8 +82,10 @@ ResourceConfig::new("order").scope(|identity| match identity {
 
 `ScopeDecision::Restrict` ANDs each `(column, value)` equality into the query (so you can scope by tenant *and* owner); `All` exposes every row; `None` exposes none. The scope runs alongside (not instead of) the permission class.
 
+**Creates are scoped too.** A `POST` whose body sets the scoped column to a value outside the caller's scope is refused with the same `404` an out-of-scope read gets — a caller who cannot see project Q cannot plant a row into it either (`RestrictIn(col, allowed)` requires the body's `col` ∈ `allowed`; `Restrict(pairs)` requires each pair to match; `None` refuses every create). The check runs after `owner_field` / nested-parent injection, so server-injected values count. The bulk write endpoints (`.bulk()`) apply the scope exactly like their single-object twins.
+
 <Callout type="info">
-Scoping covers the built-in list/retrieve/update/delete. Nested-write children and custom `.action(...)` handlers still enforce their own authorization — an action receives `ctx.pk` and `ctx.identity` and should scope its own query.
+Scoping covers the built-in list/retrieve/create/update/delete, their bulk twins, and nested-write children (each child table's own scope runs with the parent FK already injected). Custom `.action(...)` handlers still enforce their own authorization — an action receives `ctx.pk` and `ctx.identity` and should scope its own query.
 </Callout>
 
 ```rust

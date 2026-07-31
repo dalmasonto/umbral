@@ -23,7 +23,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
 
-use umbral_rest::{FnAuthentication, Identity, ResourceConfig, RestPlugin, ScopeDecision};
+use umbral_rest::{
+    AllowAny, FnAuthentication, Identity, ResourceConfig, RestPlugin, ScopeDecision,
+};
 
 /// A club a user can join.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
@@ -82,8 +84,14 @@ async fn boot() -> &'static axum::Router {
 
         // The membership scope: which clubs has this caller joined? That is a
         // DB query, which is exactly why the hook has to be async.
+        // AllowAny (writes included) so the create tests isolate gaps4 #37:
+        // with the permission gate wide open, the SCOPE alone must refuse a
+        // create into a club the caller has not joined.
         let rest = RestPlugin::default().authenticate(auth).resource(
-            ResourceConfig::new("fixture").scope_async(|identity| async move {
+            ResourceConfig::new("fixture")
+                .permission(AllowAny)
+                .bulk()
+                .scope_async(|identity| async move {
                 let Some(id) = identity else {
                     return ScopeDecision::None; // anonymous: nothing
                 };
@@ -240,5 +248,181 @@ async fn anonymous_sees_nothing() {
     assert!(
         titles(&body).is_empty(),
         "anonymous must see no fixtures; got:\n{body}"
+    );
+}
+
+async fn send_json(
+    method: &str,
+    path: &str,
+    user: Option<i64>,
+    body: Value,
+) -> (StatusCode, Value) {
+    let app = boot().await.clone();
+    let mut req = Request::builder()
+        .uri(path)
+        .method(method)
+        .header("content-type", "application/json");
+    if let Some(u) = user {
+        req = req.header("x-user", u.to_string());
+    }
+    let res = app
+        .oneshot(req.body(Body::from(body.to_string())).unwrap())
+        .await
+        .expect("request");
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let json: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    (status, json)
+}
+
+async fn count_titled(title: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM fixture WHERE title = ?")
+        .bind(title)
+        .fetch_one(&umbral::db::pool())
+        .await
+        .expect("count")
+}
+
+/// gaps4 #37, the allow half: a member CAN create into a club they joined.
+/// (The row is removed again so the read-scope tests keep their exact lists.)
+#[tokio::test]
+async fn a_member_can_create_into_their_own_club() {
+    let _g = test_lock().lock().await;
+    let (status, body) = send_json(
+        "POST",
+        "/api/fixture/",
+        Some(7),
+        serde_json::json!({ "club_id": 1, "title": "created-in-scope" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "user 7 is in club 1, so the scoped create must succeed; got:\n{body}"
+    );
+    assert_eq!(count_titled("created-in-scope").await, 1);
+    sqlx::query("DELETE FROM fixture WHERE title = 'created-in-scope'")
+        .execute(&umbral::db::pool())
+        .await
+        .expect("cleanup");
+}
+
+/// gaps4 #37, the deny half — the hole this closes: the permission gate is
+/// wide open (AllowAny), the caller is authenticated, and every READ of club
+/// 1 already returns nothing for them — yet before the fix this POST planted
+/// a row into club 1's scope anyway. The denial is a 404 (same shape as a
+/// nonexistent club — no oracle), and no row lands.
+#[tokio::test]
+async fn a_create_into_a_foreign_club_is_refused() {
+    let _g = test_lock().lock().await;
+    // User 8 is in club 3 only.
+    let (status, body) = send_json(
+        "POST",
+        "/api/fixture/",
+        Some(8),
+        serde_json::json!({ "club_id": 1, "title": "planted-cross-scope" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "user 8 is NOT in club 1 — the create must be refused, 404 not 403; got:\n{body}"
+    );
+    assert_eq!(
+        count_titled("planted-cross-scope").await,
+        0,
+        "no row may land in the foreign scope"
+    );
+
+    // A club that does not exist at all gets the IDENTICAL refusal.
+    let (status_missing, _) = send_json(
+        "POST",
+        "/api/fixture/",
+        Some(8),
+        serde_json::json!({ "club_id": 999, "title": "planted-cross-scope" }),
+    )
+    .await;
+    assert_eq!(
+        status_missing, status,
+        "foreign club and nonexistent club must be indistinguishable"
+    );
+}
+
+/// Empty membership and anonymous both refuse every create (the write-side
+/// twin of `no_membership_sees_nothing`), and a body that omits the scoped
+/// column can never be in scope.
+#[tokio::test]
+async fn empty_scope_and_missing_column_refuse_creates() {
+    let _g = test_lock().lock().await;
+    for user in [Some(42), None] {
+        let (status, body) = send_json(
+            "POST",
+            "/api/fixture/",
+            user,
+            serde_json::json!({ "club_id": 3, "title": "never-lands" }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "user {user:?} has no scope to create into; got:\n{body}"
+        );
+    }
+    // User 7 IS scoped (clubs 1, 2) but omits the scoped column entirely.
+    let (status, _) = send_json(
+        "POST",
+        "/api/fixture/",
+        Some(7),
+        serde_json::json!({ "title": "no-club" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "an absent scoped column cannot be in the allowed set"
+    );
+    assert_eq!(
+        count_titled("never-lands").await + count_titled("no-club").await,
+        0
+    );
+}
+
+/// gaps4 #37, same class: the BULK write paths honor the scope like their
+/// single-object twins. An out-of-scope row is "no row" to a bulk update,
+/// and a bulk delete of it deletes nothing.
+#[tokio::test]
+async fn bulk_writes_honor_the_scope() {
+    let _g = test_lock().lock().await;
+    // Fixture 1 is club 1's ('w3-match'); user 8 is in club 3 only.
+    let (status, body) = send_json(
+        "PATCH",
+        "/api/fixture/",
+        Some(8),
+        serde_json::json!([{ "id": 1, "title": "hijacked" }]),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "an out-of-scope pk must read as 'no row' to bulk update; got:\n{body}"
+    );
+    assert_eq!(count_titled("hijacked").await, 0);
+
+    let (status, _) = send_json(
+        "DELETE",
+        "/api/fixture/",
+        Some(8),
+        serde_json::json!({ "ids": [1] }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "bulk delete skips out-of-scope ids exactly like nonexistent ids"
+    );
+    assert_eq!(
+        count_titled("w3-match").await,
+        1,
+        "the out-of-scope row must survive the foreign bulk delete"
     );
 }
