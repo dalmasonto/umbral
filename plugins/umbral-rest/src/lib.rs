@@ -70,6 +70,49 @@ pub use resource::{
 pub mod versioning;
 pub use versioning::{VersioningConfig, VersioningScheme, version_from_headers};
 
+/// How a `RestrictIn` value list should be bound, given the scoped column's
+/// type. The scope hooks speak strings (`Identity` ids are strings by
+/// contract), but binding text against a BIGINT column is a hard error on
+/// Postgres (`operator does not exist: bigint = text`) — SQLite's silent
+/// coercion hid this until the first scoped LIST ran on a real Postgres.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TypedScopeValues {
+    /// Integer-family column: bind parsed i64s (unparseable values dropped —
+    /// they can never match an integer column).
+    Ints(Vec<i64>),
+    /// Text / unknown column: bind the strings unchanged.
+    Strings(Vec<String>),
+    /// Every value was unparseable for an integer column — an empty
+    /// membership in that column's terms. Fail closed, never unconstrained.
+    Deny,
+}
+
+/// The pure typing decision for [`TypedScopeValues`] — see the enum docs.
+/// `col_ty` is `None` when the model/column isn't in the registry (computed
+/// columns, tests); behavior then stays exactly the pre-fix string binding.
+pub fn typed_restrict_in_values(
+    col_ty: Option<umbral::orm::SqlType>,
+    values: Vec<String>,
+) -> TypedScopeValues {
+    use umbral::orm::SqlType;
+    let integer_family = matches!(
+        col_ty,
+        Some(SqlType::BigInt | SqlType::Integer | SqlType::SmallInt | SqlType::ForeignKey)
+    );
+    if !integer_family {
+        return TypedScopeValues::Strings(values);
+    }
+    let ints: Vec<i64> = values
+        .iter()
+        .filter_map(|v| v.trim().parse().ok())
+        .collect();
+    if ints.is_empty() {
+        TypedScopeValues::Deny
+    } else {
+        TypedScopeValues::Ints(ints)
+    }
+}
+
 pub mod auth;
 pub use auth::{
     Authentication, ChainAuthentication, FnAuthentication, Identity, NoAuthentication,
@@ -654,8 +697,21 @@ impl RestPlugin {
                 if values.is_empty() {
                     return ObjectScopeOutcome::DenyAll;
                 }
-                let cond = sea_query::Condition::all()
-                    .add(sea_query::Expr::col(sea_query::Alias::new(col)).is_in(values));
+                // Bind in the COLUMN's type — see `typed_restrict_in_values`:
+                // text values against a bigint column are a hard Postgres
+                // error, so every scoped LIST 500s there while SQLite coerces.
+                let col_ty = umbral::migrate::model_meta_for_table(table)
+                    .and_then(|m| m.fields.iter().find(|c| c.name == col).map(|c| c.ty));
+                let expr = sea_query::Expr::col(sea_query::Alias::new(col));
+                let cond = match typed_restrict_in_values(col_ty, values) {
+                    TypedScopeValues::Deny => return ObjectScopeOutcome::DenyAll,
+                    TypedScopeValues::Ints(ints) => {
+                        sea_query::Condition::all().add(expr.is_in(ints))
+                    }
+                    TypedScopeValues::Strings(vals) => {
+                        sea_query::Condition::all().add(expr.is_in(vals))
+                    }
+                };
                 ObjectScopeOutcome::Filter(cond)
             }
         }
