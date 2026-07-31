@@ -267,7 +267,12 @@ pub struct AuthUser {
     /// case-insensitively unique there too — the typed `create_user` path
     /// normalizes explicitly via `normalize_username` (gaps3 #33). Together
     /// they close every write surface.
-    #[umbral(unique, trim, lowercase)]
+    #[umbral(
+        unique,
+        trim,
+        lowercase,
+        help = "Unique login name; stored trimmed and lowercased."
+    )]
     pub username: String,
     /// Shown read-only on edit forms; never on create forms (use the
     /// admin's password field mechanism for changes). `trim` + `lowercase`
@@ -278,7 +283,14 @@ pub struct AuthUser {
     /// `create_user` path stays non-validating by design — its callers
     /// (the register route, `createsuperuser`) validate at their own
     /// untrusted boundary.
-    #[umbral(noedit, unique, trim, lowercase, email)]
+    #[umbral(
+        noedit,
+        unique,
+        trim,
+        lowercase,
+        email,
+        help = "Unique email address; also accepted as the login identifier."
+    )]
     pub email: String,
     /// Never shown on any form — password management goes through the
     /// dedicated Change Password flow in the admin. `signal_skip` keeps the
@@ -286,6 +298,7 @@ pub struct AuthUser {
     /// an audit-log subscriber can't copy password hashes into its logs.
     #[umbral(noform, signal_skip)]
     pub password_hash: String,
+    #[umbral(help = "Inactive users cannot log in; deactivate instead of deleting.")]
     pub is_active: bool,
     /// Staff flag — grants admin-site access. Privileged: the untrusted JSON
     /// write path (REST create/update, admin form-submit) refuses to set it
@@ -294,17 +307,24 @@ pub struct AuthUser {
     /// privilege escalation. An admin acting as a superuser still toggles it.
     /// `default = "false"` so a create that had the field stripped fills the
     /// safe value at the DB rather than tripping NOT NULL.
-    #[umbral(privileged, default = "false")]
+    #[umbral(privileged, default = "false", help = "Grants admin-site access.")]
     pub is_staff: bool,
     /// Superuser flag — full authority. Privileged for the same reason as
     /// `is_staff`; this is the field a mass-assignment attack most wants.
-    #[umbral(privileged, default = "false")]
+    #[umbral(
+        privileged,
+        default = "false",
+        help = "Full authority: every permission, implicitly."
+    )]
     pub is_superuser: bool,
+    #[umbral(help = "Set when the account is created.")]
     pub date_joined: DateTime<Utc>,
+    #[umbral(help = "Stamped on every successful login; NULL until the first one.")]
     pub last_login: Option<DateTime<Utc>>,
     /// When this user's email was verified, NULL until they complete the
     /// verification flow. Tracked always; only enforced when the plugin is
     /// built with `require_verified_email()`.
+    #[umbral(help = "When the email was verified; NULL until the verification flow completes.")]
     pub email_verified_at: Option<DateTime<Utc>>,
 }
 

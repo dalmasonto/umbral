@@ -7,13 +7,22 @@ export interface FieldInfo {
   required: boolean;
   nullable: boolean;
   readOnly: boolean;
+  writeOnly: boolean;
   enumValues?: string[];
   enumLabels?: string[];
   maxLength?: number;
   defaultValue?: string;
+  example?: string;
   isMultichoice?: boolean;
   fkTarget?: string;
   isStringRepr?: boolean;
+  /** Never accepted from a client (server-managed column). */
+  noform?: boolean;
+  /** Accepted on create, immutable afterwards. */
+  noedit?: boolean;
+  /** Stamped by the server on every save / on create. */
+  autoNow?: boolean;
+  autoNowAdd?: boolean;
   description?: string;
   refName?: string;
   itemsType?: string;
@@ -57,6 +66,10 @@ interface VendorExt {
   "x-umbral-choice-labels"?: string[];
   "x-umbral-fk-target"?: string;
   "x-umbral-string-repr"?: boolean;
+  "x-umbral-noform"?: boolean;
+  "x-umbral-noedit"?: boolean;
+  "x-umbral-auto-now"?: boolean;
+  "x-umbral-auto-now-add"?: boolean;
 }
 
 function vendorExt(s: OpenAPIV3.SchemaObject): VendorExt {
@@ -91,6 +104,7 @@ function propToInfo(
       required,
       nullable: false,
       readOnly: false,
+      writeOnly: false,
       refName: targetName,
       description: target?.description,
     };
@@ -112,6 +126,7 @@ function propToInfo(
     required,
     nullable: prop.nullable === true,
     readOnly: prop.readOnly === true,
+    writeOnly: prop.writeOnly === true,
     enumValues,
     enumLabels: ext["x-umbral-choice-labels"],
     maxLength: prop.maxLength,
@@ -119,9 +134,17 @@ function propToInfo(
       prop.default !== undefined && prop.default !== null
         ? String(prop.default)
         : undefined,
+    example:
+      prop.example !== undefined && prop.example !== null
+        ? String(prop.example)
+        : undefined,
     isMultichoice: ext["x-umbral-multichoice"] === true,
     fkTarget: ext["x-umbral-fk-target"],
     isStringRepr: ext["x-umbral-string-repr"] === true,
+    noform: ext["x-umbral-noform"] === true,
+    noedit: ext["x-umbral-noedit"] === true,
+    autoNow: ext["x-umbral-auto-now"] === true,
+    autoNowAdd: ext["x-umbral-auto-now-add"] === true,
     description: prop.description,
     itemsType,
     itemsRefName: itemsRef,

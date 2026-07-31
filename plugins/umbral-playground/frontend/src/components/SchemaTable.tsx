@@ -7,7 +7,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Lock, Key, Link2, Tags } from "lucide-react";
+import { Lock, Link2, Tags, Type, Clock, ServerCog, PenOff, EyeOff } from "lucide-react";
 import type { FieldInfo } from "@/lib/openapiSchema";
 
 interface SchemaTableProps {
@@ -53,10 +53,10 @@ export function SchemaTable({ fields, emptyLabel }: SchemaTableProps) {
                   <span>{f.name}</span>
                   {f.isStringRepr && (
                     <span
-                      title="Used as the model's display label"
+                      title="Display label — this field is what the model shows as in lists and dropdowns"
                       className="text-muted-foreground"
                     >
-                      <Key className="size-3" />
+                      <Type className="size-3" />
                     </span>
                   )}
                   {f.fkTarget && (
@@ -76,14 +76,58 @@ export function SchemaTable({ fields, emptyLabel }: SchemaTableProps) {
                     </span>
                   )}
                   {f.readOnly && (
-                    <span title="Read-only" className="text-muted-foreground">
+                    <span
+                      title="Read-only — the server fills this; it is not accepted in a request body"
+                      className="text-muted-foreground"
+                    >
                       <Lock className="size-3" />
+                    </span>
+                  )}
+                  {f.writeOnly && (
+                    <span
+                      title="Write-only — accepted in a request body, never returned in a response"
+                      className="text-muted-foreground"
+                    >
+                      <EyeOff className="size-3" />
+                    </span>
+                  )}
+                  {(f.autoNow || f.autoNowAdd) && (
+                    <span
+                      title={
+                        f.autoNow
+                          ? "Auto timestamp — stamped by the server on every save"
+                          : "Auto timestamp — stamped by the server on create"
+                      }
+                      className="text-muted-foreground"
+                    >
+                      <Clock className="size-3" />
+                    </span>
+                  )}
+                  {f.noform && (
+                    <span
+                      title="Server-managed — never accepted from a client"
+                      className="text-muted-foreground"
+                    >
+                      <ServerCog className="size-3" />
+                    </span>
+                  )}
+                  {f.noedit && !f.noform && (
+                    <span
+                      title="Immutable — accepted on create, read-only afterwards"
+                      className="text-muted-foreground"
+                    >
+                      <PenOff className="size-3" />
                     </span>
                   )}
                 </div>
                 {f.description && (
                   <p className="mt-0.5 text-[10px] font-normal text-muted-foreground">
                     {f.description}
+                  </p>
+                )}
+                {f.example !== undefined && (
+                  <p className="mt-0.5 font-mono text-[10px] font-normal text-muted-foreground/80">
+                    e.g. {f.example}
                   </p>
                 )}
               </TableCell>
