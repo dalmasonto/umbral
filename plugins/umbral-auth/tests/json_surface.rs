@@ -515,3 +515,41 @@ async fn logout_revokes_the_presented_bearer_token() {
         "the revoked token must no longer resolve /me — logout revokes the presented bearer token"
     );
 }
+
+/// gaps4 #35 (same class as the CLI fix): the register boundary rejects a
+/// malformed email with a 400 naming the address, and the AuthUser email
+/// column carries the `email` text-format marker so the dynamic write
+/// paths (admin forms, REST resources) validate it too.
+#[tokio::test]
+async fn register_rejects_an_invalid_email() {
+    let (router, _rec) = boot_app_with_recorder().await;
+
+    let (status, body) = post_full(
+        &router,
+        "/api/auth/register",
+        r#"{"username":"nomail","email":"admin","password":"G00d$Pass!"}"#,
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "an email with no @ must be a 400; body: {body}"
+    );
+    assert!(
+        body.contains("not a valid email address"),
+        "the error detail names the problem; got: {body}"
+    );
+
+    // The column-level marker: single source of truth for every dynamic
+    // write path.
+    use umbral::prelude::Model;
+    let email_field = umbral_auth::AuthUser::FIELDS
+        .iter()
+        .find(|f| f.name == "email")
+        .expect("AuthUser has an email field");
+    assert_eq!(
+        email_field.text_format,
+        Some("email"),
+        "AuthUser.email must carry the email text-format marker"
+    );
+}

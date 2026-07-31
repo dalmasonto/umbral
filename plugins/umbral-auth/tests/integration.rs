@@ -444,6 +444,57 @@ async fn createsuperuser_noinput_errors_without_password_env() {
     );
 }
 
+/// gaps4 #35: an invalid `--email` (no `@`, e.g. plain `admin`) fails the
+/// command instead of silently minting a superuser with a broken address.
+/// The check is the ORM's single-source email validator, so the CLI agrees
+/// with the register route and the dynamic write path.
+#[tokio::test]
+async fn createsuperuser_rejects_an_invalid_email() {
+    boot().await;
+    let _env_guard = SUPERUSER_ENV_LOCK.lock().await;
+
+    unsafe {
+        std::env::set_var("UMBRAL_SUPERUSER_PASSWORD", "swordfish-9-9");
+    }
+
+    let plugins: Vec<Box<dyn umbral::prelude::Plugin>> = vec![Box::new(umbral_auth::AuthPlugin::<
+        umbral_auth::AuthUser,
+    >::default())];
+    let result = umbral::cli::dispatch(
+        &plugins,
+        vec![
+            "umbral-cli",
+            "createsuperuser",
+            "--username",
+            "badmailadmin",
+            "--email",
+            "admin",
+            "--noinput",
+        ],
+    )
+    .await;
+
+    unsafe {
+        std::env::remove_var("UMBRAL_SUPERUSER_PASSWORD");
+    }
+
+    let err = result.expect_err("an email with no @ must fail the command");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("not a valid email address") && msg.contains("admin"),
+        "the error must name the invalid address; got: {msg}"
+    );
+
+    // And no half-created user row.
+    let pool = umbral::db::pool();
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM auth_user WHERE username = 'badmailadmin'")
+            .fetch_one(&pool)
+            .await
+            .expect("count query");
+    assert_eq!(count, 0, "the invalid-email run must not create a user");
+}
+
 // =========================================================================
 // Case-insensitive identifiers: usernames + emails are stored and matched
 // in a canonical (trimmed + lowercased) form, so `Dalmasonto` and

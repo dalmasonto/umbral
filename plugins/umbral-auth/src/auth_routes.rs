@@ -608,6 +608,16 @@ async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response 
             "username, email and password are required",
         );
     }
+    // gaps4 #35 (same class): the register boundary validates the email
+    // format with the ORM's single-source validator — `create_user` is
+    // intentionally non-validating, so the untrusted surface checks here.
+    if umbral::orm::validate_text_format("email", body.email.trim()).is_err() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "invalid_input",
+            format!("`{}` is not a valid email address", body.email),
+        );
+    }
     // Enforce the password-strength policy HERE, at the registration boundary —
     // this is the untrusted surface (a client submitting a password) and the
     // single point we validate (routes / views, not `create_user`). The

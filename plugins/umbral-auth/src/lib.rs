@@ -272,7 +272,13 @@ pub struct AuthUser {
     /// Shown read-only on edit forms; never on create forms (use the
     /// admin's password field mechanism for changes). `trim` + `lowercase`
     /// canonicalize on the dynamic write path — see `username`.
-    #[umbral(noedit, unique, trim, lowercase)]
+    /// `email` marks the column with the `email` text format, so every
+    /// dynamic write path (admin forms, REST resources) rejects a
+    /// malformed address via the ORM's single-source validator. The typed
+    /// `create_user` path stays non-validating by design — its callers
+    /// (the register route, `createsuperuser`) validate at their own
+    /// untrusted boundary.
+    #[umbral(noedit, unique, trim, lowercase, email)]
     pub email: String,
     /// Never shown on any form — password management goes through the
     /// dedicated Change Password flow in the admin. `signal_skip` keeps the
@@ -1603,12 +1609,14 @@ impl umbral::cli::PluginCommand for CreateSuperuserCommand {
             "Username",
             noinput,
             None,
+            None,
         )?;
         let email = resolve_or_prompt(
             matches.get_one::<String>("email").cloned(),
             "Email",
             noinput,
             None,
+            Some(validate_email_input),
         )?;
         let password = resolve_password(noinput)?;
 
@@ -1623,24 +1631,45 @@ impl umbral::cli::PluginCommand for CreateSuperuserCommand {
     }
 }
 
+/// The email check `createsuperuser` applies — the ORM's single-source
+/// `email` text-format validator, so the CLI, the register route, and the
+/// dynamic write path all agree on what a valid address is (gaps4 #35).
+fn validate_email_input(v: &str) -> Result<(), String> {
+    umbral::orm::validate_text_format("email", v)
+        .map_err(|_| format!("`{v}` is not a valid email address"))
+}
+
 /// Get a value from the CLI flag, the env var, or the interactive
 /// prompt. The `noinput` flag fails the CLI call rather than
 /// prompting when no value is available.
+///
+/// `validate` gates every source: a flag/env value that fails it is a
+/// hard error (scripts must not half-succeed), while the interactive
+/// prompt prints the reason and asks again.
 fn resolve_or_prompt(
     cli_value: Option<String>,
     label: &str,
     noinput: bool,
     env_var: Option<&str>,
+    validate: Option<fn(&str) -> Result<(), String>>,
 ) -> Result<String, umbral::cli::CliError> {
+    let check = |v: &str| -> Result<(), String> {
+        match validate {
+            Some(f) => f(v),
+            None => Ok(()),
+        }
+    };
     if let Some(v) = cli_value
         && !v.is_empty()
     {
+        check(&v).map_err(|reason| format!("umbral createsuperuser: {reason}"))?;
         return Ok(v);
     }
     if let Some(key) = env_var
         && let Ok(v) = std::env::var(key)
         && !v.is_empty()
     {
+        check(&v).map_err(|reason| format!("umbral createsuperuser: {reason}"))?;
         return Ok(v);
     }
     if noinput {
@@ -1648,16 +1677,23 @@ fn resolve_or_prompt(
             format!("umbral createsuperuser: {label} not provided and --noinput is set").into(),
         );
     }
-    print!("{label}: ");
     use std::io::Write;
-    std::io::stdout().flush().ok();
-    let mut s = String::new();
-    std::io::stdin().read_line(&mut s)?;
-    let v = s.trim().to_string();
-    if v.is_empty() {
-        return Err(format!("umbral createsuperuser: {label} cannot be empty").into());
+    loop {
+        print!("{label}: ");
+        std::io::stdout().flush().ok();
+        let mut s = String::new();
+        std::io::stdin().read_line(&mut s)?;
+        let v = s.trim().to_string();
+        // Empty stays a hard error, not a re-prompt: it is how a piped
+        // stdin reaching EOF terminates, so looping here would spin.
+        if v.is_empty() {
+            return Err(format!("umbral createsuperuser: {label} cannot be empty").into());
+        }
+        match check(&v) {
+            Ok(()) => return Ok(v),
+            Err(reason) => eprintln!("{reason} — try again"),
+        }
     }
-    Ok(v)
 }
 
 /// Get the password - env var -> confirm-prompt with no-echo. Refuses

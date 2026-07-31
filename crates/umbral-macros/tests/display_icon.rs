@@ -411,3 +411,33 @@ fn min_max_round_trip_through_model_meta_snapshot() {
     assert_eq!(age.min, Some(0));
     assert_eq!(age.max, Some(150));
 }
+
+// gaps4 #35: the ATTR form of the text-format markers — `#[umbral(email)]`
+// (and url/slug) on a plain String field emits the same FieldSpec marker
+// the Email/Url/Slug newtypes do, so a model can adopt format validation
+// without retyping the field.
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
+struct AttrValidatorRow {
+    id: i64,
+    #[umbral(email)]
+    contact: String,
+    #[umbral(url)]
+    site: String,
+    #[umbral(slug)]
+    handle: String,
+    plain: String,
+}
+
+#[test]
+fn text_format_attr_on_plain_string_emits_the_marker() {
+    let by_name: std::collections::HashMap<&str, &umbral::orm::FieldSpec> =
+        <AttrValidatorRow as Model>::FIELDS
+            .iter()
+            .map(|f| (f.name, f))
+            .collect();
+
+    assert_eq!(by_name["contact"].text_format, Some("email"));
+    assert_eq!(by_name["site"].text_format, Some("url"));
+    assert_eq!(by_name["handle"].text_format, Some("slug"));
+    assert_eq!(by_name["plain"].text_format, None);
+}

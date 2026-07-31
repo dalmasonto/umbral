@@ -340,6 +340,13 @@ struct UmbralFieldAttr {
     /// Required when the field type is `ReverseSet<C>`; ignored on
     /// any other field type.
     reverse_fk: Option<String>,
+    /// `#[umbral(email)]` / `#[umbral(url)]` / `#[umbral(slug)]` — declare
+    /// the text format of a plain `String` field, exactly the marker the
+    /// `Email` / `Url` / `Slug` newtypes emit. Same vocabulary as
+    /// `#[derive(Validate)]` (gaps4 #35): the dynamic write path runs the
+    /// matching validator and OpenAPI emits the format key, without
+    /// retyping the field (which would break every construction site).
+    text_format: Option<String>,
 }
 
 /// Detect `#[sqlx(skip)]` on a struct field. Used by the OneToOne
@@ -406,6 +413,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         max: None,
         slug_from: None,
         reverse_fk: None,
+        text_format: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbral") {
@@ -612,6 +620,20 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 let lit: syn::LitStr = value.parse()?;
                 parsed.reverse_fk = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("email") {
+                // gaps4 #35 — text-format markers on a plain String field,
+                // same vocabulary as #[derive(Validate)]. The Email/Url/
+                // Slug newtypes emit the identical marker; the attr form
+                // exists so a model can adopt validation without retyping
+                // the field.
+                parsed.text_format = Some("email".to_string());
+                Ok(())
+            } else if meta.path.is_ident("url") {
+                parsed.text_format = Some("url".to_string());
+                Ok(())
+            } else if meta.path.is_ident("slug") {
+                parsed.text_format = Some("slug".to_string());
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -648,7 +670,8 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                      `example = \"...\"`, `widget = \"...\"`, \
                      `backend = \"...\"`, \
                      `min = N`, `max = N`, `slug_from = \"...\"`, \
-                     and `reverse_fk = \"...\"`"
+                     `reverse_fk = \"...\"`, and the text-format markers \
+                     `email`, `url`, `slug`"
                 )))
             }
         })?;
@@ -1564,7 +1587,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         // BUG-11/12/13: lower validator wrapper types to a
         // `text_format` marker so downstream consumers know which
-        // validator to run / which OpenAPI format key to emit.
+        // validator to run / which OpenAPI format key to emit. The
+        // newtype wins when both are present (they can't disagree — the
+        // attr on a newtype field is either redundant or a contradiction
+        // the newtype's own validation already settles); the attr form
+        // covers plain String fields (gaps4 #35).
         let text_format_tokens = match kind {
             FieldKind::Slug => {
                 quote!(::core::option::Option::Some("slug"))
@@ -1575,7 +1602,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             FieldKind::Url => {
                 quote!(::core::option::Option::Some("url"))
             }
-            _ => quote!(::core::option::Option::None),
+            _ => match &field_attr.text_format {
+                Some(fmt) => quote!(::core::option::Option::Some(#fmt)),
+                None => quote!(::core::option::Option::None),
+            },
         };
 
         // Gap 109: `#[umbral(slug_from = "title")]` carries through to
