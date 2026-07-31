@@ -4591,6 +4591,19 @@ fn is_safe_cast(from: SqlType, to: SqlType) -> bool {
 /// clause. Matches what sea-query's `PostgresQueryBuilder` emits for
 /// the same `SqlType` inside a `CREATE TABLE`, so the resulting
 /// schema after the alter is identical to a freshly created table.
+/// The full Postgres type for a column, INCLUDING the varchar bound. A
+/// `Text` column with `max_length > 0` is `character varying(n)` — the same
+/// mapping the CreateTable path uses — so alters land on the type the table
+/// would have been created with, not a bare `text` that silently drops the
+/// bound.
+fn postgres_type_sql(col: &Column) -> String {
+    if col.ty == SqlType::Text && col.max_length > 0 {
+        format!("character varying({})", col.max_length)
+    } else {
+        postgres_type_name(col.ty).to_string()
+    }
+}
+
 fn postgres_type_name(ty: SqlType) -> &'static str {
     use SqlType::*;
     match ty {
@@ -4714,8 +4727,40 @@ fn diff_columns(
                 comment_columns.push(*name);
             }
 
+            // `max_length` IS schema-meaningful for Text columns: CreateTable
+            // renders `Text + max_length > 0` as `character varying(n)` on
+            // Postgres, so treating it as UI-only let models drift from DDL —
+            // raising a bound never emitted an ALTER, and every FRESH database
+            // enforced the stale one (found live loading TaskFlow's dev dump:
+            // four columns rejected rows the app had been writing for weeks;
+            // SQLite hid it because its varchar bounds are advisory).
+            // WIDENING (n -> bigger, or n -> unbounded) is a lossless in-place
+            // alter; NARROWING (smaller, or unbounded -> bounded) can abort on
+            // existing rows mid-migration, so it stays a hand-written job.
+            let length_changed = !type_changed
+                && prev_col.ty == SqlType::Text
+                && prev_col.max_length != curr_col.max_length;
+            if length_changed
+                && curr_col.max_length != 0
+                && (prev_col.max_length == 0 || curr_col.max_length < prev_col.max_length)
+            {
+                return Err(MigrateError::UnsafeAlter {
+                    model: model.to_string(),
+                    column: (*name).to_string(),
+                    reason: format!(
+                        "narrowing max_length {prev} -> {curr} can abort on existing oversized rows — write a data-preserving (truncate/validate) migration by hand",
+                        prev = if prev_col.max_length == 0 {
+                            "unbounded".to_string()
+                        } else {
+                            prev_col.max_length.to_string()
+                        },
+                        curr = curr_col.max_length,
+                    ),
+                });
+            }
+
             // Any schema-meaningful field change triggers AlterColumn.
-            // UI-only flags (`noform`, `noedit`, `max_length`,
+            // UI-only flags (`noform`, `noedit`,
             // `is_string_repr`, `is_multichoice`) are intentionally
             // excluded — they affect admin / OpenAPI rendering but
             // not the database schema, so emitting an ALTER would do
@@ -4727,6 +4772,7 @@ fn diff_columns(
             // `diff_indexes` now emits a proper `AddIndex`/`DropIndex` for it,
             // which is correct and cheap on both backends.
             if type_changed
+                || length_changed
                 || prev_col.nullable != curr_col.nullable
                 || prev_col.fk_target != curr_col.fk_target
                 || prev_col.unique != curr_col.unique
@@ -5701,9 +5747,20 @@ fn render_alter_column_postgres(
     // AND the change is in the safe-cast whitelist (diff_columns has
     // already gated unsafe ones). Emitted before nullable so a NOT
     // NULL flip against the just-cast column reads the new type.
+    //
+    // A same-type Text column whose `max_length` changed is ALSO a type
+    // change on Postgres — varchar(n) carries the bound in the type — and
+    // rendering nothing here is how widened models silently kept their old
+    // bound on every fresh database (diff_columns has already refused the
+    // narrowing direction). `postgres_type_sql` is length-aware, so a plain
+    // safe-cast into a bounded Text lands on varchar(n) too, not bare text.
     if let Some(prev_col) = prev {
-        if prev_col.ty != new.ty && is_safe_cast(prev_col.ty, new.ty) {
-            let new_ty_sql = postgres_type_name(new.ty);
+        let cast_changed = prev_col.ty != new.ty && is_safe_cast(prev_col.ty, new.ty);
+        let length_changed = prev_col.ty == new.ty
+            && new.ty == SqlType::Text
+            && prev_col.max_length != new.max_length;
+        if cast_changed || length_changed {
+            let new_ty_sql = postgres_type_sql(new);
             stmts.push(format!(
                 "ALTER TABLE {q_table} ALTER COLUMN {q_column} TYPE {new_ty_sql} USING {q_column}::{new_ty_sql}"
             ));
