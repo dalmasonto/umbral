@@ -271,15 +271,32 @@ async fn json_verify_and_reset_endpoints() {
         axum::http::StatusCode::NO_CONTENT
     );
 
-    // Forgot is always 202 even for unknown emails.
+    // Forgot is always 202 even for unknown emails — and gaps4 #33: the 202
+    // carries a `{"detail": ...}` body (a bare 202 read like a broken
+    // endpoint), IDENTICAL for known and unknown emails (anti-enumeration).
+    let (unknown_status, unknown_body) = post_full(
+        &router,
+        "/api/auth/password-forgot",
+        r#"{"email":"ghost@example.com"}"#,
+    )
+    .await;
+    assert_eq!(unknown_status, axum::http::StatusCode::ACCEPTED);
+    let (known_status, known_body) = post_full(
+        &router,
+        "/api/auth/password-forgot",
+        r#"{"email":"dan@example.com"}"#,
+    )
+    .await;
+    assert_eq!(known_status, axum::http::StatusCode::ACCEPTED);
     assert_eq!(
-        post(
-            &router,
-            "/api/auth/password-forgot",
-            r#"{"email":"ghost@example.com"}"#
-        )
-        .await,
-        axum::http::StatusCode::ACCEPTED
+        unknown_body, known_body,
+        "the 202 body must not distinguish known from unknown emails"
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&unknown_body)
+        .expect("password-forgot 202 must carry a JSON body");
+    assert!(
+        parsed["detail"].as_str().is_some_and(|d| !d.is_empty()),
+        "the 202 body carries a non-empty `detail` message; got: {unknown_body}"
     );
 }
 

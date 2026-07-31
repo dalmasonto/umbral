@@ -89,6 +89,17 @@ struct ErrorOut {
     detail: String,
 }
 
+/// Success envelope for the accepted-but-async endpoints (`password-forgot`,
+/// `resend-verification`). A bare 202 with no body reads like a broken
+/// endpoint in a client or the playground; the `detail` key matches the
+/// error envelope's, so every non-empty auth response has a human-readable
+/// `detail`. The message MUST be identical for known and unknown emails —
+/// it is part of the anti-enumeration contract.
+#[derive(Debug, Serialize)]
+struct DetailOut {
+    detail: &'static str,
+}
+
 // New DTOs for the verification + password-reset surface (Task 10).
 #[derive(Debug, Deserialize)]
 struct VerifyEmailIn {
@@ -134,6 +145,11 @@ fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Re
         }),
     )
         .into_response()
+}
+
+/// 202 + `{"detail": ...}` — see [`DetailOut`].
+fn accepted(detail: &'static str) -> Response {
+    (StatusCode::ACCEPTED, Json(DetailOut { detail })).into_response()
 }
 
 // =========================================================================
@@ -381,6 +397,14 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
             "detail": {"type": "string"},
         }
     });
+    // Success envelope for the 202 accepted-but-async endpoints; the message
+    // is identical for known and unknown emails (anti-enumeration).
+    let detail_response = json!({
+        "type": "object",
+        "properties": {
+            "detail": {"type": "string"},
+        }
+    });
 
     vec![
         (
@@ -496,7 +520,7 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
                         })}}
                     },
                     "responses": {
-                        "202": {"description": "Request accepted (mail sent if the address is known and unverified)."}
+                        "202": {"description": "Request accepted (mail sent if the address is known and unverified).", "content": {"application/json": {"schema": detail_response.clone()}}}
                     }
                 }
             }),
@@ -520,7 +544,7 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
                         })}}
                     },
                     "responses": {
-                        "202": {"description": "Request accepted (reset link sent if the address matches a known account)."}
+                        "202": {"description": "Request accepted (reset link sent if the address matches a known account).", "content": {"application/json": {"schema": detail_response.clone()}}}
                     }
                 }
             }),
@@ -845,7 +869,7 @@ async fn resend_verification_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -
     {
         let _ = crate::start_email_verification(&u).await;
     }
-    StatusCode::ACCEPTED.into_response()
+    accepted("If the address matches an unverified account, a verification email has been sent.")
 }
 
 /// `POST {prefix}/password-forgot` — issue a password-reset link.
@@ -866,7 +890,7 @@ async fn password_forgot_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -> Re
     }
     let base = reset_url_base(&headers);
     let _ = crate::start_password_reset(&b.email, &base).await;
-    StatusCode::ACCEPTED.into_response()
+    accepted("If the address matches a known account, a password-reset link has been sent.")
 }
 
 /// `POST {prefix}/password-reset` — consume a password-reset token.
