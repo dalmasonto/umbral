@@ -207,24 +207,24 @@ async fn presence_gating_default_off_projection_dedup_anonymous() {
 //    presence. (Same gate the SSE/WS handshake applies before registering.)
 // =========================================================================
 
-#[test]
-fn t5_presence_visibility_is_policy_gated() {
+#[tokio::test]
+async fn t5_presence_visibility_is_policy_gated() {
     use umbral_realtime::GroupPolicy;
     let policy = PublicGroupsOnly;
     // A private `room:*` group is presence-enabled by the spec, but the default
     // policy refuses the join — so the client never registers, never receives
     // its presence:* events. Enabling presence never widens who can subscribe.
     assert!(
-        !policy.can_join(Some("1"), "room:42"),
+        !policy.can_join(Some("1"), "room:42").await,
         "the default policy denies a non-public group, presence-enabled or not"
     );
     assert!(
-        !policy.can_join(None, "room:42"),
+        !policy.can_join(None, "room:42").await,
         "an anonymous client is denied the private presence group too"
     );
     // Only a public: presence group is visible by default.
     assert!(
-        policy.can_join(None, "public:lobby"),
+        policy.can_join(None, "public:lobby").await,
         "a public: group is joinable, so its presence (if enabled) is visible"
     );
 }

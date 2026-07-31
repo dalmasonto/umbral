@@ -156,7 +156,7 @@ pub(crate) async fn ws_handler(
 
     let policy = Realtime::policy();
     for g in &requested {
-        if !policy.can_join(user_id.as_deref(), g) {
+        if !policy.can_join(user_id.as_deref(), g).await {
             return (
                 StatusCode::FORBIDDEN,
                 format!("not allowed to join group `{g}`"),

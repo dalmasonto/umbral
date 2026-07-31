@@ -34,9 +34,12 @@ async fn ctx_publish_authorizes_before_broadcast() {
     };
 
     // can_send mirrors the installed policy.
-    assert!(ctx.can_send("public:lobby"), "public rooms are sendable");
     assert!(
-        !ctx.can_send("chat:secret"),
+        ctx.can_send("public:lobby").await,
+        "public rooms are sendable"
+    );
+    assert!(
+        !ctx.can_send("chat:secret").await,
         "a non-public room is denied by the default policy"
     );
 

@@ -70,7 +70,7 @@ pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -
     // so a client can't subscribe to a room it has no claim to.
     let policy = Realtime::policy();
     for g in &requested {
-        if !policy.can_join(user_id.as_deref(), g) {
+        if !policy.can_join(user_id.as_deref(), g).await {
             return (
                 StatusCode::FORBIDDEN,
                 format!("not allowed to join group `{g}`"),

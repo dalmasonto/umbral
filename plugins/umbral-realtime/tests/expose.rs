@@ -169,22 +169,22 @@ async fn whitelist_strips_secrets_and_default_is_id_only() {
 /// handshake applies (see `sse.rs`, which 403s a non-`public:` group). So
 /// exposing to a private group does NOT make it joinable under the default
 /// `PublicGroupsOnly` policy; the dev must opt in with a custom policy.
-#[test]
-fn exposed_private_group_is_not_joinable_under_default_policy() {
+#[tokio::test]
+async fn exposed_private_group_is_not_joinable_under_default_policy() {
     let policy = PublicGroupsOnly;
     // A `public:` group the dev exposed to is joinable…
     assert!(
-        policy.can_join(None, "public:posts"),
+        policy.can_join(None, "public:posts").await,
         "a public: exposed group is joinable by default"
     );
     // …but a private group (even if exposed to) is denied — exposing a model
     // never widens who can subscribe; the policy still governs.
     assert!(
-        !policy.can_join(None, "post:42"),
+        !policy.can_join(None, "post:42").await,
         "a non-public exposed group is NOT joinable under the default policy"
     );
     assert!(
-        !policy.can_join(Some("7"), "tenant:secret"),
+        !policy.can_join(Some("7"), "tenant:secret").await,
         "even an authenticated user is denied a private group by default"
     );
 }

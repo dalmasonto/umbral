@@ -780,12 +780,19 @@ impl Broker for RedisBroker {
 /// non-`public:` group, so a client can't subscribe to `tenant:99` or
 /// `chat:123` it has no claim to — override to grant access from the
 /// authenticated identity (membership tables, tenant id, role).
+///
+/// Both methods are `async` (gaps4 #36): a real policy usually consults
+/// async state — a membership table, a cache — and every call site (the
+/// SSE/WS handshakes, [`MessageContext::publish`]) is already async, so a
+/// DB-backed policy is a plain `.await`, not a `block_in_place` bridge.
+/// A shape-only policy simply doesn't await anything.
+#[async_trait::async_trait]
 pub trait GroupPolicy: Send + Sync {
     /// `user_id` is the authenticated user's PK string (or `None` for
     /// anonymous) — PK-type-agnostic, so `i64`/`String`/`uuid` PKs all
     /// arrive as the same canonical string. Return `true` to allow the
     /// join. Default: only `public:*` groups.
-    fn can_join(&self, user_id: Option<&str>, group: &str) -> bool {
+    async fn can_join(&self, user_id: Option<&str>, group: &str) -> bool {
         let _ = user_id;
         group.starts_with("public:")
     }
@@ -798,19 +805,23 @@ pub trait GroupPolicy: Send + Sync {
     /// can't join it, you can't send to it"), the safe default; override for
     /// asymmetric rooms (e.g. a read-only broadcast channel, or a room you may
     /// post to but not subscribe).
-    fn can_send(&self, user_id: Option<&str>, group: &str) -> bool {
-        self.can_join(user_id, group)
+    async fn can_send(&self, user_id: Option<&str>, group: &str) -> bool {
+        self.can_join(user_id, group).await
     }
 }
 
 /// The permissive-for-public default policy.
 pub struct PublicGroupsOnly;
+#[async_trait::async_trait]
 impl GroupPolicy for PublicGroupsOnly {}
 
-/// A [`GroupPolicy`] built from a closure — the ergonomic way to gate rooms
-/// without declaring a named type. Construct it directly, or use
+/// A [`GroupPolicy`] built from a SYNC closure — the ergonomic way to gate
+/// rooms on shape alone (prefixes, `user:{id}` ownership) without declaring
+/// a named type. Construct it directly, or use
 /// [`RealtimePlugin::group_policy_fn`]. The closure returns `true` to allow
-/// the join.
+/// the join. For a policy that needs async state (a DB membership check),
+/// use [`AsyncFnGroupPolicy`] / [`RealtimePlugin::group_policy_async_fn`]
+/// or implement [`GroupPolicy`] directly.
 ///
 /// ```ignore
 /// use umbral_realtime::RealtimePlugin;
@@ -820,20 +831,56 @@ impl GroupPolicy for PublicGroupsOnly {}
 ///     .group_policy_fn(|user_id, group| {
 ///         if group.starts_with("public:") { return true; }   // public rooms: anyone
 ///         match user_id {
-///             Some(uid) => group == format!("user:{uid}")     // your own private room
-///                 || is_member(uid, group),                   // or your DB membership check
+///             Some(uid) => group == format!("user:{uid}"),    // your own private room
 ///             None => false,                                  // anonymous: public only
 ///         }
 ///     });
 /// ```
 pub struct FnGroupPolicy<F>(pub F);
 
+#[async_trait::async_trait]
 impl<F> GroupPolicy for FnGroupPolicy<F>
 where
     F: Fn(Option<&str>, &str) -> bool + Send + Sync,
 {
-    fn can_join(&self, user_id: Option<&str>, group: &str) -> bool {
+    async fn can_join(&self, user_id: Option<&str>, group: &str) -> bool {
         (self.0)(user_id, group)
+    }
+}
+
+/// A [`GroupPolicy`] built from an ASYNC closure — for policies that gate a
+/// room on async state, the common case being a DB membership check at the
+/// SSE/WS handshake (gaps4 #36). Construct it directly, or use
+/// [`RealtimePlugin::group_policy_async_fn`]. The closure receives owned
+/// `Option<String>` / `String` (an async closure can't borrow from the
+/// handshake's stack) and returns `true` to allow the join.
+///
+/// ```ignore
+/// use umbral_realtime::RealtimePlugin;
+///
+/// RealtimePlugin::new()
+///     .with_auth_sessions()
+///     .group_policy_async_fn(|user_id, group| async move {
+///         if group.starts_with("public:") { return true; }
+///         let Some(uid) = user_id else { return false };
+///         // A real ORM membership check — awaited at the handshake.
+///         Membership::objects()
+///             .filter(membership::USER_ID.eq(&uid) & membership::GROUP.eq(&group))
+///             .exists()
+///             .await
+///             .unwrap_or(false)   // DB error → fail closed
+///     });
+/// ```
+pub struct AsyncFnGroupPolicy<F>(pub F);
+
+#[async_trait::async_trait]
+impl<F, Fut> GroupPolicy for AsyncFnGroupPolicy<F>
+where
+    F: Fn(Option<String>, String) -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = bool> + Send,
+{
+    async fn can_join(&self, user_id: Option<&str>, group: &str) -> bool {
+        (self.0)(user_id.map(str::to_string), group.to_string()).await
     }
 }
 
@@ -853,9 +900,10 @@ pub struct MessageContext {
 impl MessageContext {
     /// Whether this connection's identity may broadcast to `group`, per the
     /// installed [`GroupPolicy::can_send`]. Sugar for
-    /// [`Realtime::can_send`]`(self.user_id.as_deref(), group)`.
-    pub fn can_send(&self, group: &str) -> bool {
-        Realtime::can_send(self.user_id.as_deref(), group)
+    /// [`Realtime::can_send`]`(self.user_id.as_deref(), group)`. Async since
+    /// gaps4 #36 — the policy may consult a membership table.
+    pub async fn can_send(&self, group: &str) -> bool {
+        Realtime::can_send(self.user_id.as_deref(), group).await
     }
 
     /// **Authorized publish** — the safe-by-default way to broadcast from an
@@ -875,7 +923,7 @@ impl MessageContext {
     /// }
     /// ```
     pub async fn publish<T: Serialize>(&self, group: &str, event: &str, data: &T) -> bool {
-        if !self.can_send(group) {
+        if !self.can_send(group).await {
             return false;
         }
         Realtime::to_group(group).send(event, data).await;
@@ -1412,9 +1460,10 @@ impl Realtime {
     /// (audit_2 realtime #2). A [`MessageHandler`] that broadcasts to a
     /// client-supplied room MUST call this first — a joined client can otherwise
     /// inject into any group (IDOR). Delegates to [`GroupPolicy::can_send`],
-    /// which defaults to the same rule as join.
-    pub fn can_send(user_id: Option<&str>, group: &str) -> bool {
-        Self::get().policy.can_send(user_id, group)
+    /// which defaults to the same rule as join. Async since gaps4 #36 — the
+    /// policy may consult a membership table; every caller is already async.
+    pub async fn can_send(user_id: Option<&str>, group: &str) -> bool {
+        Self::get().policy.can_send(user_id, group).await
     }
 
     /// The configured inbound-message handler (WS transport).
@@ -1657,6 +1706,33 @@ impl RealtimePlugin {
         F: Fn(Option<&str>, &str) -> bool + Send + Sync + 'static,
     {
         self.group_policy(FnGroupPolicy(f))
+    }
+
+    /// Gate room access with an ASYNC closure — for policies that consult
+    /// async state at the handshake, the common case being a DB membership
+    /// check (gaps4 #36). `|user_id: Option<String>, group: String| -> impl
+    /// Future<Output = bool>`; return `true` to allow the join, and fail
+    /// CLOSED (`false`) on a lookup error. See [`AsyncFnGroupPolicy`].
+    ///
+    /// ```ignore
+    /// RealtimePlugin::new()
+    ///     .with_auth_sessions()
+    ///     .group_policy_async_fn(|user_id, group| async move {
+    ///         if group.starts_with("public:") { return true; }
+    ///         let Some(uid) = user_id else { return false };
+    ///         Membership::objects()
+    ///             .filter(membership::USER_ID.eq(&uid) & membership::GROUP.eq(&group))
+    ///             .exists()
+    ///             .await
+    ///             .unwrap_or(false)
+    ///     });
+    /// ```
+    pub fn group_policy_async_fn<F, Fut>(self, f: F) -> Self
+    where
+        F: Fn(Option<String>, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = bool> + Send + 'static,
+    {
+        self.group_policy(AsyncFnGroupPolicy(f))
     }
 
     /// Supply a custom identity resolver: an async function that maps the
@@ -2241,30 +2317,76 @@ mod tests {
         assert_eq!(recv(&mut rx_b).await.unwrap().channel, "@broadcast");
     }
 
-    #[test]
-    fn default_group_policy_allows_only_public() {
+    #[tokio::test]
+    async fn default_group_policy_allows_only_public() {
         let p = PublicGroupsOnly;
-        assert!(p.can_join(Some("1"), "public:lobby"));
-        assert!(!p.can_join(Some("1"), "tenant:99"));
-        assert!(!p.can_join(None, "chat:1"));
+        assert!(p.can_join(Some("1"), "public:lobby").await);
+        assert!(!p.can_join(Some("1"), "tenant:99").await);
+        assert!(!p.can_join(None, "chat:1").await);
     }
 
-    #[test]
-    fn fn_group_policy_gates_rooms_via_closure() {
+    #[tokio::test]
+    async fn fn_group_policy_gates_rooms_via_closure() {
         // The ergonomic gate: public rooms for anyone, a private room only for
         // its owning user, everything else denied.
         let p = FnGroupPolicy(|user_id: Option<&str>, group: &str| {
             group.starts_with("public:")
                 || matches!(user_id, Some(uid) if group == format!("user:{uid}"))
         });
-        assert!(p.can_join(None, "public:lobby"), "public open to anyone");
-        assert!(p.can_join(Some("7"), "user:7"), "owner can join their room");
-        assert!(!p.can_join(Some("8"), "user:7"), "non-owner denied");
-        assert!(!p.can_join(None, "user:7"), "anonymous denied private");
+        assert!(
+            p.can_join(None, "public:lobby").await,
+            "public open to anyone"
+        );
+        assert!(
+            p.can_join(Some("7"), "user:7").await,
+            "owner can join their room"
+        );
+        assert!(!p.can_join(Some("8"), "user:7").await, "non-owner denied");
+        assert!(
+            !p.can_join(None, "user:7").await,
+            "anonymous denied private"
+        );
     }
 
-    #[test]
-    fn group_policy_is_pk_type_agnostic() {
+    #[tokio::test]
+    async fn async_fn_group_policy_awaits_its_state() {
+        // gaps4 #36: an ASYNC closure policy — the membership lookup here is a
+        // real .await point (a lock over async state), standing in for the DB
+        // membership query a downstream app runs at the handshake.
+        let members =
+            std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashSet::from([
+                "7".to_string(),
+            ])));
+        let p = AsyncFnGroupPolicy(move |user_id: Option<String>, group: String| {
+            let members = members.clone();
+            async move {
+                if group.starts_with("public:") {
+                    return true;
+                }
+                match user_id {
+                    Some(uid) => members.read().await.contains(&uid),
+                    None => false,
+                }
+            }
+        });
+        assert!(
+            p.can_join(None, "public:lobby").await,
+            "public open to anyone"
+        );
+        assert!(p.can_join(Some("7"), "project:1").await, "member admitted");
+        assert!(
+            !p.can_join(Some("8"), "project:1").await,
+            "non-member denied"
+        );
+        assert!(!p.can_join(None, "project:1").await, "anonymous denied");
+        assert!(
+            p.can_send(Some("7"), "project:1").await,
+            "can_send defaults to the async can_join"
+        );
+    }
+
+    #[tokio::test]
+    async fn group_policy_is_pk_type_agnostic() {
         // Identity is an opaque PK STRING, so a numeric-PK user and a UUID-PK
         // user route through the very same closure with no i64 assumption: each
         // owns its own `user:<pk>` room, keyed on whatever its PK renders to.
@@ -2274,19 +2396,22 @@ mod tests {
         );
         // Numeric string PK.
         assert!(
-            p.can_join(Some("42"), "user:42"),
+            p.can_join(Some("42"), "user:42").await,
             "numeric pk owns its room"
         );
         assert!(
-            !p.can_join(Some("42"), &format!("user:{uuid}")),
+            !p.can_join(Some("42"), &format!("user:{uuid}")).await,
             "not the uuid's room"
         );
         // UUID string PK.
         assert!(
-            p.can_join(Some(uuid), &format!("user:{uuid}")),
+            p.can_join(Some(uuid), &format!("user:{uuid}")).await,
             "uuid pk owns its room"
         );
-        assert!(!p.can_join(Some(uuid), "user:42"), "uuid is not user 42");
+        assert!(
+            !p.can_join(Some(uuid), "user:42").await,
+            "uuid is not user 42"
+        );
     }
 
     #[tokio::test]
@@ -2459,28 +2584,29 @@ mod audit_realtime2_tests {
 
     // audit_2 realtime #2: can_send defaults to can_join (safe default), and a
     // policy can override it independently.
-    #[test]
-    fn can_send_defaults_to_can_join() {
+    #[tokio::test]
+    async fn can_send_defaults_to_can_join() {
         let p = PublicGroupsOnly;
-        assert!(p.can_send(Some("1"), "public:lobby"));
-        assert!(!p.can_send(Some("1"), "chat:secret")); // same rule as join
+        assert!(p.can_send(Some("1"), "public:lobby").await);
+        assert!(!p.can_send(Some("1"), "chat:secret").await); // same rule as join
     }
 
-    #[test]
-    fn can_send_is_overridable_independently_of_join() {
+    #[tokio::test]
+    async fn can_send_is_overridable_independently_of_join() {
         // A room you may POST to but not SUBSCRIBE to.
         struct PostOnly;
+        #[async_trait::async_trait]
         impl GroupPolicy for PostOnly {
-            fn can_join(&self, _u: Option<&str>, group: &str) -> bool {
+            async fn can_join(&self, _u: Option<&str>, group: &str) -> bool {
                 group.starts_with("public:")
             }
-            fn can_send(&self, _u: Option<&str>, group: &str) -> bool {
+            async fn can_send(&self, _u: Option<&str>, group: &str) -> bool {
                 group == "feedback" || group.starts_with("public:")
             }
         }
         let p = PostOnly;
-        assert!(!p.can_join(None, "feedback"));
-        assert!(p.can_send(None, "feedback"));
+        assert!(!p.can_join(None, "feedback").await);
+        assert!(p.can_send(None, "feedback").await);
     }
 }
 

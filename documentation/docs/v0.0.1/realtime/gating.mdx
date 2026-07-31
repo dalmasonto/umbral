@@ -99,23 +99,27 @@ RealtimePlugin::new()
     });
 ```
 
-### Membership / multi-tenant - check the DB or the session
+### Membership / multi-tenant - check the DB at the handshake
 
-For a `tenant:{id}` or a `team:{id}` room, gate on a membership check. The closure is synchronous, so resolve membership from data you can read synchronously (a cache, or a check that doesn't need `.await`):
+For a `tenant:{id}` or a `team:{id}` room, gate on a real membership check. `group_policy_async_fn` takes an **async** closure, so the ORM query is a plain `.await` — it runs once, at the SSE/WS handshake. Fail closed (`false`) on a lookup error:
 
 ```rust
 RealtimePlugin::new()
     .with_auth_sessions()
-    .group_policy_fn(|user_id, group| {
+    .group_policy_async_fn(|user_id, group| async move {
         if group.starts_with("public:") {
             return true;
         }
-        match user_id {
-            Some(uid) => is_member(uid, group),  // your membership lookup -> bool
-            None => false,
-        }
+        let Some(uid) = user_id else { return false };
+        Membership::objects()
+            .filter(membership::USER_ID.eq(&uid) & membership::GROUP.eq(&group))
+            .exists()
+            .await
+            .unwrap_or(false)   // DB error -> fail closed
     });
 ```
+
+The async closure receives owned `Option<String>` / `String` (it outlives the handshake's stack). The sync `group_policy_fn` stays the right tool for shape-only rules like the ones above.
 
 ### Role-based - staff-only channels
 
@@ -139,22 +143,23 @@ A clean pattern for sensitive data that avoids gating logic entirely: never put 
 
 ## Complex policies: a named `GroupPolicy` type
 
-When a closure isn't enough (you want state, or shared helpers across methods), implement the `GroupPolicy` trait on your own type and pass it to `group_policy`:
+When a closure isn't enough (you want state, or shared helpers across methods), implement the `GroupPolicy` trait on your own type and pass it to `group_policy`. The trait is `async` (via `async_trait`), so a method can await the DB directly:
 
 ```rust
-use umbral_realtime::{GroupPolicy, RealtimePlugin};
+use umbral_realtime::{GroupPolicy, RealtimePlugin, async_trait};
 
 struct AppPolicy {
     // ... any state you need
 }
 
+#[async_trait]
 impl GroupPolicy for AppPolicy {
-    fn can_join(&self, user_id: Option<&str>, group: &str) -> bool {
+    async fn can_join(&self, user_id: Option<&str>, group: &str) -> bool {
         if group.starts_with("public:") {
             return true;
         }
         match user_id {
-            Some(uid) => self.allows(uid, group),
+            Some(uid) => self.allows(uid, group).await,
             None => false,
         }
     }
@@ -172,7 +177,7 @@ The default `can_join` (if you don't override it) is the same `group.starts_with
 | Step | Where | Result |
 |---|---|---|
 | Resolve identity | `with_auth_sessions()` / `identity_resolver(...)` | `user_id: Option<&str>` (the PK string) |
-| Check the join | `group_policy_fn(...)` / `group_policy(...)` | allow → stream; deny → `403` |
+| Check the join | `group_policy_fn(...)` / `group_policy_async_fn(...)` / `group_policy(...)` | allow → stream; deny → `403` |
 | Per-group dispatch | `Realtime::to_group(...).send(...)` | reaches only joined connections |
 
 Because every send to a group only reaches connections the policy already admitted, the policy is the single chokepoint for "who can see this room" - including for [model subscriptions](model-subscriptions) and [presence](presence), which both ride the same group dispatch.
