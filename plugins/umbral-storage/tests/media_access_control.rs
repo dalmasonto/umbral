@@ -87,3 +87,52 @@ async fn without_a_gate_serving_is_unchanged() {
         "with no gate configured, media serves as before"
     );
 }
+
+/// The callback must receive the PERCENT-DECODED key — the same string
+/// `FileField` stores and `ServeDir` resolves on disk. Handing it the raw
+/// encoded path (`with%20spaces.txt`) makes every spaced/escaped key
+/// unmatchable in an ownership lookup, so real uploads ("Screenshot from
+/// 2026-07-08.png") get denied as unknown files while unspaced ones pass —
+/// found live in TaskFlow the first day the gate shipped.
+#[tokio::test]
+async fn media_access_gate_receives_the_decoded_key() {
+    let dir = tempfile::tempdir().expect("tmp dir");
+    fs::write(dir.path().join("with spaces.txt"), b"SPACED").unwrap();
+
+    // Allow ONLY the exact decoded key — an encoded key reaching the callback
+    // fails this equality, exactly like a DB lookup by stored key would.
+    let app = StoragePlugin::new()
+        .media("/media", dir.path())
+        .media_access(|_headers: axum::http::HeaderMap, key: String| async move {
+            key == "with spaces.txt"
+        })
+        .routes();
+
+    let res = app
+        .clone()
+        .oneshot(get("/media/with%20spaces.txt", false))
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "the gate must see the decoded key (`with spaces.txt`), not the raw path"
+    );
+    let body = axum::body::to_bytes(res.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    assert_eq!(
+        &body[..],
+        b"SPACED",
+        "and the file serves after the gate allows"
+    );
+
+    // A key that percent-decodes to something DIFFERENT from any stored key
+    // still denies: decoding must not open new paths through the gate.
+    let res = app
+        .clone()
+        .oneshot(get("/media/with%20spaces%2Etxt.evil", false))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}

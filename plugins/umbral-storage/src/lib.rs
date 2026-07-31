@@ -666,13 +666,23 @@ impl Plugin for StoragePlugin {
                         let mount_prefix = mount_prefix.clone();
                         async move {
                             // The requested key = path with the mount prefix and
-                            // any leading slash stripped (`/media/a/b.jpg` → `a/b.jpg`).
+                            // any leading slash stripped (`/media/a/b.jpg` → `a/b.jpg`),
+                            // then PERCENT-DECODED. The callback must see the same
+                            // string `FileField` stores and `ServeDir` resolves on
+                            // disk — the raw path (`Screenshot%20from%20x.png`)
+                            // makes every spaced/escaped key unmatchable in an
+                            // ownership lookup, denying real files as unknown.
+                            // Invalid UTF-8 after decoding keeps the raw string:
+                            // it matches no stored key, so the gate fails CLOSED.
                             let path = req.uri().path();
-                            let key = path
+                            let raw_key = path
                                 .strip_prefix(&mount_prefix)
                                 .unwrap_or(path)
-                                .trim_start_matches('/')
-                                .to_string();
+                                .trim_start_matches('/');
+                            let key = percent_encoding::percent_decode_str(raw_key)
+                                .decode_utf8()
+                                .map(|s| s.into_owned())
+                                .unwrap_or_else(|_| raw_key.to_string());
                             let allowed = access(req.headers(), &key).await;
                             if allowed {
                                 next.run(req).await
