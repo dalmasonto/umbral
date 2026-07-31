@@ -324,3 +324,47 @@ async fn validation_error_surfaces_from_in_tx_and_rolls_back() {
     );
     assert_eq!(count("dqtx_item").await, before_items);
 }
+
+/// gaps4 #37 root cause: `update_json_in_tx` must report the REAL matched
+/// row count. It used to return `parent_pks.len().max(1)` whenever any SET
+/// column was present, so a WHERE that matched nothing claimed "1 affected"
+/// — and a bulk update of a nonexistent or out-of-scope pk answered 200
+/// instead of 404.
+#[tokio::test]
+async fn update_json_in_tx_reports_zero_for_a_no_match_where() {
+    boot().await;
+    let _g = SERIALISE.lock().await;
+
+    let mut tx = db::begin().await.expect("begin");
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "reference".to_string(),
+        serde_json::Value::String("never-lands".into()),
+    );
+
+    // A pk far outside anything seeded — the WHERE matches no row.
+    let affected = DynQuerySet::for_meta(&order_meta())
+        .filter_eq_string("id", "999999")
+        .update_json_in_tx(&body, &mut tx)
+        .await
+        .expect("update runs");
+    assert_eq!(
+        affected, 0,
+        "a zero-row UPDATE must report 0 affected, not a fabricated 1"
+    );
+
+    // And a real row still reports 1.
+    let mut form = HashMap::new();
+    form.insert("reference".to_string(), "aff-probe".to_string());
+    DynQuerySet::for_meta(&order_meta())
+        .insert_form_in_tx(&mut tx, &form, &[])
+        .await
+        .expect("seed row");
+    let affected = DynQuerySet::for_meta(&order_meta())
+        .filter_eq_string("reference", "aff-probe")
+        .update_json_in_tx(&body, &mut tx)
+        .await
+        .expect("update runs");
+    assert_eq!(affected, 1, "a one-row UPDATE reports 1");
+    tx.rollback().await.expect("rollback probe rows");
+}

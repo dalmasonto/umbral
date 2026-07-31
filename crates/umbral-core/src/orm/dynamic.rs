@@ -2355,30 +2355,44 @@ impl<'a> DynQuerySet<'a> {
             None => Vec::new(),
         };
 
+        let mut rows_affected: u64 = 0;
         if any {
             match tx.backend_name() {
                 "sqlite" => {
                     let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                     let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
-                    sqlx::query_with(&sql, values)
+                    rows_affected = sqlx::query_with(&sql, values)
                         .execute(&mut **inner)
                         .await
-                        .map_err(|e| classify_or_sqlx(e, body))?;
+                        .map_err(|e| classify_or_sqlx(e, body))?
+                        .rows_affected();
                 }
                 _ => {
                     let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                     let inner = tx.as_pg_mut().expect("postgres backend_name");
-                    sqlx::query_with(&sql, values)
+                    rows_affected = sqlx::query_with(&sql, values)
                         .execute(&mut **inner)
                         .await
-                        .map_err(|e| classify_or_sqlx(e, body))?;
+                        .map_err(|e| classify_or_sqlx(e, body))?
+                        .rows_affected();
                 }
             }
         }
         for pk in &parent_pks {
             write_m2m_junctions_in_tx(self.meta, Some(pk), body, tx).await?;
         }
-        Ok(parent_pks.len().max(if any { 1 } else { 0 }) as u64)
+        // The REAL matched-row count — a WHERE that matched nothing must
+        // report 0, exactly like `update_json` on the pool path. This used to
+        // return `parent_pks.len().max(1)` whenever any column was set, so a
+        // zero-row update claimed "1 affected" and a bulk update of a
+        // nonexistent (or out-of-scope, gaps4 #37) pk answered 200 instead
+        // of 404. An M2M-only update (no column writes) still reports the
+        // rows whose junctions were rewritten.
+        Ok(if any {
+            rows_affected
+        } else {
+            parent_pks.len() as u64
+        })
     }
 
     /// Transaction-aware sibling of [`Self::delete`]. Deletes (or
