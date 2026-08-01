@@ -583,7 +583,7 @@ use umbral_sessions::SessionsPlugin;
 use umbral_admin::AdminPlugin;
 use umbral_rest::{{RestPlugin, ResourceConfig}};
 use umbral_openapi::OpenApiPlugin;
-use umbral_security::{{SecurityConfig, SecurityPlugin}};
+use umbral_security::SecurityPlugin;
 use umbral_storage::StoragePlugin;
 
 // ---------------------------------------------------------------------------
@@ -660,10 +660,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
         // Security (on by default): CSRF + clickjacking/HSTS hardening
         // headers across the app. `/api` is exempt so token-authenticated
         // JSON clients can POST without a browser form CSRF cookie.
-        .plugin(SecurityPlugin::with_config(SecurityConfig {{
-            csrf_exempt_paths: vec!["/api".to_string()],
-            ..Default::default()
-        }}))
+        .plugin(SecurityPlugin::new().csrf_exempt(["/api"]))
 
         // --- Templates -------------------------------------------------------
         .templates_dir("templates")

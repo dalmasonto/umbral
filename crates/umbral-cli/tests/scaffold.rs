@@ -123,8 +123,9 @@ fn scaffold_project_main_rs_references_all_plugins() {
         "RestPlugin",
         "OpenApiPlugin",
         "SecurityPlugin",
-        "SecurityConfig",
-        "csrf_exempt_paths",
+        // gaps4 #41: the chainable shorthand replaced the SecurityConfig
+        // struct-update ceremony in the template.
+        ".csrf_exempt([\"/api\"])",
         "login_required_html",
         "ForeignKey",
         "ResourceConfig",

@@ -346,6 +346,34 @@ impl SecurityPlugin {
         self.config.hsts = hsts;
         self
     }
+
+    /// Exempt path prefixes from CSRF protection — the chainable shorthand
+    /// for the single most common security config (gaps4 #41). Every
+    /// token-authenticated or POST-only-transport surface needs it
+    /// (`/api`, `/graphql`), and before this every app performed the
+    /// `with_config(SecurityConfig { csrf_exempt_paths: vec![...],
+    /// ..Default::default() })` struct-update ceremony to say so.
+    ///
+    /// Appends to (never replaces) previously configured exemptions, so it
+    /// composes with `with_config` and with repeated calls:
+    ///
+    /// ```ignore
+    /// SecurityPlugin::new().csrf_exempt(["/api", "/graphql"])
+    /// ```
+    ///
+    /// Exempting a prefix is safe exactly when nothing under it relies on
+    /// cookie/session auth — bearer-token and explicitly-CORS'd JSON APIs
+    /// qualify; HTML form routes never do.
+    pub fn csrf_exempt<I, S>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.config
+            .csrf_exempt_paths
+            .extend(paths.into_iter().map(Into::into));
+        self
+    }
 }
 
 impl Plugin for SecurityPlugin {

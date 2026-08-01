@@ -271,6 +271,48 @@ async fn exempt_path_skips_csrf_on_writes() {
     assert_eq!(body, "ok-api");
 }
 
+/// gaps4 #41: `.csrf_exempt([...])` — the chainable shorthand — behaves
+/// exactly like the `with_config` struct-update ceremony it replaces, and
+/// APPENDS to previously configured exemptions rather than replacing them.
+#[tokio::test]
+async fn csrf_exempt_shorthand_exempts_and_composes() {
+    let inner = Router::new()
+        .route("/api/save", post(|| async { "ok-api" }))
+        .route("/graphql", post(|| async { "ok-gql" }))
+        .route("/form", post(|| async { "never-reached" }));
+    let router = SecurityPlugin::with_config(SecurityConfig {
+        csrf_exempt_paths: vec!["/api".into()],
+        ..Default::default()
+    })
+    .csrf_exempt(["/graphql"])
+    .wrap_router(inner);
+
+    for (path, expected) in [("/api/save", "ok-api"), ("/graphql", "ok-gql")] {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(path)
+            .body(Body::empty())
+            .unwrap();
+        let (status, _, body) = body_string(router.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{path} is exempt");
+        assert_eq!(body, expected);
+    }
+
+    // A non-exempt cookieless write still trips CSRF — the shorthand
+    // widened nothing beyond the named prefixes.
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/form")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = body_string(router.oneshot(req).await.unwrap()).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "non-exempt writes keep CSRF protection"
+    );
+}
+
 #[tokio::test]
 async fn middleware_token_wins_over_handler_minted_cookie() {
     // The middleware is the only mint (docs/decisions/
