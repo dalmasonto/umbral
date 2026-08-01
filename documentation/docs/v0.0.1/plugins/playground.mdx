@@ -4,7 +4,7 @@ description: Interactive API playground for umbral-rest endpoints - Postman-styl
 sidebar_position: 18
 ---
 
-`umbral-playground` mounts an interactive API explorer at `/api/playground/`. It reads the OpenAPI spec produced by `umbral-openapi` and gives you a navigable endpoint tree, a request builder with schema introspection, a response viewer, per-endpoint history, and a per-endpoint stats panel - all in the browser, no extra service to run.
+`umbral-playground` mounts an interactive API explorer at `/playground/`. It reads the OpenAPI spec produced by `umbral-openapi` and gives you a navigable endpoint tree, a request builder with schema introspection, a response viewer, per-endpoint history, and a per-endpoint stats panel - all in the browser, no extra service to run.
 
 ## Install
 
@@ -30,7 +30,7 @@ let app = App::builder()
 
 `PlaygroundPlugin::new(app_name)` takes an application name. The playground namespaces its browser-side storage (Dexie/IndexedDB, `localStorage`) per app so two umbral apps served to the same browser don't collide. `PlaygroundPlugin::default()` warns and falls back to `"default"`. Move the mount with `.at("/some/path")`.
 
-Open `http://localhost:8000/api/playground/` in a browser.
+Open `http://localhost:8000/playground/` in a browser.
 
 <Callout type="warning">
 The playground is a request console that fires live REST calls with the visitor's ambient cookies. To avoid exposing that against a production API, the plugin **does not mount under `Environment::Prod`** by default - `routes()` returns an empty router and logs a warning. Opt in explicitly with `PlaygroundPlugin::new("my_app").allow_in_prod()` if you intend to run it in production (e.g. behind your own auth proxy).

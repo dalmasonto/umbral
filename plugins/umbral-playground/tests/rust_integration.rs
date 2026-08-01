@@ -142,11 +142,16 @@ async fn shell_points_assets_at_static_pipeline() {
         "shell must link the CSS at the static pipeline URL {css_url}; got: {s}"
     );
     // The shell must NOT carry the old bespoke `<base>/assets/` prefix
-    // any more — that route is gone.
-    assert!(
-        !s.contains(&format!("/{base}/assets/")),
-        "shell must not reference the removed embedded asset route; got: {s}"
-    );
+    // any more — that route is gone. Anchor on the attribute start: with
+    // the default base `playground`, the LEGITIMATE pipeline URL
+    // `/static/playground/assets/...` contains `/{base}/assets/` as a
+    // substring, so a bare contains() would false-positive (gaps4 #43).
+    for attr in ["href", "src"] {
+        assert!(
+            !s.contains(&format!("{attr}=\"/{base}/assets/")),
+            "shell must not reference the removed embedded asset route; got: {s}"
+        );
+    }
     // A script tag pointing at the pipeline prefix exists too.
     assert!(
         s.contains("/static/playground/assets/") && s.contains("<script type=\"module\""),
@@ -342,7 +347,7 @@ async fn shell_scope_escapes_dangerous_chars() {
     let plugin = PlaygroundPlugin::new(r#"my"shop & <test>"#);
     let app = plugin.routes();
     let req = Request::builder()
-        .uri("/api/playground/")
+        .uri("/playground/")
         .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
@@ -357,5 +362,27 @@ async fn shell_scope_escapes_dangerous_chars() {
     assert!(
         s.contains(r#"window.__UMBRAL_PLAYGROUND_APP__ = "my\"shop & <test>";"#),
         "window assignment must JSON-escape the unsafe chars; got: {s}"
+    );
+}
+
+/// gaps4 #43: the DEFAULT mount lives outside `/api`, where REST's
+/// `/api/{table}` route can never shadow the no-slash URL. (An earlier
+/// default of `/api/playground` 404ed from REST on the no-slash form, and
+/// slash_redirect could not rescue a MATCHED route.)
+#[tokio::test]
+async fn default_mount_is_outside_the_rest_prefix() {
+    let plugin = PlaygroundPlugin::new("default-mount-app");
+    assert_eq!(plugin.base_path_for_test(), "/playground");
+
+    let app = plugin.routes();
+    let req = Request::builder()
+        .uri("/playground/")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "the console answers at /playground/ out of the box"
     );
 }

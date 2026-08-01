@@ -2,7 +2,7 @@
 
 # umbral-playground
 
-Interactive API playground UI for umbral-rest. A 3-pane Postman-style UI mounted at `/api/playground/`. Fetches the existing `umbral-openapi` JSON spec at runtime and renders a navigable endpoint tree, request builder, and response viewer.
+Interactive API playground UI for umbral-rest. A 3-pane Postman-style UI mounted at `/playground/`. Fetches the existing `umbral-openapi` JSON spec at runtime and renders a navigable endpoint tree, request builder, and response viewer.
 
 ## Install
 
@@ -23,7 +23,7 @@ use umbral_openapi::OpenApiPlugin;
 let app = App::builder()
     .plugin(RestPlugin::default())
     .plugin(OpenApiPlugin::new())
-    .plugin(PlaygroundPlugin::new())    // mounts at /api/playground/
+    .plugin(PlaygroundPlugin::new())    // mounts at /playground/
     .build();
 ```
 
@@ -56,7 +56,7 @@ See `docs/superpowers/specs/2026-06-02-rest-playground-design.md` for the full d
 After `cargo build -p umbral-playground` with the CLIs installed:
 
 1. Run an example app that registers `RestPlugin`, `OpenApiPlugin`, and `PlaygroundPlugin`.
-2. Open `http://localhost:<port>/api/playground/` in a browser.
+2. Open `http://localhost:<port>/playground/` in a browser.
 3. The 3-pane shell renders: left endpoint tree, center request builder, right response viewer.
 4. The left pane shows a "Loading spec..." state, then a list of endpoints grouped by tag.
 5. Click an endpoint; the center URL strip populates with the method and path.

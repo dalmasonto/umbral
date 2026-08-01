@@ -39,7 +39,7 @@ Every official plugin implements the same [`Plugin`](/docs/v0.0.1/plugins/the-pl
 | [`umbral-signals`](/docs/v0.0.1/plugins/signals) | In-process pub/sub: pre/post save and delete. Plugins emit, other plugins subscribe. | — | Opt-in |
 | [`umbral-tenants`](/docs/v0.0.1/plugins/tenancy) | Schema-per-tenant multitenancy: one Postgres database, one schema per tenant, shared `public` schema. | middleware | Opt-in |
 | [`umbral-rls`](/docs/v0.0.1/plugins/rls) | Postgres row-level security. Declare policies at `App::build`; `on_ready` applies them. | — | Opt-in |
-| [`umbral-playground`](/docs/v0.0.1/plugins/playground) | Interactive, browsable API console for your REST endpoints. Refuses to mount in `Prod`. | `/api/playground` | Opt-in |
+| [`umbral-playground`](/docs/v0.0.1/plugins/playground) | Interactive, browsable API console for your REST endpoints. Refuses to mount in `Prod`. | `/playground` | Opt-in |
 | [`umbral-health`](/docs/v0.0.1/plugins/health) | Liveness + readiness probes. | `/healthz`, `/ready` | Opt-in |
 | [`umbral-analytics`](/docs/v0.0.1/plugins/analytics) | Product-analytics event capture (PostHog backend), ambient client, opt-in per-request middleware. | middleware | Opt-in |
 | [`umbral-livereload`](/docs/v0.0.1/plugins/live-reload) | Dev-only browser live-reload: file watcher pushes reload / CSS-swap over SSE, client script auto-injected. Inert outside `Dev`. | SSE (dev only) | Opt-in |

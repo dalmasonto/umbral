@@ -23,7 +23,7 @@ use axum::http::{Response, StatusCode, header};
 use crate::{CSS, JS, PLACEHOLDER_HTML};
 
 /// Shared state carried through middleware: the base path (e.g.
-/// `/api/playground`) and a flag for whether we're in placeholder mode.
+/// `/playground`) and a flag for whether we're in placeholder mode.
 #[derive(Clone, Debug)]
 pub struct PlaygroundState {
     pub base_path: Arc<str>,
