@@ -2032,22 +2032,30 @@ fn toposort(
         &'static str,
         std::collections::BTreeSet<&'static str>,
     >,
+    rank: &std::collections::BTreeMap<&'static str, usize>,
 ) -> Result<Vec<&'static str>, Vec<&'static str>> {
     use std::collections::BTreeSet;
 
-    let mut ready: BTreeSet<&'static str> = remaining_deps
+    // The ready queue is keyed by REGISTRATION rank (gaps4 #44): among
+    // plugins whose dependencies are satisfied, the one the app registered
+    // first runs first. Ties used to break alphabetically (a bare name
+    // BTreeSet), which made the visually meaningful ordering in every
+    // main.rs decorative — while the docs told users to "mount X after Y".
+    // Now the builder order IS the tie-break, so the documented mental
+    // model is true; dependencies (declared + FK-derived) still outrank it.
+    let mut ready: BTreeSet<(usize, &'static str)> = remaining_deps
         .iter()
-        .filter_map(|(name, deps)| if deps.is_empty() { Some(*name) } else { None })
+        .filter_map(|(name, deps)| deps.is_empty().then(|| (rank[name], *name)))
         .collect();
 
     let mut order: Vec<&'static str> = Vec::with_capacity(remaining_deps.len());
-    while let Some(name) = ready.iter().next().copied() {
-        ready.remove(&name);
+    while let Some(&(r, name)) = ready.iter().next() {
+        ready.remove(&(r, name));
         remaining_deps.remove(&name);
         order.push(name);
         for (other_name, deps) in remaining_deps.iter_mut() {
             if deps.remove(&name) && deps.is_empty() {
-                ready.insert(*other_name);
+                ready.insert((rank[other_name], *other_name));
             }
         }
     }
@@ -2060,8 +2068,9 @@ fn toposort(
 }
 
 /// Validate the registered plugins and return them in a stable
-/// topological order. Standard Kahn's algorithm with a name-sorted ready queue
-/// so ties resolve deterministically.
+/// topological order. Standard Kahn's algorithm with a ready queue keyed by
+/// REGISTRATION order (gaps4 #44), so the order plugins appear in the
+/// builder is honored wherever dependencies leave a choice.
 ///
 /// The edge set is the union of two sources:
 ///
@@ -2137,7 +2146,7 @@ fn sort_plugins(plugins: Vec<Box<dyn Plugin>>) -> Result<Vec<Box<dyn Plugin>>, B
             .insert(edge.depends_on);
     }
 
-    let order = match toposort(combined) {
+    let order = match toposort(combined, &by_name) {
         Ok(order) => order,
         Err(stuck) => {
             // The combined graph cycles. Re-run on the declared edges alone to
@@ -2150,7 +2159,7 @@ fn sort_plugins(plugins: Vec<Box<dyn Plugin>>) -> Result<Vec<Box<dyn Plugin>>, B
             // Cargo dependency. Two plugins defined in ONE crate can still do
             // it, and a cross-plugin FK cycle has no valid `CREATE TABLE` order
             // on a fresh database either way.
-            if toposort(declared).is_ok() {
+            if toposort(declared, &by_name).is_ok() {
                 let stuck: BTreeSet<&'static str> = stuck.into_iter().collect();
                 let edges: Vec<FkEdge> = fk_edges
                     .into_iter()
@@ -2497,6 +2506,84 @@ mod drain_tests {
             started.elapsed() >= Duration::from_millis(100),
             "must hold for ~the drain delay before resolving; held {:?}",
             started.elapsed(),
+        );
+    }
+}
+
+#[cfg(test)]
+mod sort_plugins_tests {
+    use super::sort_plugins;
+    use crate::plugin::Plugin;
+
+    struct Named {
+        name: &'static str,
+        deps: &'static [&'static str],
+    }
+    impl Plugin for Named {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn dependencies(&self) -> &'static [&'static str] {
+            self.deps
+        }
+    }
+
+    fn names(order: &[Box<dyn Plugin>]) -> Vec<&'static str> {
+        order.iter().map(|p| p.name()).collect()
+    }
+
+    /// gaps4 #44: with no dependencies at all, the sort preserves the
+    /// builder's registration order — it must NOT collapse to alphabetical
+    /// (which is what a name-keyed ready queue silently did, making the
+    /// visually meaningful ordering in every main.rs decorative).
+    #[test]
+    fn ties_break_by_registration_order_not_alphabetically() {
+        let plugins: Vec<Box<dyn Plugin>> = vec![
+            Box::new(Named {
+                name: "zeta",
+                deps: &[],
+            }),
+            Box::new(Named {
+                name: "midway",
+                deps: &[],
+            }),
+            Box::new(Named {
+                name: "alpha",
+                deps: &[],
+            }),
+        ];
+        let sorted = sort_plugins(plugins).expect("acyclic");
+        assert_eq!(
+            names(&sorted),
+            vec!["zeta", "midway", "alpha"],
+            "registration order is the tie-break"
+        );
+    }
+
+    /// ...and a declared dependency still outranks registration order: the
+    /// dependency graph is authoritative, the builder order only settles
+    /// what the graph leaves open.
+    #[test]
+    fn dependencies_outrank_registration_order() {
+        let plugins: Vec<Box<dyn Plugin>> = vec![
+            Box::new(Named {
+                name: "zeta",
+                deps: &["alpha"],
+            }),
+            Box::new(Named {
+                name: "midway",
+                deps: &[],
+            }),
+            Box::new(Named {
+                name: "alpha",
+                deps: &[],
+            }),
+        ];
+        let sorted = sort_plugins(plugins).expect("acyclic");
+        assert_eq!(
+            names(&sorted),
+            vec!["midway", "alpha", "zeta"],
+            "zeta waits for alpha; midway keeps its registration slot"
         );
     }
 }

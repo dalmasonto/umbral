@@ -1,12 +1,13 @@
 //! gaps3 #40 — cross-plugin foreign-key ordering.
 //!
-//! `App::build()` sorts plugins with Kahn's algorithm and breaks ties with a
-//! `BTreeSet`, i.e. alphabetically. When *no* plugin declares
-//! `Plugin::dependencies()`, every plugin has in-degree 0, so the
-//! "topological" order collapses to plain alphabetical order. `"accounts"`
-//! sorts before `"auth"`, so `CREATE TABLE accounts_git_hub_account (... user
-//! bigint REFERENCES auth_user(id))` ran before `auth_user` existed and the
-//! first umbralrs.dev deploy died with `relation "auth_user" does not exist`.
+//! `App::build()` sorts plugins with Kahn's algorithm; ties break by
+//! REGISTRATION order since gaps4 #44 (they used to break alphabetically).
+//! When *no* plugin declares `Plugin::dependencies()`, every plugin has
+//! in-degree 0, so the "topological" order collapses to the tie-break — and
+//! under the old alphabetical one, `"accounts"` sorted before `"auth"`, so
+//! `CREATE TABLE accounts_git_hub_account (... user bigint REFERENCES
+//! auth_user(id))` ran before `auth_user` existed and the first umbralrs.dev
+//! deploy died with `relation "auth_user" does not exist`.
 //!
 //! Any database that *already* contains the referenced table migrates fine, so
 //! the whole dev loop, every test, and every incremental deploy passed. Only a
@@ -163,33 +164,36 @@ fn position(order: &[String], plugin: &str) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// The regression: a derived FK edge outranks the alphabetical tie-break.
+// The regression: a derived FK edge outranks the tie-break.
 // ---------------------------------------------------------------------------
 
-/// `fkorder_accounts` FKs `fkorder_auth`'s table and declares NO dependency.
-/// Alphabetically `fkorder_accounts` sorts first, which is exactly the order
-/// that produced `relation "auth_user" does not exist` on the fresh Postgres.
-/// The FK edge derived from the model registry must reorder them.
+/// `fkorder_accounts` FKs `fkorder_auth`'s table, declares NO dependency, and
+/// is REGISTERED first — exactly the order that produced `relation
+/// "auth_user" does not exist` on the fresh Postgres. The FK edge derived
+/// from the model registry must outrank the registration-order tie-break
+/// (gaps4 #44) and reorder them.
 ///
 /// The logical-FK plugin (`db_constraint = false`) renders no `REFERENCES`
-/// clause, so it imposes no DDL ordering and must NOT gain an edge — it stays
-/// wherever the alphabetical tie-break puts it.
+/// clause, so it imposes no DDL ordering and must NOT gain an edge — it is
+/// registered FIRST and stays first, even though it points at
+/// `fkorder_user`; a wrongly-derived edge would push it after `fkorder_auth`.
 #[tokio::test]
 async fn cross_plugin_fk_orders_target_before_dependent() {
     let (settings, pool) = settings_and_pool().await;
 
     let accounts = FkPlugin::new("fkorder_accounts", "fkorder_account").fk_to("fkorder_user");
     let auth = FkPlugin::new("fkorder_auth", "fkorder_user");
-    // Sorts first alphabetically and points at `fkorder_user`, but only
-    // logically — no physical constraint, so no ordering obligation.
+    // Registered first and points at `fkorder_user`, but only logically —
+    // no physical constraint, so no ordering obligation to outrank its
+    // registration position.
     let logical = FkPlugin::new("fkorder_aaa", "fkorder_logical").logical_fk_to("fkorder_user");
 
     App::builder()
         .settings(settings)
         .database("default", pool)
+        .plugin(logical)
         .plugin(accounts)
         .plugin(auth)
-        .plugin(logical)
         .build()
         .expect("build succeeds: the FK edges are acyclic");
 
@@ -208,8 +212,9 @@ async fn cross_plugin_fk_orders_target_before_dependent() {
         "the implicit `app` plugin stays last; got {order:?}",
     );
 
-    // A logical-only FK creates no ordering obligation, so the alphabetical
-    // tie-break still puts `fkorder_aaa` ahead of its (non-)target.
+    // A logical-only FK creates no ordering obligation, so `fkorder_aaa`
+    // keeps its registration-order position AHEAD of its (non-)target — a
+    // wrongly-derived edge would have pushed it after `fkorder_auth`.
     assert!(
         position(&order, "fkorder_aaa") < position(&order, "fkorder_auth"),
         "`db_constraint = false` renders no REFERENCES clause and must not \
