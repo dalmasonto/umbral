@@ -707,3 +707,14 @@ async fn random_password_hash_is_valid_unique_and_unguessable() {
         "no plaintext should verify against a random hash"
     );
 }
+
+/// gaps4 #45: `AuthPlugin::new()` infers `AuthPlugin<AuthUser>` with no
+/// turbofish — `new` exists only on the `AuthUser` instantiation, so
+/// inference has exactly one candidate. (A compile-shape test: the
+/// assignment IS the assertion.)
+#[test]
+fn auth_plugin_new_needs_no_turbofish() {
+    let plugin: umbral_auth::AuthPlugin<umbral_auth::AuthUser> =
+        umbral_auth::AuthPlugin::new().with_default_routes();
+    assert!(plugin.default_routes_prefix.is_some());
+}

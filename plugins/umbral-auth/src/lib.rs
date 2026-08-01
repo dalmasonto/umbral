@@ -749,6 +749,26 @@ pub(crate) fn verified_email_required() -> bool {
 const JSON_PREFIX_SENTINEL: &str = "\0auto-api-base\0";
 
 impl AuthPlugin<AuthUser> {
+    /// The standard auth plugin over the built-in [`AuthUser`] — no
+    /// turbofish (gaps4 #45).
+    ///
+    /// `AuthPlugin::<AuthUser>::default()` was written out in every app
+    /// because Rust's default type parameters don't participate in
+    /// fn-call inference: `AuthPlugin::default()` is "type annotations
+    /// needed" even though `AuthUser` is the declared default. `new` is
+    /// defined ONLY on `AuthPlugin<AuthUser>`, so `AuthPlugin::new()`
+    /// resolves the parameter by having exactly one candidate:
+    ///
+    /// ```ignore
+    /// .plugin(AuthPlugin::new().with_default_routes())
+    /// ```
+    ///
+    /// Custom user models keep the explicit form:
+    /// `AuthPlugin::<TenantUser>::default()`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Mount the built-in `/api/auth/{register,login,logout,me,…}`
     /// surface. Same handlers that lived in the derive-demo example
     /// app, promoted to the framework so every app gets them with one
