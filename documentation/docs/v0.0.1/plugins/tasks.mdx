@@ -52,23 +52,21 @@ async fn send_welcome(payload: WelcomeEmailPayload) -> Result<(), String> {
 }
 ```
 
-The macro emits two things:
+That's the whole wiring: **the handler is discovered automatically**. The
+macro registers the task in a link-time slice, and `TasksPlugin` (plus the
+`tasks-worker` / `tasks-beat` commands) installs every discovered handler at
+startup — there is nothing to call by hand, so a forgotten registration can
+no longer surface as a runtime `HandlerNotFound` in production.
+
+The macro also emits, for when you want manual control:
 
 1. The original `async fn send_welcome` unchanged, so you can call it directly
    in tests or other code.
-2. A companion `pub fn register_send_welcome()` that calls
-   `umbral_tasks::register_handler("send_welcome", ...)` with a generated wrapper
-   that JSON-deserialises the payload and forwards to your function.
+2. A companion `pub fn register_send_welcome()` that installs the handler by
+   hand — useful with `TasksPlugin::no_discover()`, which turns discovery off
+   for the whole process and returns you to explicit registration.
 
-Call the companion from `Plugin::on_ready` or your `main` function before the
-worker starts:
-
-```rust
-// in Plugin::on_ready or main.rs, before App::build()
-register_send_welcome();
-```
-
-Then enqueue work anywhere in your request handlers:
+Enqueue work anywhere in your request handlers:
 
 ```rust
 use umbral_tasks::{EnqueueOptions, enqueue};
@@ -91,10 +89,7 @@ async fn send_welcome(payload: WelcomeEmailPayload) -> Result<(), String> {
     Ok(())
 }
 
-// The generated companion is still named after the Rust identifier:
-register_send_welcome();
-
-// But enqueue uses the custom name:
+// Discovery registers it under the custom name; enqueue uses it too:
 enqueue("email.send_welcome", payload, EnqueueOptions::default()).await?;
 ```
 

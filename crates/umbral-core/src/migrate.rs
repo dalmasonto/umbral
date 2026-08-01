@@ -7582,6 +7582,11 @@ mod tests {
 pub struct ModelRegistration {
     /// Builds this model's meta.
     pub meta: fn() -> ModelMeta,
+    /// `module_path!()` at the derive site (gaps4 #40) — lets
+    /// [`models_registered_in`] filter the slice down to one crate's models,
+    /// so a plugin's `models()` can be `umbral::discovered_models!()` instead
+    /// of a hand-maintained `ModelMeta::for_::<T>()` list.
+    pub module_path: &'static str,
 }
 
 inventory::collect!(ModelRegistration);
@@ -7590,6 +7595,24 @@ inventory::collect!(ModelRegistration);
 pub fn link_registered_models() -> Vec<ModelMeta> {
     inventory::iter::<ModelRegistration>
         .into_iter()
+        .map(|r| (r.meta)())
+        .collect()
+}
+
+/// The self-registered models whose defining CRATE matches `caller_path`'s
+/// crate (gaps4 #40) — the engine behind `umbral::discovered_models!()`.
+///
+/// Matching is by the first `::` segment of `module_path!()`, i.e. the crate
+/// name, so models in submodules (`my_plugin::models::Post`) are found from a
+/// `models()` impl at the crate root. Inherits `auto_models()`' documented
+/// linker caveat: a model object file nothing references can be dropped and
+/// would then be missing here — if a table must NEVER silently go missing,
+/// list it explicitly.
+pub fn models_registered_in(caller_path: &str) -> Vec<ModelMeta> {
+    let crate_root = caller_path.split("::").next().unwrap_or(caller_path);
+    inventory::iter::<ModelRegistration>
+        .into_iter()
+        .filter(|r| r.module_path.split("::").next() == Some(crate_root))
         .map(|r| (r.meta)())
         .collect()
 }

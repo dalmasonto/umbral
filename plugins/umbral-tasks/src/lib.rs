@@ -86,6 +86,63 @@ use std::time::Duration;
 #[doc(hidden)]
 pub use serde_json as _serde_json;
 
+/// Re-export for macro-generated code — `#[umbral::task]` submits its
+/// [`TaskRegistration`] through `::umbral_tasks::inventory::submit!`, so a
+/// user crate needs no direct `inventory` dependency.
+pub use umbral::inventory;
+
+/// One `#[umbral::task]` handler's link-time self-registration (gaps4 #40).
+///
+/// The attribute macro submits one of these per task fn. [`register_discovered`]
+/// walks the collected slice and calls each `register` — the same generated
+/// companion (`register_<fn>`) the app used to have to call by hand. A
+/// forgotten manual call was invisible until production, where the enqueued
+/// row failed with `HandlerNotFound`; discovery closes that class, and
+/// over-registration costs one map entry (unlike models, where it would
+/// widen the schema — see `AppBuilder::auto_models`' opt-in rationale).
+pub struct TaskRegistration {
+    /// The task's queue name (`Task::NAME`).
+    pub name: &'static str,
+    /// The generated registration companion; calling it installs the
+    /// handler into the runtime registry (idempotent).
+    pub register: fn(),
+}
+
+inventory::collect!(TaskRegistration);
+
+/// Process-wide opt-out for task autodiscovery, set by
+/// [`TasksPlugin::no_discover`]. A static (not a plugin field) because the
+/// worker/beat commands are plain unit structs that run without plugin
+/// context — and possibly without `on_ready` ever firing (`build_deferred`).
+static DISCOVERY_DISABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Install every `#[umbral::task]` handler the binary links into the
+/// runtime handler registry. Called automatically from
+/// [`TasksPlugin`]'s `on_ready` AND at the top of the `tasks-worker` /
+/// `tasks-beat` commands (whichever runs first wins; registration is
+/// idempotent). Returns the number of distinct handler names installed.
+///
+/// No-ops (returning 0) after [`TasksPlugin::no_discover`]. Two task fns
+/// sharing one name get a warning; the last registration wins, matching
+/// [`register_handler`]'s replace-on-collision semantics.
+pub fn register_discovered() -> usize {
+    if DISCOVERY_DISABLED.load(std::sync::atomic::Ordering::Relaxed) {
+        return 0;
+    }
+    let mut seen: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
+    for reg in inventory::iter::<TaskRegistration> {
+        if !seen.insert(reg.name) {
+            tracing::warn!(
+                task = reg.name,
+                "umbral-tasks: two #[task] fns register the same name; the last one linked wins"
+            );
+        }
+        (reg.register)();
+    }
+    seen.len()
+}
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -214,6 +271,14 @@ impl Plugin for TasksPlugin {
                  TasksPlugin; ignoring this registration"
             );
         }
+        // gaps4 #40: install every #[umbral::task] handler the binary links.
+        // The worker/beat commands ALSO call this (on_ready may never fire
+        // when the app was built with build_deferred and a command runs);
+        // registration is idempotent, so whichever path runs first wins.
+        let discovered = register_discovered();
+        if discovered > 0 {
+            tracing::debug!(discovered, "umbral-tasks: auto-registered task handlers");
+        }
         Ok(())
     }
 }
@@ -257,6 +322,20 @@ impl TasksPlugin {
         T::Payload: Serialize,
     {
         self.periodic(name, schedule, T::NAME, payload)
+    }
+
+    /// Opt OUT of `#[umbral::task]` autodiscovery for this process (gaps4
+    /// #40). With discovery off, only handlers you register by hand — the
+    /// generated `register_<fn>()` companions or [`register_handler`] —
+    /// serve the queue, and an enqueued name with no handler fails with
+    /// `HandlerNotFound` exactly as before.
+    ///
+    /// Process-wide (a static, not a plugin field): the worker/beat
+    /// commands run without plugin context, so the switch has to be
+    /// readable from anywhere. Call it where the plugin is constructed.
+    pub fn no_discover(self) -> Self {
+        DISCOVERY_DISABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        self
     }
 
     pub fn periodic<P: Serialize>(
@@ -303,6 +382,9 @@ impl umbral::cli::PluginCommand for WorkerCommand {
     }
 
     async fn run(&self, matches: &clap::ArgMatches) -> Result<(), umbral::cli::CliError> {
+        // gaps4 #40: the worker process may run without on_ready firing
+        // (build_deferred + CLI dispatch), so discovery happens here too.
+        register_discovered();
         if matches.get_flag("once") {
             let _ran = run_worker_once().await?;
             Ok(())
@@ -339,6 +421,9 @@ impl umbral::cli::PluginCommand for BeatCommand {
     }
 
     async fn run(&self, matches: &clap::ArgMatches) -> Result<(), umbral::cli::CliError> {
+        // gaps4 #40: same as the worker — beat may be the only process that
+        // ever runs, and its enqueues deserve registered handlers too.
+        register_discovered();
         if matches.get_flag("once") {
             let _fired = run_beat_once().await?;
             Ok(())

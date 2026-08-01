@@ -84,6 +84,32 @@ macro_rules! models {
     };
 }
 
+/// Every `#[derive(Model)]` in the CALLING crate, as `Vec<ModelMeta>` —
+/// the one-line body for a plugin's `models()` (gaps4 #40):
+///
+/// ```rust,ignore
+/// impl Plugin for EcommercePlugin {
+///     fn name(&self) -> &'static str { "ecommerce" }
+///     fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
+///         umbral::discovered_models!()   // replaces 16 ModelMeta::for_::<T>() lines
+///     }
+/// }
+/// ```
+///
+/// Discovery is the same link-time slice `AppBuilder::auto_models()` reads,
+/// filtered to the calling crate (each derive records its `module_path!()`).
+/// It inherits `auto_models()`' caveat: a model in an object file nothing
+/// references can be dropped by the linker and would then be missing —
+/// which for `models()` means missing from `makemigrations`. In practice a
+/// plugin crate's models are referenced by its own routes/handlers; if a
+/// table must NEVER silently go missing, keep listing it explicitly.
+#[macro_export]
+macro_rules! discovered_models {
+    () => {
+        $crate::migrate::models_registered_in(::core::module_path!())
+    };
+}
+
 /// Re-export of `serde_json` for use in macro-generated code.
 ///
 /// The `#[derive(Model)]` macro emits `::umbral::_serde_json::from_value`
@@ -312,10 +338,11 @@ pub mod migrate {
         drift_report_in, fake_apply, fake_apply_in, fake_initial, fake_initial_in,
         fk_effective_type, is_initialised, link_registered_models, make, make_empty, make_empty_in,
         make_in, migrate_apps_into_pool, migrate_apps_into_pool_in, model_alias,
-        model_meta_for_table, models_for_plugin, pk_meta_for_table, plugin_order, record_applied,
-        registered_api_endpoints, registered_models, registered_models_opt, registered_plugins,
-        render_operation_for, run, run_checked, run_checked_in, run_for_schema, run_for_schema_in,
-        run_in, run_shared, run_shared_in, show, show_in, squash_in, table_alias,
+        model_meta_for_table, models_for_plugin, models_registered_in, pk_meta_for_table,
+        plugin_order, record_applied, registered_api_endpoints, registered_models,
+        registered_models_opt, registered_plugins, render_operation_for, run, run_checked,
+        run_checked_in, run_for_schema, run_for_schema_in, run_in, run_shared, run_shared_in, show,
+        show_in, squash_in, table_alias,
     };
 }
 

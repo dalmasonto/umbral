@@ -23,7 +23,11 @@ impl Plugin for BlogPlugin {
     fn dependencies(&self) -> &'static [&'static str] { &["auth"] }
 
     fn models(&self) -> Vec<umbral::migrate::ModelMeta> {
-        vec![umbral::migrate::ModelMeta::for_::<Post>()]
+        // One line for the whole crate: every #[derive(Model)] in THIS crate,
+        // via the link-time registry. Or list them explicitly —
+        // `vec![umbral::migrate::ModelMeta::for_::<Post>()]` — if a table
+        // must never depend on the linker keeping the model's object file.
+        umbral::discovered_models!()
     }
 
     fn routes(&self) -> Router {

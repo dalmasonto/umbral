@@ -2223,6 +2223,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         ::umbral::inventory::submit! {
             ::umbral::migrate::ModelRegistration {
                 meta: || ::umbral::migrate::ModelMeta::for_::<#struct_name>(),
+                // Expands at the DERIVE site, so it names the module (and
+                // therefore the crate) that owns this model — the filter key
+                // for `umbral::discovered_models!()` (gaps4 #40).
+                module_path: ::core::module_path!(),
             }
         }
 
@@ -4088,6 +4092,18 @@ fn expand_task(args: TokenStream2, input: TokenStream2) -> syn::Result<TokenStre
                     }
                 },
             );
+        }
+
+        // 4. gaps4 #40: self-register into the link-time task slice, so the
+        // worker/beat/on_ready discovery path finds this handler without the
+        // app calling the companion by hand (a forgotten call was a runtime
+        // HandlerNotFound in production). Costs nothing extra: the companion
+        // above is the registration; this only records its address.
+        ::umbral_tasks::inventory::submit! {
+            ::umbral_tasks::TaskRegistration {
+                name: #task_name_tokens,
+                register: #register_fn_name,
+            }
         }
     };
 
