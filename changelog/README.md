@@ -6,6 +6,11 @@ Versions follow [Semantic Versioning](https://semver.org/); the format is inspir
 
 | Version | Date | Theme |
 |---|---|---|
+| [0.0.11](./0.0.11.md) | 2026-08-02 | Plugin ergonomics & private media — model/task autodiscovery, app-wide authentication, owner-only + signed-URL media gates, a gated proxy for S3/custom backends (closes gaps4 #32–#58) |
+| [0.0.10](./0.0.10.md) | 2026-07-15 | Security-hardening sweep (review_3) — row-level GraphQL mutations, per-request context across SSE/WS, reverse-FK windowing, analytics path scrubber, `umbral startcommand` |
+| [0.0.9](./0.0.9.md) | 2026-07-14 | Testing ergonomics & admin dashboards — test schema derived from the models (205 suites), draggable dashboards, CSV export, widget filters, UUID-PK fixes |
+| [0.0.8](./0.0.8.md) | 2026-07-13 | The GraphQL release — a full API (queries, mutations, subscriptions, cursor pagination) derived from the model registry, plus `private`/`secret` field tiers |
+| [0.0.7](./0.0.7.md) | 2026-07-13 | Typed client & data modeling — the generated TypeScript client (`gen-client`), database views, `Valid<T>`/`Dto`, `ResourceConfig::under`, audit trail, cascading soft-delete, scaffold redesign |
 | [0.0.6](./0.0.6.md) | 2026-07-08 | Data ergonomics & authorization — case-insensitive accounts/columns, `trim`/`lowercase`/`case_insensitive`, object (row-level) permissions, gated-by-construction routes, `llms.txt` |
 | [0.0.5](./0.0.5.md) | 2026-07-05 | Security-hardening sweep + custom admin views, object-level REST scoping, recursive nested writes |
 | [0.0.4](./0.0.4.md) | 2026-06-30 | Hotfix — Postgres FK migration ordering |
@@ -15,6 +20,6 @@ Versions follow [Semantic Versioning](https://semver.org/); the format is inspir
 
 ## Upcoming
 
-`0.0.7` is next. Add its notes as `changelog/0.0.7.md` when it ships.
+`0.0.12` is next. Add its notes as `changelog/0.0.12.md` when it ships. On deck: template traversal of related objects (forward FK, reverse FK, reverse O2O) in the auth `user` context, so `{{ user.profile.bio }}` resolves in a template.
 
 > Longer-term, these notes are intended to be served from the app (tracked in the database) so releases can be browsed in-product; the files here are the source of truth until then.
