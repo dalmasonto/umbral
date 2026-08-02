@@ -103,7 +103,7 @@ tracing = "0.1"
 # mean the server binds and serves SILENTLY, which reads as a hang.
 # Already in the workspace tree via umbral-cli; env-filter honors RUST_LOG.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-uuid = { version = "1", features = ["serde", "v7"] }
+uuid = { version = "1", features = ["serde", "v7", "v4"] }
 # multipart/form-data body parsing for file uploads (FileField/ImageField,
 # the admin's create/update on multipart POSTs). multer is the same
 # streaming multipart parser axum uses internally for its `Multipart`

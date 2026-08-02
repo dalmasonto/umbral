@@ -1156,6 +1156,7 @@ mod tests {
             on_update: FkAction::NoAction,
             index: false,
             auto_now_add,
+            auto_uuid: false,
             auto_now,
             trim: false,
             lowercase: false,

@@ -142,6 +142,7 @@ impl Plugin for TestPlugin {
                 on_update: umbral_core::orm::FkAction::NoAction,
                 index: false,
                 auto_now_add: false,
+                auto_uuid: false,
                 auto_now: false,
                 trim: false,
                 lowercase: false,

@@ -348,6 +348,7 @@ mod readonly_set_tests {
             on_update: umbral::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,

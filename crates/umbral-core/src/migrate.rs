@@ -475,6 +475,7 @@ impl Default for Column {
             on_update: crate::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             auto_user_add: false,
             auto_user: false,
@@ -1022,6 +1023,13 @@ pub struct Column {
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_now: bool,
 
+    /// Carries `FieldSpec::auto_uuid` to the runtime write paths, which
+    /// generate a fresh `Uuid::new_v4()` when the column is omitted/nil on
+    /// create. A write-behaviour, not a schema property, so it's skipped in
+    /// snapshots (like `auto_user_add`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_uuid: bool,
+
     /// Carries `FieldSpec::trim` into the snapshot. Behavioral (dynamic write
     /// path strips surrounding whitespace), not schema-affecting — excluded
     /// from the schema diff like `auto_now`. Default `false` so existing
@@ -1325,6 +1333,7 @@ impl From<&FieldSpec> for Column {
             on_update: f.on_update,
             index: f.index,
             auto_now_add: f.auto_now_add,
+            auto_uuid: f.auto_uuid,
             auto_user_add: f.auto_user_add,
             auto_user: f.auto_user,
             auto_now: f.auto_now,
@@ -6599,6 +6608,7 @@ mod tests {
             on_update: crate::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -6637,6 +6647,7 @@ mod tests {
             on_update: crate::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -6675,6 +6686,7 @@ mod tests {
             on_update: crate::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -6783,6 +6795,7 @@ mod tests {
             on_update: crate::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -6801,6 +6814,7 @@ mod tests {
             on_update: crate::orm::FkAction::Cascade,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -6910,6 +6924,7 @@ mod tests {
                 on_update: crate::orm::FkAction::NoAction,
                 index: false,
                 auto_now_add: false,
+                auto_uuid: false,
                 auto_now: false,
                 trim: false,
                 lowercase: false,
@@ -7024,6 +7039,7 @@ mod tests {
             on_update: crate::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -7138,6 +7154,7 @@ mod tests {
             on_update: crate::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -7228,6 +7245,7 @@ mod tests {
             // already covers it.
             index: true,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -7248,6 +7266,7 @@ mod tests {
             nullable: false,
             index: true,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -7265,6 +7284,7 @@ mod tests {
             nullable: false,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -7341,6 +7361,7 @@ mod tests {
             on_update: crate::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,
@@ -7452,6 +7473,7 @@ mod tests {
                 on_update: crate::orm::FkAction::NoAction,
                 index: false,
                 auto_now_add,
+                auto_uuid: false,
                 auto_now,
                 trim: false,
                 lowercase: false,

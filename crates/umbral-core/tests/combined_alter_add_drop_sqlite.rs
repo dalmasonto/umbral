@@ -48,6 +48,7 @@ fn col(name: &str, ty: SqlType, primary_key: bool, nullable: bool) -> Column {
         on_update: FkAction::NoAction,
         index: false,
         auto_now_add: false,
+        auto_uuid: false,
         auto_now: false,
         trim: false,
         lowercase: false,

@@ -844,6 +844,7 @@ impl From<&IntrospectedColumn> for Column {
             on_update: crate::orm::FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             auto_user_add: false,
             auto_user: false,

@@ -121,6 +121,30 @@ pub(super) fn build_insert_one_for<T: Model>(
             values.push(user_for_column(field.ty).into());
             continue;
         }
+        // `#[umbral(auto_uuid)]`: generate a fresh random UUID on create when
+        // the struct omits it (or leaves the nil UUID), matching the dynamic
+        // path's `apply_auto_uuid` so a public id fills in identically whether
+        // the row is created via `Manager::create` or REST/admin.
+        if field.auto_uuid {
+            const NIL: &str = "00000000-0000-0000-0000-000000000000";
+            let supplied = val
+                .as_str()
+                .map(|s| !s.is_empty() && s != NIL)
+                .unwrap_or(false);
+            if !supplied {
+                let generated = serde_json::Value::String(uuid::Uuid::new_v4().to_string());
+                let sea_value = json_to_sea_value(
+                    field.ty,
+                    &generated,
+                    field.nullable,
+                    field.name,
+                    fk_pk_hint(field),
+                )?;
+                columns.push(Alias::new(field.name));
+                values.push(sea_value.into());
+                continue;
+            }
+        }
         // Skip absent fields when nullable (caller didn't supply them).
         if val.is_null() && field.nullable && !map.contains_key(field.name) {
             continue;

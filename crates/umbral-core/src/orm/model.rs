@@ -764,6 +764,17 @@ pub struct FieldSpec {
     /// a future v2 toggle if a real consumer asks.
     pub auto_now: bool,
 
+    /// When `true`, the framework generates a fresh `Uuid::new_v4()` for
+    /// this column at row-creation time when the body/struct omits it (or
+    /// leaves it at the nil UUID). Set via `#[umbral(auto_uuid)]`. The
+    /// who-am-I-publicly twin of `auto_now_add`: a stable, non-sequential
+    /// public identifier that doesn't leak row counts, generated in Rust so
+    /// it works identically on SQLite and Postgres (unlike a
+    /// `gen_random_uuid()` DDL default, which is Postgres-only). Fires on
+    /// BOTH the dynamic write path (REST/admin) and the typed
+    /// `Manager::create` path; an explicitly-supplied non-nil value is kept.
+    pub auto_uuid: bool,
+
     /// When `true`, the dynamic write path strips leading/trailing whitespace
     /// from this column's string value before INSERT/UPDATE. Set via
     /// `#[umbral(trim)]`; only valid on `String` / `Option<String>` fields

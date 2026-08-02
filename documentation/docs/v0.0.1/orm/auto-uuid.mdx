@@ -1,0 +1,41 @@
+---
+title: A public id, generated
+description: auto_uuid generates a random v4 UUID for a column on create — a stable, opaque public identifier that doesn't leak your row sequence.
+sidebar_position: 15
+icon: fingerprint
+tags: [orm, models, security]
+badge: new
+---
+
+# A public id, generated
+
+`#[umbral(auto_uuid)]` fills a `Uuid` column with a fresh random `Uuid::new_v4()` when a row is created and the value was omitted (or left at the nil UUID). It's the public-facing twin of [`auto_now_add`](/v0.0.1/orm/datetimes-and-timezones): where that stamps *when* a row was made, `auto_uuid` gives it a **stable, opaque public identifier** — so you can expose `/posts/{public_id}` without leaking your sequential primary key (and with it, how many rows you have, and which id comes next).
+
+```rust
+#[derive(Model)]
+#[umbral(table = "post")]
+struct Post {
+    id: i64,                       // internal, sequential — never exposed
+
+    #[umbral(auto_uuid)]
+    public_id: Uuid,               // 3f8c… — what you put in URLs and APIs
+
+    title: String,
+}
+```
+
+That's it. A `POST /api/post/` with no `public_id` in the body stores a random UUID, and the create path never asks the operator to type one. An explicitly-supplied, non-nil UUID is kept — the attribute only fills the gap.
+
+## Why v4, and why in Rust
+
+- **v4, not v7.** A time-ordered UUID (v7) can be sorted back into creation order, which quietly re-leaks the very sequence you were hiding. `auto_uuid` uses fully-random **v4** so a public id reveals nothing about when or in what order the row was made.
+- **Generated in Rust, not the database.** A Postgres `DEFAULT gen_random_uuid()` only works on Postgres; `auto_uuid` runs the same on SQLite and Postgres, on both the typed `Manager::create` path and the dynamic REST/admin path.
+
+## It keys off the attribute, never the column name
+
+Like [`auto_user`](/v0.0.1/orm/auto-user), nothing looks for a column *called* `public_id`. The attribute is the opt-in — name the field whatever your domain calls it (`token`, `ref`, `slug_id`), and a plain `Uuid` field with no attribute is yours, untouched.
+
+## See also
+
+- [`slug_from`](/v0.0.1/orm/models) derives a URL slug from another field the same way, at the same write layer.
+- Design: the `Column`/`FieldSpec` `auto_uuid` flag in `crates/umbral-core`, applied by `apply_auto_uuid` (dynamic) and the typed insert builder.

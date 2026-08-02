@@ -878,6 +878,41 @@ pub fn apply_slug_from(
     }
 }
 
+/// Fill `#[umbral(auto_uuid)]` columns with a fresh random `Uuid::new_v4()` on
+/// INSERT when the body omits them (or leaves the nil UUID). The write-side
+/// twin of a DB `gen_random_uuid()` default, but generated in Rust so it works
+/// identically on SQLite and Postgres. Update is a no-op — a public id is
+/// stable once assigned. Mirrors [`apply_slug_from`]. v4 (fully random) not v7,
+/// so a public id can't be ordered back into row-creation sequence.
+pub fn apply_auto_uuid(
+    fields: &[crate::migrate::Column],
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    is_update: bool,
+) {
+    if is_update {
+        return;
+    }
+    const NIL: &str = "00000000-0000-0000-0000-000000000000";
+    for col in fields {
+        if !col.auto_uuid {
+            continue;
+        }
+        // An explicitly-supplied, non-nil value is kept — the caller chose it.
+        let supplied = body
+            .get(&col.name)
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty() && s != NIL)
+            .unwrap_or(false);
+        if supplied {
+            continue;
+        }
+        body.insert(
+            col.name.clone(),
+            serde_json::Value::String(uuid::Uuid::new_v4().to_string()),
+        );
+    }
+}
+
 pub fn now_for_column(sql_type: SqlType) -> SeaValue {
     let now = chrono::Utc::now();
     match sql_type {

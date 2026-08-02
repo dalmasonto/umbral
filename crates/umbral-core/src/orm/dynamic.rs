@@ -4021,7 +4021,10 @@ fn normalise_insert_body(
     allow_privileged: &[String],
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
     let needs_owned = meta.fields.iter().any(|c| {
-        c.noform || c.slug_from.is_some() || is_unauthorized_privileged(c, allow_privileged)
+        c.noform
+            || c.slug_from.is_some()
+            || c.auto_uuid
+            || is_unauthorized_privileged(c, allow_privileged)
     });
     if !needs_owned {
         return None;
@@ -4033,6 +4036,7 @@ fn normalise_insert_body(
         }
     }
     crate::orm::write::apply_slug_from(&meta.fields, &mut owned, false);
+    crate::orm::write::apply_auto_uuid(&meta.fields, &mut owned, false);
     Some(owned)
 }
 
@@ -4409,6 +4413,7 @@ mod tests {
             on_update: FkAction::NoAction,
             index: false,
             auto_now_add: false,
+            auto_uuid: false,
             auto_now: false,
             trim: false,
             lowercase: false,

@@ -769,6 +769,7 @@ mod tests {
             lowercase: false,
             case_insensitive: false,
             auto_now_add: false,
+            auto_uuid: false,
             help: String::new(),
             example: String::new(),
             widget: None,

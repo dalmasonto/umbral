@@ -283,6 +283,9 @@ struct UmbralFieldAttr {
     /// `#[umbral(auto_now_add)]` — populate with `Utc::now()` on
     /// create. Closes BUG-5 from bugs/tests/testBugs.md.
     auto_now_add: bool,
+    /// `#[umbral(auto_uuid)]` — generate a fresh `Uuid::new_v4()` on
+    /// create when the field is omitted / nil (a public opaque id).
+    auto_uuid: bool,
     /// `#[umbral(auto_user_add)]` — stamp the authenticated caller's id on
     /// INSERT only (the row's author). Nothing is magic about the column's
     /// *name*: a plain `created_by` field with no attribute is left alone.
@@ -399,6 +402,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         on_update: None,
         index: false,
         auto_now_add: false,
+        auto_uuid: false,
         auto_user_add: false,
         auto_user: false,
         auto_now: false,
@@ -554,6 +558,9 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
             } else if meta.path.is_ident("auto_now_add") {
                 parsed.auto_now_add = true;
                 Ok(())
+            } else if meta.path.is_ident("auto_uuid") {
+                parsed.auto_uuid = true;
+                Ok(())
             } else if meta.path.is_ident("auto_now") {
                 parsed.auto_now = true;
                 Ok(())
@@ -664,7 +671,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
-                     `auto_now_add`, `auto_user`, `auto_user_add`, `trim`, `lowercase`, \
+                     `auto_now_add`, `auto_uuid`, `auto_user`, `auto_user_add`, `trim`, `lowercase`, \
                      `case_insensitive`, \
                      `help = \"...\"`, \
                      `example = \"...\"`, `widget = \"...\"`, \
@@ -1467,6 +1474,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let auto_uuid_lit = if field_attr.auto_uuid {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
         let auto_now_lit = if field_attr.auto_now {
             quote!(true)
         } else {
@@ -1641,6 +1653,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 on_update: #on_update_tokens,
                 index: #index_lit,
                 auto_now_add: #auto_now_add_lit,
+                auto_uuid: #auto_uuid_lit,
                 auto_user_add: #auto_user_add_lit,
                 auto_user: #auto_user_lit,
                 auto_now: #auto_now_lit,
@@ -4199,6 +4212,7 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
             || model_attr.primary_key
             || model_attr.auto_now
             || model_attr.auto_now_add
+            || model_attr.auto_uuid
             || is_implicit_pk
             // Masked (encrypted secret) fields are server-set, never
             // user-submittable — skip them as if they were `noform`.
@@ -4489,7 +4503,7 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
                  / isize / usize, f32 / f64, bool, and Option<T> of any of \
                  those. For framework-managed fields (PKs, timestamps, \
                  choice enums set server-side), mark with one of \
-                 `#[umbral(primary_key)]`, `#[umbral(auto_now_add)]`, \
+                 `#[umbral(primary_key)]`, `#[umbral(auto_now_add)]`, `#[umbral(auto_uuid)]`, \
                  `#[umbral(auto_now)]`, or `#[umbral(noform)]` to skip \
                  the form-validation pass.",
             ));
