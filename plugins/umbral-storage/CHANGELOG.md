@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.10...umbral-storage-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(storage)* file→owner media schema + owner-only gate (gaps4 #57)
+- *(storage)* signed media URLs + a gated proxy for non-FS backends (gaps4 #56, #58)
+- *(storage)* identity-aware media gate + honest non-FS behaviour
+
+### Fixed
+
+- *(storage)* media access gate sees the percent-decoded key
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.9...umbral-storage-v0.0.10) - 2026-07-15
 
 ### Fixed

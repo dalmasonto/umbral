@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.10...umbral-cli-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(core)* seed_on_serve + Dev autodetect on serve; adopt the seams (gaps4 #47)
+- *(security)* SecurityPlugin::csrf_exempt chainable shorthand (gaps4 #41)
+
+### Fixed
+
+- *(cli)* reserve all built-in plugin names + docs for the startplugin merge
+- *(cli)* scaffold — working login page + currency sweep
+
+### Other
+
+- *(cli)* merge startapp into startplugin + fix the broken plugin template
+- *(cli)* startplugin README wires build_deferred + dispatch
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-cli-v0.0.9...umbral-cli-v0.0.10) - 2026-07-15
 
 ### Added

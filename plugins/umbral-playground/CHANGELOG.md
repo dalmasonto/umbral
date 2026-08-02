@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-playground-v0.0.10...umbral-playground-v0.0.11) - 2026-08-02
+
+### Fixed
+
+- *(core)* slash-redirect probes 404s from MATCHED routes too (gaps4 #50)
+- *(playground)* default mount moves off /api to /playground (gaps4 #43)
+- *(playground)* schema tab shows real per-field metadata (gaps4 #34)
+
+### Other
+
+- *(playground)* document mount path and the /api trailing-slash gotcha
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-playground-v0.0.8...umbral-playground-v0.0.9) - 2026-07-14
 
 ### Other

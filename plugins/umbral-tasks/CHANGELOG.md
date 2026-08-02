@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-tasks-v0.0.10...umbral-tasks-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(plugin-contract)* autodiscovery for task handlers + plugin models (gaps4 #40)
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-tasks-v0.0.9...umbral-tasks-v0.0.10) - 2026-07-15
 
 ### Fixed

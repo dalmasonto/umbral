@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-oauth-v0.0.10...umbral-oauth-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(oauth)* from_settings + provider_opt construction (gaps4 #46)
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-oauth-v0.0.9...umbral-oauth-v0.0.10) - 2026-07-15
 
 ### Fixed

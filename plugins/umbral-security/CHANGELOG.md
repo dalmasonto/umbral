@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-security-v0.0.10...umbral-security-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(security)* SecurityPlugin::csrf_exempt chainable shorthand (gaps4 #41)
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-security-v0.0.8...umbral-security-v0.0.9) - 2026-07-14
 
 ### Other
