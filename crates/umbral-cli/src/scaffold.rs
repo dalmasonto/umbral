@@ -146,7 +146,7 @@ impl std::fmt::Display for ScaffoldError {
                     write!(
                         f,
                         "no plugin named `{asked}` — this project has no `plugins/` directory yet. \
-                         Create one with `umbral startapp <name>`, or place the command at the \
+                         Create one with `umbral startplugin <name>`, or place the command at the \
                          project root with `--in root`."
                     )
                 } else {
@@ -988,7 +988,7 @@ pub fn overview_section() -> WidgetSection {
     // plugins/ — empty home for local app plugins (umbral startapp)        //
     // ------------------------------------------------------------------ //
     write_file(&root, "plugins/.gitkeep", "", &mut files)?;
-    let plugins_readme = "# plugins/\n\nLocal app plugins go here; create one with `umbral startapp <name>`.\nEach is its own crate (`lib/models/views/urls`) and is\nauto-wired into this project's `Cargo.toml` `[dependencies]`.\n";
+    let plugins_readme = "# plugins/\n\nLocal plugins go here; create one with `umbral startplugin <name>`.\nEach is its own crate (`lib.rs` + `models.rs` + `handlers.rs`) and is\nauto-wired into this project's `Cargo.toml` `[dependencies]`.\n";
     write_file(&root, "plugins/README.md", plugins_readme, &mut files)?;
 
     // ------------------------------------------------------------------ //
@@ -1126,7 +1126,7 @@ first thing a `default-src 'self'` Content-Security-Policy blocks.
 
 ## Where to go next
 
-- Add a plugin: `umbral startapp posts`
+- Add a plugin: `umbral startplugin posts`
 - Your first app: {docs}/getting-started/your-first-app
 - Models & the ORM: {docs}/orm/models
 - Migrations: {docs}/migrations/managed-migrations
@@ -1211,7 +1211,7 @@ first thing a `default-src 'self'` Content-Security-Policy blocks.
         "cargo run -- migrate  # apply schema migrations".to_string(),
         "cargo run -- serve    # boot the HTTP server on http://127.0.0.1:8000".to_string(),
         "cargo run -- createsuperuser  # create an admin login".to_string(),
-        "umbral startapp <name>          # add another app to this project".to_string(),
+        "umbral startplugin <name>       # add a plugin to this project".to_string(),
     ];
 
     Ok(ScaffoldReport {
@@ -1224,237 +1224,20 @@ first thing a `default-src 'self'` Content-Security-Policy blocks.
     })
 }
 
-/// Write a new plugin crate at `<project_root>/plugins/<name>/`, using
-/// the per-concern layout (gaps2 #8):
-///
-/// ```text
-/// plugins/<name>/
-/// ├── Cargo.toml
-/// └── src/
-///     ├── lib.rs     — the `Plugin` impl (name/models/routes/on_ready)
-///     ├── models.rs  — `#[derive(Model)]` structs
-///     ├── views.rs   — HTTP handlers
-///     └── urls.rs    — the URL conf (`router()`): the route table
-/// ```
-///
-/// `lib.rs` declares a `{Name}Plugin` struct whose `routes()` returns
-/// `urls::router()`. The new crate is auto-registered as a path dep in
-/// the project's `Cargo.toml` (see [`register_dep_in_cargo_toml`]); the
-/// user then wires it into their App by adding `.plugin(...)` to the
-/// builder chain — the next_steps in the returned report spell out the
-/// exact lines.
+/// Deprecated alias for [`scaffold_plugin`]. Everything the framework
+/// generates under `plugins/` is a *plugin* — there is no separate "app"
+/// contract — so the old minimal `startapp` writer folds into
+/// `startplugin` / [`scaffold_plugin`], leaving one generator to maintain.
+/// Kept as a forwarding shim so existing API callers keep working; the CLI
+/// `startapp` command forwards here and prints a deprecation note. (Not
+/// `#[deprecated]` at the Rust level — that would warn on every internal
+/// test call site; the user-facing deprecation lives on the CLI command.)
 pub fn scaffold_app(
     name: &str,
     project_root: &Path,
     local_umbral_repo: Option<&Path>,
 ) -> Result<ScaffoldReport, ScaffoldError> {
-    // The reserved-name check comes FIRST. Some built-in plugin names (`static`)
-    // are also Rust keywords, so the identifier check would refuse them too —
-    // but with "invalid name", when the useful thing to say is "that is a
-    // built-in umbral plugin, and here are the reserved names". Same refusal,
-    // better message.
-    //
-    // Reject names that collide with built-in umbral plugins. Both crates
-    // would compile, but the user could never register both via
-    // `.plugin(...)` without aliasing — and the table-name conflicts
-    // would surface at boot, not at startapp time.
-    let normalized = name.replace('-', "_");
-    if RESERVED_PLUGIN_NAMES.contains(&normalized.as_str()) {
-        return Err(ScaffoldError::ReservedName(name.to_string()));
-    }
-
-    validate_name(name)?;
-
-    let plugins_dir = project_root.join("plugins");
-    let root = plugins_dir.join(name);
-    if root.exists() {
-        return Err(ScaffoldError::AlreadyExists(root));
-    }
-
-    fs::create_dir_all(&root)?;
-    fs::create_dir_all(root.join("src"))?;
-
-    let crate_name = rust_ident(name);
-    let pascal = pascal_case_from_ident(name);
-    let mut files = Vec::new();
-
-    let version = env!("CARGO_PKG_VERSION");
-    let cargo_toml = format!(
-        r#"[package]
-name = "{name}"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-umbral = "{version}"
-serde = {{ version = "1", features = ["derive"] }}
-sqlx = {{ version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }}
-chrono = {{ version = "0.4", features = ["serde"] }}
-"#
-    );
-    let cargo_toml = match local_umbral_repo {
-        Some(repo) => localize_deps(&cargo_toml, repo),
-        None => cargo_toml,
-    };
-    write_file(&root, "Cargo.toml", &cargo_toml, &mut files)?;
-
-    let lib_rs = format!(
-        r#"//! {pascal}Plugin — generated by `umbral startapp {name}`.
-//!
-//! A plugin split one file per concern:
-//!
-//!   src/
-//!     lib.rs     — the `Plugin` impl: glues models + routes together (this file)
-//!     models.rs  — `#[derive(Model)]` structs (this app's tables)
-//!     views.rs   — HTTP handlers
-//!     urls.rs    — the URL conf: maps paths to `views::` handlers
-//!
-//! Wire this into your App by adding to `src/main.rs`:
-//!
-//! ```ignore
-//! .plugin({crate_name}::{pascal}Plugin::default())
-//! ```
-//!
-//! See `documentation/docs/v0.0.1/plugins/the-plugin-trait.mdx` for
-//! what each `Plugin` method does. This layout is a recommended
-//! convention — the framework only needs a type that impls `Plugin`.
-
-pub mod models;
-pub mod urls;
-pub mod views;
-
-use umbral::plugin::{{AppContext, Plugin, PluginError}};
-use umbral::web::Router;
-
-#[derive(Debug, Default, Clone)]
-pub struct {pascal}Plugin;
-
-impl Plugin for {pascal}Plugin {{
-    fn name(&self) -> &'static str {{
-        "{name}"
-    }}
-
-    fn models(&self) -> Vec<umbral::migrate::ModelMeta> {{
-        // Register every model the plugin owns so makemigrations
-        // picks them up. Uncomment + extend once you've defined one
-        // in src/models.rs.
-        // vec![umbral::migrate::ModelMeta::for_::<models::Example>()]
-        Vec::new()
-    }}
-
-    fn routes(&self) -> Router {{
-        // Routes live in `urls.rs` (this app's URL conf), one place to
-        // see every path the plugin serves.
-        urls::router()
-    }}
-
-    fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {{
-        Ok(())
-    }}
-}}
-"#
-    );
-    write_file(&root, "src/lib.rs", &lib_rs, &mut files)?;
-
-    // IMP-4 from bugs/tests/testBugs.md: startapp scaffolds a
-    // `models.rs` stub so the user has an obvious place to declare
-    // their first `#[derive(Model)]` struct.
-    let models_rs = format!(
-        r#"//! Models for the `{name}` plugin.
-//!
-//! Declare one `#[derive(umbral::orm::Model)]` struct per database
-//! table. Once registered via `Plugin::models()` in lib.rs, the
-//! migration engine picks them up on the next `makemigrations`.
-//!
-//! ```ignore
-//! use chrono::{{DateTime, Utc}};
-//! use serde::{{Deserialize, Serialize}};
-//!
-//! #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
-//! pub struct Example {{
-//!     pub id: i64,
-//!     #[umbral(string, max_length = 200)]
-//!     pub title: String,
-//!     #[umbral(noedit)]
-//!     pub created_at: DateTime<Utc>,
-//! }}
-//! ```
-"#
-    );
-    write_file(&root, "src/models.rs", &models_rs, &mut files)?;
-
-    // src/views.rs — HTTP handlers for this plugin. One sample `index`
-    // handler so `urls.rs` has something to route to out of the box.
-    let views_rs = format!(
-        r#"//! HTTP handlers for the `{name}` plugin.
-//!
-//! Each handler is an axum handler — return anything that implements
-//! `IntoResponse` (`Html<String>`, `Json<T>`, `&'static str`, a
-//! `Result<_, (StatusCode, String)>`, …). Read this app's data through
-//! the ORM (`models::*::objects()`), never raw SQL.
-//!
-//! Routes that reach these handlers are declared in `urls.rs`.
-
-/// Sample landing handler. `GET /{name}/` hits this; rewire the path in
-/// `urls.rs`.
-pub async fn index() -> &'static str {{
-    "Hello from the {name} plugin"
-}}
-"#
-    );
-    write_file(&root, "src/views.rs", &views_rs, &mut files)?;
-
-    // src/urls.rs — the plugin's URL conf (the route table). One place
-    // that maps every path to a `views::` handler.
-    let urls_rs = format!(
-        r#"//! URL conf for the `{name}` plugin — the route table.
-//! `router()` returns the axum `Router` that
-//! `Plugin::routes()` in lib.rs hands back to the framework.
-//!
-//! Convention: `/<name>/...` for HTML pages, `/api/<name>/...` for JSON.
-//! Map each path to a handler in `views.rs` so this file reads as the
-//! single index of everything the plugin serves.
-
-use umbral::web::{{Router, get}};
-
-use crate::views;
-
-/// Build this plugin's route table. Add one `.route(path, method(handler))`
-/// line per endpoint.
-pub fn router() -> Router {{
-    Router::new().route("/{name}/", get(views::index))
-}}
-"#
-    );
-    write_file(&root, "src/urls.rs", &urls_rs, &mut files)?;
-
-    // Auto-register the new crate as a path dep in the project's Cargo.toml.
-    // This is a best-effort step: if it fails (e.g. the user ran startapp
-    // from a directory that isn't a Cargo project), we warn but don't roll
-    // back the scaffold files already written.
-    let project_cargo_toml = project_root.join("Cargo.toml");
-    let cargo_toml_registered = if project_cargo_toml.is_file() {
-        register_dep_in_cargo_toml(&project_cargo_toml, name).ok()
-    } else {
-        None
-    };
-
-    let next_steps = vec![
-        "Wire the plugin into your App::builder chain in src/main.rs:".to_string(),
-        format!("    .plugin({crate_name}::{pascal}Plugin::default())"),
-        "(The plugin crate was auto-added to your project dependencies.)".to_string(),
-        "Declare your first model in src/models.rs and uncomment the".to_string(),
-        "    `Plugin::models()` line in src/lib.rs.".to_string(),
-        "Add handlers in src/views.rs and route them in src/urls.rs.".to_string(),
-    ];
-
-    Ok(ScaffoldReport {
-        root,
-        files,
-        next_steps,
-        cargo_toml_registered,
-        registered: None,
-    })
+    scaffold_plugin(name, project_root, local_umbral_repo)
 }
 
 /// Write a richer plugin scaffold at `<project_root>/plugins/<name>/`
@@ -1472,10 +1255,9 @@ pub fn router() -> Router {{
 ///     └── handlers.rs    — one example axum handler using AppContext
 /// ```
 ///
-/// Contrast with [`scaffold_app`], which writes a minimal skeleton
-/// (Cargo.toml + lib.rs with a stub Plugin impl, nothing else). Use
-/// `startplugin` when you're building a plugin you intend to ship; use
-/// `startapp` for an internal module that just needs a `Plugin` seam.
+/// This is the one plugin scaffolder. `startapp` / [`scaffold_app`] are a
+/// deprecated alias that forward here — everything generated under
+/// `plugins/` is a plugin, so there is no separate "app" template.
 pub fn scaffold_plugin(
     name: &str,
     project_root: &Path,
@@ -1603,7 +1385,6 @@ pub mod models;
 
 use async_trait::async_trait;
 use umbral::migrate::ModelMeta;
-use umbral::orm::Model;
 use umbral::plugin::{{AppContext, Plugin, PluginError}};
 use umbral::web::{{Router, get}};
 
@@ -1622,7 +1403,10 @@ impl Plugin for {pascal}Plugin {{
     /// `umbral_migrations` tracking table once the initial migration
     /// applies.
     fn models(&self) -> Vec<ModelMeta> {{
-        vec![models::{pascal}Item::meta()]
+        // One entry per model the plugin owns. `umbral::discovered_models!()`
+        // finds every #[derive(Model)] in this crate automatically if you'd
+        // rather not maintain the list by hand.
+        vec![ModelMeta::for_::<models::{pascal}Item>()]
     }}
 
     /// HTTP routes contributed by this plugin. The base path is
@@ -1675,9 +1459,10 @@ pub struct {pascal}Item {{
     #[umbral(string, max_length = 200)]
     pub title: String,
 
-    /// Lifecycle state. The choices map 1:1 to enum variants; the
-    /// migration engine emits a CHECK constraint, the admin renders a
-    /// `<select>`, and the OpenAPI schema gets an `enum` array.
+    /// Lifecycle state. `#[umbral(choices)]` maps the column 1:1 to the
+    /// enum variants: the migration engine emits a CHECK constraint, the
+    /// admin renders a `<select>`, and the OpenAPI schema gets an `enum`.
+    #[umbral(choices)]
     pub status: {pascal}Status,
 
     /// When the item was last published. Read-only on edit forms.
@@ -1685,10 +1470,11 @@ pub struct {pascal}Item {{
     pub published_at: Option<DateTime<Utc>>,
 }}
 
-/// Lifecycle state for [`{pascal}Item`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
+/// Lifecycle state for [`{pascal}Item`]. The `Choices` derive teaches the
+/// ORM the closed set; `rename_all` controls how variants serialize to the
+/// stored string (`Draft` → `"draft"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, umbral::orm::Choices)]
+#[choices(rename_all = "lowercase")]
 pub enum {pascal}Status {{
     Draft,
     Review,
@@ -1707,7 +1493,7 @@ pub enum {pascal}Status {{
 //! `GET /{name}/hello?name=world` returns `{{"greeting": "Hello, world!"}}`.
 
 use serde::{{Deserialize, Serialize}};
-use umbral::web::{{Json, extract::Query}};
+use umbral::web::{{Json, Query}};
 
 #[derive(Debug, Deserialize, Default)]
 pub struct HelloParams {{
@@ -2717,72 +2503,38 @@ mod tests {
         scaffold_project("blog", tmp.path(), None).expect("scaffold ok");
         let readme = fs::read_to_string(tmp.path().join("blog/plugins/README.md")).unwrap();
         assert!(
-            readme.contains("umbral startapp"),
-            "plugins/README.md should point at `umbral startapp`",
+            readme.contains("umbral startplugin"),
+            "plugins/README.md should point at the canonical `umbral startplugin`",
         );
     }
 
     // ----------------------------------------------------------------- //
-    // scaffold_app per-concern plugin layout (gaps2 #8)                  //
+    // scaffold_app is now a deprecated alias forwarding to scaffold_plugin //
     // ----------------------------------------------------------------- //
 
     #[test]
-    fn scaffold_app_writes_per_concern_plugin_layout() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let report = scaffold_app("posts", tmp.path(), None).expect("scaffold ok");
-
-        let root = tmp.path().join("plugins").join("posts");
-        assert!(root.is_dir());
-
-        for rel in [
-            "Cargo.toml",
-            "src/lib.rs",
-            "src/models.rs",
-            "src/views.rs",
-            "src/urls.rs",
-        ] {
-            assert!(
-                root.join(rel).exists(),
-                "missing expected file: {rel}; got {:?}",
-                report.files,
-            );
-        }
-    }
-
-    #[test]
-    fn scaffold_app_lib_wires_urls_and_views() {
+    fn scaffold_app_forwards_to_the_plugin_generator() {
         let tmp = tempfile::tempdir().expect("tempdir");
         scaffold_app("posts", tmp.path(), None).expect("scaffold ok");
         let root = tmp.path().join("plugins/posts");
 
+        // The plugin layout (not the old plain views.rs/urls.rs one).
+        for rel in [
+            "Cargo.toml",
+            "README.md",
+            "src/lib.rs",
+            "src/models.rs",
+            "src/handlers.rs",
+        ] {
+            assert!(root.join(rel).exists(), "missing expected file: {rel}");
+        }
         let lib = fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(lib.contains("pub mod models;"), "lib.rs publishes models");
         assert!(
-            lib.contains("pub mod models;"),
-            "lib.rs must publish models"
-        );
-        assert!(lib.contains("pub mod views;"), "lib.rs must publish views");
-        assert!(lib.contains("pub mod urls;"), "lib.rs must publish urls");
-        assert!(
-            lib.contains("urls::router()"),
-            "routes() must return urls::router()",
+            lib.contains("pub mod handlers;"),
+            "lib.rs publishes handlers"
         );
         assert!(lib.contains("PostsPlugin"), "PascalCase plugin name");
-
-        let urls = fs::read_to_string(root.join("src/urls.rs")).unwrap();
-        assert!(
-            urls.contains("pub fn router() -> Router"),
-            "urls.rs must expose a router() returning a Router",
-        );
-        assert!(
-            urls.contains("views::index"),
-            "urls.rs route table should map to a views:: handler",
-        );
-
-        let views = fs::read_to_string(root.join("src/views.rs")).unwrap();
-        assert!(
-            views.contains("pub async fn index"),
-            "views.rs should ship a sample index handler",
-        );
     }
 
     #[test]

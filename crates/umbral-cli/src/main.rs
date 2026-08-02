@@ -65,12 +65,11 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         local: Option<PathBuf>,
     },
-    /// Create a new plugin (app) crate in `<project>/plugins/<name>/`.
+    /// Deprecated alias of `startplugin`. Generates the same plugin crate.
     ///
-    /// Run this from inside a project. The generated plugin lives at
-    /// `plugins/<name>/` and exports a `{Name}Plugin` struct. Wire
-    /// it into your App by editing `src/main.rs` per the printed
-    /// instructions. Minimal: one lib.rs with a stub Plugin impl.
+    /// There is no separate "app" contract — everything under `plugins/`
+    /// is a plugin — so `startapp` folds into `startplugin`. Prefer
+    /// `startplugin`; this alias prints a deprecation note and forwards.
     Startapp {
         /// Plugin name. ASCII alphanumeric, underscore, hyphen.
         name: String,
@@ -81,14 +80,13 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         local: Option<PathBuf>,
     },
-    /// Create a richer plugin scaffold in `<project>/plugins/<name>/`.
+    /// Create a plugin crate in `<project>/plugins/<name>/`.
     ///
-    /// Like `startapp` but writes a more complete starter: an example
-    /// `Model` showing common field attributes (`max_length`,
-    /// `choices`, nullable timestamp, `noedit`), an example axum
-    /// handler that reads query params and returns JSON, and a
-    /// README walking through the layout. Use this when you're
-    /// building a plugin you intend to distribute.
+    /// Writes a complete starter: an example `Model` showing common field
+    /// attributes (`max_length`, `choices`, nullable timestamp, `noedit`),
+    /// an example axum handler that reads query params and returns JSON,
+    /// and a README walking through the layout. This is the one plugin
+    /// scaffolder; `startapp` is a deprecated alias.
     Startplugin {
         /// Plugin name. ASCII alphanumeric, underscore, hyphen.
         name: String,
@@ -308,7 +306,14 @@ fn main() -> ExitCode {
                 .map_err(Into::into)
         }
         Command::Startapp { name, path, local } => {
-            umbral_cli::scaffold::scaffold_app(&name, &path, local.as_deref())
+            // `startapp` is a deprecated alias of `startplugin` — everything
+            // generated under plugins/ is a plugin; there is no separate
+            // "app" contract. Same output either way.
+            eprintln!(
+                "note: `startapp` is deprecated — use `startplugin` (there's no separate \
+                 \"app\" contract; everything under plugins/ is a plugin)."
+            );
+            umbral_cli::scaffold::scaffold_plugin(&name, &path, local.as_deref())
                 .map(|r| print_report(&r, &name, true))
                 .map_err(Into::into)
         }

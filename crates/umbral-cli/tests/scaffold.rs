@@ -527,31 +527,49 @@ fn scaffold_project_local_flag_emits_path_deps() {
     );
 }
 
-/// IMP-4: `startapp` (the minimal scaffold) now writes a
-/// `src/models.rs` stub alongside `src/lib.rs` so the user has an
-/// obvious place to declare their first model. Previously they had
-/// to create it themselves or step up to `startplugin` for the
-/// richer layout.
+/// `startapp` is now a deprecated ALIAS of `startplugin` — it produces the
+/// exact same plugin crate (there is no separate "app" contract). This
+/// pins the equivalence: scaffold_app writes the identical file set with
+/// identical contents that scaffold_plugin does.
 #[test]
-fn scaffold_app_writes_models_rs_stub() {
+fn scaffold_app_is_an_alias_of_scaffold_plugin() {
+    // Two sibling projects so the two writers don't collide on paths.
     let tmp = TempDir::new().unwrap();
-    scaffold_project("acme", tmp.path(), None).unwrap();
-    let project_root = tmp.path().join("acme");
-    let report = scaffold_app("posts", &project_root, None).unwrap();
-    let models = std::fs::read_to_string(report.root.join("src/models.rs")).unwrap();
-    assert!(
-        models.contains("#[derive(umbral::orm::Model)]"),
-        "models.rs should show the canonical derive line in its example block; got:\n{models}",
+    scaffold_project("viaapp", tmp.path(), None).unwrap();
+    scaffold_project("viaplugin", tmp.path(), None).unwrap();
+
+    let via_app = scaffold_app("posts", &tmp.path().join("viaapp"), None).unwrap();
+    let via_plugin = scaffold_plugin("posts", &tmp.path().join("viaplugin"), None).unwrap();
+
+    // Same relative file set (of files written UNDER the plugin root —
+    // `files` also lists the project Cargo.toml the dep-registration edits).
+    let rel = |root: &std::path::Path, files: &[std::path::PathBuf]| {
+        let mut v: Vec<String> = files
+            .iter()
+            .filter_map(|f| {
+                f.strip_prefix(root)
+                    .ok()
+                    .map(|r| r.to_string_lossy().into_owned())
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(
+        rel(&via_app.root, &via_app.files),
+        rel(&via_plugin.root, &via_plugin.files),
+        "the alias must write the same file set as startplugin"
     );
-    let lib = std::fs::read_to_string(report.root.join("src/lib.rs")).unwrap();
-    assert!(
-        lib.contains("pub mod models;"),
-        "lib.rs should declare `pub mod models;`; got:\n{lib}",
-    );
-    assert!(
-        lib.contains("Plugin::models()") || lib.contains("fn models("),
-        "lib.rs should reference Plugin::models() so the user sees where to register; got:\n{lib}",
-    );
+
+    // And identical contents for the plugin's own source files.
+    for name in ["src/lib.rs", "src/models.rs", "src/handlers.rs"] {
+        let a = std::fs::read_to_string(via_app.root.join(name)).unwrap();
+        let p = std::fs::read_to_string(via_plugin.root.join(name)).unwrap();
+        assert_eq!(
+            a, p,
+            "{name} must be identical between startapp and startplugin"
+        );
+    }
 }
 
 // =========================================================================
