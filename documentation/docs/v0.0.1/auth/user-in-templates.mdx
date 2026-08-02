@@ -113,28 +113,37 @@ The serialized shape carries every column on `AuthUser`. If you've added a `disp
 <span>{{ user.display_name or user.username }}</span>
 ```
 
-## What `user` does NOT carry: related objects
+## Related objects: forward-FK and reverse-OneToOne traversal
+
+`with_user_in_templates()` expands the serialized `user` with its related **single** objects, up to **two hops**, so a template can dot-walk into them without the handler pre-resolving anything:
+
+```jinja
+{# reverse-OneToOne: a Customer with a UNIQUE FK to AuthUser #}
+<p>Loyalty points: {{ user.customer.loyalty_points }}</p>
+
+{# two hops: reverse-OneToOne, then a forward FK on that child #}
+<p>City: {{ user.customer.address.city }}</p>
+```
+
+How the keys are named:
+
+- **Forward FK** — a foreign-key column resolves to its full target row under the column's own name (`user.<fk_field>.<column>`).
+- **Reverse-OneToOne** — a child model with a **UNIQUE** FK pointing at `auth_user` is injected under the **child table's name** (`Customer { user: ForeignKey<AuthUser> (unique) }` → `user.customer`). An ambiguous match (two UNIQUE FKs to the user, e.g. `primary_user` + `backup_user`) is skipped — there's no single right answer for which becomes `user.customer`.
+
+The walk is depth-bounded at **2 hops** (`user.customer.address` is the last resolvable step) with `(table, pk)` cycle detection, and it costs **one query per resolved relation per request** — the honest price of "templates get relations for free." Sparse graphs (the common case) add 1–3 queries; deeper or wider graphs hit the cap and stop.
 
 <Callout type="warning">
-  **Reverse-OneToOne, reverse-FK, and forward-FK traversal in templates is not implemented yet.** `{{ user.profile.avatar }}`, `{{ user.customer.id }}`, `{{ user.order_set }}`, `{{ user.profile.address.city }}`: none of these work today, regardless of how the relations are declared on the Rust side.
+  **Reverse-FK one-to-many lists are not expanded.** `{{ user.order_set }}` — the *list* of children pointing at the user through a **non-unique** FK — is deliberately not injected: it's an unbounded per-request query (a user with 50k orders would load all of them into every template render). It's [on deck for 0.0.12](https://github.com/dalmasonto/umbral/blob/main/changelog/README.md), with a row cap.
 
-  Why: `user` in templates is the JSON-serialized AuthUser. Relation accessors are Rust async methods that aren't serialized into the value (they'd need DB access to resolve, and minijinja is sync, can't `.await`). The cross-crate reverse-OneToOne accessor (e.g. `user.customer().await?` from [orm/relationships](/v0.0.1/orm/relationships#parent-side-cross-crate)) is a Rust-only API.
-
-  **What to do today**: resolve the relations you need in the handler and pass them into the template context explicitly:
+  **What to do today** for a child list: resolve it in the handler and pass it in explicitly:
 
   ```rust
-  let customer = user.0.customer().await?;
-  let customer_id = customer.as_ref().map(|c| c.id);
-  let loyalty = customer.as_ref().map(|c| c.loyalty_points).unwrap_or(0);
-  render("me.html", &context!(username, customer_id, loyalty))
+  let orders = Order::objects().filter(order::USER.eq(&user.0.id)).limit(20).fetch().await?;
+  render("me.html", &context!(username, orders))
   ```
-
-  Then in the template: `{{ customer_id }}`, `{{ loyalty }}`, flat keys, pre-resolved.
-
-  **What's coming**: `planning/gaps2.md` #14 captures the design space. The front-runner is an eager-prefetch declaration built on `select_related` / `prefetch_related`: the handler declares "this template will walk user.customer.address," the framework resolves those before rendering, and the template uses dot-notation against the pre-loaded values. No ETA; logged as a focused follow-on.
 </Callout>
 
-For now, `user.<column>` works only for **columns on the AuthUser table itself**: `is_authenticated`, `is_staff`, `is_superuser`, `username`, `email`, `date_joined`, etc. Anything that requires a SQL query to fetch (relations, computed fields, M2M sets) has to be resolved in the handler.
+Everything else — columns on `AuthUser` itself (`is_authenticated`, `is_staff`, `username`, `email`, `date_joined`, …) plus the FK/reverse-O2O relations above — is available on `user` directly. M2M sets and computed fields still have to be resolved in the handler.
 
 ## Custom user models
 
