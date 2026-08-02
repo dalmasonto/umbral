@@ -8,11 +8,13 @@
 
 pub mod models;
 
-pub use models::{Category, Tag, Post, Comment, Page, Faq, Menu, MenuItem, Banner, Testimonial, ContactMessage, Note, Subscriber, MediaAsset, Redirect, SiteSetting};
+pub use models::{
+    Banner, Category, Comment, ContactMessage, Faq, MediaAsset, Menu, MenuItem, Note, Page, Post,
+    Redirect, SiteSetting, Subscriber, Tag, Testimonial,
+};
 
 use umbral::migrate::ModelMeta;
-use umbral::plugin::{AppContext, Plugin, PluginError};
-use umbral::web::Router;
+use umbral::plugin::Plugin;
 
 #[derive(Debug, Default, Clone)]
 pub struct ContentPlugin;
@@ -23,31 +25,32 @@ impl Plugin for ContentPlugin {
     }
 
     fn models(&self) -> Vec<ModelMeta> {
-        vec![
-            ModelMeta::for_::<models::Category>(),
-            ModelMeta::for_::<models::Tag>(),
-            ModelMeta::for_::<models::Post>(),
-            ModelMeta::for_::<models::Comment>(),
-            ModelMeta::for_::<models::Page>(),
-            ModelMeta::for_::<models::Faq>(),
-            ModelMeta::for_::<models::Menu>(),
-            ModelMeta::for_::<models::MenuItem>(),
-            ModelMeta::for_::<models::Banner>(),
-            ModelMeta::for_::<models::Testimonial>(),
-            ModelMeta::for_::<models::ContactMessage>(),
-            ModelMeta::for_::<models::Note>(),
-            ModelMeta::for_::<models::Subscriber>(),
-            ModelMeta::for_::<models::MediaAsset>(),
-            ModelMeta::for_::<models::Redirect>(),
-            ModelMeta::for_::<models::SiteSetting>(),
-        ]
+        // Every #[derive(Model)] in THIS crate, via the link-time registry
+        // (gaps4 #40) — replaces 16 hand-listed ModelMeta::for_::<T>()
+        // lines that had to be kept in sync with models.rs by hand.
+        umbral::discovered_models!()
     }
+}
 
-    fn routes(&self) -> Router {
-        Router::new()
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use umbral::plugin::Plugin;
 
-    fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        Ok(())
+    /// gaps4 #40 proof: every content model is discovered at link time.
+    #[test]
+    fn discovered_models_finds_all_sixteen() {
+        let tables: std::collections::BTreeSet<String> = ContentPlugin
+            .models()
+            .into_iter()
+            .map(|m| m.table)
+            .collect();
+        assert_eq!(
+            tables.len(),
+            16,
+            "content owns 16 models; discovery found: {tables:?}"
+        );
+        assert!(tables.contains("post"));
+        assert!(tables.contains("site_setting"));
     }
 }

@@ -15,7 +15,6 @@ use umbral::templates::context;
 use umbral::web::{ApiError, Html};
 use umbral_auth::{AuthUser, LoggedIn, UserModel};
 
-
 pub async fn dashboard(user: LoggedIn<AuthUser>) -> Result<Html<String>, ApiError> {
     let username = user.0.username().to_string();
 

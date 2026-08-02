@@ -9,8 +9,7 @@
 pub mod models;
 
 use umbral::migrate::ModelMeta;
-use umbral::plugin::{AppContext, Plugin, PluginError};
-use umbral::web::Router;
+use umbral::plugin::Plugin;
 
 #[derive(Debug, Default, Clone)]
 pub struct EcommercePlugin;
@@ -25,31 +24,36 @@ impl Plugin for EcommercePlugin {
     }
 
     fn models(&self) -> Vec<ModelMeta> {
-        vec![
-            ModelMeta::for_::<models::Brand>(),
-            ModelMeta::for_::<models::Product>(),
-            ModelMeta::for_::<models::ProductImage>(),
-            ModelMeta::for_::<models::ProductVariant>(),
-            ModelMeta::for_::<models::Customer>(),
-            ModelMeta::for_::<models::Address>(),
-            ModelMeta::for_::<models::Order>(),
-            ModelMeta::for_::<models::OrderItem>(),
-            ModelMeta::for_::<models::Payment>(),
-            ModelMeta::for_::<models::Shipment>(),
-            ModelMeta::for_::<models::Coupon>(),
-            ModelMeta::for_::<models::Review>(),
-            ModelMeta::for_::<models::ProductTag>(),
-            ModelMeta::for_::<models::CouponProduct>(),
-            ModelMeta::for_::<models::CouponCategory>(),
-            ModelMeta::for_::<models::ReviewImage>(),
-        ]
+        // Every #[derive(Model)] in THIS crate, via the link-time registry
+        // (gaps4 #40) — replaces 16 hand-listed ModelMeta::for_::<T>()
+        // lines that had to be kept in sync with models.rs by hand.
+        umbral::discovered_models!()
     }
+}
 
-    fn routes(&self) -> Router {
-        Router::new()
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use umbral::plugin::Plugin;
 
-    fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
-        Ok(())
+    /// gaps4 #40 proof: `discovered_models!()` finds every #[derive(Model)]
+    /// in THIS crate (16 of them, across the models submodule) at link
+    /// time — the replacement for the hand-listed vec must not silently
+    /// under-count, which would make makemigrations try to DROP tables.
+    #[test]
+    fn discovered_models_finds_all_sixteen() {
+        let tables: std::collections::BTreeSet<String> = EcommercePlugin
+            .models()
+            .into_iter()
+            .map(|m| m.table)
+            .collect();
+        assert_eq!(
+            tables.len(),
+            16,
+            "ecommerce owns 16 models; discovery found: {tables:?}"
+        );
+        // Spot-check a submodule model and an M2M-join model.
+        assert!(tables.contains("product"));
+        assert!(tables.contains("coupon_product"));
     }
 }

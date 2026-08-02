@@ -21,6 +21,7 @@
 
 mod auth;
 mod seed;
+mod tasks;
 mod views;
 mod widgets;
 
@@ -32,8 +33,9 @@ use umbral::cors::CorsConfig;
 use umbral::prelude::*;
 use umbral::web::SlashRedirect;
 use umbral_admin::{AdminModel, AdminPlugin};
-use umbral_auth::{AuthPlugin, AuthUser, BearerAuthentication, login_required_html};
+use umbral_auth::{AuthPlugin, BearerAuthentication, login_required_html};
 use umbral_graphql::GraphqlPlugin;
+use umbral_health::HealthPlugin;
 use umbral_openapi::OpenApiPlugin;
 use umbral_permissions::{PermissionsPlugin, permission_required_html};
 use umbral_playground::PlaygroundPlugin;
@@ -41,9 +43,10 @@ use umbral_rest::{
     Authentication, ChainAuthentication, IsAuthenticated, IsStaff, OrPermission,
     PageNumberPagination, ReadOnly, ResourceConfig, RestPlugin,
 };
-use umbral_security::{SecurityConfig, SecurityPlugin};
+use umbral_security::SecurityPlugin;
 use umbral_sessions::SessionsPlugin;
 use umbral_storage::StoragePlugin;
+use umbral_tasks::TasksPlugin;
 
 use crate::auth::{TokenSchemeAuthentication, session_authentication};
 
@@ -79,9 +82,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = App::builder()
         .settings(settings)
         .database("default", pool)
+        // ONE app-wide authentication chain (gaps4 #42): session cookie →
+        // Bearer → the custom `Token <T>` scheme. REST and GraphQL below
+        // inherit it — before this seam the same chain was pasted into
+        // each plugin, and forgetting one copy silently made that surface
+        // anonymous.
+        .authentication(ChainAuthentication::new(vec![
+            Arc::new(session_authentication()) as Arc<dyn Authentication>,
+            Arc::new(BearerAuthentication::default()) as Arc<dyn Authentication>,
+            Arc::new(TokenSchemeAuthentication::default()) as Arc<dyn Authentication>,
+        ]))
         // --- Plugins ---------------------------------------------------------
         .plugin(
-            AuthPlugin::<AuthUser>::default()
+            AuthPlugin::new()
                 .with_default_routes()
                 // Mounts `user_context_layer` globally — every
                 // template render gets `user` in its context
@@ -91,6 +104,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .with_user_in_templates(),
         )
         .plugin(SessionsPlugin::default())
+        // Liveness + readiness probes at /healthz and /ready — zero config.
+        .plugin(HealthPlugin::default())
+        // Background task queue. #[umbral::task] handlers (see src/tasks.rs)
+        // are DISCOVERED automatically (gaps4 #40) — drain the queue with
+        // `cargo run -- tasks-worker` alongside the server.
+        .plugin(TasksPlugin::default())
         .plugin(PermissionsPlugin)
         .plugin(ContentPlugin)
         .plugin(EcommercePlugin)
@@ -184,11 +203,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(
             RestPlugin::default()
                 .paginate(PageNumberPagination::new(20))
-                .authenticate(ChainAuthentication::new(vec![
-                    Arc::new(session_authentication()) as Arc<dyn Authentication>,
-                    Arc::new(BearerAuthentication::default()) as Arc<dyn Authentication>,
-                    Arc::new(TokenSchemeAuthentication::default()) as Arc<dyn Authentication>,
-                ]))
+                // Identity comes from the app-wide `.authentication(...)`
+                // chain above (gaps4 #42).
                 .resource(ResourceConfig::new("product").hide("cost").permission(
                     OrPermission::new(vec![Box::new(ReadOnly), Box::new(IsStaff)]),
                 ))
@@ -210,14 +226,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // address { ... } } }` in one request. `expose_if` gates the ones staff need.
         .plugin(
             GraphqlPlugin::new()
-                // The SAME auth chain REST uses. Without it every GraphQL request is
-                // anonymous and the `expose_if` models below could only ever be DENIED —
-                // a gate that cannot be opened is a wall with a lock painted on it.
-                .authenticate(ChainAuthentication::new(vec![
-                    Arc::new(session_authentication()) as Arc<dyn Authentication>,
-                    Arc::new(BearerAuthentication::default()) as Arc<dyn Authentication>,
-                    Arc::new(TokenSchemeAuthentication::default()) as Arc<dyn Authentication>,
-                ]))
+                // Identity comes from the app-wide `.authentication(...)`
+                // chain above — the `expose_if` gates below see the same
+                // caller REST does.
                 // --- public catalog ---
                 .expose("product")
                 .expose("category")
@@ -241,20 +252,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // wrapper.html template references /static/css/shop.css.
         // Self-hosted Inter woff2 files live alongside the CSS.
         .plugin(StoragePlugin::new().static_files("/static", "./static"))
-        // CSRF + hardening headers across the whole app. `/api` is exempt
-        // because the REST surface authenticates by bearer token (no session
-        // cookie), so the double-submit check doesn't apply there. HSTS stays
-        // off for local http dev (flip it on behind a prod profile).
-        .plugin(SecurityPlugin::with_config(SecurityConfig {
-            csrf_exempt_paths: vec!["/api".to_string(),
-                // Every GraphQL request is a POST, so the CSRF middleware 403s the whole
-                // endpoint unless it is exempt. Safe here because the transport requires
-                // `content-type: application/json`, which a browser cannot send
-                // cross-origin without a CORS preflight — there is no simple-request path
-                // for a hostile page to forge one.
-                "/graphql".to_string(),],
-            ..Default::default()
-        }))
+        // CSRF + hardening headers across the whole app (gaps4 #41's
+        // shorthand). `/api` is exempt because the REST surface
+        // authenticates by token (no session cookie, so the double-submit
+        // check doesn't apply); `/graphql` because every GraphQL request
+        // is a POST — safe, since the transport requires
+        // `content-type: application/json`, which a hostile page cannot
+        // send cross-origin without a CORS preflight. HSTS stays off for
+        // local http dev (flip it on behind a prod profile).
+        .plugin(SecurityPlugin::new().csrf_exempt(["/api", "/graphql"]))
         // CORS scoped to the REST API only (`/api`) — the HTML pages stay
         // same-origin. Strict by default (deny all cross-origin); opt in to the
         // origins a browser frontend on another host uses to call the API.

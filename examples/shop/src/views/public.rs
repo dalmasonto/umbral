@@ -13,7 +13,6 @@ use umbral::forms::Form;
 use umbral::templates::context;
 use umbral::web::{ApiError, Html, IntoResponse, Json, Path, Query, Redirect, Response};
 
-
 #[derive(Debug, Deserialize)]
 pub struct ContactQuery {
     sent: Option<String>,
@@ -88,10 +87,7 @@ pub async fn home() -> Result<Html<String>, ApiError> {
         .fetch()
         .await?;
 
-    let brands = Brand::objects()
-        .order_by(brand::NAME.asc())
-        .fetch()
-        .await?;
+    let brands = Brand::objects().order_by(brand::NAME.asc()).fetch().await?;
 
     let reviews = Review::objects()
         .filter(review::IS_APPROVED.eq(true))
@@ -170,7 +166,8 @@ pub async fn post_list() -> Result<Html<String>, ApiError> {
 
     let post_count = posts.len();
 
-    let body = umbral::templates::render("posts.html", &context!(posts, featured_posts, post_count))?;
+    let body =
+        umbral::templates::render("posts.html", &context!(posts, featured_posts, post_count))?;
     Ok(Html(body))
 }
 
@@ -182,8 +179,7 @@ pub async fn post_detail(Path(slug): Path<String>) -> Result<Html<String>, ApiEr
         .await?
         .ok_or_else(|| ApiError::not_found(format!("Post `{slug}` not found")))?;
 
-    let body =
-        umbral::templates::render("post_detail.html", &context!(post))?;
+    let body = umbral::templates::render("post_detail.html", &context!(post))?;
     Ok(Html(body))
 }
 
@@ -204,9 +200,7 @@ pub async fn faqs() -> Result<Html<String>, ApiError> {
 /// CSRF is ambient (`{{ csrf_input }}` in the template), `errors`
 /// is simply absent, and `?sent=1` after a successful redirect
 /// shows the thank-you banner.
-pub async fn contact(
-    Query(query): Query<ContactQuery>,
-) -> Result<Html<String>, ApiError> {
+pub async fn contact(Query(query): Query<ContactQuery>) -> Result<Html<String>, ApiError> {
     let sent = query.sent.as_deref() == Some("1");
     let form = ContactMessage::default();
     let errors: HashMap<String, Vec<String>> = HashMap::new();
@@ -229,9 +223,21 @@ pub async fn submit_contact(form: Form<ContactMessage>) -> Result<Response, ApiE
     // deliberately doesn't change case (it matters for usernames).
     msg.email = msg.email.to_lowercase();
 
-    ContactMessage::objects()
-        .create(msg)
-        .await?;
+    let saved = ContactMessage::objects().create(msg).await?;
+
+    // Queue the follow-up (staff notification / acknowledgement email)
+    // OFF the request path — the typed handle comes from #[umbral::task]
+    // in src/tasks.rs and the worker discovers it automatically (gaps4
+    // #40). Best-effort: the message is already saved, so an enqueue
+    // failure logs rather than failing the user's submission.
+    if let Err(e) = crate::tasks::NotifyContactTask::enqueue(crate::tasks::NotifyContactPayload {
+        contact_id: saved.id,
+        email: saved.email.clone(),
+    })
+    .await
+    {
+        tracing::warn!(error = %e, "contact saved but follow-up task not enqueued");
+    }
 
     Ok(Redirect::to("/contact?sent=1").into_response())
 }

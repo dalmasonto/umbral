@@ -20,7 +20,8 @@ umbral-openapi  = { path = "../../plugins/umbral-openapi" }
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 umbral-playground   = { path = "../../plugins/umbral-playground" }
-# umbral-tasks        = { path = "../../plugins/umbral-tasks" }
+umbral-tasks    = { path = "../../plugins/umbral-tasks" }
+umbral-health   = { path = "../../plugins/umbral-health" }
 umbral-permissions  = { path = "../../plugins/umbral-permissions" }
 # umbral-rls          = { path = "../../plugins/umbral-rls" }
 # umbral-cache        = { path = "../../plugins/umbral-cache" }
@@ -35,6 +36,7 @@ umbral-logs         = { path = "../../plugins/umbral-logs", features = ["otel"] 
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

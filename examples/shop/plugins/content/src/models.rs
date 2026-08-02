@@ -261,7 +261,9 @@ pub struct Testimonial {
 /// fields via `..Default::default()` in the constructor; the
 /// `Choices` derive on `ContactStatus` provides `Default` itself,
 /// so the struct-level `Default` derive falls out for free.
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Default, Model, umbral::forms::Form)]
+#[derive(
+    Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Default, Model, umbral::forms::Form,
+)]
 #[form(normalize_strings)]
 pub struct ContactMessage {
     pub id: i64,
