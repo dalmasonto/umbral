@@ -739,10 +739,35 @@ async fn serve(
     // through this fn). This owns the "migrate exactly when starting the server"
     // logic that consumers otherwise hand-roll with an argv-sniffing guard.
     if app.auto_migrate_on_serve_enabled() {
+        // gaps4 #47: in Dev, ALSO autodetect first — the equivalent of
+        // `makemigrations` — so a model change is picked up on the next
+        // `serve` with no explicit command. Prod only applies pending
+        // migrations; a server never generates migration files.
+        let dev = matches!(
+            umbral_core::settings::get().environment,
+            umbral::Environment::Dev
+        );
+        if dev {
+            match umbral::migrate::make().await {
+                Ok(paths) => {
+                    for path in paths {
+                        eprintln!("auto-migrate: wrote {}", path.display());
+                    }
+                }
+                Err(umbral::migrate::MigrateError::NoChanges) => {}
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
         let n = umbral::migrate::run().await?;
         if n > 0 {
             eprintln!("auto-migrate: applied {n} migration(s)");
         }
+    }
+    // gaps4 #47: the seed hook runs on serve only, AFTER migrations (a seed
+    // writes to tables migrations create). The contract is idempotence —
+    // it runs on every boot.
+    if let Some(seed) = app.seed_on_serve_hook() {
+        seed().await?;
     }
     let addr_str = match addr_override {
         Some(s) => s,

@@ -39,11 +39,16 @@ The schema is fully migrated before a single request is served. `compose` fails 
 ```rust
 App::builder()
     .auto_migrate_on_serve()
+    .seed_on_serve(seed::all)   // optional: idempotent first-run data, after migrations
     .plugin(/* ... */)
     .build()?;
 ```
 
 A fresh database "just works" on `cargo run` with no separate step. Good for demos, single-instance apps, and local dev.
+
+In `Environment::Dev`, `auto_migrate_on_serve` also **autodetects first** — the equivalent of `makemigrations` — so a model change is picked up on the next `serve` with no explicit command. In `Prod` it only applies pending migrations; a server never generates migration files.
+
+`seed_on_serve(f)` runs `f` after migrations, on `serve` only. Its contract is **idempotence**: it runs on every boot, so "top up missing rows" (e.g. `get_or_create`), never "insert once". Together the two replace the `is_serve_invocation()` argv-sniffing block apps used to hand-roll in `main.rs`.
 
 ## Running many instances? It's still safe.
 

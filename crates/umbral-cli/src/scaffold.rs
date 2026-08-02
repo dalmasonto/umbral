@@ -577,7 +577,6 @@ mod widgets;
 
 use umbral::prelude::*;
 use umbral::web::{{SlashRedirect}};
-use umbral::migrate::MigrateError;
 use umbral_auth::{{AuthPlugin, AuthUser, login_required_html}};
 use umbral_sessions::SessionsPlugin;
 use umbral_admin::AdminPlugin;
@@ -693,6 +692,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
                     get(views::public::dashboard).layer(login_required_html("/login")),
                 ),
         )
+        // Auto-migrate + seed on `serve` (gaps4 #47) so `cargo run -- serve`
+        // Just Works against a fresh database, and NEVER during
+        // `makemigrations` / `migrate` / any other subcommand. In Dev,
+        // auto_migrate_on_serve also autodetects (the makemigrations half);
+        // in Prod it only applies pending migrations. `seed::all()` is
+        // idempotent — see seed/mod.rs.
+        .auto_migrate_on_serve()
+        .seed_on_serve(seed::all)
+
         // `build_deferred`, not `build`: it wires everything (pools, model
         // registry, router, system checks) but leaves each plugin's `on_ready`
         // hook unfired. Those hooks seed content and backfill rows, so they must
@@ -700,45 +708,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
         // tables they write to. `dispatch` fires them once it has read argv.
         .build_deferred()?;
 
-    // Auto-migrate + seed on boot so `cargo run -- serve` Just Works
-    // against a fresh database — but only when we're actually starting
-    // the server. Running `cargo run -- makemigrations` or `migrate`
-    // from the CLI used to silently trigger `auto_migrate()` first and
-    // then report "no changes detected" (IMP-1 in bugs/tests/testBugs.md).
-    // The guard reads `std::env::args` before dispatch picks them apart
-    // so it matches whatever subcommand the user actually typed.
-    let argv: Vec<String> = std::env::args().collect();
-    let user_invoked_cli = argv.iter().skip(1).any(|a| !a.starts_with('-'));
-    if !user_invoked_cli {{
-        auto_migrate().await?;
-        // First-run data. `seed::all()` is idempotent — see seed/mod.rs.
-        seed::all().await?;
-    }}
-
     umbral_cli::dispatch(app).await
 }}
 
-// ---------------------------------------------------------------------------
-// Boot helpers
-// ---------------------------------------------------------------------------
-
-/// Run `makemigrations` + `migrate` on boot. Demo-only convenience.
-async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
-    match umbral::migrate::make().await {{
-        Ok(paths) => {{
-            for path in paths {{
-                eprintln!("auto-migrate: wrote {{}}",  path.display());
-            }}
-        }}
-        Err(MigrateError::NoChanges) => {{}}
-        Err(err) => return Err(Box::new(err)),
-    }}
-    let n = umbral::migrate::run().await?;
-    if n > 0 {{
-        eprintln!("auto-migrate: applied {{n}} migration(s)");
-    }}
-    Ok(())
-}}
 "#
     );
     write_file(&root, "src/main.rs", &main_rs, &mut files)?;
@@ -2683,10 +2655,11 @@ mod tests {
             main.contains("views::public::home"),
             "route table should wire views::public::home",
         );
-        // Boot runs the seed orchestrator.
+        // Boot seeds via the framework seam (gaps4 #47): serve-only,
+        // after migrations, idempotent.
         assert!(
-            main.contains("seed::all().await"),
-            "boot should run seed::all()",
+            main.contains(".seed_on_serve(seed::all)"),
+            "boot should seed via .seed_on_serve(seed::all)",
         );
 
         // SecurityPlugin mounted by default (gaps2 #25).

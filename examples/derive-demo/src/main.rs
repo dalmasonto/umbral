@@ -247,8 +247,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ))
     .build()?;
 
-    // Auto-migrate on startup — demo-only convenience. Skipped when
-    // the user explicitly runs a non-serve CLI subcommand, so that
+    // Auto-migrate on startup — demo-only convenience. NOTE: the standard
+    // way to get this is the framework seams (gaps4 #47):
+    //
+    //     App::builder().auto_migrate_on_serve().seed_on_serve(seed_fn)
+    //
+    // This example keeps the hand-rolled version deliberately, because its
+    // auto_migrate() also runs `fake_initial()` — the "DB predates umbral's
+    // tracking" self-heal the seam does not perform. If you don't need
+    // fake_initial, use the builder seams and delete all of this.
+    //
+    // Skipped when the user explicitly runs a non-serve CLI subcommand, so
     // `cargo run -- makemigrations` / `migrate` / `inspectdb` /
     // `createsuperuser` etc. drive the migration flow themselves
     // without auto-apply stepping on the inputs. Production

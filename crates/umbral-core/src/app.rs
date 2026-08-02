@@ -33,6 +33,10 @@ pub struct App {
     /// "just works" WITHOUT running migrate during `makemigrations`/`migrate`
     /// or any other subcommand. Opt in via [`AppBuilder::auto_migrate_on_serve`].
     auto_migrate_on_serve: bool,
+    /// gaps4 #47: idempotent first-run seed, run by `umbral_cli`'s serve path
+    /// after migrations. Set via [`AppBuilder::seed_on_serve`].
+    seed_on_serve: Option<SeedHook>,
+
     /// Kikosi #5 — how long [`App::serve`] keeps serving after a shutdown signal
     /// before it stops accepting, so a load balancer observes `/readyz` flip to
     /// 503 and drains this instance. `Duration::ZERO` (the default) skips the
@@ -49,6 +53,12 @@ impl App {
     /// `umbral_cli`'s serve path; see [`AppBuilder::auto_migrate_on_serve`].
     pub fn auto_migrate_on_serve_enabled(&self) -> bool {
         self.auto_migrate_on_serve
+    }
+
+    /// The [`AppBuilder::seed_on_serve`] hook, if one was registered (gaps4
+    /// #47). Read by `umbral_cli`'s serve path, after migrations.
+    pub fn seed_on_serve_hook(&self) -> Option<&SeedHook> {
+        self.seed_on_serve.as_ref()
     }
 
     /// Fire every plugin's [`Plugin::on_ready`] hook, in topological order.
@@ -242,6 +252,19 @@ impl App {
 ///
 /// Collects settings, database pools, and routes, then locks everything
 /// into place at [`build`](AppBuilder::build).
+/// The boxed [`AppBuilder::seed_on_serve`] hook (gaps4 #47): an async,
+/// idempotent first-run seed the CLI serve path runs after migrations.
+pub type SeedHook = Box<
+    dyn Fn() -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<(), Box<dyn std::error::Error + Send + Sync>>,
+                    > + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
 pub struct AppBuilder {
     settings: Option<Settings>,
     databases: HashMap<String, DbPool>,
@@ -279,6 +302,9 @@ pub struct AppBuilder {
     default_error_pages: bool,
     /// gaps3 #23: apply pending migrations on `serve` (opt-in).
     auto_migrate_on_serve: bool,
+    /// gaps4 #47: idempotent first-run seed to run on `serve`, after
+    /// migrations. See [`AppBuilder::seed_on_serve`].
+    seed_on_serve: Option<SeedHook>,
     /// Kikosi #5: shutdown drain delay. `Duration::ZERO` = no drain.
     drain_delay: std::time::Duration,
     /// Path-scoped cross-origin policies (prefix → config), applied via
@@ -364,6 +390,7 @@ impl Default for AppBuilder {
             server_error_hook: None,
             default_error_pages: true,
             auto_migrate_on_serve: false,
+            seed_on_serve: None,
             drain_delay: std::time::Duration::ZERO,
             cors: None,
             cors_scoped: Vec::new(),
@@ -786,11 +813,44 @@ impl AppBuilder {
     /// umbral_cli::dispatch(app).await   // migrate runs iff this serves
     /// ```
     ///
+    /// In `Environment::Dev` this ALSO autodetects first (gaps4 #47) — the
+    /// equivalent of `makemigrations` + `migrate` — so a model change is
+    /// picked up on the next `serve` with no explicit command: the
+    /// declare → migrate loop with zero typing. In `Prod` it only APPLIES
+    /// pending migrations; a server never generates migration files.
+    ///
     /// A convenience for demos / small apps; a large deploy still runs
-    /// `migrate` as an explicit release step. Seeding stays app-owned (a
-    /// plugin's `on_ready` or an explicit call).
+    /// `migrate` as an explicit release step. For first-run data, pair with
+    /// [`Self::seed_on_serve`].
     pub fn auto_migrate_on_serve(mut self) -> Self {
         self.auto_migrate_on_serve = true;
+        self
+    }
+
+    /// Run `seed` after migrations, every time the app is STARTED via
+    /// `umbral_cli::dispatch` → the `serve` command — and never during
+    /// `migrate` / `makemigrations` / any other subcommand (gaps4 #47).
+    ///
+    /// The other half of the bootstrap block consumers hand-rolled around
+    /// an argv-sniffing guard. The hook runs AFTER
+    /// [`Self::auto_migrate_on_serve`]'s migrations (a seed writes to
+    /// tables migrations create) and BEFORE the listener binds. Make it
+    /// idempotent — it runs on every boot, so "top up missing rows" is the
+    /// contract, not "insert once":
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .auto_migrate_on_serve()
+    ///     .seed_on_serve(seed::all)   // async fn all() -> Result<(), Box<dyn Error + Send + Sync>>
+    /// ```
+    pub fn seed_on_serve<F, Fut>(mut self, seed: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+            + Send
+            + 'static,
+    {
+        self.seed_on_serve = Some(Box::new(move || Box::pin(seed())));
         self
     }
 
@@ -1864,6 +1924,7 @@ impl AppBuilder {
             plugins: sorted_plugins,
             commands: self.commands,
             auto_migrate_on_serve: self.auto_migrate_on_serve,
+            seed_on_serve: self.seed_on_serve.take(),
             drain_delay: self.drain_delay,
             ready_fired: std::sync::atomic::AtomicBool::new(false),
         })

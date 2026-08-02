@@ -29,7 +29,6 @@ use std::sync::Arc;
 use content::ContentPlugin;
 use ecommerce::EcommercePlugin;
 use umbral::cors::CorsConfig;
-use umbral::migrate::MigrateError;
 use umbral::prelude::*;
 use umbral::web::SlashRedirect;
 use umbral_admin::{AdminModel, AdminPlugin};
@@ -304,41 +303,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     get(views::me).layer(login_required_html("/login")),
                 ),
         )
+        // Auto-migrate + seed on `serve` only (gaps4 #47) — the framework
+        // seams replace the hand-rolled is_serve_invocation() argv guard.
+        // In Dev, auto_migrate_on_serve autodetects AND applies (the full
+        // makemigrations+migrate loop); in Prod it only applies pending.
+        // `seed::all()` runs the per-concern files (credentials → products
+        // → demo_data → blogs) in order, after migrations. Idempotent:
+        // re-running tops up missing rows without re-inserting.
+        .auto_migrate_on_serve()
+        .seed_on_serve(seed::all)
         .build()?;
 
-    if is_serve_invocation() {
-        auto_migrate().await?;
-        // One call now — `seed::all()` runs the per-concern files
-        // (credentials → products → demo_data → blogs) in the right
-        // order. Idempotent: re-running tops up missing rows
-        // without re-inserting.
-        seed::all().await?;
-    }
-
     umbral_cli::dispatch(app).await
-}
-
-// ---------------------------------------------------------------------------
-// Boot helpers
-// ---------------------------------------------------------------------------
-
-fn is_serve_invocation() -> bool {
-    matches!(std::env::args().nth(1).as_deref(), None | Some("serve"))
-}
-
-async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    match umbral::migrate::make().await {
-        Ok(paths) => {
-            for path in paths {
-                eprintln!("auto-migrate: wrote {}", path.display());
-            }
-        }
-        Err(MigrateError::NoChanges) => {}
-        Err(err) => return Err(Box::new(err)),
-    }
-    let n = umbral::migrate::run().await?;
-    if n > 0 {
-        eprintln!("auto-migrate: applied {n} migration(s)");
-    }
-    Ok(())
 }
