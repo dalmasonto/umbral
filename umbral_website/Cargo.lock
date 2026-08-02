@@ -3838,9 +3838,9 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "umbral"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cdd111669d2a2d6b02bf0e914fa67590ee9345f4ca2ee416133179e0d0cbbb5"
+checksum = "a25fe46a9de45f5a60667a483cf6ba27973a0d56883f144c71d5b306ca636d74"
 dependencies = [
  "async-trait",
  "minijinja",
@@ -3852,9 +3852,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-admin"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9db8b0eb83e9e6f0e456058a4f6849156446e9c14b0008b355c4e52154aa19a"
+checksum = "9f39bdc87355d9a54b26da2766b51e30647838a500f6ac6fc5aaceb2ae89eb82"
 dependencies = [
  "axum",
  "chrono",
@@ -3876,9 +3876,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-auth"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09a321a102ade41bc950f2fef8424bbc304c3cda4ee88b0a5010dc740318d02a"
+checksum = "a8a5b0c0bd14d5b48cf2776cdd857f6ee916ff570007b421b0341d12f5048711"
 dependencies = [
  "argon2",
  "async-trait",
@@ -3903,9 +3903,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-cache"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4ae1ebbe2d652817b5af54719a6a0458c266efeba5c00187c93e1c4b4dfae36"
+checksum = "b355016d3c9b3d3d584a2ac76be6430e4454b68803a85cbbb674fe07d477770d"
 dependencies = [
  "async-trait",
  "axum",
@@ -3926,15 +3926,15 @@ dependencies = [
 
 [[package]]
 name = "umbral-casing"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d34516ed50c821b2dfac1c7495ed283f504696f4a5ae4353d870aacfa8b48bd"
+checksum = "bb6605982c730590929bcbc2522b85e22bafcd6d9889ba4e0d3902e2ac6e3f88"
 
 [[package]]
 name = "umbral-cli"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a5307f037821c1d410f4e9167209a4c2bb88c10b02913880985b2249475f7fb"
+checksum = "30d8f1c6d373350c8bdd0f50dd88460fb46bafdeeb1758ee403b032de9585f37"
 dependencies = [
  "clap",
  "csv",
@@ -3948,9 +3948,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-core"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4e393b454eca0008cb54b865e09e03538a1d35f3a791d366e0fe0b7a0ad9b76"
+checksum = "47df7308f0ca947bab7e1d7542373d3fcc4e061fe5af64bfd51b7d46c26a8a47"
 dependencies = [
  "ammonia",
  "async-trait",
@@ -3987,15 +3987,16 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
  "umbral-casing",
  "uuid",
 ]
 
 [[package]]
 name = "umbral-livereload"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6f615eb66e25c34c2395362372c76c84d568ef74a2ad04762f52ba55e583cac"
+checksum = "54d8ea533cf5adcaa5dcf0d0edb3ff3213a2c13f4c575ba531ba4bd921d14246"
 dependencies = [
  "axum",
  "futures-util",
@@ -4009,9 +4010,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-macros"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "831bc17411da9a9a0d3c6275a88ae2be9471a5592c2b93ddca80557bae8edbb3"
+checksum = "08a2c58f8698ae5551cbb816fafd5260448708f0c8df93492665cdd3e974f976"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4021,9 +4022,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-oauth"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "094bf72d2da2e7efa1b5306d4bef7c4e1261b747803552022801472e6cab40e5"
+checksum = "61c5e9dba272efe3d8f83f15707d3ce7ab911679832d3c0f80a6b0a83a885d33"
 dependencies = [
  "async-trait",
  "axum",
@@ -4047,9 +4048,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-openapi"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a8c264fef171859a13de49e6a7bddfffc73f38bdc2d6f3d11e07b5a2db97eab"
+checksum = "a02bf8293d89c43d539987f01737fb61002a8996223f045b05c1cdf141d7c52c"
 dependencies = [
  "async-trait",
  "clap",
@@ -4063,9 +4064,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-permissions"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7e5299ef3aae73fbd412f5a70f6f32e1fb78ff310d6e706b07eaef726209909"
+checksum = "bc6ef1e2a9a2d32c53e5bb30811f98c022a03b373995135e065322e57527855b"
 dependencies = [
  "axum",
  "axum-core",
@@ -4083,9 +4084,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-playground"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "132a156c29a6c7af3aed77a176f54d455eef07361daa9ee076df12e9fd416228"
+checksum = "d07393d76228553cc5564ecde18639927ce1a14a3825c409ffb0766263beb587"
 dependencies = [
  "axum",
  "serde_json",
@@ -4095,9 +4096,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-realtime"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c217c86e129f65d9d5e1792d40e092ce808938c6bfac89f9c2bc03f5377c8f20"
+checksum = "2bbf9d2bccab3f9fd69793c4e985a4d1b62382639430bc341cbe8c2a4b2f96a0"
 dependencies = [
  "async-trait",
  "axum",
@@ -4113,9 +4114,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-rest"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82caaf97768a71f9212cadee743c0c3cf0944d094debab7bd5b18753d35cad31"
+checksum = "ef3bd29e8e834400ebc1878a5ebd3c3ee8e33ffb08798170dd44a19c0d5f95c5"
 dependencies = [
  "async-trait",
  "axum",
@@ -4135,9 +4136,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-security"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f5489092fae18f58282a976a14c95d9f77d1a84f0953d3e317a54fcfac4e85c"
+checksum = "571e71db669b5f9848b2ab9541cdda27552f7664a92390041c7f5bf5711a53ee"
 dependencies = [
  "axum",
  "getrandom 0.2.17",
@@ -4153,9 +4154,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-sessions"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "500295a8d0b0219fdf2f268c40078bdaaebac8816345e0dfb068faac73012b24"
+checksum = "c391c23f4d1049f602f52c3c2bbac461bcc1944db70f7186fa51ccdd8d5a56d8"
 dependencies = [
  "async-trait",
  "axum",
@@ -4178,9 +4179,9 @@ dependencies = [
 
 [[package]]
 name = "umbral-storage"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87dd173d0da410793d001fcf427ad6f6408c1280a7b97db753f28fdf88819595"
+checksum = "d94a746fd79562d7a3e2da585acc64a89d2fd009692fadf6746585931f31cbb8"
 dependencies = [
  "async-trait",
  "axum",
@@ -4188,6 +4189,8 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
+ "hex",
+ "hmac",
  "http",
  "include_dir",
  "mime_guess",
@@ -4195,6 +4198,7 @@ dependencies = [
  "serde",
  "sha2",
  "sqlx",
+ "subtle",
  "tokio",
  "tokio-util",
  "tower",
