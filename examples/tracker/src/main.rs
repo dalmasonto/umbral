@@ -7,9 +7,11 @@ use umbral_graphql::GraphqlPlugin;
 use umbral_openapi::OpenApiPlugin;
 use umbral_playground::PlaygroundPlugin;
 use umbral_rest::{IsAuthenticated, PageNumberPagination, ResourceConfig, RestPlugin};
-use umbral_security::{SecurityConfig, SecurityPlugin};
+use umbral_health::HealthPlugin;
+use umbral_security::SecurityPlugin;
 use umbral_sessions::SessionsPlugin;
 use umbral_storage::StoragePlugin;
+use umbral_tasks::TasksPlugin;
 use umbral::web::SlashRedirect;
 
 // Your app's models, so the registrations below can name them by
@@ -34,9 +36,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = App::builder()
         .settings(settings)
         .database("default", pool)
+        // ONE app-wide authentication backend (gaps4 #42): REST and
+        // GraphQL below inherit it — no more pasting the same
+        // `.authenticate(...)` into each plugin, where forgetting one copy
+        // silently made that surface anonymous.
+        .authentication(BearerAuthentication::default())
         // --- Built-in plugins -------------------------------------------
-        .plugin(AuthPlugin::<AuthUser>::default().with_default_routes())
+        .plugin(AuthPlugin::new().with_default_routes())
         .plugin(SessionsPlugin::default())
+        // Liveness + readiness probes at /healthz and /ready — zero
+        // config; a deploy's load balancer reads these.
+        .plugin(HealthPlugin::default())
+        // Background task queue. `#[umbral::task]` handlers (see
+        // `celebrate_task` below) are DISCOVERED automatically — run the
+        // worker alongside the server with `cargo run -- tasks-worker`.
+        .plugin(TasksPlugin::default())
         // --- Your app ---------------------------------------------------
         .plugin(projects::ProjectsPlugin::default())
         // --- Admin (Step 8) ---------------------------------------------
@@ -55,7 +69,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(
             RestPlugin::default()
                 .paginate(PageNumberPagination::new(20))
-                .authenticate(BearerAuthentication::default())
                 .resource(
                     ResourceConfig::new(Task::table_name()).permission(IsAuthenticated), // logged-in users may write tasks
                 ),
@@ -67,19 +80,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .version("0.1.0")
                 .description("Task tracker — projects, tasks, and comments."),
         )
-        // Mount the console OFF the `/api` namespace. If it stays at the
-        // default `/api/playground`, REST's `/api/{table}` route matches the
-        // no-slash URL first and 404s it — and slash-redirect can't help,
-        // because that 404 comes from a MATCHED route, not a route-miss.
-        // At `/playground` nothing else claims it, so `/playground/` works and
-        // (with slash-redirect on) `/playground` forwards to it too.
-        .plugin(PlaygroundPlugin::new("tracker").at("/playground"))
+        // The console's default mount is `/playground/` — deliberately off
+        // the `/api` namespace, where REST's `/api/{table}` route would
+        // shadow the no-slash URL (gaps4 #43). `.at(...)` relocates it.
+        .plugin(PlaygroundPlugin::new("tracker"))
         // --- GraphQL (Step 10) ------------------------------------------
         .plugin(
             GraphqlPlugin::new()
-                // Turn a request into a known caller. Without this, EVERY request
-                // is anonymous and the gates below can only ever deny.
-                .authenticate(BearerAuthentication::default())
+                // Identity comes from the app-wide `.authentication(...)`
+                // above — the gates below see the same caller REST does.
                 // Reads
                 .expose(Project::table_name())
                 .expose(Task::table_name())
@@ -118,11 +127,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .mutable(Comment::table_name())
                 .owned_by(Comment::table_name(), "author"),
         )
-        // GraphQL speaks POST, so exempt /graphql from CSRF.
-        .plugin(SecurityPlugin::with_config(SecurityConfig {
-            csrf_exempt_paths: vec!["/api".into(), "/graphql".into()],
-            ..Default::default()
-        }))
+        // Token-authenticated JSON surfaces don't use CSRF cookies, and
+        // GraphQL speaks POST — exempt both (gaps4 #41's shorthand).
+        .plugin(SecurityPlugin::new().csrf_exempt(["/api", "/graphql"]))
         // Serve ./static at /static so the home page's stylesheet loads.
         .plugin(StoragePlugin::new().static_files("/static", "./static"))
         // --- Templates + routes -----------------------------------------
@@ -137,3 +144,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     umbral_cli::dispatch(app).await
 }
+
+// ---------------------------------------------------------------------------
+// Background work (Step 11)
+// ---------------------------------------------------------------------------
+
+/// Payload for [`celebrate_task`]. Any `Serialize + Deserialize` type works.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct CelebratePayload {
+    pub task_title: String,
+}
+
+/// A background task. `#[umbral::task]` registers it in a link-time slice,
+/// so the worker discovers it automatically — nothing to wire in `main`.
+/// Enqueue from any handler:
+///
+/// ```ignore
+/// CelebrateTask::enqueue(CelebratePayload { task_title: "ship it".into() }).await?;
+/// ```
+///
+/// …and drain the queue with a worker process:
+///
+/// ```text
+/// cargo run -- tasks-worker
+/// ```
+#[umbral::task]
+async fn celebrate_task(payload: CelebratePayload) -> Result<(), String> {
+    tracing::info!(title = %payload.task_title, "a task was completed — celebrate!");
+    Ok(())
+}
+

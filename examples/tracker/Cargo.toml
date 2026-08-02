@@ -32,7 +32,8 @@ umbral-storage  = { path = "../../plugins/umbral-storage" }
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbral-playground   = { path = "../../plugins/umbral-playground" }  # Interactive API playground UI (think mini-Postman) at /playground/.
-# umbral-tasks        = { path = "../../plugins/umbral-tasks" }  # DB-backed background task queue with a worker process.
+umbral-tasks    = { path = "../../plugins/umbral-tasks" }
+umbral-health   = { path = "../../plugins/umbral-health" }
 # umbral-permissions  = { path = "../../plugins/umbral-permissions" }  # ContentType + Group + Permission model.
 # umbral-rls          = { path = "../../plugins/umbral-rls" }  # Postgres row-level security policy registration.
 # umbral-cache        = { path = "../../plugins/umbral-cache" }  # Per-request caching helper.
@@ -44,6 +45,7 @@ umbral-storage  = { path = "../../plugins/umbral-storage" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }
 
