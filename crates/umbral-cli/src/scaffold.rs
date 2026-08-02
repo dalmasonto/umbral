@@ -510,11 +510,17 @@ umbral-storage  = "{version}"
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbral-playground   = "{version}"  # Interactive API playground UI (think mini-Postman) at /playground/.
+# umbral-health       = "{version}"  # Liveness + readiness probes at /healthz and /ready. Zero config.
 # umbral-tasks        = "{version}"  # DB-backed background task queue with a worker process.
+# umbral-graphql      = "{version}"  # A real GraphQL API derived from your models. Expose per model.
+# umbral-realtime     = "{version}"  # Server-Sent Events + WebSocket push, with model-change subscriptions.
+# umbral-oauth        = "{version}"  # Social login / account connection (Google, GitHub). See auth/oauth docs.
 # umbral-permissions  = "{version}"  # ContentType + Group + Permission model.
+# umbral-tenants      = "{version}"  # Multi-tenant schema routing (Postgres).
 # umbral-rls          = "{version}"  # Postgres row-level security policy registration.
 # umbral-cache        = "{version}"  # Per-request caching helper.
 # umbral-email        = "{version}"  # SMTP + MIME email composer + sender.
+# umbral-analytics    = "{version}"  # Pageview / event analytics (needs an API key).
 # umbral-signals      = "{version}"  # Pre/post save/delete signal dispatch.
 # umbral-livereload   = "{version}"  # Dev-only browser live-reload (SSE push + file watcher). Add `.plugin(LiveReloadPlugin::new())`.
 
@@ -628,7 +634,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
 
         // --- Plugins ---------------------------------------------------------
         // Auth: user table, password hashing, createsuperuser command.
-        .plugin(AuthPlugin::<AuthUser>::default())
+        // `with_form_routes()` mounts the POST form-action routes under
+        // `/auth` (login / logout / signup / …) that the login page below
+        // submits to; `AuthPlugin::new()` is the no-turbofish constructor
+        // over the built-in AuthUser (gaps4 #45).
+        .plugin(AuthPlugin::new().with_form_routes())
         // Sessions: session table + cookie middleware.
         .plugin(SessionsPlugin::default())
         // Admin: auto CRUD UI at /admin/ for every registered model.
@@ -683,6 +693,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
                 .get("/", views::public::home)
                 // API: list posts as JSON (no auth required — demo).
                 .get("/api/posts", views::public::api_list_posts)
+                // Login page. The form POSTs to /auth/login (mounted by
+                // `with_form_routes()` above); on success it redirects to
+                // `?next`. This is the page login_required_html sends
+                // anonymous visitors to.
+                .get("/login", views::public::login)
                 // Dashboard: only reachable when logged in. The
                 // login_required_html("/login") layer issues a 302 to
                 // /login?next=/dashboard/ for anonymous visitors.
@@ -774,6 +789,23 @@ pub async fn home() -> Result<Html<String>, ApiError> {
 pub async fn api_list_posts() -> Result<Json<Vec<Post>>, ApiError> {
     let posts = Post::objects().order_by(post::ID.desc()).fetch().await?;
     Ok(Json(posts))
+}
+
+/// Login page. Renders the form in `login.html`; the form POSTs to the
+/// auth plugin's `/auth/login` action. The `?next` query param (set by
+/// the `login_required_html` layer when it bounced an anonymous visitor
+/// here) is passed through to the template so a successful login returns
+/// the user to where they were headed.
+pub async fn login(umbral::web::Query(q): umbral::web::Query<LoginQuery>) -> Result<Html<String>, ApiError> {
+    let next = q.next.unwrap_or_else(|| "/dashboard".to_string());
+    let body = umbral::templates::render("login.html", &context!(next))?;
+    Ok(Html(body))
+}
+
+/// `?next=<path>` on the login page — where to return after signing in.
+#[derive(serde::Deserialize)]
+pub struct LoginQuery {
+    pub next: Option<String>,
 }
 
 /// Dashboard: only reachable when logged in (see the `login_required_html`
@@ -1048,22 +1080,28 @@ repository — rename it, gut it, replace it.
 ## Running
 
 ```bash
-# First run — a bare `cargo run` (no subcommand) auto-migrates the
-# database and then starts the server. Passing an explicit subcommand
-# (like `serve`) SKIPS the auto-migrate, so `serve` alone assumes the
-# schema already exists.
-cargo run
-
-# Separate steps (production pattern) — migrate explicitly, then serve:
-cargo run -- migrate
+# First run — `serve` (or a bare `cargo run`, which defaults to serve)
+# auto-migrates AND seeds against a fresh database before starting the
+# server (auto_migrate_on_serve + seed_on_serve in main.rs). In dev it
+# also autodetects model changes (the makemigrations half), so editing a
+# model and re-running `serve` just works. Schema commands like `migrate`
+# / `makemigrations` do NOT auto-migrate — they drive the flow themselves.
 cargo run -- serve
 
-# Create a superuser to log in to the admin:
+# Separate steps (production pattern) — migrate explicitly, then serve:
+cargo run -- makemigrations   # autodetect model changes into a migration file
+cargo run -- migrate          # apply pending migrations
+cargo run -- serve
+
+# Create a superuser (the login page above uses these credentials):
 cargo run -- createsuperuser
 
 # Inspect the schema:
 cargo run -- showmigrations
-cargo run -- makemigrations
+
+# Background tasks: run a worker alongside the server to drain the queue.
+# Any #[umbral::task] handler you write is discovered automatically.
+cargo run -- tasks-worker
 ```
 
 ## Styling
@@ -1132,6 +1170,10 @@ first thing a `default-src 'self'` Content-Security-Policy blocks.
         (
             "templates/dashboard.html",
             include_str!("../assets/scaffold/templates/dashboard.html"),
+        ),
+        (
+            "templates/login.html",
+            include_str!("../assets/scaffold/templates/login.html"),
         ),
         (
             "templates/404.html",

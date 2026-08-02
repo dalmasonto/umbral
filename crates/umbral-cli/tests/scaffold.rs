@@ -74,16 +74,32 @@ fn scaffold_project_cargo_toml_lists_every_builtin_plugin_at_least_commented() {
     let report = scaffold_project("testapp", tmp.path(), None).unwrap();
     let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
 
+    // The complete built-in roster (every crate under plugins/). Each must
+    // appear in the manifest — active as a real dep, or commented for
+    // discovery. Keep this in sync with plugins/.
     for plugin in &[
-        "umbral-playground",
-        "umbral-tasks",
-        "umbral-permissions",
-        "umbral-rls",
+        "umbral-admin",
+        "umbral-analytics",
+        "umbral-auth",
         "umbral-cache",
         "umbral-email",
-        "umbral-storage",
-        "umbral-signals",
+        "umbral-graphql",
+        "umbral-health",
+        "umbral-livereload",
+        "umbral-logs",
+        "umbral-oauth",
+        "umbral-openapi",
+        "umbral-permissions",
+        "umbral-playground",
+        "umbral-realtime",
+        "umbral-rest",
+        "umbral-rls",
         "umbral-security",
+        "umbral-sessions",
+        "umbral-signals",
+        "umbral-storage",
+        "umbral-tasks",
+        "umbral-tenants",
     ] {
         assert!(
             cargo.contains(plugin),
@@ -117,7 +133,9 @@ fn scaffold_project_main_rs_references_all_plugins() {
 
     // App-wiring surfaces — these live in main.rs.
     let main_markers = &[
-        "AuthPlugin",
+        // gaps4 #45: the no-turbofish constructor; gaps4 #21-sweep: the
+        // form routes the login page below submits to.
+        "AuthPlugin::new().with_form_routes()",
         "SessionsPlugin",
         "AdminPlugin",
         "RestPlugin",
@@ -127,6 +145,9 @@ fn scaffold_project_main_rs_references_all_plugins() {
         // struct-update ceremony in the template.
         ".csrf_exempt([\"/api\"])",
         "login_required_html",
+        // The login page the login_required_html layer redirects to must
+        // actually be routed (was a dangling /login → 404 before).
+        "views::public::login",
         "ForeignKey",
         "ResourceConfig",
         "ResourceConfig::new(\"post\")",

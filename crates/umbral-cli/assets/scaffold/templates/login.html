@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+
+{% block content %}
+
+  {# A minimal, working login page. The form POSTs to the auth plugin's
+     form-action route (mounted by `.with_form_routes()` in main.rs); on
+     success it redirects to `next` — the path the login_required_html
+     layer captured when it bounced an anonymous visitor here.
+
+     `{{ csrf_input }}` is required: /auth is NOT in the CSRF exempt list
+     (only /api is), so a POST without the token is a 403. The token is
+     rendered as a hidden input; the security middleware validates it
+     against the double-submit cookie. #}
+
+  <div class="mx-auto max-w-sm">
+    <h1 class="text-2xl font-bold tracking-tight text-ink">Sign in</h1>
+    <p class="mt-1.5 text-sm text-muted">
+      Create the first account with
+      <code class="rounded border border-hairline-2 bg-surface-2 px-1 py-0.5 font-mono text-[12px] text-ink-2">cargo run -- createsuperuser</code>.
+    </p>
+
+    <form method="POST" action="/auth/login?redirect={{ next }}" class="mt-8 space-y-4">
+      {{ csrf_input }}
+
+      <div>
+        <label for="username" class="block text-sm font-medium text-ink-2">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" required autofocus
+               class="mt-1.5 block w-full rounded-lg border border-hairline-2 bg-surface px-3 py-2.5 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft">
+      </div>
+
+      <div>
+        <label for="password" class="block text-sm font-medium text-ink-2">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required
+               class="mt-1.5 block w-full rounded-lg border border-hairline-2 bg-surface px-3 py-2.5 text-sm text-ink focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-soft">
+      </div>
+
+      <button type="submit"
+              class="w-full rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-accent-2">
+        Sign in
+      </button>
+    </form>
+  </div>
+
+{% endblock %}
