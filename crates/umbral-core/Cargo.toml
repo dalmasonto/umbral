@@ -98,6 +98,11 @@ toml = "0.8"
 http = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "signal"] }
 tracing = "0.1"
+# gaps4 #48: `App::serve` installs a default fmt subscriber via `try_init`
+# when the app didn't set one — a forgotten observability::init used to
+# mean the server binds and serves SILENTLY, which reads as a hang.
+# Already in the workspace tree via umbral-cli; env-filter honors RUST_LOG.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde", "v7"] }
 # multipart/form-data body parsing for file uploads (FileField/ImageField,
 # the admin's create/update on multipart POSTs). multer is the same
@@ -144,11 +149,8 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", 
 # merged axum::Router in `tests/plugin_contract.rs` so the plugin-routes-
 # mount-under-the-app-router check doesn't need a real TCP listener.
 tower = { version = "0.5", features = ["util"] }
-# Test-only: a tracing Layer that counts sqlx query events, so the ORM's
-# no-N+1 guarantees are proven by COUNTING executed statements (and
-# showing the count stays flat as row counts grow), not by structural
-# inference alone. Powers the query-count proof harness.
-tracing-subscriber = "0.3"
+# (tracing-subscriber moved to [dependencies] for the serve-path default
+# subscriber, gaps4 #48; the query-count proof harness uses it from there.)
 # http::Request / Response shape for the same oneshot path. axum re-exports
 # the types but the trait bound on `oneshot` wants the concrete `http::*`
 # types, so a direct dev-dep keeps the call site short.

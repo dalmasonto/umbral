@@ -11,6 +11,8 @@ umbral gives you one entry point for observability: `umbral_logs::observability:
 
 It replaces the hand-rolled `tracing_subscriber::fmt().init()` that example apps used to put in `main.rs`.
 
+**Even with no init at all, `serve` is never silent.** `App::serve` installs a plain fmt subscriber (honoring `RUST_LOG`, default `info`) when no global subscriber exists yet, so a fresh app always prints its `umbral serving on ...` line — a forgotten init used to make a booting server indistinguishable from a hung one. Any subscriber installed earlier in `main` (including `observability::init`) wins; the fallback is strictly last-resort console logging with no OTLP export.
+
 ## Quick start
 
 Call `init` once at the top of `main`, and keep the returned guard alive for the whole program. The guard flushes and shuts down the OTLP exporter on drop, so spans buffered by the batch processor aren't lost when the process exits.

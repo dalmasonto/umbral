@@ -150,6 +150,20 @@ impl App {
     /// shutdown hook; that lands with the signal-handling work in a later
     /// milestone.
     pub async fn serve(self, addr: impl Into<SocketAddr>) -> Result<(), std::io::Error> {
+        // gaps4 #48: install a default fmt subscriber when the app didn't
+        // set one. `try_init` is a no-op (Err) when a global subscriber
+        // already exists — `umbral_logs::observability::init(...)` or a
+        // hand-rolled `tracing_subscriber::fmt()` earlier in main always
+        // wins. Without SOME subscriber the "umbral serving on ..." line
+        // below goes nowhere and a booting server is indistinguishable from
+        // a hung one. RUST_LOG is honored; the default level is `info`.
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .try_init();
+
         self.ready().map_err(std::io::Error::other)?;
 
         let listener = tokio::net::TcpListener::bind(addr.into()).await?;
