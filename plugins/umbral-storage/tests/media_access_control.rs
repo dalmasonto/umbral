@@ -136,3 +136,161 @@ async fn media_access_gate_receives_the_decoded_key() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
+
+// ── gaps4 sweep: the identity-aware gate + coverage the audit flagged ──
+
+use std::sync::Arc;
+
+/// Install an ambient auth backend that reads `x-user` as an i64 identity.
+/// Process-global (OnceLock), so ONLY this test installs it — the sibling
+/// header-based tests don't use identity gating and are unaffected.
+fn install_x_user_auth() {
+    umbral::auth::set_default_authentication(Arc::new(umbral::auth::FnAuthentication::new(
+        |headers: axum::http::HeaderMap| async move {
+            let uid: i64 = headers.get("x-user")?.to_str().ok()?.parse().ok()?;
+            Some(umbral::auth::Identity::user(uid))
+        },
+    )));
+}
+
+fn get_as(uri: &str, user: Option<i64>) -> Request<Body> {
+    let mut b = Request::builder().uri(uri);
+    if let Some(u) = user {
+        b = b.header("x-user", u.to_string());
+    }
+    b.body(Body::empty()).unwrap()
+}
+
+/// The headline auth check: `media_access_identity` resolves the caller
+/// through the app-wide auth backend (gaps4 #42), so "signed-in users
+/// only" is a one-liner with no manual cookie parsing.
+#[tokio::test]
+async fn media_access_identity_gates_on_the_resolved_caller() {
+    install_x_user_auth();
+    let dir = tempfile::tempdir().expect("tmp dir");
+    fs::write(dir.path().join("private.txt"), b"OWNER-ONLY").unwrap();
+
+    let app = StoragePlugin::new()
+        .media("/media", dir.path())
+        // Authenticated users only — the closure sees Option<Identity>,
+        // never raw headers.
+        .media_access_identity(|caller, _key| async move { caller.is_some() })
+        .routes();
+
+    let anon = app
+        .clone()
+        .oneshot(get_as("/media/private.txt", None))
+        .await
+        .unwrap();
+    assert_eq!(
+        anon.status(),
+        StatusCode::FORBIDDEN,
+        "an anonymous caller is denied — the ambient backend resolved None"
+    );
+
+    let signed_in = app
+        .clone()
+        .oneshot(get_as("/media/private.txt", Some(7)))
+        .await
+        .unwrap();
+    assert_eq!(
+        signed_in.status(),
+        StatusCode::OK,
+        "an authenticated caller (x-user: 7 → Identity) is served"
+    );
+    let body = axum::body::to_bytes(signed_in.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], b"OWNER-ONLY");
+}
+
+/// The gate runs on a Range request too — a partial fetch is not a bypass
+/// (the audit flagged this as unpinned). Denied → 403 with no bytes.
+#[tokio::test]
+async fn media_access_gate_covers_range_requests() {
+    let dir = tempfile::tempdir().expect("tmp dir");
+    fs::write(dir.path().join("clip.bin"), b"0123456789").unwrap();
+
+    let app = StoragePlugin::new()
+        .media("/media", dir.path())
+        .media_access(|headers: axum::http::HeaderMap, _key: String| async move {
+            headers.contains_key("x-allow")
+        })
+        .routes();
+
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/media/clip.bin")
+                .header("range", "bytes=0-3")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        denied.status(),
+        StatusCode::FORBIDDEN,
+        "a Range request must pass the gate first — no partial-content bypass"
+    );
+    let body = axum::body::to_bytes(denied.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    assert!(
+        !body.windows(4).any(|w| w == b"0123"),
+        "no bytes leak through a denied Range request"
+    );
+
+    // With the credential, the Range is honoured (206) behind the gate.
+    let allowed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/media/clip.bin")
+                .header("range", "bytes=0-3")
+                .header("x-allow", "yes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        allowed.status(),
+        StatusCode::PARTIAL_CONTENT,
+        "an allowed Range request serves 206 Partial Content"
+    );
+}
+
+/// A subdirectory key (`/media/a/b/c.txt` → key `a/b/c.txt`) reaches the
+/// gate as the full nested path — an ownership lookup needs the whole key.
+#[tokio::test]
+async fn media_access_gate_sees_subdirectory_keys() {
+    let dir = tempfile::tempdir().expect("tmp dir");
+    fs::create_dir_all(dir.path().join("2026/receipts")).unwrap();
+    fs::write(dir.path().join("2026/receipts/r1.txt"), b"RECEIPT").unwrap();
+
+    let seen: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+    let seen_c = seen.clone();
+    let app = StoragePlugin::new()
+        .media("/media", dir.path())
+        .media_access(move |_headers: axum::http::HeaderMap, key: String| {
+            let seen = seen_c.clone();
+            async move {
+                *seen.lock().unwrap() = Some(key);
+                true
+            }
+        })
+        .routes();
+
+    let resp = app
+        .oneshot(get("/media/2026/receipts/r1.txt", false))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        seen.lock().unwrap().as_deref(),
+        Some("2026/receipts/r1.txt"),
+        "the gate must see the full nested key, not just the leaf"
+    );
+}

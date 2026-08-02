@@ -635,25 +635,37 @@ This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying bo
 | `.cleanup_on_delete::<M>()`     | off     | Delete a row's `FileField`/`ImageField` blobs when the row is deleted (auto-detected columns). |
 | `.cleanup_files::<M>(&[...])`   | off     | Same, naming the file columns explicitly (for widget-overridden columns).         |
 | `.media_access(callback)`       | off (public) | Gate the media GET route: the async callback receives the request headers + the requested key and returns `true` to serve or `false` for a 403. Off by default (every file public). |
+| `.media_access_identity(callback)` | off (public) | Same, but the callback receives the resolved `Option<Identity>` instead of raw headers — the ergonomic auth check. |
 
 ## Access control for private uploads
 
-By default the media route serves **every** file under the mount to anyone with the URL — correct for public assets (avatars, logos), but an IDOR for private uploads (a leaked or shared URL grants permanent, unauthenticated access). Gate it with `.media_access(...)`:
+By default the media route serves **every** file under the mount to anyone with the URL — correct for public assets (avatars, logos), but an IDOR for private uploads (a leaked or shared URL grants permanent, unauthenticated access).
+
+The cleanest gate is `.media_access_identity(...)`: it resolves the caller through the app-wide authentication backend (the same one REST and GraphQL use — set it with `App::builder().authentication(...)`), so you write the ownership rule against an `Identity`, not raw headers:
 
 ```rust
-StoragePlugin::new()
-    .media_with_storage("/media", fs)
-    .media_access(|headers: HeaderMap, key: String| async move {
-        // Your helpers: resolve the caller from the session cookie / bearer
-        // token, then (for private files) confirm they own `key`.
-        let Some(user) = current_user(&headers).await else {
-            return false; // anonymous → denied
-        };
-        owns_media(&user, &key).await
-    })
+App::builder()
+    .authentication(SessionAuthentication::<AuthUser>::default())
+    .plugin(
+        StoragePlugin::new()
+            .media("/media", "./media")
+            .media_access_identity(|caller, key| async move {
+                // Anonymous → denied; otherwise confirm this user owns `key`
+                // (your own file→owner lookup — the framework stores the key,
+                // your model links it to a user).
+                let Some(user) = caller else { return false };
+                owns_media(&user, &key).await
+            }),
+    )
 ```
 
-The callback runs on every `GET <mount>/<key>` **before any bytes are served**; a `false` short-circuits with a 403 and the file contents never leave the server. It's async, so an ownership lookup against the database is fine.
+If you need the raw headers instead (a signed header token, a custom scheme), use `.media_access(|headers, key| ...)` — same 403 behaviour, you resolve the caller yourself.
+
+The callback runs on every `GET <mount>/<key>` **before any bytes are served** (including Range and HEAD requests, and it sees the full nested key for subdirectory files); a `false` short-circuits with a 403 and the file contents never leave the server. It's async, so an ownership lookup against the database is fine.
+
+<Callout type="warning">
+The gate is enforced **only by the local filesystem backend** (`.media(mount, dir)`). An S3 or custom backend serves its own URLs, so the framework never sees the byte request and the gate cannot run — setting it there warns loudly at boot and does nothing. For private delivery on S3, use a **private bucket with presigned URLs** (`S3StorageBuilder::presign(ttl)`), where the signature *is* the access control.
+</Callout>
 
 ## What v0 does not ship
 

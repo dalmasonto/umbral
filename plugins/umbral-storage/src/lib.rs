@@ -55,6 +55,12 @@ use umbral::prelude::*;
 /// check a session cookie / bearer token and, if the file is private, its
 /// per-user ownership. `None` (the default) serves every file to anyone, the
 /// original backward-compatible behaviour.
+///
+/// **Only the local filesystem backend ([`StoragePlugin::media`]) enforces
+/// this** — an S3 / custom backend serves its own URLs, so the framework
+/// never sees the byte request. Setting a gate on those backends is a
+/// no-op that warns loudly at boot; use a private bucket + presigned URLs
+/// for private delivery there.
 pub type MediaAccessFn = Arc<
     dyn Fn(
             &http::HeaderMap,
@@ -125,6 +131,11 @@ pub struct StoragePlugin {
     /// Optional access-control gate for the media GET route (audit_2
     /// plugin-storage-tasks #3). `None` serves every file to anyone.
     media_access: Option<MediaAccessFn>,
+    /// Set by [`StoragePlugin::media_access_identity`]: the gate resolves
+    /// the caller through the ambient auth backend, so the boot check can
+    /// warn when that backend was never installed (every caller would
+    /// resolve to `None`).
+    media_access_wants_identity: bool,
 }
 
 /// The media side's configuration: mount, on-disk dir, the backend, an
@@ -163,6 +174,7 @@ impl StoragePlugin {
             media: None,
             processors: Vec::new(),
             media_access: None,
+            media_access_wants_identity: false,
         }
     }
 
@@ -174,9 +186,13 @@ impl StoragePlugin {
     /// 403. The closure receives the request headers (read a session cookie /
     /// bearer token) and the requested key (look up per-file ownership).
     ///
+    /// Only the local filesystem backend ([`Self::media`]) enforces this —
+    /// see [`MediaAccessFn`]. For an auth check that hands you the resolved
+    /// caller instead of raw headers, use [`Self::media_access_identity`].
+    ///
     /// ```ignore
     /// StoragePlugin::new()
-    ///     .media_with_storage("/media", fs)
+    ///     .media("/media", "./media")
     ///     .media_access(|headers: HeaderMap, key: String| async move {
     ///         // e.g. resolve the session user and check they own `key`
     ///         is_authenticated(&headers).await
@@ -190,6 +206,61 @@ impl StoragePlugin {
         self.media_access = Some(Arc::new(move |headers: &http::HeaderMap, key: &str| {
             Box::pin(f(headers.clone(), key.to_string()))
         }));
+        self
+    }
+
+    /// Gate the media GET route on the AUTHENTICATED CALLER — the ergonomic
+    /// auth-aware form of [`Self::media_access`]. The closure receives the
+    /// resolved `Option<Identity>` (or `None` for an anonymous request) and
+    /// the requested key, so "only signed-in users" / "only the owner" is a
+    /// one-liner instead of re-parsing the session cookie by hand on every
+    /// byte request.
+    ///
+    /// Identity is resolved through the app-wide authentication backend
+    /// installed with [`AppBuilder::authentication`](umbral::AppBuilder) —
+    /// the same seam REST and GraphQL inherit (gaps4 #42). **That backend
+    /// must be set**, or every caller resolves to `None`; the boot check
+    /// warns when a media identity gate is configured without one.
+    ///
+    /// Like [`Self::media_access`], only the filesystem backend enforces it.
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .authentication(SessionAuthentication::<AuthUser>::default())
+    ///     .plugin(
+    ///         StoragePlugin::new()
+    ///             .media("/media", "./media")
+    ///             // Signed-in users only:
+    ///             .media_access_identity(|caller, _key| async move { caller.is_some() })
+    ///             // …or owner-only, via your own file→owner lookup:
+    ///             // .media_access_identity(|caller, key| async move {
+    ///             //     let Some(id) = caller else { return false };
+    ///             //     owns_media(&id, &key).await
+    ///             // })
+    ///     )
+    /// ```
+    pub fn media_access_identity<F, Fut>(mut self, f: F) -> Self
+    where
+        F: Fn(Option<umbral::auth::Identity>, String) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = bool> + Send + 'static,
+    {
+        let f = Arc::new(f);
+        self.media_access = Some(Arc::new(move |headers: &http::HeaderMap, key: &str| {
+            let f = f.clone();
+            let headers = headers.clone();
+            let key = key.to_string();
+            Box::pin(async move {
+                // Resolve the caller through the ambient auth backend (gaps4
+                // #42). No backend installed → anonymous; the closure decides
+                // what that means.
+                let identity = match umbral::auth::default_authentication() {
+                    Some(auth) => auth.authenticate(&headers).await,
+                    None => None,
+                };
+                f(identity, key).await
+            })
+        }));
+        self.media_access_wants_identity = true;
         self
     }
 
@@ -741,6 +812,40 @@ impl Plugin for StoragePlugin {
                  (user documents, invoices, tenant files), gate them with \
                  `StoragePlugin::media_access(...)`. Ignore this if the media mount is \
                  intentionally public (avatars, public assets)."
+            );
+        }
+
+        // A gate that CANNOT run is worse than no gate — the operator thinks
+        // uploads are protected when they are wide open. The media gate is
+        // enforced ONLY by the local filesystem backend (`media()`, which
+        // mounts a `ServeDir` the layer wraps). On an S3 / custom backend
+        // (`dir: None`) the framework serves nothing, so the closure never
+        // runs. Refuse to let that be silent.
+        if let Some(media) = &self.media
+            && self.media_access.is_some()
+            && media.dir.is_none()
+        {
+            tracing::warn!(
+                target: "umbral::storage",
+                "umbral-storage: `media_access(...)` is set but this media backend serves \
+                 its own URLs (S3 / custom), so the gate is NEVER enforced — the closure \
+                 does not run and files are as public as the backend makes them. For \
+                 private delivery on S3, use a private bucket with presigned URLs \
+                 (`S3StorageBuilder::presign(ttl)`); the gate only applies to the local \
+                 filesystem backend (`media(mount, dir)`)."
+            );
+        }
+
+        // An identity gate needs the app-wide auth backend (gaps4 #42) to
+        // resolve a caller from — without it every request is anonymous and
+        // an owner/authenticated check can only ever deny.
+        if self.media_access_wants_identity && umbral::auth::default_authentication().is_none() {
+            tracing::warn!(
+                target: "umbral::storage",
+                "umbral-storage: `media_access_identity(...)` resolves the caller through \
+                 the app-wide authentication backend, but none is installed — every \
+                 request resolves to an anonymous `None`. Set one with \
+                 `App::builder().authentication(...)` (the same backend REST/GraphQL use)."
             );
         }
 
