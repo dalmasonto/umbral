@@ -549,8 +549,9 @@ Every upload is one row:
 | `size`          | `i64`                           | Byte count                                     |
 | `uploaded_at`   | `DateTime<Utc>`                 | Time of save                                   |
 | `status`        | `String`                        | `ready` \| `processing` \| `failed` - the [background-processing](#background-uploads--processing) lifecycle. Defaults to `ready`, so a plain upload is usable immediately. |
+| `owner`         | `Option<String>`                | The PK (as a string) of the user who owns the file, or `NULL` for a public/unowned file. Stamp it with `set_media_owner`; it's what [`.media_access_owner()`](#owner-only--media_access_owner) checks. |
 
-The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate` and the admin lists it under the **storage** sidebar group automatically. Every column is `#[umbral(noedit)]` - the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
+The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate` and the admin lists it under the **storage** sidebar group automatically. Every column is `#[umbral(noedit)]` - the admin shows the row read-only because mutating it from the UI would diverge from what's on disk. The `owner` column is PK-agnostic (a `String`) so it holds an `i64`, `Uuid`, or string primary key equally; `set_media_owner(key, owner)` writes it and returns `false` if no row tracks that key.
 
 To delete a file, write a small handler that removes the row with `MediaFile::objects().filter(media_file::ID.eq(id)).delete().await?` and then `Storage::delete(key)` (or `tokio::fs::remove_file(...)`). For automatic blob cleanup when a *model* row is deleted, opt that model into [file-lifecycle cleanup](#file-lifecycle--orphan-cleanup) below.
 
@@ -565,6 +566,18 @@ Files come back at `<mount>/<key>`. Reference them like any other URL:
 {# Download with original filename forced by Content-Disposition #}
 <a href="/media/{{ doc.key }}"
    download="{{ doc.filename }}">Download {{ doc.filename }}</a>
+```
+
+That plain `<mount>/<key>` URL is right for **public** files. A **private** file lives behind a [gate](#access-control-for-private-uploads); to embed one in a page without a session, mint a short-lived signed URL in the handler and pass it to the template:
+
+```rust
+// handler: hand the template a link good for 5 minutes
+use std::time::Duration;
+ctx.insert("doc_url", &umbral_storage::signed_media_url("/media", &doc.key, Duration::from_secs(300)));
+```
+
+```jinja
+<a href="{{ doc_url }}" download="{{ doc.filename }}">Download</a>
 ```
 
 The plugin sets `X-Content-Type-Options: nosniff` on every media response so the browser respects the MIME type the file was uploaded with - a small defence against a user uploading an HTML file disguised as `.png` and getting it interpreted on the same origin.
@@ -652,8 +665,9 @@ App::builder()
     .authentication(SessionAuthentication::<AuthUser>::default())
     .plugin(StoragePlugin::new().media("/media", "./media").media_access_owner());
 
-// …at your upload site, the one line that records ownership:
-let outcome = umbral::storage::storage().save("avatar.png", "image/png", &bytes).await?;
+// …at your upload site (a handler with `State(storage): State<StoragePlugin>`),
+// the one extra line that records ownership:
+let outcome = storage.save("avatar.png", "image/png", &bytes).await?;
 umbral_storage::set_media_owner(&outcome.file.key, &identity.user_id).await?;
 ```
 
@@ -689,14 +703,14 @@ StoragePlugin::new()
 Every gate runs on `GET <mount>/<key>` **before any bytes are served** (Range and HEAD requests too, and it sees the full nested key for subdirectory files); a deny short-circuits with a 403 and the contents never leave the server. It's async, so a database lookup is fine.
 
 <Callout type="info">
-**Gates work on S3 / custom backends too, via a proxy.** A non-FS backend serves its own URLs, so with no gate the framework mounts nothing there. But when you configure a gate, it mounts a route that runs the gate and **streams the bytes through the backend** — so private custom backends serve gated files, and signed URLs work everywhere. For a high-traffic *public* mount, a private bucket + presigned URLs (`S3StorageBuilder::presign(ttl)`) still avoids the proxy round-trip.
+**Gates work on S3 / custom backends too, via a proxy.** A non-FS backend serves its own URLs, so with no gate the framework mounts nothing there. But when you configure a gate, it mounts a route that runs the gate and **streams the bytes through the backend** — so private custom backends serve gated files, and signed URLs work everywhere. For a high-traffic *public* mount, a private bucket + [presigned URLs](#presigned-urls-private-buckets) (`.presign(secs)` on the S3 builder) still avoids the proxy round-trip.
 </Callout>
 
 ## What v0 does not ship
 
-The storage-backend trait `gaps.md #49` called for **has shipped**: it landed as `Storage` (in `umbral-core`, see above), with the filesystem `FsStorage` impl, the `s3`-gated `S3Storage` (now with `UMBRAL_S3_*` config, explicit credentials, path-style addressing, and **presigned URLs** for private buckets), and `.media_with_storage(...)` for swapping backends. One thing still deferred:
+The storage-backend trait `gaps.md #49` called for **has shipped**: it landed as `Storage` (in `umbral-core`, see above), with the filesystem `FsStorage` impl, the `s3`-gated `S3Storage` (now with `UMBRAL_S3_*` config, explicit credentials, path-style addressing, and **presigned URLs** for private buckets), and `.media_with_storage(...)` for swapping backends. Access control for private uploads has also shipped — the four [gates](#access-control-for-private-uploads) (`.media_access_owner()`, `.media_signed_urls()`, `.media_access_identity()`, `.media_access()`), including the gated proxy that lets S3/custom backends serve private files. Built-in [thumbnails / resizing](#thumbnails-and-resizing) shipped too, behind the `images` feature. Deferred bits of the image library:
 
-1. **Image library.** A *built-in* thumbnail / EXIF-strip / format-probe implementation behind an `images` cargo feature, later. The *hook* to run that work - [`on_upload` processors](#background-uploads--processing), with the `processing`/`ready`/`failed` lifecycle and `save_deferred` - has shipped; you can wire your own image pipeline today.
+1. **EXIF-strip and format-probe.** Thumbnail generation is in (`thumbnails(...)`), but a *built-in* EXIF-metadata stripper and a byte-level format prober are not yet. The [`on_upload`](#background-uploads--processing) hook (with the `processing`/`ready`/`failed` lifecycle and `save_deferred`) runs any pipeline you write, so you can strip EXIF today in your own processor.
 
 Design rationale and the migration plan live in `docs/decisions/2026-06-02-media-and-s3.md` in the repo. Each step keeps the v0 public surface compatible.
 
