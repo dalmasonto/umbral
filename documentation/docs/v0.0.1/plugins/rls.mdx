@@ -98,7 +98,7 @@ One builder call does the wiring:
 ```rust
 App::builder()
     .plugin(SessionsPlugin::default())
-    .plugin(AuthPlugin::<AuthUser>::default().with_db_session_var("app.user_id"))
+    .plugin(AuthPlugin::new().with_db_session_var("app.user_id"))
     .plugin(RlsPlugin::new().policy(
         "post", "own", Action::All,
         "author_id = NULLIF(current_setting('app.user_id'), '')",

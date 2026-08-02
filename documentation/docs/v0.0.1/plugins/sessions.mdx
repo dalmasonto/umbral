@@ -50,7 +50,7 @@ Opt in with `.with_user_in_templates()` and every template render in the app get
 
 ```rust
 App::builder()
-    .plugin(AuthPlugin::<AuthUser>::default().with_user_in_templates())
+    .plugin(AuthPlugin::new().with_user_in_templates())
     .plugin(SessionsPlugin::default())
     .build()?;
 ```

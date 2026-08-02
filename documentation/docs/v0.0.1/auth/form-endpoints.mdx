@@ -13,7 +13,7 @@ tags: [auth, forms, html]
 ```rust
 use umbral_auth::{AuthPlugin, AuthUser};
 
-AuthPlugin::<AuthUser>::default()
+AuthPlugin::new()
     .with_default_routes()   // JSON surface (optional, independent)
     .with_form_routes()      // POST-only form endpoints at /auth/*
     // or: .with_form_routes_at("/my-auth")

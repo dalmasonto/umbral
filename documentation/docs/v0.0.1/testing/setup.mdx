@@ -33,7 +33,7 @@ Plugins and models both go in the closure, which hands you the `AppBuilder` mid-
 
 ```rust
 boot(|b| {
-    b.plugin(AuthPlugin::<AuthUser>::default())
+    b.plugin(AuthPlugin::new())
      .plugin(SessionsPlugin::default())
      .model::<Note>()
 }).await;

@@ -11,7 +11,7 @@ With one builder call, umbral injects the current user into every HTML template'
 
 ```rust
 .plugin(
-    AuthPlugin::<AuthUser>::default()
+    AuthPlugin::new()
         .with_default_routes()
         .with_user_in_templates()   // ← here
 )
@@ -138,7 +138,7 @@ For now, `user.<column>` works only for **columns on the AuthUser table itself**
 
 ## Custom user models
 
-The default wiring is `AuthPlugin::<AuthUser>::default().with_user_in_templates()`. The middleware is hard-bound to `AuthUser` because the serialization step uses its concrete `Serialize` impl. Apps using a custom `UserModel` build their own middleware against the building blocks:
+The default wiring is `AuthPlugin::new().with_user_in_templates()`. The middleware is hard-bound to `AuthUser` because the serialization step uses its concrete `Serialize` impl. Apps using a custom `UserModel` build their own middleware against the building blocks:
 
 - `umbral_sessions::current_session(&headers)` → `Option<SessionRow>`
 - `current_session.user_id` → your custom user's PK

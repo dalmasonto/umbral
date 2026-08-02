@@ -120,8 +120,7 @@ GraphqlPlugin::new()
 GraphQL speaks `POST` for *reads*, so a browser-facing app with CSRF protection on will reject every query with a **403** until you exempt the endpoint:
 
 ```rust
-SecurityPlugin::default()
-    .csrf_exempt_paths(vec!["/graphql".to_string()])
+SecurityPlugin::new().csrf_exempt(["/graphql"])
 ```
 
 Exempting it is safe because the plugin replaces the token check with a defence CSRF middleware can't provide here: **every POST must be `Content-Type: application/json`** (see [Mutations](#mutations-change-the-csrf-story) below). That's not a formality — it's precisely the property a cross-site `<form>` cannot satisfy.

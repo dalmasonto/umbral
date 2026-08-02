@@ -15,7 +15,7 @@ That split is deliberate. Everything dangerous about auth lives in the `POST` â€
 ## Turn on the endpoints
 
 ```rust
-AuthPlugin::<AuthUser>::default().with_form_routes()
+AuthPlugin::new().with_form_routes()
 ```
 
 That mounts three POST handlers under `/auth` (use `with_form_routes_at("/accounts")` for a different prefix):

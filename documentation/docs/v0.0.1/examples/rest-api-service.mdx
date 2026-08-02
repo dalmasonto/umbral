@@ -257,7 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .database("default", pool)
         // Auth plugin: ships the AuthUser model and password hashing.
         // We don't expose its routes - this is an API-only service.
-        .plugin(AuthPlugin::<AuthUser>::default())
+        .plugin(AuthPlugin::new())
         // Register the bearer-token model so migrations track it.
         .model::<auth::ApiToken>()
         .model::<Project>()

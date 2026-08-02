@@ -13,7 +13,7 @@ umbral-auth ships opt-in email verification. When enabled, a 6-digit code is sen
 ```rust
 use umbral_auth::{AuthPlugin, AuthUser};
 
-AuthPlugin::<AuthUser>::default()
+AuthPlugin::new()
     .with_default_routes()
     .require_verified_email() // auto-sends code on register; 403 on login until confirmed
     .mailer(/* see Auth mailer */);

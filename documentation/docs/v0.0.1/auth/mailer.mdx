@@ -41,7 +41,7 @@ If you just want delivery and are happy with the default email wording, ignore `
 ```rust
 use umbral_auth::{AuthPlugin, AuthUser, OutgoingMail, AuthMailError};
 
-AuthPlugin::<AuthUser>::default()
+AuthPlugin::new()
     .with_default_routes()
     .require_verified_email()
     .mailer(|m: OutgoingMail| async move {
@@ -65,7 +65,7 @@ This is the point of `kind`. When you want to own the content - your branding, y
 ```rust
 use umbral_auth::{AuthPlugin, AuthUser, OutgoingMail, AuthMailError, MailKind};
 
-AuthPlugin::<AuthUser>::default()
+AuthPlugin::new()
     .with_default_routes()
     .require_verified_email()
     .mailer(|m: OutgoingMail| async move {
@@ -132,7 +132,7 @@ impl AuthMailer for SmtpMailer {
     }
 }
 
-AuthPlugin::<AuthUser>::default().mailer(SmtpMailer { /* ... */ });
+AuthPlugin::new().mailer(SmtpMailer { /* ... */ });
 ```
 
 ## Development default

@@ -30,7 +30,7 @@ For JavaScript or htmx writes, send the raw token as a header instead. One attri
 ```
 
 <Callout type="info">
-Token-authenticated APIs carry no session cookie, so their writes would 403. Exempt them with `csrf_exempt_paths: vec!["/api".into()]` on `SecurityConfig`.
+Token-authenticated APIs carry no session cookie, so their writes would 403. Exempt them with the chainable shorthand — `SecurityPlugin::new().csrf_exempt(["/api"])` — or via `csrf_exempt_paths` on a full `SecurityConfig`. The shorthand appends, so it composes with `with_config` and repeated calls.
 </Callout>
 
 ### Seeing the token in your page source is expected

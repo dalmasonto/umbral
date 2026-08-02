@@ -248,7 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(blog::BlogPlugin)
         // Auth: users + password hashing. Generic over the user model;
         // `AuthUser` is the built-in default.
-        .plugin(umbral_auth::AuthPlugin::<AuthUser>::default())
+        .plugin(umbral_auth::AuthPlugin::new())
         // Sessions: anonymous on every visit, fresh token on login.
         .plugin(umbral_sessions::SessionsPlugin::default())
         // REST: /api/post/ CRUD + /api/post/{id}/publish/ action.
@@ -380,7 +380,7 @@ curl -X POST -d "username=alice&password=secret" http://127.0.0.1:3000/login
 | REST pagination + auth + permissions | `paginate(...).authenticate(...).resource(... .permission(...))` |
 | OpenAPI schema + Swagger UI | `umbral_openapi::OpenApiPlugin` |
 | Admin UI at `/admin/` | `umbral_admin::AdminPlugin` |
-| Users + password hashing | `umbral_auth::AuthPlugin::<AuthUser>::default()` + `authenticate(...)` |
+| Users + password hashing | `umbral_auth::AuthPlugin::new()` + `authenticate(...)` |
 | Sessions + `request.user` | `umbral_sessions::SessionsPlugin::default()` + `umbral_auth::OptionalUser` / `User` extractors |
 | Login / logout helpers | `umbral_auth::login(...)` / `umbral_auth::logout(...)` |
 | Background tasks | `umbral_tasks::TasksPlugin::default()` + `#[umbral::task]` (self-registering) + `tasks-worker` |
