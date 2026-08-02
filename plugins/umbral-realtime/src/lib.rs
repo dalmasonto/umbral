@@ -1683,6 +1683,11 @@ pub struct RealtimePlugin {
     /// realtime #4). Defaults to [`DEFAULT_WS_MAX_MESSAGES_PER_SEC`]; `0`
     /// disables the cap. Set via [`ws_max_messages_per_sec`](Self::ws_max_messages_per_sec).
     ws_max_messages_per_sec: u32,
+    /// Whether [`RealtimePlugin::identity_resolver`] (or a convenience over
+    /// it) was called (gaps4 #42). Tracked explicitly so an app-wide
+    /// `AppBuilder::authentication` default only fills the gap — a resolver
+    /// this plugin configured always wins.
+    resolver_overridden: bool,
 }
 
 /// The no-op identity resolver: every connection is anonymous (`None`).
@@ -1731,6 +1736,7 @@ impl Default for RealtimePlugin {
             base_path: "/realtime".to_string(),
             ws_max_message_bytes: DEFAULT_WS_MAX_MESSAGE_BYTES,
             ws_max_messages_per_sec: DEFAULT_WS_MAX_MESSAGES_PER_SEC,
+            resolver_overridden: false,
         }
     }
 }
@@ -1816,6 +1822,7 @@ impl RealtimePlugin {
         Fut: Future<Output = Option<String>> + Send + 'static,
     {
         self.resolver = Arc::new(move |h| Box::pin(f(h)));
+        self.resolver_overridden = true;
         self
     }
 
@@ -2137,12 +2144,27 @@ impl Plugin for RealtimePlugin {
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
         let registry = Arc::new(Registry::new(self.replay_cap, self.max_connections));
         let broker: Arc<dyn Broker> = self.build_broker(registry.clone());
+        // gaps4 #42: inherit the app-wide default Authentication when no
+        // resolver was configured on THIS plugin — bridged into an
+        // IdentityResolver (the identity's user_id string is exactly what
+        // the group policy and per-user targeting key on).
+        let resolver = if self.resolver_overridden {
+            self.resolver.clone()
+        } else if let Some(auth) = umbral::auth::default_authentication() {
+            Arc::new(move |headers: HeaderMap| {
+                let auth = auth.clone();
+                Box::pin(async move { auth.authenticate(&headers).await.map(|id| id.user_id) })
+                    as Pin<Box<dyn Future<Output = Option<String>> + Send>>
+            }) as IdentityResolver
+        } else {
+            self.resolver.clone()
+        };
         let _ = REALTIME.set(Realtime {
             broker,
             registry,
             policy: self.policy.clone(),
             handler: self.handler.clone(),
-            resolver: self.resolver.clone(),
+            resolver,
             presence: self.presence.clone(),
             allowed_origins: self.allowed_origins.clone().into(),
             base_path: Arc::from(self.base_path.as_str()),

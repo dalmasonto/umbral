@@ -639,7 +639,15 @@ impl Plugin for GraphqlPlugin {
         let post_exposed = Arc::new(exposed.clone());
         let post_path = path.clone();
         let ide_path = path.clone();
-        let auth = self.auth.clone();
+        // gaps4 #42: fall back to the app-wide default authentication when
+        // this plugin has no `.authenticate(...)` of its own — one builder
+        // line serves REST and GraphQL instead of the same chain pasted
+        // into each. `App::build` publishes the default before routes()
+        // runs.
+        let auth = self
+            .auth
+            .clone()
+            .or_else(umbral::auth::default_authentication);
 
         // A gated model with no way to authenticate is a permanent 403 the operator will
         // debug for an hour. Say it at boot instead.
@@ -652,12 +660,13 @@ impl Plugin for GraphqlPlugin {
             );
         }
 
+        let post_auth = auth.clone();
         let mut router = Router::new().route(
             &path,
             axum::routing::post(
                 move |headers: umbral::web::HeaderMap, req: GraphQLRequest| {
                     let schema = post_schema.clone();
-                    let auth = auth.clone();
+                    let auth = post_auth.clone();
                     let exposed = post_exposed.clone();
                     async move {
                         let (identity, unlocks, loaders) =
@@ -702,7 +711,7 @@ impl Plugin for GraphqlPlugin {
             // context (identity + private unlocks + per-caller loaders) the POST
             // query path does, resolved from the connection/request headers.
             let ws_schema = schema.clone();
-            let ws_auth = self.auth.clone();
+            let ws_auth = auth.clone();
             let ws_exposed = Arc::new(exposed.clone());
             router = router.route(
                 &format!("{path}/ws"),
@@ -736,7 +745,7 @@ impl Plugin for GraphqlPlugin {
             );
 
             let sse_schema = schema.clone();
-            let sse_auth = self.auth.clone();
+            let sse_auth = auth.clone();
             let sse_exposed = Arc::new(exposed.clone());
             router = router.route(
                 &format!("{path}/sse"),

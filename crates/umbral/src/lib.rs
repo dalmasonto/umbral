@@ -149,7 +149,8 @@ pub use umbral_core::settings::{Environment, Settings};
 pub mod auth {
     pub use umbral_core::auth_contract::{
         Authentication, ChainAuthentication, FnAuthentication, Identity, IdentityPkError,
-        NoAuthentication, parse_basic_credentials,
+        NoAuthentication, default_authentication, parse_basic_credentials,
+        set_default_authentication,
     };
 }
 

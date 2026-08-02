@@ -7,9 +7,7 @@
 
 use std::collections::HashSet;
 
-use umbral_realtime::{
-    DEFAULT_BUFFER, Event, PresenceSpec, Realtime, RealtimePlugin, dispatch_presence,
-};
+use umbral_realtime::{DEFAULT_BUFFER, PresenceSpec, Realtime, RealtimePlugin, dispatch_presence};
 
 async fn boot(plugin: RealtimePlugin) {
     umbral::signals::clear_for_tests();

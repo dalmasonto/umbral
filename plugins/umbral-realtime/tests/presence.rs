@@ -18,7 +18,7 @@
 use std::collections::HashSet;
 
 use umbral_realtime::{
-    DEFAULT_BUFFER, Event, PresenceSpec, PublicGroupsOnly, Realtime, RealtimePlugin, Registry,
+    DEFAULT_BUFFER, PresenceSpec, PublicGroupsOnly, Realtime, RealtimePlugin, Registry,
     dispatch_presence,
 };
 

@@ -17,6 +17,20 @@ pub trait Authentication: Send + Sync + 'static {
 
 One auth class is wired per `RestPlugin` (one plugin-wide backend, not per-resource). Chain multiple with `ChainAuthentication` if you need browsers and curl to use different shapes.
 
+**Or wire it once for the whole app.** `AppBuilder::authentication(...)` installs an app-wide default that REST, GraphQL, and the realtime handshake all inherit when they have no backend of their own — one builder line instead of the same chain pasted into each plugin (where forgetting one copy silently made that surface anonymous):
+
+```rust
+App::builder()
+    .authentication(ChainAuthentication::new(vec![
+        Box::new(SessionAuthentication::<AuthUser>::default()),
+        Box::new(BearerAuthentication::default()),
+    ]))
+    .plugin(RestPlugin::default())   // inherits it
+    .plugin(GraphqlPlugin::new())    // inherits it
+```
+
+A per-plugin `.authenticate(...)` (or a realtime `identity_resolver`) still overrides the default wherever it's set — including an explicit `NoAuthentication` to keep one surface deliberately anonymous.
+
 ## Identity
 
 ```rust

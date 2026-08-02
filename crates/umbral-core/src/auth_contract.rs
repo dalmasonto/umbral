@@ -381,6 +381,40 @@ impl Authentication for ChainAuthentication {
 }
 
 // =========================================================================
+// The app-wide default authentication backend (gaps4 #42).
+// =========================================================================
+
+/// The backend [`AppBuilder::authentication`](crate::app::AppBuilder)
+/// published at build time, if any.
+static DEFAULT_AUTH: std::sync::OnceLock<Arc<dyn Authentication>> = std::sync::OnceLock::new();
+
+/// Publish the app-wide default [`Authentication`] backend. Called once by
+/// `App::build()` (Phase 3, before plugin routes are collected) when the
+/// app used `AppBuilder::authentication`. Second calls are ignored with a
+/// warning — one app, one default.
+pub fn set_default_authentication(auth: Arc<dyn Authentication>) {
+    if DEFAULT_AUTH.set(auth).is_err() {
+        tracing::warn!(
+            "umbral: a default authentication backend is already installed; \
+             ignoring this one (AppBuilder::authentication may only be used once)"
+        );
+    }
+}
+
+/// The app-wide default [`Authentication`] backend, if the app installed
+/// one via `AppBuilder::authentication` (gaps4 #42).
+///
+/// Plugins that authenticate requests (REST, GraphQL, realtime) fall back
+/// to this when no per-plugin backend was configured, so ONE builder line
+/// serves every surface — the alternative was pasting the same
+/// `ChainAuthentication` block into each plugin, where forgetting one copy
+/// silently made that surface anonymous. A per-plugin `.authenticate(...)`
+/// still overrides it.
+pub fn default_authentication() -> Option<Arc<dyn Authentication>> {
+    DEFAULT_AUTH.get().cloned()
+}
+
+// =========================================================================
 // Helper: HTTP Basic Auth credential extraction.
 // =========================================================================
 

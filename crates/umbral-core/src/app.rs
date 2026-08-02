@@ -241,6 +241,10 @@ pub struct AppBuilder {
     models: Vec<ModelMeta>,
     /// gaps3 #46 — collect link-registered models at build time.
     auto_models: bool,
+    /// gaps4 #42 — the app-wide default [`Authentication`] backend,
+    /// published to `auth_contract` at build time so REST / GraphQL /
+    /// realtime inherit it unless a per-plugin backend overrides.
+    authentication: Option<std::sync::Arc<dyn crate::auth_contract::Authentication>>,
     plugins: Vec<Box<dyn Plugin>>,
     /// Project-owned management commands, added via [`AppBuilder::command`].
     /// Kept out of the plugin list on purpose: a command the binary owns
@@ -335,6 +339,7 @@ impl Default for AppBuilder {
             route_paths: Vec::new(),
             models: Vec::new(),
             auto_models: false,
+            authentication: None,
             plugins: Vec::new(),
             commands: Vec::new(),
             templates_dir: None,
@@ -455,6 +460,37 @@ impl AppBuilder {
     /// the linker keeps it) or keep naming them with `.model::<T>()`.
     pub fn auto_models(mut self) -> Self {
         self.auto_models = true;
+        self
+    }
+
+    /// Install the app-wide default [`Authentication`] backend (gaps4 #42).
+    ///
+    /// One line serves every authenticating surface: REST, GraphQL, and the
+    /// realtime handshake all fall back to this backend when no per-plugin
+    /// `.authenticate(...)` / `identity_resolver(...)` was configured. The
+    /// alternative was pasting the same `ChainAuthentication` block into
+    /// each plugin — and forgetting one copy silently made that surface
+    /// anonymous ("a gate that cannot be opened is a wall with a lock
+    /// painted on it").
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .authentication(ChainAuthentication::new(vec![
+    ///         Box::new(SessionAuthentication::<AuthUser>::default()),
+    ///         Box::new(BearerAuthentication::default()),
+    ///     ]))
+    ///     .plugin(RestPlugin::default())      // inherits it
+    ///     .plugin(GraphqlPlugin::new())       // inherits it
+    /// ```
+    ///
+    /// A per-plugin backend still overrides this wherever it's set.
+    ///
+    /// [`Authentication`]: crate::auth_contract::Authentication
+    pub fn authentication(
+        mut self,
+        auth: impl crate::auth_contract::Authentication + 'static,
+    ) -> Self {
+        self.authentication = Some(std::sync::Arc::new(auth));
         self
     }
 
@@ -1281,6 +1317,12 @@ impl AppBuilder {
         // them to nothing in the registry but the per-plugin model walk
         // stays deterministic.
         crate::settings::init(&settings);
+        // gaps4 #42: publish the app-wide default authentication BEFORE any
+        // plugin's routes() runs, so REST/GraphQL/realtime see it when they
+        // seal their per-request config.
+        if let Some(auth) = self.authentication.take() {
+            crate::auth_contract::set_default_authentication(auth);
+        }
         db::init(self.databases);
         if let Some(router) = self.db_router {
             crate::db::router::install_router(router);

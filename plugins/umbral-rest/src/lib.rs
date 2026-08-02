@@ -327,8 +327,14 @@ pub struct RestPlugin {
     /// The authentication backend run on every request before the
     /// permission check. Defaults to [`NoAuthentication`] — every
     /// request looks anonymous. Configure via
-    /// [`Self::authenticate`].
+    /// [`Self::authenticate`], or app-wide via
+    /// `AppBuilder::authentication` (gaps4 #42).
     authentication: Arc<dyn Authentication>,
+    /// Whether [`Self::authenticate`] was called (gaps4 #42). Tracked
+    /// explicitly — not inferred from `is_anonymous()` — so an app that
+    /// DELIBERATELY sets `NoAuthentication` on this plugin is not
+    /// overridden by the app-wide default.
+    authentication_overridden: bool,
     /// Per-table permission classes, keyed by table name. Populated
     /// when a [`ResourceConfig`] with `.permission(...)` is merged
     /// via [`Self::resource`]. Tables without an entry fall back to
@@ -875,6 +881,7 @@ impl RestPlugin {
             computed: Vec::new(),
             pagination: Arc::new(NoPagination),
             authentication: Arc::new(NoAuthentication),
+            authentication_overridden: false,
             permissions: HashMap::new(),
             default_throttles: Vec::new(),
             throttles: HashMap::new(),
@@ -1062,6 +1069,7 @@ impl RestPlugin {
     /// ```
     pub fn authenticate<A: Authentication>(mut self, auth: A) -> Self {
         self.authentication = Arc::new(auth);
+        self.authentication_overridden = true;
         self
     }
 
@@ -2183,7 +2191,19 @@ impl Plugin for RestPlugin {
         // The OnceLock-captured config is what the static handlers
         // read. `routes()` is called exactly once per App::build, so
         // setting it here is safe.
-        let _ = CONFIG.set(self.clone());
+        //
+        // gaps4 #42: inherit the app-wide default authentication unless
+        // `.authenticate(...)` was called on THIS plugin. Resolved here —
+        // App::build publishes the default in Phase 3, before any routes()
+        // runs — so the sealed CONFIG carries the effective backend.
+        let mut cfg = self.clone();
+        if !cfg.authentication_overridden
+            && let Some(ambient) = umbral::auth::default_authentication()
+        {
+            cfg.authentication = ambient;
+        }
+        let effective_auth = cfg.authentication.clone();
+        let _ = CONFIG.set(cfg);
 
         // WEB-1: shout if any exposed resource is reachable with no
         // authentication AND an open (AllowAny) permission — that's
@@ -2191,7 +2211,9 @@ impl Plugin for RestPlugin {
         // footgun in the API. We can't change the open-by-default
         // contract from under existing apps, but a developer who didn't
         // mean it sees exactly which tables are wide open at boot.
-        if self.authentication.is_anonymous() {
+        // (Checked against the EFFECTIVE backend — an inherited app-wide
+        // default counts as authentication.)
+        if effective_auth.is_anonymous() {
             let tables: Vec<String> = umbral::migrate::registered_models()
                 .iter()
                 .map(|m| m.table.clone())
