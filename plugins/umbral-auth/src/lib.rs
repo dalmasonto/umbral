@@ -430,6 +430,14 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// REST-only service has nothing to gain from it. Set via
     /// [`AuthPlugin::with_user_in_templates`].
     pub user_in_templates: bool,
+    /// Reverse-FK child tables to expand as one-to-many lists in the
+    /// template `user` context (features #84). Each entry is a child
+    /// table name recorded by [`AuthPlugin::expand_list`]; the layer
+    /// injects up to a capped number of that child's rows (those whose
+    /// FK points at the user) under `user.<table>_set`. Empty by default
+    /// — opt-in, because a child list is an unbounded per-request query.
+    /// Only meaningful alongside [`Self::with_user_in_templates`].
+    pub expand_lists: Vec<String>,
     /// When `Some(name)`, publish the authenticated user's id to the database
     /// connection as the Postgres session variable `name` on every request, so
     /// a row-level-security policy can read it via `current_setting(name)`.
@@ -481,6 +489,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
             default_routes_prefix: None,
             form_routes_prefix: None,
             user_in_templates: false,
+            expand_lists: Vec::new(),
             db_session_var: None,
             // SECURE BY DEFAULT: an unconfigured AuthPlugin enforces the
             // full validator set. `None` defers to PasswordPolicy::default()
@@ -530,6 +539,31 @@ impl<U: UserModel> AuthPlugin<U> {
     /// populated context with one builder call.
     pub fn with_user_in_templates(mut self) -> Self {
         self.user_in_templates = true;
+        self
+    }
+
+    /// Expand a reverse-FK **one-to-many list** into the template `user`
+    /// context (features #84). Declare each child model you want to walk;
+    /// the layer injects up to a capped number of that child's rows (the
+    /// ones whose foreign key points at the user) under `user.<table>_set`:
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default()
+    ///     .with_user_in_templates()
+    ///     .expand_list::<Order>()   // → `{% for o in user.order_set %}`
+    /// ```
+    ///
+    /// Opt-in and per-relation *by design*: a child list is an unbounded
+    /// per-request query, so it is never auto-injected — you name the ones
+    /// worth the cost. The list is `LIMIT`-ed (see the layer's cap) and its
+    /// items are the flat child rows (not further expanded); need more, or
+    /// a filtered/ordered slice, and you resolve it in the handler instead.
+    /// Only takes effect together with [`Self::with_user_in_templates`].
+    pub fn expand_list<M: umbral::orm::Model>(mut self) -> Self {
+        let table = M::table_name().to_string();
+        if !self.expand_lists.contains(&table) {
+            self.expand_lists.push(table);
+        }
         self
     }
 
@@ -955,7 +989,14 @@ where
     fn wrap_router(&self, router: umbral::web::Router) -> umbral::web::Router {
         let mut router = router;
         if self.user_in_templates {
-            router = router.layer(axum::middleware::from_fn(user_context_layer));
+            // features #84: hand the layer the opt-in reverse-FK-list tables
+            // as state. Empty (the default) → the layer expands only forward
+            // FKs and reverse-O2Os, exactly as before.
+            let expand_lists = std::sync::Arc::new(self.expand_lists.clone());
+            router = router.layer(axum::middleware::from_fn_with_state(
+                expand_lists,
+                user_context_layer,
+            ));
         }
         if let Some(name) = &self.db_session_var {
             // Applied last, so it is the OUTERMOST of this plugin's layers: the

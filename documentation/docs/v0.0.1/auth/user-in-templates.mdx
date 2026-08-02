@@ -132,18 +132,30 @@ How the keys are named:
 
 The walk is depth-bounded at **2 hops** (`user.customer.address` is the last resolvable step) with `(table, pk)` cycle detection, and it costs **one query per resolved relation per request** — the honest price of "templates get relations for free." Sparse graphs (the common case) add 1–3 queries; deeper or wider graphs hit the cap and stop.
 
-<Callout type="warning">
-  **Reverse-FK one-to-many lists are not expanded.** `{{ user.order_set }}` — the *list* of children pointing at the user through a **non-unique** FK — is deliberately not injected: it's an unbounded per-request query (a user with 50k orders would load all of them into every template render). It's [on deck for 0.0.12](https://github.com/dalmasonto/umbral/blob/main/changelog/README.md), with a row cap.
+### Reverse-FK one-to-many lists: opt-in
 
-  **What to do today** for a child list: resolve it in the handler and pass it in explicitly:
+The *list* of children pointing at the user through a **non-unique** FK (`{{ user.order_set }}`) is **not** auto-expanded — it's an unbounded per-request query (a user with 50k orders would otherwise load all of them into every render). You opt each list in explicitly with `expand_list::<Child>()`:
 
-  ```rust
-  let orders = Order::objects().filter(order::USER.eq(&user.0.id)).limit(20).fetch().await?;
-  render("me.html", &context!(username, orders))
-  ```
-</Callout>
+```rust
+AuthPlugin::<AuthUser>::default()
+    .with_user_in_templates()
+    .expand_list::<Order>()   // surfaces `user.order_set`
+```
 
-Everything else — columns on `AuthUser` itself (`is_authenticated`, `is_staff`, `username`, `email`, `date_joined`, …) plus the FK/reverse-O2O relations above — is available on `user` directly. M2M sets and computed fields still have to be resolved in the handler.
+```jinja
+{% for o in user.order_set %}
+  <li>{{ o.total }}</li>
+{% endfor %}
+```
+
+The list is injected under `user.<child_table>_set` (the same `_set` suffix as the Rust reverse-FK accessor) and is **capped** — at most 20 rows, ordered by primary key — so it can never become an unbounded render cost. Its items are the flat child rows (their own columns), not further-expanded. Need a filtered, ordered, or larger slice? Resolve it in the handler instead:
+
+```rust
+let orders = Order::objects().filter(order::USER.eq(&user.0.id)).limit(50).fetch().await?;
+render("me.html", &context!(username, orders))
+```
+
+Everything else — columns on `AuthUser` itself (`is_authenticated`, `is_staff`, `username`, `email`, `date_joined`, …), the forward-FK / reverse-O2O relations above, and any `expand_list` you declared — is available on `user` directly. M2M sets and computed fields still have to be resolved in the handler.
 
 ## Custom user models
 

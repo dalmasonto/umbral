@@ -264,6 +264,7 @@ where
 /// Opt in via [`crate::AuthPlugin::with_user_in_templates`] when the
 /// app is HTML-heavy; leave off for REST-only services.
 pub async fn user_context_layer(
+    axum::extract::State(expand_lists): axum::extract::State<std::sync::Arc<Vec<String>>>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
@@ -273,9 +274,13 @@ pub async fn user_context_layer(
     let headers = req.headers().clone();
     let lazy = umbral::templates::LazyUser::new(move || {
         let headers = headers.clone();
+        // features #84: the opt-in reverse-FK-list tables the AuthPlugin
+        // recorded, threaded into the expansion. Empty (the default) means
+        // no lists — identical to the pre-#84 behaviour.
+        let expand_lists = expand_lists.clone();
         async move {
             match current_user(&headers).await {
-                Ok(Some(u)) => serialize_authenticated_with_relations(&u).await,
+                Ok(Some(u)) => serialize_authenticated_with_relations(&u, &expand_lists).await,
                 _ => anonymous_user_value(),
             }
         }
@@ -345,7 +350,18 @@ where
 /// stops being honest.
 const USER_RELATION_DEPTH: usize = 2;
 
-async fn serialize_authenticated_with_relations(user: &AuthUser) -> umbral::templates::Value {
+/// Hard row cap on an injected reverse-FK one-to-many list (features
+/// #84). `user.order_set` is a per-request query; a user with 50k
+/// orders must not load all of them into every template render. The
+/// list is `LIMIT`-ed to this many rows — a bounded, opt-in cost that
+/// keeps the "one query per relation per request" contract honest.
+/// Callers who need more paginate in the handler.
+const USER_REVERSE_FK_LIST_CAP: u64 = 20;
+
+async fn serialize_authenticated_with_relations(
+    user: &AuthUser,
+    expand_lists: &[String],
+) -> umbral::templates::Value {
     let mut json = match serde_json::to_value(user) {
         Ok(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
@@ -383,6 +399,7 @@ async fn serialize_authenticated_with_relations(user: &AuthUser) -> umbral::temp
             &mut json,
             USER_RELATION_DEPTH,
             &mut visited,
+            expand_lists,
         )
         .await;
     }
@@ -416,6 +433,7 @@ fn expand_relations<'a>(
     row: &'a mut serde_json::Map<String, serde_json::Value>,
     depth: usize,
     visited: &'a mut std::collections::HashSet<(String, String)>,
+    expand_lists: &'a [String],
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
         if depth == 0 {
@@ -464,7 +482,15 @@ fn expand_relations<'a>(
                 continue;
             };
             visited.insert(visit_key);
-            expand_relations(target_meta, registered, &mut target_row, depth - 1, visited).await;
+            expand_relations(
+                target_meta,
+                registered,
+                &mut target_row,
+                depth - 1,
+                visited,
+                expand_lists,
+            )
+            .await;
             row.insert(col_name, serde_json::Value::Object(target_row));
         }
 
@@ -528,10 +554,64 @@ fn expand_relations<'a>(
                 continue;
             }
             visited.insert(visit_key);
-            expand_relations(child_meta, registered, &mut child_row, depth - 1, visited).await;
+            expand_relations(
+                child_meta,
+                registered,
+                &mut child_row,
+                depth - 1,
+                visited,
+                expand_lists,
+            )
+            .await;
             row.insert(
                 child_meta.table.clone(),
                 serde_json::Value::Object(child_row),
+            );
+        }
+
+        // -- Reverse-FK one-to-many lists (features #84): opt-in only.
+        // For each child table the app declared via
+        // `with_user_in_templates().expand_list::<Child>()`, inject up
+        // to `USER_REVERSE_FK_LIST_CAP` child rows (ordered by PK) that
+        // point at THIS row through a FK, under `<child_table>_set`.
+        //
+        // Scoped by FK target: `order_set` only appears where `order`
+        // actually has a FK to `meta.table`, so the same opt-in surfaces
+        // `user.order_set` on the user but not on an unrelated parent.
+        //
+        // List items are the flat child rows — deliberately NOT expanded
+        // further. One query per opted-in list per level, regardless of
+        // how many rows it holds, keeps the per-request cost honest and
+        // predictable (a nested expansion would multiply by the cap).
+        for child_table in expand_lists {
+            let list_key = format!("{child_table}_set");
+            if row.contains_key(&list_key) {
+                continue;
+            }
+            let Some(child_meta) = registered.iter().find(|m| &m.table == child_table) else {
+                continue;
+            };
+            // The child's FK column that points back at THIS table. If
+            // it doesn't reference `meta.table`, this list doesn't belong
+            // on this row (that's the FK-target scoping).
+            let Some(fk_col) = child_meta
+                .fields
+                .iter()
+                .find(|c| c.fk_target.as_deref() == Some(&meta.table))
+            else {
+                continue;
+            };
+            let rows = umbral::orm::DynQuerySet::for_meta(child_meta)
+                .filter_eq_string(&fk_col.name, &json_value_to_pk_string(&parent_pk))
+                .limit(USER_REVERSE_FK_LIST_CAP)
+                .fetch_as_json()
+                .await;
+            let Ok(rows) = rows else {
+                continue;
+            };
+            row.insert(
+                list_key,
+                serde_json::Value::Array(rows.into_iter().map(serde_json::Value::Object).collect()),
             );
         }
     })

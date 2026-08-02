@@ -48,9 +48,12 @@ async fn json_handler() -> &'static str {
 /// the change. Kept here as a baseline; the gating test is below.
 #[tokio::test(flavor = "multi_thread")]
 async fn no_cookie_json_request_returns_ok() {
-    let app = axum::Router::new()
-        .route("/json", get(json_handler))
-        .layer(axum::middleware::from_fn(user_context_layer));
+    let app = axum::Router::new().route("/json", get(json_handler)).layer(
+        axum::middleware::from_fn_with_state(
+            std::sync::Arc::new(Vec::<String>::new()),
+            user_context_layer,
+        ),
+    );
 
     let resp = app
         .oneshot(Request::builder().uri("/json").body(Body::empty()).unwrap())
@@ -82,9 +85,12 @@ async fn no_cookie_json_request_returns_ok() {
 async fn cookie_bearing_json_request_does_not_touch_pool() {
     // No App::build(), no pool configured — pool_dispatched() would panic
     // if called. The lazy middleware must NOT call it for this request.
-    let app = axum::Router::new()
-        .route("/json", get(json_handler))
-        .layer(axum::middleware::from_fn(user_context_layer));
+    let app = axum::Router::new().route("/json", get(json_handler)).layer(
+        axum::middleware::from_fn_with_state(
+            std::sync::Arc::new(Vec::<String>::new()),
+            user_context_layer,
+        ),
+    );
 
     // A plausible session cookie value (raw token format: UUID v4).
     // The eager path would try to hash this, look it up, and call pool_dispatched().
