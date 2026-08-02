@@ -52,6 +52,12 @@ axum = "0.8"
 http = "1"
 tracing = "0.1"
 sha2 = "0.10"
+# gaps4 #56: HMAC-signed, time-bounded media URLs (same primitives the
+# security plugin signs CSRF tokens with). `subtle` for constant-time
+# signature comparison; `hex` for the signature encoding.
+hmac = "0.12"
+hex = "0.4"
+subtle = "2"
 percent-encoding = "2"
 # Embedded-asset support: callers pass in a `&'static Dir<'static>`
 # produced by `include_dir!()` and we serve files out of memory.

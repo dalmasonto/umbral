@@ -73,9 +73,23 @@ use umbral::storage::{ByteStream, DEFAULT, STATICFILES};
 
 mod collect;
 mod media;
+mod media_gate;
 #[cfg(feature = "s3")]
 mod s3;
 mod static_serve;
+
+pub use media_gate::signed_media_url;
+
+/// The 403 a denied media request gets — one shape for the FS guard layer
+/// and the non-FS proxy (gaps4 #58).
+fn forbidden_media() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (
+        axum::http::StatusCode::FORBIDDEN,
+        "forbidden: you are not allowed to access this file",
+    )
+        .into_response()
+}
 
 pub use media::clear_processors_for_test;
 pub use media::{
@@ -136,6 +150,12 @@ pub struct StoragePlugin {
     /// warn when that backend was never installed (every caller would
     /// resolve to `None`).
     media_access_wants_identity: bool,
+    /// gaps4 #56: when true, a valid HMAC-signed, time-bounded query
+    /// (`?exp=…&sig=…`) grants access to a media file — the way to hand out
+    /// a private FS-backed file for a bounded window without a session. Set
+    /// via [`StoragePlugin::media_signed_urls`]; mint links with
+    /// [`signed_media_url`].
+    media_signed_urls: bool,
 }
 
 /// The media side's configuration: mount, on-disk dir, the backend, an
@@ -175,6 +195,7 @@ impl StoragePlugin {
             processors: Vec::new(),
             media_access: None,
             media_access_wants_identity: false,
+            media_signed_urls: false,
         }
     }
 
@@ -261,6 +282,33 @@ impl StoragePlugin {
             })
         }));
         self.media_access_wants_identity = true;
+        self
+    }
+
+    /// Serve media only to requests carrying a valid HMAC-signed,
+    /// time-bounded query — the session-free way to deliver a private file
+    /// for a bounded window (gaps4 #56). Mint a link with [`signed_media_url`]
+    /// and hand it out; it works until it expires, then 403s.
+    ///
+    /// ```ignore
+    /// StoragePlugin::new()
+    ///     .media("/media", "./media")
+    ///     .media_signed_urls();
+    ///
+    /// // In a handler, hand the user a link good for 5 minutes:
+    /// let url = umbral_storage::signed_media_url("/media", &key, Duration::from_secs(300));
+    /// ```
+    ///
+    /// The signature binds the key AND the expiry to the app's
+    /// `secret_key`, so a link is valid for exactly one file until exactly
+    /// one instant and cannot be edited to point elsewhere or extended.
+    /// Composes with [`Self::media_access`] / [`Self::media_access_identity`]:
+    /// a valid signature grants access outright, otherwise the closure
+    /// decides — so you can serve signed links to anonymous share targets
+    /// AND session users through one mount. Unlike the closure gates, this
+    /// one ALSO works through the non-FS proxy route (gaps4 #58).
+    pub fn media_signed_urls(mut self) -> Self {
+        self.media_signed_urls = true;
         self
     }
 
@@ -700,75 +748,126 @@ impl Plugin for StoragePlugin {
         // custom / S3 backend (`dir: None`) serves its own URLs; mounting a
         // `ServeDir` over `PathBuf::from(mount)` there would serve whatever
         // unrelated directory happens to exist at that path on the local disk.
-        if let Some((media, dir)) = self
-            .media
-            .as_ref()
-            .and_then(|m| m.dir.clone().map(|d| (m, d)))
-        {
-            if !dir.exists() {
-                tracing::warn!(
-                    "umbral-storage: media directory `{}` does not exist; requests under `{}` \
-                     will return 404",
-                    dir.display(),
-                    media.mount
-                );
-            }
+        // Any gate configured? (custom closure OR signed URLs.) Drives both
+        // whether the FS serve path gets a guard layer and whether the
+        // non-FS proxy route is mounted at all.
+        let gated = self.media_access.is_some() || self.media_signed_urls;
+
+        if let Some(media) = self.media.as_ref() {
             let mount = media.mount.trim_end_matches('/').to_string();
-            let serve = tower::ServiceBuilder::new()
-                .map_response(|resp: http::Response<_>| resp.map(axum::body::Body::new))
-                .service(ServeDir::new(&dir));
-            let guarded = static_serve::SymlinkGuardService::new(dir.clone(), serve);
-            let svc = tower::ServiceBuilder::new()
-                .layer(SetResponseHeaderLayer::if_not_present(
-                    HeaderName::from_static("x-content-type-options"),
-                    HeaderValue::from_static("nosniff"),
-                ))
-                .service(guarded);
-            // Build the media routes in their OWN sub-router so an access-control
-            // layer (audit_2 plugin-storage-tasks #3) wraps ONLY media GETs, not
-            // the static side. Without a gate this is byte-identical to before.
-            let mut media_router = Router::new().nest_service(&mount, svc);
-            if let Some(access) = &self.media_access {
-                let access = access.clone();
-                let mount_prefix = mount.clone();
-                media_router = media_router.layer(axum::middleware::from_fn(
-                    move |req: axum::extract::Request, next: axum::middleware::Next| {
+            match &media.dir {
+                // ── Local filesystem backend: ServeDir + optional guard layer.
+                Some(dir) => {
+                    if !dir.exists() {
+                        tracing::warn!(
+                            "umbral-storage: media directory `{}` does not exist; requests \
+                             under `{}` will return 404",
+                            dir.display(),
+                            media.mount
+                        );
+                    }
+                    let serve = tower::ServiceBuilder::new()
+                        .map_response(|resp: http::Response<_>| resp.map(axum::body::Body::new))
+                        .service(ServeDir::new(dir));
+                    let guarded = static_serve::SymlinkGuardService::new(dir.clone(), serve);
+                    let svc = tower::ServiceBuilder::new()
+                        .layer(SetResponseHeaderLayer::if_not_present(
+                            HeaderName::from_static("x-content-type-options"),
+                            HeaderValue::from_static("nosniff"),
+                        ))
+                        .service(guarded);
+                    // Media routes in their OWN sub-router so a guard layer
+                    // (audit_2 plugin-storage-tasks #3) wraps ONLY media GETs,
+                    // not the static side. Ungated is byte-identical to before.
+                    let mut media_router = Router::new().nest_service(&mount, svc);
+                    if gated {
+                        let access = self.media_access.clone();
+                        let signed = self.media_signed_urls;
+                        let mount_prefix = mount.clone();
+                        media_router = media_router.layer(axum::middleware::from_fn(
+                            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                                let access = access.clone();
+                                let mount_prefix = mount_prefix.clone();
+                                async move {
+                                    let key =
+                                        media_gate::key_for_path(req.uri().path(), &mount_prefix);
+                                    let ok = media_gate::allows(
+                                        signed,
+                                        &access,
+                                        req.uri().query(),
+                                        req.headers(),
+                                        &key,
+                                    )
+                                    .await;
+                                    if ok {
+                                        next.run(req).await
+                                    } else {
+                                        forbidden_media()
+                                    }
+                                }
+                            },
+                        ));
+                    }
+                    router = router.merge(media_router);
+                }
+                // ── Non-FS backend (S3 / custom): the framework serves its
+                // own URLs and normally mounts nothing here. But when a gate
+                // is configured, mount a proxy route that runs the gate and
+                // streams the bytes THROUGH the backend (gaps4 #58) — so a
+                // private custom backend can serve gated files, and signed
+                // URLs (gaps4 #56) work everywhere. Ungated: nothing mounted,
+                // exactly as before (public backend URLs).
+                None if gated => {
+                    let storage = media.storage.clone();
+                    let access = self.media_access.clone();
+                    let signed = self.media_signed_urls;
+                    let mount_prefix = mount.clone();
+                    let proxy = move |req: axum::extract::Request| {
+                        let storage = storage.clone();
                         let access = access.clone();
                         let mount_prefix = mount_prefix.clone();
                         async move {
-                            // The requested key = path with the mount prefix and
-                            // any leading slash stripped (`/media/a/b.jpg` → `a/b.jpg`),
-                            // then PERCENT-DECODED. The callback must see the same
-                            // string `FileField` stores and `ServeDir` resolves on
-                            // disk — the raw path (`Screenshot%20from%20x.png`)
-                            // makes every spaced/escaped key unmatchable in an
-                            // ownership lookup, denying real files as unknown.
-                            // Invalid UTF-8 after decoding keeps the raw string:
-                            // it matches no stored key, so the gate fails CLOSED.
-                            let path = req.uri().path();
-                            let raw_key = path
-                                .strip_prefix(&mount_prefix)
-                                .unwrap_or(path)
-                                .trim_start_matches('/');
-                            let key = percent_encoding::percent_decode_str(raw_key)
-                                .decode_utf8()
-                                .map(|s| s.into_owned())
-                                .unwrap_or_else(|_| raw_key.to_string());
-                            let allowed = access(req.headers(), &key).await;
-                            if allowed {
-                                next.run(req).await
-                            } else {
-                                (
-                                    axum::http::StatusCode::FORBIDDEN,
-                                    "forbidden: you are not allowed to access this file",
-                                )
-                                    .into_response()
+                            let key = media_gate::key_for_path(req.uri().path(), &mount_prefix);
+                            let ok = media_gate::allows(
+                                signed,
+                                &access,
+                                req.uri().query(),
+                                req.headers(),
+                                &key,
+                            )
+                            .await;
+                            if !ok {
+                                return forbidden_media();
+                            }
+                            match storage.retrieve_stream(&key).await {
+                                Ok(stream) => {
+                                    let ct = mime_guess::from_path(&key)
+                                        .first_or_octet_stream()
+                                        .to_string();
+                                    axum::http::Response::builder()
+                                        .status(axum::http::StatusCode::OK)
+                                        .header(axum::http::header::CONTENT_TYPE, ct)
+                                        .header("x-content-type-options", "nosniff")
+                                        .body(axum::body::Body::from_stream(stream))
+                                        .unwrap_or_else(|_| {
+                                            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+                                                .into_response()
+                                        })
+                                }
+                                Err(umbral::storage::StorageError::NotFound) => {
+                                    axum::http::StatusCode::NOT_FOUND.into_response()
+                                }
+                                Err(e) => {
+                                    tracing::error!(key = %key, error = %e, "media proxy: retrieve failed");
+                                    axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                                }
                             }
                         }
-                    },
-                ));
+                    };
+                    router = router.route(&format!("{mount}/{{*key}}"), axum::routing::get(proxy));
+                }
+                None => {}
             }
-            router = router.merge(media_router);
         }
 
         router
@@ -815,24 +914,23 @@ impl Plugin for StoragePlugin {
             );
         }
 
-        // A gate that CANNOT run is worse than no gate — the operator thinks
-        // uploads are protected when they are wide open. The media gate is
-        // enforced ONLY by the local filesystem backend (`media()`, which
-        // mounts a `ServeDir` the layer wraps). On an S3 / custom backend
-        // (`dir: None`) the framework serves nothing, so the closure never
-        // runs. Refuse to let that be silent.
+        // gaps4 #58: on a non-FS backend WITH a gate, the framework now
+        // mounts a proxy route that streams gated bytes through the backend
+        // (the gate is enforced), so the old "this is a silent no-op"
+        // warning no longer applies. Note it at debug for visibility — the
+        // proxy re-reads bytes through the app rather than handing out a
+        // backend URL, so for a high-traffic public CDN case a private
+        // bucket + presigned URLs is still the leaner path.
         if let Some(media) = &self.media
-            && self.media_access.is_some()
+            && (self.media_access.is_some() || self.media_signed_urls)
             && media.dir.is_none()
         {
-            tracing::warn!(
+            tracing::debug!(
                 target: "umbral::storage",
-                "umbral-storage: `media_access(...)` is set but this media backend serves \
-                 its own URLs (S3 / custom), so the gate is NEVER enforced — the closure \
-                 does not run and files are as public as the backend makes them. For \
-                 private delivery on S3, use a private bucket with presigned URLs \
-                 (`S3StorageBuilder::presign(ttl)`); the gate only applies to the local \
-                 filesystem backend (`media(mount, dir)`)."
+                "umbral-storage: media gate on a non-FS backend — serving gated bytes \
+                 through a proxy route (gaps4 #58). For a public high-traffic mount, a \
+                 private bucket + presigned URLs (`S3StorageBuilder::presign`) avoids the \
+                 proxy round-trip."
             );
         }
 
