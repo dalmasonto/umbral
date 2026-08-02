@@ -506,16 +506,27 @@ impl Storage for S3Storage {
             None => object_key.clone(),
         };
         match self.presign_ttl {
-            // `url()` is sync but is called from inside async request handlers
-            // (a template resolving a FileField's presigned URL). rust-s3's
-            // `presign_get_blocking` does `Runtime::new().block_on`, which
-            // PANICS ("Cannot start a runtime from within a runtime") on a
-            // tokio worker thread. Presigning is pure local HMAC (no I/O), so
-            // we drive the async `presign_get` with `futures_executor::block_on`
-            // — it polls the already-ready future to completion without
-            // spinning up a tokio runtime, so it's safe in any context.
+            // `url()` is sync but is reached from inside async request handlers
+            // (a FileField / template / admin resolving a presigned URL). The
+            // presign is NOT the pure-HMAC no-I/O operation an earlier comment
+            // here claimed: rust-s3's `presign_get` → `RequestImpl::new` first
+            // `.await`s `bucket.credentials_refresh()`, which takes a
+            // `tokio::sync::RwLock` and, for provider-sourced credentials, can
+            // do network I/O. Driving that with `futures_executor::block_on`
+            // is what wedged production (gaps4 #59): that executor has NO tokio
+            // reactor, so any reactor-bound await (credential refresh) can
+            // never make progress and the worker thread parks forever — a
+            // handful of media-serializing requests starve the whole runtime.
+            //
+            // Fix: drive the presign on the REAL runtime so the reactor is
+            // present, using `block_in_place` so sibling tasks are moved off
+            // this worker while it blocks (the same sync-over-async pattern as
+            // `collect.rs`). Only valid on a multi-thread runtime; on a
+            // current-thread runtime or outside any runtime (tests, tooling)
+            // there's no worker pool to starve, so we fall back to the
+            // in-place executor. Mirrors `session_user.rs::resolve_blocking`.
             Some(ttl) => {
-                match futures_executor::block_on(self.bucket.presign_get(&object_key, ttl, None)) {
+                match presign_blocking(&self.bucket, &object_key, ttl) {
                     Ok(url) => url,
                     Err(e) => {
                         // For a PRIVATE bucket the public-URL fallback will
@@ -534,6 +545,33 @@ impl Storage for S3Storage {
             }
             None => public(),
         }
+    }
+}
+
+/// Drive rust-s3's async `presign_get` to completion from the synchronous
+/// [`Storage::url`] contract without wedging the runtime (gaps4 #59).
+///
+/// On a **multi-thread** runtime (the production server) use `block_in_place`
+/// + the current `Handle::block_on`, so the presign runs WITH the tokio
+/// reactor — its `credentials_refresh().await` (a `tokio::sync::RwLock`, plus
+/// possible provider I/O) can actually make progress — and sibling tasks are
+/// relocated off this worker while it blocks. On a **current-thread** runtime
+/// or with no runtime at all (unit tests, one-shot tooling) there is no worker
+/// pool to starve, so poll it in place with `futures_executor::block_on`. The
+/// runtime-flavor branch mirrors `umbral-auth`'s `resolve_blocking`.
+fn presign_blocking(
+    bucket: &Bucket,
+    object_key: &str,
+    ttl: u32,
+) -> Result<String, s3::error::S3Error> {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| {
+                handle.block_on(bucket.presign_get(object_key, ttl, None))
+            })
+        }
+        _ => futures_executor::block_on(bucket.presign_get(object_key, ttl, None)),
     }
 }
 
@@ -632,14 +670,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn presign_url_does_not_panic_inside_a_tokio_runtime() {
-        // `url()` is called from inside async request handlers (rendering a
-        // template that resolves a FileField's presigned URL). The presign
-        // path must NOT spin up a nested tokio runtime — rust-s3's
-        // `*_blocking` does `Runtime::new().block_on`, which panics with
-        // "Cannot start a runtime from within a runtime" inside an existing
-        // one. Driving the async `presign_get` with `futures::executor::
-        // block_on` (pure HMAC, no I/O) is runtime-safe.
+    async fn presign_url_does_not_panic_on_a_current_thread_runtime() {
+        // `url()` is reached from inside async request handlers. On a
+        // CURRENT-THREAD runtime (this test's default) there is no worker pool
+        // to starve, so `presign_blocking` polls the presign in place with
+        // `futures_executor::block_on` — it must sign, not panic. (The
+        // multi-thread production path is covered by the test below.)
         let s3 = S3Storage::builder("private-bucket")
             .region("us-east-1")
             .credentials("AKIAEXAMPLE", "secretexamplekey", None)
@@ -652,6 +688,44 @@ mod tests {
             url.contains("X-Amz-Signature"),
             "presigned url must sign even inside a runtime, got: {url}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn presign_on_multi_thread_runtime_does_not_wedge() {
+        // The production posture (gaps4 #59): the server runs a MULTI-THREAD
+        // runtime, and a FileField serializes through `url()` on a worker
+        // thread. `presign_blocking` must take the `block_in_place` +
+        // `Handle::block_on` branch — driving the presign WITH the reactor so
+        // `credentials_refresh().await` completes — and return a signed URL
+        // rather than parking the worker forever (which `futures_executor::
+        // block_on` did, wedging the whole runtime). If this hangs or panics,
+        // the fix regressed.
+        let s3 = S3Storage::builder("private-bucket")
+            .region("us-east-1")
+            .credentials("AKIAEXAMPLE", "secretexamplekey", None)
+            .presign(900)
+            .build()
+            .expect("builder with dummy creds + presign should build");
+
+        // Serialize a handful concurrently — the old code starved the runtime
+        // once a few of these ran at once; the fix must let them all finish.
+        let s3 = std::sync::Arc::new(s3);
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let s3 = s3.clone();
+            handles.push(tokio::spawn(async move {
+                // `url()` is sync; call it from inside the async task exactly
+                // as FileField serialization does.
+                s3.url(&format!("media/photo-{i}.png"))
+            }));
+        }
+        for h in handles {
+            let url = h.await.expect("task must not panic or hang");
+            assert!(
+                url.contains("X-Amz-Signature"),
+                "each presigned url must sign on the multi-thread runtime, got: {url}"
+            );
+        }
     }
 
     #[test]
