@@ -59,20 +59,35 @@ pub enum ScaffoldError {
 /// Adding a new built-in plugin? Add its name here so future
 /// `startapp <name>` calls fail fast with a clear message.
 pub const RESERVED_PLUGIN_NAMES: &[&str] = &[
+    // Every built-in plugin name (each crate under plugins/) — a project
+    // plugin named the same would compile but could never register
+    // alongside the built-in without aliasing, and its tables would
+    // collide at boot. Plus "app" (the reserved implicit-plugin name) and
+    // "static" (the storage static side). Keep in sync with plugins/.
     "admin",
+    "analytics",
     "app",
     "auth",
     "cache",
     "email",
+    "graphql",
+    "health",
+    "livereload",
+    "logs",
+    "oauth",
     "openapi",
     "permissions",
+    "playground",
+    "realtime",
     "rest",
     "rls",
     "security",
     "sessions",
     "signals",
     "static",
+    "storage",
     "tasks",
+    "tenants",
 ];
 
 /// Commands shipped by a **built-in plugin**. Unlike the framework's own
@@ -2308,7 +2323,7 @@ mod tests {
         );
         assert!(lib.contains("WidgetsPlugin"), "PascalCase plugin name");
         assert!(
-            lib.contains("models::WidgetsItem::meta()"),
+            lib.contains("ModelMeta::for_::<models::WidgetsItem>()"),
             "models() should register the example model",
         );
         assert!(
@@ -2334,6 +2349,18 @@ mod tests {
         assert!(
             models.contains("WidgetsStatus"),
             "example model should declare a Choice enum",
+        );
+        // The choices field MUST carry `#[umbral(choices)]` and the enum
+        // MUST use the `Choices` derive — a bare `sqlx::Type` enum made the
+        // generated model fail to compile ("M3 doesn't support this field
+        // type"). Pin both so that regression can't recur.
+        assert!(
+            models.contains("#[umbral(choices)]"),
+            "the status field needs #[umbral(choices)] or the model won't compile",
+        );
+        assert!(
+            models.contains("Choices"),
+            "the enum needs the Choices derive, not a bare sqlx::Type",
         );
         assert!(
             models.contains("noedit"),
