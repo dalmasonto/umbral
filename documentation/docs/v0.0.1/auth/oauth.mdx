@@ -18,19 +18,27 @@ A social identity is an **extension** of the user (a `SocialAccount` row linked 
 
 ```rust
 use umbral_oauth::OAuthPlugin;
-use umbral_oauth::providers::{GoogleProvider, GitHubProvider};
-
-let mut oauth = OAuthPlugin::new("https://example.com").login_redirect("/dashboard");
-if let Some(g) = GoogleProvider::from_env() { oauth = oauth.provider(g); }
-if let Some(gh) = GitHubProvider::from_env() { oauth = oauth.provider(gh); }
 
 App::builder()
-    .plugin(AuthPlugin::<AuthUser>::default())
+    .plugin(AuthPlugin::new())
     .plugin(SessionsPlugin::default()) // required: the flow stores CSRF state in the session
-    .plugin(oauth)
+    .plugin(OAuthPlugin::from_settings(&settings).login_redirect("/dashboard"))
 ```
 
-`OAuthPlugin::new(redirect_base)` takes your app's **public origin** (`https://example.com`, or `http://localhost:8000` in dev). Each provider's callback is `{redirect_base}/oauth/{provider}/callback`, which must match what you register in the provider's console. `.login_redirect(path)` is where the browser lands after a successful login (default `/`). Using `from_env()` means a provider with no credentials configured is simply skipped, so it's safe to leave the plugin on with nothing set.
+`from_settings` reads the conventional keys — `oauth_redirect_base` (your app's **public origin**; each provider's callback is `{redirect_base}/oauth/{provider}/callback` and must match the provider's console), plus `oauth_google_client_id`/`_secret` and `oauth_github_client_id`/`_secret`. In practice those come from `UMBRAL_OAUTH_*` env vars. A provider with no credentials is simply skipped, so it's safe to leave the plugin on with nothing set; a provider with only HALF a credential pair is skipped **with a warning** (that's a typo, not a choice).
+
+For manual control, the granular builders remain — `provider_opt` keeps an env-driven setup a straight chain:
+
+```rust
+use umbral_oauth::providers::{GoogleProvider, GitHubProvider};
+
+OAuthPlugin::new("https://example.com")
+    .provider_opt(GoogleProvider::from_env())
+    .provider_opt(GitHubProvider::from_env())
+    .login_redirect("/dashboard")
+```
+
+`.login_redirect(path)` is where the browser lands after a successful login (default `/`).
 
 <Callout type="warning">
 `SessionsPlugin` is **required**: the flow stores its CSRF `state` token in the session. Without it, every callback fails the state check.

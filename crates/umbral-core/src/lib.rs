@@ -22,6 +22,11 @@ pub mod inspect;
 pub mod middleware;
 pub mod validate;
 pub use inventory;
+// `Settings.extra` publicly stores `toml::Value`, so the crate that names
+// the foreign type re-exports it — a consumer constructing or matching an
+// extra value (tests, plugin config readers) must not need its own `toml`
+// dep pinned to a compatible version.
+pub use toml;
 
 pub mod migrate;
 pub mod orm;

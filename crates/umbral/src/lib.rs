@@ -316,6 +316,12 @@ pub mod check {
 /// without the app adding an `inventory` dependency of its own.
 pub use umbral_core::inventory;
 
+/// Re-export of `toml` — `Settings.extra` publicly stores `toml::Value`
+/// (the flattened catch-all for `UMBRAL_*` env vars and `umbral.toml`
+/// keys), so consumers that construct or match those values reach the
+/// exact same crate version here instead of pinning their own.
+pub use umbral_core::toml;
+
 /// Per-field clean / validate hooks (features #83).
 pub mod cleaners {
     pub use umbral_core::orm::cleaners::{Cleaner, clear_for_tests, register_cleaner};

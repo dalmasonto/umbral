@@ -113,6 +113,94 @@ impl OAuthPlugin {
         self
     }
 
+    /// Register a provider that may not be configured (gaps4 #46): `None`
+    /// chains through unchanged. This is what makes env-driven provider
+    /// setup a straight builder chain instead of a `{ let mut plugin = …;
+    /// if let Some(p) = … }` block expression inside `.plugin(...)`:
+    ///
+    /// ```ignore
+    /// OAuthPlugin::new(base)
+    ///     .provider_opt(google)   // Option<GoogleProvider> from settings
+    ///     .provider_opt(github)
+    /// ```
+    pub fn provider_opt(self, provider: Option<impl OAuthProvider + 'static>) -> Self {
+        match provider {
+            Some(p) => self.provider(p),
+            None => self,
+        }
+    }
+
+    /// Construct from [`Settings`] using the conventional keys (gaps4 #46)
+    /// — the exact plumbing every consumer hand-rolled before:
+    ///
+    /// | key | meaning |
+    /// |---|---|
+    /// | `oauth_redirect_base` | the app's public origin (callback URLs are built on it) |
+    /// | `oauth_google_client_id` / `oauth_google_client_secret` | enable [`GoogleProvider`] when BOTH set |
+    /// | `oauth_github_client_id` / `oauth_github_client_secret` | enable [`GitHubProvider`] when BOTH set |
+    ///
+    /// Settings' `extra` map is fed by `UMBRAL_`-prefixed env vars, so in
+    /// practice this reads `UMBRAL_OAUTH_REDIRECT_BASE`,
+    /// `UMBRAL_OAUTH_GOOGLE_CLIENT_ID`, … A missing `oauth_redirect_base`
+    /// falls back to `http://localhost:8000` with a warning — fine for dev;
+    /// in prod the provider console rejects the mismatched callback URL
+    /// loudly. A provider with only one of its two keys set is skipped with
+    /// a warning (half a credential is a typo, not a choice).
+    ///
+    /// Chain the usual builders after it for anything else:
+    ///
+    /// ```ignore
+    /// OAuthPlugin::from_settings(&settings).login_redirect("/dashboard")
+    /// ```
+    ///
+    /// [`Settings`]: umbral::Settings
+    /// [`GoogleProvider`]: crate::providers::GoogleProvider
+    /// [`GitHubProvider`]: crate::providers::GitHubProvider
+    pub fn from_settings(settings: &umbral::Settings) -> Self {
+        let base = match settings.extra_str("oauth_redirect_base") {
+            Some(b) => b.to_string(),
+            None => {
+                tracing::warn!(
+                    "umbral-oauth: `oauth_redirect_base` is not set \
+                     (UMBRAL_OAUTH_REDIRECT_BASE); falling back to \
+                     http://localhost:8000 — provider callbacks will only \
+                     work locally"
+                );
+                "http://localhost:8000".to_string()
+            }
+        };
+        let pair = |id_key: &str, secret_key: &str| -> Option<(String, String)> {
+            match (settings.extra_str(id_key), settings.extra_str(secret_key)) {
+                (Some(id), Some(secret)) => Some((id.to_string(), secret.to_string())),
+                (None, None) => None,
+                _ => {
+                    tracing::warn!(
+                        "umbral-oauth: only one of `{id_key}` / `{secret_key}` is set — \
+                         skipping the provider (half a credential is a typo, not a choice)"
+                    );
+                    None
+                }
+            }
+        };
+        Self::new(base)
+            .provider_opt(
+                pair("oauth_google_client_id", "oauth_google_client_secret")
+                    .map(|(id, s)| crate::providers::GoogleProvider::new(id, s)),
+            )
+            .provider_opt(
+                pair("oauth_github_client_id", "oauth_github_client_secret")
+                    .map(|(id, s)| crate::providers::GitHubProvider::new(id, s)),
+            )
+    }
+
+    /// The keys of the registered providers, in registration order —
+    /// `["google", "github"]`. Diagnostics surface: what
+    /// [`Self::from_settings`] actually wired, which templates can use to
+    /// render only the configured login buttons.
+    pub fn provider_keys(&self) -> Vec<&'static str> {
+        self.providers.iter().map(|p| p.key()).collect()
+    }
+
     /// Where to redirect after a successful login / connect. Defaults to
     /// `"/"`.
     pub fn login_redirect(mut self, path: impl Into<String>) -> Self {
