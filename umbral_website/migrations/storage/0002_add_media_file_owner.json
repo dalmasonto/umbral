@@ -1,0 +1,115 @@
+{
+  "id": "0002_add_media_file_owner",
+  "plugin": "storage",
+  "depends_on": [],
+  "operations": [
+    {
+      "kind": "AddColumn",
+      "table": "media_file",
+      "column": {
+        "name": "owner",
+        "ty": "Text",
+        "primary_key": false,
+        "nullable": true,
+        "noform": false,
+        "noedit": true,
+        "is_string_repr": false,
+        "max_length": 255
+      }
+    }
+  ],
+  "snapshot_after": {
+    "models": [
+      {
+        "name": "MediaFile",
+        "table": "media_file",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "key",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": true,
+            "max_length": 0
+          },
+          {
+            "name": "filename",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 200
+          },
+          {
+            "name": "content_type",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 80
+          },
+          {
+            "name": "size",
+            "ty": "BigInt",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "uploaded_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "status",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 16,
+            "default": "ready"
+          },
+          {
+            "name": "owner",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": true,
+            "is_string_repr": false,
+            "max_length": 255
+          }
+        ],
+        "display": "Media file",
+        "icon": "file",
+        "app_label": "app"
+      }
+    ]
+  }
+}
