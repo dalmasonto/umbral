@@ -636,35 +636,60 @@ This rides the `post_update:<table>` signal the ORM fires on UPDATE (carrying bo
 | `.cleanup_files::<M>(&[...])`   | off     | Same, naming the file columns explicitly (for widget-overridden columns).         |
 | `.media_access(callback)`       | off (public) | Gate the media GET route: the async callback receives the request headers + the requested key and returns `true` to serve or `false` for a 403. Off by default (every file public). |
 | `.media_access_identity(callback)` | off (public) | Same, but the callback receives the resolved `Option<Identity>` instead of raw headers — the ergonomic auth check. |
+| `.media_access_owner()`         | off (public) | Owner-only: serve a file only to the user whose PK string matches its recorded `owner`. Stamp owners with `set_media_owner`. |
+| `.media_signed_urls()`          | off (public) | Serve only requests carrying a valid HMAC-signed, time-bounded query. Mint links with `signed_media_url(mount, key, ttl)`. |
 
 ## Access control for private uploads
 
-By default the media route serves **every** file under the mount to anyone with the URL — correct for public assets (avatars, logos), but an IDOR for private uploads (a leaked or shared URL grants permanent, unauthenticated access).
+By default the media route serves **every** file under the mount to anyone with the URL — correct for public assets (avatars, logos), but an IDOR for private uploads (a leaked or shared URL grants permanent, unauthenticated access). Four gates, from most turnkey to most bespoke:
 
-The cleanest gate is `.media_access_identity(...)`: it resolves the caller through the app-wide authentication backend (the same one REST and GraphQL use — set it with `App::builder().authentication(...)`), so you write the ownership rule against an `Identity`, not raw headers:
+### Owner-only — `.media_access_owner()`
+
+The tracked `media_file` row carries an `owner` column. Stamp it once at upload with `set_media_owner`, and the gate resolves the caller (through the app-wide auth backend) and serves each file only to its owner — no file→owner join to hand-write:
 
 ```rust
 App::builder()
     .authentication(SessionAuthentication::<AuthUser>::default())
-    .plugin(
-        StoragePlugin::new()
-            .media("/media", "./media")
-            .media_access_identity(|caller, key| async move {
-                // Anonymous → denied; otherwise confirm this user owns `key`
-                // (your own file→owner lookup — the framework stores the key,
-                // your model links it to a user).
-                let Some(user) = caller else { return false };
-                owns_media(&user, &key).await
-            }),
-    )
+    .plugin(StoragePlugin::new().media("/media", "./media").media_access_owner());
+
+// …at your upload site, the one line that records ownership:
+let outcome = umbral::storage::storage().save("avatar.png", "image/png", &bytes).await?;
+umbral_storage::set_media_owner(&outcome.file.key, &identity.user_id).await?;
 ```
 
-If you need the raw headers instead (a signed header token, a custom scheme), use `.media_access(|headers, key| ...)` — same 403 behaviour, you resolve the caller yourself.
+Anonymous callers, and files with no recorded owner (a `NULL` after the additive migration, or a file with no tracked row), are denied — fail closed.
 
-The callback runs on every `GET <mount>/<key>` **before any bytes are served** (including Range and HEAD requests, and it sees the full nested key for subdirectory files); a `false` short-circuits with a 403 and the file contents never leave the server. It's async, so an ownership lookup against the database is fine.
+### Time-bounded share links — `.media_signed_urls()`
 
-<Callout type="warning">
-The gate is enforced **only by the local filesystem backend** (`.media(mount, dir)`). An S3 or custom backend serves its own URLs, so the framework never sees the byte request and the gate cannot run — setting it there warns loudly at boot and does nothing. For private delivery on S3, use a **private bucket with presigned URLs** (`S3StorageBuilder::presign(ttl)`), where the signature *is* the access control.
+Hand someone a private file for a bounded window with **no session** — the signed link *is* the access grant. Mint it with `signed_media_url`; the signature binds the key AND the expiry to your `secret_key`, so it can't be edited to point elsewhere or extended:
+
+```rust
+StoragePlugin::new().media("/media", "./media").media_signed_urls();
+
+// In a handler — a link good for 5 minutes:
+use std::time::Duration;
+let url = umbral_storage::signed_media_url("/media", &key, Duration::from_secs(300));
+```
+
+Signed URLs **compose** with the other gates (a valid signature grants access outright, otherwise the closure decides) and are the one gate that also works through the non-FS proxy below.
+
+### Custom logic — `.media_access_identity(...)` / `.media_access(...)`
+
+For a rule the presets don't cover, resolve the caller yourself. `media_access_identity` hands you the resolved `Option<Identity>` (via `App::builder().authentication(...)`); `media_access` hands you the raw headers (a signed header token, a custom scheme):
+
+```rust
+StoragePlugin::new()
+    .media("/media", "./media")
+    .media_access_identity(|caller, key| async move {
+        let Some(user) = caller else { return false };
+        my_custom_rule(&user, &key).await
+    });
+```
+
+Every gate runs on `GET <mount>/<key>` **before any bytes are served** (Range and HEAD requests too, and it sees the full nested key for subdirectory files); a deny short-circuits with a 403 and the contents never leave the server. It's async, so a database lookup is fine.
+
+<Callout type="info">
+**Gates work on S3 / custom backends too, via a proxy.** A non-FS backend serves its own URLs, so with no gate the framework mounts nothing there. But when you configure a gate, it mounts a route that runs the gate and **streams the bytes through the backend** — so private custom backends serve gated files, and signed URLs work everywhere. For a high-traffic *public* mount, a private bucket + presigned URLs (`S3StorageBuilder::presign(ttl)`) still avoids the proxy round-trip.
 </Callout>
 
 ## What v0 does not ship

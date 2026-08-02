@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 use umbral::storage::Storage;
-use umbral_storage::{FsStorage, StoragePlugin, Thumbnail, variant_key};
+use umbral_storage::{FsStorage, Thumbnail, variant_key};
 
 /// A variant's key is a pure function of the original's — so a template can
 /// build a thumbnail URL with no extra column, no join and no second lookup.
@@ -60,6 +60,7 @@ async fn thumbnails_are_generated_at_derived_keys() {
         size: 0,
         status: "ready".into(),
         uploaded_at: chrono::Utc::now(),
+        owner: None,
     };
     proc(media).await.expect("processor");
 
@@ -99,6 +100,7 @@ async fn a_small_image_is_not_upscaled() {
         size: 0,
         status: "ready".into(),
         uploaded_at: chrono::Utc::now(),
+        owner: None,
     })
     .await
     .expect("processor");
@@ -138,6 +140,7 @@ async fn a_non_image_upload_is_left_alone() {
         size: 0,
         status: "ready".into(),
         uploaded_at: chrono::Utc::now(),
+        owner: None,
     })
     .await
     .expect("a non-image must not be an error");

@@ -804,6 +804,8 @@ async fn record_tracking_row(filename: &str, content_type: &str, stored: &Stored
         size: stored.size as i64,
         uploaded_at: chrono::Utc::now(),
         status: initial.to_string(),
+        // Unowned by default; stamp with set_media_owner after upload (gaps4 #57).
+        owner: None,
     };
     let saved = match MediaFile::objects().create(row).await {
         Ok(saved) => saved,
@@ -857,6 +859,45 @@ pub struct MediaFile {
     /// `RealtimePlugin::new().expose::<MediaFile>(...)` — no coupling.
     #[umbral(noedit, default = "ready", max_length = 16)]
     pub status: String,
+    /// The owner's primary-key string, or `NULL` for an unowned/public
+    /// file (gaps4 #57). PK-type-agnostic: an `i64`/`String`/`uuid` PK all
+    /// render to the same string `Identity::user_id` uses, so
+    /// [`set_media_owner`](crate::set_media_owner) stamps it and
+    /// [`StoragePlugin::media_access_owner`](crate::StoragePlugin::media_access_owner)
+    /// checks it without the app hand-writing a file→owner join. Nullable +
+    /// additive: existing `media_file` rows backfill to `NULL` (owner-gated
+    /// requests then deny them, which is the correct fail-closed default
+    /// for a newly-added ownership check).
+    #[umbral(noedit, max_length = 255)]
+    pub owner: Option<String>,
+}
+
+/// Record the owner of an uploaded file by its storage key (gaps4 #57).
+///
+/// Call it right after saving an upload — the one line the app writes to
+/// make owner-only access work — so
+/// [`StoragePlugin::media_access_owner`](crate::StoragePlugin::media_access_owner)
+/// can enforce it. `owner` is the caller's primary-key string (what
+/// [`Identity::user_id`](umbral::auth::Identity) carries).
+///
+/// ```ignore
+/// let outcome = umbral::storage::storage().save("avatar.png", "image/png", &bytes).await?;
+/// umbral_storage::set_media_owner(&outcome.file.key, &identity.user_id).await?;
+/// ```
+///
+/// Returns `Ok(false)` when no `media_file` row exists for `key` (a file
+/// written outside the tracked upload path has no row to stamp).
+pub async fn set_media_owner(key: &str, owner: &str) -> Result<bool, BoxError> {
+    let Some(mut row) = MediaFile::objects()
+        .filter(media_file::KEY.eq(key))
+        .first()
+        .await?
+    else {
+        return Ok(false);
+    };
+    row.owner = Some(owner.to_string());
+    MediaFile::objects().save(row).await?;
+    Ok(true)
 }
 
 /// Result of a successful upload.
@@ -959,6 +1000,8 @@ async fn finish_save(
         size: stored.size as i64,
         uploaded_at: chrono::Utc::now(),
         status: initial.to_string(),
+        // Unowned by default; stamp with set_media_owner after upload (gaps4 #57).
+        owner: None,
     };
     let saved = MediaFile::objects()
         .save(row)
@@ -1023,6 +1066,8 @@ pub(crate) async fn save_deferred_through(
         size: bytes.len() as i64,
         uploaded_at: chrono::Utc::now(),
         status: STATUS_PROCESSING.to_string(),
+        // Unowned by default; stamp with set_media_owner after upload (gaps4 #57).
+        owner: None,
     };
     let saved = MediaFile::objects()
         .save(row)

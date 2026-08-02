@@ -56,11 +56,11 @@ use umbral::prelude::*;
 /// per-user ownership. `None` (the default) serves every file to anyone, the
 /// original backward-compatible behaviour.
 ///
-/// **Only the local filesystem backend ([`StoragePlugin::media`]) enforces
-/// this** — an S3 / custom backend serves its own URLs, so the framework
-/// never sees the byte request. Setting a gate on those backends is a
-/// no-op that warns loudly at boot; use a private bucket + presigned URLs
-/// for private delivery there.
+/// The local filesystem backend ([`StoragePlugin::media`]) enforces this
+/// on its `ServeDir`. A gated S3 / custom backend enforces it too, via a
+/// proxy route that streams the bytes through the backend (gaps4 #58) —
+/// though for a high-traffic public mount a private bucket + presigned
+/// URLs avoids the proxy round-trip.
 pub type MediaAccessFn = Arc<
     dyn Fn(
             &http::HeaderMap,
@@ -92,6 +92,7 @@ fn forbidden_media() -> axum::response::Response {
 }
 
 pub use media::clear_processors_for_test;
+pub use media::set_media_owner;
 pub use media::{
     BoxError, FsStorage, MediaError, MediaFile, MediaSaveOutcome, MediaTracking, Processor,
     STATUS_FAILED, STATUS_PROCESSING, STATUS_READY,
@@ -310,6 +311,40 @@ impl StoragePlugin {
     pub fn media_signed_urls(mut self) -> Self {
         self.media_signed_urls = true;
         self
+    }
+
+    /// Gate media on OWNERSHIP — serve a file only to the user whose PK
+    /// string matches the file's recorded `owner` (gaps4 #57). The turnkey
+    /// "owner only" preset over [`Self::media_access_identity`]: it resolves
+    /// the caller through the app-wide auth backend (gaps4 #42), looks the
+    /// [`MediaFile`] row up by key, and allows iff `owner == caller`.
+    ///
+    /// Anonymous callers, and files with no recorded owner, are denied
+    /// (fail closed — a `media_file` row backfilled to `NULL` owner, or a
+    /// file with no row at all, is not owned by anyone). Stamp owners at
+    /// upload time with [`set_media_owner`]:
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .authentication(SessionAuthentication::<AuthUser>::default())
+    ///     .plugin(StoragePlugin::new().media("/media", "./media").media_access_owner());
+    ///
+    /// // …at your upload site:
+    /// set_media_owner(&outcome.file.key, &identity.user_id).await?;
+    /// ```
+    pub fn media_access_owner(self) -> Self {
+        self.media_access_identity(|caller, key| async move {
+            let Some(id) = caller else { return false };
+            match MediaFile::objects()
+                .filter(media::media_file::KEY.eq(&key))
+                .first()
+                .await
+            {
+                Ok(Some(row)) => row.owner.as_deref() == Some(id.user_id.as_str()),
+                // No row for this key, or a DB error → deny.
+                _ => false,
+            }
+        })
     }
 
     /// Register a **background upload processor** — an async fn run over each
