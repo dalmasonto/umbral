@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.10...umbral-auth-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(auth)* AuthPlugin::new() — no more turbofish (gaps4 #45)
+- *(auth)* validate email format at every entry point (gaps4 #35)
+- *(auth)* 202 endpoints return a {"detail": ...} body (gaps4 #33)
+
+### Fixed
+
+- *(playground)* schema tab shows real per-field metadata (gaps4 #34)
+- *(auth)* logout revokes the presented bearer token (gaps4 #32)
+
+### Other
+
+- fmt rewrap in json_surface test + GitNexus index-count stamps
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.9...umbral-auth-v0.0.10) - 2026-07-15
 
 ### Fixed

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.10...umbral-macros-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(plugin-contract)* autodiscovery for task handlers + plugin models (gaps4 #40)
+- *(auth)* validate email format at every entry point (gaps4 #35)
+- *(orm)* choices columns filter by the enum variant (gaps4 #39)
+
 ## [0.0.9](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.8...umbral-macros-v0.0.9) - 2026-07-14
 
 ### Other

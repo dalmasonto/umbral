@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.10...umbral-core-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(core)* seed_on_serve + Dev autodetect on serve; adopt the seams (gaps4 #47)
+- *(core)* serve installs a default tracing subscriber (gaps4 #48)
+- *(oauth)* from_settings + provider_opt construction (gaps4 #46)
+- *(plugin-contract)* app-wide default authentication seam (gaps4 #42)
+- *(plugin-contract)* autodiscovery for task handlers + plugin models (gaps4 #40)
+- *(orm)* choices columns filter by the enum variant (gaps4 #39)
+
+### Fixed
+
+- *(core)* slash-redirect probes 404s from MATCHED routes too (gaps4 #50)
+- *(plugin-contract)* plugin-sort ties honor registration order (gaps4 #44)
+- *(orm)* update_json_in_tx reports the real matched-row count
+- *(migrate)* varchar max_length changes now emit Postgres alters
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.9...umbral-core-v0.0.10) - 2026-07-15
 
 ### Added

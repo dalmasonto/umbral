@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-realtime-v0.0.10...umbral-realtime-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(plugin-contract)* app-wide default authentication seam (gaps4 #42)
+- *(realtime)* GroupPolicy is async — gate rooms on DB state (gaps4 #36)
+
+### Other
+
+- *(realtime)* fan-out shares one Arc'd payload + one render (gaps4 #38)
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-realtime-v0.0.9...umbral-realtime-v0.0.10) - 2026-07-15
 
 ### Fixed

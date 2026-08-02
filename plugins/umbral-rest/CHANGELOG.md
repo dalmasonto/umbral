@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.10...umbral-rest-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(plugin-contract)* app-wide default authentication seam (gaps4 #42)
+
+### Fixed
+
+- *(rest)* creates and bulk writes honor the object scope (gaps4 #37)
+- *(rest)* bind RestrictIn scope values in the column's type
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-rest-v0.0.9...umbral-rest-v0.0.10) - 2026-07-15
 
 ### Added

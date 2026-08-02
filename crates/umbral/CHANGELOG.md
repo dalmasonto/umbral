@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.10...umbral-v0.0.11) - 2026-08-02
+
+### Added
+
+- *(oauth)* from_settings + provider_opt construction (gaps4 #46)
+- *(plugin-contract)* app-wide default authentication seam (gaps4 #42)
+- *(plugin-contract)* autodiscovery for task handlers + plugin models (gaps4 #40)
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.9...umbral-v0.0.10) - 2026-07-15
 
 ### Added
