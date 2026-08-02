@@ -118,8 +118,12 @@ pub struct ContentTag {
 )]
 pub struct BlogPost {
     pub id: i64,
+    // TODO(umbral 0.0.12): add `#[umbral(auto_uuid)]` here once the framework
+    // release ships it (the feature is on `main`). It auto-generates a random
+    // v4 UUID on create so the admin/REST create path doesn't need public_id
+    // supplied. On 0.0.11 the seed sets `public_id: Uuid::new_v4()` explicitly.
     pub public_id: Uuid,
-    #[umbral(unique, max_length = 160)]
+    #[umbral(unique, max_length = 160, slug_from = "title")]
     pub slug: String,
     #[umbral(string, max_length = 180)]
     pub title: String,

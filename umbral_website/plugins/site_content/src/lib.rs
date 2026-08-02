@@ -70,6 +70,52 @@ impl Plugin for SiteContentPlugin {
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
         // Blog and changelog seed writes are command-driven via `seed_orm_data`.
+
+        // Derive `reading_minutes` from the post body on every save. A blog's
+        // read-time is a pure function of its text, so rather than ask an
+        // author to compute and type it, a post_save signal recomputes
+        // word-count / 200 wpm and writes it back. (slug derives from the
+        // title via `#[umbral(slug_from = "title")]` and public_id via
+        // `#[umbral(auto_uuid)]`, both at the ORM write layer — this signal is
+        // the "compute it in a post-save hook" case those two can't cover.)
+        //
+        // Loop-safe: it only writes when the value actually changed, so the
+        // write it triggers recomputes the same number, finds it unchanged,
+        // and stops — at most one extra write per save.
+        umbral::signals::subscribe_async("post_save:blog_post", |payload: &serde_json::Value| {
+            // Extract owned data now — the payload is borrowed but the future
+            // must be `'static`.
+            let instance = payload.get("instance");
+            let id = instance.and_then(|i| i.get("id")).and_then(|v| v.as_i64());
+            let body = instance
+                .and_then(|i| i.get("body"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let current = instance
+                .and_then(|i| i.get("reading_minutes"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as i32;
+            async move {
+                let Some(id) = id else { return };
+                // ~200 words/min, rounded, and never less than a 1-minute read.
+                let words = body.split_whitespace().count();
+                let desired = ((words as f64 / 200.0).round() as i32).max(1);
+                if desired == current {
+                    return;
+                }
+                let mut values = serde_json::Map::new();
+                values.insert("reading_minutes".to_string(), serde_json::json!(desired));
+                if let Err(e) = BlogPost::objects()
+                    .filter(blog_post::ID.eq(id))
+                    .update_values(values)
+                    .await
+                {
+                    tracing::warn!("site_content: reading_minutes backfill failed for blog_post {id}: {e}");
+                }
+            }
+        });
+
         Ok(())
     }
 }
