@@ -1703,43 +1703,32 @@ impl AppBuilder {
             router = plugin.wrap_router(router);
         }
 
-        // Phase 5.6 — install the 404 fallback. Four cases:
+        // Phase 5.6 — install the 404 fallback + the slash-redirect layer.
         //
-        // 1. slash_redirect = Off, not_found_template = None, default pages off:
-        //    no-op. axum's built-in empty 404 is what users see.
-        // 2. slash_redirect = Off, not_found_template = None, default pages ON:
-        //    install the not-found fallback; render_not_found will use the
-        //    embedded default_404 template.
-        // 3. slash_redirect = Off, not_found_template = Some(name):
-        //    install the not-found fallback directly. Renders the
-        //    template on every miss.
-        // 4. slash_redirect != Off:
-        //    install the slash-redirect fallback. It handles its own
-        //    404 path internally — when no alternate matches, it
-        //    renders the configured not-found template (or the default
-        //    if enabled, or plain text if both are absent).
+        // The fallback only renders 404 BODIES (the configured template,
+        // the embedded default, or plain text). It is installed whenever a
+        // template/default-pages source exists, or whenever slash-redirect
+        // is on (so the no-alternate 404 keeps the same rendered body it
+        // had when the redirect logic lived in the fallback itself).
         //
-        // The slash-redirect fallback ALWAYS captures a router
-        // snapshot taken BEFORE the fallback is installed, so the
-        // alternate-path probe can't recursively re-hit the fallback.
+        // The redirect itself is a LAYER over the whole router, not a
+        // fallback (gaps4 #50): a 404 from a MATCHED route — a wildcard
+        // capture like REST's `/api/{table}`, a nested service, an admin
+        // catch-all — never reaches a fallback, so "slash redirect is on
+        // but some URLs don't redirect" was structural. The layer sees
+        // every 404 regardless of origin and probes the alternate form
+        // against a snapshot taken before the layer is applied (so the
+        // probe can't recursively re-enter it).
         let need_not_found_fallback = self.not_found_template.is_some() || self.default_error_pages;
-        match (self.slash_redirect, need_not_found_fallback) {
-            (crate::slash::SlashRedirect::Off, false) => {
-                // axum's default 404 — nothing to do.
-            }
-            (crate::slash::SlashRedirect::Off, true) => {
-                let fallback = crate::errors::not_found_fallback(self.not_found_template.clone());
-                router = router.fallback(fallback);
-            }
-            (policy, _) => {
-                let snapshot = router.clone();
-                let fallback = crate::slash::slash_redirect_fallback(
-                    snapshot,
-                    policy,
-                    self.not_found_template.clone(),
-                );
-                router = router.fallback(fallback);
-            }
+        if need_not_found_fallback || self.slash_redirect != crate::slash::SlashRedirect::Off {
+            let fallback = crate::errors::not_found_fallback(self.not_found_template.clone());
+            router = router.fallback(fallback);
+        }
+        if self.slash_redirect != crate::slash::SlashRedirect::Off {
+            let snapshot = router.clone();
+            router = router.layer(axum::middleware::from_fn(
+                crate::slash::slash_redirect_probe(snapshot, self.slash_redirect),
+            ));
         }
 
         // Phase 5.65 — framework middleware stack (feature #68). App-level

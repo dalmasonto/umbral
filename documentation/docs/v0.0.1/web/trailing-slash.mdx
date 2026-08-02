@@ -59,23 +59,33 @@ data. umbral picked 308 so a `POST /api/users` redirected to
 
 ## How it works
 
-`App::build` installs a fallback handler when the policy isn't
-`Off`. The handler:
+`App::build` wraps the whole router in a probe **layer** when the
+policy isn't `Off`. The layer:
 
-1. Snapshots the merged router **before** installing the fallback,
-   so the probe can't recursively re-hit itself.
-2. On a 404, computes the alternate path per policy (add or strip
-   the trailing slash).
-3. Probes the snapshot with a synthetic `GET` to the alternate. If
-   the probe returns anything but 404 (200, 405, 3xx all count), the
-   alternate exists.
+1. Snapshots the merged router **before** the layer is applied, so
+   the probe can't recursively re-enter itself.
+2. Runs the request normally. If the response — from any origin:
+   a matched handler, a wildcard capture like `/api/{table}`, a
+   nested service, or the 404 fallback — is a 404, it computes the
+   alternate path per policy (add or strip the trailing slash).
+3. Probes the snapshot with a synthetic header-less `GET` to the
+   alternate. Anything but 404 (200, 405, 401, 3xx all count) means
+   the alternate exists.
 4. If the alternate exists, returns a 308 redirect to it.
-5. Otherwise returns the original 404.
+5. Otherwise returns the **original** 404 untouched — an API's JSON
+   404 body passes through as-is.
+
+It's a layer, not a fallback, on purpose: a 404 produced by a
+*matched* route never reaches a fallback, and wildcard routes make
+that common — `/api/docs/` matches REST's `/api/{table}/` route and
+404s from inside the handler, so under the old fallback design that
+URL simply never redirected even with the policy on. The layer sees
+every 404.
 
 Query strings are preserved: `/articles?page=2` redirects to
 `/articles/?page=2`. No infinite loops - if both `/foo` and `/foo/`
 are 404, the second request just returns 404 cleanly (the snapshot
-doesn't have a fallback installed).
+doesn't have the layer applied).
 
 ## When to pick which
 

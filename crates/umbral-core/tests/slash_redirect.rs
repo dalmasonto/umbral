@@ -1,26 +1,32 @@
 //! End-to-end tests for [`umbral_core::slash`].
 //!
 //! These tests bypass `App::build` (which initialises a process-wide
-//! settings OnceLock and so only runs once per test binary) and
-//! exercise the slash-redirect fallback handler directly. The handler
-//! is the same one App::build installs, so the integration shape is
-//! preserved.
+//! settings OnceLock and so only runs once per test binary) and apply
+//! the slash-redirect probe LAYER directly — the same wiring App::build
+//! installs at Phase 5.6, so the integration shape is preserved.
+//!
+//! gaps4 #50: the probe is a layer over the whole router, not a
+//! fallback, so it fires on 404s from MATCHED routes too (wildcard
+//! captures, nested services) — the class of URL that used to ignore
+//! the policy entirely.
 
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use axum::routing::{get, post};
 use tower::ServiceExt;
-use umbral_core::slash::{SlashRedirect, slash_redirect_fallback};
+use umbral_core::slash::{SlashRedirect, slash_redirect_probe};
 
-/// Build a router with the slash-redirect fallback installed,
-/// matching the wiring App::build does at Phase 5.6.
+/// Apply the slash-redirect layer, matching the wiring App::build does
+/// at Phase 5.6 (snapshot taken before the layer is applied).
 fn router_with_fallback(router: Router, policy: SlashRedirect) -> Router {
     if policy == SlashRedirect::Off {
         return router;
     }
     let snapshot = router.clone();
-    router.fallback(slash_redirect_fallback(snapshot, policy, None))
+    router.layer(axum::middleware::from_fn(slash_redirect_probe(
+        snapshot, policy,
+    )))
 }
 
 async fn oneshot(router: Router, method: Method, path: &str) -> axum::http::Response<Body> {
@@ -170,4 +176,101 @@ async fn append_redirect_uses_308_so_post_method_preserves() {
         StatusCode::PERMANENT_REDIRECT,
         "expected 308 (not 301) so POST method is preserved on redirect"
     );
+}
+
+// =====================================================================
+// gaps4 #50 — 404s from MATCHED routes redirect too. The fallback-based
+// implementation never saw these: a wildcard capture like REST's
+// `/api/{table}/` matched the request and 404ed from inside the
+// handler, so "slash redirect is on but some URLs will not redirect".
+// =====================================================================
+
+/// The REST-shadow shape: `/api/{table}/` matches `/api/docs/` and
+/// 404s ("unknown resource"), while the REAL `/api/docs` route exists
+/// in the slashless form. Strip policy must rescue it.
+#[tokio::test]
+async fn strip_policy_redirects_a_404_from_a_matched_wildcard_route() {
+    let router = router_with_fallback(
+        Router::new()
+            .route("/api/docs", get(|| async { "the docs" }))
+            .route(
+                "/api/{table}/",
+                get(|| async { (StatusCode::NOT_FOUND, "unknown resource") }),
+            ),
+        SlashRedirect::Strip,
+    );
+    let resp = oneshot(router, Method::GET, "/api/docs/").await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::PERMANENT_REDIRECT,
+        "a 404 produced by a MATCHED wildcard route must still probe the alternate"
+    );
+    let location = resp
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(location, Some("/api/docs"));
+}
+
+/// The playground shape under Append: the bare wildcard matches
+/// `/api/console` and 404s, while `/api/console/` is a real route.
+#[tokio::test]
+async fn append_policy_redirects_a_404_from_a_matched_wildcard_route() {
+    let router = router_with_fallback(
+        Router::new()
+            .route("/api/console/", get(|| async { "the console" }))
+            .route(
+                "/api/{table}",
+                get(|| async { (StatusCode::NOT_FOUND, "unknown resource") }),
+            ),
+        SlashRedirect::Append,
+    );
+    let resp = oneshot(router, Method::GET, "/api/console").await;
+    assert_eq!(resp.status(), StatusCode::PERMANENT_REDIRECT);
+    let location = resp
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok());
+    assert_eq!(location, Some("/api/console/"));
+}
+
+/// A deliberate 404 whose alternate form ALSO 404s (missing row with
+/// both slash forms registered, out-of-scope row) keeps its ORIGINAL
+/// body — the probe must never replace an API's 404 payload.
+#[tokio::test]
+async fn a_404_with_no_answering_alternate_keeps_its_original_body() {
+    let router = router_with_fallback(
+        Router::new()
+            .route(
+                "/api/task/{id}",
+                get(|| async { (StatusCode::NOT_FOUND, r#"{"detail":"no row"}"#) }),
+            )
+            .route(
+                "/api/task/{id}/",
+                get(|| async { (StatusCode::NOT_FOUND, r#"{"detail":"no row"}"#) }),
+            ),
+        SlashRedirect::Append,
+    );
+    let resp = oneshot(router, Method::GET, "/api/task/999").await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    assert_eq!(
+        &body[..],
+        br#"{"detail":"no row"}"#,
+        "the handler's own 404 body must pass through untouched"
+    );
+}
+
+/// Non-404 responses are never touched — the layer is a pure 404 probe.
+#[tokio::test]
+async fn non_404_responses_pass_through_untouched() {
+    let router = router_with_fallback(
+        Router::new().route(
+            "/api/thing",
+            get(|| async { (StatusCode::IM_A_TEAPOT, "teapot") }),
+        ),
+        SlashRedirect::Append,
+    );
+    let resp = oneshot(router, Method::GET, "/api/thing").await;
+    assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
 }

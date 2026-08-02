@@ -108,12 +108,11 @@ pub(crate) fn default_pages_enabled() -> bool {
 /// default pages are disabled and no template name is set, returns
 /// plain "Not Found".
 ///
-/// Used by:
-///
-/// - [`crate::slash::slash_redirect_fallback`] for the no-alternate
-///   branch.
-/// - The standalone not-found fallback installed when only
-///   `not_found_template` is set (no slash redirect).
+/// Used by the not-found fallback installed at build Phase 5.6 — which
+/// serves both the plain-404 case and, since the slash-redirect probe
+/// moved into a layer (gaps4 #50), the no-alternate branch of a
+/// slash-redirect app (the layer passes the rendered 404 through
+/// untouched when the alternate form doesn't answer).
 ///
 /// The template gets the request path as `path` so it can render
 /// `The page {{ path }} doesn't exist.` without the user wiring

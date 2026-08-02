@@ -102,3 +102,4 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 47. [x] Hand-rolled migrate+seed bootstrap — archived (Dev autodetect on serve + seed_on_serve, adopted in scaffold+shop, `eae3d0bd`)
 48. [x] Inconsistent observability init — archived (serve try_inits a default fmt subscriber, `3067651b`)
 49. [x] Unused plugins: health+tasks wired into tracker — archived (`b87f0240`); signals/email/analytics/logs/rls stay catalog-only
+50. [x] Slash-redirect missed 404s from MATCHED routes (wildcards/nested services) — archived (probe moved from fallback to a whole-router layer)

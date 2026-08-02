@@ -37,21 +37,35 @@
 //! slash) doesn't silently become a GET when the canonical URL is
 //! `/api/users/`. umbral picks 308 since it's a greenfield framework.
 //!
-//! ## Implementation: fallback handler, not tower layer
+//! ## Implementation: an outer layer over EVERY 404, not a fallback
 //!
-//! `Router::layer(...)` in axum wraps individual route handlers; it
-//! does **not** run on requests that don't match any route. The
-//! redirect probe has to fire on 404s for paths that *don't* match —
-//! so we install a fallback handler instead. The handler captures a
-//! pre-fallback clone of the Router and probes it for the alternate
-//! form when a request hits the fallback.
+//! The first implementation was a `Router::fallback` handler, which only
+//! runs on route-*misses*. That left a blind spot users hit constantly
+//! (gaps4 #50): a 404 produced by a MATCHED route never reaches a
+//! fallback, and wildcard routes make that the common case — `/api/docs/`
+//! *matches* REST's `/api/{table}/` route (table = "docs"), REST answers
+//! 404 "unknown resource" from inside the handler, and the redirect to
+//! the real `/api/docs` never fired. The same mechanism produced the
+//! playground `/api/playground` trap, and gaps3 #11 hand-mounted both
+//! slash forms of every auth route to dodge it — symptoms of the
+//! mechanism being at the wrong altitude.
+//!
+//! The probe is now a middleware layer wrapped around the WHOLE router
+//! (including its fallback and nested services): run the request, and if
+//! the response — from a matched handler, a wildcard capture, a
+//! `nest_service`, or the fallback — is a 404, probe the alternate slash
+//! form against a pre-layer snapshot of the router and redirect when it
+//! would answer. A deliberate 404 whose alternate form ALSO 404s (a
+//! missing row when both slash forms are registered, an out-of-scope row)
+//! passes through with its original body untouched.
 //!
 //! ## Performance
 //!
-//! Routes that match on the first try pay zero overhead. The fallback
-//! only fires when nothing matched; in that case it does one extra
-//! Router::call to probe the alternate path. The probe goes through a
-//! Router clone (cheap, Arc internally).
+//! Responses that aren't 404 pay a string clone of the path. A 404 pays
+//! one extra Router::call to probe the alternate path (through a Router
+//! clone — cheap, Arc internally). The probe is a header-less GET: safe
+//! to repeat, and a 405 ("route exists, wrong method") counts as proof
+//! enough to redirect.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -59,6 +73,7 @@ use std::pin::Pin;
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, Response, StatusCode, Uri, header};
+use axum::middleware::Next;
 use tower::Service;
 
 /// Policy for how the framework handles requests with a trailing slash
@@ -119,29 +134,30 @@ impl SlashRedirect {
     }
 }
 
-/// Build a closure suitable for `Router::fallback_service` that
-/// implements the slash-redirect policy.
+/// Build the middleware closure (for `axum::middleware::from_fn`) that
+/// implements the slash-redirect policy over EVERY 404 the app produces
+/// (gaps4 #50) — matched handlers, wildcard captures, nested services,
+/// and the fallback alike.
 ///
-/// `snapshot` is a clone of the router taken **before** the fallback
-/// is installed, so probing it can't recursively re-trigger this
-/// fallback. `policy` chooses the redirect direction.
-///
-/// Returns a function-like service that takes
-/// `axum::http::Request<Body>` and returns `axum::http::Response<Body>`.
-pub fn slash_redirect_fallback(
+/// `snapshot` is a clone of the router taken **before** this layer is
+/// applied, so probing it can't recursively re-enter the layer. `policy`
+/// chooses the redirect direction. A 404 whose alternate form doesn't
+/// answer passes through with its original body untouched (a REST JSON
+/// 404 stays a REST JSON 404).
+pub fn slash_redirect_probe(
     snapshot: Router,
     policy: SlashRedirect,
-    not_found_template: Option<String>,
-) -> impl Fn(Request<Body>) -> Pin<Box<dyn Future<Output = Response<Body>> + Send>>
+) -> impl Fn(Request<Body>, Next) -> Pin<Box<dyn Future<Output = Response<Body>> + Send>>
 + Clone
 + Send
 + Sync
 + 'static {
-    move |req: Request<Body>| {
+    move |req: Request<Body>, next: Next| {
         let snapshot = snapshot.clone();
         let policy = policy;
-        let template = not_found_template.clone();
         Box::pin(async move {
+            // Capture the path/query up front — `next.run` consumes the
+            // request.
             let original_path = req.uri().path().to_owned();
             let query = req
                 .uri()
@@ -149,34 +165,36 @@ pub fn slash_redirect_fallback(
                 .map(|q| format!("?{q}"))
                 .unwrap_or_default();
 
-            // 404 path. Uses the configured not-found template when
-            // present; otherwise plain text.
-            let default_404 =
-                || crate::errors::render_not_found(template.as_deref(), &original_path);
-
-            // Don't fire the redirect unless the policy says so.
+            let response = next.run(req).await;
+            // Only a 404 is a candidate — and only when the policy
+            // produces an alternate form for this path.
+            if response.status() != StatusCode::NOT_FOUND {
+                return response;
+            }
             let Some(alt) = policy.alternate_path(&original_path) else {
-                return default_404();
+                return response;
             };
-            // Probe the alternate path with a GET request. axum's
-            // routes only match specific methods; if a route exists
-            // for `/alt` it usually serves GET (and a re-request from
-            // the browser after the 308 will use the same method the
-            // user attempted). For non-GET probes that come back 405
-            // we still redirect — 405 means "route exists, just not
-            // for that method" which is enough to know the alternate
-            // path is real.
+
+            // Probe the alternate path with a header-less GET. axum's
+            // routes only match specific methods; if a route exists for
+            // `alt` it usually serves GET (and the client's re-request
+            // after the 308 uses the method it originally attempted).
+            // For non-GET probes that come back 405 we still redirect —
+            // 405 means "route exists, just not for that method", which
+            // is enough to know the alternate path is real. The probe
+            // carries no headers, so a protected alternate answers
+            // 401/403 — also proof of existence.
             let alt_uri: Uri = match format!("{alt}{query}").parse() {
                 Ok(u) => u,
-                Err(_) => return default_404(),
+                Err(_) => return response,
             };
             let probe_req = match Request::builder()
                 .method(Method::GET)
-                .uri(alt_uri.clone())
+                .uri(alt_uri)
                 .body(Body::empty())
             {
                 Ok(r) => r,
-                Err(_) => return default_404(),
+                Err(_) => return response,
             };
             // Drive poll_ready before call() per Service contract.
             // The fully-qualified syntax pins which `Service<...>`
@@ -193,13 +211,13 @@ pub fn slash_redirect_fallback(
                 match <Router as Service<Request<Body>>>::call(&mut probe_service, probe_req).await
                 {
                     Ok(r) => r,
-                    Err(_) => return default_404(),
+                    Err(_) => return response,
                 };
-            // Removed debug eprintln; uncomment for diagnostics.
-            // 404 means "no route for this path at all." Anything
-            // else (200, 405, 3xx, etc.) means a route exists.
+            // 404 means "the alternate doesn't answer either" — keep the
+            // ORIGINAL response (body and all). Anything else (200, 405,
+            // 401, 3xx, …) means a route exists there.
             if probe_resp.status() == StatusCode::NOT_FOUND {
-                return default_404();
+                return response;
             }
             // Issue a 308 redirect preserving method + body, with
             // the original query string carried across.

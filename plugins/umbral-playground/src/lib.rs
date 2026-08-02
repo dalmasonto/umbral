@@ -9,11 +9,10 @@
 //! By default the console is served at **`/playground/`** (gaps4 #43). The
 //! default deliberately lives OUTSIDE the `/api` namespace: an earlier
 //! default of `/api/playground` was shadowed by REST's `/api/{table}`
-//! route — the no-slash form MATCHED that route and 404ed from REST, and
-//! `slash_redirect` couldn't rescue it because the fallback only runs on a
-//! true route-miss. Off `/api`, the no-slash `/playground` is a genuine
-//! miss, so `slash_redirect(SlashRedirect::Append)` forwards it to the
-//! console like any other path.
+//! route — the no-slash form MATCHED that route and 404ed from REST.
+//! (Since gaps4 #50 the slash-redirect layer rescues matched-route 404s
+//! too, so even that shape now redirects — but a clean mount beats a
+//! 308 hop, so the default stays off `/api`.)
 //!
 //! Mount it anywhere else with [`PlaygroundPlugin::at`]:
 //!
@@ -22,7 +21,8 @@
 //! ```
 //!
 //! If you relocate it back under REST's prefix (`.at("/api/playground")`),
-//! the old shadowing returns and only the trailing-slash URL works.
+//! the shadowing returns: the no-slash URL reaches the console only via a
+//! slash-redirect 308 (or 404s with the policy off).
 
 use std::path::PathBuf;
 
@@ -93,11 +93,11 @@ impl PlaygroundPlugin {
     /// The console is served at `<base_path>/` — **`/playground/`** by
     /// default, and with `slash_redirect(SlashRedirect::Append)` the
     /// no-slash `/playground` forwards to it. The default deliberately
-    /// lives outside `/api` (gaps4 #43): mounted under REST's prefix, the
-    /// no-slash form MATCHES REST's `/api/{table}` route and 404s from
-    /// REST — a matched route is not a route-miss, so `slash_redirect`
-    /// never runs. `.at(...)` relocates it anywhere; relocating back under
-    /// `/api` revives that shadowing and only the trailing-slash URL works.
+    /// lives outside `/api` (gaps4 #43), where nothing shadows it; under
+    /// REST's prefix the no-slash form matches `/api/{table}` and only
+    /// reaches the console via the slash-redirect layer's 308 (gaps4 #50)
+    /// — one extra hop, or a plain 404 with the policy off. `.at(...)`
+    /// relocates it anywhere.
     ///
     /// [`RestPlugin`]: https://docs.rs/umbral-rest
     pub fn new(app_name: impl Into<String>) -> Self {
@@ -128,8 +128,8 @@ impl PlaygroundPlugin {
     ///
     /// The console is served at `<path>/` (with a trailing slash). Keep the
     /// path OUTSIDE the REST prefix: `.at("/api/playground")` puts the
-    /// no-slash URL back inside REST's `/api/{table}` route, which matches
-    /// it and 404s — see [`new`](Self::new) for the full explanation.
+    /// no-slash URL back inside REST's `/api/{table}` route — reachable
+    /// only via a slash-redirect 308 hop — see [`new`](Self::new).
     pub fn at(mut self, path: impl Into<String>) -> Self {
         let trimmed = path.into().trim_end_matches('/').to_string();
         self.base_path = if trimmed.is_empty() {
