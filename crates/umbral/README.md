@@ -1,6 +1,8 @@
 # umbral
 
-A batteries-included web framework for Rust. Declare your data and you get migrations, an admin, CRUD, and an optional REST API, backed by Rust's compile-time guarantees.
+**Every capability is a plugin. Including auth.**
+
+A declarative web framework for Rust. Declare your data and you get migrations, an admin, CRUD, and an optional REST API, backed by Rust's compile-time guarantees. Auth, the admin, and the API layer are plugins registered through the same trait your code uses, with no privileged core.
 
 The name "umbral" means "of the shadow" (from the Latin umbra, shadow).
 

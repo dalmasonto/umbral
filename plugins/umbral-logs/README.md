@@ -2,7 +2,7 @@
 
 Request logging for umbral. A non-blocking capture layer records each HTTP request to a RequestLog model, browsable in the admin.
 
-This is a built-in plugin for umbral, a batteries-included web framework for Rust.
+This is a built-in plugin for umbral, a declarative web framework for Rust.
 
 ## Install
 

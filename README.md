@@ -1,6 +1,8 @@
 # umbral
 
-A batteries-included web framework for Rust.
+**Every capability is a plugin. Including auth.**
+
+A declarative web framework for Rust. Auth is the heaviest subsystem umbral ships, a full plugin generic over your user model, and it registers through the same trait your code uses. No privileged core, and Cargo's dependency rules enforce it.
 
 Declare your data models and umbral gives you managed migrations, a typed ORM, an admin UI, an auto-generated REST API, auth, sessions, background tasks, and email - wired together, with Rust's compile-time guarantees instead of runtime hopes.
 

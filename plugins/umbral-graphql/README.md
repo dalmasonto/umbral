@@ -2,7 +2,7 @@
 
 A real GraphQL API derived from your umbral models — relations and all.
 
-This is an optional plugin for umbral, a batteries-included web framework for Rust.
+This is an optional plugin for umbral, a declarative web framework for Rust.
 
 ## Install
 

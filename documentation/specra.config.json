@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/SpecraDocs/specra-sdk/main/config/specra.config.schema.json",
   "site": {
     "title": "Umbral",
-    "description": "Batteries-included Rust web framework: ORM, managed migrations, REST API, admin, auth, sessions, tasks, email. Built on axum + sqlx.",
+    "description": "Declarative Rust web framework: ORM, managed migrations, REST API, admin, auth, sessions, tasks, email. Built on axum + sqlx.",
     "url": "https://dalmasonto.github.io/umbral",
     "baseUrl": "/umbral",
     "language": "en",

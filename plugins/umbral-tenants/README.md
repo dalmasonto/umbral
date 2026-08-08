@@ -2,7 +2,7 @@
 
 Schema-per-tenant multitenancy for umbral: one Postgres database, one schema per tenant, a shared `public` for cross-tenant apps.
 
-This is a built-in plugin for umbral, a batteries-included web framework for Rust.
+This is a built-in plugin for umbral, a declarative web framework for Rust.
 
 ## Install
 

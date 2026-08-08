@@ -15,11 +15,11 @@
   let { data } = $props();
   let config = $derived(data.config);
   const docsUrl = link('/docs/v0.0.1/about');
-  const pageTitle = 'Umbral - the batteries-included Rust web framework for full-stack apps and APIs';
+  const pageTitle = 'Umbral - the declarative Rust web framework for full-stack apps and APIs';
   const pageDescription =
     'Umbral is a Rust web framework for shipping complete web applications: ORM with managed migrations, auto-generated REST API, admin UI, auth + sessions, background tasks, email, and a plugin system. Compile-time guarantees instead of runtime hopes.';
   const pageKeywords =
-    'Rust web framework, Rust ORM, Rust web framework with API, Rust admin panel, Rust REST framework, full-stack Rust, sqlx ORM, axum framework, Rust web development, batteries-included Rust';
+    'Rust web framework, Rust ORM, Rust web framework with API, Rust admin panel, Rust REST framework, full-stack Rust, sqlx ORM, axum framework, Rust web development, declarative Rust';
   let siteUrl = $derived((config?.site?.url || 'http://localhost:5173').replace(/\/$/, ''));
 
   let jsonLd = $derived({
@@ -81,13 +81,13 @@
       <p class="text-sm uppercase tracking-widest text-muted-foreground mb-4">v0.0.1 · pre-alpha</p>
       <h1 id="hero-heading" class="text-5xl md:text-7xl font-bold tracking-tight mb-6">
         <span class="bg-gradient-to-r from-[#bd34fe] to-[#646cff] bg-clip-text text-transparent">
-          Ship the whole app.
+          Every capability is a plugin.
         </span>
         <br />
-        <span class="text-foreground">In Rust.</span>
+        <span class="text-foreground">Including auth.</span>
       </h1>
       <p class="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-6 leading-relaxed">
-        Umbral is a batteries-included Rust web framework: declare your data and you get
+        Umbral is a declarative Rust web framework: declare your data and you get
         <strong class="text-foreground font-semibold">managed migrations</strong>, a
         <strong class="text-foreground font-semibold">REST API</strong>, an
         <strong class="text-foreground font-semibold">admin UI</strong>,
