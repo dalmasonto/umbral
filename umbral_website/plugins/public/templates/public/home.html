@@ -2,8 +2,8 @@
 {% import "plugin_directory/_macros.html" as media %}
 {% import "community/_channel.html" as cc %}
 
-{% block title %}Umbral - the batteries are real plugins{% endblock %}
-{% block meta_description %}Umbral gives Rust developers a complete web framework - models, migrations, admin, forms, REST, background work - with every battery delivered as a plugin you can enable, replace, or extend. This site is built with Umbral.{% endblock %}
+{% block title %}Umbral - every capability is a plugin, including auth{% endblock %}
+{% block meta_description %}Umbral gives Rust developers a complete web framework - models, migrations, admin, forms, REST, background work - with every capability delivered as a plugin you can enable, replace, or extend. This site is built with Umbral.{% endblock %}
 
 {# -----------------------------------------------------------------------
    Scoped presentation layer. Everything here is driven by the :root CSS
@@ -155,10 +155,10 @@
     Modular Rust web framework · v{{ umbral_version }}
   </div>
   <h1 class="reveal mx-auto max-w-[880px] text-[40px] font-extrabold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[52px] lg:text-[62px]" style="--d:60ms">
-    The batteries are <span class="text-accent">real plugins.</span>
+    Every capability is a plugin. <span class="text-accent">Including auth.</span>
   </h1>
   <p class="reveal mx-auto mt-6 max-w-[640px] text-[18px] leading-[1.55] text-muted sm:text-[20px]" style="--d:130ms">
-    Umbral gives Rust developers a complete web framework - models, migrations, admin, forms, REST, background work - with every battery delivered as a plugin you can enable, replace, or extend.
+    Umbral gives Rust developers a complete web framework - models, migrations, admin, forms, REST, background work - with every capability delivered as a plugin you can enable, replace, or extend.
   </p>
   <div class="reveal mt-[34px] flex flex-wrap justify-center gap-3" style="--d:200ms">
     <a href="/docs" class="btn-accent btn-accent--lg">
@@ -216,7 +216,7 @@
       <pre class="overflow-x-auto px-[22px] py-5 font-mono text-[13.5px] leading-[1.85] text-shade-ink"><span class="text-code-violet">$</span> umbral startproject <span class="text-code-green">blog</span>
 <span class="text-code-violet">$</span> cd blog && umbral startapp <span class="text-code-green">posts</span>
 
-<span class="text-muted"># enable batteries — they're plugins, wired in main.rs</span>
+<span class="text-muted"># enable capabilities, they're plugins, wired in main.rs</span>
 <span class="text-shade-ink">App</span>::builder()
   .plugin(<span class="text-code-amber">AdminPlugin</span>::new())
   .plugin(<span class="text-code-amber">RestPlugin</span>::new())
@@ -494,11 +494,11 @@ $ cargo run -- migrate
 </section>
 
 {# -----------------------------------------------------------------------
-   Prebuilt batteries - the official plugin grid.
+   Prebuilt plugins - the official plugin grid.
    ----------------------------------------------------------------------- #}
 <section class="mx-auto max-w-[1200px] px-7 py-10">
   <div class="mx-auto mb-[34px] max-w-[680px] text-center">
-    <h2 class="mb-3 text-[28px] font-extrabold tracking-[-0.03em] sm:text-[34px]">The batteries, included</h2>
+    <h2 class="mb-3 text-[28px] font-extrabold tracking-[-0.03em] sm:text-[34px]">Every capability, a plugin</h2>
     <p class="text-[16.5px] leading-[1.55] text-muted">Official plugins maintained by the Umbral team. Each one is swappable, has its own page, and tracks what's shipped vs. planned.</p>
   </div>
   <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">

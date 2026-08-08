@@ -6,7 +6,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 Greenfield. No Cargo workspace or source yet. Before scaffolding anything, read `arch.md`; that's the authoritative design spec.
 
-umbral is a batteries-included web framework in Rust (*umbral* means 'of the shadow', from Latin *umbra*). The goal is to recreate that batteries-included, declare-your-data-and-get-everything feeling: declare data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees. The name is a placeholder; the whole tree can be renamed later with `sed 's/umbral/yourname/g'`.
+umbral is a declarative web framework in Rust (*umbral* means 'of the shadow', from Latin *umbra*). The goal is to recreate that declare-your-data-and-get-everything feeling: declare data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees. The name is a placeholder; the whole tree can be renamed later with `sed 's/umbral/yourname/g'`.
 
 ## The one idea that matters most
 

@@ -1,4 +1,4 @@
-# Building a Batteries-Included Web Framework in Rust - Architecture, Features & Build Strategy
+# Building a Declarative, Full-Stack Web Framework in Rust - Architecture, Features & Build Strategy
 
 The goal is a particular *feeling*: declare your data, get migrations, CRUD, an admin, and (optionally) an API almost for free, while gaining Rust's compile-time resilience. umbral is a self-contained Rust framework with its own ORM, migration engine, and plugin system. The framework is **thin-core + plugin-heavy**, and it **dogfoods its own plugin system** for every built-in feature.
 

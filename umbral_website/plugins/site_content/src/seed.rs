@@ -31,13 +31,13 @@ const POSTS: &[Seed] = &[
     Seed {
         slug: "why-umbral-exists",
         title: "Why Umbral exists",
-        excerpt: "Rust has fast routers and solid ORMs. What it didn't have was the batteries-included feeling: declare your data and get migrations, an admin, forms, and a REST API almost for free. Umbral is that feeling, rebuilt on Rust's guarantees.",
+        excerpt: "Rust has fast routers and solid ORMs. What it didn't have was the declare-and-get-everything feeling: declare your data and get migrations, an admin, forms, and a REST API almost for free. Umbral is that feeling, rebuilt on Rust's guarantees.",
         kind: BlogPostKind::DesignNote,
         reading_minutes: 7,
         featured: true,
         body: r#"Rust already has excellent web building blocks. `axum` is a great router, `sqlx` is a great database layer, `serde` is a great serializer. What it didn't have, until now, is what makes a framework productive: one where you **declare your data once** and get migrations, CRUD, an admin, forms, and an optional REST API almost for free.
 
-Umbral ('of the shadow', from Latin *umbra*, shadow) is a deliberate attempt to bring that batteries-included feeling to Rust's compile-time guarantees.
+Umbral ('of the shadow', from Latin *umbra*, shadow) is a deliberate attempt to bring that declare-and-get-everything feeling to Rust's compile-time guarantees.
 
 ![The Umbral plugin directory, built with Umbral](/media/91b8f829-2e2e-4ecb-8c53-4e2fec4a7028-adem_preview2-720x405.jpg)
 
@@ -189,12 +189,12 @@ Each plugin owns its own migrations. `migrate` walks every registered plugin, co
     },
     Seed {
         slug: "the-plugin-contract-batteries-as-real-plugins",
-        title: "The plugin contract: batteries as real plugins",
+        title: "The plugin contract: every capability is a real plugin",
         excerpt: "Dependencies point inward toward the core; control flows outward through a trait. That single rule is what lets you keep the official auth, swap it for your SSO, or build a project-specific plugin — all behind the same boundary.",
         kind: BlogPostKind::DesignNote,
         reading_minutes: 8,
         featured: true,
-        body: r#"Umbral's strongest public argument is also its simplest internal rule: **the batteries are real plugins.** The official auth, sessions, admin, tasks, and REST implement the exact same `Plugin` trait a community developer would.
+        body: r#"Umbral's strongest public argument is also its simplest internal rule: **every capability is a real plugin.** The official auth, sessions, admin, tasks, and REST implement the exact same `Plugin` trait a community developer would.
 
 ## Dependency inversion is the whole game
 
@@ -235,13 +235,13 @@ App::builder()
 Because the boundary is identical first-party or third, you can swap the default auth for your SSO, drop in a community GraphQL plugin, or build a project-specific plugin with `startapp` — and the admin, the ORM, and the rest of your app keep working unchanged.
 
 ```toml
-# enable batteries — they're just plugins
+# enable capabilities, they're just plugins
 umbral-admin = "0.1"
 umbral-rest  = "0.1"
 acme-graphql = "0.3"   # a community plugin, same contract
 ```
 
-That's the entire pitch: a productive, batteries-included web framework where no capability is privileged, and the one you want to replace is always replaceable.
+That's the entire pitch: a productive, declarative web framework where no capability is privileged, and the one you want to replace is always replaceable.
 "#,
     },
     Seed {
@@ -315,11 +315,11 @@ Declare once, and the form, the admin, the API, and your queries all read the sa
     Seed {
         slug: "we-tried-to-break-our-own-framework",
         title: "The week we tried to break our own framework",
-        excerpt: "A batteries-included framework makes a quiet promise: the easy path is the safe path. So we spent a week attacking our own defaults — and shipped a stack of fixes. Here's what 'secure by default' actually costs, and why it's the feature you never see.",
+        excerpt: "A declarative framework makes a quiet promise: the easy path is the safe path. So we spent a week attacking our own defaults, and shipped a stack of fixes. Here's what 'secure by default' actually costs, and why it's the feature you never see.",
         kind: BlogPostKind::DesignNote,
         reading_minutes: 8,
         featured: true,
-        body: r#"Every framework that says "batteries included" is really making a promise about *defaults*. The whole pitch — declare your data and get an admin, a REST API, forms, migrations — only holds up if the thing you get for free is also the thing that's safe. The moment the convenient path and the correct path diverge, "batteries included" becomes "footguns included."
+        body: r#"Every framework that promises to include everything is really making a promise about *defaults*. The whole pitch, declare your data and get an admin, a REST API, forms, migrations, only holds up if the thing you get for free is also the thing that's safe. The moment the convenient path and the correct path diverge, "everything included" becomes "footguns included."
 
 So one week, we stopped adding features and tried to break Umbral instead. We read every plugin as if we were the attacker, not the author. The rule was simple: assume nothing, and treat every "this is probably fine" as a bug until proven otherwise.
 
@@ -355,7 +355,7 @@ Two app replicas deploying at once used to race the same schema change; one woul
 
 Here's the thing about all of this: if we did it right, you will never see any of it. There's no dashboard for "the OOM that didn't happen" or "the row you didn't leak." Secure-by-default is the rarest kind of feature — the one whose entire job is to be invisible.
 
-But it's also the reason a batteries-included framework is worth using at all. The value was never that you *can* build auth, or throttling, or multi-tenancy. You can build those anywhere. The value is that you get them already thought through — including the 3 a.m. edge cases you'd never have time to chase on a deadline.
+But it's also the reason a declarative framework is worth using at all. The value was never that you *can* build auth, or throttling, or multi-tenancy. You can build those anywhere. The value is that you get them already thought through — including the 3 a.m. edge cases you'd never have time to chase on a deadline.
 
 We tried to break our own framework for a week. What we actually did was write down all the hard questions once, so you don't have to ask them every time you ship.
 "#,
@@ -363,13 +363,13 @@ We tried to break our own framework for a week. What we actually did was write d
     Seed {
         slug: "ship-a-saas-this-weekend-in-rust",
         title: "Ship a SaaS this weekend, in Rust, without the boilerplate",
-        excerpt: "You have an idea and two free days. Here's how a batteries-included Rust framework takes you from an empty repo to a real multi-tenant app — auth, an admin, a REST API, background jobs — before Sunday night. No DTOs, no glue code, no yak-shaving.",
+        excerpt: "You have an idea and two free days. Here's how a declarative Rust framework takes you from an empty repo to a real multi-tenant app, auth, an admin, a REST API, background jobs, before Sunday night. No DTOs, no glue code, no yak-shaving.",
         kind: BlogPostKind::Tutorial,
         reading_minutes: 9,
         featured: true,
         body: r#"It's Friday evening. You have an idea you can't shake and a weekend with nothing on it. The idea is a small SaaS — a dashboard your customers log into, each seeing only their own data. Nothing exotic. The kind of thing you've built before and remember mostly as *boilerplate*: wiring auth, hand-rolling an admin, writing the same CRUD endpoints, gluing a job queue on.
 
-This time you reach for Umbral, a batteries-included framework for Rust — think the productivity of Django or Rails, on top of Rust's compile-time guarantees. Here's how the weekend goes.
+This time you reach for Umbral, a declarative framework for Rust, think the productivity of Django or Rails, on top of Rust's compile-time guarantees. Here's how the weekend goes.
 
 ## Friday night: declare your data
 
@@ -450,7 +450,7 @@ Then you sprinkle in the finishing touches: file uploads for avatars through a s
 
 You didn't build a framework this weekend. You built *your app* — and the framework quietly handled auth, the admin, the API, migrations, isolation, and background work, each as an opt-in plugin you could swap or drop.
 
-The batteries-included promise was never "you can't do this yourself." Of course you can. The promise is that you shouldn't have to spend a weekend on the parts that are the same in every app — so you can spend it on the part that's only in yours.
+The whole promise was never "you can't do this yourself." Of course you can. The promise is that you shouldn't have to spend a weekend on the parts that are the same in every app, so you can spend it on the part that's only in yours.
 
 Ship it. It's still Sunday.
 "#,
@@ -464,7 +464,7 @@ Ship it. It's still Sunday.
         featured: false,
         body: r#"Most frameworks have a *core* and then some *extensions*. The core gets special privileges — hooks the extensions can't reach, a fast path only the built-ins get to use. Extensions are second-class citizens, and you feel it the first time you try to build something the authors didn't anticipate.
 
-Umbral made a different bet, and it's the bet that shapes everything else: **the core is thin, and everything else is a plugin — including the batteries.** Auth, sessions, the admin, REST, the task queue: structurally, each is identical to a plugin you'd write yourself. There is no privileged path. If a built-in couldn't be expressed as a plugin, that would be a bug in the plugin contract, not a reason to cheat.
+Umbral made a different bet, and it's the bet that shapes everything else: **the core is thin, and every capability is a plugin, including auth.** Auth, sessions, the admin, REST, the task queue: structurally, each is identical to a plugin you'd write yourself. There is no privileged path. If a built-in couldn't be expressed as a plugin, that would be a bug in the plugin contract, not a reason to cheat.
 
 Cargo enforces this for us. `umbral-core` doesn't depend on the REST plugin — so "serializers are a plugin" isn't a slogan, it's a fact the compiler won't let us break. A REST-free app compiles with zero serializer code in the binary.
 
@@ -496,7 +496,7 @@ Declare a model, mount these four, and you have a login page and an admin before
 
 Count them and it's twenty-one first-party plugins. But the number isn't the point. The point is that *your* plugin sits at exactly the same table. The extension point that powers the admin is the one you use to add your billing integration. The signal the framework fires on save is the one your code subscribes to. There's no inside track you're locked out of.
 
-That's the real batteries-included promise: not a fixed menu of features, but a toolbox where the tools you build are indistinguishable from the ones that came in the box. Browse the whole set on the [plugin directory](/plugins) — and then go write the twenty-second.
+That's the real promise: not a fixed menu of capabilities, but a toolbox where the tools you build are indistinguishable from the ones that came in the box. Browse the whole set on the [plugin directory](/plugins), and then go write the twenty-second.
 "#,
     },
 ];

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Product** | Umbral — a batteries-included, declarative web framework for Rust |
+| **Product** | Umbral, a declarative web framework for Rust |
 | **Status** | Draft v0.1 |
 | **Date** | May 30, 2026 |
 | **Owner** | *[you]* |
@@ -12,7 +12,7 @@
 
 ## 1. Summary
 
-Umbral is a batteries-included web framework for Rust that delivers a declarative developer experience: declarative models, managed migrations, an auto-generated admin, an optional REST layer, an out-of-the-box task queue, plus Rust's compile-time safety, predictable latency, and fearless concurrency. Its defining bet is the **porting experience**: the fastest path in the Rust ecosystem to take an existing database-backed API and stand it up in Rust, rather than assembling Axum + sqlx + serde + a dozen other crates by hand.
+Umbral is a full-stack web framework for Rust that delivers a declarative developer experience: declarative models, managed migrations, an auto-generated admin, an optional REST layer, an out-of-the-box task queue, plus Rust's compile-time safety, predictable latency, and fearless concurrency. Its defining bet is the **porting experience**: the fastest path in the Rust ecosystem to take an existing database-backed API and stand it up in Rust, rather than assembling Axum + sqlx + serde + a dozen other crates by hand.
 
 At the centre of the experience is the **declare → migrate → change → migrate** cycle: declare or change a model, an autodetected migration is generated, `migrate` applies it, and the next change diffs cleanly into the right `ALTER` / `DROP`. That loop is the product, not a later feature; it lands at M5 alongside the first models.
 
@@ -45,7 +45,7 @@ frameworks because the on-ramp is too steep. Umbral targets that on-ramp.
 ### Goals
 - **G1 — Fast porting.** Point Umbral at an existing database and generate working models +
   migrations; bring up a CRUD API over them with minimal code.
-- **G2 — Batteries included.** ORM, migrations, routing, auth, admin, sessions, caching, and a
+- **G2 — Everything included.** ORM, migrations, routing, auth, admin, sessions, caching, and a
   DB-backed task queue available without external assembly.
 - **G3 — Resilience by default.** The easy path is the safe path: nullable columns are
   `Option<T>`, errors are `Result`, query mistakes and backend mismatches fail at build/boot,
@@ -219,7 +219,7 @@ milestones M0–M13 in the companion plan.
 | **0.1 — Spine + migration loop alive** | Prove the ORM concept and make the declare → migrate loop work end-to-end | M0–M5 | Define a model, query it via the derived API, and have an autodetected migration applied by `migrate` against a real Postgres DB |
 | **0.2 — Porting MVP** | The differentiator | M6 + M8 hardening | `inspectdb` lands cleanly into the M5 loop; rename detection and data-preserving alters in place |
 | **0.3 — Plugin contract** | Extensibility keystone | M7–M8 (overlaps with 0.2 on M8) | Auth + sessions re-expressed as plugins; `migrate` walks every registered plugin |
-| **0.4 — Productivity** | Batteries | M9–M12 | Task queue, optional REST, admin, OpenAPI all usable |
+| **0.4 — Productivity** | Full-stack | M9–M12 | Task queue, optional REST, admin, OpenAPI all usable |
 | **0.5 — Polish** | DX & ecosystem | M13 | Generators, autoreload, docs, first external plugin |
 
 > Phasing is sequenced for *learning-first* development (the project's stated primary goal): each phase is independently demoable, and the plugin contract is extracted only after the primitives have been built once by hand. M5 sits inside phase 0.1 deliberately, because the declare → migrate → change → migrate cycle is what makes the framework feel complete and declarative; without it, the ORM alone wouldn't be demoable as "umbral works."
