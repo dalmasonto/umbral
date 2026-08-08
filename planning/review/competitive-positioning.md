@@ -2,6 +2,12 @@
 
 Date: 2026-06-10. umbral facts are grounded in the security/feature/performance audit in this folder. Competitor facts were verified by web sweep on 2026-06-10 (sources at the bottom); they reflect that date and should be re-checked before any public use, as cot/loco move fast.
 
+> **Update (2026-08-08): the two round-one gaps this analysis pivots on are now closed.** Re-verified against current code:
+> - **Secure-by-default: shipped (was "opt-in / round-one gap").** `SecurityPlugin` is mounted by default in generated projects (`crates/umbral-cli/src/scaffold.rs:687`, test at `:2522`), with CSRF, signed-CSRF, `nosniff`, `X-Frame-Options: DENY`, sensitive-header redaction, and private-cache all on by `Default`; argon2 hashing; minijinja autoescape; always-parameterized SQL. HSTS/CSP are deliberate opt-ins. The "price of entry to compete with cot on its secure-by-default headline" is now paid.
+> - **umbral-tasks correctness: fixed (was "has correctness bugs").** Double-claim is guarded by `for_update_skip_locked()` plus a conditional `WHERE id=? AND status='pending'` claim, and crashed-worker rows are reclaimed by `reclaim_orphaned_tasks` on the visibility timeout. `select_for_update` exists. See `broken-features.md` BROKEN-1/BROKEN-2.
+>
+> Consequence: umbral can now honestly compete on declarative-ergonomics-plus-safety AND keep the plugin-architecture wedge, rather than being forced to differentiate only on modularity. The rows below are left as the 2026-06-10 snapshot; read them with this update in mind.
+
 ## The layer map — most "competitors" aren't on the same layer
 
 | Layer | Solves | Members | Relationship to umbral |
@@ -35,10 +41,10 @@ The real comparison is **two frameworks: cot.rs (batteries-included, declarative
 | Auto-migrations + inspectdb | ✓ (+ inspectdb) | ✓ | ✓ (SeaORM migrator) |
 | Admin panel | ✓ rich (HTMX, ApexCharts dashboards, sheets, bulk actions) | ✓ | ✗ |
 | Auth / sessions / permissions | ✓ (3 plugins + RLS) | ✓ | ✓ |
-| Background tasks | ✓ umbral-tasks (has correctness bugs - see broken-features.md) | ✗ (not found) | ✓ workers + scheduler |
+| Background tasks | ✓ umbral-tasks (correctness fixed 2026-08-08 - see broken-features.md) | ✗ (not found) | ✓ workers + scheduler |
 | Full REST (serializers/viewsets) + OpenAPI + playground | ✓ full stack | OpenAPI only | controllers only |
 | Plugin breadth | rls, cache, email, media, health, signals, openapi, playground all first-class | focused core | focused core |
-| Secure-by-default | **opt-in (round-one gap)** | **opt-out (their brand)** | partial |
+| Secure-by-default | **on by default (fixed 2026-08-08)** | **opt-out (their brand)** | partial |
 | Maturity / traction | greenfield, solo, unpublished, placeholder name | v0.6, ~940★, shipping releases | most mature, biggest community |
 
 ## ORM call-site & data-layer comparison

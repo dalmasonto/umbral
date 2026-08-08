@@ -2,6 +2,12 @@
 
 Date: 2026-06-10. Companion to `competitive-positioning.md`. The reasoning here is grounded in the audit in this folder (the modularity claim is verified, not aspirational) and the competitor sweep.
 
+> **Update (2026-08-08), supersedes the round-one caveats in this doc.** Two caveats below are now stale, re-verified against current code:
+> - **Security is on by default.** `SecurityPlugin` is mounted by default in generated projects (`crates/umbral-cli/src/scaffold.rs:687`, asserted by a test at `:2522`). Its `Default` config ships CSRF on, signed-CSRF on, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, sensitive-header redaction, and private-cache; passwords use argon2; templates autoescape (minijinja); SQL is always parameterized. HSTS and CSP are intentionally opt-in (documented, so a wrong value cannot brick dev or a CDN-using app). "Secure by default" is now provable end to end.
+> - **umbral-tasks correctness is fixed.** `claim_one` now uses `for_update_skip_locked()` plus a conditional `WHERE id=? AND status='pending'` claim guard (no double-run on Postgres), and `reclaim_orphaned_tasks` runs every worker loop to re-queue rows a crashed worker left `running` past the visibility timeout (`plugins/umbral-tasks/src/lib.rs`). BROKEN-1 and BROKEN-2 no longer apply.
+>
+> The modularity thesis still stands. The strategic consequence is that umbral is no longer forced off the ease axis: "declarative" (descriptor), secure-by-default (proof point), and the plugin wedge (the flag) are all honest at once. That is Variation 5.
+
 ## The strategic core
 
 The established batteries-included frameworks, cot, and loco all compete on the same axis, **developer ease**:
@@ -81,7 +87,7 @@ Each is headline + subline + three proof-points. The proof-points are grounded i
 > umbral gives you the full batteries-included shape - models, migrations, an admin, a real REST framework, a task queue - on Rust, with one difference that changes everything: nothing is built-in. Everything is a plugin, including the parts we wrote.
 
 - **Outgrow nothing.** When you need to replace the admin, the auth, or the API layer, there's no privileged core fighting you — just another plugin.
-- **More batteries than a starter kit.** Auth, permissions, sessions, admin with dashboards, full serializer/viewset REST, OpenAPI, a background task queue, email, cache, media. *(Harden tasks-queue correctness before leading with it - see broken-features.md.)*
+- **More batteries than a starter kit.** Auth, permissions, sessions, admin with dashboards, full serializer/viewset REST, OpenAPI, a background task queue, email, cache, media. *(Tasks-queue correctness fixed as of 2026-08-08, see the update note at the top; safe to lead with.)*
 - **Safety the compiler enforces, not the docs.** argon2 hashing, template autoescaping, always-parameterized SQL.
 
 ### Variation 5 - Hybrid for refugees from monolithic batteries frameworks (leads familiar, pivots to the wedge)
@@ -98,4 +104,4 @@ Each is headline + subline + three proof-points. The proof-points are grounded i
 ## Notes for using these
 
 - **Pick one motto and commit** — fragmenting across taglines weakens the flag-plant. Variation 1's headline is the recommendation; the others are A/B candidates.
-- **Two proof-points in every variation depend on closing round-one gaps** to be honest in public: the security-defaults theme (so "secure primitives by default" reads as true end-to-end) and the umbral-tasks correctness bugs (before the task queue headlines a bullet). The motto raises the bar; the backlog is how you clear it. See `competitive-positioning.md` → "the engineering backlog *is* the marketing strategy."
+- **~~Two proof-points in every variation depend on closing round-one gaps~~ (superseded 2026-08-08).** Both gaps are now closed and verified in code: security defaults are on by default, and the umbral-tasks correctness bugs are fixed (see the update note at the top). Both the security theme and the task queue are safe to headline. Original note, kept for history: the security-defaults theme and the umbral-tasks correctness bugs used to need closing before public use. See `competitive-positioning.md`.

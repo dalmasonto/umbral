@@ -4,7 +4,7 @@
 > - **Fixed:** BROKEN-1 (conditional claim, `98ef6e9`), BROKEN-3 (mutex-poison recover + catch_unwind, `23ad8b0`), BROKEN-4 (no `process::exit`, `98ef6e9`), BROKEN-5 (logged decode failure, `23ad8b0`), BROKEN-6 (`get_opt`, `23ad8b0`), BROKEN-13 (stale comment, `23ad8b0`).
 > - **Also fixed:** BROKEN-7 (`cache_page` logs + 502 instead of fake-200, `17939c4`), BROKEN-8 (`Form<T>` checks Content-Type → 415, surfaces parse errors → 400, `dbb57c8`), BROKEN-9 (`CachePlugin::new(cache)` wires the ambient cache in `on_ready`, `17939c4`).
 > - **Also fixed:** BROKEN-11 (405 for non-GET/HEAD on embedded static), BROKEN-12 (cache backends log swallowed write errors), BROKEN-14 (Form derive message lists all validators) — all `93bf205`.
-> - **Deferred (genuine larger work):** BROKEN-2 (worker-crash task reclaim — needs a lease/reclaim watcher), BROKEN-10 (memory-backend eviction).
+> - **Deferred (genuine larger work):** BROKEN-10 (memory-backend eviction). *(BROKEN-2 was here; fixed 2026-08-08 via `reclaim_orphaned_tasks`, see its entry.)*
 
 Code that cannot work as written, swallows failures, or contradicts its own docs. Checked against `bugs/gaps.md`, `gaps2.md`, `REAL-GAPS.md`, `features.md` — only new findings here. The "already tracked" list is at the bottom.
 
@@ -20,7 +20,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** Add `select_for_update(skip_locked)` to the QuerySet (no-op on SQLite, `FOR UPDATE SKIP LOCKED` on Postgres) and use it in `claim_one` (see MISS-1). At minimum make the UPDATE conditional (`WHERE id = ? AND status = 'pending'`) and check `rows_affected` as an optimistic guard. Fix the comment either way.
 
 ## BROKEN-2 — Tasks: worker crash mid-task permanently loses the task
-> **⏳ DEFERRED** — needs a lease/reclaim watcher (larger change).
+> **✅ FIXED** (2026-08-08) — `reclaim_orphaned_tasks` runs on every worker loop iteration (`plugins/umbral-tasks/src/lib.rs:882`), moving rows left `status='running'` past the visibility timeout back to `pending` so they are re-claimed (or failed at `max_attempts`). The lease/reclaim watcher this entry asked for now exists.
 **Severity: high**
 
 - **File:** `plugins/umbral-tasks/src/lib.rs:60-63, 420-496`
