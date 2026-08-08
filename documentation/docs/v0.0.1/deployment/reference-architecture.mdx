@@ -1,0 +1,503 @@
+---
+title: Reference architecture
+description: Supported production topologies for umbral (single binary, split web/worker/beat, and the full self-hosted stack) with Docker Compose, Kubernetes, PaaS, and bare-metal recipes.
+sidebar_position: 3
+tags: [deployment, production, architecture, kubernetes, docker, self-hosted, observability]
+---
+
+# Reference architecture
+
+> **Draft (gaps5 #4).** This page is the operations reference for umbral's Stage 2 "self-hosted platform" posture described in `docs/decisions/2026-08-08-product-north-star.md`. It documents the topologies umbral supports today and is honest about the pieces still on the roadmap. Treat it as a living document: the API surface it points at is stable, but the recipes will keep growing.
+
+umbral is a framework first (Stage 1), and a self-hostable backend platform second (Stage 2). You own the runtime. This page names the deployment shapes umbral is built to run in, from a single binary on one box to a split web/worker/beat fleet behind a managed Postgres, and gives you a starting recipe for each of Docker Compose, Kubernetes, the common PaaS providers, and bare-metal systemd.
+
+Every umbral app is one binary. `serve`, `migrate`, `makemigrations`, `tasks-worker`, `tasks-beat`, and `collectstatic` are all subcommands of that same binary (`cargo run -- <command>`, or `./myapp <command>` for a release build). The topologies below differ only in how many copies of that binary you run and which subcommand each copy invokes.
+
+## The three topologies
+
+### 1. Single binary (web plus an in-process worker)
+
+The smallest supported shape: one process serves HTTP and, optionally, drains the task queue in the same tokio runtime. Good for a single VPS, an internal tool, a demo, or an early-stage app that has not outgrown one box.
+
+```
+              TLS
+  internet ──▶  reverse proxy  ──▶  ./myapp serve   ──▶  Postgres (or SQLite)
+                (Caddy/nginx)        (web + worker)
+```
+
+Run the web server with migrate-on-boot so a fresh database just works:
+
+```rust
+App::builder()
+    .auto_migrate_on_serve()
+    .plugin(HealthPlugin::default().require_migrations())
+    .plugin(TasksPlugin::default())
+    // ...
+    .build()?;
+```
+
+The task worker is a library function (`umbral_tasks::run_worker`) designed to be `tokio::spawn`ed alongside the web server, so a single-binary deploy can drain its own queue without a second process:
+
+```rust
+// In your main, after building the app and before/around serve:
+let (_tx, shutdown) = tokio::sync::watch::channel(false);
+tokio::spawn(umbral_tasks::run_worker(umbral_tasks::WorkerOptions {
+    shutdown,
+    ..Default::default()
+}));
+```
+
+`run_worker` returns cooperatively on shutdown (it never calls `process::exit`), so it cannot tear the web server down with it. This is the intended single-binary pattern.
+
+Trade-off: the worker shares CPU and the connection pool with request handling. The moment task load competes with request latency, split the worker out (topology 2). SQLite is viable here because you are single-writer by construction on one node; use Postgres the moment you run more than one instance.
+
+### 2. Split web / worker / beat (one shared Postgres)
+
+The conventional production shape. The same image runs three different subcommands as three process groups, all pointed at one Postgres:
+
+```
+                          ┌──▶  ./myapp serve         (N replicas, stateless)
+  reverse proxy / LB  ────┤
+                          ├──▶  ./myapp tasks-worker  (M replicas, drain the queue)
+                          └──▶  ./myapp tasks-beat     (exactly ONE, enqueues periodic jobs)
+                                        │
+                                        ▼
+                                    Postgres  ◀── ./myapp migrate  (one-shot, on deploy)
+```
+
+- **web**: `./myapp serve`. Stateless, scale horizontally. Put it behind the load balancer, gate routing on `/readyz`.
+- **worker**: `./myapp tasks-worker`. Scale horizontally. On Postgres the claim query uses `FOR UPDATE SKIP LOCKED`, so N workers each grab a different pending row instead of contending on the head of the queue. See [the tasks plugin](../plugins/tasks#running-the-worker).
+- **beat**: `./myapp tasks-beat`. The periodic scheduler that enqueues due `PeriodicTask` rows. Run **exactly one** replica: two beats double-enqueue every cron job. (Distributed leader election for beat is not yet built; keep it a singleton.)
+- **migrate**: `./myapp migrate`, run once as a discrete release step before the new web/worker images start. See [Migrations in production](./migrations-in-production).
+
+All four connect to the same Postgres via `UMBRAL_DATABASE_URL`. The queue, the periodic schedule, sessions, and everything else live in that one database, so this topology needs no extra infrastructure beyond Postgres and a reverse proxy.
+
+### 3. Full self-hosted stack
+
+Everything topology 2 has, plus the external services the batteries-on plugins reach for at scale:
+
+```
+                    CDN
+  internet ──▶  (static/media)          ┌──▶  web        (serve)
+        │                               │
+        └──▶  reverse proxy / LB   ─────┼──▶  worker     (tasks-worker)
+                                        └──▶  beat        (tasks-beat)
+                                                 │
+                    ┌────────────────────────────┼───────────────────────────┐
+                    ▼                ▼            ▼             ▼              ▼
+                 Postgres        Redis        S3-compatible   OTel         (backups /
+                (primary +      (cache /       object          collector    PITR target)
+                 replicas)      throttle /     storage
+                                broker*)       (static+media)
+```
+
+Component by component:
+
+- **Postgres**: the system of record. Add read replicas and point `UMBRAL_REPLICA_URL` at them for read routing.
+- **Redis** (`UMBRAL_REDIS_URL`): cache backend today. It is *also* the intended backend for distributed throttling and a task broker, both on the roadmap (see [Roadmap and honest gaps](#roadmap-and-honest-gaps)). Provision it now if you want cache; the other two land later.
+- **S3-compatible object storage**: static assets (`collectstatic --storage s3`) and user-uploaded media, via the storage plugin. Works with AWS S3, Cloudflare R2, MinIO, Backblaze B2, or any S3 API.
+- **OpenTelemetry collector**: receives OTLP/gRPC spans from every process (web, worker, beat). One trace per HTTP request out of the box under the `otel` feature.
+- **CDN**: fronts the static/media bucket (and optionally the app) for edge caching and TLS.
+- **Reverse proxy / LB**: terminates public TLS, routes on `/readyz`, and is the only publicly exposed surface.
+
+> The star on "broker" is deliberate: umbral's task queue is **database-backed** today. There is no Redis broker requirement. Redis in this diagram is for cache (shipped) and, later, distributed throttling. You can run the full stack without Redis if you only need cache-less operation.
+
+## Docker Compose
+
+A full topology-2/3 stack. `web`, `worker`, and `beat` all run the same image with different commands; `migrate` runs to completion first and gates everything else.
+
+```yaml
+# docker-compose.yml
+x-app: &app
+  image: myapp:latest
+  environment: &app-env
+    UMBRAL_ENVIRONMENT: prod
+    UMBRAL_DATABASE_URL: postgres://app:${DB_PASSWORD}@db:5432/app
+    UMBRAL_REDIS_URL: redis://redis:6379
+    UMBRAL_SECRET_KEY: ${SECRET_KEY}
+    UMBRAL_ALLOWED_HOSTS: app.example.com
+    # static/media on S3-compatible storage
+    UMBRAL_STATIC_STORAGE: s3
+    UMBRAL_STATIC_BUCKET: ${STATIC_BUCKET}
+    UMBRAL_STATIC_ENDPOINT: ${S3_ENDPOINT}
+    UMBRAL_STATIC_REGION: ${S3_REGION}
+    UMBRAL_STATIC_PUBLIC_BASE: https://cdn.example.com
+    # observability
+    UMBRAL_LOG_FORMAT: json
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    OTEL_SERVICE_NAME: myapp
+  depends_on:
+    db: { condition: service_healthy }
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--save", "60", "1"]
+    volumes:
+      - redisdata:/data
+
+  # One-shot: applies migrations to completion, then exits. Everything
+  # that serves waits on this. A bad migration turns the deploy red.
+  migrate:
+    <<: *app
+    command: ["migrate"]
+
+  web:
+    <<: *app
+    command: ["serve"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    ports:
+      - "127.0.0.1:8000:8000"   # loopback only; the proxy dials this
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/readyz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+    deploy:
+      replicas: 2
+
+  worker:
+    <<: *app
+    command: ["tasks-worker"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    deploy:
+      replicas: 2
+
+  beat:
+    <<: *app
+    command: ["tasks-beat"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    # exactly one; two beats double-enqueue every periodic job
+    deploy:
+      replicas: 1
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otel/config.yaml:ro
+
+volumes:
+  pgdata:
+  redisdata:
+```
+
+Notes:
+
+- Doubling `$$` in the healthcheck escapes the `$` so Compose does not try to interpolate it; the shell inside the container expands it.
+- `web` publishes on loopback only. A separate reverse proxy (Caddy, nginx, Traefik) owns public TLS and dials `127.0.0.1:8000`. See [Going to production](./going-to-production) for the proxy split and zero-downtime rollout settings.
+- `collectstatic` is a build/deploy step, not a running service. Run `./myapp collectstatic --storage s3` in your image build or a one-shot job that runs after `migrate`.
+
+## Kubernetes
+
+Three Deployments (web, worker, beat), a migrate Job gated by an init sequence, and Postgres as either a managed service (recommended) or an in-cluster StatefulSet. Sketch, trim to your cluster's conventions:
+
+```yaml
+# migrate as a one-shot Job you run (or a Helm pre-install/pre-upgrade hook)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: myapp-migrate
+spec:
+  backoffLimit: 0            # a failed migration fails the deploy
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: myapp:latest
+          args: ["migrate"]
+          envFrom:
+            - secretRef: { name: myapp-env }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-web
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: myapp, role: web } }
+  template:
+    metadata: { labels: { app: myapp, role: web } }
+    spec:
+      containers:
+        - name: web
+          image: myapp:latest
+          args: ["serve"]
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            - secretRef: { name: myapp-env }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8000 }
+            periodSeconds: 10
+          # let umbral drain: shutdown_drain(15s) plus a matching grace period
+          lifecycle:
+            preStop: { exec: { command: ["sleep", "15"] } }
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-worker
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: myapp, role: worker } }
+  template:
+    metadata: { labels: { app: myapp, role: worker } }
+    spec:
+      containers:
+        - name: worker
+          image: myapp:latest
+          args: ["tasks-worker"]
+          envFrom:
+            - secretRef: { name: myapp-env }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-beat
+spec:
+  replicas: 1                # NEVER more than one
+  strategy: { type: Recreate }   # avoid two beats overlapping during a rollout
+  selector: { matchLabels: { app: myapp, role: beat } }
+  template:
+    metadata: { labels: { app: myapp, role: beat } }
+    spec:
+      containers:
+        - name: beat
+          image: myapp:latest
+          args: ["tasks-beat"]
+          envFrom:
+            - secretRef: { name: myapp-env }
+```
+
+Key points:
+
+- **Liveness on `/healthz`, readiness on `/readyz`.** Liveness stays 200 while the process runs (a downstream DB blip must not restart-loop the pod). Readiness flips to 503 while migrations are pending or during drain, so the Service keeps a not-ready pod out of rotation. See [the health plugin](../plugins/health).
+- **Migrate as a Job, not an initContainer on every pod.** With the Postgres advisory lock, migrate-on-boot across replicas is safe (see [Migrations in production](./migrations-in-production)), but a single Job keeps the schema change a discrete, observable step. A Helm `pre-upgrade` hook is the idiomatic place.
+- **Drain.** Pair `AppBuilder::shutdown_drain(Duration::from_secs(15))` with a `preStop` sleep and a `terminationGracePeriodSeconds` longer than the drain, so the Endpoints controller removes the pod before it stops accepting. Details in [Going to production](./going-to-production#zero-downtime-rollout).
+- **Postgres**: prefer a managed instance (RDS, Cloud SQL, Neon, Supabase Postgres) and put its URL in the `myapp-env` Secret. If you must run it in-cluster, use a StatefulSet with a PersistentVolumeClaim and a real backup sidecar; an in-cluster database you do not back up is a data-loss incident waiting to happen.
+- **beat during rollout**: `strategy: Recreate` (not RollingUpdate) so you never briefly have two beat pods enqueuing the same cron jobs.
+
+## PaaS: Fly.io, Render, Railway
+
+The same one-image, multiple-process-groups model maps cleanly onto every process-based PaaS. The provider owns TLS, the load balancer, and (usually) a managed Postgres.
+
+**Fly.io.** Define process groups in `fly.toml`; run migrations as a release command so they complete before the new machines take traffic:
+
+```toml
+# fly.toml
+[processes]
+  web  = "serve"
+  worker = "tasks-worker"
+  beat = "tasks-beat"     # scale this group to exactly 1
+
+[deploy]
+  release_command = "migrate"
+
+[[services]]
+  processes = ["web"]
+  internal_port = 8000
+  [[services.http_checks]]
+    path = "/readyz"
+```
+
+Then `fly scale count web=3 worker=2 beat=1`. Set secrets with `fly secrets set UMBRAL_SECRET_KEY=... UMBRAL_DATABASE_URL=...`. Attach Fly Postgres or an external managed Postgres.
+
+**Render.** Model each process group as its own Render service off the same repo/image: a Web Service running `serve` (health check path `/readyz`), a Background Worker running `tasks-worker`, and a second Background Worker running `tasks-beat` pinned to one instance. Use a Render Job (or the pre-deploy command) for `migrate`, and a managed Render Postgres and Redis. Put env vars in an env group shared across the services.
+
+**Railway.** One service per process group, all deploying the same image with different start commands (`serve`, `tasks-worker`, `tasks-beat`). Provision the Postgres and Redis plugins, reference their connection strings as `UMBRAL_DATABASE_URL` / `UMBRAL_REDIS_URL`, and run `migrate` as a deploy/release step. Keep the beat service at one replica.
+
+Across all three: keep **exactly one beat**, gate the web health check on `/readyz`, and run `migrate` as a release step, not on every boot, unless you have deliberately chosen migrate-on-boot.
+
+## Bare-metal systemd
+
+For a single VPS or a fleet you manage yourself. One unit per process group, all reading the same environment file. Migrations run via a `oneshot` unit that the others require.
+
+```ini
+# /etc/myapp/env  (chmod 600, owned by the service user)
+UMBRAL_ENVIRONMENT=prod
+UMBRAL_DATABASE_URL=postgres://app:...@127.0.0.1:5432/app
+UMBRAL_REDIS_URL=redis://127.0.0.1:6379
+UMBRAL_SECRET_KEY=...
+UMBRAL_ALLOWED_HOSTS=app.example.com
+UMBRAL_BIND_ADDR=127.0.0.1:8000
+UMBRAL_LOG_FORMAT=json
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317
+```
+
+```ini
+# /etc/systemd/system/myapp-migrate.service  (runs to completion on deploy)
+[Unit]
+Description=myapp migrate
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=myapp
+EnvironmentFile=/etc/myapp/env
+ExecStart=/usr/local/bin/myapp migrate
+RemainAfterExit=yes
+```
+
+```ini
+# /etc/systemd/system/myapp-web.service
+[Unit]
+Description=myapp web
+After=myapp-migrate.service
+Requires=myapp-migrate.service
+
+[Service]
+Type=exec
+User=myapp
+EnvironmentFile=/etc/myapp/env
+ExecStart=/usr/local/bin/myapp serve
+Restart=always
+# give umbral's shutdown_drain time to finish before SIGKILL
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+# /etc/systemd/system/myapp-worker.service
+[Unit]
+Description=myapp task worker
+After=myapp-migrate.service
+Requires=myapp-migrate.service
+
+[Service]
+Type=exec
+User=myapp
+EnvironmentFile=/etc/myapp/env
+ExecStart=/usr/local/bin/myapp tasks-worker
+Restart=always
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+# /etc/systemd/system/myapp-beat.service  (single instance, do not template this)
+[Unit]
+Description=myapp periodic scheduler
+After=myapp-migrate.service
+Requires=myapp-migrate.service
+
+[Service]
+Type=exec
+User=myapp
+EnvironmentFile=/etc/myapp/env
+ExecStart=/usr/local/bin/myapp tasks-beat
+Restart=always
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Scale the worker with a templated unit (`myapp-worker@.service` started as `myapp-worker@1`, `myapp-worker@2`). Never template beat: exactly one. Put Caddy or nginx in front for TLS, proxying to `127.0.0.1:8000`.
+
+## Operational concerns
+
+### Running migrations on deploy
+
+Covered in depth in [Migrations in production](./migrations-in-production). The short version:
+
+- **Default (multi-instance): one-shot `migrate`** as a discrete release step before new instances serve. A non-zero exit fails the deploy.
+- **Alternative: `auto_migrate_on_serve()`** applies pending migrations on `serve` boot. Safe across any number of Postgres replicas because umbral takes a session-level advisory lock before applying anything; the first migrator wins, the rest block and then find nothing pending. A migrator that cannot get the lock within `UMBRAL_MIGRATION_LOCK_TIMEOUT_SECS` (default 300) fails with `MigrationLockTimeout` rather than hanging.
+- Gate readiness on migrations (`HealthPlugin::default().require_migrations()`) so an instance stays out of rotation until its schema is current.
+- Use [`checkmigrations`](../migrations/checkmigrations) in CI to fail a deploy on an unsafe migration before it ever reaches production.
+
+### Secrets and environment
+
+umbral reads configuration from `UMBRAL_*` environment variables (Stage 2 keeps secrets environment-first; a dedicated secrets manager integration is future work, gaps5 #18). The load-bearing ones:
+
+| Variable | Purpose |
+|---|---|
+| `UMBRAL_ENVIRONMENT` | `prod` / `dev`; controls autodetect-on-boot and secure defaults. |
+| `UMBRAL_SECRET_KEY` | Signing key for sessions, CSRF, signed URLs. Must be set, stable, and secret in prod. |
+| `UMBRAL_DATABASE_URL` | Primary Postgres DSN. |
+| `UMBRAL_REPLICA_URL` | Optional read-replica DSN for read routing. |
+| `UMBRAL_REDIS_URL` | Cache backend (and future throttle/broker). |
+| `UMBRAL_ALLOWED_HOSTS` | Comma-separated hostnames the app will answer to. |
+| `UMBRAL_BIND_ADDR` | Listen address (e.g. `0.0.0.0:8000` or `127.0.0.1:8000`). |
+| `UMBRAL_STATIC_*` | Static/media storage: `UMBRAL_STATIC_STORAGE`, `UMBRAL_STATIC_BUCKET`, `UMBRAL_STATIC_ENDPOINT`, `UMBRAL_STATIC_REGION`, `UMBRAL_STATIC_PUBLIC_BASE`. |
+| `UMBRAL_LOG_FORMAT` | `json` for structured logs. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` | OTLP span export (under the `otel` feature). |
+| `RUST_LOG` | tracing `EnvFilter` directive. |
+
+Deliver these through your platform's secret store (k8s Secret, Fly secrets, Render/Railway env groups, a `chmod 600` EnvironmentFile on bare metal). Never bake `UMBRAL_SECRET_KEY` or a database password into the image.
+
+### Health and readiness
+
+Mount `HealthPlugin::default().require_migrations()`. `GET /healthz` is liveness (200 while the process runs, point restart policies here). `GET /readyz` is readiness (200 only when the DB answers and no migration is pending, point the load balancer here). Full detail in [the health plugin](../plugins/health) and [Going to production](./going-to-production#health-and-readiness).
+
+### Postgres backups
+
+umbral does not manage your database backups; that is the operator's job, and it is non-negotiable for any real deploy.
+
+- **Managed Postgres**: enable automated backups and point-in-time recovery in the provider console. This is the recommended path.
+- **Self-managed**: run `pg_dump` on a schedule for logical backups, and configure WAL archiving (`archive_mode` plus an archive command shipping to the same S3-compatible bucket you use for media) for point-in-time recovery. Test a restore into a scratch database regularly; an untested backup is a hope, not a backup.
+- Migrations and backups compose: take a backup immediately before applying a schema migration in production, so a bad data-migration is recoverable.
+
+> PITR-grade, umbral-orchestrated backup tooling is not shipped (it is tracked as gaps5 #30). Today you wire backups with standard Postgres tooling around umbral, exactly as you would for any Postgres app.
+
+### Static and media files
+
+- **`collectstatic`** gathers every plugin's declared static assets. `./myapp collectstatic --storage local` writes them to `UMBRAL_STATIC_ROOT`; `./myapp collectstatic --storage s3` uploads them to the configured bucket. Run it as a build or deploy step, not at request time.
+- **Media** (user uploads) go through the storage plugin to the same S3-compatible backend. Signed URLs and per-object access gating are handled by the plugin; see [the storage plugin](../plugins/storage).
+- Front the bucket with a CDN and set `UMBRAL_STATIC_PUBLIC_BASE` to the CDN origin so generated asset URLs point at the edge, not your app.
+- Serving static files from the app process is fine for small single-binary deploys; move to S3 plus CDN as soon as you run more than one web replica, so every replica serves identical, cache-friendly URLs.
+
+### Observability
+
+umbral emits structured logs and OpenTelemetry traces out of the box (see [Observability](../observability)).
+
+- **Logs**: set `UMBRAL_LOG_FORMAT=json` for structured lines carrying `level`, `target`, fields, and (under the `otel` feature) `trace_id` / `span_id`. Ship them with your platform's log agent.
+- **Traces**: build with the `otel` feature and set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector's OTLP/gRPC address. You get one `http.request` span per request (method, route, status) exported to the collector. A collector that is unreachable at startup is not fatal; the app falls back to logs-only and boots anyway.
+- Run one collector as a sidecar or a cluster service, and fan its output out to your traces backend (Jaeger, Tempo, Honeycomb, Grafana Cloud, and so on).
+
+## Roadmap and honest gaps
+
+This posture is Stage 2 and still filling in. These pieces are **on the roadmap, not shipped**. Do not architect around them as if they exist today:
+
+- **Prometheus `/metrics` exporter (gaps5 #64).** umbral has no metrics endpoint yet. HTTP/DB/cache/task/queue counters and histograms are planned, but today your quantitative signal is logs and traces, not scrape-able metrics. If you need dashboards now, derive them from structured logs or trace data.
+- **Distributed rate limiting (gaps5 #67).** The REST throttle is in-memory and per-process. Across N replicas your effective limit is N times the configured limit, because each replica counts independently. A Redis-backed shared limiter is planned; until then, do coarse rate limiting at the reverse proxy / CDN if you need a hard global cap.
+- **W3C `traceparent` propagation (gaps5 #65).** Inbound `traceparent` headers are not yet extracted, so a request's span starts fresh in umbral instead of continuing an upstream trace. Cross-service trace stitching through umbral is not wired. Per-DB-query and per-task spans (gaps5 #66) are likewise deferred; only the request span is exported today.
+
+When these land, this page will fold them into the recipes above (a Redis limiter in topology 3, a `/metrics` scrape target in the k8s and Compose examples, `traceparent` continuation in the observability section).
+
+## See also
+
+- [Migrations in production](./migrations-in-production): one-shot vs migrate-on-boot, and the advisory lock.
+- [Going to production](./going-to-production): the reverse-proxy split and zero-downtime rollout settings.
+- [The health plugin](../plugins/health): `/healthz`, `/readyz`, and the migration gate.
+- [The tasks plugin](../plugins/tasks): the worker, beat, and how the queue scales.
+- [The storage plugin](../plugins/storage): S3 backends, `collectstatic`, signed media URLs.
+- [Observability](../observability): logs and OTLP traces, and what is deferred.
+- `docs/decisions/2026-08-08-product-north-star.md`: the Stage 1/2/3 product framing this page realizes.
