@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+  body { margin:0; font-family:Inter,system-ui,sans-serif; }
+  .row { display:flex; gap:56px; align-items:center; padding:48px 56px; flex-wrap:wrap; }
+  .dark { background:#07070f; }
+  .light { background:#f4f2ee; }
+  .lockup { display:flex; align-items:center; gap:18px; }
+  .word { font-weight:700; letter-spacing:-0.02em; font-size:44px; }
+  .word .a { color:#a78bfa; }         /* subtle accent on the last glyph */
+  .dark .word { color:#ecebf5; }
+  .light .word { color:#141126; }
+  .tag { font-weight:600; font-size:12px; letter-spacing:.16em; text-transform:uppercase; }
+  .dark .tag { color:#6b6f86; }
+  .light .tag { color:#8a8676; }
+  .chip { display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .chip .cap { font-size:11px; font-weight:600; opacity:.55; }
+  .dark .chip .cap { color:#aeb2c8; }
+  .light .chip .cap { color:#6a6656; }
+</style>
+</head>
+<body>
+  <div class="row dark">
+    <div class="chip"><img src="umbral-mark.svg" width="128" height="128"/><span class="cap">128</span></div>
+    <div class="chip"><img src="umbral-mark.svg" width="56" height="56"/><span class="cap">56</span></div>
+    <div class="chip"><img src="umbral-mark.svg" width="32" height="32"/><span class="cap">32</span></div>
+    <div class="chip"><img src="umbral-mark.svg" width="16" height="16"/><span class="cap">16</span></div>
+    <div class="lockup">
+      <img src="umbral-mark.svg" width="60" height="60"/>
+      <span class="word">umbr<span class="a">al</span></span>
+    </div>
+    <div class="chip"><img src="umbral-favicon.svg" width="40" height="40"/><span class="cap">favicon</span></div>
+    <div style="margin-left:auto"><span class="tag">of the shadow</span></div>
+  </div>
+
+  <div class="row dark">
+    <div class="chip"><img src="umbral-logo.svg" width="260" height="83"/><span class="cap">umbral-logo.svg</span></div>
+  </div>
+
+  <div class="row light">
+    <div class="chip"><img src="umbral-mark.svg" width="128" height="128"/><span class="cap">128</span></div>
+    <div class="chip"><img src="umbral-mark.svg" width="56" height="56"/><span class="cap">56</span></div>
+    <div class="lockup">
+      <img src="umbral-mark.svg" width="60" height="60"/>
+      <span class="word">umbr<span class="a">al</span></span>
+    </div>
+    <div style="margin-left:auto"><span class="tag">of the shadow</span></div>
+  </div>
+
+  <div class="row light">
+    <div class="chip"><img src="umbral-logo-light.svg" width="260" height="83"/><span class="cap">umbral-logo-light.svg</span></div>
+  </div>
+</body>
+</html>

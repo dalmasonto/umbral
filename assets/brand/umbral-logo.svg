@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 96" width="300" height="96" role="img" aria-label="umbral">
+  <defs>
+    <radialGradient id="umbra" cx="40%" cy="38%" r="75%">
+      <stop offset="0" stop-color="#1b1840"/>
+      <stop offset="0.7" stop-color="#0c0d1c"/>
+      <stop offset="1" stop-color="#07070f"/>
+    </radialGradient>
+    <linearGradient id="corona" x1="72" y1="20" x2="26" y2="74" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe6a6"/>
+      <stop offset="0.42" stop-color="#b79cff"/>
+      <stop offset="1" stop-color="#6d5cf0"/>
+    </linearGradient>
+    <mask id="crescent">
+      <rect width="96" height="96" fill="#000"/>
+      <circle cx="55" cy="41" r="31" fill="#fff"/>
+      <circle cx="45" cy="51" r="30" fill="#000"/>
+    </mask>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3.4"/>
+    </filter>
+  </defs>
+
+  <!-- mark -->
+  <g>
+    <circle cx="48" cy="48" r="30" fill="#8b7bf5" opacity="0.28" filter="url(#soft)"/>
+    <circle cx="45" cy="51" r="30" fill="url(#umbra)"/>
+    <circle cx="45" cy="51" r="30" fill="none" stroke="#2a2550" stroke-width="1"/>
+    <rect width="96" height="96" fill="url(#corona)" mask="url(#crescent)" opacity="0.55" filter="url(#soft)"/>
+    <rect width="96" height="96" fill="url(#corona)" mask="url(#crescent)"/>
+    <circle cx="71" cy="27" r="7" fill="#fff" opacity="0.4" filter="url(#soft)"/>
+    <circle cx="71" cy="27" r="3" fill="#fff"/>
+  </g>
+
+  <!-- wordmark (Inter where available; outline the text for fixed rendering) -->
+  <text x="106" y="62" font-family="Inter, system-ui, -apple-system, 'Segoe UI', sans-serif"
+        font-size="46" font-weight="700" letter-spacing="-1">
+    <tspan fill="#ecebf5">umbr</tspan><tspan fill="#a78bfa">al</tspan>
+  </text>
+</svg>
