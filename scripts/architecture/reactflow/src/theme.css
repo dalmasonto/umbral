@@ -1,0 +1,160 @@
+/* Umbral architecture — an engineering schematic drawn in twilight (umbra).
+   Palette named by role; borders encode build-status; mono eyebrows classify. */
+:root {
+  --ground: #070912;
+  --ink: #eef1f8;
+  --dim: #9aa3bd;
+  --muted: #6b7490;
+  --hair: rgba(124, 108, 240, 0.09);
+
+  --c-core: #a78bfa;
+  --c-plugin: #60a5fa;
+  --c-mw: #f472b6;
+  --c-runtime: #5eead4;
+  --c-db: #34d399;
+  --c-coming: #f59e0b;
+  --c-tool: #94a3b8;
+  --c-facade: #8b7bf5;
+  --c-life: #38bdf8;
+  --c-loop: #c4b5fd;
+  --c-flow: #7c6cf0;
+
+  /* same faces as umbral_website */
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+html, body, #root { margin: 0; height: 100%; background: var(--ground); }
+body { font-family: var(--sans); color: var(--ink); }
+
+/* moving blueprint grid comes from <Background/>; this sets base + a fixed twilight vignette */
+.react-flow { background-color: var(--ground); }
+.react-flow__renderer::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(120% 60% at 50% -10%, rgba(139, 123, 245, 0.14), transparent 55%),
+    radial-gradient(80% 50% at 100% 100%, rgba(52, 211, 153, 0.06), transparent 60%);
+}
+.react-flow__handle { opacity: 0; }
+.react-flow__attribution { display: none; }
+.react-flow__edge-path { stroke-linecap: round; }
+.react-flow__edge-text { fill: var(--dim); font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .02em; }
+.react-flow__edge-textbg { fill: #070912; }
+
+/* ---------------- cards ---------------- */
+.node-card {
+  --c: var(--c-tool);
+  position: relative; height: 100%; width: 100%; box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--c) 34%, transparent);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--c) 13%, #0b0e1c),
+      color-mix(in srgb, var(--c) 5%, #090b16));
+  padding: 14px 18px; overflow: hidden;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--c) 16%, transparent), 0 8px 22px rgba(0, 0, 0, 0.42);
+  display: flex; flex-direction: column; justify-content: center;
+}
+.node-card .kick {
+  font: 600 9px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase;
+  color: var(--c); opacity: .92;
+}
+.node-card .title { font: 700 15px/1.2 var(--sans); color: var(--ink); margin-top: 7px; letter-spacing: -.01em; }
+.node-card .sub { font: 500 11px/1.35 var(--mono); color: var(--dim); margin-top: 6px; }
+.node-card .desc { font: 400 10.5px/1.35 var(--sans); color: var(--muted); margin-top: 5px; }
+.node-card.big .title { font-size: 17.5px; }
+
+/* dashed = not built yet (roadmap). the border IS the status legend. */
+.node-card.dashed {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--c) 55%, transparent);
+  background: linear-gradient(180deg, rgba(8, 10, 20, 0.55), rgba(6, 8, 16, 0.7));
+}
+.node-card.dashed .title { color: #d7dcec; }
+
+/* core cards glow a touch stronger — the keystone */
+.node-card.core { box-shadow: inset 0 1px 0 rgba(167,139,250,.28), 0 0 0 1px rgba(167,139,250,.10), 0 10px 26px rgba(0,0,0,.5); }
+
+.node-card.core    { --c: var(--c-core); }
+.node-card.plugin  { --c: var(--c-plugin); }
+.node-card.mw      { --c: var(--c-mw); }
+.node-card.runtime { --c: var(--c-runtime); }
+.node-card.db      { --c: var(--c-db); }
+.node-card.coming  { --c: var(--c-coming); }
+.node-card.tool    { --c: var(--c-tool); }
+.node-card.facade  { --c: var(--c-facade); }
+.node-card.life    { --c: var(--c-life); }
+.node-card.loop    { --c: var(--c-loop); }
+
+/* ---------------- zones (schematic regions) ---------------- */
+.node-zone {
+  --c: #2a2f47; position: relative; height: 100%; width: 100%; box-sizing: border-box;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--c) 26%, transparent);
+  background: color-mix(in srgb, var(--c) 4%, transparent);
+}
+.node-zone::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px; border-radius: 14px 14px 0 0;
+  background: linear-gradient(90deg, var(--c), color-mix(in srgb, var(--c) 10%, transparent) 55%, transparent);
+}
+.node-zone .tab {
+  position: absolute; top: -14px; left: 22px;
+  background: var(--c); color: #08101e;
+  font: 750 12px/1 var(--sans); letter-spacing: .01em;
+  padding: 6px 12px; border-radius: 8px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45), 0 0 18px color-mix(in srgb, var(--c) 45%, transparent);
+}
+.node-zone .note {
+  position: absolute; top: 13px; right: 20px; max-width: 62%; text-align: right;
+  font: 500 11px/1.35 var(--mono); color: var(--dim);
+}
+.node-zone.dashed { border-style: dashed; border-color: color-mix(in srgb, var(--c) 45%, transparent); }
+
+.node-zone.core    { --c: var(--c-core); }
+.node-zone.plugin  { --c: var(--c-plugin); }
+.node-zone.mw      { --c: var(--c-mw); }
+.node-zone.runtime { --c: var(--c-runtime); }
+.node-zone.db      { --c: var(--c-db); }
+.node-zone.coming  { --c: var(--c-coming); }
+.node-zone.life    { --c: var(--c-life); }
+.node-zone.loop    { --c: var(--c-loop); }
+
+/* the pool_dispatched umbra-spine label */
+.spine-label { fill: var(--c-flow); font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+
+/* ---------------- chrome: toolbar, legend, controls ---------------- */
+.panel-card {
+  background: rgba(10, 13, 24, 0.82); backdrop-filter: blur(10px);
+  border: 1px solid var(--hair); border-radius: 12px; padding: 12px 14px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+}
+.toolbar { display: flex; align-items: center; gap: 12px; }
+.eclipse { width: 26px; height: 26px; border-radius: 50%; position: relative; flex: none;
+  background: radial-gradient(circle at 38% 38%, #f4d38a, #caa24a 70%);
+  box-shadow: 0 0 16px rgba(167, 139, 250, 0.55); }
+.eclipse::after { content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background: var(--ground); transform: translate(7px, -4px); }
+.brand { font: 800 16px/1 var(--sans); letter-spacing: -.01em; }
+.brand b { color: var(--c-core); font-weight: 800; }
+.brand .of { display: block; font: 600 9.5px/1.4 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin-top: 3px; }
+.toolbar .sep { width: 1px; height: 26px; background: var(--hair); }
+.toolbar button {
+  background: linear-gradient(180deg, #7c6cf5, #6249e6); color: #fff; border: 0;
+  padding: 8px 14px; border-radius: 8px; font: 650 12.5px var(--sans); cursor: pointer;
+  box-shadow: 0 6px 16px rgba(98, 73, 230, 0.4);
+}
+.toolbar button:hover { filter: brightness(1.08); }
+.toolbar button.ghost { background: rgba(148, 163, 184, 0.12); color: var(--ink); box-shadow: none; }
+.toolbar button.ghost:hover { background: rgba(148, 163, 184, 0.22); }
+
+.legend { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 16px; }
+.legend .head { grid-column: 1 / -1; font: 600 9px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+.legend .item { display: flex; align-items: center; gap: 7px; font: 500 11px/1 var(--sans); color: var(--dim); }
+.legend .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.legend .sw.dash { background: transparent !important; border: 1.5px dashed var(--c-coming); }
+
+.react-flow__controls { box-shadow: 0 8px 24px rgba(0,0,0,.5); border-radius: 10px; overflow: hidden; }
+.react-flow__controls-button { background: #10131f; border-bottom: 1px solid var(--hair); color: var(--dim); }
+.react-flow__controls-button:hover { background: #171b2b; }
+.react-flow__controls-button svg { fill: var(--dim); }
+.react-flow__minimap { border: 1px solid var(--hair); border-radius: 10px; }

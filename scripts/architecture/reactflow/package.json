@@ -1,0 +1,22 @@
+{
+  "name": "umbral-architecture-flow",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Interactive Umbral architecture diagram (React Flow / @xyflow/react)",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4390 --strictPort"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.3.5",
+    "html-to-image": "^1.11.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Umbral — architecture illustration</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: #04050b; color: #cbd5e1;
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .bar { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+    position: sticky; top: 0; background: rgba(6,8,18,.85); backdrop-filter: blur(8px);
+    border-bottom: 1px solid #1e2338; z-index: 5; }
+  .bar h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .3px; color: #e2e8f0; }
+  .bar h1 span { color: #a78bfa; }
+  .bar .sub { font-size: 12px; color: #64748b; }
+  button { margin-left: auto; background: #6d5cf0; color: #fff; border: 0;
+    padding: 9px 16px; border-radius: 8px; font: inherit; font-size: 13px; font-weight: 600;
+    cursor: pointer; }
+  button:hover { background: #7c6cf5; }
+  .wrap { padding: 20px; overflow: auto; }
+  canvas { display: block; margin: 0 auto; border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6); max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <h1><span>Umbral</span> — architecture illustration</h1>
+    <div class="sub">of the shadow · declare your data, get everything · Rust</div>
+    <button id="dl">Download PNG</button>
+  </div>
+  <div class="wrap"><canvas id="c"></canvas></div>
+
+<script>
+const W = 2820, H = 2400;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+cv.width = W * DPR; cv.height = H * DPR;
+cv.style.width = W + 'px'; cv.style.height = H + 'px';
+ctx.scale(DPR, DPR);
+
+// ------- palette (umbra: deep twilight, violet shadow) -------
+const COL = {
+  bg1: '#0a0c1a', bg2: '#04050b',
+  text: '#e6e9f2', dim: '#8b93ad', muted: '#5b6480',
+  core: '#1a1740', coreBd: '#8b7bf5', coreGlow: 'rgba(124,108,240,.45)',
+  violet: '#a78bfa', violetFill: 'rgba(139,123,245,.14)',
+  blue: '#60a5fa', blueFill: 'rgba(96,165,250,.12)', blueBd: 'rgba(96,165,250,.55)',
+  teal: '#5eead4', tealFill: 'rgba(94,234,212,.10)', tealBd: 'rgba(94,234,212,.5)',
+  amber: '#fbbf24', amberFill: 'rgba(251,191,36,.08)', amberBd: 'rgba(251,191,36,.5)',
+  green: '#34d399', greenFill: 'rgba(52,211,153,.12)', greenBd: 'rgba(52,211,153,.55)',
+  rose: '#fb7185', roseFill: 'rgba(251,113,133,.10)', roseBd: 'rgba(251,113,133,.5)',
+  slate: '#94a3b8', slateFill: 'rgba(148,163,184,.08)', slateBd: 'rgba(148,163,184,.4)',
+  flow: '#7c6cf0', flowSoft: 'rgba(124,108,240,.7)',
+  line: '#2a2f47',
+};
+
+// ------- helpers -------
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) { ctx.roundRect(x, y, w, h, r); return; }
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function font(size, weight = 400) {
+  ctx.font = `${weight} ${size}px Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
+}
+function text(s, x, y, { size = 15, weight = 400, color = COL.text, align = 'left', baseline = 'alphabetic' } = {}) {
+  font(size, weight); ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = baseline;
+  ctx.fillText(s, x, y);
+}
+const nodes = {};
+function anchor(n, side) {
+  switch (side) {
+    case 'top': return [n.x + n.w / 2, n.y];
+    case 'bottom': return [n.x + n.w / 2, n.y + n.h];
+    case 'left': return [n.x, n.y + n.h / 2];
+    case 'right': return [n.x + n.w, n.y + n.h / 2];
+    default: return [n.x + n.w / 2, n.y + n.h / 2];
+  }
+}
+function box(id, x, y, w, h, opts = {}) {
+  const {
+    title = '', sub = '', desc = '',
+    fill = COL.slateFill, border = COL.slateBd, radius = 12,
+    titleColor = COL.text, subColor = COL.dim, titleSize = 18, titleWeight = 600,
+    dashed = false, glow = null, lw = 1.5, subSize = 12.5, align = 'center',
+  } = opts;
+  ctx.save();
+  if (glow) { ctx.shadowColor = glow; ctx.shadowBlur = 26; }
+  rr(x, y, w, h, radius); ctx.fillStyle = fill; ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = lw; ctx.strokeStyle = border;
+  if (dashed) ctx.setLineDash([7, 6]);
+  rr(x, y, w, h, radius); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+  const cx = align === 'center' ? x + w / 2 : x + 16;
+  const ta = align === 'center' ? 'center' : 'left';
+  let ty = sub || desc ? y + h / 2 - (desc ? 14 : 6) : y + h / 2;
+  if (title) text(title, cx, ty, { size: titleSize, weight: titleWeight, color: titleColor, align: ta, baseline: 'middle' });
+  if (sub) text(sub, cx, ty + (title ? titleSize * 0.95 : 0), { size: subSize, color: subColor, align: ta, baseline: 'middle' });
+  if (desc) text(desc, cx, ty + (title ? titleSize * 0.95 : 0) + 17, { size: 11.5, color: COL.muted, align: ta, baseline: 'middle' });
+  nodes[id] = { x, y, w, h };
+  return nodes[id];
+}
+function arrowHead(x, y, ang, size, color) {
+  ctx.save(); ctx.fillStyle = color; ctx.translate(x, y); ctx.rotate(ang);
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-size, -size * 0.42); ctx.lineTo(-size, size * 0.42);
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+function line(x1, y1, x2, y2, { color = COL.line, width = 2, dashed = false, head = true, both = false, label = null, labelBg = COL.bg2 } = {}) {
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = width;
+  if (dashed) ctx.setLineDash([8, 7]);
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  ctx.setLineDash([]);
+  const ang = Math.atan2(y2 - y1, x2 - x1);
+  if (head) arrowHead(x2, y2, ang, 12, color);
+  if (both) arrowHead(x1, y1, ang + Math.PI, 12, color);
+  ctx.restore();
+  if (label) {
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    font(11.5, 600); const tw = ctx.measureText(label).width;
+    ctx.fillStyle = labelBg; rr(mx - tw / 2 - 7, my - 11, tw + 14, 22, 6); ctx.fill();
+    text(label, mx, my, { size: 11.5, weight: 600, color: COL.dim, align: 'center', baseline: 'middle' });
+  }
+}
+function connect(a, aSide, b, bSide, opts = {}) {
+  const [x1, y1] = anchor(nodes[a], aSide);
+  const [x2, y2] = anchor(nodes[b], bSide);
+  line(x1, y1, x2, y2, opts);
+}
+function elbow(x1, y1, x2, y2, midx, opts = {}) { // vertical-horizontal-vertical via midx path (left-margin routing)
+  const { color = COL.flowSoft, width = 3, dashed = false, label = null } = opts;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = width; if (dashed) ctx.setLineDash([9, 7]);
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(midx, y1); ctx.lineTo(midx, y2); ctx.lineTo(x2, y2); ctx.stroke();
+  ctx.setLineDash([]); arrowHead(x2, y2, Math.atan2(0, x2 - midx) + (x2 > midx ? 0 : Math.PI), 13, color); ctx.restore();
+  if (label) { ctx.save(); ctx.translate(midx, (y1 + y2) / 2); ctx.rotate(-Math.PI / 2);
+    text(label, 0, -10, { size: 12, weight: 600, color: COL.dim, align: 'center' }); ctx.restore(); }
+}
+
+// ------- background -------
+(function background() {
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, COL.bg1); g.addColorStop(1, COL.bg2);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // subtle dot grid
+  ctx.fillStyle = 'rgba(255,255,255,.025)';
+  for (let y = 40; y < H; y += 48) for (let x = 40; x < W; x += 48) { ctx.beginPath(); ctx.arc(x, y, 1, 0, 7); ctx.fill(); }
+  // vignette
+  const v = ctx.createRadialGradient(W / 2, H / 2, 300, W / 2, H / 2, W * 0.75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.45)');
+  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+})();
+
+// ------- eclipse motif (the umbra) -------
+(function eclipse() {
+  const cx = 96, cy = 74, r = 34;
+  const gl = ctx.createRadialGradient(cx, cy, r * 0.4, cx, cy, r * 2.4);
+  gl.addColorStop(0, 'rgba(167,139,250,.55)'); gl.addColorStop(1, 'rgba(167,139,250,0)');
+  ctx.fillStyle = gl; ctx.beginPath(); ctx.arc(cx, cy, r * 2.4, 0, 7); ctx.fill();
+  ctx.fillStyle = '#f4d38a'; ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fill();      // sun
+  ctx.fillStyle = COL.bg2; ctx.beginPath(); ctx.arc(cx + 12, cy - 6, r, 0, 7); ctx.fill(); // moon casting umbra
+})();
+
+// ------- title + legend -------
+text('Umbral', 150, 62, { size: 40, weight: 700, color: COL.text });
+text('of the shadow', 152, 90, { size: 15, weight: 500, color: COL.violet });
+text('A declarative web framework in Rust — declare your data and get migrations, CRUD, an admin, and a REST/GraphQL API almost for free.', 150, 112, { size: 13.5, color: COL.dim });
+text('Thin core · plugin-heavy · dependencies point inward, control flows outward through the Plugin trait.', 150, 132, { size: 13.5, color: COL.muted });
+
+(function legend() {
+  const items = [
+    ['Thin core', COL.violet], ['Built-in plugin', COL.blue], ['Roadmap / coming', COL.amber],
+    ['Runtime service', COL.teal], ['Database', COL.green], ['CLI / tooling', COL.slate],
+  ];
+  let x = 1300, y = 46; const bx = 1300, by = 34;
+  box('legendbox', bx, by, 940, 110, { fill: 'rgba(148,163,184,.05)', border: COL.line, radius: 10 });
+  text('Legend', bx + 20, by + 26, { size: 13, weight: 700, color: COL.dim });
+  let lx = bx + 20, ly = by + 52;
+  items.forEach((it, i) => {
+    if (i === 3) { lx = bx + 20; ly = by + 82; }
+    ctx.fillStyle = it[1]; rr(lx, ly - 9, 16, 16, 4); ctx.fill();
+    text(it[0], lx + 24, ly, { size: 13, color: COL.text, baseline: 'middle' });
+    lx += it[0].length * 8.4 + 70;
+  });
+})();
+
+// ==================== DEV ROW ====================
+box('app', 60, 168, 1180, 116, {
+  title: 'Your app crate', titleColor: COL.text,
+  sub: 'App::builder().plugin(AuthPlugin).plugin(RestPlugin)…​.build()',
+  desc: 'depends on core + every chosen plugin · explicit wiring, no magic',
+  fill: 'rgba(148,163,184,.07)', border: COL.slateBd,
+});
+box('cli', 1300, 168, 940, 116, {
+  title: 'umbral-cli', titleColor: COL.slate,
+  sub: 'migrate · makemigrations · worker · inspectdb',
+  desc: 'startproject · startplugin · typegen · runserver',
+  fill: COL.slateFill, border: COL.slateBd,
+});
+
+// ==================== FACADE ROW ====================
+box('facade', 60, 316, 1500, 96, {
+  title: 'umbral — the facade  ·  use umbral::prelude::*', titleColor: COL.violet,
+  sub: 'the ONE stable surface every app and plugin imports · re-exports core + macros',
+  fill: COL.violetFill, border: COL.coreBd,
+});
+box('macros', 1600, 316, 640, 96, {
+  title: 'umbral-macros', titleColor: COL.violet,
+  sub: '#[derive(Model)] · #[task]',
+  desc: 'generates the Model / QuerySet impls the ORM consumes',
+  fill: COL.violetFill, border: COL.coreBd,
+});
+
+// ==================== CORE ====================
+const coreX = 60, coreY = 452, coreW = 2180, coreH = 556;
+box('core', coreX, coreY, coreW, coreH, {
+  fill: COL.core, border: COL.coreBd, radius: 18, glow: COL.coreGlow, lw: 2,
+});
+text('umbral-core', coreX + 28, coreY + 40, { size: 26, weight: 700, color: COL.violet });
+text('the thin core — ORM · migrations · routing · backends · the Plugin trait. Names no concrete plugin; touches them only as Box<dyn Plugin>.', coreX + 210, coreY + 40, { size: 13, color: COL.dim, baseline: 'middle' });
+
+const inX = coreX + 30, inW = coreW - 60;
+const cw = 660, cgap = (inW - 3 * cw) / 2;
+const cxs = [inX, inX + cw + cgap, inX + 2 * (cw + cgap)];
+const r1y = coreY + 74, r2y = r1y + 200, ch = 184;
+box('plugintrait', cxs[0], r1y, cw, ch, {
+  title: 'Plugin trait', titleColor: COL.violet, titleSize: 20,
+  sub: 'Box<dyn Plugin> registry — the dynamic seam',
+  desc: 'models · routes · middleware · commands · settings · admin · on_ready · system_checks',
+  fill: 'rgba(139,123,245,.10)', border: COL.coreBd,
+});
+box('router', cxs[1], r1y, cw, ch, {
+  title: 'Router', titleColor: COL.blue, titleSize: 20,
+  sub: 'axum + tower middleware chain',
+  desc: 'security (CSRF · HSTS · frame) → host-check → sessions → user-context → handler',
+  fill: COL.blueFill, border: COL.blueBd,
+});
+box('orm', cxs[2], r1y, cw, ch, {
+  title: 'ORM', titleColor: COL.teal, titleSize: 20,
+  sub: 'Model → QuerySet builder → SQL',
+  desc: 'filter · select_related · annotate · bulk · transactions · always parameterized',
+  fill: COL.tealFill, border: COL.tealBd,
+});
+box('migrate', cxs[0], r2y, cw, ch, {
+  title: 'Migration engine', titleColor: COL.violet, titleSize: 20,
+  sub: 'snapshot · autodetect diff · tracking table',
+  desc: 'create/alter/drop · reversible ops · cross-plugin FK ordering · inspectdb on-ramp',
+  fill: 'rgba(139,123,245,.10)', border: COL.coreBd,
+});
+box('backend', cxs[1], r2y, cw, ch, {
+  title: 'Backend abstraction', titleColor: COL.blue, titleSize: 20,
+  sub: 'DatabaseBackend · boot system checks',
+  desc: 'field/backend compatibility caught at boot, not in prod · Postgres-first',
+  fill: COL.blueFill, border: COL.blueBd,
+});
+box('pool', cxs[2], r2y, cw, ch, {
+  title: 'Ambient DbPool', titleColor: COL.teal, titleSize: 20,
+  sub: 'OnceLock — the one intentional global',
+  desc: 'pool_dispatched() picks the backend so Post::objects() needs no threaded pool',
+  fill: COL.tealFill, border: COL.tealBd,
+});
+
+// core-internal wiring
+connect('macros', 'bottom', 'orm', 'top', { color: COL.violet, width: 2, dashed: true, label: 'derive' });
+connect('orm', 'bottom', 'pool', 'top', { color: COL.teal, width: 2 });
+connect('router', 'bottom', 'backend', 'top', { color: COL.blue, width: 2, head: false });
+
+// dev/facade → core
+connect('app', 'bottom', 'facade', 'top', { color: COL.slate, width: 2.5, label: 'wires plugins' });
+line(1220, 412, 1220, 452, { color: COL.coreBd, width: 2.5 }); // facade→core
+connect('facade', 'bottom', 'plugintrait', 'top', { color: COL.coreBd, width: 2.5, label: 'imports' });
+// cli → core (drives migrate / makemigrations / worker) — clean orthogonal bracket over the core top
+{
+  const cx0 = nodes.cli.x + nodes.cli.w / 2;
+  line(cx0, 284, cx0, coreY - 18, { color: COL.slate, width: 2, dashed: true, head: false });
+  line(cx0, coreY - 18, coreX + 380, coreY - 18, { color: COL.slate, width: 2, dashed: true, head: false, label: 'drives migrate · makemigrations · worker' });
+  line(coreX + 380, coreY - 18, coreX + 380, coreY, { color: COL.slate, width: 2, dashed: true });
+}
+
+// ==================== PLUGIN CONTRACT PILLS ====================
+text('Every plugin contributes any subset of  ▾', coreX + 20, coreY + coreH + 34, { size: 14, weight: 600, color: COL.dim });
+const contract = ['models → migrations', 'routes & views', 'middleware', 'commands', 'typed settings', 'admin registrations', 'on_ready hook', 'system checks'];
+(function pills() {
+  let x = 640, y = coreY + coreH + 20; const h = 30;
+  contract.forEach(c => {
+    font(12.5, 600); const w = ctx.measureText(c).width + 30;
+    ctx.fillStyle = 'rgba(139,123,245,.10)'; ctx.strokeStyle = COL.coreBd; ctx.lineWidth = 1.2;
+    rr(x, y, w, h, 15); ctx.fill(); ctx.stroke();
+    text(c, x + w / 2, y + h / 2, { size: 12.5, weight: 600, color: COL.violet, align: 'center', baseline: 'middle' });
+    x += w + 12; if (x > 2180) { x = 640; y += 40; }
+  });
+})();
+
+// ==================== BUILT-IN PLUGINS ====================
+const shipped = [
+  ['umbral-auth', 'users · argon2 · perms'], ['umbral-sessions', 'store + middleware'],
+  ['umbral-admin', 'auto CRUD UI · views'], ['umbral-tasks', 'DB-backed queue'],
+  ['umbral-rest', 'serializers · viewsets'], ['umbral-graphql', 'expose · mutable'],
+  ['umbral-openapi', 'schema · Swagger UI'], ['umbral-storage', 'FS · S3 · signed URLs'],
+  ['umbral-realtime', 'WS · presence'], ['umbral-cache', 'ambient cache'],
+  ['umbral-security', 'CSRF · HSTS · headers'], ['umbral-email', 'send · templates'],
+  ['umbral-tenants', 'multi-tenancy'], ['umbral-rls', 'row-level security'],
+  ['umbral-logs', 'request logs'], ['umbral-analytics', 'events · PostHog'],
+  ['umbral-oauth', 'Google · GitHub'], ['umbral-health', 'readiness · liveness'],
+  ['umbral-playground', 'API explorer'],
+];
+const pbY = 1096;
+text('Built-in plugins', 60, pbY, { size: 20, weight: 700, color: COL.blue });
+text('each its own crate — structurally identical to a third-party plugin. A REST-free app compiles with zero serializer code.', 260, pbY, { size: 13, color: COL.dim, baseline: 'middle' });
+(function shippedGrid() {
+  const cols = 5, gap = 24, gx = 60, gy = pbY + 22;
+  const w = (2180 - (cols - 1) * gap) / cols, h = 72, stepY = 88;
+  shipped.forEach((p, i) => {
+    const c = i % cols, r = Math.floor(i / cols);
+    box('sp' + i, gx + c * (w + gap), gy + r * stepY, w, h, {
+      title: p[0], titleColor: COL.blue, titleSize: 16.5, titleWeight: 600,
+      sub: p[1], subColor: COL.dim, subSize: 12,
+      fill: COL.blueFill, border: COL.blueBd, radius: 10,
+    });
+  });
+})();
+
+// contract seam: top-down layering (core → contract pills → plugins) conveys registration; one clean label reinforces it
+text('▲  each plugin registers through the Plugin trait — same contract as the built-ins', 1150, pbY + 20 + 4 * 88 + 8, { size: 12.5, weight: 600, color: 'rgba(96,165,250,.7)', align: 'center' });
+
+// ==================== ROADMAP ====================
+const coming = [
+  ['feature flags', 'rollout · targeting'], ['metering & billing', 'quotas · usage'],
+  ['i18n / l10n', 'locale · pluralization'], ['edge functions', 'deployable units'],
+  ['policy engine', 'ABAC · named policies'], ['object-scope check', 'IDOR guard (in design)'],
+  ['compliance', 'DSAR · retention'], ['tamper-evident audit', 'hash-chained log'],
+  ['OIDC · SAML · SCIM', 'enterprise identity'], ['task broker / DLQ', 'durable queue'],
+  ['CDC outbox', 'after-commit events'], ['DB branching · PITR', 'preview · backup'],
+];
+const rmY = 1540;
+text('Roadmap — what\'s coming', 60, rmY, { size: 20, weight: 700, color: COL.amber });
+text('not limited to what ships today — the platform the design is aimed at. Every one lands as a plugin, the same contract as the built-ins.', 400, rmY, { size: 13, color: COL.dim, baseline: 'middle' });
+(function comingGrid() {
+  const cols = 6, gap = 22, gx = 60, gy = rmY + 22;
+  const w = (2180 - (cols - 1) * gap) / cols, h = 74, stepY = 88;
+  coming.forEach((p, i) => {
+    const c = i % cols, r = Math.floor(i / cols);
+    box('cm' + i, gx + c * (w + gap), gy + r * stepY, w, h, {
+      title: p[0], titleColor: COL.amber, titleSize: 15, titleWeight: 600,
+      sub: p[1], subColor: COL.muted, subSize: 11.5,
+      fill: COL.amberFill, border: COL.amberBd, radius: 10, dashed: true,
+    });
+  });
+})();
+
+// ==================== RUNTIME SERVICES ====================
+const rsY = 1760;
+text('Runtime services', 60, rsY, { size: 20, weight: 700, color: COL.teal });
+const services = [
+  ['Tasks worker', 'polls DB queue · runs #[task]s'],
+  ['Realtime', 'WebSockets · presence · channels'],
+  ['Email', 'send now · retry queue (coming)'],
+  ['Cache', 'ambient get/set · invalidation'],
+  ['Storage', 'FS / S3 · gated media · signed URLs'],
+];
+(function svc() {
+  const cols = 5, gap = 24, gx = 60, gy = rsY + 20;
+  const w = (2180 - (cols - 1) * gap) / cols, h = 92;
+  services.forEach((s, i) => {
+    box('svc' + i, gx + i * (w + gap), gy, w, h, {
+      title: s[0], titleColor: COL.teal, titleSize: 17,
+      sub: s[1], subColor: COL.dim, subSize: 12,
+      fill: COL.tealFill, border: COL.tealBd, radius: 11,
+    });
+  });
+})();
+
+// ==================== DATABASES ====================
+const dbY = 1920, dbH = 400;
+box('dbgroup', 60, dbY, 2180, dbH, { fill: 'rgba(52,211,153,.05)', border: COL.greenBd, radius: 16, lw: 1.6 });
+text('Databases — Postgres-first, SQLite for tests', 88, dbY + 34, { size: 20, weight: 700, color: COL.green });
+box('dispatch', 900, dbY + 58, 500, 76, {
+  title: 'DbPool::Sqlite | Postgres', titleColor: COL.green, titleSize: 17,
+  sub: 'pool_dispatched() — every QuerySet terminal',
+  fill: COL.greenFill, border: COL.greenBd, radius: 11,
+});
+box('pg', 130, dbY + 168, 980, 96, {
+  title: 'PostgreSQL', titleColor: COL.green, titleSize: 19,
+  sub: 'primary · RLS · materialized views · arrays · citext · JSON',
+  desc: 'always-parameterized SQL · the production backend',
+  fill: COL.greenFill, border: COL.greenBd, radius: 12,
+});
+box('sqlite', 1190, dbY + 168, 980, 96, {
+  title: 'SQLite', titleColor: COL.green, titleSize: 19,
+  sub: 'tests · local dev · single-writer',
+  desc: 'same ORM path — backend mismatches caught at boot',
+  fill: COL.greenFill, border: COL.greenBd, radius: 12,
+});
+connect('dispatch', 'bottom', 'pg', 'top', { color: COL.green, width: 2.5 });
+connect('dispatch', 'bottom', 'sqlite', 'top', { color: COL.green, width: 2.5 });
+(function comingDb() {
+  const tags = ['read replicas', 'CDC outbox', 'PITR backup', 'DB branching', 'multi-region'];
+  let x = 130, y = dbY + 300; const h = 34;
+  text('coming ▸', 88, y + h / 2, { size: 13, weight: 600, color: COL.amber, baseline: 'middle' });
+  x = 210;
+  tags.forEach(t => {
+    font(12.5, 600); const w = ctx.measureText(t).width + 30;
+    ctx.fillStyle = COL.amberFill; ctx.strokeStyle = COL.amberBd; ctx.lineWidth = 1.2; ctx.setLineDash([6, 5]);
+    rr(x, y, w, h, 16); ctx.fill(); ctx.stroke(); ctx.setLineDash([]);
+    text(t, x + w / 2, y + h / 2, { size: 12.5, weight: 600, color: COL.amber, align: 'center', baseline: 'middle' });
+    x += w + 14;
+  });
+})();
+
+// ---- THE data-flow spine: core's ORM/DbPool → DB dispatch, down the left margin (clear of the busy centre) ----
+{
+  const px = nodes.pool.x + 40;                    // just inside the pool box's left
+  const yBand = coreY + coreH - 40;                // empty band below the row-2 boxes, still inside the core group
+  const mX = 30;                                   // far-left margin lane
+  const eX = nodes.dispatch.x, eY = nodes.dispatch.y + nodes.dispatch.h / 2;
+  ctx.save(); ctx.strokeStyle = COL.flow; ctx.lineWidth = 3.5;
+  ctx.beginPath();
+  ctx.moveTo(px, nodes.pool.y + nodes.pool.h);
+  ctx.lineTo(px, yBand);
+  ctx.lineTo(mX, yBand);
+  ctx.lineTo(mX, eY);
+  ctx.lineTo(eX, eY);
+  ctx.stroke(); ctx.restore();
+  arrowHead(eX, eY, 0, 13, COL.flow);
+  ctx.save(); ctx.translate(mX + 16, (yBand + eY) / 2); ctx.rotate(-Math.PI / 2);
+  text('one ORM path → pool_dispatched() → the right backend', 0, -6, { size: 12.5, weight: 600, color: COL.flowSoft, align: 'center' });
+  ctx.restore();
+}
+
+// runtime services all sit on the same ambient ORM / DbPool path (left-margin spine shows the DB seam)
+
+// ==================== RIGHT PANEL: REQUEST LIFECYCLE ====================
+const rpX = 2320, rpW = 460;
+box('reqpanel', rpX, 168, rpW, 840, { fill: 'rgba(96,165,250,.05)', border: COL.blueBd, radius: 16, lw: 1.6 });
+text('Request lifecycle', rpX + 24, 206, { size: 19, weight: 700, color: COL.blue });
+text('how a request moves through', rpX + 24, 230, { size: 12.5, color: COL.dim });
+const steps = [
+  ['HTTP request', 'axum accepts the connection'],
+  ['Security middleware', 'CSRF · HSTS · frame · headers'],
+  ['Host validation', 'allowed_hosts guard'],
+  ['Session + user-context', 'user injected into templates'],
+  ['Router → handler', 'or a REST/GraphQL viewset'],
+  ['ORM QuerySet', 'built, then parameterized SQL'],
+  ['Backend dispatch', 'Postgres / SQLite via DbPool'],
+  ['Response', 'REST serializer / autoescaped HTML'],
+];
+(function lifecycle() {
+  let y = 262; const sx = rpX + 30;
+  steps.forEach((s, i) => {
+    ctx.fillStyle = COL.blue; ctx.beginPath(); ctx.arc(sx + 16, y + 20, 16, 0, 7); ctx.fill();
+    text(String(i + 1), sx + 16, y + 21, { size: 14, weight: 700, color: '#06121f', align: 'center', baseline: 'middle' });
+    text(s[0], sx + 46, y + 14, { size: 15, weight: 600, color: COL.text });
+    text(s[1], sx + 46, y + 33, { size: 12, color: COL.dim });
+    if (i < steps.length - 1) line(sx + 16, y + 38, sx + 16, y + 58, { color: 'rgba(96,165,250,.5)', width: 2, head: true });
+    y += 72;
+  });
+})();
+
+// ==================== RIGHT PANEL: DECLARE → MIGRATE LOOP ====================
+const mpY = 1040;
+box('looppanel', rpX, mpY, rpW, 620, { fill: 'rgba(139,123,245,.05)', border: COL.coreBd, radius: 16, lw: 1.6 });
+text('The everyday loop', rpX + 24, mpY + 38, { size: 19, weight: 700, color: COL.violet });
+text('declare → migrate → change → migrate', rpX + 24, mpY + 62, { size: 12.5, color: COL.dim });
+text('this cycle IS the product — working from', rpX + 24, mpY + 84, { size: 12, color: COL.muted });
+text('the first milestone that has models.', rpX + 24, mpY + 100, { size: 12, color: COL.muted });
+const loop = [
+  ['Declare / change', 'a #[derive(Model)] struct'],
+  ['makemigrations', 'diff current models vs snapshot'],
+  ['migrate', 'apply pending · record in tracking table'],
+  ['Change again', 'the diff writes the right ALTER / DROP'],
+];
+(function loopSteps() {
+  let y = mpY + 128; const sx = rpX + 30;
+  loop.forEach((s, i) => {
+    box('lp' + i, sx, y, rpW - 60, 84, {
+      title: s[0], titleColor: COL.violet, titleSize: 16, align: 'left',
+      sub: s[1], subColor: COL.dim, subSize: 12,
+      fill: 'rgba(139,123,245,.08)', border: COL.coreBd, radius: 10,
+    });
+    if (i < loop.length - 1) line(sx + (rpW - 60) / 2, y + 84, sx + (rpW - 60) / 2, y + 100, { color: COL.violet, width: 2 });
+    y += 100;
+  });
+  // loop-back arrow
+  const bx = sx + (rpW - 60) / 2;
+  line(bx, y - 16, bx, y + 6, { color: COL.violet, width: 2, head: false });
+  line(bx, y + 6, sx - 8, y + 6, { color: COL.violet, width: 2, head: false });
+  line(sx - 8, y + 6, sx - 8, mpY + 170, { color: COL.violet, width: 2, head: false });
+  line(sx - 8, mpY + 170, sx, mpY + 170, { color: COL.violet, width: 2, head: true });
+  text('never wipe the DB — existing rows are the test', rpX + 24, y + 34, { size: 11.5, weight: 600, color: COL.rose });
+})();
+
+// ==================== FOOTER ====================
+text('Generated illustration · scripts/architecture/index.html · combines shipped subsystems and the roadmap · umbra = the shadow', 60, H - 34, { size: 13, color: COL.muted });
+text('Secure by default: CSRF · clickjacking/HSTS headers · template autoescaping · always-parameterized SQL.', 60, H - 14, { size: 12.5, color: COL.dim });
+
+// ------- PNG download -------
+document.getElementById('dl').addEventListener('click', () => {
+  const a = document.createElement('a');
+  a.download = 'umbral-architecture.png';
+  a.href = cv.toDataURL('image/png');
+  a.click();
+});
+</script>
+</body>
+</html>
