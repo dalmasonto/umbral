@@ -2,11 +2,11 @@
 # and push the static output to the gh-pages branch of a SEPARATE repo, which
 # then serves it via GitHub Pages — automatically, on every change.
 #
-# One-time setup:
-#   1. Add a secret PAGES_DEPLOY_TOKEN = a PAT with Contents:write on the target
-#      repo. (The built-in GITHUB_TOKEN can't push to another repo, so this one
-#      token is unavoidable.)
-#   2. In the target repo: Settings → Pages → Deploy from a branch → gh-pages.
+# Auth: pushes to the target repo with an SSH deploy key (write). The private
+# key is the ACTIONS_DEPLOY_KEY secret here; its public half is a write deploy
+# key on the target repo. (The built-in GITHUB_TOKEN can't push cross-repo.)
+# Remaining setup: in the target repo, Settings → Pages → Deploy from a branch
+# → gh-pages (after the first run creates that branch).
 # Change `external_repository` below if your repo name differs.
 
 name: deploy-architecture
@@ -45,7 +45,7 @@ jobs:
       - name: Push to the Pages repo
         uses: peaceiris/actions-gh-pages@v4
         with:
-          personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          deploy_key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
           external_repository: dalmasonto/umbral-architecture # ← change if needed
           publish_branch: gh-pages
           publish_dir: ./scripts/architecture/reactflow/dist # repo-root-relative
