@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes the answers to gaps5 #49, #50, #51; the final call is the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #49 (tf #262), #50 (tf #263), #51 (tf #264)
+Decision coverage: planning/gaps5.md #49 (tf #262), #50 (tf #263), #51 (tf #264). This closes the design question, not the broker/DLQ/dashboard implementation.
 
 ## Where the task queue actually is today (evidence)
 

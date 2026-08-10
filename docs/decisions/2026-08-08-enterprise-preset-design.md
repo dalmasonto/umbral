@@ -21,6 +21,25 @@ Expose the same underlying bundle two ways:
 
 **Packaging.** Put `EnterprisePreset` in a small `umbral-enterprise` meta-crate that depends on the security-relevant plugins, rather than in the facade. This preserves the dependency-inversion rule (the `umbral` facade keeps zero plugin dependencies). Recommended over a facade feature module for that reason.
 
+### Identity hardening profile
+
+The base preset wires the shipped auth/session/security posture. It must also make the broader identity roadmap visible, because production adopters will otherwise think "auth is installed" means "enterprise identity is done". Add an optional identity profile inside the meta-crate:
+
+```rust
+EnterprisePreset::default()
+    .identity(IdentityPreset::recommended())
+```
+
+`IdentityPreset::recommended()` does not force every app to support every provider. It composes what the app has configured and emits system-check findings for missing production pieces:
+
+- **Session/device inventory.** When gaps5 #13 lands, require bearer-token max age, device/session listing, revoke-other-devices, and admin revoke actions for apps that mint long-lived bearer tokens or enable OAuth device flow.
+- **OAuth/social providers.** When `umbral-oauth` is mounted, validate HTTPS redirect bases, provider credentials, PKCE/state enabled, provider manifests present, and untrusted email providers not allowed to auto-link accounts. The provider catalog comes from `docs/decisions/2026-08-08-enterprise-identity-design.md`: Google/GitHub plus Apple, Microsoft, Facebook, X/Twitter, LinkedIn, GitLab, Bitbucket, Discord, Slack, and custom OAuth2/OIDC as configured.
+- **Enterprise SSO.** When `umbral-sso` is mounted, require OIDC issuer/audience/JWKS checks, domain mappings only for verified domains, SAML signature enforcement, and IdP-initiated SAML explicitly opted in.
+- **MFA.** Recommend `MfaPolicy::RequiredForStaff` at minimum; fail only when the app explicitly marks itself enterprise-hardened and staff MFA is absent. TOTP/recovery codes are the first required factor set; WebAuthn/passkeys are recommended once shipped.
+- **Client attestation.** When `umbral-attest` is mounted, start in Monitor mode and require an explicit `Enforce` decision per route group. Absence of attestation is a warning for public mobile/API surfaces, not a hard fail for ordinary server-rendered apps.
+
+This keeps the preset honest: username/password auth is a safe baseline, but production readiness for a SaaS or BaaS-shaped deployment also needs the #9/#10/#12/#13 identity layers.
+
 ## Production system checks (fail boot, not prod)
 
 Add checks that run at boot under `Environment::Prod` and fail with a clear, actionable message:
@@ -31,6 +50,9 @@ Add checks that run at boot under `Environment::Prod` and fail with a clear, act
 - Host validation / allowed hosts is configured.
 - A trusted-proxy list is set when behind a proxy (so client IP and rate limiting are correct).
 - The database is Postgres (SQLite emits a not-for-production warning).
+- Bearer tokens have a max age when API auth is enabled.
+- OAuth/SSO providers use HTTPS redirect/callback origins outside `Dev` and are not half-configured.
+- Staff MFA is configured or explicitly waived when the identity hardening profile is enabled.
 
 These extend the existing boot-time system-check mechanism rather than adding a parallel one.
 
@@ -41,6 +63,7 @@ Not a new privileged path. Every piece is a plugin an app can add or remove indi
 ## Dependencies and follow-ups
 
 - Metrics (gaps5 #64) and distributed throttling (gaps5 #67) must land before the preset can include them; until then the preset emits a warning that they are recommended for multi-replica production.
+- Enterprise identity pieces (gaps5 #9, #10, #12, #13) remain separately tracked. The preset should compose and check them when present; it should not hide the fact that SSO/MFA/device inventory/attestation are separate implementation tasks.
 - Ties to scaffold profiles (gaps5 #82) and `SECURITY.md` (gaps5 #20).
 
 ## Open decision for the maintainer

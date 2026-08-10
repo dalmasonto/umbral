@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes the answers to gaps5 #93 and #94; the final call is the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #93 (tf #306), planning/gaps5.md #94 (tf #307)
+Decision coverage: planning/gaps5.md #93 (tf #306), planning/gaps5.md #94 (tf #307). This records the CI/reliability design; the release gate is not closed until the workflows run in CI.
 
 ## Honesty up front
 

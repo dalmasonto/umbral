@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes the design for gaps5 #98 and #99; the final call is the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #98 (tf #311), #99 (tf #312)
+Decision coverage: planning/gaps5.md #98 (tf #311), #99 (tf #312). This is the planned permanent suite and release pipeline contract; the tasks close only after CI/release automation exists.
 
 ## Context: what already exists
 

@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes answers to planning/gaps5.md #37, #41, #40; the final calls are the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #37 (tf #250), #41 (tf #254), #40 (tf #253)
+Decision coverage: planning/gaps5.md #37 (tf #250), #41 (tf #254), #40 (tf #253). This records the SDK/API lifecycle/gRPC decisions; packages and tooling still need implementation.
 
 ## Why these three sit together
 

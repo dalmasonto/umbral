@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes the design for gaps5 #64, #65, #66; the final call is the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #64 (tf #277), #65 (tf #278), #66 (tf #279)
+Decision coverage: planning/gaps5.md #64 (tf #277), #65 (tf #278), #66 (tf #279). This is a pre-implementation contract, not evidence that metrics/tracing are already shipped.
 
 ## Context: what observability already is
 

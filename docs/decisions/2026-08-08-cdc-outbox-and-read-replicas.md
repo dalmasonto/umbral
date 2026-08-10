@@ -1,5 +1,5 @@
 # CDC / transactional outbox and read-replica / failover operations
-
+ 
 Status: draft for ratification (proposes the shape of gaps5 #31 and gaps5 #32)
 Date: 2026-08-08
 Relates: planning/gaps5.md #31 (tf#244), #32 (tf#245), #42 (tf#255, webhook endpoint management), #52 (tf#265, transactional outbox / after-commit)

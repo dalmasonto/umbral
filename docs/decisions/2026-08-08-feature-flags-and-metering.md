@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes the design for gaps5 #83, #84; the final call is the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #83 (tf #296), #84 (tf #297)
+Decision coverage: planning/gaps5.md #83 (tf #296), #84 (tf #297). This defines the target surfaces; the feature-flag and metering subsystems remain implementation tasks.
 
 ## Context: what these two build on
 

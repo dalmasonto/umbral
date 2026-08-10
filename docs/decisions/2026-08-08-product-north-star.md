@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes the answer to gaps5 #1; the final call is the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #1 (tf #214)
+Decision coverage: planning/gaps5.md #1 (tf #214). This closes the product-boundary decision, not the downstream implementation work.
 
 ## The question
 
@@ -33,6 +33,19 @@ Commit publicly to this ordering and contract:
 - We describe umbral as "a declarative web framework" (Stage 1) with a "self-hostable backend platform" posture (Stage 2), and we do not market managed-cloud features we do not run.
 - The **plugin contract stays the boundary**: platform features are plugins, so Stage 2 is composition, not a fork. This is the same bet as the motto ("every capability is a plugin, including auth").
 - Every BaaS-shaped plugin owns its self-hosted operational needs (backups, metrics, scaling) as part of Stage 2, so "self-hosted platform" is honest rather than aspirational.
+
+## v0.0.12 to v0.1 adoption gate
+
+Use v0.0.12 as the implementation release that turns the highest-leverage design decisions into shipped, test-backed production posture. v0.1 should not be described as broadly adoptable until the following are true:
+
+1. **The framework contract is public and enforceable.** `STABILITY.md`, the maturity matrix, plugin manifests/compatibility checks, docs-drift checks, and the OpenAPI breaking-change gate are published and wired into CI.
+2. **The production posture is one switch.** `EnterprisePreset` and `startproject --prod-hardening` exist, with boot checks for default/empty `secret_key`, debug/dev mode, secure cookies/HSTS, allowed hosts, trusted proxies, Postgres production stance, bearer-token max age, provider callback safety, and staff-MFA waiver/requirement.
+3. **Operations are observable and tested.** `/metrics`, traceparent extraction/injection, DB/task spans, distributed throttling, live-service CI for Postgres/Redis/MinIO, and the permanent security/regression suite run before release.
+4. **Identity is credible for orgs.** At minimum: generic OIDC discovery/JWKS/ID-token verification; first-class OAuth provider catalog beyond Google/GitHub (Apple, Microsoft, Facebook, X/Twitter, LinkedIn, GitLab, Bitbucket, Discord, Slack, custom OAuth2/OIDC); TOTP + recovery codes; session/device inventory with revoke-one/revoke-all; authenticated change-password finishing work; and SCIM/JIT/domain verification design implemented far enough that org onboarding is not hand-rolled. SAML and WebAuthn/passkeys can follow behind feature flags if they are not yet stable.
+5. **Data movement is durable.** Zero-downtime migration planning, rollback/targeting, database branching/shadow verification, PITR backup runbooks, transactional outbox/after-commit, webhook delivery logs, durable email retry, and task DLQ/operator dashboard exist or are explicitly marked beta in the maturity matrix.
+6. **Storage/realtime have production boundaries.** Direct uploads, CDN invalidation hooks, storage scanning/quarantine, retention/legal hold, durable realtime/offline-sync posture, realtime quotas, and realtime metrics are either implemented or marked as not-v0.1 in the maturity matrix with safe defaults.
+
+Everything managed-cloud-shaped remains out of the v0.1 adoption bar unless the product decision changes: managed projects/control plane (gaps5 #5), management API/Terraform (#39), billing/quotas as a hosted business feature (#84), project/team control-plane RBAC (#88), environment promotion (#92), and multi-region/residency (#85). Those are Stage 3 seams; v0.1 can be adoptable as a framework/self-hosted platform without pretending to be a hosted BaaS.
 
 ## What is explicitly out (for now)
 

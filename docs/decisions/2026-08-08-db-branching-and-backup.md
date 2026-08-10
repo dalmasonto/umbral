@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes the design for gaps5 #29 and gaps5 #30; the final call is the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #29 (tf #242), planning/gaps5.md #30 (tf #243)
+Decision coverage: planning/gaps5.md #29 (tf #242), planning/gaps5.md #30 (tf #243). This records the accepted design target; implementation and docs/runbook publication remain tracked on the tasks.
 
 ## Scope and posture
 

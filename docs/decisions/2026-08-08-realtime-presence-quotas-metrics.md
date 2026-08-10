@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes the design for gaps5 #46, #47, #48; the final call is the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #46 (tf #259), #47 (tf #260), #48 (tf #261)
+Decision coverage: planning/gaps5.md #46 (tf #259), #47 (tf #260), #48 (tf #261). This is design coverage, not shipped realtime productization.
 
 ## Context: what umbral-realtime already is
 

@@ -11,7 +11,7 @@
 
 This is a single cohesive design for the three enterprise-identity backlog items, treated as one program because they share a spine (the `umbral-auth` user model, the `umbral-sessions` session, and the `umbral-permissions` group graph) even though they ship as three separate plugins:
 
-- **gaps5 #9 (tf#222): enterprise SSO.** Generic OIDC discovery plus SAML 2.0. Delivered as a new `umbral-sso` plugin.
+- **gaps5 #9 (tf#222): enterprise SSO and provider completeness.** Generic OIDC discovery plus SAML 2.0, while also closing the "Google/GitHub only" social-login gap with provider metadata, first-class social providers, and OAuth device-flow support. Generic SSO lands in a new `umbral-sso` plugin; social-provider breadth stays in `umbral-oauth`.
 - **gaps5 #10 (tf#223): multi-factor auth.** TOTP, WebAuthn/passkeys, recovery codes, remembered devices, step-up auth, admin enforcement. Delivered as a new `umbral-mfa` plugin.
 - **gaps5 #11 (tf#224): org identity lifecycle.** SCIM 2.0 provisioning, JIT provisioning, OIDC claims-to-groups mapping, domain verification, deprovisioning. Delivered as a new `umbral-org` plugin.
 
@@ -43,7 +43,7 @@ From `plugins/umbral-tenants`: **`Tenant`** (`schema_name`, `name`, `domain`, `i
 
 ### What was explicitly deferred (and is now in scope)
 
-- `docs/superpowers/specs/2026-06-13-masked-and-oauth-design.md` non-goals: "SAML / enterprise SSO, OIDC discovery beyond Google/GitHub, token-refresh background jobs." gaps5 #9 picks up SAML and generic OIDC discovery; token-refresh jobs stay a follow-up (noted below).
+- `docs/superpowers/specs/2026-06-13-masked-and-oauth-design.md` non-goals: "SAML / enterprise SSO, OIDC discovery beyond Google/GitHub, token-refresh background jobs." gaps5 #9 picks up SAML, generic OIDC discovery, social-provider breadth beyond Google/GitHub, and OAuth device-flow support. Token-refresh jobs do not block login, but they are no longer hand-waved: a provider that advertises API-access/connection use must either implement refresh or explicitly mark itself login-only.
 - `docs/decisions/2026-06-28-auth-full-surface.md` out-of-scope list: "TOTP / 2FA", "Magic-link / passwordless login". gaps5 #10 picks up TOTP and passkeys. (Note: authenticated `change_password` was on that deferred list but has since shipped in the auth `challenge` module; step-up auth in #10 reuses it.)
 
 ## Composition model: how each plugin plugs into auth without a privileged core
@@ -55,6 +55,70 @@ The one shared idea: **an external identity is an extension row keyed to the use
 Session establishment stays owned by `umbral-sessions`, so session fixation is handled the way it already is: a new session id is issued on privilege change. Every new sign-in path below MUST route through the existing login helper rather than writing a session row directly, so it inherits that rotation for free.
 
 ---
+
+## Section A0: `umbral-oauth` provider catalog and device flow (part of gaps5 #9, tf#222)
+
+The immediate code gap behind #9 is not only enterprise SSO. The shipped OAuth plugin has a good provider abstraction, but the built-ins are Google and GitHub only. For adoption, `umbral-oauth` needs a visible provider catalog, enough built-in adapters for common apps, and a non-browser/CLI device flow. These stay in `umbral-oauth`; they do not belong in `umbral-sso` unless the provider is being used as an enterprise IdP with domain routing and group claims.
+
+### Provider tiers
+
+Keep `OAuthProvider` as the low-level trait. Add a higher-level `ProviderManifest` for documentation, admin UI, boot checks, and generated settings docs:
+
+```rust
+pub struct ProviderManifest {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub protocol: ProviderProtocol,          // OAuth2 | Oidc
+    pub default_scopes: &'static [&'static str],
+    pub supports_pkce: bool,
+    pub supports_refresh_token: bool,
+    pub supports_device_authorization: bool,
+    pub email_trust: EmailTrust,             // Verified | Conditional | Untrusted | NotProvided
+    pub login_use: ProviderUse,              // LoginAndConnect | ConnectOnly | LoginOnly
+    pub docs_url: &'static str,
+}
+```
+
+The first-party adapter list should be explicit:
+
+| Provider | Why it matters | Notes |
+|---|---|---|
+| Google | already shipped; consumer and Workspace login | OIDC userinfo today; generic OIDC ID-token verification can replace the hand-coded identity trust path later. |
+| GitHub | already shipped; developer login/connect | No refresh token for OAuth apps; email trust comes from `/user/emails`. |
+| Apple | required for serious consumer/mobile apps | OIDC; email may be private relay and often appears only on first consent; verify `iss`, `aud`, `nonce`, and JWK signature. |
+| Microsoft | consumer Microsoft accounts plus Entra ID | Prefer OIDC discovery; tenant mode decides whether it is social login, enterprise SSO, or both. |
+| Facebook | broad consumer login | Graph API identity; email may be absent depending on permissions, so auto-link only on a verified email assertion. |
+| X / Twitter | social login and account connect | OAuth 2.0; email is often unavailable, so default `email_trust = NotProvided` and do not auto-link by email. |
+| LinkedIn | business/professional login | OIDC when available; good candidate for verified-email linking only after adapter tests prove the claim semantics. |
+| GitLab | developer/org login | OAuth/OIDC depending on deployment; useful for self-hosted GitLab instances through custom endpoints. |
+| Bitbucket | developer login/connect | OAuth 2.0; mostly account connection and import workflows. |
+| Discord | community products | OAuth 2.0; email can be verified but scopes are explicit, so manifest must state the trust rule. |
+| Slack | workspace install/connect | Primarily connect/workspace authorization, not default user login; use `ProviderUse::ConnectOnly` unless sign-in is explicitly enabled. |
+| Mastodon/custom OAuth2 | federation/self-hosted apps | Generic OAuth2 adapter with custom authorize/token/userinfo endpoints, marked untrusted for email by default. |
+
+The default `OAuthPlugin::from_settings` keeps Google/GitHub for backwards compatibility, then grows a provider registry convention: `UMBRAL_OAUTH_<KEY>_CLIENT_ID`, `UMBRAL_OAUTH_<KEY>_CLIENT_SECRET`, optional `UMBRAL_OAUTH_<KEY>_SCOPES`, and, for custom OAuth2/OIDC, endpoint/discovery URLs. A half-configured provider remains a boot warning and is skipped, matching today's safe posture.
+
+### Device Authorization Grant
+
+Add OAuth 2.0 Device Authorization Grant support (RFC 8628) for CLI tools, TVs, terminals, and native apps that cannot safely receive a browser callback. This is not a replacement for browser login; it is a separate public-client flow that still ends at the same `AuthUser` + `umbral-sessions`/`AuthToken` terminal.
+
+Routes under `/oauth/device`:
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/oauth/device/code` | Client asks for a `device_code`, short `user_code`, verification URL, TTL, and polling interval. |
+| GET/POST | `/oauth/device/verify` | Human enters the `user_code` in a normal browser session, authenticates, satisfies MFA if required, and approves the device. |
+| POST | `/oauth/device/token` | Device polls with `device_code`; before approval returns `authorization_pending` / `slow_down`; after approval returns a bearer token. |
+
+Back it with an `OAuthDeviceGrant` model: hashed `device_code`, short `user_code_hash`, provider/client label, requested scopes, `expires_at`, `approved_user_id`, `approved_at`, `denied_at`, `last_polled_at`, and `poll_interval_secs`. Codes are single-use and TTL-bound; polling is throttled and returns the RFC errors. Approval uses the normal login stack, so `umbral-mfa` gates it when policy requires MFA, and `umbral-org` domain/group policy can deny approval when the provider/user is not allowed.
+
+Security posture:
+
+- Device clients are public clients; no client secret is accepted or required.
+- `user_code` is short only because the browser session authenticates the human; the high-entropy `device_code` is stored hashed and never displayed.
+- A device token is issued only after the browser session approves. Approval should show provider/app label, requested scopes, and expiry.
+- Tokens issued by device flow are named bearer tokens, so `DeviceSession` inventory (#13) can list and revoke them.
+- Device flow is disabled by default and enabled per provider/client. Browser/mobile apps keep Authorization Code + PKCE.
 
 ## Section A: `umbral-sso` (gaps5 #9, tf#222): generic OIDC and SAML 2.0
 
@@ -473,13 +537,14 @@ SCIM `User` maps to `AuthUser` + `OrgMembership` (`scim_external_id` is the IdP'
 
 The three plugins ship incrementally; each phase is independently useful and independently reversible.
 
-1. **Phase 1: OIDC discovery (`umbral-sso`, `feature = "oidc"`).** Generic `.well-known` discovery, JWKS + ID-token verification, domain mapping, `SsoProvider`/`SsoIdentity`/`SsoDomain`. Highest value, lowest risk, reuses OAuth's PKCE/state machinery. This alone covers Okta/Azure AD/Auth0/Google Workspace via OIDC, which is the majority of enterprise SSO demand.
+1. **Phase 1: OAuth provider catalog + OIDC discovery.** Add `ProviderManifest`, first-class social providers beyond Google/GitHub (Apple, Microsoft, Facebook, X/Twitter, LinkedIn, GitLab, Bitbucket, Discord, Slack, Mastodon/custom OAuth2), and generic `.well-known` discovery with JWKS + ID-token verification. In `umbral-sso`, this covers Okta/Azure AD/Auth0/Google Workspace via OIDC; in `umbral-oauth`, it removes the "Google/GitHub only" adoption blocker.
 2. **Phase 2: TOTP + recovery codes (`umbral-mfa`, core).** The login gate, `MfaFactor`/`RecoveryCode`, step-up, remembered devices, and `MfaPolicy` enforcement. Small, high-demand, no XML or WebAuthn complexity.
-3. **Phase 3: SCIM + JIT + group mapping + domain verification (`umbral-org`).** The lifecycle layer on top of Phases 1 and 2. JIT lands with Phase 1's identity resolution; SCIM and group mapping follow.
-4. **Phase 4: SAML 2.0 (`umbral-sso`, `feature = "saml"`).** SP-initiated first (it has server-side `InResponseTo` state), IdP-initiated second and opt-in. Behind its own feature so OIDC-only apps never compile the XML-DSig stack. This is the largest single piece; it is sequenced last deliberately.
-5. **Phase 5: WebAuthn/passkeys (`umbral-mfa`, `feature = "webauthn"`).** The registration/authentication ceremonies on top of a vetted `webauthn-rs`-style crate. Large and browser-coupled; sequenced after the TOTP path proves the gate.
+3. **Phase 3: OAuth Device Authorization Grant (`umbral-oauth`).** CLI/native-device login via `/oauth/device/*`, issuing named bearer tokens that appear in the #13 device inventory and honoring MFA/org policy during human approval.
+4. **Phase 4: SCIM + JIT + group mapping + domain verification (`umbral-org`).** The lifecycle layer on top of Phases 1 and 2. JIT lands with Phase 1's identity resolution; SCIM and group mapping follow.
+5. **Phase 5: SAML 2.0 (`umbral-sso`, `feature = "saml"`).** SP-initiated first (it has server-side `InResponseTo` state), IdP-initiated second and opt-in. Behind its own feature so OIDC-only apps never compile the XML-DSig stack. This is the largest single piece; it is sequenced last deliberately.
+6. **Phase 6: WebAuthn/passkeys (`umbral-mfa`, `feature = "webauthn"`).** The registration/authentication ceremonies on top of a vetted `webauthn-rs`-style crate. Large and browser-coupled; sequenced after the TOTP path proves the gate.
 
-Follow-ups explicitly not gating any phase: OAuth/OIDC token-refresh background jobs (deferred by the masked-and-oauth spec and still deferred here; a natural `umbral-tasks` integration), and a distributed replay cache for SAML assertion IDs / OIDC nonces once multi-replica (ties into gaps5 #67 distributed throttling).
+Follow-ups explicitly not gating login: OAuth/OIDC token-refresh background jobs for provider API access (a natural `umbral-tasks` integration), and a distributed replay cache for SAML assertion IDs / OIDC nonces once multi-replica (ties into gaps5 #67 distributed throttling). A provider that advertises connect/API access should not call itself production-ready until refresh behavior is implemented or the manifest states `supports_refresh_token = false`.
 
 ## Cross-cutting security summary
 
@@ -496,7 +561,7 @@ All row-level reads and writes go through the ORM (no raw `sqlx::query` in plugi
 
 ## Open questions for the maintainer
 
-1. Plugin naming: `umbral-sso` vs folding OIDC into `umbral-oauth` (OIDC genuinely IS OAuth + ID-token verification). The proposal keeps them separate so an OAuth-only social-login app does not pull the SSO surface, but a shared crate with features is defensible.
+1. Plugin naming: `umbral-sso` vs folding OIDC into `umbral-oauth` (OIDC genuinely IS OAuth + ID-token verification). The proposal keeps enterprise domain-routing, SAML, and SCIM-facing SSO in `umbral-sso`, while social OIDC providers and device flow stay in `umbral-oauth`. A shared internal OIDC crate with two public plugin surfaces is defensible.
 2. Whether `umbral-org` should require `umbral-tenants` or keep the `Org`-to-`Tenant` link optional (the draft keeps it optional so single-tenant enterprise apps still get SCIM/JIT).
 3. Group-sync default: full reconcile (IdP authoritative) vs additive-only. The draft defaults to full reconcile with a per-org opt-out.
 4. Whether IdP-initiated SAML should exist at all given its weaker guarantees, or be dropped in favor of SP-initiated only.

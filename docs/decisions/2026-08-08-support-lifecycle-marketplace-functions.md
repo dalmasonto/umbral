@@ -2,7 +2,7 @@
 
 Status: draft for ratification (proposes answers to gaps5 #89, #90, #91; the final call is the maintainer's)
 Date: 2026-08-08
-Closes: planning/gaps5.md #89 (tf#302), #90 (tf#303), #91 (tf#304)
+Decision coverage: planning/gaps5.md #89 (tf#302), #90 (tf#303), #91 (tf#304). This records the policy/product decisions; implementation deliverables remain on the linked tasks.
 
 ## Why these three sit in one document
 
