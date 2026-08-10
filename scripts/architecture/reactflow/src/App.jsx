@@ -6,6 +6,7 @@ import {
 } from '@xyflow/react';
 import { toPng } from 'html-to-image';
 import { initialNodes, initialEdges, legendItems } from './graph.js';
+import { blueprintNodes, blueprintEdges, blueprintLegend } from './blueprint.js';
 
 // Every node carries all 8 handles (both types, each side) so edges attach on any
 // side; handle dots are hidden in CSS — this is a static, non-interactive diagram.
@@ -84,9 +85,11 @@ function downloadPng(nodes) {
   });
 }
 
-function Flow() {
-  const [nodes, , onNodesChange] = useNodesState(initialNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
+function Flow({ view, setView }) {
+  const isBp = view === 'blueprint';
+  const [nodes, , onNodesChange] = useNodesState(isBp ? blueprintNodes : initialNodes);
+  const [edges, , onEdgesChange] = useEdgesState(isBp ? blueprintEdges : initialEdges);
+  const legend = isBp ? blueprintLegend : legendItems;
   const onExport = useCallback(() => downloadPng(nodes), [nodes]);
 
   return (
@@ -118,14 +121,18 @@ function Flow() {
           <img className="brand-mark" src="./umbral-mark.svg" width="30" height="30" alt="" />
           <span className="brand"><b>Umbral</b><span className="of">of the shadow · schematic</span></span>
           <span className="sep" />
+          <div className="switch">
+            <button className={view === 'flow' ? 'on' : ''} onClick={() => setView('flow')}>Flow</button>
+            <button className={view === 'blueprint' ? 'on' : ''} onClick={() => setView('blueprint')}>Blueprint</button>
+          </div>
+          <span className="sep" />
           <button onClick={onExport}>Download PNG</button>
-          <button className="ghost" onClick={() => window.location.reload()}>Reset</button>
         </div>
       </Panel>
       <Panel position="top-right">
         <div className="panel-card legend">
           <div className="head">Map key</div>
-          {legendItems.map(([label, color]) => (
+          {legend.map(([label, color]) => (
             <div className="item" key={label}>
               <span className={`sw${label.includes('Roadmap') ? ' dash' : ''}`} style={{ background: color }} />
               {label}
@@ -138,10 +145,21 @@ function Flow() {
 }
 
 export default function App() {
+  const [view, setView] = React.useState(
+    () => (new URLSearchParams(window.location.search).get('view') === 'blueprint' ? 'blueprint' : 'flow'),
+  );
+  // keep the view shareable via ?view=blueprint
+  const changeView = (v) => {
+    setView(v);
+    const u = new URL(window.location.href);
+    if (v === 'flow') u.searchParams.delete('view');
+    else u.searchParams.set('view', v);
+    window.history.replaceState(null, '', u);
+  };
   return (
     <div style={{ width: '100vw', height: '100vh' }}>
       <ReactFlowProvider>
-        <Flow />
+        <Flow key={view} view={view} setView={changeView} />
       </ReactFlowProvider>
     </div>
   );

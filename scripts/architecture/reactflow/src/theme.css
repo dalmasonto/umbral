@@ -143,6 +143,11 @@ body { font-family: var(--sans); color: var(--ink); }
 .toolbar button.ghost { background: rgba(148, 163, 184, 0.12); color: var(--ink); box-shadow: none; }
 .toolbar button.ghost:hover { background: rgba(148, 163, 184, 0.22); }
 
+.switch { display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: rgba(148, 163, 184, 0.1); }
+.switch button { background: transparent; color: var(--dim); box-shadow: none; padding: 6px 13px; border-radius: 6px; font: 650 12px var(--sans); }
+.switch button:hover:not(.on) { color: var(--ink); background: rgba(148, 163, 184, 0.12); }
+.switch button.on { background: linear-gradient(180deg, #7c6cf5, #6249e6); color: #fff; }
+
 .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 16px; }
 .legend .head { grid-column: 1 / -1; font: 600 9px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
 .legend .item { display: flex; align-items: center; gap: 7px; font: 500 11px/1 var(--sans); color: var(--dim); }
