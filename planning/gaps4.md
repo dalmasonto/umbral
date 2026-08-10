@@ -115,3 +115,4 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 58. [x] Gated proxy for non-FS media backends — archived (streams gated bytes through the Storage trait, `5c75e937`)
 
 59. [x] umbral-storage `.media_s3` presign wedged the tokio runtime — archived (`url()` now drives presign via `block_in_place` + `Handle::block_on` on the real reactor, not reactor-less `futures_executor::block_on`; 0.0.11 shipped #58)
+60. [ ] I think the main function is long like what is `async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>` this is a very loong statement that the developer has to recall, of which personally it becomes hard to understand. Fold this into a macro that wrapps both `tokio::main` and produces all this for the developer.
