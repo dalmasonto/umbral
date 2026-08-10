@@ -825,6 +825,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "errno"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "etcetera"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1399,6 +1409,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "inventory"
+version = "0.3.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
+dependencies = [
+ "rustversion",
 ]
 
 [[package]]
@@ -2471,6 +2490,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "signal-hook-registry"
+version = "1.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
+dependencies = [
+ "errno",
+ "libc",
+]
+
+[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2970,6 +2999,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
@@ -3206,7 +3236,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "umbral"
-version = "0.0.1"
+version = "0.0.11"
 dependencies = [
  "async-trait",
  "minijinja",
@@ -3217,8 +3247,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbral-casing"
+version = "0.0.11"
+
+[[package]]
 name = "umbral-cli"
-version = "0.0.1"
+version = "0.0.11"
 dependencies = [
  "clap",
  "csv",
@@ -3226,12 +3260,13 @@ dependencies = [
  "tokio",
  "tracing-subscriber",
  "umbral",
+ "umbral-casing",
  "umbral-core",
 ]
 
 [[package]]
 name = "umbral-core"
-version = "0.0.1"
+version = "0.0.11"
 dependencies = [
  "ammonia",
  "async-trait",
@@ -3246,6 +3281,7 @@ dependencies = [
  "figment",
  "futures-util",
  "http",
+ "inventory",
  "ipnetwork",
  "mac_address",
  "minijinja",
@@ -3267,6 +3303,8 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
+ "umbral-casing",
  "uuid",
 ]
 
@@ -3283,11 +3321,12 @@ dependencies = [
 
 [[package]]
 name = "umbral-macros"
-version = "0.0.1"
+version = "0.0.11"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+ "umbral-casing",
 ]
 
 [[package]]
