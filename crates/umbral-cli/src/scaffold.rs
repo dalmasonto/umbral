@@ -1217,6 +1217,12 @@ first thing a `default-src 'self'` Content-Security-Policy blocks.
             "static/css/app.css",
             include_str!("../assets/scaffold/static/css/app.css"),
         ),
+        // The umbral mark (umbra crescent), served at /static/favicon.svg and
+        // referenced from base.html — every scaffolded project gets a favicon.
+        (
+            "static/favicon.svg",
+            include_str!("../assets/scaffold/static/favicon.svg"),
+        ),
     ] {
         write_file(&root, path, &fill(body), &mut files)?;
     }
