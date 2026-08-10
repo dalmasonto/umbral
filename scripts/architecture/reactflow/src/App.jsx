@@ -115,7 +115,7 @@ function Flow() {
       />
       <Panel position="top-left">
         <div className="panel-card toolbar">
-          <span className="eclipse" />
+          <img className="brand-mark" src="./umbral-mark.svg" width="30" height="30" alt="" />
           <span className="brand"><b>Umbral</b><span className="of">of the shadow · schematic</span></span>
           <span className="sep" />
           <button onClick={onExport}>Download PNG</button>

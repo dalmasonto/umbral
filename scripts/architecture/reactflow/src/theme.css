@@ -129,11 +129,7 @@ body { font-family: var(--sans); color: var(--ink); }
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
 }
 .toolbar { display: flex; align-items: center; gap: 12px; }
-.eclipse { width: 26px; height: 26px; border-radius: 50%; position: relative; flex: none;
-  background: radial-gradient(circle at 38% 38%, #f4d38a, #caa24a 70%);
-  box-shadow: 0 0 16px rgba(167, 139, 250, 0.55); }
-.eclipse::after { content: ""; position: absolute; inset: 0; border-radius: 50%;
-  background: var(--ground); transform: translate(7px, -4px); }
+.brand-mark { flex: none; filter: drop-shadow(0 0 10px rgba(139, 123, 245, 0.45)); }
 .brand { font: 800 16px/1 var(--sans); letter-spacing: -.01em; }
 .brand b { color: var(--c-core); font-weight: 800; }
 .brand .of { display: block; font: 600 9.5px/1.4 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin-top: 3px; }
