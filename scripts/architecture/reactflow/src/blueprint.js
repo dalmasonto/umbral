@@ -49,17 +49,24 @@ function pipeline(id, cat, title, note, steps, o) {
   const rows = Math.ceil(steps.length / cols);
   const h = top + rows * cardH + (rows - 1) * gapY + botPad;
   zone(id, cat, title, note, ZX, Y, ZW, h);
+  // boustrophedon: even rows left→right, odd rows right→left, so every step
+  // joins one continuous snake (→ ↓ ← ↓ →) with straight vertical drops.
+  const visualCol = (i) => {
+    const r = Math.floor(i / cols), inRow = i % cols;
+    return r % 2 === 0 ? inRow : cols - 1 - inRow;
+  };
   const ids = steps.map((s, i) => {
-    const c = i % cols, r = Math.floor(i / cols);
+    const r = Math.floor(i / cols);
     const nid = `${id}_${i}`;
-    card(nid, s.cat || cat, s.k, s.t, s.s || '', IM + c * (cardW + gapX), top + r * (cardH + gapY), cardW, cardH, id);
+    card(nid, s.cat || cat, s.k, s.t, s.s || '', IM + visualCol(i) * (cardW + gapX), top + r * (cardH + gapY), cardW, cardH, id);
     return nid;
   });
   const line = COLOR[cat] || '#5b6480';
   for (let i = 0; i < steps.length - 1; i++) {
-    const lastInRow = i % cols === cols - 1;
-    if (lastInRow) edge(ids[i], 'bs', ids[i + 1], 'tt', line, { dash: true, w: 1.6, label: 'then' });
-    else edge(ids[i], 'rs', ids[i + 1], 'lt', line, { anim: true });
+    const r = Math.floor(i / cols);
+    if (i % cols === cols - 1) edge(ids[i], 'bs', ids[i + 1], 'tt', line, { w: 1.8 }); // drop straight down
+    else if (r % 2 === 0) edge(ids[i], 'rs', ids[i + 1], 'lt', line, { anim: true }); // → even row
+    else edge(ids[i], 'ls', ids[i + 1], 'rt', line, { anim: true }); // ← odd row
   }
   Y += h + ZGAP;
 }
