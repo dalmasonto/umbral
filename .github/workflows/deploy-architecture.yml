@@ -1,31 +1,26 @@
-# Build the interactive architecture diagram (scripts/architecture/reactflow -
-# a Vite + @xyflow/react app) and deploy it to GitHub Pages in a SEPARATE repo.
+# Build the architecture diagram (scripts/architecture/reactflow, a Vite app)
+# and push the static output to the gh-pages branch of a SEPARATE repo, which
+# then serves it via GitHub Pages — automatically, on every change.
 #
-# Why a separate repo: this repo already serves docs at dalmasonto.github.io/umbral/
-# via `deploy-docs`. The architecture schematic ships to its own Pages site (e.g.
-# https://dalmasonto.github.io/umbral-architecture/) so the two don't collide.
-#
-# Cross-repo note: the built-in GITHUB_TOKEN is scoped to THIS repo and cannot
-# push to another one, so the deploy step authenticates to the target repo with
-# an SSH deploy key (recommended, repo-scoped) or a PAT. The target repo and the
-# credential are read from a repo variable + secret, so nothing is hardcoded.
-#
-# ONE-TIME SETUP: see scripts/architecture/reactflow/DEPLOY.md.
+# One-time setup:
+#   1. Add a secret PAGES_DEPLOY_TOKEN = a PAT with Contents:write on the target
+#      repo. (The built-in GITHUB_TOKEN can't push to another repo, so this one
+#      token is unavoidable.)
+#   2. In the target repo: Settings → Pages → Deploy from a branch → gh-pages.
+# Change `external_repository` below if your repo name differs.
 
 name: deploy-architecture
 
 on:
-  # auto-deploy when the diagram changes on main …
   push:
     branches: [main]
     paths:
       - "scripts/architecture/reactflow/**"
       - ".github/workflows/deploy-architecture.yml"
-  # … and on demand from the Actions tab.
   workflow_dispatch:
 
 permissions:
-  contents: read # we push to the TARGET repo via deploy key/PAT, not GITHUB_TOKEN
+  contents: read
 
 concurrency:
   group: deploy-architecture
@@ -34,50 +29,25 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Skip on forks / when the target repo variable isn't configured, so the
-    # workflow never fails loudly for someone who hasn't set up the target repo.
-    if: vars.ARCH_PAGES_REPO != ''
     defaults:
       run:
         working-directory: scripts/architecture/reactflow
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: scripts/architecture/reactflow/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build the React Flow app
-        run: npm run build
-
-      - name: Add .nojekyll (serve assets/ untouched)
-        run: touch dist/.nojekyll
-
-      - name: Deploy to the separate Pages repo
+      - run: npm ci
+      - run: npm run build
+      - run: touch dist/.nojekyll
+      - name: Push to the Pages repo
         uses: peaceiris/actions-gh-pages@v4
         with:
-          # RECOMMENDED: an SSH deploy key added (with write access) to the
-          # TARGET repo, stored here as the ARCH_PAGES_DEPLOY_KEY secret.
-          deploy_key: ${{ secrets.ARCH_PAGES_DEPLOY_KEY }}
-          # e.g. "dalmasonto/umbral-architecture" — set as a repo variable so the
-          # target isn't hardcoded in the workflow.
-          external_repository: ${{ vars.ARCH_PAGES_REPO }}
+          personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          external_repository: dalmasonto/umbral-architecture # ← change if needed
           publish_branch: gh-pages
-          # publish_dir is repo-root-relative (peaceiris ignores defaults.run.working-directory).
-          publish_dir: ./scripts/architecture/reactflow/dist
-          force_orphan: true # keep the target's gh-pages a single, tidy commit
-          user_name: "github-actions[bot]"
-          user_email: "github-actions[bot]@users.noreply.github.com"
+          publish_dir: ./scripts/architecture/reactflow/dist # repo-root-relative
+          force_orphan: true
           commit_message: "deploy: umbral architecture ${{ github.sha }}"
-          # --- PAT alternative: comment out `deploy_key` above and uncomment ---
-          # personal_token: ${{ secrets.ARCH_PAGES_TOKEN }}
-
-      - name: Summary
-        run: echo "Architecture deployed to the gh-pages branch of ${{ vars.ARCH_PAGES_REPO }}"
