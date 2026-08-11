@@ -10,6 +10,8 @@ The name is the adjective "of the shadow" (from Latin *umbra*).
 
 > **Status: early/alpha, published on crates.io.** The framework and its built-in plugins ship under the `umbral-*` namespace; start with the [`umbral`](https://crates.io/crates/umbral) facade. APIs will still move before 1.0.
 
+**Links:** [Website](https://umbralrs.dev/) · [Docs](https://dalmasonto.github.io/umbral/) · [Architecture](https://dalmasonto.github.io/umbral-architecture/) · [Blueprint](https://dalmasonto.github.io/umbral-architecture/?view=blueprint) · [crates.io](https://crates.io/crates/umbral)
+
 ## Quick start
 
 Install the CLI (the `umbral` binary), scaffold a project, and run it:
@@ -70,9 +72,12 @@ Install the CLI separately with `cargo install umbral-cli`.
 - **The easy path is the safe path.** Nullable columns are `Option<T>`, errors are `Result`, backend mismatches fail at boot, and SQL is always parameterized. CSRF, secure cookies, and HTML autoescaping are on by default.
 - **Stand on shoulders.** axum, sqlx, sea-query, and tower do the heavy lifting; umbral provides the conventions and the integration, not a reimplementation of HTTP, async, SQL, or JSON.
 
-## Documentation
+## Documentation & links
 
-The docs site is at **https://dalmasonto.github.io/umbral/** (source in `documentation/`, a SvelteKit + Specra site; run locally with `cd documentation && yarn dev`).
+- **Docs** - the docs site is at **https://dalmasonto.github.io/umbral/** (source in `documentation/`, a SvelteKit + Specra site; run locally with `cd documentation && yarn dev`).
+- **Website** - the project site, **https://umbralrs.dev/**, is itself built with umbral.
+- **Architecture map** - an interactive schematic of the whole framework: the [flow view](https://dalmasonto.github.io/umbral-architecture/) (system map) and the detailed [blueprint view](https://dalmasonto.github.io/umbral-architecture/?view=blueprint) (per-subsystem pipelines). Source in `scripts/architecture/`.
+- **Crate** - published on **[crates.io](https://crates.io/crates/umbral)**; start with the `umbral` facade.
 
 ## Working in this repository
 
