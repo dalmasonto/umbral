@@ -287,6 +287,8 @@ fn inspect_maps_postgres_network_types() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
                 IntrospectedColumn {
                     name: "addr".to_string(),
@@ -299,6 +301,8 @@ fn inspect_maps_postgres_network_types() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
                 IntrospectedColumn {
                     name: "mac".to_string(),
@@ -311,6 +315,8 @@ fn inspect_maps_postgres_network_types() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
             ],
 

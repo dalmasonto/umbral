@@ -119,3 +119,81 @@ async fn full_round_trip_against_real_postgres() {
     assert!(!by_name["small"].nullable);
     assert!(!by_name["note"].nullable);
 }
+
+/// A native Postgres enum column (`CREATE TYPE ... AS ENUM`) is recovered as a
+/// TEXT-backed `choices` column carrying the enum type name + labels (in
+/// `enumsortorder`), so the renderer folds it into a generated `Choices` enum.
+/// This exercises the `pg_enum` introspection the SQLite path can't reach (no
+/// native enum type).
+#[tokio::test]
+#[ignore = "needs UMBRAL_TEST_POSTGRES_URL pointing at a Postgres server"]
+async fn native_pg_enum_recovers_as_choices_column() {
+    let url = std::env::var("UMBRAL_TEST_POSTGRES_URL")
+        .expect("UMBRAL_TEST_POSTGRES_URL must be set to run the ignored Postgres test");
+    let pool = PgPool::connect(&url)
+        .await
+        .expect("connect to Postgres at UMBRAL_TEST_POSTGRES_URL");
+
+    // Clean state — drop the table before the type it depends on.
+    sqlx::query("DROP TABLE IF EXISTS umbral_enum_probe")
+        .execute(&pool)
+        .await
+        .expect("drop prior table");
+    sqlx::query("DROP TYPE IF EXISTS umbral_payment_method")
+        .execute(&pool)
+        .await
+        .expect("drop prior type");
+
+    sqlx::query("CREATE TYPE umbral_payment_method AS ENUM ('STRIPE', 'CRYPTO', 'AQUAFIER')")
+        .execute(&pool)
+        .await
+        .expect("create enum type");
+    sqlx::query(
+        "CREATE TABLE umbral_enum_probe ( \
+            id BIGSERIAL PRIMARY KEY, \
+            method umbral_payment_method NOT NULL, \
+            fallback umbral_payment_method \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .expect("create table with enum columns");
+
+    let schema = introspect_pool_pg(&pool)
+        .await
+        .expect("introspect_pool_pg should succeed");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.table == "umbral_enum_probe")
+        .expect("enum probe table should appear");
+    let by_name: std::collections::HashMap<&str, &umbral::inspect::IntrospectedColumn> =
+        table.columns.iter().map(|c| (c.name.as_str(), c)).collect();
+
+    // A native enum column: TEXT-backed, carrying the type name + labels in
+    // declaration order (NOT alphabetical — CRYPTO/STRIPE would sort wrong).
+    let method = by_name.get("method").expect("method column");
+    assert_eq!(method.ty, SqlType::Text, "enum stores as TEXT + CHECK");
+    assert_eq!(method.enum_type.as_deref(), Some("umbral_payment_method"));
+    assert_eq!(method.choices, vec!["STRIPE", "CRYPTO", "AQUAFIER"]);
+    assert!(!method.nullable);
+
+    // The nullable column of the same enum type recovers the same labels.
+    let fallback = by_name.get("fallback").expect("fallback column");
+    assert_eq!(fallback.enum_type.as_deref(), Some("umbral_payment_method"));
+    assert_eq!(fallback.choices, vec!["STRIPE", "CRYPTO", "AQUAFIER"]);
+    assert!(fallback.nullable);
+
+    // A plain column is untouched — no spurious choices.
+    assert!(by_name["id"].choices.is_empty());
+    assert!(by_name["id"].enum_type.is_none());
+
+    sqlx::query("DROP TABLE umbral_enum_probe")
+        .execute(&pool)
+        .await
+        .ok();
+    sqlx::query("DROP TYPE umbral_payment_method")
+        .execute(&pool)
+        .await
+        .ok();
+}

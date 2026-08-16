@@ -149,6 +149,19 @@ pub struct IntrospectedColumn {
     /// so recovered only by the `--framework django` name heuristic
     /// (`updated*` / `modified*`). Renders `#[umbral(auto_now)]`.
     pub auto_now: bool,
+    /// The closed set of values a native DB enum column accepts, in
+    /// `enumsortorder`. Non-empty only for a Postgres `USER-DEFINED` enum
+    /// column: the type stays [`SqlType::Text`] and the field renders as the
+    /// generated [`Choices`] enum named by [`Self::enum_type`], carrying a
+    /// `#[umbral(choices)]` attribute (which the migration lowers to a
+    /// `CHECK (col IN (...))` constraint). Empty for every non-enum column —
+    /// SQLite has no native enum type, so its path never populates this.
+    pub choices: Vec<String>,
+    /// The Postgres enum type name backing a `choices` column (`PaymentMethod`),
+    /// or `None` when the column isn't a native enum. Drives the generated Rust
+    /// enum's name and lets columns sharing one DB enum type reuse a single
+    /// generated `enum` rather than each emitting its own.
+    pub enum_type: Option<String>,
 }
 
 /// Errors `inspectdb` can produce. Carries enough detail for the CLI
@@ -550,9 +563,27 @@ async fn introspect_columns_pg(
     // rather than crashing as an unsupported type.
     let spatial = pg_spatial_columns(pool, table).await;
 
+    // Native Postgres enum types (`CREATE TYPE ... AS ENUM (...)`) report
+    // `data_type = "USER-DEFINED"` with `udt_name` naming the enum type. The
+    // accepted labels live in `pg_enum`; recover them (in `enumsortorder`) so an
+    // enum column folds into a generated `Choices` enum rather than crashing as
+    // an unsupported type. Composite / range / domain USER-DEFINED types aren't
+    // enums, so they're absent from this map and still surface as unsupported.
+    let enums = pg_enum_columns(pool, table).await;
+
     let mut columns: Vec<IntrospectedColumn> = Vec::with_capacity(column_rows.len());
     for (name, data_type, is_nullable, udt_name, raw_default) in column_rows {
-        let ty = if udt_name.eq_ignore_ascii_case("geometry")
+        // A native enum column: TEXT-backed choices, carrying the enum type name
+        // so the renderer names (and de-duplicates) the generated `Choices` enum.
+        let (choices, enum_type) = match enums.get(&name) {
+            Some((type_name, labels)) => (labels.clone(), Some(type_name.clone())),
+            None => (Vec::new(), None),
+        };
+        let ty = if !choices.is_empty() {
+            // The enum's storage type is TEXT + a CHECK; the migration engine
+            // emits the CHECK from `choices`.
+            SqlType::Text
+        } else if udt_name.eq_ignore_ascii_case("geometry")
             || udt_name.eq_ignore_ascii_case("geography")
         {
             // Prefer the catalog's exact subtype+SRID; fall back to the
@@ -618,6 +649,9 @@ async fn introspect_columns_pg(
             default: raw_default,
             auto_now_add: false,
             auto_now: false,
+            // Recovered native-enum labels (empty for a non-enum column).
+            choices,
+            enum_type,
         });
     }
 
@@ -724,6 +758,49 @@ async fn pg_spatial_columns(
         map.insert(col, SqlType::Geography(spec));
     }
 
+    map
+}
+
+/// Recover the native Postgres enum columns of one table: a map from column
+/// name to `(enum_type_name, labels)`, labels in `enumsortorder`.
+///
+/// A `CREATE TYPE ... AS ENUM (...)` column reports `data_type =
+/// "USER-DEFINED"` through information_schema; only `pg_enum` carries the
+/// accepted labels. Joining `pg_attribute` → `pg_type` → `pg_enum` for the
+/// table yields one row per (column, label); the labels for a column are
+/// collected in declaration order. Columns whose USER-DEFINED type is a
+/// composite / range / domain (not an enum) simply produce no rows and stay
+/// out of the map, so they still surface as [`InspectError::UnsupportedColumnType`].
+async fn pg_enum_columns(
+    pool: &PgPool,
+    table: &str,
+) -> std::collections::HashMap<String, (String, Vec<String>)> {
+    // One row per (column, enum label), ordered so `enumsortorder` preserves the
+    // enum's declared value order and `attnum` groups a column's labels together.
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT a.attname, t.typname, e.enumlabel \
+         FROM pg_attribute a \
+         JOIN pg_type t ON t.oid = a.atttypid \
+         JOIN pg_enum e ON e.enumtypid = t.oid \
+         JOIN pg_class c ON c.oid = a.attrelid \
+         JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = 'public' AND c.relname = $1 \
+           AND a.attnum > 0 AND NOT a.attisdropped \
+         ORDER BY a.attnum, e.enumsortorder",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut map: std::collections::HashMap<String, (String, Vec<String>)> =
+        std::collections::HashMap::new();
+    for (col, type_name, label) in rows {
+        map.entry(col)
+            .or_insert_with(|| (type_name, Vec::new()))
+            .1
+            .push(label);
+    }
     map
 }
 
@@ -884,6 +961,11 @@ async fn introspect_columns(
             default: raw_default,
             auto_now_add: false,
             auto_now: false,
+            // SQLite has no native enum type — a closed-set column is modelled
+            // as plain TEXT with a CHECK the introspector doesn't parse back,
+            // so the recovered column carries no choices.
+            choices: Vec::new(),
+            enum_type: None,
         });
     }
     Ok(columns)
@@ -1161,6 +1243,28 @@ pub fn render_models_with(
         out.push_str(AUTH_USER_IMPORT);
     }
 
+    // Recovered native enum types (Postgres `CREATE TYPE ... AS ENUM`) render as
+    // `Choices` enums once, ahead of the structs that reference them. Columns
+    // sharing one DB enum type collapse onto a single generated enum, keyed by
+    // its Rust name; emitted in name order for a stable diff.
+    let mut enums: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for table in &schema.tables {
+        for column in &table.columns {
+            if let Some(enum_type) = &column.enum_type {
+                if !column.choices.is_empty() {
+                    enums
+                        .entry(choices_enum_name(enum_type))
+                        .or_insert_with(|| column.choices.clone());
+                }
+            }
+        }
+    }
+    for (name, labels) in &enums {
+        out.push('\n');
+        out.push_str(&render_choices_enum(name, labels));
+    }
+
     let mut tables: Vec<&IntrospectedTable> = schema.tables.iter().collect();
     tables.sort_by(|a, b| struct_names[&a.table].cmp(&struct_names[&b.table]));
 
@@ -1172,6 +1276,65 @@ pub fn render_models_with(
         out.push('\n');
         out.push_str(&render_one_struct(table, &struct_names));
     }
+    out
+}
+
+/// The Rust type name for a recovered DB enum: PascalCase of the DB type name
+/// (`payment_method` -> `PaymentMethod`; an already-PascalCase Prisma type name
+/// like `PaymentMethod` passes through). Kept in one place so the enum
+/// definition and every field that references it agree on the identifier.
+fn choices_enum_name(enum_type: &str) -> String {
+    umbral_casing::pascal_case_from_ident(enum_type)
+}
+
+/// Render one `#[derive(Choices)]` enum from a recovered DB enum's labels.
+///
+/// Each variant identifier is the PascalCase of its DB label
+/// (`PARTIALLY_PAID` -> `PartiallyPaid`). When every label is reproduced by the
+/// `SCREAMING_SNAKE_CASE` rename rule — the Choices derive computes a variant's
+/// DB value as `to_snake_case(variant).to_uppercase()` — a single enum-level
+/// `rename_all` keeps the variants clean. When a label wouldn't round-trip that
+/// way (a lowercase or mixed-case enum), each variant pins its exact DB string
+/// with `#[choices(value = "...")]` (and the matching `#[serde(rename)]`) so the
+/// generated column always round-trips, whatever the label casing.
+fn render_choices_enum(rust_name: &str, labels: &[String]) -> String {
+    let variants: Vec<String> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let ident = pascal_case_from_table(l);
+            if ident.is_empty() {
+                format!("Variant{i}")
+            } else {
+                ident
+            }
+        })
+        .collect();
+    // The Choices derive's SCREAMING_SNAKE_CASE value == to_snake_case(variant)
+    // uppercased; check every label is reproduced before trusting the tidy form.
+    let screaming_round_trips = variants
+        .iter()
+        .zip(labels)
+        .all(|(v, l)| to_snake_case(v).to_ascii_uppercase() == *l);
+
+    let mut out = String::new();
+    out.push_str(
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Choices)]\n",
+    );
+    if screaming_round_trips {
+        out.push_str("#[choices(rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
+        out.push_str("#[serde(rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
+    }
+    out.push_str(&format!("pub enum {rust_name} {{\n"));
+    for (variant, label) in variants.iter().zip(labels) {
+        if !screaming_round_trips {
+            let escaped = label.replace('\\', "\\\\").replace('"', "\\\"");
+            out.push_str(&format!("    #[choices(value = \"{escaped}\")]\n"));
+            out.push_str(&format!("    #[serde(rename = \"{escaped}\")]\n"));
+        }
+        out.push_str(&format!("    {variant},\n"));
+    }
+    out.push_str("}\n");
     out
 }
 
@@ -1597,6 +1760,14 @@ fn render_one_struct(
         if let Some(attr) = geometry_attr(column.ty) {
             out.push_str(&format!("    {attr}\n"));
         }
+        // A recovered native enum column renders as its generated `Choices`
+        // enum type, marked `#[umbral(choices)]` so the derive treats it as a
+        // closed set and the migration re-emits the CHECK. Emitted before the
+        // field line, like the other per-column attributes.
+        let is_enum_column = column.enum_type.is_some() && !column.choices.is_empty();
+        if is_enum_column {
+            out.push_str("    #[umbral(choices)]\n");
+        }
         // A FK field keeps its REAL column name (`author_id`), not a prettified
         // `author`: umbral uses the field name as the column name, so this
         // avoids a `#[sqlx(rename)]` on every foreign key and keeps the index /
@@ -1612,10 +1783,22 @@ fn render_one_struct(
                 };
                 (column.name.clone(), ty)
             }
-            None => (
-                column.name.clone(),
-                render_field_type(column.ty, column.nullable),
-            ),
+            None => match &column.enum_type {
+                // The enum column's type is the generated `Choices` enum.
+                Some(enum_type) if !column.choices.is_empty() => {
+                    let enum_name = choices_enum_name(enum_type);
+                    let ty = if column.nullable {
+                        format!("Option<{enum_name}>")
+                    } else {
+                        enum_name
+                    };
+                    (column.name.clone(), ty)
+                }
+                _ => (
+                    column.name.clone(),
+                    render_field_type(column.ty, column.nullable),
+                ),
+            },
         };
         // Escape a Rust keyword / otherwise-invalid identifier (a column named
         // `type`, `match`, …) by suffixing `_`. Whenever the Rust field name
@@ -1999,8 +2182,11 @@ impl From<&IntrospectedColumn> for Column {
             noedit: false,
             is_string_repr: false,
             max_length: 0,
-            choices: Vec::new(),
-            choice_labels: Vec::new(),
+            // Recovered native-enum labels: the closed set drives the migration's
+            // `CHECK (col IN (...))`. Labels double as their own human labels —
+            // inspectdb has no display-name source beyond the DB value.
+            choices: c.choices.clone(),
+            choice_labels: c.choices.clone(),
             // Recovered constant default (`''` when none / unrepresentable), so
             // the initial migration re-emits the DDL `DEFAULT` clause.
             default: c.default.clone().unwrap_or_default(),
@@ -2048,6 +2234,8 @@ mod tests {
             default: None,
             auto_now_add: false,
             auto_now: false,
+            choices: Vec::new(),
+            enum_type: None,
         }
     }
 

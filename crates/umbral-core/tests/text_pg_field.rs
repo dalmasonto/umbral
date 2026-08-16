@@ -204,6 +204,8 @@ fn inspect_renders_text_pg_types_as_string() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
                 IntrospectedColumn {
                     name: "body".to_string(),
@@ -216,6 +218,8 @@ fn inspect_renders_text_pg_types_as_string() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
                 IntrospectedColumn {
                     name: "path".to_string(),
@@ -228,6 +232,8 @@ fn inspect_renders_text_pg_types_as_string() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
                 IntrospectedColumn {
                     name: "flags".to_string(),
@@ -240,6 +246,8 @@ fn inspect_renders_text_pg_types_as_string() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
             ],
 

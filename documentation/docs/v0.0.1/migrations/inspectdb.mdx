@@ -52,6 +52,18 @@ Beyond columns and primary keys, `inspectdb` recovers:
 - **Autoincrement primary keys** need no special handling: an integer PK is
   emitted as a plain `pub id: i64`, and the migration engine already lowers that
   to `BIGSERIAL` on Postgres and `INTEGER … AUTOINCREMENT` on SQLite.
+- **Native Postgres enums** (`CREATE TYPE ... AS ENUM`): a column of a native
+  enum type — which information_schema reports only as the opaque
+  `USER-DEFINED` — is recovered from `pg_enum` into a generated
+  `#[derive(Choices)]` enum, and the field renders as that enum with
+  `#[umbral(choices)]`. Variant names are the PascalCase of
+  the DB labels (`PARTIALLY_PAID` → `PartiallyPaid`), and an enum-level
+  `#[choices(rename_all = "SCREAMING_SNAKE_CASE")]` maps each back to its label;
+  a label that wouldn't round-trip that way pins its exact string with
+  `#[choices(value = "...")]`. Columns sharing one DB enum type reuse a single
+  generated enum. The type stores as `TEXT` + a `CHECK (col IN (...))` in the
+  initial migration, so a re-migrate rebuilds the closed set. (SQLite has no
+  native enum type, so this is Postgres-only.)
 - **Many-to-many** (`--framework django`): a Django join table
   (`communities_community_software` — a pure junction of two FK columns plus the
   surrogate PK) is folded into an `M2M<Software>` field on the owner

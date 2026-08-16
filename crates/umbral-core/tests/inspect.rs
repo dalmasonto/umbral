@@ -30,6 +30,7 @@ use tokio::sync::OnceCell;
 use umbral::inspect::{
     INITIAL_MIGRATION_ID, INSPECTED_PLUGIN_NAME, InspectOptions, IntrospectedColumn,
     IntrospectedSchema, IntrospectedTable, inspectdb, introspect_pool, render_models,
+    render_models_with,
 };
 use umbral::migrate::{MigrationFile, Operation};
 use umbral::orm::{Post, SqlType};
@@ -306,6 +307,8 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 }],
 
                 unique_together: Vec::new(),
@@ -326,6 +329,8 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 }],
 
                 unique_together: Vec::new(),
@@ -502,6 +507,8 @@ async fn render_models_emits_fromrow_and_skips_option_on_primary_keys() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
                 IntrospectedColumn {
                     name: "body".to_string(),
@@ -514,6 +521,8 @@ async fn render_models_emits_fromrow_and_skips_option_on_primary_keys() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
             ],
 
@@ -882,6 +891,101 @@ async fn inspectdb_prisma_folds_implicit_m2m() {
     );
 }
 
+/// A recovered native Postgres enum column (`choices` + `enum_type` populated,
+/// as `introspect_columns_pg` fills them from `pg_enum`) renders a `Choices`
+/// enum type plus a `#[umbral(choices)]` field typed as that enum. Two columns
+/// sharing one DB enum type reuse a single generated enum. Tests the rendering
+/// half directly — the PG introspection that populates the fields is exercised
+/// by the live-DB test gated on `UMBRAL_TEST_POSTGRES_URL`.
+#[test]
+fn render_models_folds_pg_enum_into_choices_type() {
+    let enum_col = |name: &str| IntrospectedColumn {
+        name: name.to_string(),
+        ty: SqlType::Text,
+        primary_key: false,
+        nullable: false,
+        fk_target: None,
+        unique: false,
+        index: false,
+        default: None,
+        auto_now_add: false,
+        auto_now: false,
+        choices: vec![
+            "STRIPE".to_string(),
+            "CRYPTO".to_string(),
+            "AQUAFIER".to_string(),
+        ],
+        enum_type: Some("PaymentMethod".to_string()),
+    };
+    let schema = IntrospectedSchema {
+        tables: vec![IntrospectedTable {
+            table: "payments".to_string(),
+            name: "Payments".to_string(),
+            columns: vec![
+                IntrospectedColumn {
+                    name: "id".to_string(),
+                    ty: SqlType::BigInt,
+                    primary_key: true,
+                    nullable: false,
+                    fk_target: None,
+                    unique: false,
+                    index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
+                },
+                // Two columns of the SAME enum type must reuse one generated enum.
+                enum_col("payment_method"),
+                enum_col("refund_method"),
+            ],
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
+            m2m: Vec::new(),
+        }],
+    };
+
+    let m = render_models_with(&schema, Some(umbral::inspect::Framework::Prisma), false);
+
+    // The generated Choices enum, variants derived from the DB labels, with the
+    // SCREAMING_SNAKE_CASE rename so each variant round-trips to its label.
+    assert!(
+        m.contains("pub enum PaymentMethod {"),
+        "must emit a Choices enum named for the PG enum type; got:\n{m}"
+    );
+    assert!(
+        m.contains("Choices)]"),
+        "the enum must derive Choices; got:\n{m}"
+    );
+    assert!(
+        m.contains("#[choices(rename_all = \"SCREAMING_SNAKE_CASE\")]"),
+        "SCREAMING_SNAKE_CASE rename maps `Stripe` -> `STRIPE`; got:\n{m}"
+    );
+    for variant in ["Stripe", "Crypto", "Aquafier"] {
+        assert!(
+            m.contains(&format!("    {variant},")),
+            "variant `{variant}` must be present; got:\n{m}"
+        );
+    }
+    // Exactly one generated enum even though two columns use it.
+    assert_eq!(
+        m.matches("pub enum PaymentMethod").count(),
+        1,
+        "two columns sharing one PG enum reuse a single generated enum; got:\n{m}"
+    );
+
+    // The fields render as the enum type, with `#[umbral(choices)]`.
+    assert!(
+        m.contains("#[umbral(choices)]\n    pub payment_method: PaymentMethod,"),
+        "the enum column must render `#[umbral(choices)] pub payment_method: PaymentMethod`; got:\n{m}"
+    );
+    assert!(
+        m.contains("#[umbral(choices)]\n    pub refund_method: PaymentMethod,"),
+        "the second column reuses the same enum type; got:\n{m}"
+    );
+}
+
 /// The `_id` strip rewrites composite index groups in lockstep: a
 /// `unique_together` over FK columns must name the stripped fields, not the old
 /// `<fk>_id` columns (which no longer exist on the generated struct).
@@ -1170,6 +1274,8 @@ fn render_geometry_column_emits_subtype_srid_attribute() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
                 IntrospectedColumn {
                     name: "location".into(),
@@ -1185,6 +1291,8 @@ fn render_geometry_column_emits_subtype_srid_attribute() {
                     default: None,
                     auto_now_add: false,
                     auto_now: false,
+                    choices: Vec::new(),
+                    enum_type: None,
                 },
             ],
 
