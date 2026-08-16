@@ -358,6 +358,7 @@ async fn inspectdb_writes_models_and_migration_to_output_directory() {
 
     let opts = InspectOptions {
         source: None,
+        framework: None,
         output: tmp.path().to_path_buf(),
         mark_applied: false,
     };
@@ -414,6 +415,7 @@ async fn inspectdb_with_mark_applied_records_the_initial_migration() {
 
     let opts = InspectOptions {
         source: None,
+        framework: None,
         output: tmp.path().to_path_buf(),
         mark_applied: true,
     };
@@ -541,6 +543,7 @@ async fn inspectdb_honors_an_explicit_source_database() {
     let out_dir = TempDir::new().expect("temp dir for output");
     let opts = InspectOptions {
         source: Some(url.clone()),
+        framework: None,
         output: out_dir.path().to_path_buf(),
         mark_applied: false,
     };
@@ -593,6 +596,7 @@ async fn inspectdb_recovers_foreign_keys_and_indexes() {
     let out_dir = TempDir::new().expect("output dir");
     let opts = InspectOptions {
         source: Some(url),
+        framework: None,
         output: out_dir.path().to_path_buf(),
         mark_applied: false,
     };
@@ -613,5 +617,52 @@ async fn inspectdb_recovers_foreign_keys_and_indexes() {
     assert!(
         models.contains("#[umbral(index)]"),
         "single-column index must render #[umbral(index)]; got:\n{models}"
+    );
+}
+
+/// `inspectdb --framework django` prettifies FK columns: `author_id` becomes a
+/// clean `author` field bound to the real column via `#[sqlx(rename)]`, and a
+/// leading app-label prefix is shed (`blog_category_id` -> `category`).
+#[tokio::test]
+async fn inspectdb_django_framework_prettifies_fk_columns() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("django.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE blog_category (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE blog_author (id INTEGER PRIMARY KEY, email TEXT NOT NULL)",
+        "CREATE TABLE blog_post (\
+            id INTEGER PRIMARY KEY, \
+            title TEXT NOT NULL, \
+            author_id INTEGER NOT NULL REFERENCES blog_author(id), \
+            blog_category_id INTEGER REFERENCES blog_category(id))",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out dir");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Django),
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb --framework django");
+    let models = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // `author_id` -> pretty `author` + a rename to the real column.
+    assert!(
+        models.contains("#[sqlx(rename = \"author_id\")]")
+            && models.contains("pub author: ForeignKey<BlogAuthor>"),
+        "django FK `author_id` must become `author` bound to `author_id`; got:\n{models}"
+    );
+    // `blog_category_id` sheds the `blog_` app prefix AND the `_id` -> `category`.
+    assert!(
+        models.contains("#[sqlx(rename = \"blog_category_id\")]")
+            && models.contains("pub category: Option<ForeignKey<BlogCategory>>"),
+        "django FK `blog_category_id` must become `category`; got:\n{models}"
     );
 }

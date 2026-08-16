@@ -187,6 +187,29 @@ impl From<migrate::MigrateError> for InspectError {
 
 /// CLI-driven options. The CLI subcommand wires its flags into this
 /// struct and hands it to [`inspectdb`].
+/// A source ORM/framework whose naming conventions `inspectdb` can undo to
+/// produce idiomatic umbral models. Currently only Django, the porting test
+/// ground. `None` keeps the raw database names verbatim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Framework {
+    /// Django: a foreign-key column is `<field>_id`. Strip the `_id` (and a
+    /// leading `<app>_` prefix when the leading segment is a detected app
+    /// label) so the field is the clean `<field>`, bound to the real column via
+    /// `#[sqlx(rename = "<field>_id")]`.
+    Django,
+}
+
+impl Framework {
+    /// Parse a `--framework` value (case-insensitive). Returns `None` for an
+    /// unknown name so the caller can report it.
+    pub fn parse(s: &str) -> Option<Framework> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "django" => Some(Framework::Django),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct InspectOptions {
     /// The source database connection URL to introspect. `None` means "use the
@@ -194,6 +217,9 @@ pub struct InspectOptions {
     /// dedicated connection to that database instead, so `umbral inspectdb
     /// <db>` can onboard a foreign schema without repointing the whole app.
     pub source: Option<String>,
+    /// The source framework whose conventions to undo (`--framework django`).
+    /// `None` keeps raw column names.
+    pub framework: Option<Framework>,
     /// Directory the generated files are written under. `models.rs`
     /// lands at the root; the migration lands at
     /// `<output>/migrations/<INSPECTED_PLUGIN_NAME>/0001_initial.json`.
@@ -246,7 +272,7 @@ pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport, InspectErr
         return Err(InspectError::NoTables);
     }
 
-    let models_src = render_models(&schema);
+    let models_src = render_models_with(&schema, opts.framework);
     let migration = render_initial_migration(&schema);
     let report = write_outputs(&opts.output, &models_src, &migration).await?;
 
@@ -790,17 +816,62 @@ fn map_sqlite_type(raw: &str) -> Option<SqlType> {
 /// Field-type rendering uses fully-qualified `chrono::*` / `uuid::*`
 /// paths so no extra `use` lines are needed at the top of the file.
 pub fn render_models(schema: &IntrospectedSchema) -> String {
+    render_models_with(schema, None)
+}
+
+/// [`render_models`] with a source [`Framework`] whose naming conventions are
+/// undone (e.g. `--framework django` strips the `_id` off FK columns).
+pub fn render_models_with(schema: &IntrospectedSchema, framework: Option<Framework>) -> String {
     let mut out = String::new();
     out.push_str(HEADER);
+
+    // Detect Django "app labels" — the leading `<app>_` segment shared by the
+    // table names — so a FK field like `app_category_id` can shed the app
+    // prefix too. Only meaningful under a framework; cheap to always compute.
+    let app_labels: std::collections::HashSet<String> = schema
+        .tables
+        .iter()
+        .filter_map(|t| t.table.split_once('_').map(|(app, _)| app.to_string()))
+        .collect();
 
     let mut tables: Vec<&IntrospectedTable> = schema.tables.iter().collect();
     tables.sort_by(|a, b| a.name.cmp(&b.name));
 
     for table in tables {
         out.push('\n');
-        out.push_str(&render_one_struct(table));
+        out.push_str(&render_one_struct(table, framework, &app_labels));
     }
     out
+}
+
+/// The Rust field name for a foreign-key column under a framework convention.
+/// Returns `None` when the raw column name should be kept (no framework, or the
+/// convention doesn't apply), so the caller knows whether a `#[sqlx(rename)]`
+/// is needed.
+fn framework_fk_field_name(
+    column: &str,
+    framework: Option<Framework>,
+    app_labels: &std::collections::HashSet<String>,
+) -> Option<String> {
+    match framework {
+        Some(Framework::Django) => {
+            // Django FK columns are `<field>_id`.
+            let stripped = column.strip_suffix("_id")?;
+            if stripped.is_empty() {
+                return None;
+            }
+            // Optionally shed a leading `<app>_` when that segment is a known
+            // app label AND something meaningful remains (`app_category` ->
+            // `category`, but `user` stays `user`).
+            if let Some((head, rest)) = stripped.split_once('_') {
+                if app_labels.contains(head) && !rest.is_empty() {
+                    return Some(rest.to_string());
+                }
+            }
+            Some(stripped.to_string())
+        }
+        None => None,
+    }
 }
 
 /// Two-line module doc plus the single facade import every generated
@@ -824,7 +895,11 @@ use umbral::prelude::*;
 /// the attribute is emitted and the M3.1 derive picks it up to
 /// override the default. See `umbral-macros/src/lib.rs` for the
 /// attribute parser.
-fn render_one_struct(table: &IntrospectedTable) -> String {
+fn render_one_struct(
+    table: &IntrospectedTable,
+    framework: Option<Framework>,
+    app_labels: &std::collections::HashSet<String>,
+) -> String {
     let mut out = String::new();
     // `sqlx::FromRow` is required because the `Model` trait bounds it
     // as a supertrait (see `crates/umbral-core/src/orm/model.rs`).
@@ -846,20 +921,32 @@ fn render_one_struct(table: &IntrospectedTable) -> String {
         if column.index {
             out.push_str("    #[umbral(index)]\n");
         }
-        let ty = match &column.fk_target {
+        let (field_name, ty) = match &column.fk_target {
             // A foreign key renders as `ForeignKey<Target>` (nullable → wrapped
             // in `Option`), pointing at the referenced table's generated struct.
             Some(target) => {
                 let target_struct = pascal_case_from_table(target);
-                if column.nullable {
+                let ty = if column.nullable {
                     format!("Option<ForeignKey<{target_struct}>>")
                 } else {
                     format!("ForeignKey<{target_struct}>")
+                };
+                // Under a framework, a `<field>_id` FK column becomes the clean
+                // `<field>` Rust name bound to the real column via `#[sqlx]`.
+                match framework_fk_field_name(&column.name, framework, app_labels) {
+                    Some(pretty) if pretty != column.name => {
+                        out.push_str(&format!("    #[sqlx(rename = \"{}\")]\n", column.name));
+                        (pretty, ty)
+                    }
+                    _ => (column.name.clone(), ty),
                 }
             }
-            None => render_field_type(column.ty, column.nullable),
+            None => (
+                column.name.clone(),
+                render_field_type(column.ty, column.nullable),
+            ),
         };
-        out.push_str(&format!("    pub {}: {ty},\n", column.name));
+        out.push_str(&format!("    pub {field_name}: {ty},\n"));
     }
     out.push_str("}\n");
     out

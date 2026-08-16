@@ -196,6 +196,12 @@ enum Command {
         /// URL, or a path to a SQLite file (`./db.sqlite3`). When omitted,
         /// the app's ambient database (`UMBRAL_DATABASE_URL`) is used.
         database: Option<String>,
+        /// The source framework whose naming conventions to undo, e.g.
+        /// `django` (a `<field>_id` FK column becomes a clean `<field>` field
+        /// bound to the real column via `#[sqlx(rename)]`). Omit to keep the
+        /// raw database column names.
+        #[arg(long)]
+        framework: Option<String>,
         /// Directory the generated files are written under.
         #[arg(long)]
         output: PathBuf,
@@ -493,9 +499,10 @@ pub async fn dispatch_with_argv(
         Command::Typegen { out, check } => typegen(out, check),
         Command::Inspectdb {
             database,
+            framework,
             output,
             mark_applied,
-        } => inspectdb(database, output, mark_applied).await,
+        } => inspectdb(database, framework, output, mark_applied).await,
         Command::Dumpdata { output } => dumpdata(output).await,
         Command::Loaddata { input } => loaddata(input).await,
         Command::Importcsv { table, input } => importcsv(table, input).await,
@@ -1119,11 +1126,27 @@ fn op_kind(op: &umbral::migrate::Operation) -> &'static str {
 
 async fn inspectdb(
     database: Option<String>,
+    framework: Option<String>,
     output: PathBuf,
     mark_applied: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Reject an unknown `--framework` up front with a clear message rather than
+    // silently ignoring it.
+    let framework = match framework.as_deref() {
+        None => None,
+        Some(name) => match umbral::inspect::Framework::parse(name) {
+            Some(f) => Some(f),
+            None => {
+                return Err(format!(
+                    "unknown --framework `{name}`; supported: django (or omit to keep raw names)"
+                )
+                .into());
+            }
+        },
+    };
     let opts = InspectOptions {
         source: database.map(|d| normalize_source_db(&d)),
+        framework,
         output,
         mark_applied,
     };
