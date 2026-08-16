@@ -61,6 +61,7 @@ stores the argon2 hash.
 
 ## Documentation
 
+- Website: https://umbralrs.dev
 - Guide: https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/admin
 - Repository: https://github.com/dalmasonto/umbral
 - API reference: https://docs.rs/umbral-admin

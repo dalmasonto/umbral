@@ -14,6 +14,7 @@ Register the plugin when you build your app, then use it through the umbral faca
 
 ## Documentation
 
+- Website: https://umbralrs.dev
 - Guide: https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/logs
 - Repository: https://github.com/dalmasonto/umbral
 - API reference: https://docs.rs/umbral-logs

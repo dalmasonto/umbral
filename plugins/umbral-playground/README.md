@@ -72,6 +72,7 @@ After `cargo build -p umbral-playground` with the CLIs installed:
 
 ## Documentation
 
+- Website: https://umbralrs.dev
 - Guide: https://dalmasonto.github.io/umbral/docs/v0.0.1/plugins/playground
 - Repository: https://github.com/dalmasonto/umbral
 - API reference: https://docs.rs/umbral-playground
