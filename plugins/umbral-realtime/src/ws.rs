@@ -6,7 +6,6 @@
 //! Identity + group policy are checked at handshake exactly like SSE; a
 //! rejected group fails with `403` before the upgrade.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::extract::Query;
@@ -17,7 +16,7 @@ use http::{HeaderMap, StatusCode};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::{ConnId, DEFAULT_BUFFER, MessageContext, MessageHandler, Realtime, Registry};
+use crate::{ConnId, Handshake, MessageContext, MessageHandler, Realtime, Registry};
 
 /// `?groups=chat:123,presence` — the rooms a client joins at handshake.
 #[derive(Deserialize)]
@@ -142,50 +141,23 @@ pub(crate) async fn ws_handler(
         return (StatusCode::FORBIDDEN, "cross-origin WebSocket rejected").into_response();
     }
 
-    let user_id = Realtime::resolver()(headers.clone()).await;
-
-    let requested: Vec<String> = q
-        .groups
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
-
-    let policy = Realtime::policy();
-    for g in &requested {
-        if !policy.can_join(user_id.as_deref(), g).await {
-            return (
-                StatusCode::FORBIDDEN,
-                format!("not allowed to join group `{g}`"),
-            )
-                .into_response();
-        }
-    }
-
-    let groups: HashSet<String> = requested.into_iter().collect();
-    let registry = Realtime::registry();
-    let handler = Realtime::message_handler();
-
-    // Enforce the aggregate connection cap *before* upgrading: a refused
-    // registration returns 503 instead of completing the WS handshake.
-    // (WS has no native Last-Event-ID, so the cap is the relevant gap here.)
-    let Some((conn_id, rx, presence)) = registry
-        .register_with_presence(user_id.clone(), groups, DEFAULT_BUFFER)
-        .await
-    else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "realtime: connection limit reached",
-        )
-            .into_response();
+    // Identity → group policy → register (aggregate cap enforced *before*
+    // upgrading, so a refusal returns 503 rather than a half-open socket) →
+    // presence. Shared verbatim with the SSE handshake so the join-
+    // authorization contract can't drift (see `crate::authorize_handshake`).
+    // (WS has no native Last-Event-ID, so the connection cap is the relevant
+    // gap here.)
+    let Handshake {
+        conn_id,
+        rx,
+        user_id,
+        registry,
+        ..
+    } = match crate::authorize_handshake(&headers, q.groups.as_deref()).await {
+        Ok(h) => h,
+        Err(resp) => return resp,
     };
-
-    // Fire presence join + sync for any newly-entered presence-enabled group
-    // (gated by the spec; anonymous conns yield nothing).
-    tokio::spawn(crate::dispatch_presence(presence));
+    let handler = Realtime::message_handler();
 
     ws.on_upgrade(move |socket| handle_socket(socket, conn_id, rx, user_id, registry, handler))
 }

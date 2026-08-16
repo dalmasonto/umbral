@@ -1468,6 +1468,89 @@ pub async fn dispatch_presence(transitions: PresenceTransitions) {
 }
 
 // =========================================================================
+// Shared handshake authorization (SSE + WS).
+// =========================================================================
+
+/// A registered realtime connection handed back by [`authorize_handshake`].
+/// Carries everything both transports need after a successful join.
+pub(crate) struct Handshake {
+    pub conn_id: ConnId,
+    pub rx: mpsc::Receiver<Arc<Delivery>>,
+    pub user_id: Option<String>,
+    pub groups: HashSet<String>,
+    pub registry: Arc<Registry>,
+}
+
+/// The ONE join-authorization path the SSE and WS handshakes share, so the
+/// auth contract can't drift between transports: resolve the connection's
+/// identity from `headers`, parse the comma-separated `groups_param`,
+/// default-deny each requested group against the [`GroupPolicy`], then
+/// register the connection (enforcing the aggregate connection cap) and fire
+/// its presence transitions.
+///
+/// Returns the live [`Handshake`] on success, or the rejection `Response` the
+/// caller must return verbatim: `403` for a group the policy denies, `503`
+/// when the connection cap is reached.
+pub(crate) async fn authorize_handshake(
+    headers: &HeaderMap,
+    groups_param: Option<&str>,
+) -> Result<Handshake, axum::response::Response> {
+    use axum::response::IntoResponse;
+
+    let user_id = Realtime::resolver()(headers.clone()).await;
+
+    let requested: Vec<String> = groups_param
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+
+    // Default-deny: a group the policy rejects fails the whole handshake, so a
+    // client can't subscribe to a room it has no claim to.
+    let policy = Realtime::policy();
+    for g in &requested {
+        if !policy.can_join(user_id.as_deref(), g).await {
+            return Err((
+                http::StatusCode::FORBIDDEN,
+                format!("not allowed to join group `{g}`"),
+            )
+                .into_response());
+        }
+    }
+
+    let groups: HashSet<String> = requested.into_iter().collect();
+    let registry = Realtime::registry();
+
+    // Enforce the aggregate connection cap: a refused registration returns 503
+    // instead of opening the stream. `register_with_presence` also returns the
+    // per-group presence transitions this connect caused.
+    let Some((conn_id, rx, presence)) = registry
+        .register_with_presence(user_id.clone(), groups.clone(), DEFAULT_BUFFER)
+        .await
+    else {
+        return Err((
+            http::StatusCode::SERVICE_UNAVAILABLE,
+            "realtime: connection limit reached",
+        )
+            .into_response());
+    };
+
+    // Fire presence join + sync for any newly-entered presence-enabled group;
+    // spawned so the handshake response isn't blocked on the broadcast.
+    tokio::spawn(dispatch_presence(presence));
+
+    Ok(Handshake {
+        conn_id,
+        rx,
+        user_id,
+        groups,
+        registry,
+    })
+}
+
+// =========================================================================
 // Ambient handle.
 // =========================================================================
 
