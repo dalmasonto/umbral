@@ -831,7 +831,22 @@ fn fk_action_tokens(
         "no_action" | "no action" => "NoAction",
         "cascade" => "Cascade",
         "restrict" => "Restrict",
-        "set_null" | "set null" => "SetNull",
+        "set_null" | "set null" => {
+            // `ON DELETE SET NULL` on a NOT NULL FK is a runtime footgun: the
+            // DB tries to null the child column on parent-delete and violates
+            // the NOT NULL constraint. A non-`Option<ForeignKey<T>>` field is
+            // NOT NULL, so reject it at the field span instead of shipping a
+            // migration that errors at delete time.
+            if attr_name == "on_delete" && option_inner_type(field_ty).is_none() {
+                return Err(syn::Error::new_spanned(
+                    field_ty,
+                    "umbral: `on_delete = \"set_null\"` requires a nullable FK — \
+                     use `Option<ForeignKey<T>>`, or the DB would violate NOT NULL \
+                     when the referenced row is deleted",
+                ));
+            }
+            "SetNull"
+        }
         other => {
             return Err(syn::Error::new_spanned(
                 field_ty,
@@ -4502,6 +4517,12 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
             || model_attr.auto_now_add
             || model_attr.auto_uuid
             || is_implicit_pk
+            // `#[umbral(privileged)]` is the default-deny mass-assignment
+            // guard (is_superuser / is_staff / ownership FKs). The dynamic
+            // JSON/form write paths already strip it unless authorized; the
+            // Form derive must too, or a Model reused as a Form would accept
+            // it straight from untrusted POST input → privilege escalation.
+            || model_attr.privileged
             // Masked (encrypted secret) fields are server-set, never
             // user-submittable — skip them as if they were `noform`.
             || form_field_is_masked(&field.ty)
