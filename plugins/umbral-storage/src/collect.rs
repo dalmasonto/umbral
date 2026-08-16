@@ -80,6 +80,7 @@ impl umbral::cli::PluginCommand for CollectStaticCommand {
                 "Collect every plugin's static_dirs() (namespaced) and static_root_dirs() \
                  (site dirs) into settings.static_root.",
             )
+            .after_help("Example:\n  cargo run -- collectstatic --hashed")
             .arg(
                 clap::Arg::new("clear")
                     .long("clear")

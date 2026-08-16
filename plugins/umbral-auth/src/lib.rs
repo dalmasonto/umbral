@@ -1727,6 +1727,9 @@ impl umbral::cli::PluginCommand for CreateSuperuserCommand {
     fn command(&self) -> clap::Command {
         clap::Command::new("createsuperuser")
             .about("Create a superuser account (is_staff = is_superuser = true)")
+            .after_help(
+                "Example:\n  cargo run -- createsuperuser --username admin --email admin@example.com",
+            )
             .arg(
                 clap::Arg::new("username")
                     .long("username")
@@ -1801,10 +1804,12 @@ where
         + Unpin,
 {
     fn command(&self) -> clap::Command {
-        clap::Command::new("resetforeignpasswords").about(
-            "Neutralize user password hashes umbral-auth can't verify (e.g. after \
-             porting from Django); affected users must reset via password-forgot",
-        )
+        clap::Command::new("resetforeignpasswords")
+            .about(
+                "Neutralize user password hashes umbral-auth can't verify (e.g. after \
+                 porting from Django); affected users must reset via password-forgot",
+            )
+            .after_help("Example:\n  cargo run -- resetforeignpasswords")
     }
 
     async fn run(&self, _matches: &clap::ArgMatches) -> Result<(), umbral::cli::CliError> {

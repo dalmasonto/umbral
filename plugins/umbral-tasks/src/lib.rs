@@ -373,6 +373,7 @@ impl umbral::cli::PluginCommand for WorkerCommand {
     fn command(&self) -> clap::Command {
         clap::Command::new("tasks-worker")
             .about("Run the umbral-tasks background worker")
+            .after_help("Example:\n  cargo run -- tasks-worker")
             .arg(
                 clap::Arg::new("once")
                     .long("once")
@@ -412,6 +413,7 @@ impl umbral::cli::PluginCommand for BeatCommand {
     fn command(&self) -> clap::Command {
         clap::Command::new("tasks-beat")
             .about("Run the umbral-tasks periodic scheduler")
+            .after_help("Example:\n  cargo run -- tasks-beat")
             .arg(
                 clap::Arg::new("once")
                     .long("once")

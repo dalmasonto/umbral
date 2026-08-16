@@ -935,11 +935,13 @@ struct MigrateSchemasCommand {
 #[async_trait]
 impl umbral::cli::PluginCommand for MigrateSchemasCommand {
     fn command(&self) -> clap::Command {
-        clap::Command::new("migrate_schemas").about(
-            "Migrate everything to where it belongs: the SHARED apps into public, \
-             then the TENANT apps into every active tenant's schema. Idempotent — \
-             the one command to run after `makemigrations`.",
-        )
+        clap::Command::new("migrate_schemas")
+            .about(
+                "Migrate everything to where it belongs: the SHARED apps into public, \
+                 then the TENANT apps into every active tenant's schema. Idempotent — \
+                 the one command to run after `makemigrations`.",
+            )
+            .after_help("Example:\n  cargo run -- migrate_schemas")
     }
 
     async fn run(&self, _matches: &clap::ArgMatches) -> Result<(), umbral::cli::CliError> {

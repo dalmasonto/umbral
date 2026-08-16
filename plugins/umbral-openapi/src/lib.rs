@@ -1379,6 +1379,7 @@ impl umbral::cli::PluginCommand for GenClientCommand {
     fn command(&self) -> clap::Command {
         clap::Command::new("gen-client")
             .about("Generate a typed client (client.js + client.d.ts) for the REST API")
+            .after_help("Example:\n  cargo run -- gen-client --out ./web/src/api")
             .arg(
                 clap::Arg::new("out")
                     .long("out")
