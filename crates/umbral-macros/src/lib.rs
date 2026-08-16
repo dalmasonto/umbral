@@ -409,6 +409,30 @@ fn has_sqlx_skip(attrs: &[syn::Attribute]) -> bool {
     false
 }
 
+/// Canonical `#[derive(Model)]` field classification, shared by BOTH passes
+/// over the struct's fields so the OneToOne→unique-FK rewrite can never
+/// desync between them.
+///
+/// Returns `(kind, force_unique)`:
+///  - A CHILD-side `OneToOne<T>` (no `#[sqlx(skip)]`) is sugar for
+///    `#[umbral(unique)] pub <f>: ForeignKey<T>`. It is rewritten here to
+///    `FieldKind::ForeignKey(T)` with `force_unique = true`, so every
+///    downstream code path (column spec, hydrate arms, reverse-FK and
+///    reverse-O2O accessors) treats it identically to a unique FK.
+///  - A PARENT-side `OneToOne<T>` (`#[sqlx(skip)]`, the back-link with no
+///    DB column) is left as `FieldKind::OneToOne(T)`, `force_unique = false`.
+///  - Every other kind passes through unchanged, `force_unique = false`.
+fn classify_model_field(field: &syn::Field) -> (FieldKind, bool) {
+    let kind = classify_field_type(&field.ty);
+    if let FieldKind::OneToOne(inner) = kind {
+        if !has_sqlx_skip(&field.attrs) {
+            return (FieldKind::ForeignKey(inner), true);
+        }
+        return (FieldKind::OneToOne(inner), false);
+    }
+    (kind, false)
+}
+
 fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldAttr> {
     let mut parsed = UmbralFieldAttr {
         cidr: false,
@@ -1183,7 +1207,11 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             continue;
         }
 
-        let kind = classify_field_type(&field.ty);
+        // Canonical classification (see `classify_model_field`): a child-side
+        // `OneToOne<T>` is already rewritten to a unique FK here, so `kind` /
+        // `force_unique` are computed ONCE and reused verbatim in the second
+        // pass below — the two can't drift.
+        let (kind, force_unique) = classify_model_field(field);
 
         // BUG-16: M2M<T> fields have no column on the parent table.
         // Skip them for FIELDS/column_consts and collect them into
@@ -1303,17 +1331,10 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             continue;
         }
 
-        // Child-side `OneToOne<T>` sugar — same shape on the wire as
-        // `#[umbral(unique)] pub <f>: ForeignKey<T>`. Rewrite the
-        // classification here so all downstream code (column spec,
-        // hydrate arms, reverse-FK accessor, reverse-O2O accessor)
-        // treats it identically to a unique FK.
+        // `kind` may still be upgraded below (cidr/xml/ltree/bit); the
+        // OneToOne→unique-FK rewrite already happened in
+        // `classify_model_field`, and `force_unique` carries its verdict.
         let mut kind = kind;
-        let mut force_unique = false;
-        if let FieldKind::OneToOne(inner) = kind {
-            kind = FieldKind::ForeignKey(inner);
-            force_unique = true;
-        }
 
         // Parse field-level `#[umbral(noform)]` / `#[umbral(noedit)]` etc.
         let mut field_attr = match parse_umbral_field_attr(&field.attrs) {
@@ -1773,21 +1794,19 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
-        let mut kind = classify_field_type(&field.ty);
+        // Same canonical classification as the first pass: a child-side
+        // `OneToOne<T>` (no `#[sqlx(skip)]`) is already rewritten to a unique
+        // FK, with `force_unique` flagging it. Reusing the one helper means
+        // the reverse-set + reverse-o2o accessors can never disagree with the
+        // first pass about which fields are sugar FKs.
+        let (kind, force_unique) = classify_model_field(field);
         // Re-parse the field attr here so we can honour `no_reverse`
         // when deciding whether to emit a Gap-30 accessor. The first
         // pass at line ~797 already validated the attrs, so a parse
         // error is impossible here — fall back to defaults to keep
         // the call infallible.
         let mut field_attr = parse_umbral_field_attr(&field.attrs).unwrap_or_default();
-        // Mirror the rewrite from the first loop: child-side
-        // `OneToOne<T>` (no `#[sqlx(skip)]`) → unique FK. Without
-        // this the reverse-set + reverse-o2o accessors would skip
-        // emission for sugar fields.
-        if matches!(kind, FieldKind::OneToOne(_)) && !has_sqlx_skip(&field.attrs) {
-            if let FieldKind::OneToOne(inner) = kind {
-                kind = FieldKind::ForeignKey(inner);
-            }
+        if force_unique {
             field_attr.unique = true;
         }
         match &kind {
