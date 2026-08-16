@@ -819,30 +819,113 @@ pub fn render_models(schema: &IntrospectedSchema) -> String {
     render_models_with(schema, None)
 }
 
+/// Django's canonical user table, and the umbral-auth type it maps onto (same
+/// `auth_user` table, `id: i64` PK). Under `--framework django` the generated
+/// file does NOT re-declare this table; FKs to it point at umbral's `AuthUser`
+/// and an import at the top lets the operator swap in a custom user model.
+const DJANGO_USER_TABLE: &str = "auth_user";
+const DJANGO_USER_STRUCT: &str = "AuthUser";
+
 /// [`render_models`] with a source [`Framework`] whose naming conventions are
-/// undone (e.g. `--framework django` strips the `_id` off FK columns).
+/// undone (e.g. `--framework django` strips the `_id` off FK columns AND the
+/// `<app>_` prefix off struct/table names).
 pub fn render_models_with(schema: &IntrospectedSchema, framework: Option<Framework>) -> String {
-    let mut out = String::new();
-    out.push_str(HEADER);
+    let django = framework == Some(Framework::Django);
 
     // Detect Django "app labels" — the leading `<app>_` segment shared by the
-    // table names — so a FK field like `app_category_id` can shed the app
-    // prefix too. Only meaningful under a framework; cheap to always compute.
+    // table names — so both FK fields (`app_category_id` -> `category`) and
+    // struct names (`communities_community` -> `Community`) can shed the app
+    // prefix. Only meaningful under a framework; cheap to always compute.
     let app_labels: std::collections::HashSet<String> = schema
         .tables
         .iter()
         .filter_map(|t| t.table.split_once('_').map(|(app, _)| app.to_string()))
         .collect();
 
+    // Resolve every table to its struct name. Under Django the app prefix is
+    // stripped; `auth_user` maps to the external `AuthUser`. If two tables strip
+    // to the SAME name, both keep their full (app-prefixed) name so the file
+    // stays unambiguous.
+    let mut struct_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for t in &schema.tables {
+        let name = if django && t.table == DJANGO_USER_TABLE {
+            DJANGO_USER_STRUCT.to_string()
+        } else if django {
+            django_struct_name(&t.table, &app_labels)
+        } else {
+            t.name.clone()
+        };
+        *counts.entry(name.clone()).or_default() += 1;
+        struct_names.insert(t.table.clone(), name);
+    }
+    // Collision fallback: revert every table whose stripped name is shared to
+    // its full pascal name (the external AuthUser is exempt — it's canonical).
+    for t in &schema.tables {
+        let name = &struct_names[&t.table];
+        if counts[name] > 1 && !(django && t.table == DJANGO_USER_TABLE) {
+            struct_names.insert(t.table.clone(), pascal_case_from_table(&t.table));
+        }
+    }
+
+    // Does the schema reference Django's auth_user (own it, or FK at it)? If so,
+    // emit the swap-your-user import.
+    let uses_auth_user = django
+        && schema.tables.iter().any(|t| {
+            t.table == DJANGO_USER_TABLE
+                || t.columns
+                    .iter()
+                    .any(|c| c.fk_target.as_deref() == Some(DJANGO_USER_TABLE))
+        });
+
+    let mut out = String::new();
+    out.push_str(HEADER);
+    if uses_auth_user {
+        out.push_str(AUTH_USER_IMPORT);
+    }
+
     let mut tables: Vec<&IntrospectedTable> = schema.tables.iter().collect();
-    tables.sort_by(|a, b| a.name.cmp(&b.name));
+    tables.sort_by(|a, b| struct_names[&a.table].cmp(&struct_names[&b.table]));
 
     for table in tables {
+        // Django's auth_user is provided by umbral-auth; don't re-declare it.
+        if django && table.table == DJANGO_USER_TABLE {
+            continue;
+        }
         out.push('\n');
-        out.push_str(&render_one_struct(table, framework, &app_labels));
+        out.push_str(&render_one_struct(
+            table,
+            framework,
+            &app_labels,
+            &struct_names,
+        ));
     }
     out
 }
+
+/// The struct name for a table under Django: strip a leading `<app>_` app-label
+/// prefix, then pascal-case (`communities_community` -> `Community`,
+/// `communities_community_categories` -> `CommunityCategories`). A table whose
+/// leading segment isn't a detected app label keeps its full name.
+fn django_struct_name(table: &str, app_labels: &std::collections::HashSet<String>) -> String {
+    let model_part = table
+        .split_once('_')
+        .filter(|(app, rest)| app_labels.contains(*app) && !rest.is_empty())
+        .map(|(_, rest)| rest)
+        .unwrap_or(table);
+    pascal_case_from_table(model_part)
+}
+
+/// The import block emitted at the top of a Django-imported file. Maps
+/// `auth_user` onto umbral-auth's built-in user and tells the operator how to
+/// swap in a custom one.
+const AUTH_USER_IMPORT: &str = "\
+// This schema references Django's `auth_user`, mapped to umbral-auth's built-in
+// `AuthUser` (same `auth_user` table). If you use a CUSTOM user model, replace
+// the line below with your own, e.g. `use crate::models::MyUser as AuthUser;`.
+use umbral_auth::AuthUser;
+";
 
 /// The Rust field name for a foreign-key column under a framework convention.
 /// Returns `None` when the raw column name should be kept (no framework, or the
@@ -899,7 +982,21 @@ fn render_one_struct(
     table: &IntrospectedTable,
     framework: Option<Framework>,
     app_labels: &std::collections::HashSet<String>,
+    struct_names: &std::collections::HashMap<String, String>,
 ) -> String {
+    // The resolved struct name for this table (app-prefix-stripped under Django,
+    // full pascal otherwise), and the same resolution for FK targets.
+    let this_struct = struct_names
+        .get(&table.table)
+        .cloned()
+        .unwrap_or_else(|| table.name.clone());
+    let resolve_target = |target: &str| -> String {
+        struct_names
+            .get(target)
+            .cloned()
+            .unwrap_or_else(|| pascal_case_from_table(target))
+    };
+
     let mut out = String::new();
     // `sqlx::FromRow` is required (the `Model` trait bounds it as a supertrait),
     // and `Model` also requires `serde::Serialize` + `DeserializeOwned` (a
@@ -908,10 +1005,12 @@ fn render_one_struct(
     out.push_str(
         "#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]\n",
     );
-    if to_snake_case(&table.name) != table.table {
+    // Emit `#[umbral(table)]` whenever the struct name doesn't snake_case back
+    // to the SQL table — always true once the app prefix is stripped.
+    if to_snake_case(&this_struct) != table.table {
         out.push_str(&format!("#[umbral(table = \"{}\")]\n", table.table));
     }
-    out.push_str(&format!("pub struct {} {{\n", table.name));
+    out.push_str(&format!("pub struct {this_struct} {{\n"));
     for column in &table.columns {
         // Per-column attributes recovered from the schema: single-column
         // UNIQUE / index constraints become `#[umbral(unique)]` /
@@ -931,7 +1030,7 @@ fn render_one_struct(
         // (`author_id` -> `author`); otherwise it's the column name.
         let (desired, ty) = match &column.fk_target {
             Some(target) => {
-                let target_struct = pascal_case_from_table(target);
+                let target_struct = resolve_target(target);
                 let ty = if column.nullable {
                     format!("Option<ForeignKey<{target_struct}>>")
                 } else {

@@ -656,14 +656,14 @@ async fn inspectdb_django_framework_prettifies_fk_columns() {
     // `author_id` -> pretty `author` + a rename to the real column.
     assert!(
         models.contains("#[sqlx(rename = \"author_id\")]")
-            && models.contains("pub author: ForeignKey<BlogAuthor>"),
-        "django FK `author_id` must become `author` bound to `author_id`; got:\n{models}"
+            && models.contains("pub author: ForeignKey<Author>"),
+        "django FK `author_id` must become `author` -> ForeignKey<Author> (app prefix stripped from the target struct too); got:\n{models}"
     );
     // `blog_category_id` sheds the `blog_` app prefix AND the `_id` -> `category`.
     assert!(
         models.contains("#[sqlx(rename = \"blog_category_id\")]")
-            && models.contains("pub category: Option<ForeignKey<BlogCategory>>"),
-        "django FK `blog_category_id` must become `category`; got:\n{models}"
+            && models.contains("pub category: Option<ForeignKey<Category>>"),
+        "django FK `blog_category_id` must become `category` -> ForeignKey<Category>; got:\n{models}"
     );
 }
 
@@ -710,5 +710,61 @@ async fn inspectdb_generates_compilable_models_for_edge_cases() {
     assert!(
         m.contains("#[sqlx(rename = \"type\")]") && m.contains("pub type_: String"),
         "a keyword column `type` must become `type_` bound to `type`; got:\n{m}"
+    );
+}
+
+/// `--framework django` strips the `<app>_` prefix off struct names, falls back
+/// to full names on a collision, skips `auth_user` (mapping FKs to umbral's
+/// `AuthUser` with a swap-in import), and keeps `#[umbral(table)]`.
+#[tokio::test]
+async fn inspectdb_django_strips_app_prefix_and_externalizes_auth_user() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("apps.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username TEXT NOT NULL)",
+        "CREATE TABLE blog_post (id INTEGER PRIMARY KEY, author_id INTEGER REFERENCES auth_user(id))",
+        // A name shared across two apps → collision → both keep full names.
+        "CREATE TABLE blog_category (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE store_category (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Django),
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // App prefix stripped: blog_post -> Post (with the real table preserved).
+    assert!(
+        m.contains("#[umbral(table = \"blog_post\")]") && m.contains("pub struct Post {"),
+        "blog_post must become struct Post; got:\n{m}"
+    );
+    // Collision → full names kept for both `category` tables.
+    assert!(
+        m.contains("pub struct BlogCategory {") && m.contains("pub struct StoreCategory {"),
+        "colliding `category` tables must keep full names; got:\n{m}"
+    );
+    // auth_user is NOT re-declared, is imported, and FKs point at AuthUser.
+    assert!(
+        !m.contains("pub struct AuthUser {"),
+        "auth_user must not be re-declared; got:\n{m}"
+    );
+    assert!(
+        m.contains("use umbral_auth::AuthUser;"),
+        "the auth_user import must be emitted; got:\n{m}"
+    );
+    assert!(
+        m.contains("ForeignKey<AuthUser>"),
+        "a FK to auth_user must point at AuthUser; got:\n{m}"
     );
 }
