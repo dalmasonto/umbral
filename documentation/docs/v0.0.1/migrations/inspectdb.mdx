@@ -161,9 +161,6 @@ SQL type the catalogue doesn't know are excluded automatically.
   porting case.
 - **FK `on_delete` / `on_update`** actions. The FK reference is recovered; the
   cascade action defaults to `NoAction` rather than reading the DB's rule.
-- **PostGIS subtype / SRID.** A `geometry` column introspects to the
-  unconstrained `Geometry(4326)`; recovering the exact subtype + SRID from the
-  `geometry_columns` catalog is future work.
 - **Generated plugin crates** with a `Plugin` impl. Today the output is a flat
   `models.rs` you wire by hand. M7's full plugin shape ships the crate too.
 

@@ -456,9 +456,29 @@ async fn introspect_columns_pg(
         }
     }
 
+    // PostGIS spatial columns report `data_type = "USER-DEFINED"` with
+    // `udt_name = "geometry"` / `"geography"`; the real subtype + SRID live in
+    // the `geometry_columns` / `geography_columns` catalog views. Look them up
+    // once per table so a geometry column recovers `geometry(Point, 4326)`
+    // rather than crashing as an unsupported type.
+    let spatial = pg_spatial_columns(pool, table).await;
+
     let mut columns: Vec<IntrospectedColumn> = Vec::with_capacity(column_rows.len());
     for (name, data_type, is_nullable, udt_name) in column_rows {
-        let ty = if data_type.eq_ignore_ascii_case("ARRAY") {
+        let ty = if udt_name.eq_ignore_ascii_case("geometry")
+            || udt_name.eq_ignore_ascii_case("geography")
+        {
+            // Prefer the catalog's exact subtype+SRID; fall back to the
+            // unconstrained base type when the column isn't registered there.
+            spatial.get(&name).copied().unwrap_or_else(|| {
+                let spec = crate::orm::GeometrySpec::DEFAULT;
+                if udt_name.eq_ignore_ascii_case("geography") {
+                    SqlType::Geography(spec)
+                } else {
+                    SqlType::Geometry(spec)
+                }
+            })
+        } else if data_type.eq_ignore_ascii_case("ARRAY") {
             // Element type comes from udt_name with the leading
             // underscore stripped. `_int8` -> int8 -> ArrayElement::BigInt.
             let elem_name = udt_name.strip_prefix('_').unwrap_or(udt_name.as_str());
@@ -525,6 +545,55 @@ async fn introspect_columns_pg(
 /// `umbral::orm::ArrayElement` — chrono types, JSON, network types,
 /// and Postgres-specific types like NUMERIC fall outside Phase 4.1's
 /// array catalogue.
+/// Read PostGIS's `geometry_columns` / `geography_columns` catalog views for
+/// one table, mapping each spatial column to its exact `SqlType::Geometry` /
+/// `Geography` with recovered subtype + SRID. Returns an empty map when the
+/// views are absent (a non-PostGIS database) or a column isn't registered, so
+/// the caller falls back to the unconstrained base type.
+async fn pg_spatial_columns(
+    pool: &PgPool,
+    table: &str,
+) -> std::collections::HashMap<String, SqlType> {
+    use crate::orm::{GeometryKind, GeometrySpec};
+    let mut map = std::collections::HashMap::new();
+
+    // `geometry_columns.type` is the PostGIS subtype name ('POINT',
+    // 'MULTIPOLYGON', 'GEOMETRY'); `GeometryKind::from_attr` folds case.
+    let geom: Vec<(String, String, i32)> = sqlx::query_as(
+        "SELECT f_geometry_column, type, srid FROM geometry_columns \
+         WHERE f_table_schema = 'public' AND f_table_name = $1",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (col, kind, srid) in geom {
+        let spec = GeometrySpec {
+            kind: GeometryKind::from_attr(&kind).unwrap_or(GeometryKind::Geometry),
+            srid,
+        };
+        map.insert(col, SqlType::Geometry(spec));
+    }
+
+    let geog: Vec<(String, String, i32)> = sqlx::query_as(
+        "SELECT f_geography_column, type, srid FROM geography_columns \
+         WHERE f_table_schema = 'public' AND f_table_name = $1",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    for (col, kind, srid) in geog {
+        let spec = GeometrySpec {
+            kind: GeometryKind::from_attr(&kind).unwrap_or(GeometryKind::Geometry),
+            srid,
+        };
+        map.insert(col, SqlType::Geography(spec));
+    }
+
+    map
+}
+
 fn map_postgres_array_element(elem: &str) -> Option<SqlType> {
     use crate::orm::ArrayElement;
     let kind = match elem.trim().to_ascii_lowercase().as_str() {
@@ -1026,6 +1095,12 @@ fn render_one_struct(
         if column.primary_key && column.name != "id" {
             out.push_str("    #[umbral(primary_key)]\n");
         }
+        // PostGIS: emit the recovered subtype + SRID so the geometry column
+        // round-trips as `geometry(Point, 4326)` rather than the unconstrained
+        // base type.
+        if let Some(attr) = geometry_attr(column.ty) {
+            out.push_str(&format!("    {attr}\n"));
+        }
         // The desired Rust field name: a framework may prettify a FK column
         // (`author_id` -> `author`); otherwise it's the column name.
         let (desired, ty) = match &column.fk_target {
@@ -1112,6 +1187,32 @@ fn is_rust_keyword(s: &str) -> bool {
             | "virtual"
             | "yield"
     )
+}
+
+/// The `#[umbral(geometry|geography = "<kind>", srid = N)]` attribute for a
+/// PostGIS column, or `None` for a non-spatial column. Renders the subtype
+/// recovered from the catalog so the column round-trips with its real shape.
+fn geometry_attr(ty: SqlType) -> Option<String> {
+    use crate::orm::GeometryKind;
+    let (base, spec) = match ty {
+        SqlType::Geometry(s) => ("geometry", s),
+        SqlType::Geography(s) => ("geography", s),
+        _ => return None,
+    };
+    let kind = match spec.kind {
+        GeometryKind::Geometry => "geometry",
+        GeometryKind::Point => "point",
+        GeometryKind::LineString => "linestring",
+        GeometryKind::Polygon => "polygon",
+        GeometryKind::MultiPoint => "multipoint",
+        GeometryKind::MultiLineString => "multilinestring",
+        GeometryKind::MultiPolygon => "multipolygon",
+        GeometryKind::GeometryCollection => "geometrycollection",
+    };
+    Some(format!(
+        "#[umbral({base} = \"{kind}\", srid = {})]",
+        spec.srid
+    ))
 }
 
 /// Turn a column name into a valid, non-keyword Rust field identifier.

@@ -768,3 +768,53 @@ async fn inspectdb_django_strips_app_prefix_and_externalizes_auth_user() {
         "a FK to auth_user must point at AuthUser; got:\n{m}"
     );
 }
+
+/// A recovered PostGIS geometry column renders as `umbral::orm::gis::Geometry`
+/// with the `#[umbral(geometry = "...", srid = N)]` attribute carrying the
+/// subtype + SRID (so a re-migrate rebuilds `geometry(Point, 4326)`).
+#[test]
+fn render_geometry_column_emits_subtype_srid_attribute() {
+    use umbral::inspect::{
+        IntrospectedColumn, IntrospectedSchema, IntrospectedTable, render_models,
+    };
+    use umbral::orm::{GeometryKind, GeometrySpec, SqlType};
+
+    let schema = IntrospectedSchema {
+        tables: vec![IntrospectedTable {
+            table: "facility".into(),
+            name: "Facility".into(),
+            columns: vec![
+                IntrospectedColumn {
+                    name: "id".into(),
+                    ty: SqlType::BigInt,
+                    primary_key: true,
+                    nullable: false,
+                    fk_target: None,
+                    unique: false,
+                    index: false,
+                },
+                IntrospectedColumn {
+                    name: "location".into(),
+                    ty: SqlType::Geometry(GeometrySpec {
+                        kind: GeometryKind::Point,
+                        srid: 4326,
+                    }),
+                    primary_key: false,
+                    nullable: false,
+                    fk_target: None,
+                    unique: false,
+                    index: false,
+                },
+            ],
+        }],
+    };
+    let out = render_models(&schema);
+    assert!(
+        out.contains("#[umbral(geometry = \"point\", srid = 4326)]"),
+        "must emit the recovered subtype + SRID; got:\n{out}"
+    );
+    assert!(
+        out.contains("pub location: umbral::orm::gis::Geometry"),
+        "geometry column renders as the gis::Geometry newtype; got:\n{out}"
+    );
+}
