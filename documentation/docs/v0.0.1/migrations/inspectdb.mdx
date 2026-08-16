@@ -39,9 +39,23 @@ Beyond columns and primary keys, `inspectdb` recovers:
   `#[umbral(unique_together = [["org_id", "user_id"]])]` for a multi-column
   UNIQUE, and `#[umbral(indexes = [["role", "joined"]])]` for a multi-column
   plain index, columns in index order.
+- **Column defaults** — a constant DB default becomes `#[umbral(default =
+  "...")]` (a `'active'::varchar` string is unquoted to `active`; a numeric or
+  boolean default is kept verbatim). Sequence / function defaults
+  (`nextval(...)`, `gen_random_uuid()`) are dropped — umbral can't re-emit an
+  arbitrary expression as a literal.
+- **Auto timestamps** — a `CURRENT_TIMESTAMP` / `now()` default on a temporal
+  column lifts to `#[umbral(auto_now_add)]`, so a re-migrate re-emits the right
+  per-backend default rather than the literal string. Under `--framework
+  django`, Python-managed timestamps that leave no DB default are recovered by
+  name: `created*` → `auto_now_add`, `updated*` / `modified*` → `auto_now`.
+- **Autoincrement primary keys** need no special handling: an integer PK is
+  emitted as a plain `pub id: i64`, and the migration engine already lowers that
+  to `BIGSERIAL` on Postgres and `INTEGER … AUTOINCREMENT` on SQLite.
 
 These flow into the generated `0001_initial` migration too, so a re-migrate
-rebuilds them.
+rebuilds them — defaults, autoincrement, and the per-backend timestamp default
+included.
 
 Self-referential foreign keys work: a `parent_id` column that points at its own
 table generates `pub parent_id: Option<ForeignKey<Category>>` inside `struct

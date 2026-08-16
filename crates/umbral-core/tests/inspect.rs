@@ -303,6 +303,9 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
                     fk_target: None,
                     unique: false,
                     index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
                 }],
 
                 unique_together: Vec::new(),
@@ -319,6 +322,9 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
                     fk_target: None,
                     unique: false,
                     index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
                 }],
 
                 unique_together: Vec::new(),
@@ -491,6 +497,9 @@ async fn render_models_emits_fromrow_and_skips_option_on_primary_keys() {
                     fk_target: None,
                     unique: false,
                     index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
                 },
                 IntrospectedColumn {
                     name: "body".to_string(),
@@ -500,6 +509,9 @@ async fn render_models_emits_fromrow_and_skips_option_on_primary_keys() {
                     fk_target: None,
                     unique: false,
                     index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
                 },
             ],
 
@@ -861,6 +873,9 @@ fn render_geometry_column_emits_subtype_srid_attribute() {
                     fk_target: None,
                     unique: false,
                     index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
                 },
                 IntrospectedColumn {
                     name: "location".into(),
@@ -873,6 +888,9 @@ fn render_geometry_column_emits_subtype_srid_attribute() {
                     fk_target: None,
                     unique: false,
                     index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
                 },
             ],
 
@@ -928,5 +946,110 @@ async fn inspectdb_recovers_composite_indexes() {
     assert!(
         m.contains(r#"#[umbral(indexes = [["role", "joined"]])]"#),
         "composite plain index must render indexes; got:\n{m}"
+    );
+}
+
+/// inspectdb recovers column DEFAULTS from the database: a `CURRENT_TIMESTAMP`
+/// default on a timestamp lifts to `#[umbral(auto_now_add)]` (so a re-migrate
+/// re-emits the right per-backend default), while constant defaults become
+/// `#[umbral(default = "...")]`. A `nextval(...)` sequence default is dropped
+/// (the PK's autoincrement is handled separately). The recovered auto_now_add
+/// also lands in the initial migration snapshot.
+#[tokio::test]
+async fn inspectdb_recovers_defaults_and_auto_now_add() {
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("defaults.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    sqlx::query(
+        "CREATE TABLE event (\
+            id INTEGER PRIMARY KEY, \
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, \
+            status TEXT DEFAULT 'active', \
+            qty INTEGER DEFAULT 0)",
+    )
+    .execute(&src)
+    .await
+    .expect("seed");
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: None,
+        with_table_names: false,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // CURRENT_TIMESTAMP on a timestamp -> auto_now_add (NOT a literal default).
+    assert!(
+        m.contains("#[umbral(auto_now_add)]") && m.contains("pub created_at"),
+        "CURRENT_TIMESTAMP default must lift to auto_now_add; got:\n{m}"
+    );
+    assert!(
+        !m.contains(r#"default = "CURRENT_TIMESTAMP""#),
+        "the raw CURRENT_TIMESTAMP must not leak as a literal default; got:\n{m}"
+    );
+    // Constant defaults: string unquoted, integer verbatim.
+    assert!(
+        m.contains(r#"#[umbral(default = "active")]"#),
+        "string default must render unquoted; got:\n{m}"
+    );
+    assert!(
+        m.contains(r#"#[umbral(default = "0")]"#),
+        "integer default must render verbatim; got:\n{m}"
+    );
+
+    // The migration snapshot carries the recovered auto_now_add too.
+    let mig = std::fs::read_to_string(out_dir.path().join("migrations/app/0001_initial.json"))
+        .expect("initial migration");
+    assert!(
+        mig.contains("auto_now_add"),
+        "recovered auto_now_add must reach the initial migration; got:\n{mig}"
+    );
+}
+
+/// Under `--framework django`, Python-managed timestamps leave no DB default,
+/// so they're recovered by name: `created*` -> auto_now_add, `updated*` ->
+/// auto_now.
+#[tokio::test]
+async fn inspectdb_django_recovers_auto_now_from_column_names() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("stamps.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    sqlx::query(
+        "CREATE TABLE blog_post (\
+            id INTEGER PRIMARY KEY, \
+            created_at TIMESTAMP, \
+            updated_at TIMESTAMP)",
+    )
+    .execute(&src)
+    .await
+    .expect("seed");
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Django),
+        with_table_names: false,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    assert!(
+        m.contains("#[umbral(auto_now_add)]\n    pub created_at"),
+        "django `created_at` must become auto_now_add; got:\n{m}"
+    );
+    assert!(
+        m.contains("#[umbral(auto_now)]\n    pub updated_at"),
+        "django `updated_at` must become auto_now; got:\n{m}"
     );
 }

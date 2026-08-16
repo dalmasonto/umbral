@@ -113,6 +113,23 @@ pub struct IntrospectedColumn {
     /// A single-column (non-unique) index covers this column — rendered as
     /// `#[umbral(index)]`.
     pub index: bool,
+    /// The recovered constant DB default (`'active'`, `0`, `true`), cleaned of
+    /// Postgres `::type` casts and surrounding quotes. `None` when the column
+    /// has no default, or one umbral can't represent as a `#[umbral(default)]`
+    /// literal — a sequence (`nextval(...)`) or function call. A
+    /// `CURRENT_TIMESTAMP` / `now()` default on a temporal column is lifted to
+    /// `auto_now_add` instead of landing here.
+    pub default: Option<String>,
+    /// The column is populated with the current time on INSERT — recovered from
+    /// a `CURRENT_TIMESTAMP` / `now()` default on a temporal column, or (under
+    /// `--framework django`) a `created*`-named timestamp. Renders
+    /// `#[umbral(auto_now_add)]`.
+    pub auto_now_add: bool,
+    /// The column is refreshed to the current time on every write. Not
+    /// expressible as DB metadata on Postgres/SQLite (Django sets it in Python),
+    /// so recovered only by the `--framework django` name heuristic
+    /// (`updated*` / `modified*`). Renders `#[umbral(auto_now)]`.
+    pub auto_now: bool,
 }
 
 /// Errors `inspectdb` can produce. Carries enough detail for the CLI
@@ -286,6 +303,11 @@ pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport, InspectErr
     if schema.tables.is_empty() {
         return Err(InspectError::NoTables);
     }
+    // Lift recovered DB defaults + framework naming into umbral's semantic field
+    // attributes (auto_now_add / auto_now / default) so BOTH the model and the
+    // initial migration render them consistently.
+    let mut schema = schema;
+    apply_recovered_conventions(&mut schema, opts.framework);
 
     let models_src = render_models_with(&schema, opts.framework, opts.with_table_names);
     let migration = render_initial_migration(&schema);
@@ -420,8 +442,8 @@ async fn introspect_columns_pg(
     // For non-array columns udt_name carries the same physical name
     // (`int8`, `text`, etc.) but `data_type` is the canonical match
     // key we already lookup against.
-    let column_rows: Vec<(String, String, String, String)> = sqlx::query_as(
-        "SELECT column_name, data_type, is_nullable, udt_name \
+    let column_rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT column_name, data_type, is_nullable, udt_name, column_default \
          FROM information_schema.columns \
          WHERE table_schema = 'public' AND table_name = $1 \
          ORDER BY ordinal_position",
@@ -485,7 +507,7 @@ async fn introspect_columns_pg(
     let spatial = pg_spatial_columns(pool, table).await;
 
     let mut columns: Vec<IntrospectedColumn> = Vec::with_capacity(column_rows.len());
-    for (name, data_type, is_nullable, udt_name) in column_rows {
+    for (name, data_type, is_nullable, udt_name, raw_default) in column_rows {
         let ty = if udt_name.eq_ignore_ascii_case("geometry")
             || udt_name.eq_ignore_ascii_case("geography")
         {
@@ -547,6 +569,11 @@ async fn introspect_columns_pg(
             fk_target,
             unique,
             index,
+            // Raw recovered default; semantic lift happens in
+            // `apply_recovered_conventions`, shared with the SQLite path.
+            default: raw_default,
+            auto_now_add: false,
+            auto_now: false,
         });
     }
 
@@ -770,6 +797,10 @@ async fn introspect_columns(
         let raw_type: String = row.try_get("type")?;
         let notnull: i64 = row.try_get("notnull")?;
         let pk: i64 = row.try_get("pk")?;
+        // `dflt_value` is NULL when the column has no default; sqlx surfaces
+        // that as `None`. Otherwise it's the raw default token verbatim
+        // (`CURRENT_TIMESTAMP`, `0`, `'active'`).
+        let raw_default: Option<String> = row.try_get("dflt_value").ok().flatten();
         // A FK column's declared type is whatever SQLite stored (usually
         // `integer`); the target table is what makes it a foreign key.
         let fk_target = fk_map.get(&name).cloned();
@@ -803,6 +834,12 @@ async fn introspect_columns(
             fk_target,
             unique,
             index,
+            // Raw recovered default; the semantic lift (CURRENT_TIMESTAMP ->
+            // auto_now_add, unquote strings, drop expressions) happens in
+            // `apply_recovered_conventions` so it's shared with the PG path.
+            default: raw_default,
+            auto_now_add: false,
+            auto_now: false,
         });
     }
     Ok(columns)
@@ -1125,6 +1162,98 @@ use umbral::prelude::*;
 /// The `#[umbral(table = "...")]` attribute is emitted only when the
 /// derive's auto-derived table name (snake_case of the struct name)
 /// doesn't equal the SQL table name. For the typical snake_case shape
+/// The temporal SQL types whose current-timestamp default is an `auto_now_add`
+/// and whose `created*`/`updated*` name (under Django) implies a timestamp.
+fn is_temporal(ty: SqlType) -> bool {
+    matches!(ty, SqlType::Timestamptz | SqlType::Date | SqlType::Time)
+}
+
+/// True when a raw DB default expresses "the current time" — SQLite's
+/// `CURRENT_TIMESTAMP` and Postgres's `now()` / `CURRENT_TIMESTAMP` /
+/// `LOCALTIMESTAMP`, tolerating a trailing `()` and a `::type` cast.
+fn is_current_timestamp_default(raw: &str) -> bool {
+    let s = raw.trim();
+    let s = s.split("::").next().unwrap_or(s).trim();
+    let s = s.trim_end_matches("()").trim();
+    s.eq_ignore_ascii_case("CURRENT_TIMESTAMP")
+        || s.eq_ignore_ascii_case("now")
+        || s.eq_ignore_ascii_case("LOCALTIMESTAMP")
+}
+
+/// Reduce a raw DB default to a constant umbral can re-emit as
+/// `#[umbral(default = "...")]`, or `None` when it can't — a sequence
+/// (`nextval(...)`), a function call (`gen_random_uuid()`), or NULL. Strips a
+/// Postgres `::type` cast and unwraps a single-quoted string literal so
+/// `'active'::character varying` -> `active` (umbral re-quotes on emit).
+fn clean_constant_default(raw: &str) -> Option<String> {
+    let s = raw.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("null") {
+        return None;
+    }
+    let s = s.split("::").next().unwrap_or(s).trim();
+    if s.len() >= 2 && s.starts_with('\'') && s.ends_with('\'') {
+        // A quoted string literal — accept its inner text, un-doubling the
+        // SQL `''` escape. Can't be an expression, so it's always safe.
+        return Some(s[1..s.len() - 1].replace("''", "'"));
+    }
+    // A bare token: a number (`0`, `-1`, `3.14`) or boolean (`true`/`false`).
+    // Anything carrying `(` (a function / sequence) or other punctuation umbral
+    // can't represent as a literal is dropped.
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
+        return Some(s.to_string());
+    }
+    None
+}
+
+/// Turn raw recovered defaults + framework naming into umbral's semantic field
+/// attributes (`auto_now_add` / `auto_now` / `default`). Run once over the
+/// introspected schema so the model renderer and the initial migration agree.
+///
+/// - A `CURRENT_TIMESTAMP` / `now()` default on a temporal column becomes
+///   `auto_now_add`: umbral emits the correct per-backend default itself
+///   (`CURRENT_TIMESTAMP` on SQLite, `now()` on Postgres), so carrying the raw
+///   expression as a `#[umbral(default)]` literal (which umbral would quote)
+///   would be wrong.
+/// - Under `--framework django`, a `created*` timestamp with no recoverable
+///   default becomes `auto_now_add` and an `updated*` / `modified*` one becomes
+///   `auto_now` — Django keeps these in Python, leaving no DB default behind.
+/// - Every other default is reduced to a constant literal, or dropped when
+///   umbral can't represent it (see [`clean_constant_default`]).
+pub fn apply_recovered_conventions(schema: &mut IntrospectedSchema, framework: Option<Framework>) {
+    let django = framework == Some(Framework::Django);
+    for table in &mut schema.tables {
+        for col in &mut table.columns {
+            if let Some(raw) = col.default.take() {
+                if is_temporal(col.ty) && is_current_timestamp_default(&raw) {
+                    col.auto_now_add = true;
+                } else {
+                    col.default = clean_constant_default(&raw);
+                }
+            }
+            // Django's Python-managed timestamps leave no DB default; recover
+            // them by name, but never override a default we actually found.
+            if django && is_temporal(col.ty) && col.default.is_none() && !col.auto_now_add {
+                let lower = col.name.to_ascii_lowercase();
+                if lower.starts_with("created")
+                    || lower.starts_with("added")
+                    || lower == "date_joined"
+                {
+                    col.auto_now_add = true;
+                } else if !col.auto_now
+                    && (lower.starts_with("updated")
+                        || lower.starts_with("modified")
+                        || lower.starts_with("changed"))
+                {
+                    col.auto_now = true;
+                }
+            }
+        }
+    }
+}
+
 /// (`blog_post` -> `BlogPost` -> derive computes `"blog_post"`), the
 /// attribute is redundant and is left off. For unusual SQL casings
 /// (`POSTS` -> `Posts` -> derive computes `"posts"` not `"POSTS"`),
@@ -1179,6 +1308,19 @@ fn render_one_struct(
         }
         if column.index {
             out.push_str("    #[umbral(index)]\n");
+        }
+        // Recovered temporal semantics / constant default. `auto_now_add` and
+        // `auto_now` are mutually exclusive with a literal default (a
+        // current-timestamp default is lifted to `auto_now_add` upstream).
+        if column.auto_now_add {
+            out.push_str("    #[umbral(auto_now_add)]\n");
+        } else if column.auto_now {
+            out.push_str("    #[umbral(auto_now)]\n");
+        } else if let Some(def) = &column.default {
+            out.push_str(&format!(
+                "    #[umbral(default = \"{}\")]\n",
+                def.replace('\\', "\\\\").replace('"', "\\\"")
+            ));
         }
         // A primary key not named `id` must be marked so the derive can find
         // it (Django's `authtoken_token.key`, `django_session.session_key`, …).
@@ -1538,16 +1680,20 @@ impl From<&IntrospectedColumn> for Column {
             max_length: 0,
             choices: Vec::new(),
             choice_labels: Vec::new(),
-            default: String::new(),
+            // Recovered constant default (`''` when none / unrepresentable), so
+            // the initial migration re-emits the DDL `DEFAULT` clause.
+            default: c.default.clone().unwrap_or_default(),
             is_multichoice: false,
             // Recovered single-column UNIQUE / index constraints.
             unique: c.unique,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
             index: c.index,
-            auto_now_add: false,
+            // Recovered temporal semantics — a re-migrate rebuilds the correct
+            // per-backend default (CURRENT_TIMESTAMP / now()).
+            auto_now_add: c.auto_now_add,
             auto_uuid: false,
-            auto_now: false,
+            auto_now: c.auto_now,
             auto_user_add: false,
             auto_user: false,
             trim: false,
@@ -1578,6 +1724,9 @@ mod tests {
             fk_target: None,
             unique: false,
             index: false,
+            default: None,
+            auto_now_add: false,
+            auto_now: false,
         }
     }
 

@@ -284,6 +284,9 @@ fn inspect_maps_postgres_network_types() {
                     fk_target: None,
                     unique: false,
                     index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
                 },
                 IntrospectedColumn {
                     name: "addr".to_string(),
@@ -293,6 +296,9 @@ fn inspect_maps_postgres_network_types() {
                     fk_target: None,
                     unique: false,
                     index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
                 },
                 IntrospectedColumn {
                     name: "mac".to_string(),
@@ -302,6 +308,9 @@ fn inspect_maps_postgres_network_types() {
                     fk_target: None,
                     unique: false,
                     index: false,
+                    default: None,
+                    auto_now_add: false,
+                    auto_now: false,
                 },
             ],
 

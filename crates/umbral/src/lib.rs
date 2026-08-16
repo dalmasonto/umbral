@@ -697,9 +697,9 @@ pub mod inspect {
 
     pub use umbral_core::inspect::{
         Framework, INITIAL_MIGRATION_ID, INSPECTED_PLUGIN_NAME, InspectError, InspectOptions,
-        InspectReport, IntrospectedColumn, IntrospectedSchema, IntrospectedTable, inspectdb,
-        introspect_pool, introspect_pool_pg, render_initial_migration, render_models,
-        render_models_with, write_outputs,
+        InspectReport, IntrospectedColumn, IntrospectedSchema, IntrospectedTable,
+        apply_recovered_conventions, inspectdb, introspect_pool, introspect_pool_pg,
+        render_initial_migration, render_models, render_models_with, write_outputs,
     };
 }
 
