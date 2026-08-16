@@ -796,6 +796,50 @@ async fn inspectdb_prisma_snake_cases_camelcase_columns() {
     );
 }
 
+/// `--framework rails` folds a HABTM join table (`authors_books`) into an
+/// `M2M<T>` field, like Django — the two share the `<owner_table>_<field>` join
+/// naming, so the existing owner/field detection covers Rails.
+#[tokio::test]
+async fn inspectdb_rails_folds_habtm_join_tables() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("rails_m2m.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+        // Rails HABTM join: <owner>_<field> table, `<singular>_id` columns.
+        "CREATE TABLE authors_books (\
+            id INTEGER PRIMARY KEY, \
+            author_id INTEGER NOT NULL REFERENCES authors(id), \
+            book_id INTEGER NOT NULL REFERENCES books(id))",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Rails),
+        with_table_names: false,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb --framework rails");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    assert!(
+        m.contains("pub books: M2M<Books, i32>"),
+        "rails HABTM must fold into `books: M2M<Books, i32>` (i32 parent PK); got:\n{m}"
+    );
+    assert!(
+        !m.contains("struct AuthorsBooks"),
+        "the join table must not render as a plain struct; got:\n{m}"
+    );
+}
+
 /// The `_id` strip rewrites composite index groups in lockstep: a
 /// `unique_together` over FK columns must name the stripped fields, not the old
 /// `<fk>_id` columns (which no longer exist on the generated struct).

@@ -1406,21 +1406,26 @@ fn pick_m2m_owner(join_table: &str, ta: &str, tb: &str) -> Option<(String, Strin
     }
 }
 
-/// Fold Django M2M join tables into `M2M<T>` fields on their owner model. A
-/// pure junction — exactly two FK columns, every other column just the
-/// surrogate PK — named `<owner_table>_<field>` becomes `owner.field:
-/// M2M<Target>`, and the join table is dropped from the schema (umbral
-/// auto-generates its own junction from the field). Django-only: without the
-/// naming convention the field name can't be recovered, so other schemas keep
-/// the join table as a plain model. Skips a table whose owner is `auth_user`
-/// (external, not re-declared) or whose stripped field would collide with an
-/// existing column on the owner.
+/// Fold M2M join tables into `M2M<T>` fields on their owner model. A pure
+/// junction — exactly two FK columns, every other column just the surrogate PK
+/// — named `<owner_table>_<field>` becomes `owner.field: M2M<Target>`, and the
+/// join table is dropped (umbral auto-generates its own junction from the
+/// field). Works for Django, Rails and Laravel, which all name their through /
+/// join / pivot table `<owner_table>_<field>` — the owner is the FK target that
+/// prefixes the name. Prisma's implicit M2M (`_ModelAToModelB` with `A`/`B`
+/// columns) is a different shape and isn't folded. Skips a table whose owner is
+/// `auth_user` (external) or whose field would collide with an existing column.
 fn detect_m2m_relations(
     schema: &mut IntrospectedSchema,
     framework: Option<Framework>,
     with_table_names: bool,
 ) {
-    if framework != Some(Framework::Django) {
+    // The `<owner_table>_<field>` naming these frameworks share is what makes the
+    // owner/field derivation possible; Prisma / no-framework can't be folded.
+    if !matches!(
+        framework,
+        Some(Framework::Django | Framework::Rails | Framework::Laravel)
+    ) {
         return;
     }
     let struct_names = resolve_struct_names(schema, framework, with_table_names);

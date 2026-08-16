@@ -82,23 +82,6 @@ impl TransferMap {
             }
         }
     }
-
-    /// The source junction's `(parent, child)` FK column names, given the two
-    /// endpoint model (struct) names. `None` means the umbral `parent_id` /
-    /// `child_id` are already right.
-    fn junction_source_columns(self, owner_model: &str, target_model: &str) -> (String, String) {
-        match self {
-            TransferMap::None => ("parent_id".to_string(), "child_id".to_string()),
-            TransferMap::Django | TransferMap::Rails | TransferMap::Laravel => (
-                format!("{}_id", owner_model.to_ascii_lowercase()),
-                format!("{}_id", target_model.to_ascii_lowercase()),
-            ),
-            TransferMap::Prisma => (
-                format!("{}Id", to_lower_camel(owner_model)),
-                format!("{}Id", to_lower_camel(target_model)),
-            ),
-        }
-    }
 }
 
 /// `blog_category` / `BlogCategory` -> `blogCategory`. Normalizes any casing to
@@ -263,20 +246,21 @@ pub fn fk_topo_plan(models: Vec<ModelMeta>) -> (Vec<Vec<ModelMeta>>, Vec<ModelMe
 #[derive(Debug, Clone)]
 struct Junction {
     table: String,
+    /// The tables the two FK columns reference — used to identify, at runtime,
+    /// which source column is the parent side and which the child. The source's
+    /// junction column NAMES vary by framework (Django `<model>_id`, Rails
+    /// `<singular>_id` from a plural table, Prisma `A`/`B`), so they're read
+    /// from the DB rather than guessed.
+    owner_table: String,
+    child_table: String,
     parent_ty: SqlType,
     child_ty: SqlType,
-    /// Source FK column names. On the umbral schema these are `parent_id` /
-    /// `child_id`; under `TransferMap::Django` the source (Django) junction
-    /// names them `<model>_id`, e.g. `community_id` / `software_id`.
-    src_parent_col: String,
-    src_child_col: String,
 }
 
 /// Enumerate every M2M junction the registered models declare. `parent_ty` is
 /// the owner's PK type; `child_ty` the target's (resolved from the model set,
-/// defaulting to `BigInt` when the target isn't registered here). `map` sets the
-/// source-side column names to read from.
-fn collect_junctions(models: &[ModelMeta], map: TransferMap) -> Vec<Junction> {
+/// defaulting to `BigInt` when the target isn't registered here).
+fn collect_junctions(models: &[ModelMeta]) -> Vec<Junction> {
     let pk_ty = |table: &str| -> SqlType {
         models
             .iter()
@@ -289,20 +273,80 @@ fn collect_junctions(models: &[ModelMeta], map: TransferMap) -> Vec<Junction> {
     for m in models {
         let parent_ty = m.pk_column().map(|c| c.ty).unwrap_or(SqlType::BigInt);
         for rel in &m.m2m_relations {
-            // Source junction FK columns are named after the two endpoint models
-            // (`community_id` / `software_id` under a snake framework).
-            let (src_parent_col, src_child_col) =
-                map.junction_source_columns(&m.name, &rel.target_name);
             out.push(Junction {
                 table: format!("{}_{}", m.table, rel.field_name),
+                owner_table: m.table.clone(),
+                child_table: rel.target_table.clone(),
                 parent_ty,
                 child_ty: pk_ty(&rel.target_table),
-                src_parent_col,
-                src_child_col,
             });
         }
     }
     out
+}
+
+/// Read the junction's two FK columns from the SOURCE and decide which is the
+/// parent side and which the child by matching each FK's referenced table.
+/// Framework-agnostic: whatever the source names them (`community_id`,
+/// `author_id`, `A`/`B`), the mapping is by referenced table, not by name.
+/// A self-M2M (owner == child) falls back to the two FK columns in declaration
+/// order (first = parent).
+async fn resolve_junction_columns(
+    source: &DbPool,
+    jn: &Junction,
+) -> Result<(String, String), TransferError> {
+    // (from_column, referenced_table) for every FK on the junction.
+    let fks: Vec<(String, String)> = match source {
+        DbPool::Sqlite(pool) => {
+            let jt = jn.table.replace('"', "\"\"");
+            let rows = sqlx::query(&format!("PRAGMA foreign_key_list(\"{jt}\")"))
+                .fetch_all(pool)
+                .await?;
+            rows.iter()
+                .map(|r| {
+                    Ok::<_, TransferError>((
+                        r.try_get::<String, _>("from")?,
+                        r.try_get::<String, _>("table")?,
+                    ))
+                })
+                .collect::<Result<_, _>>()?
+        }
+        DbPool::Postgres(pool) => {
+            sqlx::query_as(
+                "SELECT kcu.column_name, ccu.table_name \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu \
+               ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema \
+             JOIN information_schema.constraint_column_usage ccu \
+               ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema \
+             WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public' \
+               AND tc.table_name = $1 ORDER BY kcu.ordinal_position",
+            )
+            .bind(&jn.table)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    if jn.owner_table == jn.child_table {
+        // Self-M2M: both FKs point at the same table; keep declaration order.
+        let mut cols = fks.into_iter().map(|(c, _)| c);
+        return Ok((
+            cols.next().unwrap_or_else(|| "parent_id".to_string()),
+            cols.next().unwrap_or_else(|| "child_id".to_string()),
+        ));
+    }
+    let parent = fks
+        .iter()
+        .find(|(_, t)| *t == jn.owner_table)
+        .map(|(c, _)| c.clone())
+        .unwrap_or_else(|| "parent_id".to_string());
+    let child = fks
+        .iter()
+        .find(|(_, t)| *t == jn.child_table)
+        .map(|(c, _)| c.clone())
+        .unwrap_or_else(|| "child_id".to_string());
+    Ok((parent, child))
 }
 
 /// Copy one junction's `(parent_id, child_id)` rows, keyset-paginated on the
@@ -316,10 +360,12 @@ async fn copy_one_junction(
     start_last: Option<(serde_json::Value, serde_json::Value)>,
     batch: u64,
 ) -> Result<u64, TransferError> {
+    // Which source column is parent vs child — read from the DB, not guessed.
+    let (pcol, ccol) = resolve_junction_columns(source, jn).await?;
     let mut last = start_last;
     let mut copied: u64 = 0;
     loop {
-        let rows = read_junction_batch(source, jn, last.as_ref(), batch).await?;
+        let rows = read_junction_batch(source, jn, &pcol, &ccol, last.as_ref(), batch).await?;
         if rows.is_empty() {
             break;
         }
@@ -641,7 +687,7 @@ pub async fn transfer(
             report.per_table.push((meta.table.clone(), n));
             report.rows += n;
         }
-        for jn in collect_junctions(&flat, opts.map) {
+        for jn in collect_junctions(&flat) {
             if excluded(&jn.table) {
                 continue;
             }
@@ -723,7 +769,7 @@ pub async fn transfer(
 
     // Junctions after every model (both endpoints now exist on the target) —
     // all independent of each other, so they run concurrently too.
-    let junctions = collect_junctions(&flat, opts.map);
+    let junctions = collect_junctions(&flat);
     let jtasks = junctions
         .iter()
         .filter(|jn| !excluded(&jn.table) && !done(&jn.table))
@@ -871,15 +917,17 @@ fn decode_pair(v: serde_json::Value) -> Option<(serde_json::Value, serde_json::V
 async fn read_junction_batch(
     source: &DbPool,
     jn: &Junction,
+    parent_col: &str,
+    child_col: &str,
     last: Option<&(serde_json::Value, serde_json::Value)>,
     limit: u64,
 ) -> Result<Vec<(serde_json::Value, serde_json::Value)>, TransferError> {
     let jt = jn.table.replace('"', "\"\"");
-    // Source-side column names (umbral `parent_id`/`child_id`, or Django's
-    // `<model>_id` under a map). The read is by position, so the output is
+    // Source-side column names resolved from the DB (see
+    // `resolve_junction_columns`). The read is by position, so the output is
     // always `(parent, child)` regardless of the source names.
-    let pcol = jn.src_parent_col.replace('"', "\"\"");
-    let ccol = jn.src_child_col.replace('"', "\"\"");
+    let pcol = parent_col.replace('"', "\"\"");
+    let ccol = child_col.replace('"', "\"\"");
     let mut out = Vec::new();
     match source {
         DbPool::Sqlite(pool) => {
