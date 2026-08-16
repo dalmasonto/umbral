@@ -118,8 +118,8 @@ impl From<sqlx::Error> for TransferError {
 /// Order models so every table's FK parents come before it (Kahn's algorithm
 /// over `fk_target`; self-FKs ignored). A stable input order + name tiebreak
 /// keeps the output deterministic. A cycle (mutually-referential tables) can't
-/// be fully ordered — the remaining nodes are appended in name order so the
-/// run still makes progress (their cross-refs need phase-2 deferred handling).
+/// be fully ordered — the remaining nodes are appended in name order (the
+/// transfer copies them under FK deferral, see [`copy_cyclic_group`]).
 pub fn fk_topo_order(models: Vec<ModelMeta>) -> Vec<ModelMeta> {
     fk_topo_levels(models).into_iter().flatten().collect()
 }
@@ -129,6 +129,20 @@ pub fn fk_topo_order(models: Vec<ModelMeta>) -> Vec<ModelMeta> {
 /// mutually independent and safe to copy concurrently. Parents-before-children
 /// holds across levels. A cycle's leftover tables form a final level.
 pub fn fk_topo_levels(models: Vec<ModelMeta>) -> Vec<Vec<ModelMeta>> {
+    let (mut levels, cyclic) = fk_topo_plan(models);
+    if !cyclic.is_empty() {
+        levels.push(cyclic);
+    }
+    levels
+}
+
+/// The scheduling plan: `(orderable_levels, cyclic_leftover)`. The levels are
+/// FK-topologically ordered (parents before children); `cyclic_leftover` holds
+/// the mutually-referential tables that couldn't be ordered at all — they need
+/// the deferred single-transaction copy. Self-referential tables stay in their
+/// natural level (their self-FK is ignored for ordering) but are copied with
+/// deferral individually.
+pub fn fk_topo_plan(models: Vec<ModelMeta>) -> (Vec<Vec<ModelMeta>>, Vec<ModelMeta>) {
     let tables: HashSet<String> = models.iter().map(|m| m.table.clone()).collect();
     let mut deps: HashMap<String, HashSet<String>> = HashMap::new();
     for m in &models {
@@ -164,13 +178,10 @@ pub fn fk_topo_levels(models: Vec<ModelMeta>) -> Vec<Vec<ModelMeta>> {
         }
         levels.push(level);
     }
-    // Any leftover (cycle) — one final level, name-ordered, so the run proceeds.
-    if !by_table.is_empty() {
-        let mut leftover: Vec<ModelMeta> = by_table.into_values().collect();
-        leftover.sort_by(|a, b| a.table.cmp(&b.table));
-        levels.push(leftover);
-    }
-    levels
+    // Whatever's left is in a cycle (mutually-referential), name-ordered.
+    let mut cyclic: Vec<ModelMeta> = by_table.into_values().collect();
+    cyclic.sort_by(|a, b| a.table.cmp(&b.table));
+    (levels, cyclic)
 }
 
 /// One many-to-many junction table to copy — an umbral-auto-generated
@@ -411,6 +422,7 @@ async fn copy_one_model(
             let mapped = apply_key_rename(row, key_rename);
             DynQuerySet::for_meta(write_meta)
                 .presealed()
+                .trusted()
                 .insert_json_in_tx(&mapped, &mut tx)
                 .await
                 .map_err(|e| TransferError::Write(e.to_string()))?;
@@ -432,6 +444,104 @@ async fn copy_one_model(
     Ok(copied)
 }
 
+/// Whether a model FK-references itself — its rows can hold a forward reference
+/// (child id < parent id) that a per-row FK check would reject on insert, so it
+/// needs the deferred single-transaction copy.
+fn has_self_fk(meta: &ModelMeta) -> bool {
+    meta.fields
+        .iter()
+        .any(|c| c.fk_target.as_deref() == Some(meta.table.as_str()))
+}
+
+/// Defer foreign-key enforcement to the end of the current transaction, so a
+/// cyclic / forward reference resolves once every row in the group is present.
+async fn defer_fk_in_tx(tx: &mut crate::db::Transaction) -> Result<(), TransferError> {
+    match tx.backend_name() {
+        "sqlite" => {
+            let inner = tx.as_sqlite_mut().expect("sqlite backend");
+            sqlx::query("PRAGMA defer_foreign_keys = ON")
+                .execute(&mut **inner)
+                .await?;
+        }
+        _ => {
+            // Works when the FK constraints are DEFERRABLE; a no-op otherwise.
+            let inner = tx.as_pg_mut().expect("postgres backend");
+            sqlx::query("SET CONSTRAINTS ALL DEFERRED")
+                .execute(&mut **inner)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Copy a set of mutually- or self-referential tables inside ONE transaction
+/// with FK enforcement deferred, so their cross-references resolve at commit
+/// (when every row exists). Trades the per-batch checkpoint for correctness on
+/// a cycle — these tables are all-or-nothing within the run, which is fine for
+/// the small tables cycles usually involve (a category tree, an org/user pair).
+async fn copy_cyclic_group(
+    source: &DbPool,
+    target: &DbPool,
+    group: &[&ModelMeta],
+    map: TransferMap,
+    batch: u64,
+) -> Result<Vec<(String, u64)>, TransferError> {
+    let mut tx = begin_on(target).await?;
+    defer_fk_in_tx(&mut tx).await?;
+    let mut results = Vec::new();
+    for meta in group {
+        let pk_col = meta
+            .pk_column()
+            .ok_or_else(|| TransferError::NoPrimaryKey(meta.table.clone()))?
+            .name
+            .clone();
+        let (read_meta, key_rename) = source_meta_for(meta, map);
+        let mut last: Option<serde_json::Value> = None;
+        let mut copied: u64 = 0;
+        loop {
+            let mut qs = DynQuerySet::for_meta(&read_meta).unredacted_for_backup();
+            if let Some(l) = &last {
+                qs = qs
+                    .filter_condition(sea_query::Condition::all().add(pk_gt_condition(&pk_col, l)));
+            }
+            let rows = qs
+                .order_by_col(&pk_col, false)
+                .limit(batch)
+                .fetch_as_json_on(source)
+                .await
+                .map_err(|e| TransferError::Read(e.to_string()))?;
+            if rows.is_empty() {
+                break;
+            }
+            let batch_len = rows.len();
+            last = rows.last().and_then(|r| r.get(&pk_col)).cloned();
+            for row in &rows {
+                let mapped = apply_key_rename(row, &key_rename);
+                DynQuerySet::for_meta(meta)
+                    .presealed()
+                    .trusted()
+                    .insert_json_in_tx(&mapped, &mut tx)
+                    .await
+                    .map_err(|e| TransferError::Write(e.to_string()))?;
+            }
+            copied += batch_len as u64;
+            if batch_len < batch as usize {
+                break;
+            }
+        }
+        upsert_state_in_tx(&mut tx, &meta.table, last.as_ref(), true).await?;
+        results.push((meta.table.clone(), copied));
+    }
+    // The single deferred FK check happens HERE — every row is present.
+    tx.commit().await?;
+    for meta in group {
+        if let Some(pk) = meta.pk_column() {
+            reset_sequence(target, &meta.table, &pk.name).await?;
+        }
+    }
+    Ok(results)
+}
+
 /// Copy every (selected) registered model from `source` to `target`, resumably.
 pub async fn transfer(
     source: &DbPool,
@@ -441,8 +551,13 @@ pub async fn transfer(
 ) -> Result<TransferReport, TransferError> {
     use futures_util::stream::{StreamExt, TryStreamExt};
 
-    let levels = fk_topo_levels(models);
-    let flat: Vec<ModelMeta> = levels.iter().flatten().cloned().collect();
+    let (levels, cyclic) = fk_topo_plan(models);
+    let flat: Vec<ModelMeta> = levels
+        .iter()
+        .flatten()
+        .chain(cyclic.iter())
+        .cloned()
+        .collect();
     let only: Option<HashSet<String>> = opts.only.as_ref().map(|v| v.iter().cloned().collect());
     let excluded = |t: &str| only.as_ref().is_some_and(|s| !s.contains(t));
     let workers = opts.workers.max(1);
@@ -477,19 +592,27 @@ pub async fn transfer(
     // independent, so up to `workers` of them copy concurrently. Each
     // `copy_one_model` owns its transactions + checkpoint, so parallel tables
     // never share mutable state.
+    let state_ref = &state;
     for level in &levels {
         let tasks = level
             .iter()
             .filter(|m| !excluded(&m.table) && !done(&m.table))
             .map(|meta| {
-                let (read_meta, key_rename) = source_meta_for(meta, opts.map);
-                let start_last = state.get(&meta.table).and_then(|(pk, _)| pk.clone());
+                let map = opts.map;
+                let batch = opts.batch_size;
                 async move {
+                    // A self-referential table can hold a forward reference, so
+                    // it takes the deferred single-transaction copy on its own.
+                    if has_self_fk(meta) {
+                        return copy_cyclic_group(source, target, &[meta], map, batch).await;
+                    }
                     let pk_col = meta
                         .pk_column()
                         .ok_or_else(|| TransferError::NoPrimaryKey(meta.table.clone()))?
                         .name
                         .clone();
+                    let (read_meta, key_rename) = source_meta_for(meta, map);
+                    let start_last = state_ref.get(&meta.table).and_then(|(pk, _)| pk.clone());
                     let copied = copy_one_model(
                         source,
                         target,
@@ -498,16 +621,32 @@ pub async fn transfer(
                         &key_rename,
                         &pk_col,
                         start_last,
-                        opts.batch_size,
+                        batch,
                     )
                     .await?;
-                    Ok::<_, TransferError>((meta.table.clone(), copied))
+                    Ok::<_, TransferError>(vec![(meta.table.clone(), copied)])
                 }
             });
-        let results: Vec<(String, u64)> = futures_util::stream::iter(tasks)
+        let results: Vec<Vec<(String, u64)>> = futures_util::stream::iter(tasks)
             .buffer_unordered(workers)
             .try_collect()
             .await?;
+        for (t, c) in results.into_iter().flatten() {
+            report.per_table.push((t, c));
+            report.rows += c;
+        }
+    }
+
+    // Mutually-referential tables that couldn't be ordered at all: copy the
+    // whole group in ONE transaction with FK enforcement deferred, so each
+    // side's reference to the other resolves at commit.
+    let cyclic_group: Vec<&ModelMeta> = cyclic
+        .iter()
+        .filter(|m| !excluded(&m.table) && !done(&m.table))
+        .collect();
+    if !cyclic_group.is_empty() {
+        let results =
+            copy_cyclic_group(source, target, &cyclic_group, opts.map, opts.batch_size).await?;
         for (t, c) in results {
             report.per_table.push((t, c));
             report.rows += c;

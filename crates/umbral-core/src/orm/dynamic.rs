@@ -162,6 +162,12 @@ pub struct DynQuerySet<'a> {
     /// instead of sealing again. Database RESTORE only; see
     /// [`DynQuerySet::presealed`]. gaps4 #2.
     presealed: bool,
+    /// Skip the app-level create/update validation (required/choices/text-format
+    /// AND the FK-existence SELECT). For a trusted bulk copy from a CONSISTENT
+    /// source (the data-transfer engine): re-validation is redundant, and the
+    /// FK-existence check would reject a legitimate cyclic / not-yet-loaded
+    /// reference. DB constraints still apply. See [`DynQuerySet::trusted`].
+    trusted: bool,
     /// Reveal ALL hidden columns in serialized output for a caller the app
     /// has already authorized: include `private` / `secret` columns AND
     /// decrypt `Masked<T>` to plaintext (not ciphertext). Trusted
@@ -330,6 +336,7 @@ impl<'a> DynQuerySet<'a> {
             allow_private: Vec::new(),
             unredacted: false,
             presealed: false,
+            trusted: false,
             revealed: false,
             reveal_cols: Vec::new(),
         }
@@ -391,6 +398,17 @@ impl<'a> DynQuerySet<'a> {
     /// `grep -rn presealed` should return the restore code and nothing else.
     pub fn presealed(mut self) -> Self {
         self.presealed = true;
+        self
+    }
+
+    /// Skip app-level create/update validation on the write. For a trusted bulk
+    /// copy from a CONSISTENT source (the data-transfer engine): the source
+    /// already satisfies every constraint, so re-validating is redundant, and
+    /// the FK-existence SELECT would wrongly reject a cyclic or not-yet-loaded
+    /// reference. Database constraints (NOT NULL, UNIQUE, FK unless deferred)
+    /// still apply, so this trusts the *source*, not the caller's payload.
+    pub fn trusted(mut self) -> Self {
+        self.trusted = true;
         self
     }
 
@@ -2089,12 +2107,17 @@ impl<'a> DynQuerySet<'a> {
                 None => body,
             };
 
-        // Phase 0 — pre-DB validation against the ambient pool.
-        let validation_errors = crate::orm::validation::validate_on_create(self.meta, body).await;
-        if !validation_errors.is_empty() {
-            return Err(WriteError::Multiple {
-                errors: validation_errors,
-            });
+        // Phase 0 — pre-DB validation against the ambient pool. Skipped for a
+        // `.trusted()` bulk copy from a consistent source (the FK-existence
+        // check would reject a cyclic / not-yet-loaded reference).
+        if !self.trusted {
+            let validation_errors =
+                crate::orm::validation::validate_on_create(self.meta, body).await;
+            if !validation_errors.is_empty() {
+                return Err(WriteError::Multiple {
+                    errors: validation_errors,
+                });
+            }
         }
 
         // Phase 1 — build the INSERT + read back the PK shape.
@@ -2286,13 +2309,18 @@ impl<'a> DynQuerySet<'a> {
             };
 
         // Phase 0 — validation reads through the transaction so an FK
-        // at an uncommitted parent resolves.
-        let validation_errors =
-            crate::orm::validation::validate_on_create_in_tx(self.meta, body, tx).await;
-        if !validation_errors.is_empty() {
-            return Err(WriteError::Multiple {
-                errors: validation_errors,
-            });
+        // at an uncommitted parent resolves. Skipped under `.trusted()` (the
+        // transfer engine copying a consistent source): the FK-existence check
+        // would reject a cyclic / not-yet-loaded reference even with DB-level
+        // deferral, since it's an app-level SELECT, not the constraint.
+        if !self.trusted {
+            let validation_errors =
+                crate::orm::validation::validate_on_create_in_tx(self.meta, body, tx).await;
+            if !validation_errors.is_empty() {
+                return Err(WriteError::Multiple {
+                    errors: validation_errors,
+                });
+            }
         }
 
         // Phase 1 — build the INSERT (shared with the pool path).

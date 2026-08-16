@@ -48,6 +48,34 @@ pub struct Note {
     pub labels: M2M<Tag>,
 }
 
+/// Self-referential FK: a row can point at a higher id (a forward reference),
+/// which a per-row FK check rejects on insert in PK order.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+pub struct Node {
+    pub id: i64,
+    pub name: String,
+    #[umbral(index)]
+    pub parent_id: Option<ForeignKey<Node>>,
+}
+
+/// Mutually-referential pair: `Org.lead -> Member` and `Member.org -> Org`.
+/// Neither can be inserted first under per-row FK enforcement.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+pub struct Org {
+    pub id: i64,
+    pub name: String,
+    #[umbral(index)]
+    pub lead_id: Option<ForeignKey<Member>>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+pub struct Member {
+    pub id: i64,
+    pub name: String,
+    #[umbral(index)]
+    pub org_id: ForeignKey<Org>,
+}
+
 static BOOT: OnceCell<()> = OnceCell::const_new();
 async fn boot() {
     BOOT.get_or_init(|| async {
@@ -60,6 +88,9 @@ async fn boot() {
             .model::<Tag>()
             .model::<Book>()
             .model::<Note>()
+            .model::<Node>()
+            .model::<Org>()
+            .model::<Member>()
             .build()
             .unwrap();
     })
@@ -442,6 +473,118 @@ async fn transfer_parallel_workers_copies_correctly() {
             .unwrap(),
     );
     assert_eq!(counts, (2, 2, 2));
+}
+
+/// A self-referential FK with a FORWARD reference (a row whose parent has a
+/// higher id) is copied under a single deferred transaction, so the FK check at
+/// commit sees every row — a per-row check would reject it in PK order.
+#[tokio::test]
+async fn transfer_self_referential_forward_reference() {
+    boot().await;
+    let dir = TempDir::new().unwrap();
+    let source = open(&dir.path().join("selffk_src.sqlite3")).await;
+    let target = open(&dir.path().join("selffk_dst.sqlite3")).await;
+    for pool in [&source, &target] {
+        sqlx::query(
+            "CREATE TABLE node (id INTEGER PRIMARY KEY, name TEXT NOT NULL, \
+             parent_id INTEGER REFERENCES node(id))",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    // Seed parent-first (satisfies FK on the source); the transfer copies in PK
+    // order (1 before 3), which is where deferral matters.
+    sqlx::query("INSERT INTO node (id, name, parent_id) VALUES (3, 'root', NULL)")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO node (id, name, parent_id) VALUES (1, 'child', 3)")
+        .execute(&source)
+        .await
+        .unwrap();
+
+    let src = umbral::db::DbPool::Sqlite(source);
+    let dst = umbral::db::DbPool::Sqlite(target.clone());
+    transfer(
+        &src,
+        &dst,
+        vec![ModelMeta::for_::<Node>()],
+        &TransferOptions::default(),
+    )
+    .await
+    .expect("self-FK forward reference must transfer under deferral");
+
+    let nodes: Vec<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT id, parent_id FROM node ORDER BY id")
+            .fetch_all(&target)
+            .await
+            .unwrap();
+    assert_eq!(nodes, vec![(1, Some(3)), (3, None)]);
+}
+
+/// A mutual FK cycle (`Org.lead -> Member`, `Member.org -> Org`) — neither side
+/// is insertable first — copies as one deferred-FK transaction group.
+#[tokio::test]
+async fn transfer_mutual_fk_cycle() {
+    boot().await;
+    let dir = TempDir::new().unwrap();
+    let source = open(&dir.path().join("cycle_src.sqlite3")).await;
+    let target = open(&dir.path().join("cycle_dst.sqlite3")).await;
+    for pool in [&source, &target] {
+        sqlx::query(
+            "CREATE TABLE org (id INTEGER PRIMARY KEY, name TEXT NOT NULL, \
+             lead_id INTEGER REFERENCES member(id))",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE member (id INTEGER PRIMARY KEY, name TEXT NOT NULL, \
+             org_id INTEGER NOT NULL REFERENCES org(id))",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    // Seed the cycle on the source inside a deferred transaction (it's a cycle
+    // there too).
+    let mut tx = source.begin().await.unwrap();
+    sqlx::query("PRAGMA defer_foreign_keys = ON")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO org (id, name, lead_id) VALUES (1, 'Acme', 10)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO member (id, name, org_id) VALUES (10, 'Ada', 1)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let src = umbral::db::DbPool::Sqlite(source);
+    let dst = umbral::db::DbPool::Sqlite(target.clone());
+    transfer(
+        &src,
+        &dst,
+        vec![ModelMeta::for_::<Org>(), ModelMeta::for_::<Member>()],
+        &TransferOptions::default(),
+    )
+    .await
+    .expect("mutual FK cycle must transfer as a deferred group");
+
+    let org: (i64, Option<i64>) = sqlx::query_as("SELECT id, lead_id FROM org")
+        .fetch_one(&target)
+        .await
+        .unwrap();
+    let member: (i64, i64) = sqlx::query_as("SELECT id, org_id FROM member")
+        .fetch_one(&target)
+        .await
+        .unwrap();
+    assert_eq!(org, (1, Some(10)));
+    assert_eq!(member, (10, 1));
 }
 
 /// FK-topological ordering: a child never precedes its parent.

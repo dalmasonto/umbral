@@ -341,7 +341,7 @@ pub mod transfer {
 
     pub use umbral_core::transfer::{
         TransferError, TransferMap, TransferOptions, TransferReport, fk_topo_levels, fk_topo_order,
-        transfer,
+        fk_topo_plan, transfer,
     };
 }
 
