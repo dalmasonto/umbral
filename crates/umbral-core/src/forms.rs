@@ -1186,23 +1186,47 @@ where
             }
         };
 
-        // Parse x-www-form-urlencoded into a String->String map. An empty
-        // body parses to an empty map (Ok) — `FormValidate::validate` then
-        // sees every field as missing and surfaces the right per-field
+        // Parse x-www-form-urlencoded. We decode into an ORDERED list of
+        // `(key, value)` pairs first — NOT straight into a
+        // `HashMap<String, String>` — because a map keeps only the LAST
+        // value for a repeated key, so a multi-select
+        // (`roles=admin&roles=editor`) would silently lose every value but
+        // the last. Repeated keys are collapsed by joining their values
+        // with `,`, which is exactly the CSV shape the multi-value parsers
+        // split back apart (`orm::multichoice` for `MultiChoice<E>`,
+        // `forms_runtime::parse_multi_ids` for `M2M<T>`, both `.split(',')`).
+        // Single-value keys are inserted verbatim, so the String->String
+        // contract every `#[derive(Form)]` impl relies on is unchanged.
+        //
+        // An empty body parses to an empty list (Ok) — `FormValidate::validate`
+        // then sees every field as missing and surfaces the right per-field
         // "required" errors. BROKEN-8: a genuinely MALFORMED body must not
         // be swallowed into an empty map (that re-runs as bogus "field
         // required" errors); surface it as a 400 naming the parse failure.
-        let pairs: std::collections::HashMap<String, String> =
-            match serde_urlencoded::from_bytes(&bytes) {
-                Ok(pairs) => pairs,
-                Err(e) => {
-                    return Err((
-                        StatusCode::BAD_REQUEST,
-                        format!("malformed urlencoded form body: {e}"),
-                    )
-                        .into_response());
+        let ordered: Vec<(String, String)> = match serde_urlencoded::from_bytes(&bytes) {
+            Ok(pairs) => pairs,
+            Err(e) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("malformed urlencoded form body: {e}"),
+                )
+                    .into_response());
+            }
+        };
+        let mut pairs: std::collections::HashMap<String, String> =
+            std::collections::HashMap::with_capacity(ordered.len());
+        for (key, value) in ordered {
+            match pairs.entry(key) {
+                std::collections::hash_map::Entry::Occupied(mut slot) => {
+                    let joined = slot.get_mut();
+                    joined.push(',');
+                    joined.push_str(&value);
                 }
-            };
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(value);
+                }
+            }
+        }
 
         // Run validation. On success, we've already proven the data
         // fits T's shape — return Ok(T). On failure, lift the
@@ -1631,6 +1655,67 @@ mod tests {
         assert!(
             !text.contains("form re-render failed"),
             "500 body leaked internal render-error detail: {text}"
+        );
+    }
+
+    // A form the extractor can validate. `roles` is a multi-value field:
+    // the extractor must hand `validate` the CSV-joined value of every
+    // repeated `roles=` key, not just the last one.
+    // `serde::Deserialize` only satisfies the extractor's trait bound;
+    // the extractor itself no longer deserializes the body into `T`.
+    #[derive(Debug, PartialEq, Eq, serde::Deserialize)]
+    struct MultiSelectForm {
+        roles: Vec<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl FormValidate for MultiSelectForm {
+        fn fields() -> Vec<Field> {
+            vec![Field::text("roles").optional()]
+        }
+
+        async fn validate(data: &HashMap<String, String>) -> Result<Self, ValidationErrors> {
+            // Mirrors how the MultiChoice / M2M runtime splits the joined
+            // value back into its members (`.split(',')`, empties dropped).
+            let roles = data
+                .get("roles")
+                .map(|raw| {
+                    raw.split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Ok(Self { roles })
+        }
+    }
+
+    #[tokio::test]
+    async fn form_extractor_keeps_every_value_of_a_repeated_key() {
+        use axum::extract::FromRequest;
+
+        // A multi-select posts the same key once per selected option.
+        // Parsing straight into a HashMap<String,String> would keep only
+        // "editor"; the extractor must preserve both as a CSV value.
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .header(
+                axum::http::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(axum::body::Body::from("roles=admin&roles=editor"))
+            .expect("build request");
+
+        let form = Form::<MultiSelectForm>::from_request(req, &())
+            .await
+            .expect("extractor succeeds");
+
+        let value = form.into_result().expect("valid");
+        assert_eq!(
+            value.roles,
+            vec!["admin".to_string(), "editor".to_string()],
+            "repeated urlencoded key lost values — only the last survived"
         );
     }
 

@@ -166,13 +166,18 @@ impl Identity {
     /// Parse the stringified [`user_id`](Self::user_id) back into the caller's
     /// primary-key type.
     ///
+    /// **Deprecated: use [`pk`](Self::pk).** `user_pk` and `pk` do the same
+    /// parse; they differ only in the error type. `user_pk` returns the bare
+    /// `T::Err`, which carries no context about *what* failed to parse, while
+    /// [`pk`](Self::pk) returns a structured [`IdentityPkError`] that names the
+    /// unparseable value and the target type. Two methods for one operation is
+    /// the confusion this collapses — `pk` is canonical; `user_pk` is retained
+    /// only so existing callers keep compiling and is slated for removal.
+    ///
     /// `Identity::user_id` is a `String` — the lowest common denominator across
-    /// `i64` / `String` / UUID user models. Rather than hand-roll
-    /// `identity.user_id.parse::<i64>().map_err(|_| /* 401 */)?` in every scoped
-    /// handler (the pattern a live consumer repeated ~8×), call
-    /// `identity.user_pk::<i64>()?`. Generic over any `T: FromStr`, so it works
-    /// for numeric, string, and UUID keys alike; a parse mismatch is returned
-    /// as `T::Err` so the caller owns the HTTP shape (usually a 401/400).
+    /// `i64` / `String` / UUID user models. Generic over any `T: FromStr`, so it
+    /// works for numeric, string, and UUID keys alike.
+    #[deprecated(note = "use `Identity::pk` for a structured `IdentityPkError`")]
     pub fn user_pk<T: std::str::FromStr>(&self) -> Result<T, T::Err> {
         self.user_id.parse()
     }
@@ -516,6 +521,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // exercising `user_pk` specifically; `pk` is the canonical replacement.
     fn user_pk_parses_the_stringified_pk_into_the_requested_type() {
         // i64 PK — the common case that consumers hand-parse today.
         let id = Identity::user(42);

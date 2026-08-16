@@ -1719,16 +1719,20 @@ impl AppBuilder {
         // every 404 regardless of origin and probes the alternate form
         // against a snapshot taken before the layer is applied (so the
         // probe can't recursively re-enter it).
+        //
+        // Only the 404 FALLBACK is wired here; the redirect layer itself is
+        // installed AFTER the framework middleware stack below (Phase 5.65)
+        // so the snapshot it probes INCLUDES that stack. Taking the snapshot
+        // here — before the stack was applied — meant a probe that matched a
+        // GET handler on the alternate form executed that handler OUTSIDE
+        // the global middleware (rate-limit / auth), bypassing it. Snapshotting
+        // after the stack routes the probe through the same middleware a real
+        // request pays, while still excluding the redirect layer itself (which
+        // is applied last) so recursion stays impossible.
         let need_not_found_fallback = self.not_found_template.is_some() || self.default_error_pages;
         if need_not_found_fallback || self.slash_redirect != crate::slash::SlashRedirect::Off {
             let fallback = crate::errors::not_found_fallback(self.not_found_template.clone());
             router = router.fallback(fallback);
-        }
-        if self.slash_redirect != crate::slash::SlashRedirect::Off {
-            let snapshot = router.clone();
-            router = router.layer(axum::middleware::from_fn(
-                crate::slash::slash_redirect_probe(snapshot, self.slash_redirect),
-            ));
         }
 
         // Phase 5.65 — framework middleware stack (feature #68). App-level
@@ -1744,6 +1748,20 @@ impl AppBuilder {
             middleware_stack.extend(plugin.middleware());
         }
         router = middleware_stack.apply(router);
+
+        // Slash-redirect layer (see the Phase 5.6 note above). Installed
+        // after the middleware stack so the snapshot it probes runs the
+        // alternate-form request through the global middleware rather than
+        // around it, and before the panic / compression / CORS / host layers
+        // so a probe never needs those outermost wrappers to decide a
+        // redirect. The snapshot excludes THIS layer (applied last), so a
+        // probe can't recursively re-enter the redirect logic.
+        if self.slash_redirect != crate::slash::SlashRedirect::Off {
+            let snapshot = router.clone();
+            router = router.layer(axum::middleware::from_fn(
+                crate::slash::slash_redirect_probe(snapshot, self.slash_redirect),
+            ));
+        }
 
         // Phase 5.66 — request-scoped routing context (DatabaseRouter
         // foundation). When a resolver is registered, wrap the whole
