@@ -259,16 +259,46 @@ async fn postgis_real_data_round_trip_and_spatial_queries() {
         "decoded geometry should be a Point"
     );
 
-    // Spatial query 1: facilities within ~0.6 degrees of central Nairobi.
+    let total = facilities.len();
+    // Spatial query 1: facilities within ~0.6 degrees of central Nairobi. A
+    // real filter must return a PROPER subset — some rows, but not all (the
+    // dataset spans the whole country), which proves it actually filters.
     let nairobi = "SRID=4326;POINT(36.8172 -1.2864)";
-    let near = Facility::objects()
+    let near_deg = Facility::objects()
         .filter(facility::LOCATION.dwithin(nairobi, 0.6))
         .count()
         .await
         .expect("dwithin count");
+    eprintln!("[postgis] within 0.6deg of Nairobi: {near_deg} / {total} facilities");
     assert!(
-        near > 0,
-        "ST_DWithin must find facilities near Nairobi; got {near}"
+        near_deg > 0 && (near_deg as usize) < total,
+        "ST_DWithin must return a proper subset near Nairobi; got {near_deg} of {total}"
+    );
+
+    // Spatial query 1b: the METRES semantics the REST `__dwithin` filter uses —
+    // `ST_DWithin(col::geography, point::geography, meters)`. Within 20 km of
+    // Nairobi should be MORE than within 5 km (monotonic), and both a subset.
+    let count_within_m = |meters: f64| {
+        let pool = pool.clone();
+        async move {
+            let sql = "SELECT count(*) FROM umbral_postgis_facility \
+                       WHERE ST_DWithin(location::geography, \
+                             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)";
+            sqlx::query_scalar::<_, i64>(sql)
+                .bind(36.8172_f64)
+                .bind(-1.2864_f64)
+                .bind(meters)
+                .fetch_one(&pool)
+                .await
+                .expect("dwithin meters")
+        }
+    };
+    let within_5km = count_within_m(5_000.0).await;
+    let within_20km = count_within_m(20_000.0).await;
+    eprintln!("[postgis] within 5km: {within_5km}, within 20km: {within_20km}, total: {total}");
+    assert!(
+        within_5km > 0 && within_5km <= within_20km && (within_20km as usize) < total,
+        "metres dwithin must be monotonic and a subset: 5km={within_5km} 20km={within_20km} total={total}"
     );
 
     // Spatial query 2: facilities whose Point intersects a specific county
