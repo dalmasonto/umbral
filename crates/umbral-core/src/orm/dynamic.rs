@@ -3098,6 +3098,23 @@ pub fn decode_to_string(
 
 /// Decode one Postgres cell to its template-friendly string form.
 ///
+/// Decode a Postgres text column, tolerating a value whose column is actually a
+/// NATIVE ENUM type (`CREATE TYPE ... AS ENUM`). umbral models a closed set as a
+/// `TEXT`-backed choices column, but a raw / un-migrated source DB stores it as a
+/// native enum; sqlx's checked `try_get::<String>` rejects the user-defined enum
+/// OID even though the wire value IS its label text. When the checked decode
+/// fails, retry with the unchecked path (which skips the type-compatibility
+/// check and decodes the label bytes) so the choices column reads its label. A
+/// genuine `TEXT` column always takes the checked path. Closes features #89b.
+fn pg_text_or_enum(row: &sqlx::postgres::PgRow, name: &str) -> Result<Option<String>, sqlx::Error> {
+    match row.try_get::<Option<String>, _>(name) {
+        Ok(v) => Ok(v),
+        // A native enum OID fails the compatibility check; its bytes are the
+        // label, so the unchecked decode reads it correctly.
+        Err(_) => row.try_get_unchecked::<Option<String>, _>(name),
+    }
+}
+
 /// Sibling of [`decode_to_string`] for the Postgres backend. Same
 /// dispatch table on `SqlType`; the only difference is the executor
 /// type (`PgRow` instead of `SqliteRow`) and a handful of types that
@@ -3137,7 +3154,7 @@ pub fn decode_pg_to_string(
                 .map_or(String::new(), |v| {
                     if v { "true" } else { "false" }.to_string()
                 }),
-            SqlType::Text => row.try_get::<Option<String>, _>(name)?.unwrap_or_default(),
+            SqlType::Text => pg_text_or_enum(row, name)?.unwrap_or_default(),
             SqlType::Date => row
                 .try_get::<Option<NaiveDate>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
@@ -3210,7 +3227,7 @@ pub fn decode_pg_to_string(
             "false"
         }
         .to_string(),
-        SqlType::Text => row.try_get::<String, _>(name)?,
+        SqlType::Text => pg_text_or_enum(row, name)?.unwrap_or_default(),
         SqlType::Date => row.try_get::<NaiveDate, _>(name)?.to_string(),
         SqlType::Time => row.try_get::<NaiveTime, _>(name)?.to_string(),
         SqlType::Timestamptz => row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339(),
@@ -3453,9 +3470,7 @@ pub fn decode_pg_to_json(
             SqlType::Boolean => row
                 .try_get::<Option<bool>, _>(name)?
                 .map_or(Value::Null, Value::from),
-            SqlType::Text => row
-                .try_get::<Option<String>, _>(name)?
-                .map_or(Value::Null, Value::from),
+            SqlType::Text => pg_text_or_enum(row, name)?.map_or(Value::Null, Value::from),
             SqlType::Date => row
                 .try_get::<Option<NaiveDate>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
@@ -3520,7 +3535,7 @@ pub fn decode_pg_to_json(
         SqlType::Real => Value::from(row.try_get::<f32, _>(name)? as f64),
         SqlType::Double => Value::from(row.try_get::<f64, _>(name)?),
         SqlType::Boolean => Value::from(row.try_get::<bool, _>(name)?),
-        SqlType::Text => Value::from(row.try_get::<String, _>(name)?),
+        SqlType::Text => pg_text_or_enum(row, name)?.map_or(Value::Null, Value::from),
         SqlType::Date => Value::from(row.try_get::<NaiveDate, _>(name)?.to_string()),
         SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
