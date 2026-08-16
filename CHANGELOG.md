@@ -103,62 +103,22 @@ data across, verified end to end against a real 32-table Prisma schema.
 - **Auth/sessions**: route session resolution through the store-aware helper so a
   surface can't silently read an unauthenticated session.
 
-## [0.0.11] - 2026-08-02
+## Previous releases
 
-Correctness and hardening pass (review_3): deduplicated authorization shapes across
-auth/permissions/realtime, storage and macro fixes, and documentation drift repairs.
-See per-crate `CHANGELOG.md` for the granular list.
+Full, themed notes for each prior round live in [`changelog/`](./changelog/), one
+file per version:
 
-## [0.0.10] - 2026-07-15
-
-Masked field encryption, the `umbral-oauth` plugin, and admin custom views.
-
-## [0.0.9] - 2026-07-14
-
-Plugin install-path verification across all built-in plugins.
-
-## [0.0.8] - 2026-07-13
-
-Release-automation and packaging fixes.
-
-## [0.0.7] - 2026-07-13
-
-Admin, REST, and ORM refinements.
-
-## [0.0.6] - 2026-07-07
-
-Iterative feature and fix batch.
-
-## [0.0.5] - 2026-07-06
-
-Iterative feature and fix batch.
-
-## [0.0.4] - 2026-07-01
-
-Iterative feature and fix batch.
-
-## [0.0.3] - 2026-06-29
-
-Early plugin and ORM groundwork.
-
-## [0.0.2] - 2026-06-26
-
-Early ORM and migration groundwork.
-
-## [0.0.1] - 2026-06-25
-
-First published release: the ORM, managed migrations, routing, and the plugin trait.
+- **[0.0.11](./changelog/0.0.11.md)** — 2026-08-02 — Plugin ergonomics & private media
+- **[0.0.10](./changelog/0.0.10.md)** — 2026-07-15 — Security-hardening sweep (review_3)
+- **[0.0.9](./changelog/0.0.9.md)** — 2026-07-14 — Testing ergonomics & admin dashboards
+- **[0.0.8](./changelog/0.0.8.md)** — 2026-07-13 — The GraphQL release
+- **[0.0.7](./changelog/0.0.7.md)** — 2026-07-13 — Typed client & data modeling
+- **[0.0.6](./changelog/0.0.6.md)** — 2026-07-08 — Data ergonomics & authorization
+- **[0.0.5](./changelog/0.0.5.md)** — 2026-07-05 — Security-hardening sweep + custom admin views
+- **[0.0.4](./changelog/0.0.4.md)** — 2026-06-30 — Hotfix: Postgres FK migration ordering
+- **[0.0.3](./changelog/0.0.3.md)** — 2026-06-29 — The auth release
+- **[0.0.2](./changelog/0.0.2.md)** — 2026-06-26 — Packaging & polish
+- **[0.0.1](./changelog/0.0.1.md)** — 2026-06-25 — First public release
 
 [Unreleased]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.12...HEAD
 [0.0.12]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.11...umbral-v0.0.12
-[0.0.11]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.10...umbral-v0.0.11
-[0.0.10]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.9...umbral-v0.0.10
-[0.0.9]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.8...umbral-v0.0.9
-[0.0.8]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.7...umbral-v0.0.8
-[0.0.7]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.6...umbral-v0.0.7
-[0.0.6]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.5...umbral-v0.0.6
-[0.0.5]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.3...umbral-v0.0.5
-[0.0.4]: https://github.com/dalmasonto/umbral/releases/tag/v0.0.4
-[0.0.3]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.2...umbral-v0.0.3
-[0.0.2]: https://github.com/dalmasonto/umbral/compare/umbral-v0.0.1...umbral-v0.0.2
-[0.0.1]: https://github.com/dalmasonto/umbral/releases/tag/umbral-v0.0.1

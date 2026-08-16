@@ -6,6 +6,7 @@ Versions follow [Semantic Versioning](https://semver.org/); the format is inspir
 
 | Version | Date | Theme |
 |---|---|---|
+| [0.0.12](./0.0.12.md) | 2026-08-17 | Database porting - a full `inspectdb → migrate → transferdata` pipeline (introspect an existing database into models, copy the data PK-preserving), plus the field types a foreign schema needs: `NaiveDateTime`, a foreign key that is a primary key, PostGIS geometry, and arbitrary-precision decimals |
 | [0.0.11](./0.0.11.md) | 2026-08-02 | Plugin ergonomics & private media - model/task autodiscovery, app-wide authentication, owner-only + signed-URL media gates, a gated proxy for S3/custom backends (closes gaps4 #32–#58) |
 | [0.0.10](./0.0.10.md) | 2026-07-15 | Security-hardening sweep (review_3) - row-level GraphQL mutations, per-request context across SSE/WS, reverse-FK windowing, analytics path scrubber, `umbral startcommand` |
 | [0.0.9](./0.0.9.md) | 2026-07-14 | Testing ergonomics & admin dashboards - test schema derived from the models (205 suites), draggable dashboards, CSV export, widget filters, UUID-PK fixes |
@@ -20,6 +21,6 @@ Versions follow [Semantic Versioning](https://semver.org/); the format is inspir
 
 ## Upcoming
 
-`0.0.12` is next. Add its notes as `changelog/0.0.12.md` when it ships. On deck: template traversal of related objects (forward FK, reverse FK, reverse O2O) in the auth `user` context, so `{{ user.profile.bio }}` resolves in a template.
+`0.0.13` is next. Add its notes as `changelog/0.0.13.md` when it ships.
 
 > Longer-term, these notes are intended to be served from the app (tracked in the database) so releases can be browsed in-product; the files here are the source of truth until then.
