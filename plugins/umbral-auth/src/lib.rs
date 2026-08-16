@@ -934,7 +934,10 @@ where
     }
 
     fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>> {
-        vec![Box::new(CreateSuperuserCommand)]
+        vec![
+            Box::new(CreateSuperuserCommand),
+            Box::new(ResetForeignPasswordsCommand),
+        ]
     }
 
     fn routes(&self) -> umbral::web::Router {
@@ -1633,6 +1636,60 @@ where
 }
 
 // =========================================================================
+// Porting: neutralize foreign password hashes
+// =========================================================================
+
+/// Outcome of [`reset_unverifiable_passwords`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PasswordAudit {
+    /// Users scanned.
+    pub total: usize,
+    /// Users whose hash umbral-auth couldn't verify and so was reset.
+    pub reset: usize,
+}
+
+/// Replace every stored password hash that umbral-auth **cannot verify** with a
+/// fresh [`random_password_hash`]. This is the fix for the classic port
+/// caveat: a database migrated from Django (or any other stack) carries hashes
+/// in a foreign format — `pbkdf2_sha256$…`, `argon2$…` (Django's own argon2
+/// framing differs from the PHC string), a bcrypt `$2b$…` — none of which parse
+/// as umbral's argon2 PHC hash. Left as-is, [`verify_password`] *errors* on
+/// them (it can't even parse the hash), so those users can neither log in nor
+/// get a clean rejection.
+///
+/// After neutralization each affected account holds a real, valid argon2 hash
+/// of an unknown random password, so a login attempt cleanly returns `false`
+/// and the account recovers through the **email password-reset flow**
+/// ([`start_password_reset`]) — the documented re-hash path. A hash umbral
+/// already accepts is left untouched, so this is idempotent and safe to re-run.
+///
+/// Targets the built-in [`AuthUser`] — the common port target (inspectdb maps
+/// Django's `auth_user` onto it), matching `createsuperuser`'s scope. A custom
+/// user model runs the same check itself via [`verify_password`] +
+/// [`random_password_hash`]. Loads users to check them — intended as a one-shot
+/// post-port step, not a hot path.
+pub async fn reset_unverifiable_passwords() -> Result<PasswordAudit, AuthError> {
+    let users = umbral::orm::Manager::<AuthUser>::default().fetch().await?;
+    let total = users.len();
+    let mut reset = 0;
+    for user in &users {
+        // The authoritative test: can umbral's argon2 even PARSE this hash?
+        if PasswordHash::new(&user.password_hash).is_ok() {
+            continue;
+        }
+        let hash = random_password_hash().await?;
+        let mut patch = serde_json::Map::new();
+        patch.insert("password_hash".to_string(), serde_json::Value::String(hash));
+        umbral::orm::Manager::<AuthUser>::default()
+            .filter(umbral::orm::Predicate::<AuthUser>::col_eq("id", user.id))
+            .update_values(patch)
+            .await?;
+        reset += 1;
+    }
+    Ok(PasswordAudit { total, reset })
+}
+
+// =========================================================================
 // Management command: createsuperuser
 // =========================================================================
 
@@ -1708,6 +1765,44 @@ impl umbral::cli::PluginCommand for CreateSuperuserCommand {
             "Created superuser `{}` (id = {}) - is_staff = true, is_superuser = true",
             user.username, user.id,
         );
+        Ok(())
+    }
+}
+
+/// `resetforeignpasswords` — the post-port fixer for the password-hash caveat.
+/// Neutralizes every stored hash umbral-auth can't verify (see
+/// [`reset_unverifiable_passwords`]) and tells the operator those users must
+/// reset. Dispatched via `cargo run -- resetforeignpasswords`.
+pub struct ResetForeignPasswordsCommand;
+
+#[async_trait::async_trait]
+impl umbral::cli::PluginCommand for ResetForeignPasswordsCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("resetforeignpasswords").about(
+            "Neutralize user password hashes umbral-auth can't verify (e.g. after \
+             porting from Django); affected users must reset via password-forgot",
+        )
+    }
+
+    async fn run(&self, _matches: &clap::ArgMatches) -> Result<(), umbral::cli::CliError> {
+        let audit = reset_unverifiable_passwords()
+            .await
+            .map_err(|e| -> umbral::cli::CliError { Box::new(e) })?;
+        if audit.reset == 0 {
+            println!(
+                "Checked {} user(s); every password hash is umbral-verifiable. Nothing to do.",
+                audit.total,
+            );
+        } else {
+            println!(
+                "Neutralized {} of {} user password hash(es) umbral-auth could not verify.",
+                audit.reset, audit.total,
+            );
+            println!(
+                "Those users must set a new password via the password-forgot / reset flow \
+                 before they can log in.",
+            );
+        }
         Ok(())
     }
 }

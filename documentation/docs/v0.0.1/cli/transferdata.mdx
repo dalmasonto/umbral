@@ -88,6 +88,25 @@ cargo run -- transferdata --from postgres://user:pass@host/django_db \
   --to ./umbral.sqlite3 --map django
 ```
 
+<Callout type="warning">
+**Passwords need one extra step.** Django's password hashes
+(`pbkdf2_sha256$…`, `argon2$…`) are in a format umbral-auth can't verify — left
+as-is, those users can't log in *and* can't get a clean rejection. After the
+transfer, run `resetforeignpasswords` (from umbral-auth) to replace every
+unverifiable hash with a valid argon2 hash of an unknown password. Those
+accounts then recover through the normal password-reset (`password-forgot`)
+flow.
+
+```bash
+cargo run -- resetforeignpasswords
+# -> Neutralized 1,204 of 1,210 user password hash(es) umbral-auth could not verify.
+#    Those users must set a new password via the password-forgot / reset flow …
+```
+
+It's idempotent (umbral-native hashes are left untouched), so it's safe to
+re-run. See [`reset_unverifiable_passwords`](/docs/v0.0.1/auth) for the API.
+</Callout>
+
 ## Going faster: `--workers`
 
 Tables that don't depend on each other copy concurrently. `transferdata` groups
