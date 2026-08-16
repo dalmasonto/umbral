@@ -212,7 +212,7 @@ enum Command {
     ///
     /// A Prisma/Postgres schema, undoing Prisma's conventions — `umbral inspectdb postgres://... --framework prisma --output plugins/imported`
     ///
-    /// Note: running `inspectdb` (and every other command) requires an umbral project — run it from your project directory (or `cargo run -- inspectdb ...`), not from the umbral framework repo itself.
+    /// Note: running `inspectdb` (and every other command) requires an umbral project — run it from your project directory (or `cargo run -- inspectdb ...`).
     Inspectdb {
         /// The source database to introspect: a `sqlite://` / `postgres://`
         /// URL, or a path to a SQLite file (`./db.sqlite3`). When omitted,
