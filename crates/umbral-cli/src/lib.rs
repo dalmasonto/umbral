@@ -248,6 +248,15 @@ enum Command {
         /// respected among them.
         #[arg(long)]
         only: Option<String>,
+        /// Translate a foreign-shaped source's column names to the umbral
+        /// target's. `django` reads a Django DB (FK `<field>_id`, junction
+        /// `<model>_id`); omit for umbral->umbral.
+        #[arg(long)]
+        map: Option<String>,
+        /// Copy this many independent tables concurrently (per FK level). `1`
+        /// is fully sequential.
+        #[arg(long, default_value_t = 1)]
+        workers: usize,
         /// Report the copy order + source row counts without writing anything.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
@@ -539,8 +548,10 @@ pub async fn dispatch_with_argv(
             to,
             batch,
             only,
+            map,
+            workers,
             dry_run,
-        } => transferdata(from, to, batch, only, dry_run).await,
+        } => transferdata(from, to, batch, only, map, workers, dry_run).await,
         Command::Importcsv { table, input } => importcsv(table, input).await,
         Command::Dev { watch, run_args } => dev(watch, run_args).await,
         Command::Maskkeygen => maskkeygen(),
@@ -1265,13 +1276,21 @@ fn normalize_target_db(input: &str) -> String {
     format!("sqlite://{abs}?mode=rwc")
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn transferdata(
     from: String,
     to: String,
     batch: u64,
     only: Option<String>,
+    map: Option<String>,
+    workers: usize,
     dry_run: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let map = match map.as_deref() {
+        None => umbral::transfer::TransferMap::None,
+        Some(name) => umbral::transfer::TransferMap::parse(name)
+            .ok_or_else(|| format!("unknown --map `{name}`; supported: django (or omit)"))?,
+    };
     let source = umbral::db::connect(&normalize_source_db(&from)).await?;
     let target = umbral::db::connect(&normalize_target_db(&to)).await?;
     let models = umbral::migrate::registered_models();
@@ -1283,6 +1302,8 @@ async fn transferdata(
                 .filter(|t| !t.is_empty())
                 .collect()
         }),
+        map,
+        workers,
         dry_run,
     };
     let report = umbral::transfer::transfer(&source, &target, models, &opts).await?;

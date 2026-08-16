@@ -63,6 +63,8 @@ link, run the identical command again, and it continues where it stopped.
 | `--to <url>` | — | Target database (URL or SQLite file path). |
 | `--batch <n>` | `1000` | Rows per page / per target transaction. |
 | `--only <a,b>` | all | Limit to these tables (FK order still respected). |
+| `--map <framework>` | none | Translate a foreign-shaped source's column names (see below). |
+| `--workers <n>` | `1` | Copy this many independent tables concurrently (per FK level). |
 | `--dry-run` | off | Print the copy order + source row counts; write nothing. |
 
 ```bash
@@ -70,11 +72,38 @@ link, run the identical command again, and it continues where it stopped.
 cargo run -- transferdata --from ./old.sqlite3 --to ./new.sqlite3 --dry-run
 ```
 
+## Porting from Django: `--map django`
+
+`transferdata` normally assumes both ends share the umbral schema. `--map django`
+lets the **source** be the original Django database — closing the loop after
+[`inspectdb`](/docs/v0.0.1/migrations/inspectdb) generated your models. It undoes
+Django's column conventions in reverse: an FK column `author_id` on the source
+maps to the umbral field `author`, and an M2M through table's `community_id` /
+`software_id` columns map to umbral's `parent_id` / `child_id`. Table names are
+unchanged (inspectdb keeps them), so only the FK and junction columns translate.
+
+```bash
+# Schema first (inspectdb -> migrate), then the data straight from Django:
+cargo run -- transferdata --from postgres://user:pass@host/django_db \
+  --to ./umbral.sqlite3 --map django
+```
+
+## Going faster: `--workers`
+
+Tables that don't depend on each other copy concurrently. `transferdata` groups
+tables into FK **levels** (a level's tables reference only earlier levels), and
+`--workers <n>` runs up to `n` tables from the same level at once — parents still
+finish before children. This mostly helps a Postgres target (SQLite serializes
+writers); junctions run concurrently after all models.
+
+```bash
+cargo run -- transferdata --from ./old.sqlite3 --to postgres://…/app --workers 8
+```
+
 ## Not yet
 
-Registered models (single-column PK), their M2M junction rows, and cross-backend
-moves (SQLite ↔ Postgres) are covered. Still on the list: parallel per-table
-workers, a `--map` layer for reading a foreign-shaped source (reusing
-`inspectdb`'s rename map), and circular-FK tables (mutually-referential pairs
-need deferred-constraint handling). The design lives in
-`docs/decisions/2026-08-16-data-transfer-engine.md`.
+Registered models (single-column PK), their M2M junction rows, cross-backend
+moves (SQLite ↔ Postgres), Django-source mapping (`--map django`), and parallel
+workers are covered. Still on the list: circular-FK tables (mutually-referential
+pairs need deferred-constraint handling) and richer `--map` targets beyond
+Django. The design lives in `docs/decisions/2026-08-16-data-transfer-engine.md`.

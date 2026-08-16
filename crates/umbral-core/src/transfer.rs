@@ -23,6 +23,31 @@ use crate::orm::dynamic::DynQuerySet;
 /// ledger: created via the schema-DDL exception, never modelled.
 const STATE_TABLE: &str = "umbral_transfer_state";
 
+/// How to translate a *foreign-shaped* source's column names to the umbral
+/// target's. The source and target tables share a name (inspectdb targets the
+/// same table); only FK / junction columns differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransferMap {
+    /// Source and target share the umbral schema — no translation (env1->env2).
+    #[default]
+    None,
+    /// The source is the original Django DB: an FK column is `<field>_id`
+    /// (umbral stripped it to `<field>`), and an M2M junction's FK columns are
+    /// `<model>_id` (umbral uses `parent_id` / `child_id`). Mirrors
+    /// `inspectdb --framework django`, in reverse. Table names are unchanged.
+    Django,
+}
+
+impl TransferMap {
+    pub fn parse(s: &str) -> Option<TransferMap> {
+        match s.to_ascii_lowercase().as_str() {
+            "django" => Some(TransferMap::Django),
+            "none" | "" => Some(TransferMap::None),
+            _ => None,
+        }
+    }
+}
+
 /// Knobs for a transfer run.
 #[derive(Debug, Clone)]
 pub struct TransferOptions {
@@ -33,6 +58,11 @@ pub struct TransferOptions {
     pub only: Option<Vec<String>>,
     /// Report the copy order + source row counts without writing anything.
     pub dry_run: bool,
+    /// Translate a foreign-shaped source's column names (see [`TransferMap`]).
+    pub map: TransferMap,
+    /// Copy independent tables concurrently, up to this many at once (per FK
+    /// level). `1` is fully sequential.
+    pub workers: usize,
 }
 
 impl Default for TransferOptions {
@@ -41,6 +71,8 @@ impl Default for TransferOptions {
             batch_size: 1000,
             only: None,
             dry_run: false,
+            map: TransferMap::None,
+            workers: 1,
         }
     }
 }
@@ -89,8 +121,15 @@ impl From<sqlx::Error> for TransferError {
 /// be fully ordered — the remaining nodes are appended in name order so the
 /// run still makes progress (their cross-refs need phase-2 deferred handling).
 pub fn fk_topo_order(models: Vec<ModelMeta>) -> Vec<ModelMeta> {
+    fk_topo_levels(models).into_iter().flatten().collect()
+}
+
+/// Like [`fk_topo_order`], but grouped into dependency LEVELS: every table in a
+/// level depends only on tables in earlier levels, so a level's tables are
+/// mutually independent and safe to copy concurrently. Parents-before-children
+/// holds across levels. A cycle's leftover tables form a final level.
+pub fn fk_topo_levels(models: Vec<ModelMeta>) -> Vec<Vec<ModelMeta>> {
     let tables: HashSet<String> = models.iter().map(|m| m.table.clone()).collect();
-    // deps[table] = set of parent tables it FKs to (excluding self).
     let mut deps: HashMap<String, HashSet<String>> = HashMap::new();
     for m in &models {
         let mut d = HashSet::new();
@@ -106,9 +145,8 @@ pub fn fk_topo_order(models: Vec<ModelMeta>) -> Vec<ModelMeta> {
     let mut by_table: HashMap<String, ModelMeta> =
         models.into_iter().map(|m| (m.table.clone(), m)).collect();
 
-    let mut ordered: Vec<ModelMeta> = Vec::with_capacity(by_table.len());
+    let mut levels: Vec<Vec<ModelMeta>> = Vec::new();
     let mut placed: HashSet<String> = HashSet::new();
-    // Repeatedly emit every table whose deps are all placed, in name order.
     loop {
         let mut ready: Vec<String> = by_table
             .keys()
@@ -120,16 +158,19 @@ pub fn fk_topo_order(models: Vec<ModelMeta>) -> Vec<ModelMeta> {
             break;
         }
         ready.sort();
+        let level: Vec<ModelMeta> = ready.iter().map(|t| by_table.remove(t).unwrap()).collect();
         for t in ready {
-            ordered.push(by_table.remove(&t).unwrap());
             placed.insert(t);
         }
+        levels.push(level);
     }
-    // Any leftover (cycle) — append in name order so the run still processes them.
-    let mut leftover: Vec<ModelMeta> = by_table.into_values().collect();
-    leftover.sort_by(|a, b| a.table.cmp(&b.table));
-    ordered.extend(leftover);
-    ordered
+    // Any leftover (cycle) — one final level, name-ordered, so the run proceeds.
+    if !by_table.is_empty() {
+        let mut leftover: Vec<ModelMeta> = by_table.into_values().collect();
+        leftover.sort_by(|a, b| a.table.cmp(&b.table));
+        levels.push(leftover);
+    }
+    levels
 }
 
 /// One many-to-many junction table to copy — an umbral-auto-generated
@@ -141,12 +182,18 @@ struct Junction {
     table: String,
     parent_ty: SqlType,
     child_ty: SqlType,
+    /// Source FK column names. On the umbral schema these are `parent_id` /
+    /// `child_id`; under `TransferMap::Django` the source (Django) junction
+    /// names them `<model>_id`, e.g. `community_id` / `software_id`.
+    src_parent_col: String,
+    src_child_col: String,
 }
 
 /// Enumerate every M2M junction the registered models declare. `parent_ty` is
 /// the owner's PK type; `child_ty` the target's (resolved from the model set,
-/// defaulting to `BigInt` when the target isn't registered here).
-fn collect_junctions(models: &[ModelMeta]) -> Vec<Junction> {
+/// defaulting to `BigInt` when the target isn't registered here). `map` sets the
+/// source-side column names to read from.
+fn collect_junctions(models: &[ModelMeta], map: TransferMap) -> Vec<Junction> {
     let pk_ty = |table: &str| -> SqlType {
         models
             .iter()
@@ -159,14 +206,71 @@ fn collect_junctions(models: &[ModelMeta]) -> Vec<Junction> {
     for m in models {
         let parent_ty = m.pk_column().map(|c| c.ty).unwrap_or(SqlType::BigInt);
         for rel in &m.m2m_relations {
+            let (src_parent_col, src_child_col) = match map {
+                TransferMap::None => ("parent_id".to_string(), "child_id".to_string()),
+                // Django's auto through table names FK columns after the models.
+                TransferMap::Django => (
+                    format!("{}_id", m.name.to_ascii_lowercase()),
+                    format!("{}_id", rel.target_name.to_ascii_lowercase()),
+                ),
+            };
             out.push(Junction {
                 table: format!("{}_{}", m.table, rel.field_name),
                 parent_ty,
                 child_ty: pk_ty(&rel.target_table),
+                src_parent_col,
+                src_child_col,
             });
         }
     }
     out
+}
+
+/// Copy one junction's `(parent_id, child_id)` rows, keyset-paginated on the
+/// composite key, translating source column names to the umbral `parent_id` /
+/// `child_id` on write. Self-contained (own per-batch checkpoint + done marker)
+/// so junctions can run concurrently.
+async fn copy_one_junction(
+    source: &DbPool,
+    target: &DbPool,
+    jn: &Junction,
+    start_last: Option<(serde_json::Value, serde_json::Value)>,
+    batch: u64,
+) -> Result<u64, TransferError> {
+    let mut last = start_last;
+    let mut copied: u64 = 0;
+    loop {
+        let rows = read_junction_batch(source, jn, last.as_ref(), batch).await?;
+        if rows.is_empty() {
+            break;
+        }
+        let batch_len = rows.len();
+        let new_last = rows.last().cloned();
+
+        let mut tx = begin_on(target).await?;
+        for (p, c) in &rows {
+            insert_junction_in_tx(&mut tx, jn, p, c).await?;
+        }
+        let checkpoint = new_last
+            .as_ref()
+            .map(|(p, c)| serde_json::Value::Array(vec![p.clone(), c.clone()]));
+        upsert_state_in_tx(&mut tx, &jn.table, checkpoint.as_ref(), false).await?;
+        tx.commit().await?;
+
+        copied += batch_len as u64;
+        last = new_last;
+        if batch_len < batch as usize {
+            break;
+        }
+    }
+
+    let checkpoint = last
+        .as_ref()
+        .map(|(p, c)| serde_json::Value::Array(vec![p.clone(), c.clone()]));
+    let mut tx = begin_on(target).await?;
+    upsert_state_in_tx(&mut tx, &jn.table, checkpoint.as_ref(), true).await?;
+    tx.commit().await?;
+    Ok(copied)
 }
 
 /// How a junction id column reads and binds. Junction ids are only ever PK
@@ -226,6 +330,108 @@ fn pk_gt_condition(pk_col: &str, last: &serde_json::Value) -> sea_query::SimpleE
     }
 }
 
+/// Build the SOURCE-shaped meta (field names swapped to the source's column
+/// names under a map) plus the `source_col -> target_field` rename that undoes
+/// it after reading. Under [`TransferMap::None`] this is the meta unchanged and
+/// an empty rename.
+fn source_meta_for(meta: &ModelMeta, map: TransferMap) -> (ModelMeta, HashMap<String, String>) {
+    let mut rename = HashMap::new();
+    if map == TransferMap::None {
+        return (meta.clone(), rename);
+    }
+    // Django: an FK field `author` reads from the source column `author_id`
+    // (umbral stripped the `_id`). A field that already ends in `_id` is left
+    // alone.
+    let mut src = meta.clone();
+    for col in &mut src.fields {
+        if col.fk_target.is_some() && !col.name.ends_with("_id") {
+            let source_col = format!("{}_id", col.name);
+            rename.insert(source_col.clone(), col.name.clone());
+            col.name = source_col;
+        }
+    }
+    (src, rename)
+}
+
+/// Rename a row's keys from source columns to target fields (identity when the
+/// map is empty).
+fn apply_key_rename(
+    row: &serde_json::Map<String, serde_json::Value>,
+    rename: &HashMap<String, String>,
+) -> serde_json::Map<String, serde_json::Value> {
+    if rename.is_empty() {
+        return row.clone();
+    }
+    row.iter()
+        .map(|(k, v)| {
+            (
+                rename.get(k).cloned().unwrap_or_else(|| k.clone()),
+                v.clone(),
+            )
+        })
+        .collect()
+}
+
+/// Copy one model's rows, keyset-paginated, translating source columns to target
+/// fields per `key_rename`. Each batch's inserts + its checkpoint commit in one
+/// target transaction; on completion the table is marked done and its sequence
+/// reset. Self-contained so it can run concurrently with sibling tables.
+#[allow(clippy::too_many_arguments)]
+async fn copy_one_model(
+    source: &DbPool,
+    target: &DbPool,
+    read_meta: &ModelMeta,
+    write_meta: &ModelMeta,
+    key_rename: &HashMap<String, String>,
+    pk_col: &str,
+    start_last: Option<serde_json::Value>,
+    batch: u64,
+) -> Result<u64, TransferError> {
+    let mut last = start_last;
+    let mut copied: u64 = 0;
+    loop {
+        let mut qs = DynQuerySet::for_meta(read_meta).unredacted_for_backup();
+        if let Some(l) = &last {
+            qs = qs.filter_condition(sea_query::Condition::all().add(pk_gt_condition(pk_col, l)));
+        }
+        let rows = qs
+            .order_by_col(pk_col, false)
+            .limit(batch)
+            .fetch_as_json_on(source)
+            .await
+            .map_err(|e| TransferError::Read(e.to_string()))?;
+        if rows.is_empty() {
+            break;
+        }
+        let batch_len = rows.len();
+        let new_last = rows.last().and_then(|r| r.get(pk_col)).cloned();
+
+        let mut tx = begin_on(target).await?;
+        for row in &rows {
+            let mapped = apply_key_rename(row, key_rename);
+            DynQuerySet::for_meta(write_meta)
+                .presealed()
+                .insert_json_in_tx(&mapped, &mut tx)
+                .await
+                .map_err(|e| TransferError::Write(e.to_string()))?;
+        }
+        upsert_state_in_tx(&mut tx, &write_meta.table, new_last.as_ref(), false).await?;
+        tx.commit().await?;
+
+        copied += batch_len as u64;
+        last = new_last;
+        if batch_len < batch as usize {
+            break;
+        }
+    }
+
+    let mut tx = begin_on(target).await?;
+    upsert_state_in_tx(&mut tx, &write_meta.table, last.as_ref(), true).await?;
+    tx.commit().await?;
+    reset_sequence(target, &write_meta.table, pk_col).await?;
+    Ok(copied)
+}
+
 /// Copy every (selected) registered model from `source` to `target`, resumably.
 pub async fn transfer(
     source: &DbPool,
@@ -233,150 +439,106 @@ pub async fn transfer(
     models: Vec<ModelMeta>,
     opts: &TransferOptions,
 ) -> Result<TransferReport, TransferError> {
-    let ordered = fk_topo_order(models);
+    use futures_util::stream::{StreamExt, TryStreamExt};
+
+    let levels = fk_topo_levels(models);
+    let flat: Vec<ModelMeta> = levels.iter().flatten().cloned().collect();
     let only: Option<HashSet<String>> = opts.only.as_ref().map(|v| v.iter().cloned().collect());
-
-    if !opts.dry_run {
-        ensure_state_table(target).await?;
-    }
-    let mut state = if opts.dry_run {
-        HashMap::new()
-    } else {
-        read_state(target).await?
-    };
-
+    let excluded = |t: &str| only.as_ref().is_some_and(|s| !s.contains(t));
+    let workers = opts.workers.max(1);
     let mut report = TransferReport::default();
-    for meta in &ordered {
-        if only.as_ref().is_some_and(|s| !s.contains(&meta.table)) {
-            continue;
-        }
-        let pk_col = meta
-            .pk_column()
-            .ok_or_else(|| TransferError::NoPrimaryKey(meta.table.clone()))?
-            .name
-            .clone();
 
-        if opts.dry_run {
+    // Dry run: count rows in dependency order, no writes, no state table.
+    if opts.dry_run {
+        for meta in &flat {
+            if excluded(&meta.table) {
+                continue;
+            }
             let n = count_rows(source, &meta.table).await?;
             report.per_table.push((meta.table.clone(), n));
             report.rows += n;
-            continue;
         }
-
-        let entry = state.get(&meta.table);
-        if entry.is_some_and(|(_, done)| *done) {
-            continue; // already finished on a previous run
-        }
-        let mut last: Option<serde_json::Value> = entry.and_then(|(pk, _)| pk.clone());
-
-        let mut copied: u64 = 0;
-        loop {
-            let mut qs = DynQuerySet::for_meta(meta).unredacted_for_backup();
-            if let Some(last) = &last {
-                qs = qs.filter_condition(
-                    sea_query::Condition::all().add(pk_gt_condition(&pk_col, last)),
-                );
+        for jn in collect_junctions(&flat, opts.map) {
+            if excluded(&jn.table) {
+                continue;
             }
-            let rows = qs
-                .order_by_col(&pk_col, false)
-                .limit(opts.batch_size)
-                .fetch_as_json_on(source)
-                .await
-                .map_err(|e| TransferError::Read(e.to_string()))?;
-            if rows.is_empty() {
-                break;
-            }
-            let batch_len = rows.len();
-            let new_last = rows.last().and_then(|r| r.get(&pk_col)).cloned();
-
-            // Inserts + checkpoint bump commit together: a crash rolls back both.
-            let mut tx = begin_on(target).await?;
-            for row in &rows {
-                DynQuerySet::for_meta(meta)
-                    .presealed()
-                    .insert_json_in_tx(row, &mut tx)
-                    .await
-                    .map_err(|e| TransferError::Write(e.to_string()))?;
-            }
-            upsert_state_in_tx(&mut tx, &meta.table, new_last.as_ref(), false).await?;
-            tx.commit().await?;
-
-            copied += batch_len as u64;
-            last = new_last;
-            if batch_len < opts.batch_size as usize {
-                break; // short page => source exhausted
-            }
-        }
-
-        // Table done: record it + clear the autoincrement cursor past the copied ids.
-        let mut tx = begin_on(target).await?;
-        upsert_state_in_tx(&mut tx, &meta.table, last.as_ref(), true).await?;
-        tx.commit().await?;
-        reset_sequence(target, &meta.table, &pk_col).await?;
-
-        state.insert(meta.table.clone(), (last, true));
-        report.per_table.push((meta.table.clone(), copied));
-        report.rows += copied;
-    }
-
-    // M2M junction tables, copied AFTER every model so both endpoints exist on
-    // the target. Composite `(parent_id, child_id)` PK makes the copy naturally
-    // idempotent (`ON CONFLICT DO NOTHING`), belt-and-suspenders with the same
-    // per-batch transactional checkpoint.
-    for jn in collect_junctions(&ordered) {
-        if only.as_ref().is_some_and(|s| !s.contains(&jn.table)) {
-            continue;
-        }
-        if opts.dry_run {
             let n = count_rows(source, &jn.table).await?;
             report.per_table.push((jn.table.clone(), n));
             report.rows += n;
-            continue;
         }
-        if state.get(&jn.table).is_some_and(|(_, done)| *done) {
-            continue;
-        }
-        let mut last: Option<(serde_json::Value, serde_json::Value)> = state
-            .get(&jn.table)
-            .and_then(|(pk, _)| pk.clone())
-            .and_then(decode_pair);
-
-        let mut copied: u64 = 0;
-        loop {
-            let rows = read_junction_batch(source, &jn, last.as_ref(), opts.batch_size).await?;
-            if rows.is_empty() {
-                break;
-            }
-            let batch_len = rows.len();
-            let new_last = rows.last().cloned();
-
-            let mut tx = begin_on(target).await?;
-            for (p, c) in &rows {
-                insert_junction_in_tx(&mut tx, &jn, p, c).await?;
-            }
-            let checkpoint = new_last
-                .as_ref()
-                .map(|(p, c)| serde_json::Value::Array(vec![p.clone(), c.clone()]));
-            upsert_state_in_tx(&mut tx, &jn.table, checkpoint.as_ref(), false).await?;
-            tx.commit().await?;
-
-            copied += batch_len as u64;
-            last = new_last;
-            if batch_len < opts.batch_size as usize {
-                break;
-            }
-        }
-
-        let checkpoint = last
-            .as_ref()
-            .map(|(p, c)| serde_json::Value::Array(vec![p.clone(), c.clone()]));
-        let mut tx = begin_on(target).await?;
-        upsert_state_in_tx(&mut tx, &jn.table, checkpoint.as_ref(), true).await?;
-        tx.commit().await?;
-        state.insert(jn.table.clone(), (checkpoint, true));
-        report.per_table.push((jn.table.clone(), copied));
-        report.rows += copied;
+        return Ok(report);
     }
+
+    ensure_state_table(target).await?;
+    let state = read_state(target).await?;
+    let done = |t: &str| state.get(t).is_some_and(|(_, d)| *d);
+
+    // Models, one FK level at a time; the tables WITHIN a level are mutually
+    // independent, so up to `workers` of them copy concurrently. Each
+    // `copy_one_model` owns its transactions + checkpoint, so parallel tables
+    // never share mutable state.
+    for level in &levels {
+        let tasks = level
+            .iter()
+            .filter(|m| !excluded(&m.table) && !done(&m.table))
+            .map(|meta| {
+                let (read_meta, key_rename) = source_meta_for(meta, opts.map);
+                let start_last = state.get(&meta.table).and_then(|(pk, _)| pk.clone());
+                async move {
+                    let pk_col = meta
+                        .pk_column()
+                        .ok_or_else(|| TransferError::NoPrimaryKey(meta.table.clone()))?
+                        .name
+                        .clone();
+                    let copied = copy_one_model(
+                        source,
+                        target,
+                        &read_meta,
+                        meta,
+                        &key_rename,
+                        &pk_col,
+                        start_last,
+                        opts.batch_size,
+                    )
+                    .await?;
+                    Ok::<_, TransferError>((meta.table.clone(), copied))
+                }
+            });
+        let results: Vec<(String, u64)> = futures_util::stream::iter(tasks)
+            .buffer_unordered(workers)
+            .try_collect()
+            .await?;
+        for (t, c) in results {
+            report.per_table.push((t, c));
+            report.rows += c;
+        }
+    }
+
+    // Junctions after every model (both endpoints now exist on the target) —
+    // all independent of each other, so they run concurrently too.
+    let junctions = collect_junctions(&flat, opts.map);
+    let jtasks = junctions
+        .iter()
+        .filter(|jn| !excluded(&jn.table) && !done(&jn.table))
+        .map(|jn| {
+            let start = state
+                .get(&jn.table)
+                .and_then(|(pk, _)| pk.clone())
+                .and_then(decode_pair);
+            async move {
+                let copied = copy_one_junction(source, target, jn, start, opts.batch_size).await?;
+                Ok::<_, TransferError>((jn.table.clone(), copied))
+            }
+        });
+    let jresults: Vec<(String, u64)> = futures_util::stream::iter(jtasks)
+        .buffer_unordered(workers)
+        .try_collect()
+        .await?;
+    for (t, c) in jresults {
+        report.per_table.push((t, c));
+        report.rows += c;
+    }
+
     Ok(report)
 }
 
@@ -506,17 +668,22 @@ async fn read_junction_batch(
     limit: u64,
 ) -> Result<Vec<(serde_json::Value, serde_json::Value)>, TransferError> {
     let jt = jn.table.replace('"', "\"\"");
+    // Source-side column names (umbral `parent_id`/`child_id`, or Django's
+    // `<model>_id` under a map). The read is by position, so the output is
+    // always `(parent, child)` regardless of the source names.
+    let pcol = jn.src_parent_col.replace('"', "\"\"");
+    let ccol = jn.src_child_col.replace('"', "\"\"");
     let mut out = Vec::new();
     match source {
         DbPool::Sqlite(pool) => {
             let where_sql = if last.is_some() {
-                "WHERE (parent_id, child_id) > (?, ?)"
+                format!("WHERE (\"{pcol}\", \"{ccol}\") > (?, ?)")
             } else {
-                ""
+                String::new()
             };
             let sql = format!(
-                "SELECT parent_id, child_id FROM \"{jt}\" {where_sql} \
-                 ORDER BY parent_id, child_id LIMIT {limit}"
+                "SELECT \"{pcol}\", \"{ccol}\" FROM \"{jt}\" {where_sql} \
+                 ORDER BY \"{pcol}\", \"{ccol}\" LIMIT {limit}"
             );
             let mut q = sqlx::query(&sql);
             if let Some((p, c)) = last {
@@ -532,13 +699,13 @@ async fn read_junction_batch(
         }
         DbPool::Postgres(pool) => {
             let where_sql = if last.is_some() {
-                "WHERE (parent_id, child_id) > ($1, $2)"
+                format!("WHERE (\"{pcol}\", \"{ccol}\") > ($1, $2)")
             } else {
-                ""
+                String::new()
             };
             let sql = format!(
-                "SELECT parent_id, child_id FROM \"{jt}\" {where_sql} \
-                 ORDER BY parent_id, child_id LIMIT {limit}"
+                "SELECT \"{pcol}\", \"{ccol}\" FROM \"{jt}\" {where_sql} \
+                 ORDER BY \"{pcol}\", \"{ccol}\" LIMIT {limit}"
             );
             let mut q = sqlx::query(&sql);
             if let Some((p, c)) = last {

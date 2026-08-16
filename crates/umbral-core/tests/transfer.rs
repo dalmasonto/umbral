@@ -35,6 +35,19 @@ pub struct Book {
     pub tags: M2M<Tag>,
 }
 
+/// Umbral-shaped model with a STRIPPED FK field (`owner`, not `owner_id`) and an
+/// M2M — the inspectdb-generated shape a `--map django` transfer reads into.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+pub struct Note {
+    pub id: i64,
+    pub body: String,
+    #[umbral(index)]
+    pub owner: ForeignKey<Author>,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    pub labels: M2M<Tag>,
+}
+
 static BOOT: OnceCell<()> = OnceCell::const_new();
 async fn boot() {
     BOOT.get_or_init(|| async {
@@ -46,6 +59,7 @@ async fn boot() {
             .model::<Author>()
             .model::<Tag>()
             .model::<Book>()
+            .model::<Note>()
             .build()
             .unwrap();
     })
@@ -90,6 +104,12 @@ async fn open(path: &std::path::Path) -> SqlitePool {
     let url = format!("sqlite://{}?mode=rwc", path.display());
     let pool = umbral::db::connect_sqlite(&url).await.unwrap();
     sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Parallel workers open concurrent write transactions; SQLite serializes
+    // writers, so a busy_timeout makes the loser wait instead of erroring.
+    sqlx::query("PRAGMA busy_timeout = 5000")
         .execute(&pool)
         .await
         .unwrap();
@@ -278,6 +298,150 @@ async fn transfer_sqlite_to_postgres_cross_backend() {
             .await
             .unwrap();
     assert_eq!(links, vec![(10, 100), (10, 200)]);
+}
+
+/// `--map django`: a Django-shaped source (FK column `owner_id`, junction
+/// columns `note_id` / `tag_id`) is translated into the umbral target's names
+/// (`owner`, `parent_id` / `child_id`) — the data half of the inspectdb port.
+#[tokio::test]
+async fn transfer_map_django_translates_columns() {
+    boot().await;
+    let dir = TempDir::new().unwrap();
+    let source = open(&dir.path().join("map_src.sqlite3")).await;
+    let target = open(&dir.path().join("map_dst.sqlite3")).await;
+
+    // Source = Django-shaped.
+    for stmt in [
+        "CREATE TABLE author (id INTEGER PRIMARY KEY, name TEXT NOT NULL, active BOOLEAN)",
+        "CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT NOT NULL, \
+         owner_id INTEGER NOT NULL REFERENCES author(id))",
+        "CREATE TABLE note_labels (\
+         note_id INTEGER NOT NULL REFERENCES note(id), \
+         tag_id INTEGER NOT NULL REFERENCES tag(id), PRIMARY KEY (note_id, tag_id))",
+    ] {
+        sqlx::query(stmt).execute(&source).await.unwrap();
+    }
+    // Target = umbral-shaped (the inspectdb-generated schema).
+    for stmt in [
+        "CREATE TABLE author (id INTEGER PRIMARY KEY, name TEXT NOT NULL, active BOOLEAN)",
+        "CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT NOT NULL, \
+         owner INTEGER NOT NULL REFERENCES author(id))",
+        "CREATE TABLE note_labels (\
+         parent_id INTEGER NOT NULL REFERENCES note(id), \
+         child_id INTEGER NOT NULL REFERENCES tag(id), PRIMARY KEY (parent_id, child_id))",
+    ] {
+        sqlx::query(stmt).execute(&target).await.unwrap();
+    }
+
+    sqlx::query("INSERT INTO author (id, name, active) VALUES (1, 'Ada', 1)")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO tag (id, name) VALUES (100, 'x')")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO note (id, body, owner_id) VALUES (10, 'hi', 1)")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO note_labels (note_id, tag_id) VALUES (10, 100)")
+        .execute(&source)
+        .await
+        .unwrap();
+
+    let src = umbral::db::DbPool::Sqlite(source);
+    let dst = umbral::db::DbPool::Sqlite(target.clone());
+    let opts = TransferOptions {
+        map: umbral::transfer::TransferMap::Django,
+        ..Default::default()
+    };
+    let metas = vec![
+        ModelMeta::for_::<Author>(),
+        ModelMeta::for_::<Tag>(),
+        ModelMeta::for_::<Note>(),
+    ];
+    transfer(&src, &dst, metas, &opts)
+        .await
+        .expect("map django transfer");
+
+    // FK column translated owner_id -> owner.
+    let notes: Vec<(i64, String, i64)> = sqlx::query_as("SELECT id, body, owner FROM note")
+        .fetch_all(&target)
+        .await
+        .unwrap();
+    assert_eq!(notes, vec![(10, "hi".into(), 1)]);
+    // Junction columns translated note_id/tag_id -> parent_id/child_id.
+    let links: Vec<(i64, i64)> = sqlx::query_as("SELECT parent_id, child_id FROM note_labels")
+        .fetch_all(&target)
+        .await
+        .unwrap();
+    assert_eq!(links, vec![(10, 100)]);
+}
+
+/// Parallel workers copy correctly: independent tables (author, tag) run
+/// concurrently in level 0, book in level 1, junctions last — with a small
+/// batch so pagination interleaves under concurrency. Output must match the
+/// sequential result exactly.
+#[tokio::test]
+async fn transfer_parallel_workers_copies_correctly() {
+    boot().await;
+    let dir = TempDir::new().unwrap();
+    let source = open(&dir.path().join("par_src.sqlite3")).await;
+    let target = open(&dir.path().join("par_dst.sqlite3")).await;
+    create_schema(&source).await;
+    create_schema(&target).await;
+    sqlx::query("INSERT INTO author (id, name) VALUES (1, 'A'), (2, 'B')")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO tag (id, name) VALUES (100, 'x'), (200, 'y')")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO book (id, title, author_id) VALUES (10, 'A', 1), (20, 'B', 2)")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO book_tags (parent_id, child_id) VALUES (10, 100), (20, 200)")
+        .execute(&source)
+        .await
+        .unwrap();
+
+    let src = umbral::db::DbPool::Sqlite(source);
+    let dst = umbral::db::DbPool::Sqlite(target.clone());
+    let opts = TransferOptions {
+        workers: 4,
+        batch_size: 1,
+        ..Default::default()
+    };
+    let metas = vec![
+        ModelMeta::for_::<Author>(),
+        ModelMeta::for_::<Tag>(),
+        ModelMeta::for_::<Book>(),
+    ];
+    let report = transfer(&src, &dst, metas, &opts)
+        .await
+        .expect("parallel transfer");
+    assert_eq!(report.rows, 8, "2 authors + 2 tags + 2 books + 2 links");
+
+    let counts: (i64, i64, i64) = (
+        sqlx::query_scalar("SELECT COUNT(*) FROM author")
+            .fetch_one(&target)
+            .await
+            .unwrap(),
+        sqlx::query_scalar("SELECT COUNT(*) FROM book")
+            .fetch_one(&target)
+            .await
+            .unwrap(),
+        sqlx::query_scalar("SELECT COUNT(*) FROM book_tags")
+            .fetch_one(&target)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(counts, (2, 2, 2));
 }
 
 /// FK-topological ordering: a child never precedes its parent.
