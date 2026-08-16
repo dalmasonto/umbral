@@ -598,9 +598,14 @@ fn pg_pool_options() -> sqlx::postgres::PgPoolOptions {
                 let ctx = route_context::current();
                 let vars = ctx.session_vars();
                 if !vars.is_empty() {
-                    SESSION_VARS_IN_USE.store(true, std::sync::atomic::Ordering::Relaxed);
+                    SESSION_VARS_IN_USE.store(true, std::sync::atomic::Ordering::Release);
                 }
-                if SESSION_VARS_IN_USE.load(std::sync::atomic::Ordering::Relaxed) {
+                // review_3: this flag gates whether a pooled connection's leaked
+                // GUCs get cleared before reuse — a cross-tenant RLS leak if a
+                // request skips the reset. Acquire/Release (not Relaxed) gives the
+                // happens-before edge so the `true` a prior request stored is
+                // always observed by the next acquisition on a weakly-ordered CPU.
+                if SESSION_VARS_IN_USE.load(std::sync::atomic::Ordering::Acquire) {
                     // gaps4 #16: clear only umbra's OWN stale GUCs — the names a
                     // PRIOR request set on this pooled connection that THIS
                     // request isn't re-setting — instead of `RESET ALL` (which

@@ -1149,6 +1149,20 @@ fn create_index_stmt(table: &str, column: &str) -> String {
     )
 }
 
+/// `CREATE UNIQUE INDEX` for a column. Used when a new `#[umbral(unique)]`
+/// column is ADDed on SQLite: SQLite rejects `ALTER TABLE ADD COLUMN …
+/// UNIQUE` outright, so the uniqueness is applied as a separate unique
+/// index instead (semantically identical, and it applies cleanly).
+fn create_unique_index_stmt(table: &str, column: &str) -> String {
+    let t = table.replace('"', "\"\"");
+    let c = column.replace('"', "\"\"");
+    format!(
+        "CREATE UNIQUE INDEX IF NOT EXISTS \"uniq_{table}_{column}\" ON \"{t}\" (\"{c}\")",
+        table = table.replace('"', ""),
+        column = column.replace('"', ""),
+    )
+}
+
 /// Build a Postgres `CREATE INDEX ... USING GIN` for a `tsvector`
 /// (`SqlType::FullText`) column (#33). A tsvector column is useless for
 /// search without a GIN index, so the migration engine emits one
@@ -3139,8 +3153,19 @@ pub fn detect_drift(
     // Collect on-disk migration names (the id, not the full path).
     let paths = list_migration_files(plugin_dir)?;
     let mut on_disk: Vec<String> = Vec::new();
+    // Migrations shadowed by an APPLIED squash: an applied `000X_squashed`
+    // replaces its originals, which are kept on disk (Django-style, non-
+    // destructive) but get no tracking row. Without this they'd be
+    // misclassified `Pending` forever and block umbral-health readiness on
+    // a freshly-squashed database. Mirrors `squash_plan`'s `shadowed` set.
+    let mut shadowed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for path in &paths {
         let file = read_migration_file(path)?;
+        if applied.contains(&(plugin.to_string(), file.id.clone())) {
+            for m in &file.replaces {
+                shadowed.insert(m.migration.clone());
+            }
+        }
         on_disk.push(file.id.clone());
     }
 
@@ -3165,7 +3190,9 @@ pub fn detect_drift(
     // Walk on-disk files in order.
     for name in &on_disk {
         let key = (plugin.to_string(), name.clone());
-        let status = if applied.contains(&key) {
+        let status = if applied.contains(&key) || shadowed.contains(name) {
+            // Applied directly, or shadowed by an applied squash (its
+            // originals are covered even without their own tracking row).
             MigrationStatus::Applied
         } else {
             // Determine this migration's sequence number.
@@ -5267,10 +5294,19 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             } else {
                 let mut stmt = Table::alter();
                 stmt.table(Alias::new(table));
-                let mut def = build_column_def_sqlite(column);
+                // SQLite rejects `ADD COLUMN … UNIQUE`. Build the column def
+                // WITHOUT the inline UNIQUE and apply uniqueness as a
+                // separate `CREATE UNIQUE INDEX` below — semantically
+                // identical, and it applies on a populated table.
+                let mut col_no_unique = column.clone();
+                col_no_unique.unique = false;
+                let mut def = build_column_def_sqlite(&col_no_unique);
                 stmt.add_column(&mut def);
                 vec![stmt.build(SqliteQueryBuilder)]
             };
+            if column.unique && !column.primary_key {
+                stmts.push(create_unique_index_stmt(table, &column.name));
+            }
             if should_emit_btree_index(column) {
                 stmts.push(create_index_stmt(table, &column.name));
             }
