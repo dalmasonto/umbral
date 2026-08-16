@@ -12,9 +12,11 @@
 use std::collections::{HashMap, HashSet};
 
 use sea_query::{Alias, Expr};
+use sqlx::Row;
 
 use crate::db::DbPool;
 use crate::migrate::ModelMeta;
+use crate::orm::SqlType;
 use crate::orm::dynamic::DynQuerySet;
 
 /// Tooling-owned resume table on the target. Same pattern as the migrations
@@ -130,6 +132,49 @@ pub fn fk_topo_order(models: Vec<ModelMeta>) -> Vec<ModelMeta> {
     ordered
 }
 
+/// One many-to-many junction table to copy — an umbral-auto-generated
+/// `<parent_table>_<field>` with `(parent_id, child_id)` and a composite PK.
+/// Not a registered model, so it's copied by raw SQL (the junction exception,
+/// same as its DDL) after both endpoint tables.
+#[derive(Debug, Clone)]
+struct Junction {
+    table: String,
+    parent_ty: SqlType,
+    child_ty: SqlType,
+}
+
+/// Enumerate every M2M junction the registered models declare. `parent_ty` is
+/// the owner's PK type; `child_ty` the target's (resolved from the model set,
+/// defaulting to `BigInt` when the target isn't registered here).
+fn collect_junctions(models: &[ModelMeta]) -> Vec<Junction> {
+    let pk_ty = |table: &str| -> SqlType {
+        models
+            .iter()
+            .find(|m| m.table == table)
+            .and_then(|m| m.pk_column())
+            .map(|c| c.ty)
+            .unwrap_or(SqlType::BigInt)
+    };
+    let mut out = Vec::new();
+    for m in models {
+        let parent_ty = m.pk_column().map(|c| c.ty).unwrap_or(SqlType::BigInt);
+        for rel in &m.m2m_relations {
+            out.push(Junction {
+                table: format!("{}_{}", m.table, rel.field_name),
+                parent_ty,
+                child_ty: pk_ty(&rel.target_table),
+            });
+        }
+    }
+    out
+}
+
+/// Whether an id column of this type reads/binds as `i64` (vs `String` for
+/// UUID / slug PKs). Junction ids are only ever PK types.
+fn is_int_id(ty: SqlType) -> bool {
+    matches!(ty, SqlType::Integer | SqlType::BigInt | SqlType::SmallInt)
+}
+
 /// A `pk > last` keyset condition. Handles integer and string/uuid PKs (the
 /// value comes straight from the last row's JSON).
 fn pk_gt_condition(pk_col: &str, last: &serde_json::Value) -> sea_query::SimpleExpr {
@@ -232,6 +277,65 @@ pub async fn transfer(
 
         state.insert(meta.table.clone(), (last, true));
         report.per_table.push((meta.table.clone(), copied));
+        report.rows += copied;
+    }
+
+    // M2M junction tables, copied AFTER every model so both endpoints exist on
+    // the target. Composite `(parent_id, child_id)` PK makes the copy naturally
+    // idempotent (`ON CONFLICT DO NOTHING`), belt-and-suspenders with the same
+    // per-batch transactional checkpoint.
+    for jn in collect_junctions(&ordered) {
+        if only.as_ref().is_some_and(|s| !s.contains(&jn.table)) {
+            continue;
+        }
+        if opts.dry_run {
+            let n = count_rows(source, &jn.table).await?;
+            report.per_table.push((jn.table.clone(), n));
+            report.rows += n;
+            continue;
+        }
+        if state.get(&jn.table).is_some_and(|(_, done)| *done) {
+            continue;
+        }
+        let mut last: Option<(serde_json::Value, serde_json::Value)> = state
+            .get(&jn.table)
+            .and_then(|(pk, _)| pk.clone())
+            .and_then(decode_pair);
+
+        let mut copied: u64 = 0;
+        loop {
+            let rows = read_junction_batch(source, &jn, last.as_ref(), opts.batch_size).await?;
+            if rows.is_empty() {
+                break;
+            }
+            let batch_len = rows.len();
+            let new_last = rows.last().cloned();
+
+            let mut tx = begin_on(target).await?;
+            for (p, c) in &rows {
+                insert_junction_in_tx(&mut tx, &jn, p, c).await?;
+            }
+            let checkpoint = new_last
+                .as_ref()
+                .map(|(p, c)| serde_json::Value::Array(vec![p.clone(), c.clone()]));
+            upsert_state_in_tx(&mut tx, &jn.table, checkpoint.as_ref(), false).await?;
+            tx.commit().await?;
+
+            copied += batch_len as u64;
+            last = new_last;
+            if batch_len < opts.batch_size as usize {
+                break;
+            }
+        }
+
+        let checkpoint = last
+            .as_ref()
+            .map(|(p, c)| serde_json::Value::Array(vec![p.clone(), c.clone()]));
+        let mut tx = begin_on(target).await?;
+        upsert_state_in_tx(&mut tx, &jn.table, checkpoint.as_ref(), true).await?;
+        tx.commit().await?;
+        state.insert(jn.table.clone(), (checkpoint, true));
+        report.per_table.push((jn.table.clone(), copied));
         report.rows += copied;
     }
     Ok(report)
@@ -341,6 +445,162 @@ async fn reset_sequence(target: &DbPool, table: &str, pk_col: &str) -> Result<()
         );
         // A non-integer PK has no serial sequence; the guard makes this a no-op.
         let _ = sqlx::query(&sql).execute(p).await;
+    }
+    Ok(())
+}
+
+/// Decode a checkpoint `[parent_id, child_id]` JSON array back into a pair.
+fn decode_pair(v: serde_json::Value) -> Option<(serde_json::Value, serde_json::Value)> {
+    match v {
+        serde_json::Value::Array(a) if a.len() == 2 => Some((a[0].clone(), a[1].clone())),
+        _ => None,
+    }
+}
+
+/// A junction id column reads as `i64` or `String` per its PK type; JSON `null`
+/// never occurs (both columns are the composite PK).
+fn id_as_json_i64(v: i64) -> serde_json::Value {
+    serde_json::Value::from(v)
+}
+
+/// Read one keyset page of `(parent_id, child_id)` rows from a source junction,
+/// after `last` in composite order.
+async fn read_junction_batch(
+    source: &DbPool,
+    jn: &Junction,
+    last: Option<&(serde_json::Value, serde_json::Value)>,
+    limit: u64,
+) -> Result<Vec<(serde_json::Value, serde_json::Value)>, TransferError> {
+    let jt = jn.table.replace('"', "\"\"");
+    let mut out = Vec::new();
+    match source {
+        DbPool::Sqlite(pool) => {
+            let where_sql = if last.is_some() {
+                "WHERE (parent_id, child_id) > (?, ?)"
+            } else {
+                ""
+            };
+            let sql = format!(
+                "SELECT parent_id, child_id FROM \"{jt}\" {where_sql} \
+                 ORDER BY parent_id, child_id LIMIT {limit}"
+            );
+            let mut q = sqlx::query(&sql);
+            if let Some((p, c)) = last {
+                q = if is_int_id(jn.parent_ty) {
+                    q.bind(p.as_i64())
+                } else {
+                    q.bind(p.as_str().map(str::to_string))
+                };
+                q = if is_int_id(jn.child_ty) {
+                    q.bind(c.as_i64())
+                } else {
+                    q.bind(c.as_str().map(str::to_string))
+                };
+            }
+            for row in q.fetch_all(pool).await? {
+                let p = if is_int_id(jn.parent_ty) {
+                    id_as_json_i64(row.try_get::<i64, _>(0)?)
+                } else {
+                    serde_json::Value::from(row.try_get::<String, _>(0)?)
+                };
+                let c = if is_int_id(jn.child_ty) {
+                    id_as_json_i64(row.try_get::<i64, _>(1)?)
+                } else {
+                    serde_json::Value::from(row.try_get::<String, _>(1)?)
+                };
+                out.push((p, c));
+            }
+        }
+        DbPool::Postgres(pool) => {
+            let where_sql = if last.is_some() {
+                "WHERE (parent_id, child_id) > ($1, $2)"
+            } else {
+                ""
+            };
+            let sql = format!(
+                "SELECT parent_id, child_id FROM \"{jt}\" {where_sql} \
+                 ORDER BY parent_id, child_id LIMIT {limit}"
+            );
+            let mut q = sqlx::query(&sql);
+            if let Some((p, c)) = last {
+                q = if is_int_id(jn.parent_ty) {
+                    q.bind(p.as_i64())
+                } else {
+                    q.bind(p.as_str().map(str::to_string))
+                };
+                q = if is_int_id(jn.child_ty) {
+                    q.bind(c.as_i64())
+                } else {
+                    q.bind(c.as_str().map(str::to_string))
+                };
+            }
+            for row in q.fetch_all(pool).await? {
+                let p = if is_int_id(jn.parent_ty) {
+                    id_as_json_i64(row.try_get::<i64, _>(0)?)
+                } else {
+                    serde_json::Value::from(row.try_get::<String, _>(0)?)
+                };
+                let c = if is_int_id(jn.child_ty) {
+                    id_as_json_i64(row.try_get::<i64, _>(1)?)
+                } else {
+                    serde_json::Value::from(row.try_get::<String, _>(1)?)
+                };
+                out.push((p, c));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Insert one junction row into the target inside the batch transaction. The
+/// composite PK makes `ON CONFLICT DO NOTHING` an exact idempotent no-op on a
+/// row already copied (resume safety, belt-and-suspenders with the checkpoint).
+async fn insert_junction_in_tx(
+    tx: &mut crate::db::Transaction,
+    jn: &Junction,
+    p: &serde_json::Value,
+    c: &serde_json::Value,
+) -> Result<(), TransferError> {
+    let jt = jn.table.replace('"', "\"\"");
+    match tx.backend_name() {
+        "sqlite" => {
+            let sql = format!(
+                "INSERT INTO \"{jt}\" (parent_id, child_id) VALUES (?, ?) \
+                 ON CONFLICT (parent_id, child_id) DO NOTHING"
+            );
+            let inner = tx.as_sqlite_mut().expect("sqlite backend");
+            let mut q = sqlx::query(&sql);
+            q = if is_int_id(jn.parent_ty) {
+                q.bind(p.as_i64())
+            } else {
+                q.bind(p.as_str().map(str::to_string))
+            };
+            q = if is_int_id(jn.child_ty) {
+                q.bind(c.as_i64())
+            } else {
+                q.bind(c.as_str().map(str::to_string))
+            };
+            q.execute(&mut **inner).await?;
+        }
+        _ => {
+            let sql = format!(
+                "INSERT INTO \"{jt}\" (parent_id, child_id) VALUES ($1, $2) \
+                 ON CONFLICT (parent_id, child_id) DO NOTHING"
+            );
+            let inner = tx.as_pg_mut().expect("postgres backend");
+            let mut q = sqlx::query(&sql);
+            q = if is_int_id(jn.parent_ty) {
+                q.bind(p.as_i64())
+            } else {
+                q.bind(p.as_str().map(str::to_string))
+            };
+            q = if is_int_id(jn.child_ty) {
+                q.bind(c.as_i64())
+            } else {
+                q.bind(c.as_str().map(str::to_string))
+            };
+            q.execute(&mut **inner).await?;
+        }
     }
     Ok(())
 }

@@ -40,6 +40,7 @@ The source is opened read-only; the target read-write.
   <Card icon="git-branch" title="Parents first" description="Tables copy in FK-topological order, so a child never lands before its parent (the target's FK constraints would reject it)." />
   <Card icon="repeat" title="Resumable" description="Interrupted mid-30GB? Rerun the same command — it resumes at the last committed page, no duplicates." />
   <Card icon="layers" title="Streamed" description="Keyset-paginated batches; only one batch is ever in memory, so table size doesn't matter." />
+  <Card icon="link" title="M2M links" description="Many-to-many junction rows copy after both endpoints, so relations like book.tags survive the move intact." />
 </CardGrid>
 
 ### Resume is exact, not best-effort
@@ -67,8 +68,8 @@ cargo run -- transferdata --from ./old.sqlite3 --to ./new.sqlite3 --dry-run
 
 ## Not yet
 
-Phase 1 covers registered models with a single-column primary key. Still on the
-list: many-to-many junction rows, cross-backend moves (SQLite → Postgres) with
-sequence reset on the target, parallel per-table workers, and circular-FK
-tables (mutually-referential pairs need deferred-constraint handling). The
-design lives in `docs/decisions/2026-08-16-data-transfer-engine.md`.
+Registered models (single-column PK) and their M2M junction rows are covered.
+Still on the list: cross-backend moves (SQLite → Postgres, where a UUID junction
+id needs the native type), parallel per-table workers, and circular-FK tables
+(mutually-referential pairs need deferred-constraint handling). The design lives
+in `docs/decisions/2026-08-16-data-transfer-engine.md`.
