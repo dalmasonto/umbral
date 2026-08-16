@@ -3,10 +3,9 @@
 //! ## Design
 //!
 //! `SessionStore` is the pluggable storage abstraction for umbral sessions.
-//! `DbStore` is the default implementation: it reproduces the SQL logic from
-//! `read_session` / `upsert_session_data_key` / `destroy_session_by_hash` in
-//! `lib.rs` exactly, but operates on the full `SessionRecord` (id, user_id,
-//! data, created_at, expires_at) rather than per-key data.
+//! `DbStore` is the default implementation: it reads and writes the `session`
+//! table through the ORM (`Session::objects()`), operating on the full
+//! `SessionRecord` (id, user_id, data, created_at, expires_at).
 //!
 //! The ambient `OnceLock<Arc<dyn SessionStore>>` follows the same pattern as
 //! umbral-core's ambient pool: set once at boot, read everywhere after that.
@@ -165,9 +164,9 @@ impl SessionStore for DbStore {
         }
     }
 
-    /// Reproduces the INSERT … ON CONFLICT shape from `upsert_session_data_key`
-    /// in `lib.rs`, but writes the FULL record (id, user_id, data,
-    /// created_at, expires_at) rather than patching a single JSON key.
+    /// Upserts the FULL record (id, user_id, data, created_at, expires_at)
+    /// via the ORM's `Session::objects().upsert(...)` — conflicts on the PK
+    /// and updates the non-PK columns — rather than patching a single JSON key.
     ///
     /// Dispatches on `pool_dispatched()` to emit the correct placeholder
     /// syntax for SQLite (`?N`) vs Postgres (`$N`) and the right

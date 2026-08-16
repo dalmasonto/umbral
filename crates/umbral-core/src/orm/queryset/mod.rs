@@ -239,6 +239,10 @@ pub struct QuerySet<T> {
     /// statement's LIMIT with its own paging value and silently walked the
     /// whole table for a caller who had bounded the scan.
     pub(crate) user_limit: Option<u64>,
+    /// A caller-supplied `.offset(n)`, tracked separately from `self.query`
+    /// because sea-query won't hand its OFFSET back — `try_for_each` needs it
+    /// to start paging from the requested row instead of 0.
+    pub(crate) user_offset: Option<u64>,
     _phantom: PhantomData<T>,
 }
 
@@ -268,6 +272,7 @@ impl<T> Clone for QuerySet<T> {
             annotations: self.annotations.clone(),
             annotation_order: self.annotation_order.clone(),
             user_limit: self.user_limit,
+            user_offset: self.user_offset,
             for_update_skip_locked: self.for_update_skip_locked,
             _phantom: PhantomData,
         }
@@ -438,6 +443,7 @@ impl<T> QuerySet<T> {
             annotation_order: Vec::new(),
             for_update_skip_locked: false,
             user_limit: None,
+            user_offset: None,
             _phantom: PhantomData,
         }
     }
@@ -796,6 +802,7 @@ impl<T> QuerySet<T> {
     /// Set OFFSET.
     pub fn offset(mut self, n: u64) -> Self {
         self.query.offset(n);
+        self.user_offset = Some(n);
         self
     }
 
@@ -1912,7 +1919,10 @@ impl<T: Model> QuerySet<T> {
         // table. Tracked separately because sea-query won't hand its LIMIT back.
         let total_cap = self.user_limit;
         let mut seen: u64 = 0;
-        let mut offset: u64 = 0;
+        // Start paging from a caller-supplied `.offset(n)` (tracked via
+        // `user_offset`) rather than 0, so rows the caller asked to skip stay
+        // skipped — the OFFSET twin of the `user_limit` cap above.
+        let mut offset: u64 = self.user_offset.unwrap_or(0);
         loop {
             // Never fetch more than the remaining cap allows.
             let this_chunk = match total_cap {

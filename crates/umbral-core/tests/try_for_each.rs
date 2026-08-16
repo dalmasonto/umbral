@@ -152,6 +152,29 @@ async fn try_for_each_honors_a_caller_limit_as_a_total_cap() {
 }
 
 #[tokio::test]
+async fn try_for_each_honors_a_caller_offset() {
+    // The OFFSET twin of the limit cap: rows the caller asked to skip stay
+    // skipped. `.offset(20)` used to be overwritten by the internal paging
+    // (which started at 0), so every row was visited. Now it starts paging
+    // from the caller's offset.
+    boot().await;
+    let count = AtomicUsize::new(0);
+    Item::objects()
+        .offset(20)
+        .try_for_each(4, |_item| {
+            count.fetch_add(1, Ordering::Relaxed);
+            Ok::<(), String>(())
+        })
+        .await
+        .expect("iterate");
+    assert_eq!(
+        count.load(Ordering::Relaxed),
+        5,
+        "a caller .offset(20) on a 25-row table must skip the first 20, visiting 5"
+    );
+}
+
+#[tokio::test]
 async fn try_for_each_limit_not_a_multiple_of_chunk_size() {
     // The cap can fall mid-chunk: limit 7 with chunk 4 → 4 then 3, stop.
     boot().await;
