@@ -72,15 +72,25 @@ link, run the identical command again, and it continues where it stopped.
 cargo run -- transferdata --from ./old.sqlite3 --to ./new.sqlite3 --dry-run
 ```
 
-## Porting from Django: `--map django`
+## Porting from another ORM: `--map`
 
-`transferdata` normally assumes both ends share the umbral schema. `--map django`
-lets the **source** be the original Django database — closing the loop after
+`transferdata` normally assumes both ends share the umbral schema. `--map <framework>`
+lets the **source** be a database shaped by another ORM — closing the loop after
 [`inspectdb`](/docs/v0.0.1/migrations/inspectdb) generated your models. It undoes
-Django's column conventions in reverse: an FK column `author_id` on the source
-maps to the umbral field `author`, and an M2M through table's `community_id` /
-`software_id` columns map to umbral's `parent_id` / `child_id`. Table names are
-unchanged (inspectdb keeps them), so only the FK and junction columns translate.
+that ORM's column conventions in reverse: a source FK column maps to the clean
+umbral field, and an M2M through table's FK columns map to umbral's `parent_id` /
+`child_id`. Table names are unchanged (inspectdb keeps them), so only the FK and
+junction columns translate.
+
+| `--map` | FK column | Junction columns |
+|---|---|---|
+| `django` | `author_id` → `author` | `community_id` / `software_id` |
+| `rails` (`activerecord`) | `author_id` → `author` | `<model>_id` |
+| `laravel` (`eloquent`) | `author_id` → `author` | `<model>_id` |
+| `prisma` (`typeorm`) | `authorId` → `author` | `<model>Id` |
+
+Django, Rails and Laravel share the snake-case `<field>_id` convention; Prisma
+(and camelCase JS ORMs) use `<field>Id`.
 
 ```bash
 # Schema first (inspectdb -> migrate), then the data straight from Django:
@@ -129,5 +139,6 @@ FK-deferred transaction so the cycle resolves at commit. On Postgres this uses
 `SET CONSTRAINTS ALL DEFERRED`, which works because umbral emits FK constraints
 `DEFERRABLE INITIALLY IMMEDIATE` — so a target created by `migrate` supports it
 out of the box (a pre-existing database whose FKs aren't deferrable would need
-those constraints re-created). Still on the list: richer `--map` targets beyond
-Django. The design lives in `docs/decisions/2026-08-16-data-transfer-engine.md`.
+those constraints re-created). Source mapping covers Django, Rails, Laravel and
+Prisma (see the `--map` table above). The design lives in
+`docs/decisions/2026-08-16-data-transfer-engine.md`.

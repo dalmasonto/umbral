@@ -249,8 +249,9 @@ enum Command {
         #[arg(long)]
         only: Option<String>,
         /// Translate a foreign-shaped source's column names to the umbral
-        /// target's. `django` reads a Django DB (FK `<field>_id`, junction
-        /// `<model>_id`); omit for umbral->umbral.
+        /// target's: `django` / `rails` / `laravel` (FK `<field>_id`, junction
+        /// `<model>_id`) or `prisma` (camelCase `<field>Id`). Omit for
+        /// umbral->umbral.
         #[arg(long)]
         map: Option<String>,
         /// Copy this many independent tables concurrently (per FK level). `1`

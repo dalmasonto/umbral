@@ -25,27 +25,95 @@ const STATE_TABLE: &str = "umbral_transfer_state";
 
 /// How to translate a *foreign-shaped* source's column names to the umbral
 /// target's. The source and target tables share a name (inspectdb targets the
-/// same table); only FK / junction columns differ.
+/// same table); only FK / junction columns differ by the source framework's
+/// naming convention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransferMap {
     /// Source and target share the umbral schema — no translation (env1->env2).
     #[default]
     None,
-    /// The source is the original Django DB: an FK column is `<field>_id`
-    /// (umbral stripped it to `<field>`), and an M2M junction's FK columns are
-    /// `<model>_id` (umbral uses `parent_id` / `child_id`). Mirrors
-    /// `inspectdb --framework django`, in reverse. Table names are unchanged.
+    /// Django: FK column `<field>_id`, M2M junction columns `<model>_id`.
+    /// Mirrors `inspectdb --framework django` in reverse.
     Django,
+    /// Rails / ActiveRecord: FK column `<field>_id`, join-table columns
+    /// `<model>_id` — the same snake-case `_id` convention as Django.
+    Rails,
+    /// Laravel / Eloquent: FK column `<field>_id`, pivot columns `<model>_id`
+    /// — the same snake-case `_id` convention as Django.
+    Laravel,
+    /// Prisma / TypeORM (and camelCase JS ORMs generally): FK column
+    /// `<field>Id` (e.g. `authorId`), junction columns `<model>Id`.
+    Prisma,
 }
 
 impl TransferMap {
     pub fn parse(s: &str) -> Option<TransferMap> {
         match s.to_ascii_lowercase().as_str() {
             "django" => Some(TransferMap::Django),
+            "rails" | "activerecord" => Some(TransferMap::Rails),
+            "laravel" | "eloquent" => Some(TransferMap::Laravel),
+            "prisma" | "typeorm" => Some(TransferMap::Prisma),
             "none" | "" => Some(TransferMap::None),
             _ => None,
         }
     }
+
+    /// The source column an umbral FK field reads from, or `None` when the umbral
+    /// name already matches the source (no rename). The umbral field is
+    /// snake_case; a snake-`_id` framework wants `<field>_id`, a camelCase one
+    /// wants `<camelCase(field)>Id`.
+    fn fk_source_column(self, field: &str) -> Option<String> {
+        match self {
+            TransferMap::None => None,
+            TransferMap::Django | TransferMap::Rails | TransferMap::Laravel => {
+                if field.ends_with("_id") {
+                    None
+                } else {
+                    Some(format!("{field}_id"))
+                }
+            }
+            TransferMap::Prisma => {
+                let col = format!("{}Id", to_lower_camel(field));
+                (col != field).then_some(col)
+            }
+        }
+    }
+
+    /// The source junction's `(parent, child)` FK column names, given the two
+    /// endpoint model (struct) names. `None` means the umbral `parent_id` /
+    /// `child_id` are already right.
+    fn junction_source_columns(self, owner_model: &str, target_model: &str) -> (String, String) {
+        match self {
+            TransferMap::None => ("parent_id".to_string(), "child_id".to_string()),
+            TransferMap::Django | TransferMap::Rails | TransferMap::Laravel => (
+                format!("{}_id", owner_model.to_ascii_lowercase()),
+                format!("{}_id", target_model.to_ascii_lowercase()),
+            ),
+            TransferMap::Prisma => (
+                format!("{}Id", to_lower_camel(owner_model)),
+                format!("{}Id", to_lower_camel(target_model)),
+            ),
+        }
+    }
+}
+
+/// `blog_category` / `BlogCategory` -> `blogCategory`. Normalizes any casing to
+/// snake first, then lower-camel-cases it. Used for camelCase source columns.
+fn to_lower_camel(s: &str) -> String {
+    let snake = umbral_casing::to_snake_case(s);
+    let mut out = String::new();
+    for (i, part) in snake.split('_').filter(|p| !p.is_empty()).enumerate() {
+        if i == 0 {
+            out.push_str(part);
+        } else {
+            let mut chars = part.chars();
+            if let Some(first) = chars.next() {
+                out.extend(first.to_uppercase());
+                out.push_str(chars.as_str());
+            }
+        }
+    }
+    out
 }
 
 /// Knobs for a transfer run.
@@ -217,14 +285,10 @@ fn collect_junctions(models: &[ModelMeta], map: TransferMap) -> Vec<Junction> {
     for m in models {
         let parent_ty = m.pk_column().map(|c| c.ty).unwrap_or(SqlType::BigInt);
         for rel in &m.m2m_relations {
-            let (src_parent_col, src_child_col) = match map {
-                TransferMap::None => ("parent_id".to_string(), "child_id".to_string()),
-                // Django's auto through table names FK columns after the models.
-                TransferMap::Django => (
-                    format!("{}_id", m.name.to_ascii_lowercase()),
-                    format!("{}_id", rel.target_name.to_ascii_lowercase()),
-                ),
-            };
+            // Source junction FK columns are named after the two endpoint models
+            // (`community_id` / `software_id` under a snake framework).
+            let (src_parent_col, src_child_col) =
+                map.junction_source_columns(&m.name, &rel.target_name);
             out.push(Junction {
                 table: format!("{}_{}", m.table, rel.field_name),
                 parent_ty,
@@ -350,13 +414,15 @@ fn source_meta_for(meta: &ModelMeta, map: TransferMap) -> (ModelMeta, HashMap<St
     if map == TransferMap::None {
         return (meta.clone(), rename);
     }
-    // Django: an FK field `author` reads from the source column `author_id`
-    // (umbral stripped the `_id`). A field that already ends in `_id` is left
-    // alone.
+    // An FK field `author` reads from the source's FK column (`author_id` on a
+    // snake-`_id` framework, `authorId` on a camelCase one). A field already in
+    // the source's shape is left alone.
     let mut src = meta.clone();
     for col in &mut src.fields {
-        if col.fk_target.is_some() && !col.name.ends_with("_id") {
-            let source_col = format!("{}_id", col.name);
+        if col.fk_target.is_none() {
+            continue;
+        }
+        if let Some(source_col) = map.fk_source_column(&col.name) {
             rename.insert(source_col.clone(), col.name.clone());
             col.name = source_col;
         }

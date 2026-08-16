@@ -412,6 +412,89 @@ async fn transfer_map_django_translates_columns() {
     assert_eq!(links, vec![(10, 100)]);
 }
 
+/// `--map prisma`: a camelCase source (FK column `ownerId`, junction columns
+/// `noteId` / `tagId`) translates into the umbral target's snake names — the
+/// genuinely-different convention from the Django family.
+#[tokio::test]
+async fn transfer_map_prisma_translates_camelcase_columns() {
+    boot().await;
+    let dir = TempDir::new().unwrap();
+    let source = open(&dir.path().join("prisma_src.sqlite3")).await;
+    let target = open(&dir.path().join("prisma_dst.sqlite3")).await;
+
+    // Source = Prisma-shaped: camelCase FK + junction columns.
+    for stmt in [
+        "CREATE TABLE author (id INTEGER PRIMARY KEY, name TEXT NOT NULL, active BOOLEAN)",
+        "CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT NOT NULL, \
+         \"ownerId\" INTEGER NOT NULL REFERENCES author(id))",
+        "CREATE TABLE note_labels (\
+         \"noteId\" INTEGER NOT NULL REFERENCES note(id), \
+         \"tagId\" INTEGER NOT NULL REFERENCES tag(id), PRIMARY KEY (\"noteId\", \"tagId\"))",
+    ] {
+        sqlx::query(stmt).execute(&source).await.unwrap();
+    }
+    // Target = umbral-shaped.
+    for stmt in [
+        "CREATE TABLE author (id INTEGER PRIMARY KEY, name TEXT NOT NULL, active BOOLEAN)",
+        "CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT NOT NULL, \
+         owner INTEGER NOT NULL REFERENCES author(id))",
+        "CREATE TABLE note_labels (\
+         parent_id INTEGER NOT NULL REFERENCES note(id), \
+         child_id INTEGER NOT NULL REFERENCES tag(id), PRIMARY KEY (parent_id, child_id))",
+    ] {
+        sqlx::query(stmt).execute(&target).await.unwrap();
+    }
+
+    sqlx::query("INSERT INTO author (id, name, active) VALUES (1, 'Ada', 1)")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO tag (id, name) VALUES (100, 'x')")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO note (id, body, \"ownerId\") VALUES (10, 'hi', 1)")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO note_labels (\"noteId\", \"tagId\") VALUES (10, 100)")
+        .execute(&source)
+        .await
+        .unwrap();
+
+    let src = umbral::db::DbPool::Sqlite(source);
+    let dst = umbral::db::DbPool::Sqlite(target.clone());
+    let opts = TransferOptions {
+        map: umbral::transfer::TransferMap::Prisma,
+        ..Default::default()
+    };
+    transfer(
+        &src,
+        &dst,
+        vec![
+            ModelMeta::for_::<Author>(),
+            ModelMeta::for_::<Tag>(),
+            ModelMeta::for_::<Note>(),
+        ],
+        &opts,
+    )
+    .await
+    .expect("map prisma transfer");
+
+    let notes: Vec<(i64, String, i64)> = sqlx::query_as("SELECT id, body, owner FROM note")
+        .fetch_all(&target)
+        .await
+        .unwrap();
+    assert_eq!(notes, vec![(10, "hi".into(), 1)]);
+    let links: Vec<(i64, i64)> = sqlx::query_as("SELECT parent_id, child_id FROM note_labels")
+        .fetch_all(&target)
+        .await
+        .unwrap();
+    assert_eq!(links, vec![(10, 100)]);
+}
+
 /// Parallel workers copy correctly: independent tables (author, tag) run
 /// concurrently in level 0, book in level 1, junctions last — with a small
 /// batch so pagination interleaves under concurrency. Output must match the
