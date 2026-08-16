@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.11...umbral-storage-v0.0.12) - 2026-08-16
+
+### Fixed
+
+- *(storage)* drive S3 presign on the reactor, not a reactor-less executor (gaps4 #59)
+
+### Other
+
+- *(cli)* add an example usage to every plugin command's help
+- *(readmes)* add the umbralrs.dev website link to every crate + plugin
+- *(worktree-agent-a9890f0defa728beb)* review_3 dedup batch
+- *(storage)* route FsStorage key-gen through neutralised_upload
+- *(storage)* fix swapped accept()/max_size() doc comments
+- *(branding)* retire batteries-included for declarative plus modularity motto
+
 ## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-storage-v0.0.10...umbral-storage-v0.0.11) - 2026-08-02
 
 ### Added

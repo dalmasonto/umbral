@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-security-v0.0.11...umbral-security-v0.0.12) - 2026-08-16
+
+### Other
+
+- *(readmes)* add the umbralrs.dev website link to every crate + plugin
+- *(branding)* retire batteries-included for declarative plus modularity motto
+
 ## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-security-v0.0.10...umbral-security-v0.0.11) - 2026-08-02
 
 ### Added
