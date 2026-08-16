@@ -29,8 +29,8 @@ use tokio::sync::OnceCell;
 
 use umbral::inspect::{
     INITIAL_MIGRATION_ID, INSPECTED_PLUGIN_NAME, InspectOptions, IntrospectedColumn,
-    IntrospectedSchema, IntrospectedTable, inspectdb, introspect_pool, render_models,
-    render_models_with,
+    IntrospectedSchema, IntrospectedTable, inspectdb, introspect_pool, render_initial_migration,
+    render_models, render_models_with,
 };
 use umbral::migrate::{MigrationFile, Operation};
 use umbral::orm::{Post, SqlType};
@@ -983,6 +983,84 @@ fn render_models_folds_pg_enum_into_choices_type() {
     assert!(
         m.contains("#[umbral(choices)]\n    pub refund_method: PaymentMethod,"),
         "the second column reuses the same enum type; got:\n{m}"
+    );
+}
+
+/// The initial migration must emit `CreateTable` operations in FK-dependency
+/// order — a referenced table before the one that references it — or Postgres
+/// rejects the inline `REFERENCES` with `relation "<target>" does not exist`.
+/// (SQLite tolerates the wrong order, which is why this only bites a real PG
+/// port.) Here the child table is listed FIRST in the schema; the migration
+/// must still create the parent first.
+#[test]
+fn initial_migration_orders_create_tables_by_fk_dependency() {
+    let plain = |name: &str, ty: SqlType, pk: bool| IntrospectedColumn {
+        name: name.to_string(),
+        ty,
+        primary_key: pk,
+        nullable: false,
+        fk_target: None,
+        unique: false,
+        index: false,
+        default: None,
+        auto_now_add: false,
+        auto_now: false,
+        choices: Vec::new(),
+        enum_type: None,
+    };
+    let fk = |name: &str, target: &str| IntrospectedColumn {
+        name: name.to_string(),
+        ty: SqlType::ForeignKey,
+        primary_key: false,
+        nullable: false,
+        fk_target: Some(target.to_string()),
+        unique: false,
+        index: false,
+        default: None,
+        auto_now_add: false,
+        auto_now: false,
+        choices: Vec::new(),
+        enum_type: None,
+    };
+    // Child listed BEFORE parent — the pre-fix order that failed on Postgres.
+    let schema = IntrospectedSchema {
+        tables: vec![
+            IntrospectedTable {
+                table: "child".to_string(),
+                name: "Child".to_string(),
+                columns: vec![
+                    plain("id", SqlType::BigInt, true),
+                    fk("parent_id", "parent"),
+                ],
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
+                m2m: Vec::new(),
+            },
+            IntrospectedTable {
+                table: "parent".to_string(),
+                name: "Parent".to_string(),
+                columns: vec![plain("id", SqlType::BigInt, true)],
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
+                m2m: Vec::new(),
+            },
+        ],
+    };
+
+    let migration = render_initial_migration(&schema);
+    let order: Vec<&str> = migration
+        .operations
+        .iter()
+        .filter_map(|op| match op {
+            Operation::CreateTable { table, .. } => Some(table.as_str()),
+            _ => None,
+        })
+        .collect();
+    let parent = order.iter().position(|t| *t == "parent");
+    let child = order.iter().position(|t| *t == "child");
+    assert!(
+        parent < child,
+        "parent must be created before the child that references it; got {order:?}"
     );
 }
 

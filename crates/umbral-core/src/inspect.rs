@@ -2023,6 +2023,61 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
     }
 }
 
+/// Order the introspected tables so a table referenced by a foreign key is
+/// created before the table that references it. Kahn's algorithm over the
+/// FK-target graph restricted to this schema's tables; self-references and FK
+/// targets outside the schema are ignored. A cycle (rare — mutual FKs) can't be
+/// created with plain inline `REFERENCES`, so the leftover cyclic tables are
+/// appended in their original order and the failure surfaces at apply time,
+/// matching the autodetector's Pass-2 behaviour in `migrate.rs`.
+fn fk_topo_order_tables(tables: &[IntrospectedTable]) -> Vec<&IntrospectedTable> {
+    use std::collections::{BTreeMap, HashSet};
+    let in_schema: HashSet<&str> = tables.iter().map(|t| t.table.as_str()).collect();
+    let mut deps: BTreeMap<&str, HashSet<&str>> = BTreeMap::new();
+    for t in tables {
+        let mut targets = HashSet::new();
+        for col in &t.columns {
+            if let Some(target) = col.fk_target.as_deref() {
+                if target != t.table.as_str() && in_schema.contains(target) {
+                    targets.insert(target);
+                }
+            }
+        }
+        deps.insert(t.table.as_str(), targets);
+    }
+    let by_name = |name: &str| tables.iter().find(|t| t.table.as_str() == name);
+    let mut ordered: Vec<&IntrospectedTable> = Vec::with_capacity(tables.len());
+    while !deps.is_empty() {
+        let ready: Vec<&str> = deps
+            .iter()
+            .filter(|(_, d)| d.is_empty())
+            .map(|(t, _)| *t)
+            .collect();
+        if ready.is_empty() {
+            // Cyclic FK: append the leftover tables in original order. The
+            // apply-time error is clearer than silently looping here.
+            for t in tables {
+                if deps.contains_key(t.table.as_str()) {
+                    ordered.push(t);
+                }
+            }
+            break;
+        }
+        for t in &ready {
+            if let Some(table) = by_name(t) {
+                ordered.push(table);
+            }
+            deps.remove(t);
+        }
+        for set in deps.values_mut() {
+            for t in &ready {
+                set.remove(t);
+            }
+        }
+    }
+    ordered
+}
+
 /// Render the introspected schema as a [`MigrationFile`] suitable for
 /// writing to `migrations/<INSPECTED_PLUGIN_NAME>/0001_initial.json`.
 /// One `CreateTable` per introspected table; `snapshot_after` captures
@@ -2066,9 +2121,13 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let mut operations: Vec<Operation> = schema
-        .tables
-        .iter()
+    // Emit CreateTable in FK-dependency order: a table referenced by another
+    // must be created first, or Postgres rejects the inline `REFERENCES` with
+    // `relation "<target>" does not exist` (SQLite tolerates the wrong order,
+    // which is why the SQLite-only tests never caught it). Mirrors the
+    // autodetector's Pass-2 Kahn sort in `migrate.rs`.
+    let mut operations: Vec<Operation> = fk_topo_order_tables(&schema.tables)
+        .into_iter()
         .map(|t| Operation::CreateTable {
             table: t.table.clone(),
             columns: t.columns.iter().map(Column::from).collect(),
