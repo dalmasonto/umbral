@@ -2947,7 +2947,8 @@ pub fn decode_to_string(
             SqlType::Decimal
             | SqlType::BigDecimal
             | SqlType::Geometry(_)
-            | SqlType::Geography(_) => panic_pg_only_unsupported(&col.name),
+            | SqlType::Geography(_)
+            | SqlType::DecimalN(_) => panic_pg_only_unsupported(&col.name),
         });
     }
     Ok(match col.ty {
@@ -2981,9 +2982,11 @@ pub fn decode_to_string(
             _ => row.try_get::<i64, _>(name)?.to_string(),
         },
         SqlType::Bytes => hex_encode(&row.try_get::<Vec<u8>, _>(name)?),
-        SqlType::Decimal | SqlType::BigDecimal | SqlType::Geometry(_) | SqlType::Geography(_) => {
-            panic_pg_only_unsupported(&col.name)
-        }
+        SqlType::Decimal
+        | SqlType::BigDecimal
+        | SqlType::DecimalN(_)
+        | SqlType::Geometry(_)
+        | SqlType::Geography(_) => panic_pg_only_unsupported(&col.name),
     })
 }
 
@@ -3075,7 +3078,7 @@ pub fn decode_pg_to_string(
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(String::new(), |b| hex_encode(&b)),
-            SqlType::Decimal => row
+            SqlType::Decimal | SqlType::DecimalN(_) => row
                 .try_get::<Option<rust_decimal::Decimal>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
             SqlType::BigDecimal => row
@@ -3119,7 +3122,9 @@ pub fn decode_pg_to_string(
             _ => row.try_get::<i64, _>(name)?.to_string(),
         },
         SqlType::Bytes => hex_encode(&row.try_get::<Vec<u8>, _>(name)?),
-        SqlType::Decimal => row.try_get::<rust_decimal::Decimal, _>(name)?.to_string(),
+        SqlType::Decimal | SqlType::DecimalN(_) => {
+            row.try_get::<rust_decimal::Decimal, _>(name)?.to_string()
+        }
         SqlType::BigDecimal => row.try_get::<bigdecimal::BigDecimal, _>(name)?.to_string(),
         SqlType::Geometry(_) | SqlType::Geography(_) => pg_geometry_geojson(row, name)?.to_string(),
     })
@@ -3262,7 +3267,8 @@ pub fn decode_to_json(
             SqlType::Decimal
             | SqlType::BigDecimal
             | SqlType::Geometry(_)
-            | SqlType::Geography(_) => panic_pg_only_unsupported(&col.name),
+            | SqlType::Geography(_)
+            | SqlType::DecimalN(_) => panic_pg_only_unsupported(&col.name),
         });
     }
     Ok(match col.ty {
@@ -3293,9 +3299,11 @@ pub fn decode_to_json(
             _ => Value::from(row.try_get::<i64, _>(name)?),
         },
         SqlType::Bytes => bytes_to_json(&row.try_get::<Vec<u8>, _>(name)?),
-        SqlType::Decimal | SqlType::BigDecimal | SqlType::Geometry(_) | SqlType::Geography(_) => {
-            panic_pg_only_unsupported(&col.name)
-        }
+        SqlType::Decimal
+        | SqlType::BigDecimal
+        | SqlType::DecimalN(_)
+        | SqlType::Geometry(_)
+        | SqlType::Geography(_) => panic_pg_only_unsupported(&col.name),
     })
 }
 
@@ -3377,7 +3385,7 @@ pub fn decode_pg_to_json(
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(Value::Null, |b| bytes_to_json(&b)),
-            SqlType::Decimal => row
+            SqlType::Decimal | SqlType::DecimalN(_) => row
                 .try_get::<Option<rust_decimal::Decimal>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
             SqlType::BigDecimal => row
@@ -3420,7 +3428,9 @@ pub fn decode_pg_to_json(
             _ => Value::from(row.try_get::<i64, _>(name)?),
         },
         SqlType::Bytes => bytes_to_json(&row.try_get::<Vec<u8>, _>(name)?),
-        SqlType::Decimal => Value::from(row.try_get::<rust_decimal::Decimal, _>(name)?.to_string()),
+        SqlType::Decimal | SqlType::DecimalN(_) => {
+            Value::from(row.try_get::<rust_decimal::Decimal, _>(name)?.to_string())
+        }
         SqlType::BigDecimal => {
             Value::from(row.try_get::<bigdecimal::BigDecimal, _>(name)?.to_string())
         }

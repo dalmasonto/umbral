@@ -854,6 +854,7 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
         // f64 lose precision, so the canonical wire shape is the
         // string representation.
         SqlType::Decimal => ("string", Some("decimal")),
+        SqlType::DecimalN(_) => ("string", Some("decimal")),
         SqlType::BigDecimal => ("string", Some("decimal")),
         // PostGIS columns serialise as GeoJSON geometry objects.
         SqlType::Geometry(_) | SqlType::Geography(_) => ("object", None),

@@ -726,7 +726,7 @@ pub fn json_to_sea_value(
         // exact decimals come in as strings) AND JSON strings
         // (canonical for money values). Anything else fails the
         // typed coerce.
-        SqlType::Decimal => coerce_decimal(value, field_name),
+        SqlType::Decimal | SqlType::DecimalN(_) => coerce_decimal(value, field_name),
         SqlType::BigDecimal => coerce_bigdecimal(value, field_name),
         // PostGIS: bind an EWKT string (`SRID=4326;POINT(…)`) as text — the
         // column's text→geometry cast parses it. The GeoJSON→EWKT conversion
@@ -1136,7 +1136,7 @@ pub(crate) fn null_for(sql_type: SqlType) -> SeaValue {
         | SqlType::Bit
         | SqlType::FullText => SeaValue::String(None),
         SqlType::Bytes => SeaValue::Bytes(None),
-        SqlType::Decimal => SeaValue::Decimal(None),
+        SqlType::Decimal | SqlType::DecimalN(_) => SeaValue::Decimal(None),
         SqlType::BigDecimal => SeaValue::BigDecimal(None),
         // Geometry binds as EWKT text, so its NULL is a NULL text.
         SqlType::Geometry(_) | SqlType::Geography(_) => SeaValue::String(None),

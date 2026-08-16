@@ -135,9 +135,9 @@ pub use foreign_key::ForeignKey;
 pub use m2m::{M2M, load_junction_selection, set_junction_dynamic, set_junction_dynamic_in_tx};
 pub use masked::{MaskError, MaskKeyring, Masked, set_mask_keyring};
 pub use model::{
-    ArrayElement, FieldSpec, FkAction, GeometryKind, GeometrySpec, HydrateRelated, M2MRelationSpec,
-    Model, ModelBase, OneToOneRelationSpec, PrimaryKey, ReverseFkRelationSpec, SqlType,
-    concat_field_specs,
+    ArrayElement, DecimalSpec, FieldSpec, FkAction, GeometryKind, GeometrySpec, HydrateRelated,
+    M2MRelationSpec, Model, ModelBase, OneToOneRelationSpec, PrimaryKey, ReverseFkRelationSpec,
+    SqlType, concat_field_specs,
 };
 pub use multichoice::MultiChoice;
 pub use one_to_one::OneToOne;

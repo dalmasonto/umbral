@@ -304,6 +304,13 @@ struct UmbralFieldAttr {
     /// `#[umbral(srid = 4326)]` — the SRID for a spatial column. Defaults to
     /// 4326 (WGS84) when omitted.
     srid: Option<i32>,
+    /// `#[umbral(precision = N)]` — total significant digits for a
+    /// `rust_decimal::Decimal` column, rendering `numeric(N, scale)` instead of
+    /// the default `numeric(19, 4)`. gaps5 (decimal dimensions).
+    precision: Option<u16>,
+    /// `#[umbral(scale = M)]` — digits after the decimal point. Defaults to 0
+    /// when `precision` is given without it.
+    scale: Option<u16>,
     /// `#[umbral(noform)]` — never show on any form.
     noform: bool,
     /// `#[umbral(signal_skip)]` — strip this field from ORM signal payloads
@@ -530,6 +537,8 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         geometry: None,
         geography: None,
         srid: None,
+        precision: None,
+        scale: None,
         noform: false,
         signal_skip: false,
         privileged: false,
@@ -611,6 +620,16 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 // `#[umbral(srid = 4326)]` — SRID for a spatial column.
                 let lit: syn::LitInt = meta.value()?.parse()?;
                 parsed.srid = Some(lit.base10_parse()?);
+                Ok(())
+            } else if meta.path.is_ident("precision") {
+                // `#[umbral(precision = N)]` — numeric(N, scale) dimensions.
+                let lit: syn::LitInt = meta.value()?.parse()?;
+                parsed.precision = Some(lit.base10_parse()?);
+                Ok(())
+            } else if meta.path.is_ident("scale") {
+                // `#[umbral(scale = M)]` — numeric(precision, M) dimensions.
+                let lit: syn::LitInt = meta.value()?.parse()?;
+                parsed.scale = Some(lit.base10_parse()?);
                 Ok(())
             } else if meta.path.is_ident("noform") {
                 parsed.noform = true;
@@ -1541,6 +1560,17 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 // attribute is (mis)placed on — the attribute is authoritative
                 // for the spatial classification.
                 _ => FieldKind::Geometry(spec),
+            };
+        }
+        // `#[umbral(precision = N, scale = M)]` — refine a Decimal field to
+        // caller-chosen `numeric(N, M)` dimensions. No-op on any non-decimal
+        // field (the attribute is only meaningful for `rust_decimal::Decimal`).
+        if let Some(precision) = field_attr.precision {
+            let scale = field_attr.scale.unwrap_or(0);
+            kind = match kind {
+                FieldKind::Decimal => FieldKind::DecimalN(precision, scale),
+                FieldKind::NullableDecimal => FieldKind::NullableDecimalN(precision, scale),
+                other => other,
             };
         }
         let noform_lit = if field_attr.noform {
@@ -2925,6 +2955,11 @@ enum FieldKind {
     BigDecimal,
     /// `Option<bigdecimal::BigDecimal>` — nullable arbitrary-precision numeric.
     NullableBigDecimal,
+    /// `rust_decimal::Decimal` with `#[umbral(precision = N, scale = M)]` —
+    /// `numeric(N, M)` instead of the `(19, 4)` default. Carries `(precision,
+    /// scale)`. Same rust_decimal codec as `Decimal`.
+    DecimalN(u16, u16),
+    NullableDecimalN(u16, u16),
     /// `umbral::orm::Slug` — TEXT with `[A-Za-z0-9_-]+` validation.
     /// Closes BUG-11. Storage is the inner String; the `text_format`
     /// marker on FieldSpec carries the validator selector.
@@ -3074,6 +3109,13 @@ impl FieldKind {
             FieldKind::BigDecimal | FieldKind::NullableBigDecimal => {
                 quote!(::umbral::orm::SqlType::BigDecimal)
             }
+            FieldKind::DecimalN(precision, scale)
+            | FieldKind::NullableDecimalN(precision, scale) => {
+                quote!(::umbral::orm::SqlType::DecimalN(::umbral::orm::DecimalSpec {
+                    precision: #precision,
+                    scale: #scale,
+                }))
+            }
             FieldKind::Geometry(g) | FieldKind::NullableGeometry(g) => {
                 let kind_ident = format_ident!("{}", g.modifier);
                 let srid = g.srid;
@@ -3133,6 +3175,7 @@ impl FieldKind {
                 | FieldKind::NullableMasked
                 | FieldKind::NullableDecimal
                 | FieldKind::NullableBigDecimal
+                | FieldKind::NullableDecimalN(..)
                 | FieldKind::NullableGeometry(_)
         )
     }
@@ -4003,6 +4046,8 @@ fn col_type_ident(kind: &FieldKind) -> Option<syn::Ident> {
         FieldKind::BigDecimal => format_ident!("BigDecimalCol"),
         FieldKind::Geometry(_) | FieldKind::NullableGeometry(_) => format_ident!("GeometryCol"),
         FieldKind::NullableBigDecimal => format_ident!("NullableBigDecimalCol"),
+        FieldKind::DecimalN(..) => format_ident!("DecimalCol"),
+        FieldKind::NullableDecimalN(..) => format_ident!("NullableDecimalCol"),
         // Relations / unsupported own no scalar column const.
         FieldKind::MultiChoice(_)
         | FieldKind::Many2Many(_)

@@ -4657,6 +4657,9 @@ fn postgres_type_sql(col: &Column) -> String {
         // path uses so an ALTER lands on the identical column type.
         SqlType::Geometry(spec) => crate::backend::pg_spatial_type("geometry", spec),
         SqlType::Geography(spec) => crate::backend::pg_spatial_type("geography", spec),
+        // Caller-chosen numeric dimensions, so an ALTER lands on the same
+        // `numeric(p,s)` the CreateTable path emits.
+        SqlType::DecimalN(spec) => format!("numeric({}, {})", spec.precision, spec.scale),
         _ => postgres_type_name(col.ty).to_string(),
     }
 }
@@ -4698,6 +4701,9 @@ fn postgres_type_name(ty: SqlType) -> &'static str {
         // Arbitrary-precision `numeric` (no dimensions). Mirrors the
         // unbounded `ColumnType::Decimal(None)` the create path emits.
         BigDecimal => "numeric",
+        // Bare fallback; the dimensioned `numeric(p,s)` form is rendered by
+        // `postgres_type_sql`, which special-cases DecimalN before reaching here.
+        DecimalN(_) => "numeric",
         // Bare spatial base type. The subtype+SRID-aware form is rendered by
         // `postgres_type_sql`, which special-cases these before reaching here;
         // this arm is the unconstrained fallback and keeps the match total.

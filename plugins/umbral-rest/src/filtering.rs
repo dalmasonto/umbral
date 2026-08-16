@@ -668,6 +668,7 @@ fn coerce_value(col: &Column, value: &str) -> Result<sea_query::Value, ApiError>
         | SqlType::Bytes
         | SqlType::Decimal
         | SqlType::BigDecimal
+        | SqlType::DecimalN(_)
         // Spatial filters (dwithin / bbox) are a planned follow-on; a plain
         // equality/range filter on a geometry column is rejected for now.
         | SqlType::Geometry(_)

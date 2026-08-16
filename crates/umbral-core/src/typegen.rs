@@ -242,7 +242,10 @@ fn push_field(out: &mut String, model: &ModelMeta, column: &Column, resolver: &R
             },
         );
     }
-    if matches!(column.ty, SqlType::Decimal | SqlType::BigDecimal) {
+    if matches!(
+        column.ty,
+        SqlType::Decimal | SqlType::BigDecimal | SqlType::DecimalN(_)
+    ) {
         docs.push(
             "Arbitrary-precision decimal, carried as a string: a JSON number \
              would lose precision."
@@ -332,6 +335,7 @@ fn ts_type(ty: SqlType) -> String {
         | SqlType::Uuid
         | SqlType::Decimal
         | SqlType::BigDecimal
+        | SqlType::DecimalN(_)
         | SqlType::Inet
         | SqlType::Cidr
         | SqlType::MacAddr

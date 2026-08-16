@@ -966,7 +966,7 @@ pub(crate) fn input_kind(col: &umbral::migrate::Column) -> &'static str {
         // numeric input would lose precision via JavaScript's f64.
         // Users type the canonical string form ("19.95"); the REST
         // dynamic path parses it via `rust_decimal::Decimal::from_str`.
-        SqlType::Decimal | SqlType::BigDecimal => "text",
+        SqlType::Decimal | SqlType::BigDecimal | SqlType::DecimalN(_) => "text",
         // v1 spatial widget: a WKT/GeoJSON textarea (portable, no map JS).
         SqlType::Geometry(_) | SqlType::Geography(_) => "text",
     }
@@ -1022,6 +1022,7 @@ pub(crate) fn sql_type_name(ty: SqlType) -> &'static str {
         SqlType::Xml | SqlType::Ltree | SqlType::Bit => "text",
         SqlType::Bytes => "bytes",
         SqlType::Decimal => "decimal",
+        SqlType::DecimalN(_) => "decimal",
         SqlType::BigDecimal => "bigdecimal",
         SqlType::Geometry(_) => "geometry",
         SqlType::Geography(_) => "geography",

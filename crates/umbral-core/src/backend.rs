@@ -222,6 +222,10 @@ impl DatabaseBackend for PostgresBackend {
             // inheriting precision via stored TEXT). v1 fixes the
             // dimensions; a future attribute lifts that.
             SqlType::Decimal => ColumnType::Decimal(Some((19, 4))),
+            // Caller-chosen `numeric(precision, scale)` dimensions.
+            SqlType::DecimalN(spec) => {
+                ColumnType::Decimal(Some((spec.precision.into(), spec.scale.into())))
+            }
             // Arbitrary-precision `numeric` — no precision/scale, so it stores
             // as many digits as the value carries. This is the whole point of
             // BigDecimal over the fixed-dimension `Decimal` above.
@@ -359,7 +363,7 @@ impl DatabaseBackend for SqliteBackend {
                 "umbral::backend::SqliteBackend::map_type: SqlType::{ty:?} is Postgres-only \
                  (PostGIS). The field.backend system check should have failed boot."
             ),
-            SqlType::Decimal | SqlType::BigDecimal => panic!(
+            SqlType::Decimal | SqlType::BigDecimal | SqlType::DecimalN(_) => panic!(
                 "umbral::backend::SqliteBackend::map_type: SqlType::{ty:?} is Postgres-only. \
                  The field.backend system check should have failed boot."
             ),

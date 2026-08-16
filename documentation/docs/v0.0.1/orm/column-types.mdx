@@ -38,6 +38,9 @@ The cross-backend types compile and run against both Postgres and SQLite. The Po
 | `umbral::orm::TsVector` (Postgres-only) | `FullText` | `TSVECTOR` | - (boot fails) |
 | `rust_decimal::Decimal` (Postgres-only) | `Decimal` | `NUMERIC(19, 4)` | - (boot fails) |
 | `Option<rust_decimal::Decimal>` (Postgres-only) | `Decimal` (nullable) | `NUMERIC(19, 4)` | - (boot fails) |
+| `rust_decimal::Decimal` + `#[umbral(precision = N, scale = M)]` (Postgres-only) | `DecimalN` | `NUMERIC(N, M)` | - (boot fails) |
+| `bigdecimal::BigDecimal` (Postgres-only) | `BigDecimal` | `NUMERIC` (unbounded) | - (boot fails) |
+| `umbral::orm::gis::Geometry` + `#[umbral(geometry = "...", srid = N)]` (Postgres-only, `postgis` feature) | `Geometry` | `geometry(<kind>, <srid>)` | - (boot fails) |
 | `ForeignKey<T>` | `ForeignKey` | `BIGINT REFERENCES "t"("id")` | `BIGINT REFERENCES "t"("id")` |
 
 Any of these types wrapped in `Option<T>` produces the nullable column. `Option` is the only path to a nullable column - there is no `null = true` attribute.

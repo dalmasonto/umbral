@@ -1261,6 +1261,15 @@ pub enum SqlType {
     /// precision numeric type, so the system check rejects a `BigDecimal`
     /// field against a SQLite backend at boot.
     BigDecimal,
+    /// A fixed-precision decimal with **caller-chosen** dimensions —
+    /// `numeric(precision, scale)` — the sibling of [`SqlType::Decimal`]
+    /// (which is the `(19, 4)` default) for a column that needs different
+    /// dimensions: `numeric(5, 2)` for a percentage, `numeric(19, 8)` for an
+    /// FX rate. Produced by `#[umbral(precision = N, scale = M)]` on a
+    /// `rust_decimal::Decimal` field. Shares the `rust_decimal` codec with
+    /// `Decimal`, so precision must stay within rust_decimal's ~28-digit
+    /// ceiling (use `BigDecimal` beyond that). Postgres-only, like `Decimal`.
+    DecimalN(DecimalSpec),
     /// PostGIS `geometry(<kind>, <srid>)` — a planar spatial column.
     /// Postgres-only, behind the `postgis` cargo feature. The subtype and
     /// SRID travel inside the [`GeometrySpec`] payload (mirroring how
@@ -1272,6 +1281,17 @@ pub enum SqlType {
     /// PostGIS `geography(<kind>, <srid>)` — a spheroidal spatial column where
     /// distances are in metres. The spheroidal sibling of [`SqlType::Geometry`].
     Geography(GeometrySpec),
+}
+
+/// The dimensions of a [`SqlType::DecimalN`] column — `numeric(precision,
+/// scale)`. `Copy` so it nests inside `SqlType` and rides in a `const FIELDS`
+/// slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct DecimalSpec {
+    /// Total number of significant digits (both sides of the point).
+    pub precision: u16,
+    /// Digits after the decimal point.
+    pub scale: u16,
 }
 
 /// The subtype + SRID of a spatial column ([`SqlType::Geometry`] /

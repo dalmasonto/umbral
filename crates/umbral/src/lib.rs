@@ -729,10 +729,10 @@ pub mod orm {
 
     pub use umbral_core::orm::write::{SaveError, WriteError, slugify};
     pub use umbral_core::orm::{
-        Aggregate, AggregateKind, ArrayElement, ChoiceField, Cmp, CsvImportReport, DynError,
-        DynQuerySet, Email, F, FColExt, FExpr, FieldSpec, FileField, FkAction, ForeignKey,
-        GeometryKind, GeometrySpec, GetError, HydrateRelated, ImageField, InsertedPk, JoinKind,
-        M2M, M2MRelationSpec, Manager, MaskError, MaskKeyring, Masked, Model, ModelBase,
+        Aggregate, AggregateKind, ArrayElement, ChoiceField, Cmp, CsvImportReport, DecimalSpec,
+        DynError, DynQuerySet, Email, F, FColExt, FExpr, FieldSpec, FileField, FkAction,
+        ForeignKey, GeometryKind, GeometrySpec, GetError, HydrateRelated, ImageField, InsertedPk,
+        JoinKind, M2M, M2MRelationSpec, Manager, MaskError, MaskKeyring, Masked, Model, ModelBase,
         MultiChoice, OneToOne, OneToOneRelationSpec, Post, Predicate, PrimaryKey, Q, QuerySet,
         QuerySetTx, ReverseError, ReverseFkRelationSpec, ReverseRelations, ReverseSet, Search,
         SearchHit, Searchable, Slug, SqlType, TryForEachError, TsVector, Url, ValidatorError,

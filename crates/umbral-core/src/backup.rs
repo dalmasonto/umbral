@@ -707,6 +707,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
                 }),
             // BUG-10: Decimal is Postgres-only.
             SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
+            SqlType::DecimalN(_) => unreachable_pg_only(&col.name, "DecimalN"),
             SqlType::BigDecimal => unreachable_pg_only(&col.name, "BigDecimal"),
             SqlType::Geometry(_) => unreachable_pg_only(&col.name, "Geometry"),
             SqlType::Geography(_) => unreachable_pg_only(&col.name, "Geography"),
@@ -738,6 +739,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             Value::Array(bytes.into_iter().map(Value::from).collect())
         }
         SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
+        SqlType::DecimalN(_) => unreachable_pg_only(&col.name, "DecimalN"),
         SqlType::BigDecimal => unreachable_pg_only(&col.name, "BigDecimal"),
         SqlType::Geometry(_) => unreachable_pg_only(&col.name, "Geometry"),
         SqlType::Geography(_) => unreachable_pg_only(&col.name, "Geography"),
@@ -847,7 +849,7 @@ fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value,
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(Value::Null, bytes_to_json),
-            SqlType::Decimal => row
+            SqlType::Decimal | SqlType::DecimalN(_) => row
                 .try_get::<Option<Decimal>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
             SqlType::Geometry(_) | SqlType::Geography(_) => pg_geometry_dump(row, name, true)?,
@@ -880,7 +882,9 @@ fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value,
             Value::from(row.try_get::<String, _>(name)?)
         }
         SqlType::Bytes => bytes_to_json(row.try_get::<Vec<u8>, _>(name)?),
-        SqlType::Decimal => Value::from(row.try_get::<Decimal, _>(name)?.to_string()),
+        SqlType::Decimal | SqlType::DecimalN(_) => {
+            Value::from(row.try_get::<Decimal, _>(name)?.to_string())
+        }
         SqlType::BigDecimal => {
             Value::from(row.try_get::<bigdecimal::BigDecimal, _>(name)?.to_string())
         }
@@ -1016,6 +1020,7 @@ fn bind_value<'q>(
             SqlType::ForeignKey => q.bind(None::<i64>),
             SqlType::Bytes => q.bind(None::<Vec<u8>>),
             SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
+            SqlType::DecimalN(_) => unreachable_pg_only(&col.name, "DecimalN"),
             SqlType::BigDecimal => unreachable_pg_only(&col.name, "BigDecimal"),
             SqlType::Geometry(_) => unreachable_pg_only(&col.name, "Geometry"),
             SqlType::Geography(_) => unreachable_pg_only(&col.name, "Geography"),
@@ -1086,6 +1091,7 @@ fn bind_value<'q>(
         // dump path emits.
         SqlType::Bytes => q.bind(bytes_from_json(table, col, &val)?),
         SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
+        SqlType::DecimalN(_) => unreachable_pg_only(&col.name, "DecimalN"),
         SqlType::BigDecimal => unreachable_pg_only(&col.name, "BigDecimal"),
         SqlType::Geometry(_) => unreachable_pg_only(&col.name, "Geometry"),
         SqlType::Geography(_) => unreachable_pg_only(&col.name, "Geography"),
@@ -1123,7 +1129,7 @@ fn bind_value_pg<'q>(
             // parameter; Postgres applies the column's assignment cast.
             SqlType::Xml | SqlType::Ltree | SqlType::Bit => q.bind(None::<String>),
             SqlType::Bytes => q.bind(None::<Vec<u8>>),
-            SqlType::Decimal => q.bind(None::<Decimal>),
+            SqlType::Decimal | SqlType::DecimalN(_) => q.bind(None::<Decimal>),
             SqlType::BigDecimal => q.bind(None::<bigdecimal::BigDecimal>),
             // Geometry binds as EWKT text, so its NULL is a NULL text bind.
             SqlType::Geometry(_) | SqlType::Geography(_) => q.bind(None::<String>),
@@ -1206,7 +1212,7 @@ fn bind_value_pg<'q>(
             q.bind(s.to_string())
         }
         SqlType::Bytes => q.bind(bytes_from_json(table, col, &val)?),
-        SqlType::Decimal => {
+        SqlType::Decimal | SqlType::DecimalN(_) => {
             let parsed = match &val {
                 Value::String(s) => Decimal::from_str(s).ok(),
                 Value::Number(n) => Decimal::from_str(&n.to_string()).ok(),
