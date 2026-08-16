@@ -901,12 +901,13 @@ fn render_one_struct(
     app_labels: &std::collections::HashSet<String>,
 ) -> String {
     let mut out = String::new();
-    // `sqlx::FromRow` is required because the `Model` trait bounds it
-    // as a supertrait (see `crates/umbral-core/src/orm/model.rs`).
-    // Without it, `#[derive(Model)]` emits an `impl Model` whose
-    // sqlx::FromRow supertrait isn't satisfied and the generated file
-    // fails to compile.
-    out.push_str("#[derive(Debug, Clone, sqlx::FromRow, Model)]\n");
+    // `sqlx::FromRow` is required (the `Model` trait bounds it as a supertrait),
+    // and `Model` also requires `serde::Serialize` + `DeserializeOwned` (a
+    // `ForeignKey<T>` needs `T: DeserializeOwned`), so both serde derives are
+    // mandatory for the generated file to compile.
+    out.push_str(
+        "#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]\n",
+    );
     if to_snake_case(&table.name) != table.table {
         out.push_str(&format!("#[umbral(table = \"{}\")]\n", table.table));
     }
@@ -921,9 +922,14 @@ fn render_one_struct(
         if column.index {
             out.push_str("    #[umbral(index)]\n");
         }
-        let (field_name, ty) = match &column.fk_target {
-            // A foreign key renders as `ForeignKey<Target>` (nullable → wrapped
-            // in `Option`), pointing at the referenced table's generated struct.
+        // A primary key not named `id` must be marked so the derive can find
+        // it (Django's `authtoken_token.key`, `django_session.session_key`, …).
+        if column.primary_key && column.name != "id" {
+            out.push_str("    #[umbral(primary_key)]\n");
+        }
+        // The desired Rust field name: a framework may prettify a FK column
+        // (`author_id` -> `author`); otherwise it's the column name.
+        let (desired, ty) = match &column.fk_target {
             Some(target) => {
                 let target_struct = pascal_case_from_table(target);
                 let ty = if column.nullable {
@@ -931,25 +937,91 @@ fn render_one_struct(
                 } else {
                     format!("ForeignKey<{target_struct}>")
                 };
-                // Under a framework, a `<field>_id` FK column becomes the clean
-                // `<field>` Rust name bound to the real column via `#[sqlx]`.
-                match framework_fk_field_name(&column.name, framework, app_labels) {
-                    Some(pretty) if pretty != column.name => {
-                        out.push_str(&format!("    #[sqlx(rename = \"{}\")]\n", column.name));
-                        (pretty, ty)
-                    }
-                    _ => (column.name.clone(), ty),
-                }
+                let name = framework_fk_field_name(&column.name, framework, app_labels)
+                    .unwrap_or_else(|| column.name.clone());
+                (name, ty)
             }
             None => (
                 column.name.clone(),
                 render_field_type(column.ty, column.nullable),
             ),
         };
+        // Escape a Rust keyword / otherwise-invalid identifier (a column named
+        // `type`, `match`, …) by suffixing `_`. Whenever the Rust field name
+        // ends up different from the DB column, bind them with `#[sqlx(rename)]`
+        // so `FromRow` and umbral's column name both resolve to the real column.
+        let field_name = safe_field_ident(&desired);
+        if field_name != column.name {
+            out.push_str(&format!("    #[sqlx(rename = \"{}\")]\n", column.name));
+        }
         out.push_str(&format!("    pub {field_name}: {ty},\n"));
     }
     out.push_str("}\n");
     out
+}
+
+/// The Rust reserved words that can't be a bare field identifier. A column with
+/// one of these names is suffixed with `_` (`type` -> `type_`) and bound to the
+/// real column via `#[sqlx(rename)]`.
+fn is_rust_keyword(s: &str) -> bool {
+    matches!(
+        s,
+        "as" | "break"
+            | "const"
+            | "continue"
+            | "crate"
+            | "dyn"
+            | "else"
+            | "enum"
+            | "extern"
+            | "false"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "in"
+            | "let"
+            | "loop"
+            | "match"
+            | "mod"
+            | "move"
+            | "mut"
+            | "pub"
+            | "ref"
+            | "return"
+            | "self"
+            | "Self"
+            | "static"
+            | "struct"
+            | "super"
+            | "trait"
+            | "true"
+            | "type"
+            | "unsafe"
+            | "use"
+            | "where"
+            | "while"
+            | "async"
+            | "await"
+            | "box"
+            | "final"
+            | "macro"
+            | "override"
+            | "priv"
+            | "typeof"
+            | "unsized"
+            | "virtual"
+            | "yield"
+    )
+}
+
+/// Turn a column name into a valid, non-keyword Rust field identifier.
+fn safe_field_ident(name: &str) -> String {
+    if is_rust_keyword(name) {
+        format!("{name}_")
+    } else {
+        name.to_string()
+    }
 }
 
 /// Map `(SqlType, nullable)` to the Rust type string the derive macro's

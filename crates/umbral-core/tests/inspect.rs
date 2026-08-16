@@ -666,3 +666,49 @@ async fn inspectdb_django_framework_prettifies_fk_columns() {
         "django FK `blog_category_id` must become `category`; got:\n{models}"
     );
 }
+
+/// Regression: the generated models must compile against the real `Model`
+/// trait, which surfaced three bugs on a real Django schema — missing serde
+/// derives, a PK not named `id` left unmarked, and a Rust-keyword column name.
+#[tokio::test]
+async fn inspectdb_generates_compilable_models_for_edge_cases() {
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("edge.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        // PK not named `id` (Django's authtoken_token.key).
+        "CREATE TABLE authtoken_token (key TEXT PRIMARY KEY, name TEXT NOT NULL)",
+        // A column that is a Rust keyword.
+        "CREATE TABLE main_media (id INTEGER PRIMARY KEY, type TEXT NOT NULL)",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: None,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // 1. serde derives are present (Model requires DeserializeOwned).
+    assert!(
+        m.contains("serde::Serialize, serde::Deserialize"),
+        "generated derive must include serde; got:\n{m}"
+    );
+    // 2. a PK not named `id` is marked.
+    assert!(
+        m.contains("#[umbral(primary_key)]") && m.contains("pub key: String"),
+        "a non-`id` PK must be marked #[umbral(primary_key)]; got:\n{m}"
+    );
+    // 3. a Rust-keyword column is escaped + sqlx-renamed.
+    assert!(
+        m.contains("#[sqlx(rename = \"type\")]") && m.contains("pub type_: String"),
+        "a keyword column `type` must become `type_` bound to `type`; got:\n{m}"
+    );
+}
