@@ -189,9 +189,13 @@ enum Command {
         #[arg(long, default_value_t = false, requires = "out")]
         check: bool,
     },
-    /// Introspect the ambient database into a `models.rs` plus an
-    /// initial migration. Used to onboard an existing schema.
+    /// Introspect a database into a `models.rs` plus an initial migration.
+    /// Used to onboard an existing schema.
     Inspectdb {
+        /// The source database to introspect: a `sqlite://` / `postgres://`
+        /// URL, or a path to a SQLite file (`./db.sqlite3`). When omitted,
+        /// the app's ambient database (`UMBRAL_DATABASE_URL`) is used.
+        database: Option<String>,
         /// Directory the generated files are written under.
         #[arg(long)]
         output: PathBuf,
@@ -488,9 +492,10 @@ pub async fn dispatch_with_argv(
         Command::Checkmigrations { strict } => checkmigrations(strict).await,
         Command::Typegen { out, check } => typegen(out, check),
         Command::Inspectdb {
+            database,
             output,
             mark_applied,
-        } => inspectdb(output, mark_applied).await,
+        } => inspectdb(database, output, mark_applied).await,
         Command::Dumpdata { output } => dumpdata(output).await,
         Command::Loaddata { input } => loaddata(input).await,
         Command::Importcsv { table, input } => importcsv(table, input).await,
@@ -1113,10 +1118,12 @@ fn op_kind(op: &umbral::migrate::Operation) -> &'static str {
 }
 
 async fn inspectdb(
+    database: Option<String>,
     output: PathBuf,
     mark_applied: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let opts = InspectOptions {
+        source: database.map(|d| normalize_source_db(&d)),
         output,
         mark_applied,
     };
@@ -1136,6 +1143,30 @@ async fn inspectdb(
         }
         Err(err) => Err(Box::new(err)),
     }
+}
+
+/// Normalize a user-supplied `inspectdb` source into a connection URL.
+///
+/// A value that already looks like a URL (`sqlite://…`, `postgres://…`,
+/// `postgresql://…`, or the in-memory `sqlite::memory:`) is passed through
+/// untouched. Anything else is treated as a **path to a SQLite file** and
+/// wrapped as a read-only `sqlite://<abs-path>?mode=ro`, so `umbral inspectdb
+/// ./db.sqlite3` works without the caller hand-writing a URL and can't mutate
+/// the source database it's only reading.
+fn normalize_source_db(input: &str) -> String {
+    let lower = input.to_ascii_lowercase();
+    if lower.starts_with("sqlite:")
+        || lower.starts_with("postgres://")
+        || lower.starts_with("postgresql://")
+    {
+        return input.to_string();
+    }
+    // A bare filesystem path. Absolutize so a relative path resolves against
+    // the caller's CWD rather than sqlx's, then open read-only.
+    let abs = std::fs::canonicalize(input)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| input.to_string());
+    format!("sqlite://{abs}?mode=ro")
 }
 
 async fn dumpdata(output: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

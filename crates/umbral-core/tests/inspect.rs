@@ -351,6 +351,7 @@ async fn inspectdb_writes_models_and_migration_to_output_directory() {
     let tmp: TempDir = tempfile::tempdir().expect("create tempdir");
 
     let opts = InspectOptions {
+        source: None,
         output: tmp.path().to_path_buf(),
         mark_applied: false,
     };
@@ -406,6 +407,7 @@ async fn inspectdb_with_mark_applied_records_the_initial_migration() {
     let tmp: TempDir = tempfile::tempdir().expect("create tempdir");
 
     let opts = InspectOptions {
+        source: None,
         output: tmp.path().to_path_buf(),
         mark_applied: true,
     };
@@ -502,4 +504,46 @@ async fn render_models_emits_fromrow_and_skips_option_on_primary_keys() {
         out.contains("pub body: Option<String>,"),
         "non-PK nullable columns should still be Option; got:\n{out}",
     );
+}
+
+/// `inspectdb` with an explicit `source` URL introspects THAT database, not the
+/// ambient pool — the `umbral inspectdb <db>` onboarding path. The ambient pool
+/// (booted with `post`) is deliberately different from the source file's single
+/// `widget` table, so a source that is honoured produces `Widget`, never `Post`.
+#[tokio::test]
+async fn inspectdb_honors_an_explicit_source_database() {
+    boot().await; // publishes the ambient `post` pool — which we must NOT read.
+
+    // A standalone SQLite file with one table the ambient pool doesn't have.
+    let src_dir = TempDir::new().expect("temp dir for the source db");
+    let src_path = src_dir.path().join("foreign.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src_pool = umbral::db::connect_sqlite(&url)
+        .await
+        .expect("open the source file db");
+    sqlx::query("CREATE TABLE widget (id INTEGER PRIMARY KEY, label TEXT NOT NULL)")
+        .execute(&src_pool)
+        .await
+        .expect("seed the source schema");
+
+    let out_dir = TempDir::new().expect("temp dir for output");
+    let opts = InspectOptions {
+        source: Some(url.clone()),
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    let report = inspectdb(opts)
+        .await
+        .expect("inspectdb against a source db");
+
+    let models = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+    assert!(
+        models.contains("pub struct Widget"),
+        "must introspect the SOURCE db's `widget` table; got:\n{models}"
+    );
+    assert!(
+        !models.contains("pub struct Post"),
+        "must NOT read the ambient `post` pool when a source is given; got:\n{models}"
+    );
+    assert_eq!(report.tables, 1, "the source db has exactly one table");
 }

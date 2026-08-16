@@ -180,6 +180,11 @@ impl From<migrate::MigrateError> for InspectError {
 /// struct and hands it to [`inspectdb`].
 #[derive(Debug, Clone)]
 pub struct InspectOptions {
+    /// The source database connection URL to introspect. `None` means "use the
+    /// app's ambient pool" (the historical behaviour); `Some(url)` opens a
+    /// dedicated connection to that database instead, so `umbral inspectdb
+    /// <db>` can onboard a foreign schema without repointing the whole app.
+    pub source: Option<String>,
     /// Directory the generated files are written under. `models.rs`
     /// lands at the root; the migration lands at
     /// `<output>/migrations/<INSPECTED_PLUGIN_NAME>/0001_initial.json`.
@@ -215,9 +220,18 @@ pub struct InspectReport {
 /// Postgres path uses `information_schema`. The downstream pipeline
 /// (rendering + writing) is backend-agnostic and runs the same way.
 pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport, InspectError> {
-    let schema = match crate::db::pool_dispatched() {
-        crate::db::DbPool::Sqlite(pool) => introspect_pool(pool).await?,
-        crate::db::DbPool::Postgres(pool) => introspect_pool_pg(pool).await?,
+    // A `--source` URL opens its own connection so a foreign database can be
+    // onboarded without repointing the whole app; otherwise introspect the
+    // ambient pool the app already booted with.
+    let schema = match &opts.source {
+        Some(url) => match crate::db::connect(url).await? {
+            crate::db::DbPool::Sqlite(pool) => introspect_pool(&pool).await?,
+            crate::db::DbPool::Postgres(pool) => introspect_pool_pg(&pool).await?,
+        },
+        None => match crate::db::pool_dispatched() {
+            crate::db::DbPool::Sqlite(pool) => introspect_pool(pool).await?,
+            crate::db::DbPool::Postgres(pool) => introspect_pool_pg(pool).await?,
+        },
     };
     if schema.tables.is_empty() {
         return Err(InspectError::NoTables);
