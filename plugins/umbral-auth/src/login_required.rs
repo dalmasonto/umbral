@@ -48,10 +48,8 @@ use axum::body::Body;
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum_core::extract::FromRequestParts;
-use chrono::{DateTime, Utc};
 use http::request::Parts;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use tower::{Layer, Service};
 
 use crate::UserModel;
@@ -237,26 +235,11 @@ where
 // Session resolution helpers
 // =========================================================================
 
-/// SHA-256 hash the raw session token. Mirrors `umbral-sessions`'s
-/// `hash_token`. umbral-auth must not depend on umbral-sessions (the dep
-/// arrow runs the other way), so we re-implement the trivial hash step.
-fn hash_token(raw: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(raw.as_bytes());
-    format!("{:x}", h.finalize())
-}
-
-/// Extract the `umbral_session` cookie from the request headers.
-fn cookie_from_headers(headers: &http::HeaderMap) -> Option<String> {
-    let header = headers.get(http::header::COOKIE)?.to_str().ok()?;
-    for pair in header.split(';') {
-        let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix("umbral_session=") {
-            return Some(value.to_string());
-        }
-    }
-    None
-}
+// Session-token hashing and cookie parsing used to be re-implemented here
+// (with `SessionRow`) to avoid depending on umbral-sessions. umbral-auth now
+// depends on umbral-sessions (Cargo.toml), and session resolution routes
+// through its STORE-AWARE `current_user_id_str` — which is why those private
+// copies (and their store-blind direct-SQL read) are gone.
 
 /// Load a user of type `U` from the session cookie in the given
 /// headers. The generic shape powers both [`LoggedIn`] and the
@@ -316,21 +299,18 @@ where
     U: UserModel,
     <U as umbral::orm::Model>::PrimaryKey: std::str::FromStr,
 {
-    let raw_token = cookie_from_headers(headers)?;
-    let stored_id = hash_token(&raw_token);
-    let row: Option<SessionRow> = umbral::orm::Manager::<SessionRow>::default()
-        .filter(umbral::orm::Predicate::<SessionRow>::col_eq(
-            "id", stored_id,
-        ))
-        .first()
+    // Route through umbral-sessions' STORE-AWARE resolver (a legal
+    // dependency now — see Cargo.toml) instead of reading the SQL `session`
+    // table directly. The direct read broke auth under CookieStore /
+    // RedisStore (no `session` row exists there) and ignored the absolute
+    // `max_session_age()` cap that `read_session` enforces — so a session
+    // past its absolute lifetime still authenticated. `current_user_id_str`
+    // resolves via the active store and applies both checks.
+    let user_id = umbral_sessions::current_user_id_str(headers)
         .await
         .ok()
-        .flatten();
-    let row = row?;
-    if row.expires_at < Utc::now() {
-        return None;
-    }
-    row.user_id?.parse().ok()
+        .flatten()?;
+    user_id.parse().ok()
 }
 
 /// Check whether headers carry a valid authenticated session.
@@ -353,26 +333,6 @@ pub(crate) async fn is_authenticated(headers: &http::HeaderMap) -> bool {
 /// instead — both stay polymorphic over the active user model's PK.
 pub async fn current_session_user_id(headers: &http::HeaderMap) -> Option<i64> {
     current_session_user_pk::<crate::AuthUser>(headers).await
-}
-
-/// Private mirror of `umbral_sessions::Session`. Lives here because
-/// `umbral-auth` does not depend on `umbral-sessions` (the dep arrow runs
-/// the other way), but we still need ORM access to the `session` table.
-/// Multiple `Model` impls can target the same table — sea-query treats
-/// the schema as data, not a type-level singleton.
-#[doc(hidden)]
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
-#[umbral(table = "session")]
-pub struct SessionRow {
-    pub id: String,
-    /// Polymorphic user-PK column (gap #59). Stored as the user's PK
-    /// `Display` form — i64 for AuthUser, UUID for custom user models,
-    /// etc. Parse with `<U::PrimaryKey as FromStr>::from_str` on the
-    /// way out.
-    pub user_id: Option<String>,
-    pub data: String,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
 }
 
 // =========================================================================
