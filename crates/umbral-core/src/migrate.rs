@@ -1326,6 +1326,14 @@ fn fk_action_suffix(col: &Column) -> String {
     s
 }
 
+/// Suffix that makes a Postgres FK constraint `DEFERRABLE INITIALLY IMMEDIATE`:
+/// checked per-statement by default (identical behaviour to a plain FK), but
+/// allowing `SET CONSTRAINTS ALL DEFERRED` inside a transaction to hold the
+/// check until commit. The data-transfer engine relies on this to load
+/// mutually-referential (cyclic) tables on Postgres. SQLite needs no equivalent
+/// — its `PRAGMA defer_foreign_keys` defers any FK regardless of declaration.
+const PG_FK_DEFERRABLE: &str = " DEFERRABLE INITIALLY IMMEDIATE";
+
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -5635,8 +5643,8 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
         } => {
             vec![format!(
                 r#"CREATE TABLE "{jt}" (
-    "parent_id" {pty} NOT NULL REFERENCES "{pt}"("{pc}") ON DELETE CASCADE,
-    "child_id" {cty} NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE,
+    "parent_id" {pty} NOT NULL REFERENCES "{pt}"("{pc}") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
+    "child_id" {cty} NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
     PRIMARY KEY ("parent_id", "child_id")
 )"#,
                 jt = junction_table.replace('"', "\"\""),
@@ -5989,7 +5997,7 @@ fn render_alter_column_postgres(
                 stmts.push(format!(
                     "ALTER TABLE {q_table} ADD CONSTRAINT \"{cname}\" \
                      FOREIGN KEY ({q_column}) REFERENCES {q_target}({q_pk})\
-                     {on_delete_clause}{on_update_clause}"
+                     {on_delete_clause}{on_update_clause}{PG_FK_DEFERRABLE}"
                 ));
             }
         }
@@ -6342,7 +6350,7 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
         // logical column + `fk_target` stay intact.
         if col.db_constraint {
             def.extra(format!(
-                "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}",
+                "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}{PG_FK_DEFERRABLE}",
                 fk_action_suffix(col),
             ));
         }

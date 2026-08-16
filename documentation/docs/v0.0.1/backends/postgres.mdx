@@ -114,6 +114,17 @@ cargo run -- inspectdb --output src/legacy
 
 `--output` is a directory: inspectdb writes a `models.rs` with one `#[derive(Model)]` struct per table plus a `0001_initial.json` migration, ready to drop into a module and register from a plugin (or via `.model::<T>()`). It recovers **foreign keys** (`information_schema` → `ForeignKey<Target>`) and **single-column unique / index** constraints (`pg_index`). Round-trip integration coverage lives in `crates/umbral-core/tests/postgres_inspect.rs`. See the [inspectdb page](../migrations/inspectdb) for the full flag set (`--mark-applied`, the optional source-DB argument, and `--framework django`).
 
+## Deferrable foreign keys
+
+On Postgres, every foreign-key constraint the migration engine emits is
+`DEFERRABLE INITIALLY IMMEDIATE`: it's checked per statement by default — no
+behaviour change from a plain FK — but a transaction can `SET CONSTRAINTS ALL
+DEFERRED` to hold the check until commit. That's what lets a bulk load insert
+mutually-referential (cyclic) rows in any order, which the
+[`transferdata`](../cli/transferdata) engine relies on to move a `parent_id`
+tree or an A↔B pair. SQLite needs no equivalent — its `PRAGMA
+defer_foreign_keys` defers any FK regardless of how it was declared.
+
 ## Row-Level Security
 
 Postgres's Row-Level Security is the right tool for per-row access control that the database enforces regardless of how the row is queried. The `umbral-rls` plugin ([Row-Level Security (umbral-rls)](../plugins/rls)) wraps the `CREATE POLICY` shape and runs at `Plugin::on_ready` time. On a SQLite backend the plugin logs and skips, so RLS-using apps stay dev-portable.

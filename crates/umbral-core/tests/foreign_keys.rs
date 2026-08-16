@@ -611,6 +611,31 @@ fn self_referential_fk_renders_inline_references() {
 /// confirm the cascade pruned the child. The same `Operation::
 /// CreateTable` the migration engine emits is the only DDL run —
 /// nothing is hand-stitched.
+/// Postgres FK constraints are emitted `DEFERRABLE INITIALLY IMMEDIATE` so a
+/// `SET CONSTRAINTS ALL DEFERRED` can hold the check until commit (the transfer
+/// engine's cyclic-table load). SQLite needs no such marker — its
+/// `PRAGMA defer_foreign_keys` defers any FK regardless.
+#[test]
+fn postgres_fk_is_deferrable_sqlite_is_not() {
+    let meta = umbral::migrate::ModelMeta::for_::<Category>();
+    let op = Operation::CreateTable {
+        table: Category::TABLE.to_string(),
+        columns: meta.fields.clone(),
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
+    };
+    let pg = render_operation_for(&op, "postgres").join("\n");
+    assert!(
+        pg.contains("DEFERRABLE INITIALLY IMMEDIATE"),
+        "the Postgres FK must be deferrable; got: {pg}"
+    );
+    let sqlite = render_operation_for(&op, "sqlite").join("\n");
+    assert!(
+        !sqlite.to_uppercase().contains("DEFERRABLE"),
+        "SQLite FK DDL should carry no DEFERRABLE marker; got: {sqlite}"
+    );
+}
+
 #[tokio::test]
 async fn self_referential_fk_round_trips_through_sqlite_with_cascade() {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();

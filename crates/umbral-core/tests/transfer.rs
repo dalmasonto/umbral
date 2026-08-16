@@ -587,6 +587,79 @@ async fn transfer_mutual_fk_cycle() {
     assert_eq!(member, (10, 1));
 }
 
+/// The mutual FK cycle across backends: SQLite source -> Postgres target, where
+/// the deferred group copy issues `SET CONSTRAINTS ALL DEFERRED` — which only
+/// works because umbral now emits FK constraints `DEFERRABLE`. Runs only with
+/// `UMBRAL_TEST_POSTGRES_URL` set.
+#[tokio::test]
+async fn transfer_mutual_fk_cycle_to_postgres() {
+    let Ok(pg_url) = std::env::var("UMBRAL_TEST_POSTGRES_URL") else {
+        eprintln!("skipping: UMBRAL_TEST_POSTGRES_URL not set");
+        return;
+    };
+    boot().await;
+    let dir = TempDir::new().unwrap();
+    let source = open(&dir.path().join("cyclepg_src.sqlite3")).await;
+    let pg = umbral::db::connect(&pg_url).await.expect("connect pg");
+    let umbral::db::DbPool::Postgres(pgpool) = &pg else {
+        panic!("UMBRAL_TEST_POSTGRES_URL must be a Postgres URL");
+    };
+    // Source schema (SQLite) + target schema (Postgres, cyclic FKs made
+    // DEFERRABLE exactly as umbral's migration engine now emits them).
+    sqlx::query("CREATE TABLE org (id INTEGER PRIMARY KEY, name TEXT NOT NULL, lead_id INTEGER REFERENCES member(id))")
+        .execute(&source).await.unwrap();
+    sqlx::query("CREATE TABLE member (id INTEGER PRIMARY KEY, name TEXT NOT NULL, org_id INTEGER NOT NULL REFERENCES org(id))")
+        .execute(&source).await.unwrap();
+    for stmt in [
+        "DROP TABLE IF EXISTS member, org, umbral_transfer_state CASCADE",
+        "CREATE TABLE org (id BIGINT PRIMARY KEY, name TEXT NOT NULL, lead_id BIGINT)",
+        "CREATE TABLE member (id BIGINT PRIMARY KEY, name TEXT NOT NULL, org_id BIGINT NOT NULL)",
+        "ALTER TABLE org ADD CONSTRAINT org_lead_fk FOREIGN KEY (lead_id) \
+         REFERENCES member(id) DEFERRABLE INITIALLY IMMEDIATE",
+        "ALTER TABLE member ADD CONSTRAINT member_org_fk FOREIGN KEY (org_id) \
+         REFERENCES org(id) DEFERRABLE INITIALLY IMMEDIATE",
+    ] {
+        sqlx::query(stmt).execute(pgpool).await.expect("pg ddl");
+    }
+
+    // Seed the cycle on the source (deferred there too).
+    let mut tx = source.begin().await.unwrap();
+    sqlx::query("PRAGMA defer_foreign_keys = ON")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO org (id, name, lead_id) VALUES (1, 'Acme', 10)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO member (id, name, org_id) VALUES (10, 'Ada', 1)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let src = umbral::db::DbPool::Sqlite(source);
+    transfer(
+        &src,
+        &pg,
+        vec![ModelMeta::for_::<Org>(), ModelMeta::for_::<Member>()],
+        &TransferOptions::default(),
+    )
+    .await
+    .expect("cyclic transfer to postgres must defer FK checks to commit");
+
+    let org: (i64, Option<i64>) = sqlx::query_as("SELECT id, lead_id FROM org")
+        .fetch_one(pgpool)
+        .await
+        .unwrap();
+    let member: (i64, i64) = sqlx::query_as("SELECT id, org_id FROM member")
+        .fetch_one(pgpool)
+        .await
+        .unwrap();
+    assert_eq!(org, (1, Some(10)));
+    assert_eq!(member, (10, 1));
+}
+
 /// FK-topological ordering: a child never precedes its parent.
 #[tokio::test]
 async fn fk_topo_order_places_parents_first() {

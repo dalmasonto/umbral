@@ -125,7 +125,9 @@ Registered models (single-column PK), their M2M junction rows, cross-backend
 moves (SQLite ↔ Postgres), Django-source mapping (`--map django`), parallel
 workers, and circular foreign keys are covered. A self-referential table (a
 `parent_id` tree) or a mutually-referential pair copies under a single
-FK-deferred transaction so the cycle resolves at commit — on Postgres this
-needs the constraints to be `DEFERRABLE`. Still on the list: richer `--map`
-targets beyond Django. The design lives in
-`docs/decisions/2026-08-16-data-transfer-engine.md`.
+FK-deferred transaction so the cycle resolves at commit. On Postgres this uses
+`SET CONSTRAINTS ALL DEFERRED`, which works because umbral emits FK constraints
+`DEFERRABLE INITIALLY IMMEDIATE` — so a target created by `migrate` supports it
+out of the box (a pre-existing database whose FKs aren't deferrable would need
+those constraints re-created). Still on the list: richer `--map` targets beyond
+Django. The design lives in `docs/decisions/2026-08-16-data-transfer-engine.md`.
