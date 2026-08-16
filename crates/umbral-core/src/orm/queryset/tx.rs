@@ -20,7 +20,7 @@ use crate::orm::{HydrateRelated, Model};
 
 use super::QuerySet;
 use super::errors::GetError;
-use super::write_helpers::{build_insert_one_for, serialize_to_map};
+use super::write_helpers::{build_insert_one_for, pk_field, serialize_to_map};
 
 /// A `QuerySet` bound to an open transaction. See module docs for
 /// the construction sites and the borrow-checker contract.
@@ -195,9 +195,77 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
     // -----------------------------------------------------------------------
 
     /// DELETE inside the transaction. Returns the number of rows deleted.
+    ///
+    /// On a `#[umbral(soft_delete)]` model this rewrites to
+    /// `UPDATE ... SET deleted_at = NOW()` (plus the on_delete=cascade
+    /// soft-cascade), exactly like the non-transactional `QuerySet::delete`
+    /// — otherwise a `.delete()` that happened to run inside `on_tx()` would
+    /// permanently destroy rows the caller expected to be recoverable.
+    /// `.hard_delete()` opts back into a real DELETE.
     pub async fn delete(self) -> Result<u64, sqlx::Error> {
+        if self.qs.soft_delete_active && !self.qs.hard_delete {
+            return self.soft_delete_in_tx().await;
+        }
         let stmt = self.qs.build_delete_for(self.tx.backend_name());
         match self.tx.backend_name() {
+            "sqlite" => {
+                let tx = self.tx.as_sqlite_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&mut **tx)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+            _ => {
+                let tx = self.tx.as_pg_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&mut **tx)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+        }
+    }
+
+    /// The soft-delete rewrite of [`Self::delete`], run inside the caller's
+    /// transaction: cascade to any `on_delete = "cascade"` children, then
+    /// stamp `deleted_at = NOW()` on the matched live rows (idempotent —
+    /// never re-stamps an already soft-deleted row). Mirrors
+    /// `QuerySet::soft_delete_update`, minus the private tx it opens.
+    async fn soft_delete_in_tx(self) -> Result<u64, sqlx::Error> {
+        use sea_query::{Alias, Query, Value};
+        let backend = self.tx.backend_name();
+        let now = chrono::Utc::now();
+        let table = crate::db::router::schema_qualified_table(T::TABLE);
+
+        // Cascade first — locate children through the parent's still-live
+        // predicate before the parent is stamped, so no orphaned live child
+        // is left behind.
+        if let Some(pkf) = pk_field::<T>() {
+            let mut sel = Query::select();
+            sel.column(Alias::new(pkf.name)).from(table.clone());
+            for p in &self.qs.predicates {
+                sel.and_where(p.cond_for(backend));
+            }
+            sel.and_where(Expr::col(Alias::new("deleted_at")).is_null());
+            let meta = crate::migrate::ModelMeta::for_::<T>();
+            let mut conn = crate::orm::soft_delete_cascade::CascadeConn::from_tx(self.tx);
+            crate::orm::soft_delete_cascade::cascade_soft_delete(&mut conn, &meta, sel, now)
+                .await?;
+        }
+
+        let mut stmt = Query::update();
+        stmt.table(table);
+        stmt.value(
+            Alias::new("deleted_at"),
+            Value::ChronoDateTimeUtc(Some(Box::new(now))),
+        );
+        for p in &self.qs.predicates {
+            stmt.and_where(p.cond_for(backend));
+        }
+        stmt.and_where(Expr::col(Alias::new("deleted_at")).is_null());
+
+        match backend {
             "sqlite" => {
                 let tx = self.tx.as_sqlite_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);

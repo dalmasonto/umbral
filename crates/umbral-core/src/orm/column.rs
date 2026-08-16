@@ -162,6 +162,21 @@ impl<T> StrCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).ne(val.into()))
     }
 
+    /// SQL `<col> IN (...)` over a list of strings — the string/`String`-PK
+    /// counterpart to `IntCol::in_`. Accepts `&[&str]` or `&[String]`.
+    pub fn in_<S: AsRef<str>>(&self, vals: &[S]) -> Predicate<T> {
+        Predicate::new(
+            Expr::col(Alias::new(self.name)).is_in(vals.iter().map(|s| s.as_ref().to_string())),
+        )
+    }
+
+    /// SQL `<col> IN (SELECT ...)` against a [`super::Subquery`] — the
+    /// string-column counterpart to `IntCol::in_subquery`, so a
+    /// String-/Uuid-PK parent can be filtered by a subquery.
+    pub fn in_subquery(&self, sub: super::Subquery) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).in_subquery(sub.into_statement()))
+    }
+
     /// SQL `LIKE` (case-sensitive).
     ///
     /// # Examples
@@ -904,6 +919,19 @@ impl<T> NullableStrCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).ne(val.into()))
     }
 
+    /// SQL `<col> IN (...)` over a list of strings. Accepts `&[&str]` or
+    /// `&[String]`.
+    pub fn in_<S: AsRef<str>>(&self, vals: &[S]) -> Predicate<T> {
+        Predicate::new(
+            Expr::col(Alias::new(self.name)).is_in(vals.iter().map(|s| s.as_ref().to_string())),
+        )
+    }
+
+    /// SQL `<col> IN (SELECT ...)` against a [`super::Subquery`].
+    pub fn in_subquery(&self, sub: super::Subquery) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).in_subquery(sub.into_statement()))
+    }
+
     /// SQL `LIKE` (case-sensitive).
     pub fn like<S: Into<String>>(&self, pattern: S) -> Predicate<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).like(pattern.into()))
@@ -1605,11 +1633,12 @@ fn json_has_key_predicate<T>(col: &'static str, key: &str) -> Predicate<T> {
     let col_escaped = col.replace('"', "\"\"");
     let key_escaped = key.replace('\'', "''");
 
-    // Postgres: native `?` has-key operator. sea-query's
-    // `cust_with_values` uses `?` and `$` as placeholder tokens, so
-    // we double the `?` to emit a literal one. The key is inline
-    // single-quoted (no binding).
-    let pg_sql = format!("\"{col_escaped}\" ?? '{key_escaped}'");
+    // Postgres: native `?` has-key operator. `Expr::cust` renders the
+    // string VERBATIM (unlike `cust_with_values`, it does not tokenize
+    // `?`/`$` as placeholders), so emit a single literal `?` — doubling it
+    // shipped an invalid `??` operator to Postgres (`operator does not
+    // exist: jsonb ?? unknown`). The key is inline single-quoted (no bind).
+    let pg_sql = format!("\"{col_escaped}\" ? '{key_escaped}'");
     let pg_cond = Expr::cust(&pg_sql);
 
     // SQLite JSON1: there's no native has-key operator. The closest

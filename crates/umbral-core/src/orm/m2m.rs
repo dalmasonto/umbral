@@ -872,9 +872,12 @@ fn pk_seaval_to_json(v: sea_query::Value) -> serde_json::Value {
         SV::Float(Some(f)) => json!(f),
         SV::Double(Some(f)) => json!(f),
         SV::String(Some(s)) => json!(*s),
-        // Uuid + any other sea_query::Value variant falls through to a
-        // best-effort Display rendering. Uuid's Display gives the
-        // canonical hyphenated form which round-trips cleanly.
+        // Uuid renders as its canonical hyphenated Display form (the
+        // round-trippable id), NOT the sea_query wrapper's Debug — a Debug
+        // render emits `Uuid(Some(936d…))` and breaks m2m_changed signal
+        // subscribers (audit log / cache invalidation) keyed on the id.
+        SV::Uuid(Some(u)) => json!(u.to_string()),
+        // Any other variant falls through to a best-effort Debug render.
         other => json!(format!("{:?}", other)),
     }
 }

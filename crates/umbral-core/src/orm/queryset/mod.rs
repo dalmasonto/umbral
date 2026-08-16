@@ -1056,7 +1056,12 @@ impl<T> QuerySet<T> {
     /// `Post::objects().filter(...).into_subquery("author_id")` →
     /// `Subquery` you can hand to `user::ID.in_subquery(...)`.
     pub fn into_subquery(self, col_name: &str) -> crate::orm::Subquery {
-        let mut q = self.build_query_for("sqlite");
+        // Resolve the real backend so per-backend predicates (e.g. a JSON
+        // path's `json_extract(...)` vs `col ->> 'k'`) render for the pool
+        // that will run the OUTER query — hardcoding "sqlite" baked the
+        // SQLite variant into subqueries later executed on Postgres.
+        let backend = subquery_backend(&self.explicit_pool);
+        let mut q = self.build_query_for(backend);
         q.clear_selects();
         q.column(Alias::new(col_name));
         crate::orm::Subquery::from_select(q)
@@ -1087,7 +1092,10 @@ impl<T> QuerySet<T> {
     /// SelectStatement with the given UnionType. Both sides apply
     /// their accumulated predicates / ORDER BY before the union.
     fn combine(mut self, other: QuerySet<T>, ty: sea_query::UnionType) -> Self {
-        let backend = "sqlite";
+        // Resolve the real backend (not a hardcoded "sqlite") so a JSON-path
+        // predicate on either arm renders for the pool that runs the
+        // combined query — see `into_subquery`.
+        let backend = subquery_backend(&self.explicit_pool);
         let other_select = other.build_query_for(backend);
         // Fold our own predicates into the base query so the union
         // sees them; further `.filter()` calls on the returned
@@ -1327,6 +1335,20 @@ fn guard_pg_terminal_unsupported(
          ambient pool / DatabaseRouter and DOES hydrate), or drop `.{feature}(...)`.",
         terminal.trim_end_matches("_pg"),
     )))
+}
+
+/// Resolve the backend name for a pure query-BUILDING context (subquery /
+/// union composition), where there is no executor yet. Prefer the
+/// QuerySet's explicit pool, else the ambient default pool; fall back to
+/// `"sqlite"` when no app is booted (a to_sql-style call in a test) so the
+/// builder never panics.
+fn subquery_backend(explicit: &Option<DbPool>) -> &'static str {
+    if let Some(p) = explicit {
+        return p.backend_name();
+    }
+    crate::db::try_pool_dispatched()
+        .map(|p| p.backend_name())
+        .unwrap_or("sqlite")
 }
 
 fn resolve_pool<T: Model>(explicit: Option<DbPool>, op: crate::db::RouteOp) -> DbPool {
@@ -3359,12 +3381,12 @@ impl<T: Model> QuerySet<T> {
         for p in &self.predicates {
             stmt.and_where(p.cond_for(backend));
         }
-        if self.soft_delete_active {
-            if self.only_deleted {
-                stmt.and_where(Expr::col(Alias::new("deleted_at")).is_not_null());
-            } else if !self.with_deleted {
-                stmt.and_where(Expr::col(Alias::new("deleted_at")).is_null());
-            }
+        // Route the implicit visibility filter through the single seam
+        // (`implicit_predicates`) instead of a 4th hand-inlined copy of the
+        // soft-delete guard — so a future implicit predicate (row-level
+        // tenant scope) reaches update_expr too, not just reads/update_values.
+        for e in self.implicit_predicates() {
+            stmt.and_where(e);
         }
         let pk = pk_field::<T>();
         if let Some(pkf) = pk {
