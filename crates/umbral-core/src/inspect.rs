@@ -1406,6 +1406,37 @@ fn pick_m2m_owner(join_table: &str, ta: &str, tb: &str) -> Option<(String, Strin
     }
 }
 
+/// Derive `(owner_table, field_name, target_table)` for a junction, per
+/// framework. Django/Rails/Laravel name the table `<owner_table>_<field>`
+/// (see [`pick_m2m_owner`]). Prisma's implicit M2M is `_<ModelA>To<ModelB>` with
+/// FK columns `A` (-> alphabetically-first model) and `B` — symmetric, so `A`'s
+/// target is taken as the owner and the field is named from the child table.
+fn pick_m2m(
+    framework: Framework,
+    table: &str,
+    fk_cols: &[&IntrospectedColumn],
+) -> Option<(String, String, String)> {
+    let ta = fk_cols[0].fk_target.as_deref().unwrap();
+    let tb = fk_cols[1].fk_target.as_deref().unwrap();
+    match framework {
+        Framework::Prisma => {
+            if !(table.starts_with('_') && table.contains("To")) {
+                return None;
+            }
+            let by_name = |name: &str| {
+                fk_cols
+                    .iter()
+                    .find(|c| c.name == name)
+                    .and_then(|c| c.fk_target.as_deref())
+            };
+            let owner = by_name("A").unwrap_or(ta);
+            let child = by_name("B").unwrap_or(tb);
+            Some((owner.to_string(), to_snake_case(child), child.to_string()))
+        }
+        _ => pick_m2m_owner(table, ta, tb),
+    }
+}
+
 /// Fold M2M join tables into `M2M<T>` fields on their owner model. A pure
 /// junction — exactly two FK columns, every other column just the surrogate PK
 /// — named `<owner_table>_<field>` becomes `owner.field: M2M<Target>`, and the
@@ -1420,14 +1451,11 @@ fn detect_m2m_relations(
     framework: Option<Framework>,
     with_table_names: bool,
 ) {
-    // The `<owner_table>_<field>` naming these frameworks share is what makes the
-    // owner/field derivation possible; Prisma / no-framework can't be folded.
-    if !matches!(
-        framework,
-        Some(Framework::Django | Framework::Rails | Framework::Laravel)
-    ) {
+    // Django/Rails/Laravel share the `<owner_table>_<field>` join naming; Prisma
+    // uses `_<A>To<B>` with `A`/`B` columns. Both are foldable (see `pick_m2m`).
+    let Some(fw) = framework else {
         return;
-    }
+    };
     let struct_names = resolve_struct_names(schema, framework, with_table_names);
     let owner_cols: std::collections::HashMap<String, std::collections::HashSet<String>> = schema
         .tables
@@ -1453,9 +1481,7 @@ fn detect_m2m_relations(
         if !is_junction {
             continue;
         }
-        let ta = fk_cols[0].fk_target.as_deref().unwrap();
-        let tb = fk_cols[1].fk_target.as_deref().unwrap();
-        let Some((owner_table, field, target_table)) = pick_m2m_owner(&t.table, ta, tb) else {
+        let Some((owner_table, field, target_table)) = pick_m2m(fw, &t.table, &fk_cols) else {
             continue;
         };
         // Owner `auth_user` isn't re-declared, so we can't hang a field on it.

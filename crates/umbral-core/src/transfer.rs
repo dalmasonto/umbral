@@ -245,7 +245,11 @@ pub fn fk_topo_plan(models: Vec<ModelMeta>) -> (Vec<Vec<ModelMeta>>, Vec<ModelMe
 /// same as its DDL) after both endpoint tables.
 #[derive(Debug, Clone)]
 struct Junction {
+    /// The umbral junction name (`<owner_table>_<field>`) — the WRITE target.
     table: String,
+    /// The junction name on the SOURCE. Equals `table` for Django/Rails/Laravel;
+    /// Prisma names it `_<ModelA>To<ModelB>`.
+    source_table: String,
     /// The tables the two FK columns reference — used to identify, at runtime,
     /// which source column is the parent side and which the child. The source's
     /// junction column NAMES vary by framework (Django `<model>_id`, Rails
@@ -259,8 +263,10 @@ struct Junction {
 
 /// Enumerate every M2M junction the registered models declare. `parent_ty` is
 /// the owner's PK type; `child_ty` the target's (resolved from the model set,
-/// defaulting to `BigInt` when the target isn't registered here).
-fn collect_junctions(models: &[ModelMeta]) -> Vec<Junction> {
+/// defaulting to `BigInt` when the target isn't registered here). `map` fixes
+/// the SOURCE junction table name: it equals the umbral one for Django/Rails/
+/// Laravel, but Prisma names it `_<ModelA>To<ModelB>` (alphabetical).
+fn collect_junctions(models: &[ModelMeta], map: TransferMap) -> Vec<Junction> {
     let pk_ty = |table: &str| -> SqlType {
         models
             .iter()
@@ -273,8 +279,19 @@ fn collect_junctions(models: &[ModelMeta]) -> Vec<Junction> {
     for m in models {
         let parent_ty = m.pk_column().map(|c| c.ty).unwrap_or(SqlType::BigInt);
         for rel in &m.m2m_relations {
+            let table = format!("{}_{}", m.table, rel.field_name);
+            let source_table = match map {
+                TransferMap::Prisma => {
+                    // `_<A>To<B>` with the two MODEL (struct) names sorted.
+                    let mut ends = [m.name.as_str(), rel.target_name.as_str()];
+                    ends.sort_unstable();
+                    format!("_{}To{}", ends[0], ends[1])
+                }
+                _ => table.clone(),
+            };
             out.push(Junction {
-                table: format!("{}_{}", m.table, rel.field_name),
+                table,
+                source_table,
                 owner_table: m.table.clone(),
                 child_table: rel.target_table.clone(),
                 parent_ty,
@@ -298,7 +315,7 @@ async fn resolve_junction_columns(
     // (from_column, referenced_table) for every FK on the junction.
     let fks: Vec<(String, String)> = match source {
         DbPool::Sqlite(pool) => {
-            let jt = jn.table.replace('"', "\"\"");
+            let jt = jn.source_table.replace('"', "\"\"");
             let rows = sqlx::query(&format!("PRAGMA foreign_key_list(\"{jt}\")"))
                 .fetch_all(pool)
                 .await?;
@@ -322,7 +339,7 @@ async fn resolve_junction_columns(
              WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public' \
                AND tc.table_name = $1 ORDER BY kcu.ordinal_position",
             )
-            .bind(&jn.table)
+            .bind(&jn.source_table)
             .fetch_all(pool)
             .await?
         }
@@ -687,11 +704,11 @@ pub async fn transfer(
             report.per_table.push((meta.table.clone(), n));
             report.rows += n;
         }
-        for jn in collect_junctions(&flat) {
+        for jn in collect_junctions(&flat, opts.map) {
             if excluded(&jn.table) {
                 continue;
             }
-            let n = count_rows(source, &jn.table).await?;
+            let n = count_rows(source, &jn.source_table).await?;
             report.per_table.push((jn.table.clone(), n));
             report.rows += n;
         }
@@ -769,7 +786,7 @@ pub async fn transfer(
 
     // Junctions after every model (both endpoints now exist on the target) —
     // all independent of each other, so they run concurrently too.
-    let junctions = collect_junctions(&flat);
+    let junctions = collect_junctions(&flat, opts.map);
     let jtasks = junctions
         .iter()
         .filter(|jn| !excluded(&jn.table) && !done(&jn.table))
@@ -922,7 +939,7 @@ async fn read_junction_batch(
     last: Option<&(serde_json::Value, serde_json::Value)>,
     limit: u64,
 ) -> Result<Vec<(serde_json::Value, serde_json::Value)>, TransferError> {
-    let jt = jn.table.replace('"', "\"\"");
+    let jt = jn.source_table.replace('"', "\"\"");
     // Source-side column names resolved from the DB (see
     // `resolve_junction_columns`). The read is by position, so the output is
     // always `(parent, child)` regardless of the source names.

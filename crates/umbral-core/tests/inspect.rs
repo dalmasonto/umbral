@@ -840,6 +840,48 @@ async fn inspectdb_rails_folds_habtm_join_tables() {
     );
 }
 
+/// `--framework prisma` folds an implicit M2M join table (`_PostToTag` with
+/// `A`/`B` columns) into an `M2M<T>` field, and drops the join table.
+#[tokio::test]
+async fn inspectdb_prisma_folds_implicit_m2m() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("prisma_m2m.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE post (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+        "CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        // Prisma implicit M2M: `_<A>To<B>` table, `A`/`B` FK columns.
+        "CREATE TABLE \"_PostToTag\" (\
+            \"A\" INTEGER NOT NULL REFERENCES post(id), \
+            \"B\" INTEGER NOT NULL REFERENCES tag(id), PRIMARY KEY (\"A\", \"B\"))",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Prisma),
+        with_table_names: false,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb --framework prisma");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    assert!(
+        m.contains("pub tag: M2M<Tag, i32>"),
+        "prisma `_PostToTag` must fold into `tag: M2M<Tag, i32>`; got:\n{m}"
+    );
+    assert!(
+        !m.contains("struct PostToTag") && !m.contains("struct Posttotag"),
+        "the `_PostToTag` join table must not render as a plain struct; got:\n{m}"
+    );
+}
+
 /// The `_id` strip rewrites composite index groups in lockstep: a
 /// `unique_together` over FK columns must name the stripped fields, not the old
 /// `<fk>_id` columns (which no longer exist on the generated struct).

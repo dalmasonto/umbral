@@ -98,15 +98,15 @@ conventions on the *data* side):
 | `django` | `author_id` → `author` | snake_case, kept | app-prefix strip (`--with-table-names`), `auth_user` → `AuthUser`, M2M fold |
 | `rails` (`activerecord`) | `author_id` → `author` | snake_case, kept | M2M fold |
 | `laravel` (`eloquent`) | `author_id` → `author` | snake_case, kept | M2M fold |
-| `prisma` (`typeorm`) | `authorId` → `author` | `firstName` → `first_name` | — |
+| `prisma` (`typeorm`) | `authorId` → `author` | `firstName` → `first_name` | M2M fold |
 
 Django, Rails and Laravel share the snake `<field>_id` FK convention; Prisma
 uses camelCase, so **every** column is snake-cased. **M2M folding** (turning a
-join table into an `M2M<T>` field) works for Django, Rails and Laravel — they
-all name the through / join / pivot table `<owner_table>_<field>`. Prisma's
-implicit M2M (`_ModelAToModelB` with `A` / `B` columns) is a different shape and
-is left as a plain struct. The **app-prefix strip** and **`auth_user`
-externalization** stay Django-only (they're Django conventions).
+join table into an `M2M<T>` field) works for all four: Django/Rails/Laravel name
+the through / join / pivot table `<owner_table>_<field>`, and Prisma's implicit
+`_ModelAToModelB` (with `A` / `B` columns) is recognised by its shape. The
+**app-prefix strip** and **`auth_user` externalization** stay Django-only
+(they're Django conventions).
 
 The Django example below shows the fullest case:
 

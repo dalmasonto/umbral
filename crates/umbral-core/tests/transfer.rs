@@ -428,9 +428,10 @@ async fn transfer_map_prisma_translates_camelcase_columns() {
         "CREATE TABLE tag (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
         "CREATE TABLE note (id INTEGER PRIMARY KEY, body TEXT NOT NULL, \
          \"ownerId\" INTEGER NOT NULL REFERENCES author(id))",
-        "CREATE TABLE note_labels (\
-         \"noteId\" INTEGER NOT NULL REFERENCES note(id), \
-         \"tagId\" INTEGER NOT NULL REFERENCES tag(id), PRIMARY KEY (\"noteId\", \"tagId\"))",
+        // Prisma implicit M2M: `_<A>To<B>` table (models sorted), `A`/`B` columns.
+        "CREATE TABLE \"_NoteToTag\" (\
+         \"A\" INTEGER NOT NULL REFERENCES note(id), \
+         \"B\" INTEGER NOT NULL REFERENCES tag(id), PRIMARY KEY (\"A\", \"B\"))",
     ] {
         sqlx::query(stmt).execute(&source).await.unwrap();
     }
@@ -459,7 +460,7 @@ async fn transfer_map_prisma_translates_camelcase_columns() {
         .execute(&source)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO note_labels (\"noteId\", \"tagId\") VALUES (10, 100)")
+    sqlx::query("INSERT INTO \"_NoteToTag\" (\"A\", \"B\") VALUES (10, 100)")
         .execute(&source)
         .await
         .unwrap();
