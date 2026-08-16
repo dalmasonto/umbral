@@ -151,9 +151,41 @@ fn forward_to_project(args: &[String]) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
+    // Self-invocation guard. `umbral <cmd>` forwards to `cargo run -- <cmd>` in
+    // the current project. If that project is the umbral framework repo itself
+    // (or any project whose binary re-invokes this scaffolding CLI), the child
+    // `cargo run` rebuilds and runs THIS binary, which forwards again — an
+    // infinite loop cargo eventually aborts with a cryptic "infinite recursion
+    // detected" after a dozen rebuilds. We set a marker on the child; seeing it
+    // already set means we are that re-entry, so we stop with a clear message.
+    const FORWARD_MARKER: &str = "UMBRAL_CLI_FORWARDING";
+    if std::env::var_os(FORWARD_MARKER).is_some() {
+        let cmd = args.first().map(String::as_str).unwrap_or("<command>");
+        eprintln!(
+            "error: `umbral {cmd}` can't run here — this looks like the umbral framework \
+             repository (or a project whose binary re-invokes the `umbral` CLI), so \
+             forwarding to `cargo run -- {cmd}` just re-runs this command in a loop.\n\
+             \n\
+             `umbral <command>` is meant to run inside an umbral *app*:\n\
+             \x20 - from your project directory:      umbral {cmd} ...\n\
+             \x20 - or equivalently:                  cargo run -- {cmd} ...\n\
+             \x20 - to try it in a bundled example:   cd examples/<name> && cargo run -- {cmd} ...\n\
+             \n\
+             To work on the framework itself:\n\
+             \x20 - run the whole test suite:         cargo test --workspace\n\
+             \x20 - build everything:                 cargo build --workspace\n\
+             \x20 - create a new app to run against:  umbral startproject <name>",
+            cmd = cmd,
+        );
+        return ExitCode::FAILURE;
+    }
     let cargo_args = umbral_cli::cargo_run_forward_args(args);
     match std::process::Command::new("cargo")
         .args(&cargo_args)
+        // Mark the child so a re-entry into this scaffolding CLI (the
+        // framework-repo recursion above) is caught with a clear message
+        // rather than cargo's "infinite recursion detected".
+        .env(FORWARD_MARKER, "1")
         .status()
     {
         Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),

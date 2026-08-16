@@ -485,23 +485,124 @@ pub fn render_help(catalog: &[(String, Option<String>)]) -> String {
         let desc = about.as_deref().map(str::trim).unwrap_or("");
         rows.push((name.as_str(), desc));
     }
-    rows.sort_by(|a, b| a.0.cmp(b.0));
 
-    let width = rows.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+    // One shared column width across every group, so descriptions line up in
+    // the same place no matter which section a command sits in.
+    let width = rows.iter().map(|(n, _)| n.len()).max().unwrap_or(0).max(4);
+    // Where a description starts: two-space left margin + name + three-space
+    // gutter. Wrapped description lines hang-indent to the same column.
+    let desc_col = 2 + width + 3;
+
+    // Ordered command groups. A command whose name isn't listed here (a plugin
+    // or app command) falls through to the final "Other commands" section, so
+    // the built-in grouping never hides a third-party command.
+    const GROUPS: &[(&str, &[&str])] = &[
+        (
+            "Create a project or plugin",
+            &["startproject", "startapp", "startplugin", "startcommand"],
+        ),
+        ("Run the app", &["serve", "dev"]),
+        (
+            "Database & migrations",
+            &[
+                "migrate",
+                "makemigrations",
+                "showmigrations",
+                "checkmigrations",
+                "squashmigrations",
+                "inspectdb",
+                "transferdata",
+                "dumpdata",
+                "loaddata",
+                "importcsv",
+            ],
+        ),
+        (
+            "Generate & utilities",
+            &["typegen", "maskkeygen", "gen-client"],
+        ),
+    ];
 
     let mut s = String::new();
-    s.push_str("umbral — manage your umbral app\n\n");
-    s.push_str("Usage: umbral <command> [options]\n\n");
-    s.push_str("Commands:\n");
-    for (name, desc) in &rows {
-        let desc = if desc.is_empty() { "-" } else { desc };
-        // First line of a multi-line `about` is the summary.
-        let summary = desc.lines().next().unwrap_or("-");
-        s.push_str(&format!("  {name:<width$}  {summary}\n"));
+    s.push_str("umbral - manage your umbral app\n\n");
+    s.push_str("Usage:\n  umbral <command> [options]\n");
+
+    let mut rendered: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for (title, names) in GROUPS {
+        let mut group: Vec<(&str, &str)> = rows
+            .iter()
+            .filter(|(n, _)| names.contains(n))
+            .copied()
+            .collect();
+        push_group(&mut s, title, &mut group, width, desc_col);
+        for (n, _) in &group {
+            rendered.insert(*n);
+        }
     }
+    // Everything not claimed by a built-in group: plugin + app commands, plus
+    // any new built-in that hasn't been slotted into a group above.
+    let mut other: Vec<(&str, &str)> = rows
+        .iter()
+        .filter(|(n, _)| !rendered.contains(n))
+        .copied()
+        .collect();
+    push_group(&mut s, "Other commands", &mut other, width, desc_col);
+
     s.push('\n');
     s.push_str("Run `umbral <command> --help` for command-specific help.\n");
     s
+}
+
+/// Render one titled group of commands into `s`. Rows are sorted by name;
+/// descriptions align to `desc_col` and long ones wrap with a hanging indent.
+/// A no-op for an empty group (so unused sections don't print an empty header).
+fn push_group(
+    s: &mut String,
+    title: &str,
+    rows: &mut [(&str, &str)],
+    width: usize,
+    desc_col: usize,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+    s.push('\n');
+    s.push_str(title);
+    s.push_str(":\n");
+    for (name, desc) in rows.iter() {
+        let desc = if desc.is_empty() { "-" } else { desc };
+        // First line of a multi-line `about` is the summary.
+        let summary = desc.lines().next().unwrap_or("-");
+        let wrapped = wrap_hanging(summary, desc_col, 96);
+        s.push_str(&format!("  {name:<width$}   {wrapped}\n"));
+    }
+}
+
+/// Word-wrap `text` so that no line exceeds `max_col` columns, hanging-indenting
+/// every line after the first to `indent` spaces (the description column). The
+/// first line carries no indent — the caller has already emitted the
+/// `  <name>   ` prefix that puts it at `indent`.
+fn wrap_hanging(text: &str, indent: usize, max_col: usize) -> String {
+    let avail = max_col.saturating_sub(indent).max(24);
+    let mut out = String::new();
+    let mut line_len = 0usize;
+    for (i, word) in text.split_whitespace().enumerate() {
+        if i == 0 {
+            out.push_str(word);
+            line_len = word.len();
+        } else if line_len + 1 + word.len() > avail {
+            out.push('\n');
+            out.push_str(&" ".repeat(indent));
+            out.push_str(word);
+            line_len = word.len();
+        } else {
+            out.push(' ');
+            out.push_str(word);
+            line_len += 1 + word.len();
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -662,9 +763,10 @@ mod tests {
             out.contains("blank") && out.contains(" -\n"),
             "missing dash for blank:\n{out}"
         );
-        // Column alignment: the longest name is `tasks-worker` (12). The
-        // shorter `migrate` row pads its name out to the same column, so
-        // its description starts at the same offset.
+        // Column alignment holds across groups: the longest name is
+        // `tasks-worker` (12), and every row pads its name to that shared
+        // width, so descriptions start at the same offset even though
+        // `migrate` and `tasks-worker` live in different sections.
         let worker_line = out.lines().find(|l| l.contains("tasks-worker")).unwrap();
         let migrate_line = out.lines().find(|l| l.contains("migrate")).unwrap();
         let worker_desc_col = worker_line.find("Run the task worker").unwrap();
@@ -673,11 +775,24 @@ mod tests {
             worker_desc_col, migrate_desc_col,
             "descriptions not column-aligned:\n{out}"
         );
-        // Sorted by name: blank < migrate < tasks-worker.
-        let bi = out.find("\n  blank").unwrap();
+        // Grouped: `migrate` is a built-in under "Database & migrations";
+        // `tasks-worker` and `blank` are plugin/app commands under "Other
+        // commands". The database section renders before the other section.
+        assert!(
+            out.contains("Database & migrations:"),
+            "missing DB group header:\n{out}"
+        );
+        assert!(
+            out.contains("Other commands:"),
+            "missing other group header:\n{out}"
+        );
         let mi = out.find("\n  migrate").unwrap();
+        let bi = out.find("\n  blank").unwrap();
         let ti = out.find("\n  tasks-worker").unwrap();
-        assert!(bi < mi && mi < ti, "commands not sorted by name:\n{out}");
+        // migrate (Database group) precedes the Other group; within Other,
+        // rows are sorted so blank precedes tasks-worker.
+        assert!(mi < bi, "database group should render first:\n{out}");
+        assert!(bi < ti, "other-group rows not sorted by name:\n{out}");
     }
 
     #[test]

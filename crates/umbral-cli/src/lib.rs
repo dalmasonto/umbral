@@ -189,8 +189,30 @@ enum Command {
         #[arg(long, default_value_t = false, requires = "out")]
         check: bool,
     },
-    /// Introspect a database into a `models.rs` plus an initial migration.
-    /// Used to onboard an existing schema.
+    /// Introspect an existing database into models + a `0001_initial` migration.
+    ///
+    /// The porting on-ramp: point it at a database and it writes one
+    /// `#[derive(Model)]` struct per table plus a migration that recreates the
+    /// schema, so an existing database drops straight into the managed
+    /// declare -> migrate loop.
+    ///
+    /// The source database is the positional argument — a `sqlite://` /
+    /// `postgres://` URL, or a path to a SQLite file. Omit it to use the app's
+    /// ambient database, which you set with the `UMBRAL_DATABASE_URL`
+    /// environment variable. `--output` is REQUIRED: it's the directory the
+    /// generated `models.rs` and `migrations/` land in.
+    ///
+    /// Examples (each is one command):
+    ///
+    /// A Postgres database, URL passed explicitly — `umbral inspectdb postgres://user:pass@localhost/mydb --output plugins/imported`
+    ///
+    /// The app's ambient database (set `UMBRAL_DATABASE_URL` first) — `umbral inspectdb --output plugins/imported`
+    ///
+    /// A SQLite file, undoing Django's conventions — `umbral inspectdb ./legacy.sqlite3 --framework django --output plugins/imported`
+    ///
+    /// A Prisma/Postgres schema, undoing Prisma's conventions — `umbral inspectdb postgres://... --framework prisma --output plugins/imported`
+    ///
+    /// Note: running `inspectdb` (and every other command) requires an umbral project — run it from your project directory (or `cargo run -- inspectdb ...`), not from the umbral framework repo itself.
     Inspectdb {
         /// The source database to introspect: a `sqlite://` / `postgres://`
         /// URL, or a path to a SQLite file (`./db.sqlite3`). When omitted,
