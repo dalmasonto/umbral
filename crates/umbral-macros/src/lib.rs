@@ -5644,12 +5644,20 @@ fn dto_field_serde(attrs: &[syn::Attribute]) -> (Option<String>, bool) {
     (rename, skip)
 }
 
+/// Apply serde's `#[serde(rename_all = "...")]` transform to a (snake_case)
+/// Rust field name, matching serde's actual per-style behaviour so the
+/// generated TypeScript-client key equals the JSON wire key.
+///
+/// The kebab / screaming-kebab / snake / screaming-snake styles are a straight
+/// per-character transform of the field name, NOT a split-and-rejoin: serde
+/// derives kebab as `snake.replace('_', "-")`, so a field like `type_` becomes
+/// `type-` on the wire. A split-on-`_`-and-`join("-")` would filter the empty
+/// segment a trailing/leading/double underscore produces and emit `type`,
+/// mismatching the wire key. camelCase / PascalCase route through
+/// `to_pascal_case`; for the snake_case identifiers this sees they match
+/// serde's state machine (an embedded-uppercase Rust field name — which serde
+/// treats char-by-char — is out of scope, Rust fields are snake_case).
 fn apply_rename_all(name: &str, style: &str) -> String {
-    let words: Vec<String> = name
-        .split('_')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
     match style {
         // camelCase / PascalCase route through the canonical `to_pascal_case`
         // (the same state-machine capitalisation the task-handle builder and
@@ -5664,7 +5672,10 @@ fn apply_rename_all(name: &str, style: &str) -> String {
             }
         }
         "PascalCase" => to_pascal_case(name),
-        "kebab-case" => words.join("-"),
+        // Straight `_` -> `-` replace, exactly as serde derives kebab from
+        // snake. Preserves leading/trailing/double underscores as dashes.
+        "kebab-case" => name.replace('_', "-"),
+        "SCREAMING-KEBAB-CASE" => name.to_uppercase().replace('_', "-"),
         "SCREAMING_SNAKE_CASE" => name.to_uppercase(),
         "UPPERCASE" => name.to_uppercase(),
         "lowercase" => name.to_lowercase(),
@@ -5760,4 +5771,50 @@ pub fn derive_dto(input: TokenStream) -> TokenStream {
     expand_dto(input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::{apply_rename_all, to_pascal_case};
+
+    #[test]
+    fn pascal_and_task_handle_shape_unchanged() {
+        // The task-handle builder and DTO PascalCase renames share this.
+        assert_eq!(to_pascal_case("send_welcome"), "SendWelcome");
+        assert_eq!(to_pascal_case("created_at"), "CreatedAt");
+        assert_eq!(to_pascal_case("email"), "Email");
+        // Routes through to_snake_case, so acronyms normalise.
+        assert_eq!(to_pascal_case("XMLReport"), "XmlReport");
+    }
+
+    #[test]
+    fn rename_all_normal_snake_case_inputs() {
+        assert_eq!(apply_rename_all("created_at", "camelCase"), "createdAt");
+        assert_eq!(apply_rename_all("created_at", "PascalCase"), "CreatedAt");
+        assert_eq!(apply_rename_all("created_at", "kebab-case"), "created-at");
+        assert_eq!(apply_rename_all("created_at", "snake_case"), "created_at");
+        assert_eq!(
+            apply_rename_all("created_at", "SCREAMING_SNAKE_CASE"),
+            "CREATED_AT"
+        );
+    }
+
+    #[test]
+    fn kebab_matches_serde_on_trailing_and_double_underscores() {
+        // serde derives kebab as `snake.replace('_', "-")`, so the trailing
+        // underscore on a keyword-avoiding field name survives as a dash.
+        // The old split-and-join collapsed it to `type`, mismatching the wire.
+        assert_eq!(apply_rename_all("type_", "kebab-case"), "type-");
+        // A double underscore keeps both dashes (serde does a straight replace).
+        assert_eq!(apply_rename_all("foo__bar", "kebab-case"), "foo--bar");
+        // Leading underscore is preserved too.
+        assert_eq!(apply_rename_all("_leading", "kebab-case"), "-leading");
+        // snake_case leaves the raw name (including the trailing `_`) intact.
+        assert_eq!(apply_rename_all("type_", "snake_case"), "type_");
+        // SCREAMING-KEBAB-CASE is likewise a straight replace after uppercasing.
+        assert_eq!(
+            apply_rename_all("foo__bar", "SCREAMING-KEBAB-CASE"),
+            "FOO--BAR"
+        );
+    }
 }
