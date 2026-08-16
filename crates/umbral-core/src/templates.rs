@@ -441,7 +441,13 @@ fn register_img_filter(env: &mut Environment<'static>) {
 /// any HTML-special character stays escaped. The path a template author writes by hand
 /// (`css/app.css`) never contains one; a hostile filename does, and it keeps its armour.
 pub fn safe_url(url: String) -> minijinja::Value {
-    if url.contains(['<', '>', '"', '\'', '&']) {
+    // Escape if the value carries an HTML-special character (a hostile
+    // filename closing the `href` attribute) OR carries a dangerous URL
+    // scheme (`javascript:`, `data:`) — the char check alone let a
+    // scheme-based `href="javascript:…"` through unescaped (stored XSS in
+    // a staff-viewed admin page). `url_scheme_is_safe` allows only relative
+    // URLs and http/https, matching the img filter's guard.
+    if url.contains(['<', '>', '"', '\'', '&']) || !url_scheme_is_safe(&url) {
         minijinja::Value::from(url)
     } else {
         minijinja::Value::from_safe_string(url)

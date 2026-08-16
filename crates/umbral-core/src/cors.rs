@@ -353,11 +353,43 @@ where
     }
 
     fn call(&mut self, req: Request) -> Self::Future {
-        if req.uri().path().starts_with(&*self.prefix) {
+        if path_under_prefix(req.uri().path(), &self.prefix) {
             Box::pin(self.with_cors.call(req))
         } else {
             Box::pin(self.without.call(req))
         }
+    }
+}
+
+/// True when `path` is the prefix itself or a path SEGMENT under it —
+/// `/api` matches `/api` and `/api/x` but NOT `/apikeys` / `/api-docs`.
+/// A bare `starts_with` would bleed a `cors_for("/api", ...)` policy
+/// (allow-origin + allow-credentials) onto every sibling sharing the
+/// string prefix — a CORS mis-scoping.
+fn path_under_prefix(path: &str, prefix: &str) -> bool {
+    let prefix = prefix.strip_suffix('/').unwrap_or(prefix);
+    match path.strip_prefix(prefix) {
+        Some("") => true,
+        Some(rest) => rest.starts_with('/'),
+        None => false,
+    }
+}
+
+#[cfg(test)]
+mod scoped_prefix_tests {
+    use super::path_under_prefix;
+
+    #[test]
+    fn prefix_matches_segment_boundary_not_string_prefix() {
+        assert!(path_under_prefix("/api", "/api"));
+        assert!(path_under_prefix("/api/", "/api"));
+        assert!(path_under_prefix("/api/users", "/api"));
+        assert!(!path_under_prefix("/apikeys", "/api"));
+        assert!(!path_under_prefix("/api-docs", "/api"));
+        assert!(!path_under_prefix("/apiary", "/api"));
+        // A prefix given with a trailing slash behaves identically.
+        assert!(path_under_prefix("/api/users", "/api/"));
+        assert!(!path_under_prefix("/apikeys", "/api/"));
     }
 }
 

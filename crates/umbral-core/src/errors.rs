@@ -532,6 +532,14 @@ pub async fn render_500_middleware(
     if ct.starts_with("text/html") {
         return resp;
     }
+    // A JSON 500 (the framework's own `ApiError::into_response`, or any
+    // REST/JSON handler) must NOT be re-rendered as an HTML page — an API
+    // client that asked for JSON would get an unparseable HTML body. The
+    // sibling `render_error_middleware` guards the same way on `Accept:
+    // application/json`; here the response Content-Type is the tell.
+    if ct.starts_with("application/json") {
+        return resp;
+    }
 
     // Capture the body to extract the error message for the hook + dev
     // context. 64KB cap: error messages don't need more, and we don't
@@ -635,11 +643,17 @@ pub async fn render_error_middleware(
 /// Template context for a general error page: `{ status, status_text, message,
 /// request_path, dev_mode }`.
 fn error_context(status: StatusCode, message: &str, path: &str, dev: bool) -> minijinja::Value {
+    // WEB-5 safe-by-default: outside dev, blank the handler body + request
+    // path for SERVER errors (5xx) — a hand-rolled 500 body can carry raw
+    // error text (table/column/SQL fragments), and leaking it to the client
+    // in prod is exactly what the dedicated 500 path (`build_500_context`)
+    // guards against. 4xx client errors keep their (intentional) message.
+    let expose = dev || !status.is_server_error();
     minijinja::context! {
         status => status.as_u16(),
         status_text => status.canonical_reason().unwrap_or(""),
-        message => message,
-        request_path => path,
+        message => if expose { message } else { "" },
+        request_path => if expose { path } else { "" },
         dev_mode => dev,
     }
 }
