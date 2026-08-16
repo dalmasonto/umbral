@@ -85,3 +85,19 @@ pub updated_at: DateTime<Utc>,
 ```
 
 Design rationale: `planning/gaps3.md` #42 in the repository.
+
+## Naive timestamps: `NaiveDateTime`
+
+`DateTime<Utc>` maps to a Postgres `TIMESTAMPTZ` — a true instant, stored in UTC, converted at the marshalling boundary. When you instead have a **wall-clock reading with no time zone** — a Postgres `TIMESTAMP` without time zone, which is what Prisma's `DateTime` and some Django configs produce — declare the field as `chrono::NaiveDateTime`:
+
+```rust
+pub struct Event {
+    pub id: i64,
+    pub happened_at: chrono::NaiveDateTime,          // TIMESTAMP (no tz)
+    pub cleared_at: Option<chrono::NaiveDateTime>,   // nullable
+}
+```
+
+The value is stored and read **verbatim** — no project-timezone conversion, and an offset-bearing input is rejected rather than silently shifted. This is what lets [`inspectdb`](/docs/v0.0.1/migrations/inspectdb) read a foreign database whose timestamps have no time zone: sqlx will not decode a bare `TIMESTAMP` into a `DateTime<Utc>`, so a naive column needs the naive type. On Postgres the column is `timestamp without time zone`; on SQLite it stores as text like the other temporals. `auto_now` / `auto_now_add` work on a `NaiveDateTime` field too (stamping the current wall-clock).
+
+Reach for `DateTime<Utc>` by default (an instant is what most apps want); reach for `NaiveDateTime` when the schema genuinely stores a tz-less wall-clock, or when porting one that does.

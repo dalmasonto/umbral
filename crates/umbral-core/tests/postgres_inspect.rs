@@ -63,6 +63,7 @@ async fn full_round_trip_against_real_postgres() {
             day DATE NOT NULL, \
             clock TIME NOT NULL, \
             at TIMESTAMP WITH TIME ZONE, \
+            naive_at TIMESTAMP WITHOUT TIME ZONE, \
             uid UUID NOT NULL \
          )",
     )
@@ -103,6 +104,9 @@ async fn full_round_trip_against_real_postgres() {
         ("day", SqlType::Date),
         ("clock", SqlType::Time),
         ("at", SqlType::Timestamptz),
+        // `timestamp without time zone` recovers as the naive type, distinct
+        // from the tz-aware `at` above — so a Prisma/Django naive schema reads.
+        ("naive_at", SqlType::Timestamp),
         ("uid", SqlType::Uuid),
     ];
     for (name, ty) in cases {

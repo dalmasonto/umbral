@@ -4635,9 +4635,12 @@ fn is_safe_cast(from: SqlType, to: SqlType) -> bool {
         // cast itself never fails.
         (
             SmallInt | Integer | BigInt | Real | Double | Boolean | Date | Time | Timestamptz
-            | Uuid | Inet | Cidr | MacAddr | ForeignKey,
+            | Timestamp | Uuid | Inet | Cidr | MacAddr | ForeignKey,
             Text,
         ) => true,
+        // A naive/aware timestamp swap keeps the same wall-clock text, so the
+        // cast is data-preserving in both directions.
+        (Timestamp, Timestamptz) | (Timestamptz, Timestamp) => true,
         // Integer widening — no data loss.
         (SmallInt, Integer | BigInt) => true,
         (Integer, BigInt) => true,
@@ -4693,6 +4696,7 @@ fn postgres_type_name(ty: SqlType) -> &'static str {
         // by Postgres, but mirroring the builder keeps the surface
         // consistent if a test ever round-trips DDL.
         Timestamptz => "timestamp with time zone",
+        Timestamp => "timestamp without time zone",
         Uuid => "uuid",
         Json => "jsonb",
         Inet => "inet",
@@ -5322,7 +5326,7 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 && !column.nullable
                 && matches!(
                     column.ty,
-                    SqlType::Timestamptz | SqlType::Date | SqlType::Time
+                    SqlType::Timestamptz | SqlType::Timestamp | SqlType::Date | SqlType::Time
                 );
 
             let mut stmts = if needs_backfill {
@@ -6414,7 +6418,10 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
     if !col.default.is_empty() {
         def.default(col.default.clone());
     } else if (col.auto_now || col.auto_now_add)
-        && matches!(col.ty, SqlType::Timestamptz | SqlType::Date | SqlType::Time)
+        && matches!(
+            col.ty,
+            SqlType::Timestamptz | SqlType::Timestamp | SqlType::Date | SqlType::Time
+        )
     {
         // Mirror of the SQLite branch above. Without a DEFAULT
         // Postgres rejects `ALTER TABLE ADD COLUMN ... NOT NULL`

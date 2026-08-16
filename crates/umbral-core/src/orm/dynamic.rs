@@ -2983,7 +2983,7 @@ pub fn decode_to_string(
     row: &sqlx::sqlite::SqliteRow,
     col: &Column,
 ) -> Result<String, sqlx::Error> {
-    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+    use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
     use serde_json::Value;
     use uuid::Uuid;
 
@@ -3017,6 +3017,9 @@ pub fn decode_to_string(
             SqlType::Timestamptz => row
                 .try_get::<Option<DateTime<Utc>>, _>(name)?
                 .map_or(String::new(), |v| v.to_rfc3339()),
+            SqlType::Timestamp => row
+                .try_get::<Option<NaiveDateTime>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
@@ -3068,6 +3071,7 @@ pub fn decode_to_string(
         SqlType::Date => row.try_get::<NaiveDate, _>(name)?.to_string(),
         SqlType::Time => row.try_get::<NaiveTime, _>(name)?.to_string(),
         SqlType::Timestamptz => row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339(),
+        SqlType::Timestamp => row.try_get::<NaiveDateTime, _>(name)?.to_string(),
         SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
         SqlType::Json => row.try_get::<Value, _>(name)?.to_string(),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
@@ -3106,7 +3110,7 @@ pub fn decode_pg_to_string(
     row: &sqlx::postgres::PgRow,
     col: &Column,
 ) -> Result<String, sqlx::Error> {
-    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+    use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
     use serde_json::Value;
     use uuid::Uuid;
 
@@ -3143,6 +3147,9 @@ pub fn decode_pg_to_string(
             SqlType::Timestamptz => row
                 .try_get::<Option<DateTime<Utc>>, _>(name)?
                 .map_or(String::new(), |v| v.to_rfc3339()),
+            SqlType::Timestamp => row
+                .try_get::<Option<NaiveDateTime>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
@@ -3207,6 +3214,7 @@ pub fn decode_pg_to_string(
         SqlType::Date => row.try_get::<NaiveDate, _>(name)?.to_string(),
         SqlType::Time => row.try_get::<NaiveTime, _>(name)?.to_string(),
         SqlType::Timestamptz => row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339(),
+        SqlType::Timestamp => row.try_get::<NaiveDateTime, _>(name)?.to_string(),
         SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
         SqlType::Json => row.try_get::<Value, _>(name)?.to_string(),
         // Same as the nullable branch: lift through best-effort string.
@@ -3300,7 +3308,7 @@ pub fn decode_to_json(
     row: &sqlx::sqlite::SqliteRow,
     col: &Column,
 ) -> Result<serde_json::Value, sqlx::Error> {
-    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+    use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
     use serde_json::Value;
     use uuid::Uuid;
 
@@ -3334,6 +3342,9 @@ pub fn decode_to_json(
             SqlType::Timestamptz => row
                 .try_get::<Option<DateTime<Utc>>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_rfc3339())),
+            SqlType::Timestamp => row
+                .try_get::<Option<NaiveDateTime>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
@@ -3383,6 +3394,7 @@ pub fn decode_to_json(
         SqlType::Date => Value::from(row.try_get::<NaiveDate, _>(name)?.to_string()),
         SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
+        SqlType::Timestamp => Value::from(row.try_get::<NaiveDateTime, _>(name)?.to_string()),
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
         SqlType::Array(_) => panic_array_unsupported(&col.name),
@@ -3416,7 +3428,7 @@ pub fn decode_pg_to_json(
     row: &sqlx::postgres::PgRow,
     col: &Column,
 ) -> Result<serde_json::Value, sqlx::Error> {
-    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+    use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
     use serde_json::Value;
     use uuid::Uuid;
 
@@ -3453,6 +3465,9 @@ pub fn decode_pg_to_json(
             SqlType::Timestamptz => row
                 .try_get::<Option<DateTime<Utc>>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_rfc3339())),
+            SqlType::Timestamp => row
+                .try_get::<Option<NaiveDateTime>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
@@ -3509,6 +3524,7 @@ pub fn decode_pg_to_json(
         SqlType::Date => Value::from(row.try_get::<NaiveDate, _>(name)?.to_string()),
         SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
+        SqlType::Timestamp => Value::from(row.try_get::<NaiveDateTime, _>(name)?.to_string()),
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
         SqlType::Array(_)

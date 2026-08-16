@@ -484,6 +484,168 @@ impl<T> NullableDateTimeCol<T> {
     }
 }
 
+/// A `chrono::NaiveDateTime`-typed column (a `TIMESTAMP` without time zone).
+/// Mirrors [`DateTimeCol`] but its comparisons take a naive wall-clock value —
+/// no time-zone conversion — matching the column's storage.
+pub struct NaiveDateTimeCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NaiveDateTimeCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// Lookup-style alias for [`Self::le`] (`__lte`).
+    pub fn lte(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        self.le(val)
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Lookup-style alias for [`Self::ge`] (`__gte`).
+    pub fn gte(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        self.ge(val)
+    }
+
+    /// Alias for `.lt`, reading naturally for time.
+    pub fn before(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        self.lt(val)
+    }
+
+    /// Alias for `.gt`, reading naturally for time.
+    pub fn after(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        self.gt(val)
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable `chrono::NaiveDateTime`-typed column.
+pub struct NullableNaiveDateTimeCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableNaiveDateTimeCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn eq(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn ne(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// Lookup-style alias for [`Self::le`] (`__lte`).
+    pub fn lte(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        self.le(val)
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Lookup-style alias for [`Self::ge`] (`__gte`).
+    pub fn gte(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        self.ge(val)
+    }
+
+    /// Alias for `.lt`, reading naturally for time.
+    pub fn before(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        self.lt(val)
+    }
+
+    /// Alias for `.gt`, reading naturally for time.
+    pub fn after(&self, val: chrono::NaiveDateTime) -> Predicate<T> {
+        self.gt(val)
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
 // =========================================================================
 //
 // M3 type-catalogue refresh: stubs added by the scaffold commit; methods

@@ -41,7 +41,7 @@
 use std::path::Path;
 use std::str::FromStr;
 
-use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ipnetwork::IpNetwork;
 use mac_address::MacAddress;
 use rust_decimal::Decimal;
@@ -671,6 +671,9 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             SqlType::Timestamptz => row
                 .try_get::<Option<DateTime<Utc>>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_rfc3339())),
+            SqlType::Timestamp => row
+                .try_get::<Option<NaiveDateTime>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
@@ -724,6 +727,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Date => Value::from(row.try_get::<NaiveDate, _>(name)?.to_string()),
         SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
+        SqlType::Timestamp => Value::from(row.try_get::<NaiveDateTime, _>(name)?.to_string()),
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
         SqlType::Array(_) => unreachable_array(&col.name),
@@ -824,6 +828,9 @@ fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value,
             SqlType::Timestamptz => row
                 .try_get::<Option<DateTime<Utc>>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_rfc3339())),
+            SqlType::Timestamp => row
+                .try_get::<Option<NaiveDateTime>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
@@ -869,6 +876,7 @@ fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value,
         SqlType::Date => Value::from(row.try_get::<NaiveDate, _>(name)?.to_string()),
         SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
+        SqlType::Timestamp => Value::from(row.try_get::<NaiveDateTime, _>(name)?.to_string()),
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
         SqlType::Array(elem) => pg_array_column_to_json(row, name, elem)?,
@@ -1006,6 +1014,7 @@ fn bind_value<'q>(
             SqlType::Date => q.bind(None::<NaiveDate>),
             SqlType::Time => q.bind(None::<NaiveTime>),
             SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
+            SqlType::Timestamp => q.bind(None::<NaiveDateTime>),
             SqlType::Uuid => q.bind(None::<Uuid>),
             SqlType::Json => q.bind(None::<Value>),
             SqlType::Array(_) => unreachable_array(&col.name),
@@ -1070,6 +1079,15 @@ fn bind_value<'q>(
                     .with_timezone(&Utc),
             )
         }
+        SqlType::Timestamp => {
+            // Naive timestamp: no offset. Accept both the space-separated
+            // `to_string()` form and the `T`-separated ISO form.
+            let s = val.as_str().ok_or_else(|| mismatch(json_type_name(&val)))?;
+            let dt = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+                .or_else(|_| s.parse::<NaiveDateTime>())
+                .map_err(|_| mismatch("invalid naive timestamp"))?;
+            q.bind(dt)
+        }
         SqlType::Uuid => {
             let s = val.as_str().ok_or_else(|| mismatch(json_type_name(&val)))?;
             q.bind(Uuid::parse_str(s).map_err(|_| mismatch("invalid uuid string"))?)
@@ -1119,6 +1137,7 @@ fn bind_value_pg<'q>(
             SqlType::Date => q.bind(None::<NaiveDate>),
             SqlType::Time => q.bind(None::<NaiveTime>),
             SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
+            SqlType::Timestamp => q.bind(None::<NaiveDateTime>),
             SqlType::Uuid => q.bind(None::<Uuid>),
             SqlType::Json => q.bind(None::<Value>),
             SqlType::Array(elem) => bind_null_array_pg(q, elem),
@@ -1185,6 +1204,15 @@ fn bind_value_pg<'q>(
                     .map_err(|_| mismatch("invalid rfc3339 timestamp"))?
                     .with_timezone(&Utc),
             )
+        }
+        SqlType::Timestamp => {
+            // Naive timestamp: no offset. Accept both the space-separated
+            // `to_string()` form and the `T`-separated ISO form.
+            let s = val.as_str().ok_or_else(|| mismatch(json_type_name(&val)))?;
+            let dt = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f")
+                .or_else(|_| s.parse::<NaiveDateTime>())
+                .map_err(|_| mismatch("invalid naive timestamp"))?;
+            q.bind(dt)
         }
         SqlType::Uuid => {
             let s = val.as_str().ok_or_else(|| mismatch(json_type_name(&val)))?;

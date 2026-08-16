@@ -857,7 +857,12 @@ fn map_postgres_type(raw: &str) -> Option<SqlType> {
         // Timestamptz. The umbral catalogue picks the with-tz variant
         // as the default so chrono::DateTime<Utc> is the natural Rust
         // type for either.
-        "timestamp without time zone" | "timestamp with time zone" => Some(SqlType::Timestamptz),
+        // A tz-aware column round-trips through `DateTime<Utc>`; a naive one
+        // (Prisma's `DateTime`, some Django configs) needs `NaiveDateTime` or
+        // sqlx refuses to decode it. Recover the distinction so the generated
+        // model reads the source as-is.
+        "timestamp with time zone" => Some(SqlType::Timestamptz),
+        "timestamp without time zone" => Some(SqlType::Timestamp),
         "uuid" => Some(SqlType::Uuid),
         // Both `json` and `jsonb` round-trip to umbral's portable Json
         // variant. The DDL renderer chose `jsonb` on the way out; if a
@@ -1379,7 +1384,10 @@ use umbral::prelude::*;
 /// The temporal SQL types whose current-timestamp default is an `auto_now_add`
 /// and whose `created*`/`updated*` name (under Django) implies a timestamp.
 fn is_temporal(ty: SqlType) -> bool {
-    matches!(ty, SqlType::Timestamptz | SqlType::Date | SqlType::Time)
+    matches!(
+        ty,
+        SqlType::Timestamptz | SqlType::Timestamp | SqlType::Date | SqlType::Time
+    )
 }
 
 /// True when a raw DB default expresses "the current time" — SQLite's
@@ -1961,6 +1969,7 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         SqlType::Date => "chrono::NaiveDate".to_string(),
         SqlType::Time => "chrono::NaiveTime".to_string(),
         SqlType::Timestamptz => "chrono::DateTime<chrono::Utc>".to_string(),
+        SqlType::Timestamp => "chrono::NaiveDateTime".to_string(),
         SqlType::Uuid => "uuid::Uuid".to_string(),
         SqlType::Json => "serde_json::Value".to_string(),
         // Recurse through the element's SqlType. Wrapping in `Vec<...>`
@@ -2487,9 +2496,11 @@ mod tests {
             map_postgres_type("time with time zone"),
             Some(SqlType::Time)
         );
+        // A naive timestamp recovers as the tz-less `Timestamp` (NaiveDateTime);
+        // a tz-aware one stays `Timestamptz` (DateTime<Utc>).
         assert_eq!(
             map_postgres_type("timestamp without time zone"),
-            Some(SqlType::Timestamptz),
+            Some(SqlType::Timestamp),
         );
         assert_eq!(
             map_postgres_type("timestamp with time zone"),

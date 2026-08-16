@@ -177,6 +177,7 @@ impl DatabaseBackend for PostgresBackend {
             SqlType::Date => ColumnType::Date,
             SqlType::Time => ColumnType::Time,
             SqlType::Timestamptz => ColumnType::TimestampWithTimeZone,
+            SqlType::Timestamp => ColumnType::Timestamp,
             SqlType::Uuid => ColumnType::Uuid,
             // Postgres has both `json` and `jsonb`; we always pick `jsonb`
             // because that's the variant with index support and the
@@ -296,6 +297,7 @@ impl DatabaseBackend for SqliteBackend {
             SqlType::Date => ColumnType::Date,
             SqlType::Time => ColumnType::Time,
             SqlType::Timestamptz => ColumnType::TimestampWithTimeZone,
+            SqlType::Timestamp => ColumnType::Timestamp,
             // BLOB, not TEXT (gaps3 #80). sqlx encodes a `Uuid` as its 16 raw bytes on
             // SQLite, and its decoder reads ONLY those bytes back — hand it the 36-char
             // hyphenated text and it fails with `ParseByteLength { len: 36 }`. So the

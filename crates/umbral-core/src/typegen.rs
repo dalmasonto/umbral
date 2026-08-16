@@ -332,6 +332,7 @@ fn ts_type(ty: SqlType) -> String {
         | SqlType::Date
         | SqlType::Time
         | SqlType::Timestamptz
+        | SqlType::Timestamp
         | SqlType::Uuid
         | SqlType::Decimal
         | SqlType::BigDecimal

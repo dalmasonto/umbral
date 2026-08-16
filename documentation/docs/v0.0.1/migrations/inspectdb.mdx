@@ -240,7 +240,7 @@ The columns inspectdb's SQLite path knows about today (the Postgres path additio
   <Card icon="percent" title="Floats" description="REAL → f32; DOUBLE / FLOAT8 → f64." />
   <Card icon="check-square" title="Booleans" description="BOOLEAN / BOOL → bool." />
   <Card icon="type" title="Text" description="TEXT, VARCHAR, CHAR, CLOB all map to String. VARCHAR(n) width is recorded as a comment." />
-  <Card icon="calendar" title="Dates and times" description="DATE → NaiveDate, TIME → NaiveTime, TIMESTAMP / DATETIME → DateTime<Utc>." />
+  <Card icon="calendar" title="Dates and times" description="DATE → NaiveDate, TIME → NaiveTime. A tz-aware TIMESTAMPTZ → DateTime<Utc>; a tz-less TIMESTAMP (Prisma's DateTime default) → NaiveDateTime, so the naive column decodes." />
   <Card icon="key" title="UUIDs" description="UUID → uuid::Uuid." />
 </CardGrid>
 

@@ -597,6 +597,7 @@ fn value_is_blank_for_type(s: &str, ty: SqlType) -> bool {
             | SqlType::Date
             | SqlType::Time
             | SqlType::Timestamptz
+            | SqlType::Timestamp
             | SqlType::Uuid
             | SqlType::ForeignKey,
     ) && s.trim().is_empty()

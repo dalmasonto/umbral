@@ -736,6 +736,21 @@ fn coerce_value(col: &Column, value: &str) -> Result<sea_query::Value, ApiError>
             })?;
             sea_query::Value::String(Some(Box::new(value.to_string())))
         }
+        // Naive TIMESTAMP (no time zone): validate a naive datetime shape, then
+        // compare as text. Accepts the `T`-separated and space-separated forms.
+        SqlType::Timestamp => {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f")
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S"))
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M"))
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f"))
+                .map_err(|_| {
+                    ApiError::BadInput(format!(
+                        "field `{}`: cannot parse `{value}` as a naive datetime",
+                        col.name
+                    ))
+                })?;
+            sea_query::Value::String(Some(Box::new(value.to_string())))
+        }
         SqlType::Time => {
             value.parse::<chrono::NaiveTime>().map_err(|_| {
                 ApiError::BadInput(format!(

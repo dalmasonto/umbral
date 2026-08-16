@@ -2896,6 +2896,8 @@ enum FieldKind {
     Date,
     Time,
     DateTime,
+    /// `chrono::NaiveDateTime` — a `TIMESTAMP` without time zone.
+    NaiveDateTime,
     Uuid,
     NullableSmallInt,
     NullableInteger,
@@ -2907,6 +2909,8 @@ enum FieldKind {
     NullableDate,
     NullableTime,
     NullableDateTime,
+    /// `Option<chrono::NaiveDateTime>` — a nullable `TIMESTAMP` without tz.
+    NullableNaiveDateTime,
     NullableUuid,
     /// `serde_json::Value` — a JSON document. Backed by Postgres
     /// JSONB or SQLite TEXT depending on the active backend; the
@@ -3123,6 +3127,9 @@ impl FieldKind {
             FieldKind::DateTime | FieldKind::NullableDateTime => {
                 quote!(::umbral::orm::SqlType::Timestamptz)
             }
+            FieldKind::NaiveDateTime | FieldKind::NullableNaiveDateTime => {
+                quote!(::umbral::orm::SqlType::Timestamp)
+            }
             FieldKind::Uuid | FieldKind::NullableUuid => quote!(::umbral::orm::SqlType::Uuid),
             FieldKind::Json | FieldKind::NullableJson => quote!(::umbral::orm::SqlType::Json),
             FieldKind::Array(elem) | FieldKind::NullableArray(elem) => {
@@ -3200,6 +3207,7 @@ impl FieldKind {
                 | FieldKind::NullableDate
                 | FieldKind::NullableTime
                 | FieldKind::NullableDateTime
+                | FieldKind::NullableNaiveDateTime
                 | FieldKind::NullableUuid
                 | FieldKind::NullableJson
                 | FieldKind::NullableArray(_)
@@ -3312,6 +3320,12 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     }
     if type_is_ident(ty, "NaiveTime") {
         return FieldKind::Time;
+    }
+    // `NaiveDateTime` — a `TIMESTAMP` without time zone, distinct from
+    // `DateTime<Utc>` below (checked first because `is_datetime_utc` keys on the
+    // `DateTime` ident, which `NaiveDateTime` does not carry).
+    if type_is_ident(ty, "NaiveDateTime") {
+        return FieldKind::NaiveDateTime;
     }
     if is_datetime_utc(ty) {
         return FieldKind::DateTime;
@@ -3445,6 +3459,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         }
         if type_is_ident(inner, "NaiveTime") {
             return FieldKind::NullableTime;
+        }
+        if type_is_ident(inner, "NaiveDateTime") {
+            return FieldKind::NullableNaiveDateTime;
         }
         if is_datetime_utc(inner) {
             return FieldKind::NullableDateTime;
@@ -4042,6 +4059,7 @@ fn col_type_ident(kind: &FieldKind) -> Option<syn::Ident> {
         FieldKind::Date => format_ident!("DateCol"),
         FieldKind::Time => format_ident!("TimeCol"),
         FieldKind::DateTime => format_ident!("DateTimeCol"),
+        FieldKind::NaiveDateTime => format_ident!("NaiveDateTimeCol"),
         FieldKind::Uuid => format_ident!("UuidCol"),
         FieldKind::NullableSmallInt | FieldKind::NullableInteger | FieldKind::NullableBigInt => {
             format_ident!("NullableIntCol")
@@ -4052,6 +4070,7 @@ fn col_type_ident(kind: &FieldKind) -> Option<syn::Ident> {
         FieldKind::NullableDate => format_ident!("NullableDateCol"),
         FieldKind::NullableTime => format_ident!("NullableTimeCol"),
         FieldKind::NullableDateTime => format_ident!("NullableDateTimeCol"),
+        FieldKind::NullableNaiveDateTime => format_ident!("NullableNaiveDateTimeCol"),
         FieldKind::NullableUuid => format_ident!("NullableUuidCol"),
         FieldKind::Json => format_ident!("JsonCol"),
         FieldKind::NullableJson => format_ident!("NullableJsonCol"),

@@ -682,6 +682,22 @@ pub fn json_to_sea_value(
             })?;
             Ok(SeaValue::ChronoDateTimeUtc(Some(Box::new(dt))))
         }
+        // A naive `TIMESTAMP` (no time zone). Unlike `Timestamptz`, the value is
+        // a wall-clock reading stored verbatim — NO project-timezone conversion,
+        // and an offset-bearing input is rejected rather than silently shifted.
+        SqlType::Timestamp => {
+            let s = coerce_string(value, field_name)?;
+            let naive = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f")
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S"))
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M"))
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f"))
+                .map_err(|_| WriteError::TypeMismatch {
+                    field: field_name.to_string(),
+                    expected: sql_type,
+                    got: format!("{value:?}"),
+                })?;
+            Ok(SeaValue::ChronoDateTime(Some(Box::new(naive))))
+        }
         SqlType::Uuid => {
             let s = coerce_string(value, field_name)?;
             let u = uuid::Uuid::parse_str(&s).map_err(|_| WriteError::TypeMismatch {
@@ -1042,6 +1058,8 @@ pub fn now_for_column(sql_type: SqlType) -> SeaValue {
     let now = chrono::Utc::now();
     match sql_type {
         SqlType::Timestamptz => SeaValue::ChronoDateTimeUtc(Some(Box::new(now))),
+        // Naive `TIMESTAMP`: stamp the current wall-clock without an offset.
+        SqlType::Timestamp => SeaValue::ChronoDateTime(Some(Box::new(now.naive_utc()))),
         SqlType::Date => SeaValue::ChronoDate(Some(Box::new(now.date_naive()))),
         SqlType::Time => SeaValue::ChronoTime(Some(Box::new(now.time()))),
         _ => null_for(sql_type),
@@ -1126,6 +1144,7 @@ pub(crate) fn null_for(sql_type: SqlType) -> SeaValue {
         SqlType::Date => SeaValue::ChronoDate(None),
         SqlType::Time => SeaValue::ChronoTime(None),
         SqlType::Timestamptz => SeaValue::ChronoDateTimeUtc(None),
+        SqlType::Timestamp => SeaValue::ChronoDateTime(None),
         SqlType::Uuid => SeaValue::Uuid(None),
         SqlType::Array(_)
         | SqlType::Inet

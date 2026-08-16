@@ -1136,6 +1136,14 @@ pub enum SqlType {
     Time,
     /// Timestamp with timezone. `chrono::DateTime<chrono::Utc>` in Rust.
     Timestamptz,
+    /// Timestamp WITHOUT timezone. `chrono::NaiveDateTime` in Rust; a bare
+    /// `TIMESTAMP` on Postgres (`DATETIME`/text on SQLite). Distinct from
+    /// [`Self::Timestamptz`]: sqlx will not decode a Postgres `TIMESTAMP` into a
+    /// `DateTime<Utc>`, so a schema that stores naive timestamps (Prisma's
+    /// `DateTime`, some Django configs) needs this to round-trip. No timezone
+    /// conversion happens at the marshalling boundary — the wall-clock value is
+    /// stored and read verbatim.
+    Timestamp,
     /// 128-bit UUID. `uuid::Uuid` in Rust.
     Uuid,
     /// JSON document. `serde_json::Value` in Rust.
