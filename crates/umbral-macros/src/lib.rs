@@ -5190,9 +5190,17 @@ fn expand_choices(input: DeriveInput) -> syn::Result<TokenStream2> {
 // =========================================================================
 // #[derive(Validate)] — request-body DTO validation (gaps3 #29 item 4).
 //
-// The attribute vocabulary is DELIBERATELY identical to `#[derive(Model)]`'s.
-// A second spelling for "this field is an email" is how a DTO and the model it
-// feeds drift apart until the API accepts a value its own database rejects.
+// The attribute vocabulary is deliberately kept in step with `#[derive(Model)]`'s
+// — same spelling for the shared markers (`trim`, `lowercase`, `max_length`,
+// `email`, `url`, `slug`, `choices`, `min`, `max`) — so a DTO and the model it
+// feeds don't drift apart until the API accepts a value its own database rejects.
+//
+// The two are NOT a strict superset/subset. The one asymmetry today:
+// `min_length` is Validate-only — it is a hard length check on a request-body
+// DTO, whereas on a Model `max_length` is admin-display truncation metadata and
+// there is no `min_length` counterpart (a DB column has no minimum length). So
+// `#[umbral(min_length = 1)]` is meaningful on a Validate field and rejected on
+// a Model field. Keep any newly-shared marker spelled the same on both sides.
 // =========================================================================
 
 /// Field rules for a `#[derive(Validate)]` DTO.
@@ -5430,9 +5438,12 @@ fn expand_validate(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
 
 /// Derive [`Validate`] for a request-body DTO.
 ///
-/// Uses the SAME field attributes as `#[derive(Model)]` — `trim`, `lowercase`,
-/// `min_length`, `max_length`, `email`, `url`, `slug`, `choices`, `min`, `max` — so
+/// Shares its field-attribute vocabulary with `#[derive(Model)]` — `trim`,
+/// `lowercase`, `max_length`, `email`, `url`, `slug`, `choices`, `min`, `max` — so
 /// there is no second vocabulary to learn and no second definition of "a valid email".
+/// The one Validate-only marker is `min_length` (a hard length check; a Model
+/// column has no minimum-length concept), so `#[umbral(min_length = 1)]` is valid
+/// here but rejected on a Model field.
 ///
 /// ```ignore
 /// #[derive(serde::Deserialize, Validate)]
