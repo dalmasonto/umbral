@@ -29,14 +29,22 @@ app's ambient database.
 
 ## What it recovers
 
-Beyond columns and primary keys, `inspectdb` recovers **foreign keys** (a
-`<col>` FK column becomes `pub <col>: ForeignKey<Target>`, pointing at the
-referenced table's generated struct) and **single-column unique / index
-constraints** (`#[umbral(unique)]` / `#[umbral(index)]`). These flow into the
-generated `0001_initial` migration too, so a re-migrate rebuilds them.
+Beyond columns and primary keys, `inspectdb` recovers:
+
+- **Foreign keys** — a `<col>` FK column becomes `pub <col>: ForeignKey<Target>`,
+  pointing at the referenced table's generated struct.
+- **Single-column unique / index** constraints — `#[umbral(unique)]` /
+  `#[umbral(index)]` on the field.
+- **Composite (multi-column) indexes** — a struct-level
+  `#[umbral(unique_together = [["org_id", "user_id"]])]` for a multi-column
+  UNIQUE, and `#[umbral(indexes = [["role", "joined"]])]` for a multi-column
+  plain index, columns in index order.
+
+These flow into the generated `0001_initial` migration too, so a re-migrate
+rebuilds them.
 
 Self-referential foreign keys work: a `parent_id` column that points at its own
-table generates `pub parent: Option<ForeignKey<Category>>` inside `struct
+table generates `pub parent_id: Option<ForeignKey<Category>>` inside `struct
 Category`.
 
 ## Generated models compile
@@ -60,7 +68,8 @@ which the generated fields name by their fully-qualified paths.
 
 Django names a foreign-key column `<field>_id` and prefixes every table with its
 app label (`blog_post`, `communities_community`). Pass `--framework django` to
-undo both, so the generated models read idiomatically:
+strip the app prefix off **struct names** (and map `auth_user`), so the
+generated models read idiomatically:
 
 ```bash
 cargo run -- inspectdb ./django.sqlite3 --framework django --output plugins/imported
@@ -73,16 +82,16 @@ pub struct Post {                              // ← `blog_` app prefix strippe
     pub id: i64,
     pub title: String,
     #[umbral(index)]
-    #[sqlx(rename = "author_id")]
-    pub author: ForeignKey<Author>,            // ← field AND target stripped
+    pub author_id: ForeignKey<Author>,         // ← real column name; target stripped
     #[umbral(index)]
-    #[sqlx(rename = "blog_category_id")]
-    pub category: Option<ForeignKey<Category>>,
+    pub blog_category_id: Option<ForeignKey<Category>>,
 }
 ```
 
-- **FK field names** drop the `_id` suffix (`author_id` → `author`), bound to the
-  real column via `#[sqlx(rename)]`.
+- **FK field names** keep the **real column name** (`author_id`) — umbral uses
+  the field name as the column name, so no `#[sqlx(rename)]` is needed and the
+  field/index reads clearly against the actual column. Only the FK *target
+  struct* is app-prefix-stripped (`ForeignKey<Author>`).
 - **Struct names** drop the `<app>_` prefix (`blog_post` → `Post`), with
   `#[umbral(table = "blog_post")]` preserving the real table. FK targets resolve
   through the same names, so `ForeignKey<Author>` lines up with `struct Author`.
@@ -155,12 +164,10 @@ SQL type the catalogue doesn't know are excluded automatically.
 
 ## Still deferred
 
-- **Composite / multi-column** unique constraints and indexes. Single-column
-  `unique` / `index` are recovered; a multi-column index is skipped (umbral
-  models per-column flags), and `unique_together` recovery lands with a real
-  porting case.
 - **FK `on_delete` / `on_update`** actions. The FK reference is recovered; the
   cascade action defaults to `NoAction` rather than reading the DB's rule.
+- **Expression indexes** (an index on `lower(email)` rather than plain columns)
+  and partial indexes — skipped, since umbral models column-name index groups.
 - **Generated plugin crates** with a `Plugin` impl. Today the output is a flat
   `models.rs` you wire by hand. M7's full plugin shape ships the crate too.
 

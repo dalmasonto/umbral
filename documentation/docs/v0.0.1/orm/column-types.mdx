@@ -206,9 +206,9 @@ pub struct Post {
 ```
 
 The column constant (`post::AUTHOR`) is still named after the Rust field but
-targets the `author_id` column. This is what [`inspectdb --framework
-django`](/docs/v0.0.1/migrations/inspectdb#framework-aware-naming) emits when it
-strips the `_id` off a Django foreign-key column.
+targets the `author_id` column. [`inspectdb`](/docs/v0.0.1/migrations/inspectdb#generated-models-compile)
+uses this to escape a column whose name is a Rust keyword — a `type` column
+becomes `pub type_` with `#[sqlx(rename = "type")]`.
 
 ```rust
 use chrono::{DateTime, Utc};
