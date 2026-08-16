@@ -29,10 +29,14 @@
 //!   so M6 v1 leaves the wiring (one `mod models;` plus one
 //!   `.model::<T>()` per generated struct) to the user. M7 turns the
 //!   output into a self-contained plugin crate.
-//! - **Type mapping.** Covers the M5 [`SqlType`] catalogue
-//!   (integers, floats, bool, text, date / time / timestamptz, uuid)
-//!   plus their nullable variants. Anything else (NUMERIC, JSON,
-//!   BYTEA, arrays, custom types) returns
+//! - **Type mapping.** Covers the [`SqlType`] catalogue: integers
+//!   (including `unsigned` variants from Django's PositiveIntegerField
+//!   family), floats, bool, text, date / time / timestamptz, uuid, json,
+//!   bytea, and numeric / decimal — plus their nullable variants.
+//!   Decimal maps faithfully to `rust_decimal::Decimal` even from a
+//!   SQLite source (it is Postgres-only at runtime, so the boot system
+//!   check surfaces that when the model targets SQLite). Anything still
+//!   off-catalogue (arrays, custom types) returns
 //!   [`InspectError::UnsupportedColumnType`] with the table / column
 //!   names; the user fixes by-hand or waits for the field-type
 //!   catalogue to grow.
@@ -485,6 +489,11 @@ fn map_postgres_type(raw: &str) -> Option<SqlType> {
         "ltree" => Some(SqlType::Ltree),
         "bit" | "bit varying" | "varbit" => Some(SqlType::Bit),
         "tsvector" => Some(SqlType::FullText),
+        // Postgres reports both NUMERIC and DECIMAL as `numeric` in
+        // information_schema.columns.data_type (precision/scale live in
+        // separate columns, so no width string to strip). Maps to
+        // umbral's Decimal, whose PG DDL renders back as `numeric(19,4)`.
+        "numeric" | "decimal" => Some(SqlType::Decimal),
         "bytea" => Some(SqlType::Bytes),
         _ => None,
     }
@@ -539,7 +548,9 @@ async fn introspect_columns(
 /// Map a raw SQLite type string to the M6 v1 [`SqlType`] catalogue.
 /// Case-insensitive; trailing `(n)` or `(p,s)` width parameters are
 /// stripped before matching so `VARCHAR(255)` and `NUMERIC(10,2)` come
-/// through as `varchar` and `numeric`. Returns `None` on anything not
+/// through as `varchar` and `numeric`. A trailing `unsigned` / `signed`
+/// qualifier is also stripped, so Django's `integer unsigned`
+/// (`PositiveIntegerField`) maps to the base signed type. Returns `None` on anything not
 /// in the table; the caller turns that into
 /// [`InspectError::UnsupportedColumnType`] with the table and column
 /// names attached.
@@ -549,7 +560,17 @@ fn map_sqlite_type(raw: &str) -> Option<SqlType> {
         None => raw,
     };
     let normalised = head.trim().to_ascii_lowercase();
-    match normalised.as_str() {
+    // Strip a trailing signedness qualifier: Django's PositiveIntegerField
+    // family emits `smallint unsigned` / `integer unsigned` / `bigint
+    // unsigned`, and MySQL-origin dumps can carry `int signed`. SQLite
+    // ignores these for column affinity, and Django range-caps the value
+    // to the signed max, so the base signed type is the faithful mapping.
+    let base = normalised
+        .strip_suffix(" unsigned")
+        .or_else(|| normalised.strip_suffix(" signed"))
+        .map(str::trim_end)
+        .unwrap_or(normalised.as_str());
+    match base {
         "smallint" | "int2" => Some(SqlType::SmallInt),
         "int" | "integer" | "int4" => Some(SqlType::Integer),
         "bigint" | "int8" => Some(SqlType::BigInt),
@@ -569,6 +590,17 @@ fn map_sqlite_type(raw: &str) -> Option<SqlType> {
         // it through `SqlType::Json` (which lowers to TEXT on SQLite
         // anyway).
         "json" | "jsonb" => Some(SqlType::Json),
+        // Django's DecimalField declares its SQLite columns as `decimal`;
+        // `numeric` is the SQL-standard spelling. Both map to umbral's
+        // Decimal (rendered as `rust_decimal::Decimal`). NOTE: Decimal is
+        // Postgres-only at v1 (sqlx has no SQLite Encode/Decode for it),
+        // so a model carrying this field passes the boot check only
+        // against Postgres. That's deliberate: inspectdb emits the
+        // faithful type and lets the backend system check surface the
+        // SQLite limitation, rather than silently downgrading to a lossy
+        // f64. Width parameters (`decimal(9,6)`) are already stripped by
+        // the `split_once('(')` above.
+        "decimal" | "numeric" => Some(SqlType::Decimal),
         "blob" | "bytea" => Some(SqlType::Bytes),
         _ => None,
     }
@@ -1025,6 +1057,44 @@ mod tests {
     }
 
     // --------------------------------------------------------------- //
+    // SQLite type-mapping coverage.                                    //
+    // --------------------------------------------------------------- //
+
+    /// Django's `PositiveIntegerField` family declares its SQLite columns
+    /// with an `unsigned` qualifier (`smallint unsigned`, `integer
+    /// unsigned`, `bigint unsigned`). SQLite ignores the qualifier for
+    /// affinity and Django range-caps the value to the signed max, so the
+    /// mapper strips the qualifier and routes to the base signed type
+    /// instead of raising `UnsupportedColumnType`. Regression test for a
+    /// port from a Django-managed schema failing on the first such column.
+    #[test]
+    fn map_sqlite_type_strips_signedness_qualifier() {
+        assert_eq!(
+            map_sqlite_type("smallint unsigned"),
+            Some(SqlType::SmallInt)
+        );
+        assert_eq!(map_sqlite_type("integer unsigned"), Some(SqlType::Integer));
+        assert_eq!(map_sqlite_type("bigint unsigned"), Some(SqlType::BigInt));
+        // Case-insensitive and MySQL-style `signed` qualifier too.
+        assert_eq!(map_sqlite_type("INTEGER UNSIGNED"), Some(SqlType::Integer));
+        assert_eq!(map_sqlite_type("int signed"), Some(SqlType::Integer));
+        // Plain types are unaffected.
+        assert_eq!(map_sqlite_type("integer"), Some(SqlType::Integer));
+    }
+
+    /// Django's DecimalField declares SQLite columns as `decimal`;
+    /// `numeric` is the standard spelling. Both map to `SqlType::Decimal`
+    /// (Postgres-only at v1, but inspectdb emits the faithful type rather
+    /// than a lossy f64). Width parameters are stripped like any other.
+    #[test]
+    fn map_sqlite_type_maps_decimal_and_numeric() {
+        assert_eq!(map_sqlite_type("decimal"), Some(SqlType::Decimal));
+        assert_eq!(map_sqlite_type("numeric"), Some(SqlType::Decimal));
+        assert_eq!(map_sqlite_type("DECIMAL(9,6)"), Some(SqlType::Decimal));
+        assert_eq!(map_sqlite_type("numeric(10, 2)"), Some(SqlType::Decimal));
+    }
+
+    // --------------------------------------------------------------- //
     // Postgres type-mapping coverage (Phase 3).                        //
     // --------------------------------------------------------------- //
 
@@ -1082,27 +1152,30 @@ mod tests {
         assert_eq!(map_postgres_type("macaddr"), Some(SqlType::MacAddr));
         // BLOB / BYTEA — Vec<u8> in Rust.
         assert_eq!(map_postgres_type("bytea"), Some(SqlType::Bytes));
+        // NUMERIC / DECIMAL — information_schema reports both as `numeric`.
+        assert_eq!(map_postgres_type("numeric"), Some(SqlType::Decimal));
+        assert_eq!(map_postgres_type("decimal"), Some(SqlType::Decimal));
     }
 
     /// Postgres-specific types umbral doesn't model yet surface as
     /// `None` so the caller produces `UnsupportedColumnType` with the
-    /// raw type string preserved. The catalogue lookups most likely to
-    /// bite a port: numeric, bytea, arrays, network types. The
-    /// user fixes by hand or waits for the catalogue to grow.
+    /// raw type string preserved. The lookup most likely to bite a port
+    /// now is `ARRAY`; the user fixes by hand or waits for the catalogue
+    /// to grow.
     ///
     /// Note `json`/`jsonb` are NOT on this list — Phase 4's `Json`
     /// SqlType variant maps both back to `SqlType::Json`. Likewise
     /// `inet`/`cidr`/`macaddr` left this list when Phase 4.4 added
-    /// the matching SqlType variants. The companion arms in
-    /// `map_postgres_type` are covered by
+    /// the matching SqlType variants, and `numeric`/`bytea` left once
+    /// `SqlType::Decimal` / `SqlType::Bytes` shipped. The companion arms
+    /// in `map_postgres_type` are covered by
     /// `map_postgres_type_covers_the_full_catalogue` above.
     #[test]
     fn map_postgres_type_returns_none_for_postgres_only_types() {
-        assert_eq!(map_postgres_type("numeric"), None);
-        // `bytea` USED to be off-catalogue and returned None; once
-        // SqlType::Bytes shipped, `bytea` started routing to it.
-        // Asserted in the positive `map_postgres_type_covers_the_full_catalogue`
-        // test instead.
+        // `numeric` and `bytea` USED to be off-catalogue and returned
+        // None; once SqlType::Decimal / SqlType::Bytes shipped they
+        // started routing to those variants. Asserted in the positive
+        // `map_postgres_type_covers_the_full_catalogue` test instead.
         assert_eq!(map_postgres_type("ARRAY"), None);
     }
 
