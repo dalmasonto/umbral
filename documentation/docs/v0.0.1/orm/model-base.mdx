@@ -112,16 +112,14 @@ When several bases are embedded, at most one may declare the primary key. A base
 A base field supports the exact same `#[umbral(...)]` attributes as a model field — `primary_key`, `auto_now_add`, `auto_now`, `unique`, `index`, `default`, `max_length`, `choices`, FK options, and so on. They are resolved on the base's own derive, so the column behaves identically whether it was declared inline or inherited.
 
 <Callout type="warning">
-**Typed column constants for base fields are not generated yet.** For a model's *own* fields you get typed constants like `article::TITLE` for query building. Base-inherited columns don't have them yet, so filter or order them by name instead:
+**Typed column constants for base fields are not generated yet.** A model's *own* fields get typed constants like `article::TITLE` for building `filter` / `order_by` predicates. Base-**inherited** columns don't have them yet, so you can't currently `filter`/`order_by` a base column through the typed `QuerySet` API:
 
 ```rust
-// own field — typed constant:
-Article::objects().filter(article::TITLE.eq("Hello"))
-// base field — order/filter by column name:
-Article::objects().order_by("-created_at")
+Article::objects().filter(article::TITLE.eq("Hello"))   // own field — works
+// article::CREATED_AT does not exist yet — see the note below
 ```
 
-This is a follow-up (planning `gaps5 #105`); the columns are fully functional for migrations, inserts, auto-stamping and reads today.
+The columns are fully functional for **migrations, inserts, auto-stamping, and reads** today — this only affects *typed query building* on the inherited columns. If you need to filter or order by a shared column right now, either declare that one column on the model directly, or reach it through the dynamic query API (`DynQuerySet::for_meta`, which the admin/REST layer uses and addresses columns by name). Tracked as planning `gaps5 #105`.
 </Callout>
 
 ## See also
