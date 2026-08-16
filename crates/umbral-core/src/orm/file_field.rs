@@ -45,6 +45,43 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Reject a deserialised storage key that isn't a well-formed relative
+/// slug. Defense-in-depth (gaps / IDOR hardening): the storage layer
+/// already blocks path traversal at the filesystem boundary, but a
+/// client that controls the serialised form of a `FileField` / `ImageField`
+/// (a REST write, a deserialised admin payload) could otherwise point a
+/// record's key at an absolute path or a `..`-traversal string. A legit
+/// storage key is a relative slug the backend minted (e.g.
+/// `"ab12-photo.jpg"` or `"posts/ab12-photo.jpg"`); it never begins with
+/// `/`, never carries a `..` segment, and never contains backslashes or
+/// control characters. The empty key is the "no file attached" state and
+/// is allowed. This is NOT an ownership / cross-tenant check — that stays
+/// app-level (`media_access`); this only rejects structurally malformed
+/// keys.
+pub(crate) fn validate_storage_key(key: &str) -> Result<(), &'static str> {
+    if key.is_empty() {
+        // Empty = no file attached (the `Default`). Nothing to police.
+        return Ok(());
+    }
+    if key.starts_with('/') {
+        return Err("storage key must be relative (must not start with `/`)");
+    }
+    if key.contains('\\') {
+        return Err("storage key must not contain backslashes");
+    }
+    if key.chars().any(|c| c.is_control()) {
+        return Err("storage key must not contain control characters");
+    }
+    // Reject a `..` path segment anywhere in the key. Splitting on `/`
+    // (backslashes are already rejected above) catches `../x`, `x/..`,
+    // `x/../y`, and a bare `..`, while leaving an in-name double dot such
+    // as `photo..jpg` — which is not a traversal — untouched.
+    if key.split('/').any(|segment| segment == "..") {
+        return Err("storage key must not contain a `..` path segment");
+    }
+    Ok(())
+}
+
 /// A TEXT-backed handle to a file in the ambient
 /// [`Storage`](crate::storage::Storage) backend.
 ///
@@ -180,9 +217,15 @@ macro_rules! impl_string_newtype {
         }
 
         impl<'de> Deserialize<'de> for $ty {
-            /// Read a JSON string straight into the key.
+            /// Read a JSON string into the key, rejecting a structurally
+            /// malformed key (absolute path, `..` traversal, backslash,
+            /// control char) as defense-in-depth against a client pointing
+            /// a record at an arbitrary storage key. See
+            /// [`validate_storage_key`].
             fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
                 let key = String::deserialize(d)?;
+                crate::orm::file_field::validate_storage_key(&key)
+                    .map_err(serde::de::Error::custom)?;
                 Ok(<$ty>::from(key))
             }
         }
@@ -251,3 +294,45 @@ macro_rules! impl_string_newtype {
 
 impl_string_newtype!(FileField);
 impl_string_newtype!(ImageField);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_relative_keys_deserialize() {
+        for key in ["ab12-photo.jpg", "posts/ab12-photo.jpg", "photo..jpg", ""] {
+            let json = serde_json::to_string(key).unwrap();
+            let f: FileField = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("key {key:?} should deserialize: {e}"));
+            assert_eq!(f.key(), key);
+            // ImageField shares the impl.
+            let i: ImageField = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("key {key:?} should deserialize: {e}"));
+            assert_eq!(i.key(), key);
+        }
+    }
+
+    #[test]
+    fn malicious_keys_are_rejected() {
+        let bad = [
+            "/etc/passwd",        // absolute path
+            "../secret.jpg",      // parent traversal
+            "posts/../../secret", // embedded traversal
+            "..",                 // bare parent
+            "a\\b.jpg",           // backslash (Windows-style separator)
+            "a\nb.jpg",           // control char
+        ];
+        for key in bad {
+            let json = serde_json::to_string(key).unwrap();
+            assert!(
+                serde_json::from_str::<FileField>(&json).is_err(),
+                "FileField accepted malicious key {key:?}"
+            );
+            assert!(
+                serde_json::from_str::<ImageField>(&json).is_err(),
+                "ImageField accepted malicious key {key:?}"
+            );
+        }
+    }
+}
