@@ -503,6 +503,37 @@ fn has_sqlx_skip(attrs: &[syn::Attribute]) -> bool {
     false
 }
 
+/// The DB column name a field maps to, honouring `#[sqlx(rename = "…")]`.
+///
+/// sqlx's `FromRow` derive reads a renamed field from that column, so umbral
+/// must use the SAME name for `FieldSpec.name` and the generated column
+/// constant — otherwise the migration would create a `foo` column while
+/// `FromRow` reads `foo_id`, a silent mismatch. This also powers `inspectdb
+/// --framework django`, which emits a pretty Rust field (`author`) bound to the
+/// database's `author_id` column via `#[sqlx(rename = "author_id")]`.
+fn sqlx_rename(attrs: &[syn::Attribute]) -> Option<String> {
+    for attr in attrs {
+        if !attr.path().is_ident("sqlx") {
+            continue;
+        }
+        let mut renamed = None;
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                if let Ok(value) = meta.value() {
+                    if let Ok(lit) = value.parse::<syn::LitStr>() {
+                        renamed = Some(lit.value());
+                    }
+                }
+            }
+            Ok(())
+        });
+        if renamed.is_some() {
+            return renamed;
+        }
+    }
+    None
+}
+
 /// Canonical `#[derive(Model)]` field classification, shared by BOTH passes
 /// over the struct's fields so the OneToOne→unique-FK rewrite can never
 /// desync between them.
@@ -1327,6 +1358,11 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
+        // The DB column name: the Rust field name, unless `#[sqlx(rename)]`
+        // remaps it (which `FromRow` honours, so the migration + column const
+        // must match). `field_name_str` stays the Rust-facing identity (const
+        // name, serde/relation keys); `column_name_str` is the SQL identity.
+        let column_name_str = sqlx_rename(&field.attrs).unwrap_or_else(|| field_name_str.clone());
         // PK detection: the field this iteration is on is the PK iff it
         // matches the one `id_field` resolved above — either explicitly
         // tagged `#[umbral(primary_key)]` or named `id` as the default.
@@ -1885,7 +1921,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
 
         field_specs.push(quote! {
             ::umbral::orm::FieldSpec {
-                name: #field_name_str,
+                name: #column_name_str,
                 ty: #sql_ty_tokens,
                 primary_key: #pk_lit,
                 nullable: #nullable_lit,
@@ -1937,15 +1973,21 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             let span = field.ty.span();
             column_consts.push(quote_spanned! { span =>
                 pub const #const_ident: ::umbral::orm::column::StrCol<super::#struct_name> =
-                    ::umbral::orm::column::StrCol::new(#field_name_str);
+                    ::umbral::orm::column::StrCol::new(#column_name_str);
             });
             assoc_consts.push(quote_spanned! { span =>
                 pub const #const_ident: ::umbral::orm::column::StrCol<Self> =
                     #module_name::#const_ident;
             });
         } else {
-            let (module_const, assoc_const) =
-                column_const_for(struct_name, &module_name, &field_name_str, field, &kind);
+            let (module_const, assoc_const) = column_const_for(
+                struct_name,
+                &module_name,
+                &field_name_str,
+                &column_name_str,
+                field,
+                &kind,
+            );
             column_consts.push(module_const);
             assoc_consts.push(assoc_const);
         }
@@ -4062,9 +4104,13 @@ fn column_const_for(
     struct_name: &syn::Ident,
     module_name: &syn::Ident,
     field_name: &str,
+    column_name: &str,
     field: &Field,
     kind: &FieldKind,
 ) -> (TokenStream2, TokenStream2) {
+    // The const is NAMED after the Rust field (`post::AUTHOR`) but wraps the DB
+    // COLUMN name (`author_id` under `#[sqlx(rename)]`), so a filter on the
+    // const targets the real column.
     let const_ident = format_ident!("{}", to_screaming_snake_case(field_name));
     let span = field.ty.span();
     let Some(col_ident) = col_type_ident(kind) else {
@@ -4075,7 +4121,7 @@ fn column_const_for(
     // at the module const, so there's one source of truth for the value.
     let module_const = quote_spanned! { span =>
         pub const #const_ident: ::umbral::orm::column::#col_ident<super::#struct_name> =
-            ::umbral::orm::column::#col_ident::new(#field_name);
+            ::umbral::orm::column::#col_ident::new(#column_name);
     };
     let assoc_const = quote_spanned! { span =>
         pub const #const_ident: ::umbral::orm::column::#col_ident<Self> =
