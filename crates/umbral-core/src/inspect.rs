@@ -228,6 +228,13 @@ pub struct InspectOptions {
     /// The source framework whose conventions to undo (`--framework django`).
     /// `None` keeps raw column names.
     pub framework: Option<Framework>,
+    /// Strip the framework app-prefix off **struct names** (`blog_post` ->
+    /// `Post`) and preserve the real table with a `#[umbral(table = "...")]`
+    /// macro (`--with-table-names`). Off by default: struct names stay full
+    /// (`BlogPost`) and round-trip to their table, so no table macro is emitted.
+    /// A struct name that still wouldn't round-trip (odd casing) gets its table
+    /// macro regardless, so generated models always map to the right table.
+    pub with_table_names: bool,
     /// Directory the generated files are written under. `models.rs`
     /// lands at the root; the migration lands at
     /// `<output>/migrations/<INSPECTED_PLUGIN_NAME>/0001_initial.json`.
@@ -280,7 +287,7 @@ pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport, InspectErr
         return Err(InspectError::NoTables);
     }
 
-    let models_src = render_models_with(&schema, opts.framework);
+    let models_src = render_models_with(&schema, opts.framework, opts.with_table_names);
     let migration = render_initial_migration(&schema);
     let report = write_outputs(&opts.output, &models_src, &migration).await?;
 
@@ -988,7 +995,7 @@ fn map_sqlite_type(raw: &str) -> Option<SqlType> {
 /// Field-type rendering uses fully-qualified `chrono::*` / `uuid::*`
 /// paths so no extra `use` lines are needed at the top of the file.
 pub fn render_models(schema: &IntrospectedSchema) -> String {
-    render_models_with(schema, None)
+    render_models_with(schema, None, false)
 }
 
 /// Django's canonical user table, and the umbral-auth type it maps onto (same
@@ -998,10 +1005,17 @@ pub fn render_models(schema: &IntrospectedSchema) -> String {
 const DJANGO_USER_TABLE: &str = "auth_user";
 const DJANGO_USER_STRUCT: &str = "AuthUser";
 
-/// [`render_models`] with a source [`Framework`] whose naming conventions are
-/// undone (e.g. `--framework django` strips the `_id` off FK columns AND the
-/// `<app>_` prefix off struct/table names).
-pub fn render_models_with(schema: &IntrospectedSchema, framework: Option<Framework>) -> String {
+/// [`render_models`] with a source [`Framework`] whose *reference* conventions
+/// are undone (e.g. `--framework django` strips the `<app>_` prefix off FK
+/// target structs and maps `auth_user` to `AuthUser`). FK field names keep
+/// their real `_id` column — umbral's own idiom. `with_table_names` additionally
+/// strips the `<app>_` prefix off **struct names**, preserving the real table
+/// with a `#[umbral(table)]` macro (emitted in [`render_one_struct`]).
+pub fn render_models_with(
+    schema: &IntrospectedSchema,
+    framework: Option<Framework>,
+    with_table_names: bool,
+) -> String {
     let django = framework == Some(Framework::Django);
 
     // Detect Django "app labels" — the leading `<app>_` segment shared by the
@@ -1024,7 +1038,9 @@ pub fn render_models_with(schema: &IntrospectedSchema, framework: Option<Framewo
     for t in &schema.tables {
         let name = if django && t.table == DJANGO_USER_TABLE {
             DJANGO_USER_STRUCT.to_string()
-        } else if django {
+        } else if with_table_names {
+            // `--with-table-names`: strip the app prefix and let the table
+            // macro (emitted in `render_one_struct`) carry the real table.
             django_struct_name(&t.table, &app_labels)
         } else {
             t.name.clone()

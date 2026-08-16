@@ -365,6 +365,7 @@ async fn inspectdb_writes_models_and_migration_to_output_directory() {
     let opts = InspectOptions {
         source: None,
         framework: None,
+        with_table_names: false,
         output: tmp.path().to_path_buf(),
         mark_applied: false,
     };
@@ -422,6 +423,7 @@ async fn inspectdb_with_mark_applied_records_the_initial_migration() {
     let opts = InspectOptions {
         source: None,
         framework: None,
+        with_table_names: false,
         output: tmp.path().to_path_buf(),
         mark_applied: true,
     };
@@ -553,6 +555,7 @@ async fn inspectdb_honors_an_explicit_source_database() {
     let opts = InspectOptions {
         source: Some(url.clone()),
         framework: None,
+        with_table_names: false,
         output: out_dir.path().to_path_buf(),
         mark_applied: false,
     };
@@ -606,6 +609,7 @@ async fn inspectdb_recovers_foreign_keys_and_indexes() {
     let opts = InspectOptions {
         source: Some(url),
         framework: None,
+        with_table_names: false,
         output: out_dir.path().to_path_buf(),
         mark_applied: false,
     };
@@ -658,6 +662,7 @@ async fn inspectdb_django_fk_keeps_real_column_name_target_stripped() {
     let opts = InspectOptions {
         source: Some(url),
         framework: Some(Framework::Django),
+        with_table_names: true,
         output: out_dir.path().to_path_buf(),
         mark_applied: false,
     };
@@ -705,6 +710,7 @@ async fn inspectdb_generates_compilable_models_for_edge_cases() {
     let opts = InspectOptions {
         source: Some(url),
         framework: None,
+        with_table_names: false,
         output: out_dir.path().to_path_buf(),
         mark_applied: false,
     };
@@ -753,6 +759,7 @@ async fn inspectdb_django_strips_app_prefix_and_externalizes_auth_user() {
     let opts = InspectOptions {
         source: Some(url),
         framework: Some(Framework::Django),
+        with_table_names: true,
         output: out_dir.path().to_path_buf(),
         mark_applied: false,
     };
@@ -781,6 +788,53 @@ async fn inspectdb_django_strips_app_prefix_and_externalizes_auth_user() {
     assert!(
         m.contains("ForeignKey<AuthUser>"),
         "a FK to auth_user must point at AuthUser; got:\n{m}"
+    );
+}
+
+/// `--framework django` WITHOUT `--with-table-names` keeps full, round-tripping
+/// struct names (`blog_post` -> `BlogPost`) and emits NO `#[umbral(table)]`
+/// macro — the noise the flag gates. Django's other conventions (auth_user
+/// externalization) still apply; `--with-table-names` is what opts into the
+/// app-prefix stripping and the table macro it necessitates.
+#[tokio::test]
+async fn inspectdb_django_without_table_names_keeps_full_struct_names() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("apps.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE auth_user (id INTEGER PRIMARY KEY, username TEXT NOT NULL)",
+        "CREATE TABLE blog_post (id INTEGER PRIMARY KEY, author_id INTEGER REFERENCES auth_user(id))",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Django),
+        with_table_names: false,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // Full struct name kept, and NO table macro (the name round-trips).
+    assert!(
+        m.contains("pub struct BlogPost {"),
+        "without --with-table-names the full struct name is kept; got:\n{m}"
+    );
+    assert!(
+        !m.contains("#[umbral(table = \"blog_post\")]"),
+        "no table macro when the struct name round-trips; got:\n{m}"
+    );
+    // Django's auth_user externalization is independent of --with-table-names.
+    assert!(
+        m.contains("use umbral_auth::AuthUser;") && m.contains("ForeignKey<AuthUser>"),
+        "auth_user must still be externalized under --framework django; got:\n{m}"
     );
 }
 
@@ -860,6 +914,7 @@ async fn inspectdb_recovers_composite_indexes() {
     let opts = InspectOptions {
         source: Some(url),
         framework: None,
+        with_table_names: false,
         output: out_dir.path().to_path_buf(),
         mark_applied: false,
     };

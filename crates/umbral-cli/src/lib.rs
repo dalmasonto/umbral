@@ -197,11 +197,16 @@ enum Command {
         /// the app's ambient database (`UMBRAL_DATABASE_URL`) is used.
         database: Option<String>,
         /// The source framework whose naming conventions to undo, e.g.
-        /// `django` (a `<field>_id` FK column becomes a clean `<field>` field
-        /// bound to the real column via `#[sqlx(rename)]`). Omit to keep the
-        /// raw database column names.
+        /// `django` (FK targets shed the app prefix, `auth_user` maps to the
+        /// external `AuthUser`). Omit to keep the raw database names.
         #[arg(long)]
         framework: Option<String>,
+        /// Strip the framework app-prefix off struct names (`blog_post` ->
+        /// `Post`) and preserve the real table with a `#[umbral(table = "...")]`
+        /// macro. Off by default: struct names stay full (`BlogPost`) and
+        /// round-trip to their table, so no table macro is emitted.
+        #[arg(long, default_value_t = false)]
+        with_table_names: bool,
         /// Directory the generated files are written under.
         #[arg(long)]
         output: PathBuf,
@@ -500,9 +505,10 @@ pub async fn dispatch_with_argv(
         Command::Inspectdb {
             database,
             framework,
+            with_table_names,
             output,
             mark_applied,
-        } => inspectdb(database, framework, output, mark_applied).await,
+        } => inspectdb(database, framework, with_table_names, output, mark_applied).await,
         Command::Dumpdata { output } => dumpdata(output).await,
         Command::Loaddata { input } => loaddata(input).await,
         Command::Importcsv { table, input } => importcsv(table, input).await,
@@ -1127,6 +1133,7 @@ fn op_kind(op: &umbral::migrate::Operation) -> &'static str {
 async fn inspectdb(
     database: Option<String>,
     framework: Option<String>,
+    with_table_names: bool,
     output: PathBuf,
     mark_applied: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1147,6 +1154,7 @@ async fn inspectdb(
     let opts = InspectOptions {
         source: database.map(|d| normalize_source_db(&d)),
         framework,
+        with_table_names,
         output,
         mark_applied,
     };

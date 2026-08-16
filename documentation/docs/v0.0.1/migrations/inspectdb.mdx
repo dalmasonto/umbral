@@ -66,10 +66,10 @@ which the generated fields name by their fully-qualified paths.
 
 ## Framework-aware naming
 
-Django names a foreign-key column `<field>_id` and prefixes every table with its
-app label (`blog_post`, `communities_community`). Pass `--framework django` to
-strip the app prefix off **struct names** (and map `auth_user`), so the
-generated models read idiomatically:
+Django prefixes every table with its app label (`blog_post`,
+`communities_community`) and names foreign-key columns `<field>_id`. Pass
+`--framework django` to undo the *reference* conventions — FK target structs
+shed the app prefix and Django's `auth_user` maps to umbral's `AuthUser`:
 
 ```bash
 cargo run -- inspectdb ./django.sqlite3 --framework django --output plugins/imported
@@ -77,8 +77,7 @@ cargo run -- inspectdb ./django.sqlite3 --framework django --output plugins/impo
 
 ```rust
 // blog_post table with author_id + blog_category_id FK columns:
-#[umbral(table = "blog_post")]                 // ← real table preserved
-pub struct Post {                              // ← `blog_` app prefix stripped
+pub struct BlogPost {                          // ← full struct name (round-trips)
     pub id: i64,
     pub title: String,
     #[umbral(index)]
@@ -90,14 +89,9 @@ pub struct Post {                              // ← `blog_` app prefix strippe
 
 - **FK field names** keep the **real column name** (`author_id`) — umbral uses
   the field name as the column name, so no `#[sqlx(rename)]` is needed and the
-  field/index reads clearly against the actual column. Only the FK *target
-  struct* is app-prefix-stripped (`ForeignKey<Author>`).
-- **Struct names** drop the `<app>_` prefix (`blog_post` → `Post`), with
-  `#[umbral(table = "blog_post")]` preserving the real table. FK targets resolve
-  through the same names, so `ForeignKey<Author>` lines up with `struct Author`.
-- **Collision safety.** If two apps have a `category` table, both stripping to
-  `Category` would clash — so on a collision the colliding tables keep their full
-  app-prefixed names (`BlogCategory`, `StoreCategory`).
+  field/index reads clearly against the actual column. This matches umbral's own
+  idiom (`pub user_id: ForeignKey<AuthUser>` in umbral-auth). Only the FK
+  *target struct* is app-prefix-stripped (`ForeignKey<Author>`).
 - **`auth_user` → your user model.** Django's `auth_user` is *not* re-declared;
   umbral-auth already provides `AuthUser` on the same table. FKs to it render
   `ForeignKey<AuthUser>`, and the file opens with an import you can repoint at a
@@ -108,6 +102,42 @@ pub struct Post {                              // ← `blog_` app prefix strippe
   // e.g. `use crate::models::MyUser as AuthUser;`.
   use umbral_auth::AuthUser;
   ```
+
+By default the **struct name is the full table name** (`blog_post` → `BlogPost`),
+which snake-cases straight back to the table — so no `#[umbral(table)]` macro is
+emitted and the models stay clean.
+
+### `--with-table-names`: strip the app prefix off struct names
+
+Add `--with-table-names` to also shed the `<app>_` prefix from **struct names**,
+preserving the real table with a `#[umbral(table = "...")]` macro:
+
+```bash
+cargo run -- inspectdb ./django.sqlite3 --framework django --with-table-names --output plugins/imported
+```
+
+```rust
+#[umbral(table = "blog_post")]                 // ← real table preserved
+pub struct Post {                              // ← `blog_` app prefix stripped
+    pub id: i64,
+    pub title: String,
+    #[umbral(index)]
+    pub author_id: ForeignKey<Author>,
+}
+```
+
+- **Struct names** drop the `<app>_` prefix (`blog_post` → `Post`), with
+  `#[umbral(table = "blog_post")]` preserving the real table. FK targets resolve
+  through the same names, so `ForeignKey<Author>` lines up with `struct Author`.
+- **Collision safety.** If two apps have a `category` table, both stripping to
+  `Category` would clash — so on a collision the colliding tables keep their full
+  app-prefixed names (`BlogCategory`, `StoreCategory`).
+
+The flag is off by default because the full struct name round-trips to its table
+with no macro at all; opt in when you'd rather read `Post` than `BlogPost` and
+don't mind the table macro. A struct name that *still* wouldn't round-trip (odd
+table casing) gets its `#[umbral(table)]` macro either way, so generated models
+always map to the right table.
 
 Without `--framework`, column and table names are kept verbatim (`struct
 BlogPost`, `pub author_id: ForeignKey<BlogAuthor>`), which round-trips exactly
