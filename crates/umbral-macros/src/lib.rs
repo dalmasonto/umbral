@@ -4224,21 +4224,7 @@ fn expand_task(args: TokenStream2, input: TokenStream2) -> syn::Result<TokenStre
     // foreign trait on a foreign payload (`String`, `i64`, a type from another
     // crate) would trip the orphan rule, and two tasks sharing a payload type
     // would collide. A generated marker has neither problem.
-    let handle_ident = format_ident!(
-        "{}",
-        fn_name
-            .to_string()
-            .split('_')
-            .filter(|s| !s.is_empty())
-            .map(|s| {
-                let mut c = s.chars();
-                match c.next() {
-                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                    None => String::new(),
-                }
-            })
-            .collect::<String>()
-    );
+    let handle_ident = format_ident!("{}", to_pascal_case(&fn_name.to_string()));
     let handle_vis = &func.vis;
     let handle_doc = format!(
         "Typed handle for the `{fn_name}` task. `{}::enqueue(payload)` enqueues it \
@@ -5653,20 +5639,20 @@ fn apply_rename_all(name: &str, style: &str) -> String {
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect();
-    let cap = |w: &str| -> String {
-        let mut c = w.chars();
-        match c.next() {
-            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-            None => String::new(),
-        }
-    };
     match style {
-        "camelCase" => words
-            .iter()
-            .enumerate()
-            .map(|(i, w)| if i == 0 { w.clone() } else { cap(w) })
-            .collect(),
-        "PascalCase" => words.iter().map(|w| cap(w)).collect(),
+        // camelCase / PascalCase route through the canonical `to_pascal_case`
+        // (the same state-machine capitalisation the task-handle builder and
+        // the reverse-accessor trait names use) so there is one definition of
+        // "PascalCase" in the crate.
+        "camelCase" => {
+            let pascal = to_pascal_case(name);
+            let mut chars = pascal.chars();
+            match chars.next() {
+                Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+        "PascalCase" => to_pascal_case(name),
         "kebab-case" => words.join("-"),
         "SCREAMING_SNAKE_CASE" => name.to_uppercase(),
         "UPPERCASE" => name.to_uppercase(),
