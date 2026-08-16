@@ -936,7 +936,9 @@ where
     fn commands(&self) -> Vec<Box<dyn umbral::cli::PluginCommand>> {
         vec![
             Box::new(CreateSuperuserCommand),
-            Box::new(ResetForeignPasswordsCommand),
+            // Generic over the plugin's own user model `U`, so an
+            // `AuthPlugin<MyUser>` neutralizes *its* users, not `AuthUser`.
+            Box::new(ResetForeignPasswordsCommand::<U>::default()),
         ]
     }
 
@@ -1663,25 +1665,33 @@ pub struct PasswordAudit {
 /// ([`start_password_reset`]) — the documented re-hash path. A hash umbral
 /// already accepts is left untouched, so this is idempotent and safe to re-run.
 ///
-/// Targets the built-in [`AuthUser`] — the common port target (inspectdb maps
-/// Django's `auth_user` onto it), matching `createsuperuser`'s scope. A custom
-/// user model runs the same check itself via [`verify_password`] +
-/// [`random_password_hash`]. Loads users to check them — intended as a one-shot
-/// post-port step, not a hot path.
-pub async fn reset_unverifiable_passwords() -> Result<PasswordAudit, AuthError> {
-    let users = umbral::orm::Manager::<AuthUser>::default().fetch().await?;
+/// Generic over the user model `U`, so it targets whatever model the
+/// [`AuthPlugin`] was configured with — the built-in [`AuthUser`] by default,
+/// or a custom `AuthPlugin<MyUser>`. Reads the hash via [`UserModel`] and writes
+/// through `U::TABLE`'s `password_hash` column (the same shape as
+/// [`set_password`]). Loads users to check them — a one-shot post-port step,
+/// not a hot path.
+pub async fn reset_unverifiable_passwords<U>() -> Result<PasswordAudit, AuthError>
+where
+    U: UserModel
+        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+        + umbral::orm::HydrateRelated
+        + Unpin,
+{
+    let users = umbral::orm::Manager::<U>::default().fetch().await?;
     let total = users.len();
     let mut reset = 0;
     for user in &users {
         // The authoritative test: can umbral's argon2 even PARSE this hash?
-        if PasswordHash::new(&user.password_hash).is_ok() {
+        if PasswordHash::new(user.password_hash()).is_ok() {
             continue;
         }
         let hash = random_password_hash().await?;
         let mut patch = serde_json::Map::new();
         patch.insert("password_hash".to_string(), serde_json::Value::String(hash));
-        umbral::orm::Manager::<AuthUser>::default()
-            .filter(umbral::orm::Predicate::<AuthUser>::col_eq("id", user.id))
+        umbral::orm::Manager::<U>::default()
+            .filter(umbral::orm::Predicate::<U>::col_eq("id", user.id()))
             .update_values(patch)
             .await?;
         reset += 1;
@@ -1773,10 +1783,23 @@ impl umbral::cli::PluginCommand for CreateSuperuserCommand {
 /// Neutralizes every stored hash umbral-auth can't verify (see
 /// [`reset_unverifiable_passwords`]) and tells the operator those users must
 /// reset. Dispatched via `cargo run -- resetforeignpasswords`.
-pub struct ResetForeignPasswordsCommand;
+pub struct ResetForeignPasswordsCommand<U = AuthUser>(std::marker::PhantomData<U>);
+
+impl<U> Default for ResetForeignPasswordsCommand<U> {
+    fn default() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
 
 #[async_trait::async_trait]
-impl umbral::cli::PluginCommand for ResetForeignPasswordsCommand {
+impl<U> umbral::cli::PluginCommand for ResetForeignPasswordsCommand<U>
+where
+    U: UserModel
+        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+        + umbral::orm::HydrateRelated
+        + Unpin,
+{
     fn command(&self) -> clap::Command {
         clap::Command::new("resetforeignpasswords").about(
             "Neutralize user password hashes umbral-auth can't verify (e.g. after \
@@ -1785,7 +1808,7 @@ impl umbral::cli::PluginCommand for ResetForeignPasswordsCommand {
     }
 
     async fn run(&self, _matches: &clap::ArgMatches) -> Result<(), umbral::cli::CliError> {
-        let audit = reset_unverifiable_passwords()
+        let audit = reset_unverifiable_passwords::<U>()
             .await
             .map_err(|e| -> umbral::cli::CliError { Box::new(e) })?;
         if audit.reset == 0 {

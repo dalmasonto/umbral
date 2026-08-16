@@ -114,7 +114,9 @@ cargo run -- resetforeignpasswords
 ```
 
 It's idempotent (umbral-native hashes are left untouched), so it's safe to
-re-run. See [`reset_unverifiable_passwords`](/docs/v0.0.1/auth) for the API.
+re-run. The command targets whichever user model your `AuthPlugin` is configured
+with — the built-in `AuthUser`, or a custom `AuthPlugin<MyUser>`. See
+[`reset_unverifiable_passwords`](/docs/v0.0.1/auth) for the generic API.
 </Callout>
 
 ## Going faster: `--workers`

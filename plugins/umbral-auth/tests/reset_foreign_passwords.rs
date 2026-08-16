@@ -78,7 +78,7 @@ async fn neutralizes_only_foreign_hashes_and_leaves_umbral_hashes() {
         "a Django hash must be unverifiable (parse error) before neutralization",
     );
 
-    let audit = umbral_auth::reset_unverifiable_passwords()
+    let audit = umbral_auth::reset_unverifiable_passwords::<AuthUser>()
         .await
         .expect("neutralize");
     assert_eq!(audit.total, 2, "both users scanned");
@@ -110,7 +110,7 @@ async fn neutralizes_only_foreign_hashes_and_leaves_umbral_hashes() {
     );
 
     // Idempotent: a second run neutralizes nothing (all hashes now umbral-valid).
-    let again = umbral_auth::reset_unverifiable_passwords()
+    let again = umbral_auth::reset_unverifiable_passwords::<AuthUser>()
         .await
         .expect("re-run");
     assert_eq!(again.reset, 0, "re-run is a no-op");
