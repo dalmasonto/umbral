@@ -247,7 +247,7 @@ pub(crate) fn ambient_seal(plaintext: &str) -> Result<String, MaskError> {
 }
 
 /// Open ciphertext with the ambient keyring.
-fn ambient_open(ciphertext: &str) -> Result<String, MaskError> {
+pub(crate) fn ambient_open(ciphertext: &str) -> Result<String, MaskError> {
     match keyring() {
         Ok(Some(k)) => k.open(ciphertext),
         Ok(None) => Err(MaskError::NoKeyring),

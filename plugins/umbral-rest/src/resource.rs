@@ -281,6 +281,10 @@ pub struct ResourceConfig {
     pub(crate) hidden: Vec<String>,
     /// `#[umbral(private)]` columns this resource can unlock, and for whom.
     pub(crate) private_unlocks: Vec<(String, PrivateFn)>,
+    /// Hidden columns this resource can REVEAL for an authorized caller, and
+    /// for whom. Stronger than `private_unlocks`: covers `secret` / `Masked`
+    /// columns too, and DECRYPTS `Masked<T>` to plaintext in the response.
+    pub(crate) reveal_unlocks: Vec<(String, PrivateFn)>,
     pub(crate) transforms: Vec<(String, TransformFn)>,
     pub(crate) computed: Vec<(String, ComputedFn)>,
     /// Permission class for this resource. `None` defaults to
@@ -366,6 +370,7 @@ impl ResourceConfig {
             table: table.into(),
             hidden: Vec::new(),
             private_unlocks: Vec::new(),
+            reveal_unlocks: Vec::new(),
             transforms: Vec::new(),
             computed: Vec::new(),
             permission: None,
@@ -781,6 +786,29 @@ impl ResourceConfig {
         F: Fn(Option<&umbral::auth::Identity>) -> bool + Send + Sync + 'static,
     {
         self.private_unlocks.push((field.to_string(), Arc::new(f)));
+        self
+    }
+
+    /// REVEAL a hidden column (`private`, `secret`, or `Masked<T>`) for a
+    /// caller the predicate authorizes — the read-side twin of the ORM's
+    /// `DynQuerySet::reveal`. Unlike [`allow_private_if`](Self::allow_private_if)
+    /// (which only unlocks `private`), this also surfaces `secret` columns
+    /// and DECRYPTS `Masked<T>` to plaintext in the response.
+    ///
+    /// ```rust,ignore
+    /// // Staff (and only staff) see the decrypted API key on this resource:
+    /// ResourceConfig::for_::<Account>()
+    ///     .reveal_if("api_key", |id| id.is_some_and(|i| i.is_staff()))
+    /// ```
+    ///
+    /// The value only leaves the server when the predicate returns true, so
+    /// pair it with a `.permission(...)` that gates the endpoint itself. Call
+    /// once per column you want revealed.
+    pub fn reveal_if<F>(mut self, field: &str, f: F) -> Self
+    where
+        F: Fn(Option<&umbral::auth::Identity>) -> bool + Send + Sync + 'static,
+    {
+        self.reveal_unlocks.push((field.to_string(), Arc::new(f)));
         self
     }
 

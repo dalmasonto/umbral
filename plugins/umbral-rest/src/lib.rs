@@ -314,6 +314,9 @@ pub struct RestPlugin {
     hidden: Vec<(String, String)>,
     /// `#[umbral(private)]` columns a resource can unlock, and for whom. `(table, field, fn)`.
     private_unlocks: Vec<(String, String, crate::resource::PrivateFn)>,
+    /// Hidden columns a resource can REVEAL (incl. `secret`/`Masked` + decrypt),
+    /// and for whom. `(table, field, fn)`. See `ResourceConfig::reveal_if`.
+    reveal_unlocks: Vec<(String, String, crate::resource::PrivateFn)>,
     /// `(table, field, transform_fn)` — replaces a field's value.
     transforms: Vec<(String, String, TransformFn)>,
     /// `(table, name, compute_fn)` — adds a derived field per row.
@@ -878,6 +881,7 @@ impl RestPlugin {
             expose: std::collections::HashSet::new(),
             hidden: Vec::new(),
             private_unlocks: Vec::new(),
+            reveal_unlocks: Vec::new(),
             transforms: Vec::new(),
             computed: Vec::new(),
             pagination: Arc::new(NoPagination),
@@ -1265,6 +1269,7 @@ impl RestPlugin {
             cache_control,
             under,
             private_unlocks,
+            reveal_unlocks,
         } = config;
         if let Some(cc) = cache_control {
             self.cache_controls.insert(table.clone(), cc);
@@ -1274,6 +1279,9 @@ impl RestPlugin {
         }
         for (field, func) in private_unlocks {
             self.private_unlocks.push((table.clone(), field, func));
+        }
+        for (field, func) in reveal_unlocks {
+            self.reveal_unlocks.push((table.clone(), field, func));
         }
         for (field, func) in transforms {
             self.transforms.push((table.clone(), field, func));
@@ -1769,6 +1777,19 @@ impl RestPlugin {
     /// a denied one never leaves the database.
     pub(crate) fn unlocked_private(&self, table: &str, identity: Option<&Identity>) -> Vec<String> {
         self.private_unlocks
+            .iter()
+            .filter(|(t, _, check)| t == table && check(identity))
+            .map(|(_, f, _)| f.clone())
+            .collect()
+    }
+
+    /// Which hidden columns THIS caller may REVEAL on this table (incl.
+    /// `secret`/`Masked`, with `Masked<T>` decrypted). Evaluated per request
+    /// from `ResourceConfig::reveal_if`; handed to `DynQuerySet::reveal`, so
+    /// an approved column is SELECTed + decrypted and a denied one is never
+    /// fetched.
+    pub(crate) fn revealed_cols(&self, table: &str, identity: Option<&Identity>) -> Vec<String> {
+        self.reveal_unlocks
             .iter()
             .filter(|(t, _, check)| t == table && check(identity))
             .map(|(_, f, _)| f.clone())
@@ -3311,6 +3332,7 @@ async fn list_impl(
             &include,
             &ordering,
             &cfg.unlocked_private(&model.table, identity.as_ref()),
+            &cfg.revealed_cols(&model.table, identity.as_ref()),
         )
         .await?;
         for row in &mut rows {
@@ -3333,6 +3355,7 @@ async fn list_impl(
         &include,
         &ordering,
         &cfg.unlocked_private(&model.table, identity.as_ref()),
+        &cfg.revealed_cols(&model.table, identity.as_ref()),
     )
     .await?;
     for row in &mut rows {
@@ -3526,6 +3549,7 @@ async fn retrieve_impl(
         &include,
         &[],
         &cfg.unlocked_private(&model.table, identity.as_ref()),
+        &cfg.revealed_cols(&model.table, identity.as_ref()),
     )
     .await?;
     let Some(mut row) = rows.pop() else {
@@ -4451,6 +4475,7 @@ async fn update_nested(
         &[],
         &[],
         &cfg.unlocked_private(&model.table, identity),
+        &cfg.revealed_cols(&model.table, identity),
     )
     .await?;
     let mut parent = rows
@@ -4693,6 +4718,7 @@ async fn update_impl(
         &[],
         &[],
         &cfg.unlocked_private(&model.table, identity.as_ref()),
+        &cfg.revealed_cols(&model.table, identity.as_ref()),
     )
     .await?;
     if existing.is_empty() {
@@ -4746,6 +4772,7 @@ async fn update_impl(
         &[],
         &[],
         &cfg.unlocked_private(&model.table, identity.as_ref()),
+        &cfg.revealed_cols(&model.table, identity.as_ref()),
     )
     .await?;
     let Some(mut row) = rows.pop() else {
@@ -5054,11 +5081,18 @@ async fn fetch_rows(
     // Empty for everyone else, which is the default and the safe direction: the ORM does not
     // even SELECT a private column it was not told to, so the value never leaves the database.
     unlocked_private: &[String],
+    // Hidden columns THIS caller may reveal (incl. `secret`/`Masked` decrypted),
+    // from `ResourceConfig::reveal_if`. Empty for everyone else.
+    revealed: &[String],
 ) -> Result<Vec<Map<String, Value>>, ApiError> {
     let mut qs = umbral::orm::DynQuerySet::for_meta(model);
     if !unlocked_private.is_empty() {
         let refs: Vec<&str> = unlocked_private.iter().map(String::as_str).collect();
         qs = qs.allow_private(&refs);
+    }
+    if !revealed.is_empty() {
+        let refs: Vec<&str> = revealed.iter().map(String::as_str).collect();
+        qs = qs.reveal(&refs);
     }
 
     if let Some((col, val)) = where_clause {

@@ -162,6 +162,16 @@ pub struct DynQuerySet<'a> {
     /// instead of sealing again. Database RESTORE only; see
     /// [`DynQuerySet::presealed`]. gaps4 #2.
     presealed: bool,
+    /// Reveal ALL hidden columns in serialized output for a caller the app
+    /// has already authorized: include `private` / `secret` columns AND
+    /// decrypt `Masked<T>` to plaintext (not ciphertext). Trusted
+    /// server-side unlock; REST/GraphQL only set it behind a per-resource
+    /// permission gate. See [`DynQuerySet::revealed`].
+    revealed: bool,
+    /// Reveal only these named columns (the per-column form of `revealed`),
+    /// leaving every other hidden column stripped. See
+    /// [`DynQuerySet::reveal`].
+    reveal_cols: Vec<String>,
 }
 
 /// Turn a string that arrived from a URL, a form or an identity into a correctly-TYPED
@@ -320,6 +330,8 @@ impl<'a> DynQuerySet<'a> {
             allow_private: Vec::new(),
             unredacted: false,
             presealed: false,
+            revealed: false,
+            reveal_cols: Vec::new(),
         }
     }
 
@@ -388,7 +400,7 @@ impl<'a> DynQuerySet<'a> {
     /// through it, so a new terminal inherits the policy instead of having to remember it —
     /// which is precisely the mistake that let `umbral-graphql` serve password hashes.
     pub(crate) fn may_serialize(&self, col: &Column) -> bool {
-        if self.unredacted {
+        if self.unredacted || self.is_revealed(col) {
             return true;
         }
         if crate::orm::secrets::is_secret_column(col) {
@@ -398,6 +410,60 @@ impl<'a> DynQuerySet<'a> {
             return self.allow_private.iter().any(|c| c == &col.name);
         }
         true
+    }
+
+    /// Whether this column is unlocked by a `revealed()` / `reveal([..])`
+    /// call — the authorized-audience switch that includes it in output and
+    /// decrypts `Masked<T>`.
+    pub(crate) fn is_revealed(&self, col: &Column) -> bool {
+        self.revealed || self.reveal_cols.iter().any(|c| c == &col.name)
+    }
+
+    /// Reveal hidden columns for a caller the application has ALREADY
+    /// authorized: include every `#[umbral(private)]` / `#[umbral(secret)]`
+    /// column in the output AND decrypt `Masked<T>` columns to plaintext
+    /// (instead of the stored ciphertext).
+    ///
+    /// This is the read-side "trusted audience" switch. Unlike
+    /// [`unredacted_for_backup`](Self::unredacted_for_backup) (which is named
+    /// to be jarring because it's for database dumps and emits Masked as
+    /// ciphertext), `revealed` is meant for a *request* surface — but ONLY
+    /// behind an authorization gate. It is unconditional here (trusted
+    /// server-side code); REST and GraphQL call it only when a resource opts
+    /// in AND the caller passes the configured permission, so a plaintext
+    /// secret never reaches an unauthorized client. `grep -rn revealed` is
+    /// the inventory of every reveal path.
+    pub fn revealed(mut self) -> Self {
+        self.revealed = true;
+        self
+    }
+
+    /// The per-column form of [`revealed`](Self::revealed): reveal only the
+    /// named columns (include them + decrypt `Masked<T>`), leaving every
+    /// other hidden column stripped. Accumulates; names not on the model are
+    /// ignored. Same authorization contract as `revealed` — callers gate it.
+    pub fn reveal(mut self, cols: &[&str]) -> Self {
+        self.reveal_cols
+            .extend(cols.iter().map(|c| (*c).to_string()));
+        self
+    }
+
+    /// Post-decode transform applied to one serialized column value: when
+    /// [`revealed`](Self::revealed) is set, a `Masked<T>` column's stored
+    /// ciphertext is decrypted to plaintext. A decrypt failure (no private
+    /// key, corrupt value) leaves the value untouched rather than erroring
+    /// the read. No-op for every non-masked column and when not revealing.
+    pub(crate) fn reveal_value(&self, col: &Column, v: serde_json::Value) -> serde_json::Value {
+        if !self.is_revealed(col) || !crate::orm::write::is_masked_col(col) {
+            return v;
+        }
+        match v.as_str() {
+            Some(ct) if !ct.is_empty() => match crate::orm::masked::ambient_open(ct) {
+                Ok(plain) => serde_json::Value::String(plain),
+                Err(_) => v,
+            },
+            _ => v,
+        }
     }
 
     /// `select_cols` minus everything this reader may not see. Not selecting the column at
@@ -1796,7 +1862,8 @@ impl<'a> DynQuerySet<'a> {
                     for row in rows {
                         let mut entry = serde_json::Map::new();
                         for (col_name, col_meta) in &selected_cols {
-                            entry.insert((*col_name).clone(), decode_to_json(&row, col_meta)?);
+                            let v = self.reveal_value(col_meta, decode_to_json(&row, col_meta)?);
+                            entry.insert((*col_name).clone(), v);
                         }
                         out.push(entry);
                     }
@@ -1810,7 +1877,8 @@ impl<'a> DynQuerySet<'a> {
                     for row in rows {
                         let mut entry = serde_json::Map::new();
                         for (col_name, col_meta) in &selected_cols {
-                            entry.insert((*col_name).clone(), decode_pg_to_json(&row, col_meta)?);
+                            let v = self.reveal_value(col_meta, decode_pg_to_json(&row, col_meta)?);
+                            entry.insert((*col_name).clone(), v);
                         }
                         out.push(entry);
                     }
