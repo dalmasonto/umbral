@@ -186,6 +186,29 @@ The macro reads each field-level attribute straight off the struct field. Empty 
 | `#[umbral(cidr)]` | On an `ipnetwork::IpNetwork` field, declare it as Postgres `CIDR` (network address) instead of the default `INET`. Postgres-only. |
 | `#[umbral(macaddr)]` | Explicit marker for a `mac_address::MacAddress` field (`MACADDR`). The type already auto-detects, so this only documents intent. Postgres-only. |
 | `#[umbral(xml)]` / `#[umbral(ltree)]` / `#[umbral(bit)]` | On a `String` (or `Option<String>`) field, declare it as a Postgres `XML` / `LTREE` / `BIT VARYING` column instead of `TEXT`. Text-backed - the Rust type stays `String`. Postgres-only. See [Text-backed Postgres types](#text-backed-postgres-types---xml-ltree-bit). |
+| `#[umbral(precision = N, scale = M)]` | On a `rust_decimal::Decimal` field, render `NUMERIC(N, M)` instead of the default `NUMERIC(19, 4)` - `numeric(5, 2)` for a percentage, `numeric(19, 8)` for an FX rate. Precision must stay within rust_decimal's ~28-digit ceiling; beyond that use `bigdecimal::BigDecimal`. Postgres-only. |
+| `#[umbral(geometry = "point", srid = 4326)]` / `#[umbral(geography = "...")]` | On a `umbral::orm::gis::Geometry` field (the `postgis` feature), a PostGIS `geometry(<kind>, <srid>)` / `geography(...)` column. Pair with `#[umbral(index)]` for a GiST index. See [PostGIS geometry](/docs/v0.0.1/orm/gis). Postgres-only. |
+
+### Mapping a field to a differently-named column - `#[sqlx(rename)]`
+
+By default a field's Rust name **is** its database column name. To point a
+pretty Rust field at a differently-named column, use sqlx's own attribute -
+umbral honors it for the column name (and `sqlx::FromRow` reads from the same
+column, so the two never disagree):
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Post {
+    pub id: i64,
+    #[sqlx(rename = "author_id")]   // Rust field `author`, DB column `author_id`
+    pub author: ForeignKey<User>,
+}
+```
+
+The column constant (`post::AUTHOR`) is still named after the Rust field but
+targets the `author_id` column. This is what [`inspectdb --framework
+django`](/docs/v0.0.1/migrations/inspectdb#framework-aware-naming) emits when it
+strips the `_id` off a Django foreign-key column.
 
 ```rust
 use chrono::{DateTime, Utc};

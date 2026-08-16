@@ -112,7 +112,7 @@ cargo run -- inspectdb --output src/legacy
 # -> Wrote src/legacy/migrations/app/0001_initial.json
 ```
 
-`--output` is a directory: inspectdb writes a `models.rs` with one `#[derive(Model)]` struct per table plus a `0001_initial.json` migration, ready to drop into a module and register from a plugin (or via `.model::<T>()`). Round-trip integration coverage lives in `crates/umbral-core/tests/postgres_inspect.rs`. See the [inspectdb page](../migrations/inspectdb) for the full flag set (`--mark-applied`, adopting a populated DB).
+`--output` is a directory: inspectdb writes a `models.rs` with one `#[derive(Model)]` struct per table plus a `0001_initial.json` migration, ready to drop into a module and register from a plugin (or via `.model::<T>()`). It recovers **foreign keys** (`information_schema` → `ForeignKey<Target>`) and **single-column unique / index** constraints (`pg_index`). Round-trip integration coverage lives in `crates/umbral-core/tests/postgres_inspect.rs`. See the [inspectdb page](../migrations/inspectdb) for the full flag set (`--mark-applied`, the optional source-DB argument, and `--framework django`).
 
 ## Row-Level Security
 

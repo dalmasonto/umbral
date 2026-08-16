@@ -35,31 +35,74 @@ referenced table's generated struct) and **single-column unique / index
 constraints** (`#[umbral(unique)]` / `#[umbral(index)]`). These flow into the
 generated `0001_initial` migration too, so a re-migrate rebuilds them.
 
+Self-referential foreign keys work: a `parent_id` column that points at its own
+table generates `pub parent: Option<ForeignKey<Category>>` inside `struct
+Category`.
+
+## Generated models compile
+
+The output is meant to build as-is against the `Model` trait, so `inspectdb`
+handles the awkward cases a real schema throws at it:
+
+- Every struct derives `serde::Serialize` + `serde::Deserialize` (the `Model`
+  trait requires them — a `ForeignKey<T>` needs `T: DeserializeOwned`).
+- A **primary key not named `id`** (`authtoken_token.key`,
+  `django_session.session_key`) is marked `#[umbral(primary_key)]`.
+- A column whose name is a **Rust keyword** (`type`, `match`, …) is escaped to a
+  valid identifier and bound to the real column: `pub type_` with
+  `#[sqlx(rename = "type")]`.
+
+You will still need the transitive type crates the schema uses in your
+`Cargo.toml` — `rust_decimal`, `ipnetwork`, `mac_address`, `uuid`, `chrono` —
+which the generated fields name by their fully-qualified paths.
+
 ## Framework-aware naming
 
-Django names a foreign-key column `<field>_id`. Pass `--framework django` to
-undo that, so the generated field is the clean `<field>` bound to the real
-column via `#[sqlx(rename)]`:
+Django names a foreign-key column `<field>_id` and prefixes every table with its
+app label (`blog_post`, `communities_community`). Pass `--framework django` to
+undo both, so the generated models read idiomatically:
 
 ```bash
 cargo run -- inspectdb ./django.sqlite3 --framework django --output plugins/imported
 ```
 
 ```rust
-// blog_post table, author_id + blog_category_id FK columns:
-pub struct BlogPost {
+// blog_post table with author_id + blog_category_id FK columns:
+#[umbral(table = "blog_post")]                 // ← real table preserved
+pub struct Post {                              // ← `blog_` app prefix stripped
     pub id: i64,
     pub title: String,
+    #[umbral(index)]
     #[sqlx(rename = "author_id")]
-    pub author: ForeignKey<BlogAuthor>,
+    pub author: ForeignKey<Author>,            // ← field AND target stripped
+    #[umbral(index)]
     #[sqlx(rename = "blog_category_id")]
-    pub category: Option<ForeignKey<BlogCategory>>, // `blog_` app prefix shed too
+    pub category: Option<ForeignKey<Category>>,
 }
 ```
 
-Without `--framework`, column names are kept verbatim (`pub author_id:
-ForeignKey<BlogAuthor>`), which round-trips exactly since umbral uses the field
-name as the column name.
+- **FK field names** drop the `_id` suffix (`author_id` → `author`), bound to the
+  real column via `#[sqlx(rename)]`.
+- **Struct names** drop the `<app>_` prefix (`blog_post` → `Post`), with
+  `#[umbral(table = "blog_post")]` preserving the real table. FK targets resolve
+  through the same names, so `ForeignKey<Author>` lines up with `struct Author`.
+- **Collision safety.** If two apps have a `category` table, both stripping to
+  `Category` would clash — so on a collision the colliding tables keep their full
+  app-prefixed names (`BlogCategory`, `StoreCategory`).
+- **`auth_user` → your user model.** Django's `auth_user` is *not* re-declared;
+  umbral-auth already provides `AuthUser` on the same table. FKs to it render
+  `ForeignKey<AuthUser>`, and the file opens with an import you can repoint at a
+  custom user model:
+
+  ```rust
+  // If you use a CUSTOM user model, replace the line below with your own,
+  // e.g. `use crate::models::MyUser as AuthUser;`.
+  use umbral_auth::AuthUser;
+  ```
+
+Without `--framework`, column and table names are kept verbatim (`struct
+BlogPost`, `pub author_id: ForeignKey<BlogAuthor>`), which round-trips exactly
+since umbral uses the field name as the column name.
 
 The output:
 
@@ -112,14 +155,19 @@ SQL type the catalogue doesn't know are excluded automatically.
 
 ## Still deferred
 
-- Foreign-key and index detection. The generated `CreateTable` ops carry
-  columns only; a Postgres FK column comes back as a plain `i64` and indexes
-  are not read out. Once the field-level FK / index types land in the
-  introspector, inspectdb picks them up. (Both backends.)
-- Generated plugin crates with a `Plugin` impl. Today the output is a flat
+- **Composite / multi-column** unique constraints and indexes. Single-column
+  `unique` / `index` are recovered; a multi-column index is skipped (umbral
+  models per-column flags), and `unique_together` recovery lands with a real
+  porting case.
+- **FK `on_delete` / `on_update`** actions. The FK reference is recovered; the
+  cascade action defaults to `NoAction` rather than reading the DB's rule.
+- **PostGIS subtype / SRID.** A `geometry` column introspects to the
+  unconstrained `Geometry(4326)`; recovering the exact subtype + SRID from the
+  `geometry_columns` catalog is future work.
+- **Generated plugin crates** with a `Plugin` impl. Today the output is a flat
   `models.rs` you wire by hand. M7's full plugin shape ships the crate too.
 
-Postgres introspection has shipped (`introspect_pool_pg`, covered by
-`crates/umbral-core/tests/postgres_inspect.rs`); it is no longer on this list.
+Foreign-key + single-column unique/index detection and Postgres introspection
+(`introspect_pool_pg`) have shipped; they are no longer on this list.
 
 The full target shape lives in `docs/specs/07-inspectdb.md`.
