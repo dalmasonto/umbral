@@ -486,6 +486,30 @@ fn has_sqlx_skip(attrs: &[syn::Attribute]) -> bool {
     false
 }
 
+/// Canonical `#[derive(Model)]` field classification, shared by BOTH passes
+/// over the struct's fields so the OneToOne→unique-FK rewrite can never
+/// desync between them.
+///
+/// Returns `(kind, force_unique)`:
+///  - A CHILD-side `OneToOne<T>` (no `#[sqlx(skip)]`) is sugar for
+///    `#[umbral(unique)] pub <f>: ForeignKey<T>`. It is rewritten here to
+///    `FieldKind::ForeignKey(T)` with `force_unique = true`, so every
+///    downstream code path (column spec, hydrate arms, reverse-FK and
+///    reverse-O2O accessors) treats it identically to a unique FK.
+///  - A PARENT-side `OneToOne<T>` (`#[sqlx(skip)]`, the back-link with no
+///    DB column) is left as `FieldKind::OneToOne(T)`, `force_unique = false`.
+///  - Every other kind passes through unchanged, `force_unique = false`.
+fn classify_model_field(field: &syn::Field) -> (FieldKind, bool) {
+    let kind = classify_field_type(&field.ty);
+    if let FieldKind::OneToOne(inner) = kind {
+        if !has_sqlx_skip(&field.attrs) {
+            return (FieldKind::ForeignKey(inner), true);
+        }
+        return (FieldKind::OneToOne(inner), false);
+    }
+    (kind, false)
+}
+
 fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldAttr> {
     let mut parsed = UmbralFieldAttr {
         cidr: false,
@@ -1275,7 +1299,11 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             continue;
         }
 
-        let kind = classify_field_type(&field.ty);
+        // Canonical classification (see `classify_model_field`): a child-side
+        // `OneToOne<T>` is already rewritten to a unique FK here, so `kind` /
+        // `force_unique` are computed ONCE and reused verbatim in the second
+        // pass below — the two can't drift.
+        let (kind, force_unique) = classify_model_field(field);
 
         // BUG-16: M2M<T> fields have no column on the parent table.
         // Skip them for FIELDS/column_consts and collect them into
@@ -1395,17 +1423,10 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             continue;
         }
 
-        // Child-side `OneToOne<T>` sugar — same shape on the wire as
-        // `#[umbral(unique)] pub <f>: ForeignKey<T>`. Rewrite the
-        // classification here so all downstream code (column spec,
-        // hydrate arms, reverse-FK accessor, reverse-O2O accessor)
-        // treats it identically to a unique FK.
+        // `kind` may still be upgraded below (cidr/xml/ltree/bit); the
+        // OneToOne→unique-FK rewrite already happened in
+        // `classify_model_field`, and `force_unique` carries its verdict.
         let mut kind = kind;
-        let mut force_unique = false;
-        if let FieldKind::OneToOne(inner) = kind {
-            kind = FieldKind::ForeignKey(inner);
-            force_unique = true;
-        }
 
         // Parse field-level `#[umbral(noform)]` / `#[umbral(noedit)]` etc.
         let mut field_attr = match parse_umbral_field_attr(&field.attrs) {
@@ -1865,21 +1886,19 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
-        let mut kind = classify_field_type(&field.ty);
+        // Same canonical classification as the first pass: a child-side
+        // `OneToOne<T>` (no `#[sqlx(skip)]`) is already rewritten to a unique
+        // FK, with `force_unique` flagging it. Reusing the one helper means
+        // the reverse-set + reverse-o2o accessors can never disagree with the
+        // first pass about which fields are sugar FKs.
+        let (kind, force_unique) = classify_model_field(field);
         // Re-parse the field attr here so we can honour `no_reverse`
         // when deciding whether to emit a Gap-30 accessor. The first
         // pass at line ~797 already validated the attrs, so a parse
         // error is impossible here — fall back to defaults to keep
         // the call infallible.
         let mut field_attr = parse_umbral_field_attr(&field.attrs).unwrap_or_default();
-        // Mirror the rewrite from the first loop: child-side
-        // `OneToOne<T>` (no `#[sqlx(skip)]`) → unique FK. Without
-        // this the reverse-set + reverse-o2o accessors would skip
-        // emission for sugar fields.
-        if matches!(kind, FieldKind::OneToOne(_)) && !has_sqlx_skip(&field.attrs) {
-            if let FieldKind::OneToOne(inner) = kind {
-                kind = FieldKind::ForeignKey(inner);
-            }
+        if force_unique {
             field_attr.unique = true;
         }
         match &kind {
@@ -4331,21 +4350,7 @@ fn expand_task(args: TokenStream2, input: TokenStream2) -> syn::Result<TokenStre
     // foreign trait on a foreign payload (`String`, `i64`, a type from another
     // crate) would trip the orphan rule, and two tasks sharing a payload type
     // would collide. A generated marker has neither problem.
-    let handle_ident = format_ident!(
-        "{}",
-        fn_name
-            .to_string()
-            .split('_')
-            .filter(|s| !s.is_empty())
-            .map(|s| {
-                let mut c = s.chars();
-                match c.next() {
-                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-                    None => String::new(),
-                }
-            })
-            .collect::<String>()
-    );
+    let handle_ident = format_ident!("{}", to_pascal_case(&fn_name.to_string()));
     let handle_vis = &func.vis;
     let handle_doc = format!(
         "Typed handle for the `{fn_name}` task. `{}::enqueue(payload)` enqueues it \
@@ -5317,9 +5322,17 @@ fn expand_choices(input: DeriveInput) -> syn::Result<TokenStream2> {
 // =========================================================================
 // #[derive(Validate)] — request-body DTO validation (gaps3 #29 item 4).
 //
-// The attribute vocabulary is DELIBERATELY identical to `#[derive(Model)]`'s.
-// A second spelling for "this field is an email" is how a DTO and the model it
-// feeds drift apart until the API accepts a value its own database rejects.
+// The attribute vocabulary is deliberately kept in step with `#[derive(Model)]`'s
+// — same spelling for the shared markers (`trim`, `lowercase`, `max_length`,
+// `email`, `url`, `slug`, `choices`, `min`, `max`) — so a DTO and the model it
+// feeds don't drift apart until the API accepts a value its own database rejects.
+//
+// The two are NOT a strict superset/subset. The one asymmetry today:
+// `min_length` is Validate-only — it is a hard length check on a request-body
+// DTO, whereas on a Model `max_length` is admin-display truncation metadata and
+// there is no `min_length` counterpart (a DB column has no minimum length). So
+// `#[umbral(min_length = 1)]` is meaningful on a Validate field and rejected on
+// a Model field. Keep any newly-shared marker spelled the same on both sides.
 // =========================================================================
 
 /// Field rules for a `#[derive(Validate)]` DTO.
@@ -5557,9 +5570,12 @@ fn expand_validate(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> 
 
 /// Derive [`Validate`] for a request-body DTO.
 ///
-/// Uses the SAME field attributes as `#[derive(Model)]` — `trim`, `lowercase`,
-/// `min_length`, `max_length`, `email`, `url`, `slug`, `choices`, `min`, `max` — so
+/// Shares its field-attribute vocabulary with `#[derive(Model)]` — `trim`,
+/// `lowercase`, `max_length`, `email`, `url`, `slug`, `choices`, `min`, `max` — so
 /// there is no second vocabulary to learn and no second definition of "a valid email".
+/// The one Validate-only marker is `min_length` (a hard length check; a Model
+/// column has no minimum-length concept), so `#[umbral(min_length = 1)]` is valid
+/// here but rejected on a Model field.
 ///
 /// ```ignore
 /// #[derive(serde::Deserialize, Validate)]
@@ -5760,27 +5776,38 @@ fn dto_field_serde(attrs: &[syn::Attribute]) -> (Option<String>, bool) {
     (rename, skip)
 }
 
+/// Apply serde's `#[serde(rename_all = "...")]` transform to a (snake_case)
+/// Rust field name, matching serde's actual per-style behaviour so the
+/// generated TypeScript-client key equals the JSON wire key.
+///
+/// The kebab / screaming-kebab / snake / screaming-snake styles are a straight
+/// per-character transform of the field name, NOT a split-and-rejoin: serde
+/// derives kebab as `snake.replace('_', "-")`, so a field like `type_` becomes
+/// `type-` on the wire. A split-on-`_`-and-`join("-")` would filter the empty
+/// segment a trailing/leading/double underscore produces and emit `type`,
+/// mismatching the wire key. camelCase / PascalCase route through
+/// `to_pascal_case`; for the snake_case identifiers this sees they match
+/// serde's state machine (an embedded-uppercase Rust field name — which serde
+/// treats char-by-char — is out of scope, Rust fields are snake_case).
 fn apply_rename_all(name: &str, style: &str) -> String {
-    let words: Vec<String> = name
-        .split('_')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
-    let cap = |w: &str| -> String {
-        let mut c = w.chars();
-        match c.next() {
-            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-            None => String::new(),
-        }
-    };
     match style {
-        "camelCase" => words
-            .iter()
-            .enumerate()
-            .map(|(i, w)| if i == 0 { w.clone() } else { cap(w) })
-            .collect(),
-        "PascalCase" => words.iter().map(|w| cap(w)).collect(),
-        "kebab-case" => words.join("-"),
+        // camelCase / PascalCase route through the canonical `to_pascal_case`
+        // (the same state-machine capitalisation the task-handle builder and
+        // the reverse-accessor trait names use) so there is one definition of
+        // "PascalCase" in the crate.
+        "camelCase" => {
+            let pascal = to_pascal_case(name);
+            let mut chars = pascal.chars();
+            match chars.next() {
+                Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+        "PascalCase" => to_pascal_case(name),
+        // Straight `_` -> `-` replace, exactly as serde derives kebab from
+        // snake. Preserves leading/trailing/double underscores as dashes.
+        "kebab-case" => name.replace('_', "-"),
+        "SCREAMING-KEBAB-CASE" => name.to_uppercase().replace('_', "-"),
         "SCREAMING_SNAKE_CASE" => name.to_uppercase(),
         "UPPERCASE" => name.to_uppercase(),
         "lowercase" => name.to_lowercase(),
@@ -5876,4 +5903,50 @@ pub fn derive_dto(input: TokenStream) -> TokenStream {
     expand_dto(input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+#[cfg(test)]
+mod rename_tests {
+    use super::{apply_rename_all, to_pascal_case};
+
+    #[test]
+    fn pascal_and_task_handle_shape_unchanged() {
+        // The task-handle builder and DTO PascalCase renames share this.
+        assert_eq!(to_pascal_case("send_welcome"), "SendWelcome");
+        assert_eq!(to_pascal_case("created_at"), "CreatedAt");
+        assert_eq!(to_pascal_case("email"), "Email");
+        // Routes through to_snake_case, so acronyms normalise.
+        assert_eq!(to_pascal_case("XMLReport"), "XmlReport");
+    }
+
+    #[test]
+    fn rename_all_normal_snake_case_inputs() {
+        assert_eq!(apply_rename_all("created_at", "camelCase"), "createdAt");
+        assert_eq!(apply_rename_all("created_at", "PascalCase"), "CreatedAt");
+        assert_eq!(apply_rename_all("created_at", "kebab-case"), "created-at");
+        assert_eq!(apply_rename_all("created_at", "snake_case"), "created_at");
+        assert_eq!(
+            apply_rename_all("created_at", "SCREAMING_SNAKE_CASE"),
+            "CREATED_AT"
+        );
+    }
+
+    #[test]
+    fn kebab_matches_serde_on_trailing_and_double_underscores() {
+        // serde derives kebab as `snake.replace('_', "-")`, so the trailing
+        // underscore on a keyword-avoiding field name survives as a dash.
+        // The old split-and-join collapsed it to `type`, mismatching the wire.
+        assert_eq!(apply_rename_all("type_", "kebab-case"), "type-");
+        // A double underscore keeps both dashes (serde does a straight replace).
+        assert_eq!(apply_rename_all("foo__bar", "kebab-case"), "foo--bar");
+        // Leading underscore is preserved too.
+        assert_eq!(apply_rename_all("_leading", "kebab-case"), "-leading");
+        // snake_case leaves the raw name (including the trailing `_`) intact.
+        assert_eq!(apply_rename_all("type_", "snake_case"), "type_");
+        // SCREAMING-KEBAB-CASE is likewise a straight replace after uppercasing.
+        assert_eq!(
+            apply_rename_all("foo__bar", "SCREAMING-KEBAB-CASE"),
+            "FOO--BAR"
+        );
+    }
 }
