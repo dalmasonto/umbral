@@ -118,13 +118,14 @@ struct ResetIn {
     new_password: String,
 }
 
-/// Resolve the client IP best-effort from reverse-proxy headers. ConnectInfo
-/// isn't wired in umbral's serve path, so the peer address isn't available; the
-/// proxy headers are the reliable source. Takes the first hop of
-/// `X-Forwarded-For`, else `X-Real-IP`. When neither resolves (direct
-/// connection, no proxy), falls back to a fixed key so the throttle still
-/// counts — every un-proxied caller shares one bucket, which is the safe side:
-/// it limits, it never opens a hole. Mirrors `umbral_logs`'s `resolve_ip`.
+/// Resolve the client IP under the framework's trusted-proxy-hops policy
+/// (audit_2 H9). Delegates to `umbral::settings::client_ip`, which reads ONLY
+/// `X-Forwarded-For` (never `X-Real-IP`) and takes the `(hops+1)`-th entry
+/// from the RIGHT — the non-forgeable hop just before your `trusted_proxy_hops`
+/// proxies — NOT the forgeable leftmost entry. With no trusted proxy configured
+/// (`trusted_proxy_hops = 0`) it resolves to `None`, so this falls back to a
+/// fixed key: every un-proxied caller shares one bucket, the safe side (it
+/// limits, never opens a hole). Mirrors `umbral_logs`'s `resolve_ip`.
 pub(crate) fn client_ip(headers: &HeaderMap) -> String {
     // audit_2 H9: resolve the client IP under the framework's trusted-proxy
     // policy (`settings.trusted_proxy_hops`) instead of blindly trusting the

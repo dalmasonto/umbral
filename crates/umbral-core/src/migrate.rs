@@ -1110,14 +1110,6 @@ fn is_no_action(a: &crate::orm::FkAction) -> bool {
     matches!(a, crate::orm::FkAction::NoAction)
 }
 
-/// Build a portable `CREATE INDEX IF NOT EXISTS idx_<table>_<col>
-/// ON "<table>" ("<col>")` statement. Same DDL on SQLite and
-/// Postgres — both accept `CREATE INDEX IF NOT EXISTS` and the
-/// `idx_<table>_<col>` name convention is unique enough that the
-/// migration engine can re-emit it idempotently on subsequent
-/// applies. Used by [`render_operation_sqlite`] / `_postgres`
-/// after a `CreateTable` or `AddColumn` op whose column carries
-/// the `#[umbral(index)]` flag. Closes BUG-4.
 /// Postgres `COMMENT ON COLUMN` for one column (gaps3 #43).
 ///
 /// An empty `comment` renders `IS NULL`, which is Postgres's "this column has no
@@ -1139,6 +1131,14 @@ fn comment_on_column_stmt(table: &str, column: &str, comment: &str) -> String {
     format!("COMMENT ON COLUMN \"{t}\".\"{c}\" IS '{body}'")
 }
 
+/// Build a portable `CREATE INDEX IF NOT EXISTS idx_<table>_<col>
+/// ON "<table>" ("<col>")` statement. Same DDL on SQLite and
+/// Postgres — both accept `CREATE INDEX IF NOT EXISTS` and the
+/// `idx_<table>_<col>` name convention is unique enough that the
+/// migration engine can re-emit it idempotently on subsequent
+/// applies. Used by [`render_operation_sqlite`] / `_postgres`
+/// after a `CreateTable` or `AddColumn` op whose column carries
+/// the `#[umbral(index)]` flag. Closes BUG-4.
 fn create_index_stmt(table: &str, column: &str) -> String {
     let t = table.replace('"', "\"\"");
     let c = column.replace('"', "\"\"");

@@ -85,7 +85,8 @@ pub struct RequestLog {
     /// this column could not hold a Uuid-keyed user's id at all, so every request from
     /// such a user was recorded **unattributed** — the one field the log exists to carry.
     pub user_id: Option<String>,
-    /// Client IP, from `X-Forwarded-For` / `X-Real-IP` when present.
+    /// Client IP, resolved from `X-Forwarded-For` under the trusted-proxy-hops
+    /// policy (the `(hops+1)`-th entry from the right; `X-Real-IP` is not used).
     pub ip: Option<String>,
     /// `User-Agent` header value, if present.
     pub user_agent: Option<String>,

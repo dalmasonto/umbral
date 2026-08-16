@@ -533,26 +533,6 @@ impl<T> QuerySet<T> {
         self.atomic.unwrap_or_else(crate::db::atomic_default)
     }
 
-    /// Clone the base query and weave in the accumulated predicates,
-    /// picking the dialect-appropriate `SimpleExpr` for each one. The
-    /// `backend_name` is `"sqlite"` or `"postgres"`; any other value
-    /// behaves like Postgres (the default).
-    /// Predicates the ORM adds on its own, independent of what the caller
-    /// filtered on — today the soft-delete visibility guard.
-    ///
-    /// **This is the single seam for implicit filtering, and it exists so a
-    /// write path cannot silently diverge from the read path.** Both
-    /// [`Self::build_query_for`] (SELECT) and [`Self::build_update_for`]
-    /// (UPDATE) call it, so a row hidden from reads cannot be updated through a
-    /// predicate that forgot the same guard. It was duplicated in both before;
-    /// two copies of a security-relevant filter is a drift bug waiting to
-    /// happen, and the next filter to land here — the row-level tenant scope —
-    /// must reach *every* builder or it is a cross-tenant leak
-    /// (`docs/specs/row-level-tenancy.md`).
-    ///
-    /// Note `build_delete_for` deliberately does NOT call this: a hard delete
-    /// may legitimately target already-trashed rows. A tenant predicate, by
-    /// contrast, will have to apply there too.
     /// Snapshot the rows this queryset selects — the pre-image an audited write
     /// records (gaps3 #54). Empty (and free) unless the model is `audited`.
     async fn audit_pre(&self, backend: &str) -> Vec<serde_json::Map<String, JsonValue>>
@@ -606,6 +586,22 @@ impl<T> QuerySet<T> {
         crate::orm::audit::record_many(&meta, action, pairs).await;
     }
 
+    /// Predicates the ORM adds on its own, independent of what the caller
+    /// filtered on — today the soft-delete visibility guard.
+    ///
+    /// **This is the single seam for implicit filtering, and it exists so a
+    /// write path cannot silently diverge from the read path.** Both
+    /// [`Self::build_query_for`] (SELECT) and [`Self::build_update_for`]
+    /// (UPDATE) call it, so a row hidden from reads cannot be updated through a
+    /// predicate that forgot the same guard. It was duplicated in both before;
+    /// two copies of a security-relevant filter is a drift bug waiting to
+    /// happen, and the next filter to land here — the row-level tenant scope —
+    /// must reach *every* builder or it is a cross-tenant leak
+    /// (`docs/specs/row-level-tenancy.md`).
+    ///
+    /// Note `build_delete_for` deliberately does NOT call this: a hard delete
+    /// may legitimately target already-trashed rows. A tenant predicate, by
+    /// contrast, will have to apply there too.
     fn implicit_predicates(&self) -> Vec<sea_query::SimpleExpr> {
         let mut out = Vec::new();
         if self.soft_delete_active {
@@ -619,6 +615,11 @@ impl<T> QuerySet<T> {
         out
     }
 
+    /// Clone the base query and weave in the accumulated predicates (plus the
+    /// [`implicit_predicates`](Self::implicit_predicates)), picking the
+    /// dialect-appropriate `SimpleExpr` for each one. The `backend_name` is
+    /// `"sqlite"` or `"postgres"`; any other value behaves like Postgres (the
+    /// default).
     pub(crate) fn build_query_for(&self, backend_name: &str) -> sea_query::SelectStatement {
         let mut q = self.query.clone();
         for p in &self.predicates {

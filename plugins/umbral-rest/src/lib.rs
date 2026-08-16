@@ -856,9 +856,10 @@ fn action_label(action: &Action) -> String {
     }
 }
 
-/// Resolve the caller's IP from proxy headers for throttle keying.
-/// Takes the first hop of `X-Forwarded-For`, else `X-Real-IP`. Returns
-/// `None` when neither resolves (direct connection, no proxy) — the
+/// Resolve the caller's IP from proxy headers for throttle keying, under the
+/// trusted-proxy-hops policy (audit_2 H9). Reads ONLY `X-Forwarded-For` (never
+/// `X-Real-IP`), taking the `(hops+1)`-th entry from the RIGHT — not the
+/// forgeable leftmost. Returns `None` when no trusted proxy resolves it — the
 /// throttles then fall back to a shared `"unknown"` bucket, which limits
 /// rather than opening a hole. Mirrors `umbral-auth`'s `client_ip` and
 /// `umbral-logs`'s `resolve_ip`.

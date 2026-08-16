@@ -25,9 +25,12 @@ pub struct RouteContext {
     tenant: Option<TenantKey>,
     /// Postgres session variables (GUCs) to set on the connection this request
     /// uses — e.g. `("app.user_id", "42")` for an RLS policy that reads
-    /// `current_setting('app.user_id')`. The PG pool's `after_acquire` hook
-    /// runs `set_config(name, value, false)` for each; `after_release` resets
-    /// them, so a value can't leak to the next request on the same connection.
+    /// `current_setting('app.user_id')`. The PG pool's `before_acquire` hook
+    /// (see `crate::db`) runs `RESET ALL` to clear any GUCs a prior request
+    /// left on the pooled connection, then `set_config(name, value, false)`
+    /// for each of these — so a value can't leak to the next request on the
+    /// same connection. (There is no `after_acquire`/`after_release` hook; the
+    /// reset happens on the NEXT acquisition.)
     session_vars: Vec<(String, String)>,
     /// The authenticated caller's id, as a string (PK-shape independent: i64,
     /// String and Uuid user models all round-trip through this).
