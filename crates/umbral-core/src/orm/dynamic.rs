@@ -1923,6 +1923,80 @@ impl<'a> DynQuerySet<'a> {
         Ok(rows.pop())
     }
 
+    /// Column-level read against an EXPLICIT pool (not the ambient router).
+    /// Mirrors [`Self::fetch_as_json`] — same visibility policy (so
+    /// `.unredacted_for_backup()` reads every column, secrets included) and the
+    /// same `reveal_value` decode — but runs on the pool you hand it and does
+    /// NOT hydrate M2M arrays or `select_related`. Built for the data-transfer
+    /// engine, which reads from a source pool that is not the app's ambient one.
+    pub async fn fetch_as_json_on(
+        self,
+        pool: &crate::db::DbPool,
+    ) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, DynError> {
+        let select_cols = self.visible_select_cols();
+        let mut q = Query::select();
+        q.from(crate::db::router::schema_qualified_table(&self.meta.table));
+        for c in &select_cols {
+            q.column(Alias::new(c));
+        }
+        for cond in &self.effective_where_clauses() {
+            q.cond_where(cond.clone());
+        }
+        for (col, descending) in &self.order {
+            q.order_by(
+                Alias::new(col),
+                if *descending { Order::Desc } else { Order::Asc },
+            );
+        }
+        if let Some(n) = self.limit {
+            q.limit(n);
+        }
+        if let Some(n) = self.offset {
+            q.offset(n);
+        }
+        let selected_cols: Vec<(&String, &Column)> = select_cols
+            .iter()
+            .filter_map(|col_name| {
+                self.meta
+                    .fields
+                    .iter()
+                    .find(|c| &c.name == col_name)
+                    .map(|col| (col_name, col))
+            })
+            .collect();
+        let out = match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut entry = serde_json::Map::new();
+                    for (col_name, col_meta) in &selected_cols {
+                        let v = self.reveal_value(col_meta, decode_to_json(&row, col_meta)?);
+                        entry.insert((*col_name).clone(), v);
+                    }
+                    out.push(entry);
+                }
+                out
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut entry = serde_json::Map::new();
+                    for (col_name, col_meta) in &selected_cols {
+                        let v = self.reveal_value(col_meta, decode_pg_to_json(&row, col_meta)?);
+                        entry.insert((*col_name).clone(), v);
+                    }
+                    out.push(entry);
+                }
+                out
+            }
+        };
+        Ok(out)
+    }
+
     /// Transaction-aware single-row read: `SELECT <cols> ... LIMIT 1` for
     /// the accumulated WHERE, run on the open `tx`. Decodes every model
     /// column into a JSON map. Used by REST bulk update to read a row back

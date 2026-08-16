@@ -1,0 +1,74 @@
+---
+title: Transferring data (transferdata)
+description: Stream-copy every row from one umbral database to another, preserving primary and foreign keys. Resumable across interruptions.
+sidebar_position: 5
+icon: database
+tags: [cli, data, migration]
+---
+
+`transferdata` copies rows from one umbral database to another — env1 → env2, a
+VPS-to-VPS move, or the data half of an `inspectdb` port once the target schema
+is stood up. Rows land with their **source primary keys and foreign keys
+intact**, so the object graph is identical on the far side.
+
+<Callout type="info">
+Both databases must share your app's schema. `transferdata` copies **data**, not
+DDL — run `migrate` on the target first so its tables exist. For a Django →
+umbral port, [`inspectdb`](/docs/v0.0.1/migrations/inspectdb) generates the
+schema; this moves the rows afterward.
+</Callout>
+
+## Run it
+
+```bash
+# SQLite file to SQLite file:
+cargo run -- transferdata --from ./old.sqlite3 --to ./new.sqlite3
+
+# Any URL works on either side:
+cargo run -- transferdata \
+  --from postgres://user:pass@vps1/app \
+  --to   postgres://user:pass@vps2/app \
+  --batch 5000
+```
+
+The source is opened read-only; the target read-write.
+
+## What it guarantees
+
+<CardGrid cols={2}>
+  <Card icon="key" title="PKs preserved" description="Each row keeps its source id — no autoincrement re-numbering — so foreign keys still point where they did." />
+  <Card icon="git-branch" title="Parents first" description="Tables copy in FK-topological order, so a child never lands before its parent (the target's FK constraints would reject it)." />
+  <Card icon="repeat" title="Resumable" description="Interrupted mid-30GB? Rerun the same command — it resumes at the last committed page, no duplicates." />
+  <Card icon="layers" title="Streamed" description="Keyset-paginated batches; only one batch is ever in memory, so table size doesn't matter." />
+</CardGrid>
+
+### Resume is exact, not best-effort
+
+Each batch's row inserts **and** its progress checkpoint commit in one target
+transaction (tracked in a `umbral_transfer_state` table the tool owns). A crash
+rolls back both, so a rerun re-reads that page cleanly — never a half-written
+batch, never a primary-key collision on restart. Kill a transfer over a flaky
+link, run the identical command again, and it continues where it stopped.
+
+## Options
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--from <url>` | — | Source database (URL or SQLite file path). |
+| `--to <url>` | — | Target database (URL or SQLite file path). |
+| `--batch <n>` | `1000` | Rows per page / per target transaction. |
+| `--only <a,b>` | all | Limit to these tables (FK order still respected). |
+| `--dry-run` | off | Print the copy order + source row counts; write nothing. |
+
+```bash
+# See what would move, and in what order, without touching the target:
+cargo run -- transferdata --from ./old.sqlite3 --to ./new.sqlite3 --dry-run
+```
+
+## Not yet
+
+Phase 1 covers registered models with a single-column primary key. Still on the
+list: many-to-many junction rows, cross-backend moves (SQLite → Postgres) with
+sequence reset on the target, parallel per-table workers, and circular-FK
+tables (mutually-referential pairs need deferred-constraint handling). The
+design lives in `docs/decisions/2026-08-16-data-transfer-engine.md`.

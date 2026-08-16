@@ -42,6 +42,7 @@ pub mod static_files;
 pub mod storage;
 pub mod templates;
 pub mod timezone;
+pub mod transfer;
 pub mod typegen;
 pub mod web;
 

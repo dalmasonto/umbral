@@ -334,6 +334,16 @@ pub mod cleaners {
     pub use umbral_core::orm::cleaners::{Cleaner, clear_for_tests, register_cleaner};
 }
 
+pub mod transfer {
+    //! The data-transfer engine: a resumable, PK-preserving, streaming row copy
+    //! between two umbral databases (env1 -> env2). See
+    //! `docs/decisions/2026-08-16-data-transfer-engine.md`.
+
+    pub use umbral_core::transfer::{
+        TransferError, TransferOptions, TransferReport, fk_topo_order, transfer,
+    };
+}
+
 pub mod migrate {
     //! The migration engine (M5).
     //!

@@ -229,6 +229,29 @@ enum Command {
         /// Path to the JSON envelope.
         input: PathBuf,
     },
+    /// Stream-copy every row from one umbral database to another, preserving
+    /// primary and foreign keys. Resumable: rerun the same command after an
+    /// interruption and it picks up where it stopped. `migrate` the target
+    /// first so its schema exists.
+    Transferdata {
+        /// Source database: a `sqlite://` / `postgres://` URL or a SQLite file
+        /// path (opened read-only).
+        #[arg(long)]
+        from: String,
+        /// Target database: a URL or a SQLite file path (opened read-write).
+        #[arg(long)]
+        to: String,
+        /// Rows per batch / per target transaction.
+        #[arg(long, default_value_t = 1000)]
+        batch: u64,
+        /// Limit the copy to these tables (comma-separated); FK order is still
+        /// respected among them.
+        #[arg(long)]
+        only: Option<String>,
+        /// Report the copy order + source row counts without writing anything.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
     /// Import a CSV file into one table's rows. The header row names the
     /// columns; each cell is coerced to its column type and inserted
     /// through the same validated write path as a REST POST (validators,
@@ -511,6 +534,13 @@ pub async fn dispatch_with_argv(
         } => inspectdb(database, framework, with_table_names, output, mark_applied).await,
         Command::Dumpdata { output } => dumpdata(output).await,
         Command::Loaddata { input } => loaddata(input).await,
+        Command::Transferdata {
+            from,
+            to,
+            batch,
+            only,
+            dry_run,
+        } => transferdata(from, to, batch, only, dry_run).await,
         Command::Importcsv { table, input } => importcsv(table, input).await,
         Command::Dev { watch, run_args } => dev(watch, run_args).await,
         Command::Maskkeygen => maskkeygen(),
@@ -1216,6 +1246,58 @@ async fn loaddata(input: PathBuf) -> Result<(), Box<dyn std::error::Error + Send
     for skipped in &report.skipped_tables {
         eprintln!("warning: skipped table `{skipped}` (not in current schema)");
     }
+    Ok(())
+}
+
+/// A writable target DB: URLs pass through; a bare path opens read-write
+/// (`?mode=rwc`), the twin of [`normalize_source_db`]'s read-only default.
+fn normalize_target_db(input: &str) -> String {
+    let lower = input.to_ascii_lowercase();
+    if lower.starts_with("sqlite:")
+        || lower.starts_with("postgres://")
+        || lower.starts_with("postgresql://")
+    {
+        return input.to_string();
+    }
+    let abs = std::fs::canonicalize(input)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| input.to_string());
+    format!("sqlite://{abs}?mode=rwc")
+}
+
+async fn transferdata(
+    from: String,
+    to: String,
+    batch: u64,
+    only: Option<String>,
+    dry_run: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let source = umbral::db::connect(&normalize_source_db(&from)).await?;
+    let target = umbral::db::connect(&normalize_target_db(&to)).await?;
+    let models = umbral::migrate::registered_models();
+    let opts = umbral::transfer::TransferOptions {
+        batch_size: batch,
+        only: only.map(|s| {
+            s.split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        }),
+        dry_run,
+    };
+    let report = umbral::transfer::transfer(&source, &target, models, &opts).await?;
+    if dry_run {
+        println!("Dry run — copy order and source row counts:");
+    }
+    for (table, n) in &report.per_table {
+        println!("  {table}: {n} rows");
+    }
+    println!(
+        "{} {} row(s) across {} table(s)",
+        if dry_run { "Would copy" } else { "Copied" },
+        report.rows,
+        report.per_table.len(),
+    );
     Ok(())
 }
 
