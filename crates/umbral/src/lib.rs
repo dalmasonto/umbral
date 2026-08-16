@@ -340,8 +340,8 @@ pub mod transfer {
     //! `docs/decisions/2026-08-16-data-transfer-engine.md`.
 
     pub use umbral_core::transfer::{
-        TransferError, TransferMap, TransferOptions, TransferReport, fk_topo_levels, fk_topo_order,
-        fk_topo_plan, transfer,
+        CustomMap, TransferError, TransferMap, TransferOptions, TransferReport, fk_topo_levels,
+        fk_topo_order, fk_topo_plan, transfer,
     };
 }
 

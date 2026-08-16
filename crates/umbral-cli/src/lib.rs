@@ -273,9 +273,12 @@ enum Command {
         #[arg(long)]
         only: Option<String>,
         /// Translate a foreign-shaped source's column names to the umbral
-        /// target's: `django` / `rails` / `laravel` (FK `<field>_id`, junction
-        /// `<model>_id`) or `prisma` (camelCase `<field>Id`). Omit for
-        /// umbral->umbral.
+        /// target's. A framework preset — `django` / `rails` / `laravel` (FK
+        /// `<field>_id`, junction `<model>_id`) or `prisma` (camelCase
+        /// `<field>Id`) — OR a path to a JSON file for a custom map. The JSON
+        /// maps umbral field names to source columns, per-table and/or globally:
+        /// `{"tables": {"users": {"created_at": "createdAt"}}, "columns": {...}}`.
+        /// Omit for a umbral->umbral copy (columns already match).
         #[arg(long)]
         map: Option<String>,
         /// Copy this many independent tables concurrently (per FK level). `1`
@@ -1313,8 +1316,8 @@ async fn transferdata(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let map = match map.as_deref() {
         None => umbral::transfer::TransferMap::None,
-        Some(name) => umbral::transfer::TransferMap::parse(name)
-            .ok_or_else(|| format!("unknown --map `{name}`; supported: django (or omit)"))?,
+        // A framework preset name, or a path to a custom-map JSON file.
+        Some(arg) => umbral::transfer::TransferMap::from_cli_arg(arg)?,
     };
     let source = umbral::db::connect(&normalize_source_db(&from)).await?;
     let target = umbral::db::connect(&normalize_target_db(&to)).await?;

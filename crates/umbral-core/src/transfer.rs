@@ -27,7 +27,7 @@ const STATE_TABLE: &str = "umbral_transfer_state";
 /// target's. The source and target tables share a name (inspectdb targets the
 /// same table); only FK / junction columns differ by the source framework's
 /// naming convention.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum TransferMap {
     /// Source and target share the umbral schema — no translation (env1->env2).
     #[default]
@@ -44,9 +44,44 @@ pub enum TransferMap {
     /// Prisma / TypeORM (and camelCase JS ORMs generally): FK column
     /// `<field>Id` (e.g. `authorId`), junction columns `<model>Id`.
     Prisma,
+    /// A user-supplied column-rename map loaded from a JSON file — for a source
+    /// whose naming doesn't fit any single framework preset (e.g. a Prisma DB
+    /// that `@map`'d most columns to snake_case but left a few camelCase).
+    Custom(CustomMap),
+}
+
+/// A custom `--map` file: which SOURCE column each umbral field reads from.
+///
+/// Loaded from a JSON file passed as `--map <path.json>`. Every key is an umbral
+/// **field** name and every value is the **source column** it reads from. A
+/// per-table entry under `tables` wins over the same key in the global
+/// `columns` map, so a mixed-case source (most tables `created_at`, a few
+/// `createdAt`) is expressed exactly.
+///
+/// ```json
+/// {
+///   "columns": { "some_field": "someSourceColumn" },
+///   "tables": {
+///     "verification_attempt": { "created_at": "createdAt" },
+///     "witness":              { "witness_merkle_root": "Witness_merkle_root" }
+///   }
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomMap {
+    /// Global umbral-field -> source-column renames, applied to every table.
+    #[serde(default)]
+    pub columns: std::collections::BTreeMap<String, String>,
+    /// Per-table umbral-field -> source-column renames. Keyed by SQL table name;
+    /// an entry here wins over the same field in `columns`.
+    #[serde(default)]
+    pub tables: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 }
 
 impl TransferMap {
+    /// Parse a built-in framework preset name. `None` for anything else (a
+    /// custom-map file path is resolved by [`TransferMap::from_cli_arg`]).
     pub fn parse(s: &str) -> Option<TransferMap> {
         match s.to_ascii_lowercase().as_str() {
             "django" => Some(TransferMap::Django),
@@ -58,14 +93,36 @@ impl TransferMap {
         }
     }
 
-    /// The source column an umbral field reads from, or `None` when the umbral
-    /// name already matches the source (no rename). The umbral field is
-    /// snake_case. A snake-`_id` framework (Django/Rails/Laravel) only renames
-    /// FK columns (`author` -> `author_id`); its other columns are already
-    /// snake_case. A camelCase framework (Prisma) renames EVERY column
-    /// (`first_name` -> `firstName`), and a FK additionally gets `Id`
-    /// (`author` -> `authorId`).
-    fn source_column(self, field: &str, is_fk: bool) -> Option<String> {
+    /// Resolve a `--map` argument to a [`TransferMap`]: a built-in framework
+    /// name (`django` / `rails` / `laravel` / `prisma`), or a path to a JSON
+    /// file describing a custom column-rename map ([`CustomMap`]).
+    pub fn from_cli_arg(s: &str) -> Result<TransferMap, String> {
+        if let Some(preset) = Self::parse(s) {
+            return Ok(preset);
+        }
+        // Not a framework name — treat it as a path to a JSON mapping file.
+        let path = std::path::Path::new(s);
+        if !path.is_file() {
+            return Err(format!(
+                "unknown --map `{s}`: not a framework (django / rails / laravel / prisma) \
+                 and not a readable JSON file"
+            ));
+        }
+        let text =
+            std::fs::read_to_string(path).map_err(|e| format!("--map: cannot read `{s}`: {e}"))?;
+        let custom: CustomMap = serde_json::from_str(&text)
+            .map_err(|e| format!("--map: `{s}` is not a valid mapping file: {e}"))?;
+        Ok(TransferMap::Custom(custom))
+    }
+
+    /// The source column an umbral field on `table` reads from, or `None` when
+    /// the umbral name already matches the source (no rename). The umbral field
+    /// is snake_case. A snake-`_id` framework (Django/Rails/Laravel) only
+    /// renames FK columns (`author` -> `author_id`); a camelCase framework
+    /// (Prisma) renames EVERY column (`first_name` -> `firstName`), and a FK
+    /// additionally gets `Id`. A [`CustomMap`] looks the field up in the table's
+    /// own map, then the global one.
+    fn source_column(&self, table: &str, field: &str, is_fk: bool) -> Option<String> {
         match self {
             TransferMap::None => None,
             TransferMap::Django | TransferMap::Rails | TransferMap::Laravel => {
@@ -80,6 +137,12 @@ impl TransferMap {
                 let col = if is_fk { format!("{base}Id") } else { base };
                 (col != field).then_some(col)
             }
+            TransferMap::Custom(m) => m
+                .tables
+                .get(table)
+                .and_then(|t| t.get(field))
+                .or_else(|| m.columns.get(field))
+                .cloned(),
         }
     }
 }
@@ -266,7 +329,7 @@ struct Junction {
 /// defaulting to `BigInt` when the target isn't registered here). `map` fixes
 /// the SOURCE junction table name: it equals the umbral one for Django/Rails/
 /// Laravel, but Prisma names it `_<ModelA>To<ModelB>` (alphabetical).
-fn collect_junctions(models: &[ModelMeta], map: TransferMap) -> Vec<Junction> {
+fn collect_junctions(models: &[ModelMeta], map: &TransferMap) -> Vec<Junction> {
     let pk_ty = |table: &str| -> SqlType {
         models
             .iter()
@@ -476,18 +539,19 @@ fn pk_gt_condition(pk_col: &str, last: &serde_json::Value) -> sea_query::SimpleE
 /// names under a map) plus the `source_col -> target_field` rename that undoes
 /// it after reading. Under [`TransferMap::None`] this is the meta unchanged and
 /// an empty rename.
-fn source_meta_for(meta: &ModelMeta, map: TransferMap) -> (ModelMeta, HashMap<String, String>) {
+fn source_meta_for(meta: &ModelMeta, map: &TransferMap) -> (ModelMeta, HashMap<String, String>) {
     let mut rename = HashMap::new();
-    if map == TransferMap::None {
+    if matches!(map, TransferMap::None) {
         return (meta.clone(), rename);
     }
     // Each field reads from the source column its framework names — a snake
     // framework only reshapes FK columns (`author` -> `author_id`); a camelCase
     // framework reshapes every column (`first_name` -> `firstName`, FK
-    // `author` -> `authorId`).
+    // `author` -> `authorId`); a custom map reshapes exactly what its file says.
     let mut src = meta.clone();
     for col in &mut src.fields {
-        if let Some(source_col) = map.source_column(&col.name, col.fk_target.is_some()) {
+        if let Some(source_col) = map.source_column(&meta.table, &col.name, col.fk_target.is_some())
+        {
             rename.insert(source_col.clone(), col.name.clone());
             col.name = source_col;
         }
@@ -614,7 +678,7 @@ async fn copy_cyclic_group(
     source: &DbPool,
     target: &DbPool,
     group: &[&ModelMeta],
-    map: TransferMap,
+    map: &TransferMap,
     batch: u64,
 ) -> Result<Vec<(String, u64)>, TransferError> {
     let mut tx = begin_on(target).await?;
@@ -704,7 +768,7 @@ pub async fn transfer(
             report.per_table.push((meta.table.clone(), n));
             report.rows += n;
         }
-        for jn in collect_junctions(&flat, opts.map) {
+        for jn in collect_junctions(&flat, &opts.map) {
             if excluded(&jn.table) {
                 continue;
             }
@@ -729,20 +793,22 @@ pub async fn transfer(
             .iter()
             .filter(|m| !excluded(&m.table) && !done(&m.table))
             .map(|meta| {
-                let map = opts.map;
+                // Owned clone per task so each concurrent future carries its own
+                // map (cheap: a preset is an enum tag, a custom map is per-table).
+                let map = opts.map.clone();
                 let batch = opts.batch_size;
                 async move {
                     // A self-referential table can hold a forward reference, so
                     // it takes the deferred single-transaction copy on its own.
                     if has_self_fk(meta) {
-                        return copy_cyclic_group(source, target, &[meta], map, batch).await;
+                        return copy_cyclic_group(source, target, &[meta], &map, batch).await;
                     }
                     let pk_col = meta
                         .pk_column()
                         .ok_or_else(|| TransferError::NoPrimaryKey(meta.table.clone()))?
                         .name
                         .clone();
-                    let (read_meta, key_rename) = source_meta_for(meta, map);
+                    let (read_meta, key_rename) = source_meta_for(meta, &map);
                     let start_last = state_ref.get(&meta.table).and_then(|(pk, _)| pk.clone());
                     let copied = copy_one_model(
                         source,
@@ -777,7 +843,7 @@ pub async fn transfer(
         .collect();
     if !cyclic_group.is_empty() {
         let results =
-            copy_cyclic_group(source, target, &cyclic_group, opts.map, opts.batch_size).await?;
+            copy_cyclic_group(source, target, &cyclic_group, &opts.map, opts.batch_size).await?;
         for (t, c) in results {
             report.per_table.push((t, c));
             report.rows += c;
@@ -786,7 +852,7 @@ pub async fn transfer(
 
     // Junctions after every model (both endpoints now exist on the target) —
     // all independent of each other, so they run concurrently too.
-    let junctions = collect_junctions(&flat, opts.map);
+    let junctions = collect_junctions(&flat, &opts.map);
     let jtasks = junctions
         .iter()
         .filter(|jn| !excluded(&jn.table) && !done(&jn.table))
@@ -1057,4 +1123,66 @@ async fn insert_junction_in_tx(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_map_prefers_table_over_global_and_falls_back() {
+        let mut columns = std::collections::BTreeMap::new();
+        columns.insert("created_at".to_string(), "createdAt".to_string());
+        let mut users = std::collections::BTreeMap::new();
+        users.insert("created_at".to_string(), "user_created".to_string());
+        let mut tables = std::collections::BTreeMap::new();
+        tables.insert("users".to_string(), users);
+        let map = TransferMap::Custom(CustomMap { columns, tables });
+
+        // Per-table entry wins over the global one.
+        assert_eq!(
+            map.source_column("users", "created_at", false).as_deref(),
+            Some("user_created")
+        );
+        // A table with no per-table entry falls back to the global map.
+        assert_eq!(
+            map.source_column("posts", "created_at", false).as_deref(),
+            Some("createdAt")
+        );
+        // A field named in neither map is left unchanged (no rename).
+        assert_eq!(map.source_column("users", "email", false), None);
+    }
+
+    #[test]
+    fn from_cli_arg_loads_a_json_map_and_rejects_garbage() {
+        // A framework preset still resolves.
+        assert_eq!(
+            TransferMap::from_cli_arg("prisma").unwrap(),
+            TransferMap::Prisma
+        );
+
+        // A JSON file resolves to a Custom map with the declared renames.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("map.json");
+        std::fs::write(
+            &path,
+            r#"{ "tables": { "witness": { "witness_merkle_root": "Witness_merkle_root" } } }"#,
+        )
+        .unwrap();
+        let map = TransferMap::from_cli_arg(path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            map.source_column("witness", "witness_merkle_root", false)
+                .as_deref(),
+            Some("Witness_merkle_root")
+        );
+
+        // A name that's neither a framework nor a file is a clear error.
+        let err = TransferMap::from_cli_arg("not_a_framework_or_file").unwrap_err();
+        assert!(err.contains("unknown --map"), "got: {err}");
+
+        // A malformed JSON file errors, not panics.
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, "{ not json").unwrap();
+        assert!(TransferMap::from_cli_arg(bad.to_str().unwrap()).is_err());
+    }
 }
