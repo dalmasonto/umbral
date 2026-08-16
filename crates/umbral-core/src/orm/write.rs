@@ -503,6 +503,22 @@ pub fn is_masked_col(col: &crate::migrate::Column) -> bool {
     col.ty == SqlType::Text && col.widget.as_deref() == Some("masked")
 }
 
+/// True when a masked column's submitted value carries no new secret — an
+/// empty string or the echoed-back redaction marker (`"••••••"`). Such a
+/// value must be OMITTED from a write, never sealed: sealing `""` /
+/// `"••••••"` over the stored ciphertext crypto-shreds the secret (a
+/// routine edit of an unrelated column would destroy it). Mirrors the
+/// `Masked` `Deserialize` contract (REDACTED / empty → no change) on the
+/// dynamic write path, which never consults it. The form update path
+/// applies the same rule inline (gaps4 #5); this covers the JSON path.
+pub fn is_masked_no_change(col: &crate::migrate::Column, value: &JsonValue) -> bool {
+    is_masked_col(col)
+        && value
+            .as_str()
+            .map(|s| s.is_empty() || s == crate::orm::masked::REDACTED)
+            .unwrap_or(false)
+}
+
 /// Seal a masked column's plaintext before it is bound, so the dynamic REST /
 /// admin write paths (`insert_json`/`update_json`/form-submit) encrypt at rest
 /// — not just the typed `Masked<T>` path (audit_2 core-orm C1). Returns

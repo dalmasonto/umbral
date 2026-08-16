@@ -4049,15 +4049,29 @@ fn normalise_update_body(
     body: &serde_json::Map<String, serde_json::Value>,
     allow_privileged: &[String],
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
+    // gaps4 #5 (JSON path): a Masked column submitted EMPTY or as the
+    // redaction marker means "leave the stored secret unchanged" — strip it
+    // BEFORE validation so it neither trips `BlankNotAllowed` nor reaches
+    // the seal (which would re-seal `""` / `"••••••"` over the ciphertext,
+    // crypto-shredding the secret). The form update path guards this inline.
+    let masked_no_change = |c: &crate::migrate::Column| {
+        body.get(&c.name)
+            .map(|v| crate::orm::write::is_masked_no_change(c, v))
+            .unwrap_or(false)
+    };
     let needs_owned = meta.fields.iter().any(|c| {
-        c.noform || c.slug_from.is_some() || is_unauthorized_privileged(c, allow_privileged)
+        c.noform
+            || c.slug_from.is_some()
+            || is_unauthorized_privileged(c, allow_privileged)
+            || masked_no_change(c)
     });
     if !needs_owned {
         return None;
     }
     let mut owned = body.clone();
     for col in &meta.fields {
-        if col.noform || is_unauthorized_privileged(col, allow_privileged) {
+        if col.noform || is_unauthorized_privileged(col, allow_privileged) || masked_no_change(col)
+        {
             owned.remove(&col.name);
         }
     }
