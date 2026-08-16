@@ -51,7 +51,7 @@ pub(crate) async fn preview_sheet(
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
     let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
-    let rows = match fetch_rows_filtered(&model, Some((&pk.name, &id)), &all_cols).await {
+    let rows = match fetch_rows_filtered(&model, (&pk.name, &id), &all_cols).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -119,7 +119,7 @@ pub(crate) async fn edit_sheet_handler(
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
     let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
-    let rows = match fetch_rows_filtered(&model, Some((&pk.name, &id)), &all_cols).await {
+    let rows = match fetch_rows_filtered(&model, (&pk.name, &id), &all_cols).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };

@@ -180,15 +180,14 @@ fn parse_order_clause(clause: &str) -> Vec<(String, bool)> {
 /// the caller asks for." Goes through [`DynQuerySet`].
 pub(crate) async fn fetch_rows_filtered(
     model: &ModelMeta,
-    where_pk: Option<(&str, &str)>,
+    where_pk: (&str, &str),
     display_cols: &[String],
 ) -> Result<Vec<HashMap<String, String>>, AdminError> {
-    let mut qs = DynQuerySet::for_meta(model).select_cols(display_cols);
-    if let Some((col, val)) = where_pk {
-        qs = qs.filter_eq_string(col, val).limit(1);
-    } else {
-        qs = qs.limit(200);
-    }
+    let (col, val) = where_pk;
+    let qs = DynQuerySet::for_meta(model)
+        .select_cols(display_cols)
+        .filter_eq_string(col, val)
+        .limit(1);
     Ok(qs.fetch_as_strings().await?)
 }
 

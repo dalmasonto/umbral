@@ -134,10 +134,23 @@ pub(crate) async fn has_codename(user: &AuthUser, codename: &str) -> bool {
 /// Handler-side guard for a raw codename. `Ok(())` when allowed, else a
 /// 403 [`Response`]. Mirrors [`require`] for the model-bound path.
 pub(crate) async fn require_codename(user: &AuthUser, codename: &str) -> Result<(), Response> {
+    require_codename_msg(user, codename, "umbral-admin: permission denied").await
+}
+
+/// [`require_codename`] with a caller-supplied 403 body. The bulk-action
+/// dispatcher reaches for this so its denial names the action explicitly
+/// ("permission denied for this action") while still routing through the
+/// one codename-check path (no-op when permissions absent, superuser-pass,
+/// deny-on-DB-error) — the check must not fork per call site.
+pub(crate) async fn require_codename_msg(
+    user: &AuthUser,
+    codename: &str,
+    denied_msg: &'static str,
+) -> Result<(), Response> {
     if has_codename(user, codename).await {
         Ok(())
     } else {
-        Err((StatusCode::FORBIDDEN, "umbral-admin: permission denied").into_response())
+        Err((StatusCode::FORBIDDEN, denied_msg).into_response())
     }
 }
 

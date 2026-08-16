@@ -5,7 +5,7 @@
 //! registers the connection, and streams its events as Server-Sent
 //! Events. A `ConnGuard` deregisters on disconnect so no index leaks.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -16,11 +16,11 @@ use axum::extract::Query;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_core::Stream;
-use http::{HeaderMap, StatusCode};
+use http::HeaderMap;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
-use crate::{ConnId, DEFAULT_BUFFER, Delivery, Realtime, Registry};
+use crate::{ConnId, Delivery, Handshake, Registry};
 
 /// Render one [`Event`] as an SSE frame. Every event ships under a SINGLE
 /// `event: u` type with a channel-tagged envelope `{"c":channel,"e":name,"d":data}`
@@ -50,33 +50,19 @@ pub(crate) struct SseQuery {
 
 /// The SSE endpoint handler. Identity → group policy → register → stream.
 pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -> Response {
-    let user_id = Realtime::resolver()(headers.clone()).await;
-
-    let requested: Vec<String> = q
-        .groups
-        .as_deref()
-        .unwrap_or("")
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
-
-    // Default-deny: a group the policy rejects fails the whole handshake,
-    // so a client can't subscribe to a room it has no claim to.
-    let policy = Realtime::policy();
-    for g in &requested {
-        if !policy.can_join(user_id.as_deref(), g).await {
-            return (
-                StatusCode::FORBIDDEN,
-                format!("not allowed to join group `{g}`"),
-            )
-                .into_response();
-        }
-    }
-
-    let groups: HashSet<String> = requested.into_iter().collect();
-    let registry = Realtime::registry();
+    // Identity → group policy → register → presence, shared verbatim with the
+    // WS handshake so the join-authorization contract can't drift (see
+    // `crate::authorize_handshake`).
+    let Handshake {
+        conn_id,
+        rx,
+        user_id,
+        groups,
+        registry,
+    } = match crate::authorize_handshake(&headers, q.groups.as_deref()).await {
+        Ok(h) => h,
+        Err(resp) => return resp,
+    };
 
     // Reconnect resume: the browser's EventSource re-sends the last `id:` it
     // saw as the `Last-Event-ID` header. Replay everything after it that
@@ -88,26 +74,6 @@ pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -
         .get("last-event-id")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse::<u64>().ok());
-
-    // Enforce the aggregate connection cap: a refused registration returns
-    // 503 instead of opening the stream. `register_with_presence` also returns
-    // the per-group presence transitions this connect caused (computed under
-    // the registry lock), which we dispatch below once the lock is dropped.
-    let Some((conn_id, rx, presence)) = registry
-        .register_with_presence(user_id.clone(), groups.clone(), DEFAULT_BUFFER)
-        .await
-    else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "realtime: connection limit reached",
-        )
-            .into_response();
-    };
-
-    // Fire presence join + sync for any newly-entered presence-enabled group.
-    // The spec gates which groups emit; an anonymous conn yields no transitions.
-    // Spawned so the handshake response isn't blocked on the broadcast.
-    tokio::spawn(crate::dispatch_presence(presence));
 
     // Replayed events are per-connection (one reconnecting client), so each
     // gets its own un-shared Delivery wrapper — the shared-render win only
