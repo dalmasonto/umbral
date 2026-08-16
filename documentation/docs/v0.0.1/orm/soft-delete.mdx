@@ -111,4 +111,8 @@ The admin ships a full trash UI for any `#[umbral(soft_delete)]` model, with no 
 
 Restore is gated by the `change_<model>` permission; Delete-permanently by `delete_<model>`. See the [Admin plugin docs](/docs/v0.0.1/plugins/admin) for the trash workflow.
 
-Pinned by `crates/umbral-core/tests/soft_delete.rs` (feature #72, gaps2 #34), `crates/umbral-core/tests/soft_delete_dynamic.rs` (gaps2 #35), and `plugins/umbral-admin/tests/soft_delete_admin.rs` (the admin trash UI); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbral-core/src/orm/model.rs`.
+<Callout type="info">
+**Sharing the `deleted_at` column across models.** If several models are soft-deletable, put the `deleted_at` column (and your PK / timestamps) on a reusable base with [`#[derive(ModelBase)]`](/docs/v0.0.1/orm/model-base) and embed it — the `#[umbral(soft_delete)]` marker stays on each model, the shared column comes from the base. One base, every soft-deletable model.
+</Callout>
+
+Pinned by `crates/umbral-core/tests/soft_delete.rs` (feature #72, gaps2 #34), `crates/umbral-core/tests/soft_delete_dynamic.rs` (gaps2 #35), and `plugins/umbral-admin/tests/soft_delete_admin.rs` (the admin trash UI); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbral-core/src/orm/model.rs`. The base-column composition is pinned by `crates/umbral-core/tests/model_base.rs`.

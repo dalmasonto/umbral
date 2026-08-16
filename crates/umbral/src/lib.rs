@@ -725,19 +725,25 @@ pub mod orm {
         Aggregate, AggregateKind, ArrayElement, ChoiceField, Cmp, CsvImportReport, DynError,
         DynQuerySet, Email, F, FColExt, FExpr, FieldSpec, FileField, FkAction, ForeignKey,
         GetError, HydrateRelated, ImageField, InsertedPk, JoinKind, M2M, M2MRelationSpec, Manager,
-        MaskError, MaskKeyring, Masked, Model, MultiChoice, OneToOne, OneToOneRelationSpec, Post,
-        Predicate, PrimaryKey, Q, QuerySet, QuerySetTx, ReverseError, ReverseFkRelationSpec,
-        ReverseRelations, ReverseSet, Search, SearchHit, Searchable, Slug, SqlType,
-        TryForEachError, TsVector, Url, ValidatorError, column, decode_to_string,
-        escape_like_literal, import_table_rows, load_junction_selection, never_matches, pk_key,
-        set_junction_dynamic, set_junction_dynamic_in_tx, set_mask_keyring, typed_cmp_condition,
-        typed_eq_condition, typed_json_value, validate_text_format, write,
+        MaskError, MaskKeyring, Masked, Model, ModelBase, MultiChoice, OneToOne,
+        OneToOneRelationSpec, Post, Predicate, PrimaryKey, Q, QuerySet, QuerySetTx, ReverseError,
+        ReverseFkRelationSpec, ReverseRelations, ReverseSet, Search, SearchHit, Searchable, Slug,
+        SqlType, TryForEachError, TsVector, Url, ValidatorError, column, concat_field_specs,
+        decode_to_string, escape_like_literal, import_table_rows, load_junction_selection,
+        never_matches, pk_key, set_junction_dynamic, set_junction_dynamic_in_tx, set_mask_keyring,
+        typed_cmp_condition, typed_eq_condition, typed_json_value, validate_text_format, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the
     /// trait — Rust's type and macro namespaces are separate, so both can
     /// coexist behind one import.
     pub use umbral_macros::Model;
+
+    /// The `#[derive(ModelBase)]` proc macro for a reusable field group (a
+    /// Django-style abstract base model). Embed the base into a model with
+    /// `#[umbral(flatten)] #[serde(flatten)] #[sqlx(flatten)]`. Shares the
+    /// `ModelBase` name with the trait.
+    pub use umbral_macros::ModelBase;
 
     /// The `#[derive(Choices)]` proc macro for closed-set enum field
     /// types. Pair the enum derive with `#[umbral(choices)]` on the

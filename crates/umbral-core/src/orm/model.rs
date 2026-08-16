@@ -925,6 +925,111 @@ pub struct FieldSpec {
     pub slug_from: Option<&'static str>,
 }
 
+impl FieldSpec {
+    /// A do-nothing `FieldSpec` used only to initialise the fixed-size
+    /// array inside [`concat_field_specs`] before the real specs are
+    /// copied over. Never surfaces in a model's `FIELDS`: every slot is
+    /// overwritten by a genuine spec during the const concat.
+    pub const PLACEHOLDER: FieldSpec = FieldSpec {
+        name: "",
+        ty: SqlType::Integer,
+        primary_key: false,
+        nullable: false,
+        supported_backends: &[],
+        fk_target: None,
+        noform: false,
+        privileged: false,
+        private: false,
+        secret: false,
+        db_constraint: true,
+        noedit: false,
+        is_string_repr: false,
+        max_length: 0,
+        choices: &[],
+        choice_labels: &[],
+        default: "",
+        is_multichoice: false,
+        unique: false,
+        on_delete: FkAction::NoAction,
+        on_update: FkAction::NoAction,
+        index: false,
+        auto_now_add: false,
+        auto_user_add: false,
+        auto_user: false,
+        auto_now: false,
+        auto_uuid: false,
+        trim: false,
+        lowercase: false,
+        case_insensitive: false,
+        help: "",
+        widget: None,
+        example: "",
+        min: None,
+        max: None,
+        text_format: None,
+        slug_from: None,
+    };
+}
+
+/// Concatenate several `&'static [FieldSpec]` slices into one owned
+/// `[FieldSpec; N]` array at compile time. `N` MUST equal the sum of all
+/// `parts` lengths (the `#[derive(Model)]` macro computes it from the
+/// base fields' `BASE_FIELDS.len()` plus the model's own field count).
+///
+/// This is the mechanism that lets a model embedding a [`ModelBase`] via
+/// `#[umbral(flatten)]` splice the base's columns into its own `FIELDS`
+/// const — `FieldSpec` is `Copy`, so the whole thing evaluates in a
+/// `const` context without allocation.
+pub const fn concat_field_specs<const N: usize>(parts: &[&[FieldSpec]]) -> [FieldSpec; N] {
+    let mut out = [FieldSpec::PLACEHOLDER; N];
+    let mut oi = 0;
+    let mut pi = 0;
+    while pi < parts.len() {
+        let part = parts[pi];
+        let mut i = 0;
+        while i < part.len() {
+            out[oi] = part[i];
+            oi += 1;
+            i += 1;
+        }
+        pi += 1;
+    }
+    out
+}
+
+/// A reusable group of model fields — the umbral equivalent of a Django
+/// abstract base model. A struct deriving [`ModelBase`](macro@crate::orm::ModelBase)
+/// declares shared columns once (with the full `#[umbral(...)]` attribute
+/// set); any [`Model`] embeds it as a nested field marked
+/// `#[umbral(flatten)]` and inherits those columns as if written inline.
+///
+/// The base's columns are spliced into the embedding model's
+/// [`Model::FIELDS`] via [`concat_field_specs`], so migrations, the SELECT
+/// list, inserts and auto-stamping all see one flat schema. The embedding
+/// model reads/writes the base's values through `#[serde(flatten)]` +
+/// `#[sqlx(flatten)]` on the nested field.
+pub trait ModelBase {
+    /// The base's columns, in declaration order, carrying every attribute
+    /// they were declared with. Spliced into the embedding model's
+    /// `FIELDS`.
+    const BASE_FIELDS: &'static [FieldSpec];
+
+    /// The name of the base's primary-key column, or `None` when the base
+    /// declares no primary key. When a model has no PK of its own and
+    /// embeds exactly one base with `BASE_PK = Some(_)`, that column
+    /// becomes the model's primary key.
+    const BASE_PK: Option<&'static str>;
+
+    /// The Rust type of the base's primary key (echoing the field type).
+    /// A dummy `i64` when the base has no PK — never read in that case.
+    type BasePrimaryKey: PrimaryKey;
+
+    /// Read this base value's primary key. Used by the embedding model's
+    /// `Model::primary_key` when the PK lives on the base. Returns a
+    /// meaningless default when the base has no PK (never called then).
+    fn base_primary_key(&self) -> Self::BasePrimaryKey;
+}
+
 /// Referential action emitted in the SQL `REFERENCES ... ON
 /// {DELETE,UPDATE} <action>` clause. Mirrors the standard SQL set.
 ///

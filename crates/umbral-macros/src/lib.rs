@@ -112,9 +112,35 @@ use umbral_casing::to_snake_case;
 #[proc_macro_derive(Model, attributes(umbral))]
 pub fn derive_model(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    expand_model(input)
+    expand_model(input, EmitMode::Model)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// `#[derive(ModelBase)]` — a reusable group of model fields (the Django
+/// abstract-base-model pattern). The base declares shared columns once,
+/// with the full `#[umbral(...)]` attribute set; a model embeds it via a
+/// `#[umbral(flatten)]` field and inherits those columns as if inline.
+///
+/// Emits an `impl ModelBase` carrying the base's `FieldSpec`s, its PK
+/// column name/type, and a PK getter — everything the embedding model's
+/// `#[derive(Model)]` needs to splice the base in.
+#[proc_macro_derive(ModelBase, attributes(umbral))]
+pub fn derive_model_base(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_model(input, EmitMode::Base)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Which impl `expand_model` emits: a full `Model` (the default) or just
+/// the `ModelBase` impl for a reusable, embeddable field group. Both
+/// share the entire field-parsing loop so a base supports the exact same
+/// `#[umbral(...)]` attribute set as a model.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EmitMode {
+    Model,
+    Base,
 }
 
 /// Parse the struct-level `#[umbral(...)]` attribute. M3.1 ships
@@ -350,6 +376,12 @@ struct UmbralFieldAttr {
     /// matching validator and OpenAPI emits the format key, without
     /// retyping the field (which would break every construction site).
     text_format: Option<String>,
+    /// `#[umbral(flatten)]` — the field's type is a `#[derive(ModelBase)]`
+    /// struct whose columns are spliced into this model's `FIELDS` as if
+    /// declared inline (the Django abstract-base-model pattern). Pair with
+    /// `#[serde(flatten)]` + `#[sqlx(flatten)]` so the nested struct's
+    /// values round-trip on write/read.
+    flatten: bool,
 }
 
 /// Detect `#[sqlx(skip)]` on a struct field. Used by the OneToOne
@@ -418,6 +450,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         slug_from: None,
         reverse_fk: None,
         text_format: None,
+        flatten: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbral") {
@@ -490,6 +523,13 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 Ok(())
             } else if meta.path.is_ident("no_reverse") {
                 parsed.no_reverse = true;
+                Ok(())
+            } else if meta.path.is_ident("flatten") {
+                // `#[umbral(flatten)]` — the field is an embedded
+                // `#[derive(ModelBase)]` struct; its columns splice into
+                // this model's FIELDS. Handled at the top of the field
+                // loop (the field itself contributes no scalar column).
+                parsed.flatten = true;
                 Ok(())
             } else if meta.path.is_ident("string") {
                 // Both `#[umbral(string)]` and `#[umbral(string = true)]` work.
@@ -922,7 +962,7 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
 /// field errors are produced inside the field loop and woven into the
 /// output so the user sees every problem at once rather than fixing one,
 /// recompiling, and discovering the next.
-fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
+fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2> {
     let struct_name = &input.ident;
 
     // Only named-field structs are valid models. Enums, unions, tuple
@@ -974,33 +1014,19 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             .iter()
             .find(|f| f.ident.as_ref().is_some_and(|i| i == "id"))
     });
-    let id_field = match id_field {
-        Some(f) => f,
-        None => {
-            return Err(syn::Error::new_spanned(
-                struct_name,
-                "umbral::Model requires a primary-key field — either name a field \
-                 `id` (historical default) or mark one with `#[umbral(primary_key)]`",
-            ));
-        }
-    };
-    // Name of the PK field — needed by the `primary_key()` impl
-    // below so it picks `self.codename` instead of `self.id` when the
-    // model nominated a non-standard PK column.
-    let pk_field_name = id_field.ident.as_ref().expect("PK field must have a name");
-    // The id field's type isn't validated here: any type implementing
-    // `umbral::orm::PrimaryKey` works. The trait ships impls for every
-    // Rust integer width, `uuid::Uuid`, and `String`; user crates can
-    // add their own with `impl PrimaryKey for MyId {}`. The trait
-    // bound on `Model::PrimaryKey` makes the compiler reject types
-    // that don't implement it, with a real Rust diagnostic (which is
-    // more useful than the previous hard-coded "i32/i64/Uuid" message
-    // when the user's intent is genuinely a custom newtype).
+    // PK resolution is DEFERRED until after the field loop. A model with
+    // no PK field of its own can still inherit one from an embedded
+    // `#[derive(ModelBase)]` (via `#[umbral(flatten)]`) — which we only
+    // discover while walking the fields. And in `EmitMode::Base` a base
+    // may legitimately declare no PK at all. So `id_field` stays optional
+    // here; the "no PK" error (or the base fallback) is decided below.
     //
-    // The `PrimaryKey` associated type echoes the user-written field
-    // type verbatim so user crate paths (`uuid::Uuid`, `::uuid::Uuid`,
-    // bare `Uuid`) round-trip unchanged through the emitted tokens.
-    let pk_ty_tokens = &id_field.ty;
+    // The id field's type isn't validated: any type implementing
+    // `umbral::orm::PrimaryKey` works (every integer width, `uuid::Uuid`,
+    // `String`, or a user newtype). The trait bound on `Model::PrimaryKey`
+    // rejects a non-conforming type with a real Rust diagnostic.
+    let pk_field_name: Option<&syn::Ident> = id_field.and_then(|f| f.ident.as_ref());
+    let pk_ty_tokens: Option<&syn::Type> = id_field.map(|f| &f.ty);
 
     // The default table name is snake_case of the struct name. Two opt-in
     // attribute keys change this, with explicit-table winning over plugin
@@ -1128,13 +1154,34 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // `HydrateRelated::set_reverse_fk_resolved_json` body.
     let mut reverse_fk_resolved_arms: Vec<TokenStream2> = Vec::new();
 
+    // Embedded `#[umbral(flatten)]` bases, in declaration order. Each
+    // entry records how many of the model's OWN column specs preceded it
+    // (so the base's columns can be spliced back into `FIELDS` at the
+    // right position), the base's type, and the flatten field's ident
+    // (used to read the base's PK when the PK lives on the base).
+    let mut flatten_bases: Vec<(usize, syn::Type, syn::Ident)> = Vec::new();
+
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
         // PK detection: the field this iteration is on is the PK iff it
         // matches the one `id_field` resolved above — either explicitly
         // tagged `#[umbral(primary_key)]` or named `id` as the default.
-        let is_primary_key = field_name == pk_field_name;
+        let is_primary_key = pk_field_name.is_some_and(|pk| field_name == pk);
+
+        // `#[umbral(flatten)]`: an embedded ModelBase. It owns no scalar
+        // column of its own — its columns come from the base's
+        // `BASE_FIELDS` and are spliced into `FIELDS` below. Record it and
+        // skip the rest of the per-field pipeline (classify would reject
+        // the struct type). Values round-trip through `#[serde(flatten)]`
+        // + `#[sqlx(flatten)]` on the field, which the user declares.
+        if parse_umbral_field_attr(&field.attrs)
+            .map(|a| a.flatten)
+            .unwrap_or(false)
+        {
+            flatten_bases.push((field_specs.len(), field.ty.clone(), field_name.clone()));
+            continue;
+        }
 
         let kind = classify_field_type(&field.ty);
 
@@ -2195,6 +2242,137 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
+    // ------------------------------------------------------------------ //
+    // Primary-key resolution + FIELDS composition (ModelBase support).     //
+    // ------------------------------------------------------------------ //
+    //
+    // The PK can live on the model's own fields OR on a single embedded
+    // base. Resolve which, and derive the three PK-dependent token
+    // fragments (`type PrimaryKey`, `fn primary_key`, `pk_as_json`) plus
+    // the `BASE_PK` name for `EmitMode::Base`.
+    let (type_pk_tokens, primary_key_body, pk_as_json_body, base_pk_name_tokens): (
+        TokenStream2,
+        TokenStream2,
+        TokenStream2,
+        TokenStream2,
+    ) = if let (Some(pk_name), Some(pk_ty)) = (pk_field_name, pk_ty_tokens) {
+        // PK on an own field — the historical path.
+        let pk_name_str = pk_name.to_string();
+        (
+            quote! { #pk_ty },
+            quote! { self.#pk_name.clone() },
+            quote! { ::umbral::_serde_json::to_value(&self.#pk_name).ok() },
+            quote! { ::core::option::Option::Some(#pk_name_str) },
+        )
+    } else if mode == EmitMode::Model && flatten_bases.len() == 1 {
+        // No own PK, but exactly one embedded base — take the PK from it.
+        // `ModelBase::base_primary_key(&self.<field>)` reads the base's PK
+        // value without the derive needing to know the base's field name.
+        let (_, base_ty, base_ident) = &flatten_bases[0];
+        (
+            quote! { <#base_ty as ::umbral::orm::ModelBase>::BasePrimaryKey },
+            quote! { ::umbral::orm::ModelBase::base_primary_key(&self.#base_ident) },
+            quote! {
+                ::umbral::_serde_json::to_value(
+                    &::umbral::orm::ModelBase::base_primary_key(&self.#base_ident)
+                ).ok()
+            },
+            // The BASE_PK name is unused for a Model impl; only Base mode
+            // reads it, and Base mode always has an own PK path above.
+            quote! { ::core::option::Option::None },
+        )
+    } else if mode == EmitMode::Base {
+        // A base with no PK of its own. Legal: it contributes only shared
+        // non-key columns. The dummy PK type is never read (BASE_PK=None).
+        (
+            quote! { i64 },
+            quote! { ::core::default::Default::default() },
+            quote! { ::core::option::Option::None },
+            quote! { ::core::option::Option::None },
+        )
+    } else if flatten_bases.len() > 1 {
+        return Err(syn::Error::new_spanned(
+            struct_name,
+            "umbral::Model: multiple embedded bases and no own primary key — \
+             the PK is ambiguous. Give the model an `id` field (or a field \
+             marked `#[umbral(primary_key)]`), or ensure exactly one base \
+             carries the primary key.",
+        ));
+    } else {
+        return Err(syn::Error::new_spanned(
+            struct_name,
+            "umbral::Model requires a primary-key field — either name a field \
+             `id` (historical default), mark one with `#[umbral(primary_key)]`, \
+             or embed a `#[derive(ModelBase)]` base (via `#[umbral(flatten)]`) \
+             that provides one.",
+        ));
+    };
+
+    // `FIELDS` is the model's own column specs with each embedded base's
+    // `BASE_FIELDS` spliced in at its declaration position. With no bases
+    // it's the plain literal (byte-identical to the pre-ModelBase output,
+    // so existing models are unaffected). With bases, a `const` concat
+    // (via `concat_field_specs`) stitches the static slices together.
+    let fields_const_tokens: TokenStream2 = if flatten_bases.is_empty() {
+        quote! { &[ #(#field_specs),* ] }
+    } else {
+        // Build the ordered part list: own-column runs (as inline static
+        // slices) interleaved with each base's `BASE_FIELDS`, preserving
+        // declaration order. `N` is the summed length — literal own-run
+        // counts plus each base's `BASE_FIELDS.len()`.
+        let mut parts: Vec<TokenStream2> = Vec::new();
+        let mut len_terms: Vec<TokenStream2> = Vec::new();
+        let mut prev = 0usize;
+        for (at, base_ty, _) in &flatten_bases {
+            if *at > prev {
+                let run = &field_specs[prev..*at];
+                parts.push(quote! { &[ #(#run),* ] });
+                let n = at - prev;
+                len_terms.push(quote! { #n });
+            }
+            parts.push(quote! { <#base_ty as ::umbral::orm::ModelBase>::BASE_FIELDS });
+            len_terms.push(quote! { <#base_ty as ::umbral::orm::ModelBase>::BASE_FIELDS.len() });
+            prev = *at;
+        }
+        if prev < field_specs.len() {
+            let run = &field_specs[prev..];
+            parts.push(quote! { &[ #(#run),* ] });
+            let n = field_specs.len() - prev;
+            len_terms.push(quote! { #n });
+        }
+        quote! {
+            {
+                const __UMBRAL_N: usize = #(#len_terms)+*;
+                const __UMBRAL_FIELDS: [::umbral::orm::FieldSpec; __UMBRAL_N] =
+                    ::umbral::orm::concat_field_specs::<__UMBRAL_N>(&[ #(#parts),* ]);
+                &__UMBRAL_FIELDS
+            }
+        }
+    };
+
+    // EmitMode::Base — emit only the `ModelBase` impl and stop. All the
+    // Model-specific machinery below (table name, relations, column
+    // consts, `objects()`) is irrelevant to a base.
+    if mode == EmitMode::Base {
+        if !flatten_bases.is_empty() {
+            return Err(syn::Error::new_spanned(
+                struct_name,
+                "umbral::ModelBase: a base cannot itself embed another base \
+                 via `#[umbral(flatten)]` yet — inline the shared fields.",
+            ));
+        }
+        return Ok(quote! {
+            impl ::umbral::orm::ModelBase for #struct_name {
+                const BASE_FIELDS: &'static [::umbral::orm::FieldSpec] = &[ #(#field_specs),* ];
+                const BASE_PK: ::core::option::Option<&'static str> = #base_pk_name_tokens;
+                type BasePrimaryKey = #type_pk_tokens;
+                fn base_primary_key(&self) -> Self::BasePrimaryKey {
+                    #primary_key_body
+                }
+            }
+        });
+    }
+
     // PK lift: the PK-agnostic counterpart to `pk_i64`. Emitted for EVERY
     // model (not just i64-PK ones) so the relation-hydration paths can
     // bucket children by the parent's PK whatever its type — i64, String,
@@ -2203,7 +2381,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // skip-this-row posture the default `None` has.
     let pk_as_json_override: TokenStream2 = quote! {
         fn pk_as_json(&self) -> ::core::option::Option<::umbral::_serde_json::Value> {
-            ::umbral::_serde_json::to_value(&self.#pk_field_name).ok()
+            #pk_as_json_body
         }
     };
 
@@ -2244,13 +2422,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
 
         impl ::umbral::orm::Model for #struct_name {
-            type PrimaryKey = #pk_ty_tokens;
+            type PrimaryKey = #type_pk_tokens;
             const NAME: &'static str = #struct_name_str;
             const TABLE: &'static str = #table_name;
             const APP_LABEL: &'static str = #app_label_lit;
-            const FIELDS: &'static [::umbral::orm::FieldSpec] = &[
-                #(#field_specs),*
-            ];
+            const FIELDS: &'static [::umbral::orm::FieldSpec] = #fields_const_tokens;
             const DISPLAY: &'static str = #display_lit;
             const ICON: &'static str = #icon_lit;
             const DATABASE: ::core::option::Option<&'static str> = #database_tokens;
@@ -2272,13 +2448,14 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const ONE_TO_ONE_RELATIONS: &'static [::umbral::orm::OneToOneRelationSpec] = &[
                 #(#one_to_one_specs),*
             ];
-            fn primary_key(&self) -> #pk_ty_tokens {
+            fn primary_key(&self) -> #type_pk_tokens {
                 // `.clone()` works for every PK type the trait accepts
                 // (the bound is `Clone`, not `Copy`). For `i32`, `i64`,
                 // `Uuid`, etc. the optimiser folds the clone back into
                 // a copy; for `String` the clone is the work the call
-                // site would have done anyway.
-                self.#pk_field_name.clone()
+                // site would have done anyway. When the PK lives on an
+                // embedded base, this reads it via `ModelBase`.
+                #primary_key_body
             }
         }
 

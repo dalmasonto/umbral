@@ -1,0 +1,130 @@
+---
+title: Reusable model bases
+description: "#[derive(ModelBase)] declares shared columns once (id, created_at, updated_at, ...) and any model embeds them with #[umbral(flatten)] — the Django abstract-base-model pattern."
+sidebar_position: 16
+icon: layers
+tags: [orm, models, inheritance, dry, timestamps]
+badge: new
+---
+
+# Reusable model bases
+
+Most tables in a real app repeat the same handful of columns — a primary key, `created_at`, `updated_at`. Declaring them on every model is the kind of duplication Django solved with an abstract base model. umbral does the same with `#[derive(ModelBase)]` plus a `#[umbral(flatten)]` field.
+
+Declare the shared columns **once**, with the full `#[umbral(...)]` attribute set:
+
+```rust
+use umbral::prelude::*;
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow, ModelBase)]
+pub struct TimeStamped {
+    #[umbral(primary_key)]  pub id: i64,
+    #[umbral(auto_now_add)] pub created_at: DateTime<Utc>,
+    #[umbral(auto_now)]     pub updated_at: DateTime<Utc>,
+}
+```
+
+Then embed it into any model as a nested field. The three attributes on the field are what make it work — `#[umbral(flatten)]` splices the base's **columns** into the model, and `#[serde(flatten)]` + `#[sqlx(flatten)]` flatten its **values** on write and read:
+
+```rust
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow, Model)]
+pub struct Article {
+    #[umbral(flatten)]
+    #[serde(flatten)]
+    #[sqlx(flatten)]
+    pub base: TimeStamped,
+
+    pub title: String,
+    #[umbral(unique)] pub slug: String,
+}
+```
+
+`Article` now has four columns — `id`, `created_at`, `updated_at`, `title`, `slug` — exactly as if you had written them inline. The migration engine creates them, `Article::objects().create(...)` stamps `created_at`/`updated_at` and autoincrements the base's `id`, and reads hydrate the nested `base`:
+
+```rust
+let a = Article::objects().create(Article {
+    base: TimeStamped { id: 0, created_at: epoch, updated_at: epoch },
+    title: "Hello".into(),
+    slug: "hello".into(),
+}).await?;
+
+assert!(a.base.id > 0);                 // base PK autoincremented
+assert!(a.base.created_at > epoch);     // auto_now_add stamped it
+```
+
+<Callout type="info">
+**The base carries the primary key.** When a model has no `id` of its own and embeds exactly one base whose base declares the PK, that column becomes the model's primary key — no extra wiring. A model can still declare its own `id` and use a base purely for non-key columns.
+</Callout>
+
+## A soft-delete base
+
+Bases pair naturally with the framework's other model features. A common one is soft-delete: a base carries the `deleted_at` tombstone column, and any model that embeds it and marks itself `#[umbral(soft_delete)]` gets hide-instead-of-delete for free.
+
+```rust
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow, ModelBase)]
+pub struct SoftDeleteBase {
+    #[umbral(primary_key)] pub id: i64,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow, Model)]
+#[umbral(soft_delete)]                       // ← the marker stays on the MODEL
+pub struct Document {
+    #[umbral(flatten)] #[serde(flatten)] #[sqlx(flatten)]
+    pub base: SoftDeleteBase,
+    pub title: String,
+}
+```
+
+`Document::objects().delete()` now writes `deleted_at = now()` instead of removing the row; default queries auto-filter `WHERE deleted_at IS NULL`, and `.with_deleted()` opts back in:
+
+```rust
+Document::objects().filter(...).delete().await?;     // soft: sets deleted_at
+Document::objects().count().await?;                  // excludes tombstoned rows
+Document::objects().with_deleted().count().await?;   // includes them
+```
+
+<Callout type="info">
+`#[umbral(soft_delete)]` is a **struct-level** marker, so it stays on the embedding model — a base can't carry it. What the base *does* carry is the `deleted_at` column the feature needs. This is the general pattern: put the shared **columns** on the base; keep model-level **markers** (`soft_delete`, `audited`, `table = "..."`) on the model. See [Soft delete](/docs/v0.0.1/orm/soft-delete) for the full behavior.
+</Callout>
+
+## Composing several bases
+
+Embed more than one base — each `#[umbral(flatten)]` field contributes its columns in declaration order:
+
+```rust
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow, Model)]
+#[umbral(soft_delete)]
+pub struct Comment {
+    #[umbral(flatten)] #[serde(flatten)] #[sqlx(flatten)]
+    pub audit: TimeStamped,       // id, created_at, updated_at
+    #[umbral(flatten)] #[serde(flatten)] #[sqlx(flatten)]
+    pub trash: Deletable,         // deleted_at (a base without its own PK)
+    pub body: String,
+}
+```
+
+When several bases are embedded, at most one may declare the primary key. A base that contributes only non-key columns (like a bare `deleted_at`) simply omits `#[umbral(primary_key)]`.
+
+## Every attribute works on the base
+
+A base field supports the exact same `#[umbral(...)]` attributes as a model field — `primary_key`, `auto_now_add`, `auto_now`, `unique`, `index`, `default`, `max_length`, `choices`, FK options, and so on. They are resolved on the base's own derive, so the column behaves identically whether it was declared inline or inherited.
+
+<Callout type="warning">
+**Typed column constants for base fields are not generated yet.** For a model's *own* fields you get typed constants like `article::TITLE` for query building. Base-inherited columns don't have them yet, so filter or order them by name instead:
+
+```rust
+// own field — typed constant:
+Article::objects().filter(article::TITLE.eq("Hello"))
+// base field — order/filter by column name:
+Article::objects().order_by("-created_at")
+```
+
+This is a follow-up (planning `gaps5 #105`); the columns are fully functional for migrations, inserts, auto-stamping and reads today.
+</Callout>
+
+## See also
+
+- [Auto timestamps](/docs/v0.0.1/orm/auto-uuid) and the `auto_now_add` / `auto_now` attributes for the stamping behavior a base typically bundles.
+- `arch.md` and `crates/umbral-core/src/orm/model.rs` (`ModelBase`) for the design.
