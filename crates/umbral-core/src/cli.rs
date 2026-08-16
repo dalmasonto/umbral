@@ -569,13 +569,19 @@ fn push_group(
     rows.sort_by(|a, b| a.0.cmp(b.0));
     s.push('\n');
     s.push_str(title);
-    s.push_str(":\n");
-    for (name, desc) in rows.iter() {
+    s.push_str(":\n\n");
+    let last = rows.len().saturating_sub(1);
+    for (i, (name, desc)) in rows.iter().enumerate() {
         let desc = if desc.is_empty() { "-" } else { desc };
         // First line of a multi-line `about` is the summary.
         let summary = desc.lines().next().unwrap_or("-");
         let wrapped = wrap_hanging(summary, desc_col, 96);
         s.push_str(&format!("  {name:<width$}   {wrapped}\n"));
+        // A blank line between entries so a multi-line (wrapped) description
+        // doesn't run straight into the next command.
+        if i != last {
+            s.push('\n');
+        }
     }
 }
 
