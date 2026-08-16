@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): PARTIAL** — gaps4 #11 boot warn added; warn-not-error remains by design
+
 # Tenant Inverse Mode Can Share Forgotten Tables
 
 Category: Security, Data Isolation, Simplicity

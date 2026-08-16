@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #16 — targeted GUC reset
+
 # PostgreSQL Session Vars Reset All GUCs On Checkout
 
 Category: Performance, Operations

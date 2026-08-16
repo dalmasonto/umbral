@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #23 — max_object_bytes cap
+
 # Page Cache Buffers Eligible Responses Without Size Cap
 
 Category: Performance, Reliability

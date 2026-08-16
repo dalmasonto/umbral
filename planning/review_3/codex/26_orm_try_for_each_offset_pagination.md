@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): PARTIAL** — gaps4 #27 limit-clobber fixed; keyset pagination not added
+
 # ORM try_for_each Uses Offset Pagination
 
 Category: Performance, Correctness

@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): NOT-A-BUG** — positive-findings note
+
 # Core ORM Clean Areas
 
 Category: Positive Findings, Security, Correctness, Simplicity

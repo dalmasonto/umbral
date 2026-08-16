@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #21 — SCAN+UNLINK by prefix
+
 # Redis Cache Clear Uses FLUSHDB
 
 Category: Operations, Correctness, Security

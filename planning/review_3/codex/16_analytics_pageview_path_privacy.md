@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #22 — scrub_path default
+
 # Analytics Auto Pageviews Send Raw Paths
 
 Category: Privacy, Security

@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — 2026-08-16 — rustdoc now cites DEFAULT_BLOCKED_TABLES
+
 # REST Documentation Contradicts Hardened Defaults
 
 Category: Correctness, Security Documentation

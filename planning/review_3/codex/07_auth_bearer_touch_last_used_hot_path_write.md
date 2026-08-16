@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #15 — 60s touch coalesce
+
 # Bearer Authentication Writes On Every Request
 
 Category: Performance, Scalability

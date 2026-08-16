@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #18 — non-FS proxies through backend
+
 # Custom Storage Backend Still Mounts Local ServeDir
 
 Category: Correctness, Security

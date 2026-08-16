@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #26 — InsertedPk enum
+
 # Dynamic Form Inserts Assume Integer Primary Keys
 
 Category: Correctness, Simplicity

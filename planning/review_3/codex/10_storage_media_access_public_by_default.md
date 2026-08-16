@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #17 — boot warn when media without media_access
+
 # Storage Media Is Public By Default
 
 Category: Security

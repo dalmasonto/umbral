@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): PARTIAL** — Routes builder fixes user routes; plugin declared-vs-mounted drift open
+
 # Plugin Route Metadata Can Drift From Actual Routes
 
 Category: Correctness, Simplicity

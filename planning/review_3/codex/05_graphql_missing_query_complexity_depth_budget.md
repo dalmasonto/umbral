@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #10 — depth/complexity defaults
+
 # GraphQL Missing Depth And Complexity Budget
 
 Category: Performance, Security

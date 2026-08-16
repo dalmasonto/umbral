@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): BY-DESIGN** — to_group is the trusted server primitive; MessageContext::publish is checked
+
 # Raw Realtime Group Publishing Bypasses Sender Policy
 
 Category: Security, API Simplicity

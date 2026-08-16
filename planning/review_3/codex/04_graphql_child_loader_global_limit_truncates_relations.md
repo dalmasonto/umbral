@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #13 — per-parent windowed loader
+
 # GraphQL Child Loader Applies A Global Relation Limit
 
 Category: Correctness, Performance

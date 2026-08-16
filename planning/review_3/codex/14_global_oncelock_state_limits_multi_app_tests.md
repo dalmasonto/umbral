@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): BY-DESIGN** — intentional single global; openapi CONFIG.set ignore is a minor open note
+
 # Global OnceLock State Limits Multi-App And Test Isolation
 
 Category: Correctness, Simplicity, Testability

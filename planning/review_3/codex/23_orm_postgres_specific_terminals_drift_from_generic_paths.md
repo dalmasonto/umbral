@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): PARTIAL** — gaps4 #24 _pg read-terminal guards; create_pg M2M guard open
+
 # Postgres-Specific ORM Terminals Drift From Generic Paths
 
 Category: Correctness, Simplicity

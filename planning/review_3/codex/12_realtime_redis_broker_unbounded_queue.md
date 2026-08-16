@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #19 — QUEUE_CAP + try_send drop
+
 # Realtime Redis Broker Uses Unbounded Queue
 
 Category: Performance, Reliability

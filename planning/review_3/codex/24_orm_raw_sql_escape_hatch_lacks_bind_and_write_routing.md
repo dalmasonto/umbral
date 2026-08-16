@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): PARTIAL** — gaps4 #24 raw_with binds params; write-routing split open
+
 # Raw SQL Escape Hatch Lacks Bind And Write Routing
 
 Category: Security, Correctness

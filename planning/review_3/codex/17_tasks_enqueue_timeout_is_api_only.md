@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #29 — warn when timeout set
+
 # Task Enqueue Timeout Is Accepted But Not Enforced
 
 Category: Correctness, Simplicity

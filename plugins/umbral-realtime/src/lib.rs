@@ -1661,8 +1661,9 @@ pub struct RealtimePlugin {
     /// reconnect resume). Defaults to [`DEFAULT_REPLAY_BUFFER`]; set via
     /// [`replay_buffer`](Self::replay_buffer).
     replay_cap: usize,
-    /// Aggregate live-connection cap across all transports. `None` =
-    /// unlimited (the default); set via
+    /// Aggregate live-connection cap across all transports. Defaults to
+    /// `Some(DEFAULT_MAX_CONNECTIONS)` (audit_2 realtime #4 flipped it from
+    /// unlimited to a cap); `None` = unlimited. Set via
     /// [`max_connections`](Self::max_connections).
     max_connections: Option<usize>,
     /// Which groups have presence ("who's online") enabled + the identity

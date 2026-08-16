@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #12 — resolve_context wires WS/SSE identity+unlocks
+
 # GraphQL Subscriptions Miss Query Context
 
 Category: Correctness, Security

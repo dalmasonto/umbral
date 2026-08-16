@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #14 — m2m written in tx before commit
+
 # Admin Many-To-Many Writes Are Not Atomic With Parent Save
 
 Category: Correctness

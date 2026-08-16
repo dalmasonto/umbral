@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #8 — models()+sessions dep
+
 # OAuth Requires Sessions But Does Not Declare It
 
 Category: Correctness, Security

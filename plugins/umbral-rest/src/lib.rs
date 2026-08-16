@@ -17,10 +17,11 @@
 //!
 //! ## Exposure
 //!
-//! By default the plugin auto-exposes every registered model except
-//! the three known-internal tables: `auth_user`, `session`, and
-//! `umbral_migrations`. Letting `/api/auth_user/` exist would leak
-//! password hashes; the default block-list is the safe shape.
+//! By default the plugin auto-exposes every registered model except the
+//! framework's internal tables (`DEFAULT_BLOCKED_TABLES`: `auth_user`,
+//! `session`, `umbral_migrations`, the `permissions_*` tables, `task_row`,
+//! `admin_audit_log`). Letting `/api/auth_user/` exist would leak password
+//! hashes; the default block-list is the safe shape.
 //!
 //! Tighten with `RestPlugin::new().include_only(["article"])` or
 //! loosen with `.exclude(["sensitive_thing"])`. The builder is

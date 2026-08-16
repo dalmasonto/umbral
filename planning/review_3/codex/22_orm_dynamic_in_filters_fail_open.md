@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #7 — fail_closed on empty-after-parse
+
 # Dynamic IN Filters Can Fail Open
 
 Category: Security, Correctness

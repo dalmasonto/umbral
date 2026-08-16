@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #9 — owner_scope
+
 # GraphQL Mutations Lack Object-Level Scope Checks
 
 Category: Security, Correctness

@@ -1,3 +1,5 @@
+> **STATUS (2026-08-16): FIXED** — gaps4 #3 — may_serialize on PG readbacks
+
 # Dynamic ORM Postgres Readbacks Leak Hidden Fields
 
 Category: Security, Correctness
