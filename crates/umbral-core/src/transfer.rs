@@ -58,22 +58,26 @@ impl TransferMap {
         }
     }
 
-    /// The source column an umbral FK field reads from, or `None` when the umbral
+    /// The source column an umbral field reads from, or `None` when the umbral
     /// name already matches the source (no rename). The umbral field is
-    /// snake_case; a snake-`_id` framework wants `<field>_id`, a camelCase one
-    /// wants `<camelCase(field)>Id`.
-    fn fk_source_column(self, field: &str) -> Option<String> {
+    /// snake_case. A snake-`_id` framework (Django/Rails/Laravel) only renames
+    /// FK columns (`author` -> `author_id`); its other columns are already
+    /// snake_case. A camelCase framework (Prisma) renames EVERY column
+    /// (`first_name` -> `firstName`), and a FK additionally gets `Id`
+    /// (`author` -> `authorId`).
+    fn source_column(self, field: &str, is_fk: bool) -> Option<String> {
         match self {
             TransferMap::None => None,
             TransferMap::Django | TransferMap::Rails | TransferMap::Laravel => {
-                if field.ends_with("_id") {
-                    None
-                } else {
+                if is_fk && !field.ends_with("_id") {
                     Some(format!("{field}_id"))
+                } else {
+                    None
                 }
             }
             TransferMap::Prisma => {
-                let col = format!("{}Id", to_lower_camel(field));
+                let base = to_lower_camel(field);
+                let col = if is_fk { format!("{base}Id") } else { base };
                 (col != field).then_some(col)
             }
         }
@@ -414,15 +418,13 @@ fn source_meta_for(meta: &ModelMeta, map: TransferMap) -> (ModelMeta, HashMap<St
     if map == TransferMap::None {
         return (meta.clone(), rename);
     }
-    // An FK field `author` reads from the source's FK column (`author_id` on a
-    // snake-`_id` framework, `authorId` on a camelCase one). A field already in
-    // the source's shape is left alone.
+    // Each field reads from the source column its framework names — a snake
+    // framework only reshapes FK columns (`author` -> `author_id`); a camelCase
+    // framework reshapes every column (`first_name` -> `firstName`, FK
+    // `author` -> `authorId`).
     let mut src = meta.clone();
     for col in &mut src.fields {
-        if col.fk_target.is_none() {
-            continue;
-        }
-        if let Some(source_col) = map.fk_source_column(&col.name) {
+        if let Some(source_col) = map.source_column(&col.name, col.fk_target.is_some()) {
             rename.insert(source_col.clone(), col.name.clone());
             col.name = source_col;
         }

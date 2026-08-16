@@ -88,10 +88,28 @@ which the generated fields name by their fully-qualified paths.
 
 ## Framework-aware naming
 
-Django prefixes every table with its app label (`blog_post`,
-`communities_community`) and names foreign-key columns `<field>_id`. Pass
-`--framework django` to undo the *reference* conventions — FK target structs
-shed the app prefix and Django's `auth_user` maps to umbral's `AuthUser`:
+`--framework <name>` undoes a source ORM's column conventions so the generated
+models read idiomatically. It pairs with
+[`transferdata --map`](/docs/v0.0.1/cli/transferdata) (which undoes the same
+conventions on the *data* side):
+
+| `--framework` | FK column | Other columns | Extras |
+|---|---|---|---|
+| `django` | `author_id` → `author` | snake_case, kept | app-prefix strip (`--with-table-names`), `auth_user` → `AuthUser`, M2M fold |
+| `rails` (`activerecord`) | `author_id` → `author` | snake_case, kept | — |
+| `laravel` (`eloquent`) | `author_id` → `author` | snake_case, kept | — |
+| `prisma` (`typeorm`) | `authorId` → `author` | `firstName` → `first_name` | — |
+
+Django, Rails and Laravel share the snake `<field>_id` FK convention; Prisma
+uses camelCase, so **every** column is snake-cased. The app-prefix strip,
+`auth_user` externalization and M2M folding are Django-only (they're Django
+conventions); the other frameworks get the FK/column reshaping alone.
+
+The Django example below shows the fullest case:
+
+```bash
+cargo run -- inspectdb ./django.sqlite3 --framework django --output plugins/imported
+```
 
 ```bash
 cargo run -- inspectdb ./django.sqlite3 --framework django --output plugins/imported

@@ -196,9 +196,11 @@ enum Command {
         /// URL, or a path to a SQLite file (`./db.sqlite3`). When omitted,
         /// the app's ambient database (`UMBRAL_DATABASE_URL`) is used.
         database: Option<String>,
-        /// The source framework whose naming conventions to undo, e.g.
-        /// `django` (FK targets shed the app prefix, `auth_user` maps to the
-        /// external `AuthUser`). Omit to keep the raw database names.
+        /// The source framework whose naming conventions to undo: `django`
+        /// (also sheds the app prefix + maps `auth_user`), `rails` /
+        /// `laravel` (FK `<field>_id` -> `<field>`), or `prisma` (camelCase
+        /// columns -> snake_case, FK `<field>Id` -> `<field>`). Omit to keep
+        /// the raw database names.
         #[arg(long)]
         framework: Option<String>,
         /// Strip the framework app-prefix off struct names (`blog_post` ->

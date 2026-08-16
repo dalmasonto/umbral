@@ -236,11 +236,21 @@ impl From<migrate::MigrateError> for InspectError {
 /// ground. `None` keeps the raw database names verbatim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framework {
-    /// Django: a foreign-key column is `<field>_id`. Strip the `_id` (and a
-    /// leading `<app>_` prefix when the leading segment is a detected app
-    /// label) so the field is the clean `<field>`, bound to the real column via
-    /// `#[sqlx(rename = "<field>_id")]`.
+    /// Django: FK column `<field>_id`. Strip the `_id` (and a leading `<app>_`
+    /// prefix when the leading segment is a detected app label) so the field is
+    /// the clean `<field>`; also externalizes `auth_user` and folds M2M tables.
     Django,
+    /// Rails / ActiveRecord: FK column `<field>_id` (snake, like Django) — strip
+    /// the `_id`. No app prefix, no `auth_user`.
+    Rails,
+    /// Laravel / Eloquent: FK column `<field>_id` (snake, like Django) — strip
+    /// the `_id`. No app prefix, no `auth_user`.
+    Laravel,
+    /// Prisma / TypeORM (and camelCase ORMs generally): columns are camelCase.
+    /// Snake-case every column to umbral's convention (`firstName` ->
+    /// `first_name`); a FK column additionally sheds a trailing `Id`
+    /// (`authorId` -> `author`).
+    Prisma,
 }
 
 impl Framework {
@@ -249,6 +259,9 @@ impl Framework {
     pub fn parse(s: &str) -> Option<Framework> {
         match s.trim().to_ascii_lowercase().as_str() {
             "django" => Some(Framework::Django),
+            "rails" | "activerecord" => Some(Framework::Rails),
+            "laravel" | "eloquent" => Some(Framework::Laravel),
+            "prisma" | "typeorm" => Some(Framework::Prisma),
             _ => None,
         }
     }
@@ -327,12 +340,12 @@ pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport, InspectErr
     // initial migration render them consistently.
     let mut schema = schema;
     apply_recovered_conventions(&mut schema, opts.framework);
-    // Django names FK columns `<field>_id`; umbral names them `<field>` (the
-    // field IS the column). Since inspectdb writes a fresh schema, shed the
-    // suffix so a FK reads `pub author: ForeignKey<Author>` / `post.author`,
-    // matching how umbral models are written.
-    if opts.framework == Some(Framework::Django) {
-        strip_django_fk_id_suffix(&mut schema);
+    // Rename source columns to umbral field names per the framework's
+    // convention (Django/Rails/Laravel shed a FK's `_id`; Prisma snake-cases
+    // every column). inspectdb writes a fresh schema, so the field IS the
+    // column — no `#[sqlx(rename)]` needed.
+    if let Some(fw) = opts.framework {
+        apply_framework_column_names(&mut schema, fw);
     }
     // Fold Django M2M join tables into `M2M<T>` fields on their owner (and drop
     // the join table — umbral auto-generates its own junction).
@@ -1103,7 +1116,9 @@ pub(crate) fn resolve_struct_names(
     for t in &schema.tables {
         let name = if django && t.table == DJANGO_USER_TABLE {
             DJANGO_USER_STRUCT.to_string()
-        } else if with_table_names {
+        } else if django && with_table_names {
+            // App-prefix stripping is a Django convention; other frameworks
+            // have no app prefix, so keep the full pascal-cased table name.
             django_struct_name(&t.table, &app_labels)
         } else {
             t.name.clone()
@@ -1259,7 +1274,10 @@ fn clean_constant_default(raw: &str) -> Option<String> {
 /// - Every other default is reduced to a constant literal, or dropped when
 ///   umbral can't represent it (see [`clean_constant_default`]).
 pub fn apply_recovered_conventions(schema: &mut IntrospectedSchema, framework: Option<Framework>) {
-    let django = framework == Some(Framework::Django);
+    // The `created*` / `updated*` timestamp name heuristic applies to any
+    // framework (Rails/Laravel/Prisma also keep these in code, and the lowercase
+    // check matches camelCase `createdAt` too).
+    let has_framework = framework.is_some();
     for table in &mut schema.tables {
         for col in &mut table.columns {
             if let Some(raw) = col.default.take() {
@@ -1269,9 +1287,9 @@ pub fn apply_recovered_conventions(schema: &mut IntrospectedSchema, framework: O
                     col.default = clean_constant_default(&raw);
                 }
             }
-            // Django's Python-managed timestamps leave no DB default; recover
-            // them by name, but never override a default we actually found.
-            if django && is_temporal(col.ty) && col.default.is_none() && !col.auto_now_add {
+            // Code-managed timestamps leave no DB default; recover them by name,
+            // but never override a default we actually found.
+            if has_framework && is_temporal(col.ty) && col.default.is_none() && !col.auto_now_add {
                 let lower = col.name.to_ascii_lowercase();
                 if lower.starts_with("created")
                     || lower.starts_with("added")
@@ -1290,35 +1308,58 @@ pub fn apply_recovered_conventions(schema: &mut IntrospectedSchema, framework: O
     }
 }
 
-/// Strip Django's `_id` suffix off foreign-key COLUMNS (`author_id` ->
-/// `author`), matching how umbral models are actually written
-/// (`pub author: ForeignKey<AuthUser>` in `examples/shop`, accessed as
-/// `post.author`). Because inspectdb targets a *fresh* database with fresh
-/// migrations — not the source DB — the new column is simply named `author`,
-/// so no `#[sqlx(rename)]` is needed; umbral maps the field name to the column.
+/// The umbral field name for a source column under a framework's convention, or
+/// `None` when the column already matches umbral's shape (no rename). Because
+/// inspectdb targets a *fresh* database, the new column simply IS the new name —
+/// no `#[sqlx(rename)]` needed.
 ///
-/// Only real FK columns are touched, and only when the stripped name is free
-/// (no other column already owns it, no two FKs collide on it) so the rename is
-/// always unambiguous. Composite `unique_together` / index groups that
-/// referenced the old `author_id` are rewritten to `author` in lockstep, or the
-/// generated `#[umbral(unique_together = [[...]])]` would name a column that no
-/// longer exists.
-fn strip_django_fk_id_suffix(schema: &mut IntrospectedSchema) {
+/// - Django / Rails / Laravel: strip a FK column's `_id` (`author_id` ->
+///   `author`); leave non-FK columns (already snake_case) alone.
+/// - Prisma: snake-case every column (`firstName` -> `first_name`), and a FK
+///   additionally sheds a trailing `Id` (`authorId` -> `author`).
+fn framework_field_name(col: &IntrospectedColumn, framework: Framework) -> Option<String> {
+    let is_fk = col.fk_target.is_some();
+    match framework {
+        Framework::Django | Framework::Rails | Framework::Laravel => {
+            if is_fk {
+                col.name
+                    .strip_suffix("_id")
+                    .filter(|b| !b.is_empty())
+                    .map(str::to_string)
+            } else {
+                None
+            }
+        }
+        Framework::Prisma => {
+            let base = if is_fk {
+                col.name.strip_suffix("Id").unwrap_or(&col.name)
+            } else {
+                &col.name
+            };
+            let snake = to_snake_case(base);
+            (snake != col.name && !snake.is_empty()).then_some(snake)
+        }
+    }
+}
+
+/// Rename source columns to umbral field names per the framework's convention
+/// (see [`framework_field_name`]), matching how umbral models are written
+/// (`pub author: ForeignKey<Author>`, accessed `post.author`). Renames are
+/// collision-guarded (a target name already owned by another column, or claimed
+/// by two columns, is left as-is), and `unique_together` / index groups that
+/// referenced the old name are rewritten in lockstep so a composite index never
+/// names a column that no longer exists.
+fn apply_framework_column_names(schema: &mut IntrospectedSchema, framework: Framework) {
     for table in &mut schema.tables {
-        // Propose `old -> new` renames, guarding against collisions.
-        let mut renames: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
         let existing: std::collections::HashSet<&str> =
             table.columns.iter().map(|c| c.name.as_str()).collect();
+        let mut renames: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         let mut claimed: std::collections::HashSet<String> = std::collections::HashSet::new();
         for col in &table.columns {
-            if col.fk_target.is_none() {
-                continue;
-            }
-            if let Some(base) = col.name.strip_suffix("_id") {
-                if !base.is_empty() && !existing.contains(base) && claimed.insert(base.to_string())
-                {
-                    renames.insert(col.name.clone(), base.to_string());
+            if let Some(new) = framework_field_name(col, framework) {
+                if !existing.contains(new.as_str()) && claimed.insert(new.clone()) {
+                    renames.insert(col.name.clone(), new);
                 }
             }
         }

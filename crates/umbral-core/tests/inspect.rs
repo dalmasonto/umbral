@@ -705,6 +705,97 @@ async fn inspectdb_django_strips_fk_id_suffix() {
     );
 }
 
+/// `--framework rails` strips a FK column's `_id` like Django, but does NOT
+/// apply Django-only conventions: no `<app>_` struct-prefix stripping (even with
+/// `--with-table-names`) and no `auth_user` externalization.
+#[tokio::test]
+async fn inspectdb_rails_strips_fk_id_without_django_extras() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("rails.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE blog_author (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE blog_post (id INTEGER PRIMARY KEY, title TEXT NOT NULL, \
+            author_id INTEGER NOT NULL REFERENCES blog_author(id))",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Rails),
+        with_table_names: true,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb --framework rails");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // FK `_id` stripped, but the struct name keeps its full (unstripped) form —
+    // Rails has no Django app prefix.
+    assert!(
+        m.contains("pub author: ForeignKey<BlogAuthor>"),
+        "rails FK `author_id` must strip to `author` -> ForeignKey<BlogAuthor>; got:\n{m}"
+    );
+    assert!(
+        m.contains("pub struct BlogPost {"),
+        "rails: no app-prefix strip, so `blog_post` -> `BlogPost`; got:\n{m}"
+    );
+    assert!(
+        !m.contains("use umbral_auth::AuthUser"),
+        "rails: no auth_user externalization; got:\n{m}"
+    );
+}
+
+/// `--framework prisma` snake-cases camelCase columns (`firstName` ->
+/// `first_name`) and sheds a FK column's trailing `Id` (`authorId` -> `author`).
+#[tokio::test]
+async fn inspectdb_prisma_snake_cases_camelcase_columns() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("prisma.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE user (id INTEGER PRIMARY KEY, \"firstName\" TEXT NOT NULL, \"lastName\" TEXT)",
+        "CREATE TABLE post (id INTEGER PRIMARY KEY, title TEXT NOT NULL, \
+            \"authorId\" INTEGER NOT NULL REFERENCES user(id))",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Prisma),
+        with_table_names: false,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb --framework prisma");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // camelCase regular columns snake-cased.
+    assert!(
+        m.contains("pub first_name: String") && m.contains("pub last_name:"),
+        "prisma: `firstName`/`lastName` must snake-case; got:\n{m}"
+    );
+    // FK `authorId` -> `author` (Id shed), target struct `User`.
+    assert!(
+        m.contains("pub author: ForeignKey<User>"),
+        "prisma FK `authorId` must become `author: ForeignKey<User>`; got:\n{m}"
+    );
+    assert!(
+        !m.contains("firstName") && !m.contains("authorId"),
+        "no camelCase column name should survive; got:\n{m}"
+    );
+}
+
 /// The `_id` strip rewrites composite index groups in lockstep: a
 /// `unique_together` over FK columns must name the stripped fields, not the old
 /// `<fk>_id` columns (which no longer exist on the generated struct).
