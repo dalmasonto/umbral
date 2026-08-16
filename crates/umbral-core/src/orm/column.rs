@@ -3089,9 +3089,11 @@ impl<T> GeometryCol<T> {
         }
     }
 
-    /// `ST_DWithin(col, <other>, meters)` — the workhorse "within N of" query.
-    /// On a `geography` column the distance is metres; on `geometry`, SRID
-    /// units. `other` is a WKT/EWKT string.
+    /// `ST_DWithin(col, <other>, distance)` — the workhorse "within N of" query,
+    /// in the column's own units: metres on a `geography` column, SRID units
+    /// (degrees for `geometry(…, 4326)`) on a `geometry` column. `other` is a
+    /// WKT/EWKT string. For a metres query on a planar `geometry` column, use
+    /// [`Self::dwithin_meters`].
     pub fn dwithin(&self, other: &str, distance: f64) -> Predicate<T> {
         // `$1`/`$2` are sea-query cust placeholders, renumbered globally when
         // this condition is combined with other filters (the same convention
@@ -3101,6 +3103,26 @@ impl<T> GeometryCol<T> {
             [
                 sea_query::Value::from(other.to_string()),
                 sea_query::Value::from(distance),
+            ],
+        ))
+    }
+
+    /// `ST_DWithin(col::geography, <other>::geography, meters)` — "within N
+    /// **metres**", regardless of whether the column is `geometry` or
+    /// `geography`. The `::geography` cast makes PostGIS measure true spheroidal
+    /// distance in metres, so this is the method to reach for on a lon/lat
+    /// (`geometry(…, 4326)`) column where [`Self::dwithin`] would otherwise
+    /// measure in degrees. This is the same SQL the REST `__dwithin` filter
+    /// builds, so a typed query and a REST query agree.
+    pub fn dwithin_meters(&self, other: &str, meters: f64) -> Predicate<T> {
+        Predicate::new(Expr::cust_with_values(
+            format!(
+                "ST_DWithin(\"{}\"::geography, ST_GeomFromEWKT($1)::geography, $2)",
+                self.name
+            ),
+            [
+                sea_query::Value::from(other.to_string()),
+                sea_query::Value::from(meters),
             ],
         ))
     }

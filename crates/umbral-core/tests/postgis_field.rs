@@ -275,23 +275,16 @@ async fn postgis_real_data_round_trip_and_spatial_queries() {
         "ST_DWithin must return a proper subset near Nairobi; got {near_deg} of {total}"
     );
 
-    // Spatial query 1b: the METRES semantics the REST `__dwithin` filter uses —
-    // `ST_DWithin(col::geography, point::geography, meters)`. Within 20 km of
-    // Nairobi should be MORE than within 5 km (monotonic), and both a subset.
-    let count_within_m = |meters: f64| {
-        let pool = pool.clone();
-        async move {
-            let sql = "SELECT count(*) FROM umbral_postgis_facility \
-                       WHERE ST_DWithin(location::geography, \
-                             ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)";
-            sqlx::query_scalar::<_, i64>(sql)
-                .bind(36.8172_f64)
-                .bind(-1.2864_f64)
-                .bind(meters)
-                .fetch_one(&pool)
-                .await
-                .expect("dwithin meters")
-        }
+    // Spatial query 1b: the METRES semantics, through the TYPED ORM (no raw
+    // SQL) — `GeometryCol::dwithin_meters` renders the `::geography` cast so the
+    // distance is metres. Within 20 km of Nairobi should be MORE than within
+    // 5 km (monotonic), and both a subset.
+    let count_within_m = |meters: f64| async move {
+        Facility::objects()
+            .filter(facility::LOCATION.dwithin_meters(nairobi, meters))
+            .count()
+            .await
+            .expect("dwithin_meters count") as i64
     };
     let within_5km = count_within_m(5_000.0).await;
     let within_20km = count_within_m(20_000.0).await;
