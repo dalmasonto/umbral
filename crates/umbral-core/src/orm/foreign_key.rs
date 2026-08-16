@@ -97,6 +97,53 @@ where
 
 impl<T: Model> Eq for ForeignKey<T> where T::PrimaryKey: Eq {}
 
+// ── ForeignKey as a primary key: identifying relations ──────────────────────
+//
+// A model whose PRIMARY KEY *is* a foreign key (Prisma's `@id` on a relation
+// field, a shared / identifying primary key — `Settings { @id user -> User }`
+// recovered as `#[umbral(primary_key)] pub user: ForeignKey<User>`) needs
+// `ForeignKey<T>` to satisfy `PrimaryKey`. That trait's supertraits are
+// `Clone + Send + Sync + 'static + Into<sea_query::Value> + Display`; the FK
+// already has `Clone` (with `T: Clone`) and the auto traits, so the two missing
+// pieces are `Display` and `Into<Value>`, both delegating to the inner key
+// (itself a `PrimaryKey`, so it has both). `Hash` isn't a `PrimaryKey`
+// supertrait but `QuerySet::in_bulk` keys a `HashMap` on the PK, so it's
+// provided too — hashing the raw key, consistent with the `PartialEq`/`Eq`
+// above.
+
+impl<T: Model> std::fmt::Display for ForeignKey<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Delegate to the inner key's Display — `T::PrimaryKey: PrimaryKey`
+        // guarantees it. The FK renders as its stored key (an id / slug / uuid),
+        // which is exactly what a PK-valued FK should print as.
+        std::fmt::Display::fmt(&self.raw, f)
+    }
+}
+
+impl<T: Model> From<ForeignKey<T>> for sea_query::Value {
+    fn from(fk: ForeignKey<T>) -> Self {
+        // The FK binds as its raw key — `T::PrimaryKey: Into<Value>` via
+        // `PrimaryKey`. This is what lets a FK-valued PK flow through every
+        // sea-query bind site (filters, junction CRUD, `get(pk)`).
+        fk.raw.into()
+    }
+}
+
+impl<T: Model> std::hash::Hash for ForeignKey<T>
+where
+    T::PrimaryKey: std::hash::Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.raw.hash(state);
+    }
+}
+
+// The marker impl — `T: Clone` is required because `ForeignKey<T>`'s derived
+// `Clone` (it holds an `Option<Box<T>>` resolved slot) needs it, and `Clone` is
+// a `PrimaryKey` supertrait. Every `#[derive(Model)]` struct is `Clone`, so a
+// FK target is always eligible.
+impl<T: Model + Clone> super::PrimaryKey for ForeignKey<T> {}
+
 /// Default FK = the PK type's default (id `0` for the i64-keyed common
 /// case), with no resolved row. This is the "unset" placeholder the
 /// `#[derive(Form)]` macro's `..Default::default()` tail and the typed

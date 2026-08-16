@@ -6142,12 +6142,21 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
         if !col.nullable {
             def.not_null();
         }
+        // A FK column that is ALSO the primary key (an identifying relation —
+        // Prisma's `@id` on a relation field) must carry the PRIMARY KEY
+        // marking. The FK branch returns early, so it wouldn't otherwise reach
+        // the general `col.primary_key` handling below. No AUTOINCREMENT: the
+        // value is the referenced row's key, not a fresh sequence.
+        if col.primary_key {
+            def.primary_key();
+        }
         // BUG-15: `#[umbral(unique)]` on a FK column is the
         // OneToOne idiom — emit UNIQUE inline so the
         // referencing-row uniqueness is enforced at the DB.
         // The FK branch used to skip this because it returned
-        // before the non-FK unique branch ran.
-        if col.unique {
+        // before the non-FK unique branch ran. A PK column is already
+        // unique, so don't double up.
+        if col.unique && !col.primary_key {
             def.unique_key();
         }
         // gaps2 #22: `#[umbral(db_constraint = false)]` keeps the logical

@@ -285,6 +285,23 @@ This is the right shape for `request.user.profile.avatar`-style flows in Rust: o
 
 Trying to create a second `Profile` for a user who already has one trips the UNIQUE constraint. The admin surfaces this as **"A record with this `user` already exists."** rather than a generic "database error". The column name comes from the parser in `umbral-admin/src/util.rs::parse_unique_violation_column`, which handles both SQLite (`UNIQUE constraint failed: profile.user`) and Postgres (`Key (user)=(7) already exists.`) message formats.
 
+## Identifying relations: a foreign key that *is* the primary key
+
+Some tables have no surrogate `id`: their primary key **is** a foreign key to another table, one row per parent (a shared / identifying primary key — Django's `OneToOneField(primary_key=True)`, Prisma's `@id` on a relation field, Rails' `belongs_to` on the PK). Declare it by marking the `ForeignKey<T>` field as the primary key:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Settings {
+    #[umbral(primary_key)]
+    pub user: ForeignKey<AuthUser>,   // the PK and the FK are one column
+    pub theme: String,
+}
+```
+
+The column is emitted with the target's PK type (`TEXT` for a slug-keyed parent, `BIGINT` for an integer one), marked `PRIMARY KEY`, and given a `REFERENCES` constraint — one column doing both jobs, no `AUTOINCREMENT` (the key comes from the parent row). `Settings::objects().create(...)` stores the parent's key, reads it back through `settings.user.id()`, and a second row with the same key is rejected by the primary key. `select_related("user")` hydrates the parent as usual, and you filter by the raw key: `settings::USER.eq("ada")`.
+
+This is what [`inspectdb`](/docs/v0.0.1/migrations/inspectdb) generates for an identifying relation it finds in a foreign database, so a Prisma/Django/Rails schema built this way ports without hand-editing.
+
 ## Querying with a foreign key
 
 The column constant emitted by `#[derive(Model)]` for a `ForeignKey<T>` field is a `ForeignKeyCol`, which accepts `i64` comparisons:
