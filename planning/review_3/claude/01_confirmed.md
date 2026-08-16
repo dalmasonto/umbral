@@ -6,6 +6,8 @@ Each of these was traced end to end against the real code, adversarially (defaul
 
 ## 1. CRITICAL — admin inline cell-edit: staff → superuser
 
+> **STATUS (2026-08-16): FIXED** — gaps4 #1: `cell_edit_post` rejects privileged/noform/noedit; `DynQuerySet::update_one` applies `is_unauthorized_privileged` + noform/noedit. Staff→superuser via the cell endpoint is refused at both layers.
+
 **`plugins/umbral-admin/src/handlers/inline_edit.rs:184` → `crates/umbral-core/src/orm/dynamic.rs:1215`**
 Also raised independently as inline_edit.rs:185, inline_edit.rs:187, dynamic.rs:1215 — one root cause.
 
@@ -43,6 +45,8 @@ and their own row is updated to `is_superuser = true`. They are now a superuser 
 
 ## 2. HIGH — secret / private / Masked columns leak in the Postgres write response
 
+> **STATUS (2026-08-16): FIXED** — gaps4 #3: all three PG write-response builders filter through `may_serialize`, identical to their SQLite twins.
+
 **`crates/umbral-core/src/orm/dynamic.rs:1822, 1966, 2130`**
 Raised as dynamic.rs:1966 (twice, from two lenses).
 
@@ -63,6 +67,8 @@ Raised as dynamic.rs:1966 (twice, from two lenses).
 ---
 
 ## 3. HIGH — REST list filter/search is a blind extraction oracle over hidden columns
+
+> **STATUS (2026-08-16): FIXED** — REST list filter/search/order build over `queryable_fields` (hidden/secret/private excluded via `is_field_hidden`); the unknown-field error no longer enumerates secret column names.
 
 **`plugins/umbral-rest/src/lib.rs:3061,3070` → `plugins/umbral-rest/src/filtering.rs:164`**
 

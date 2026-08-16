@@ -1,5 +1,7 @@
 # Framework-wide sweep — review_3 (Claude)
 
+> **SWEEP CLOSED (2026-08-16).** Every candidate in this folder was re-verified against v0.0.11 and annotated in-file (`01_confirmed.md`, `02_triage.md`). The 3 confirmed CRITICAL/HIGH findings were fixed by the gaps4 batch; the `Masked<T>` re-seal cluster is now fixed (see below). Remaining triage items are marked FIXED / PARTIAL / BY-DESIGN / DEFERRED per item; the deferred set (maintainability + app-level) is tracked as `gaps5 #106`. Fixes shipped on branch `fix/slug-and-masked`.
+
 Full correctness + **security** + simplicity sweep across all 28 crates (~130k lines of `src/`), run as a fan-out workflow: 3 finder lenses × 11 risk-ordered areas → adversarial verification → per-area report.
 
 ## What actually happened
@@ -34,6 +36,8 @@ These three are not independent: #1 and the mass-assignment gap are the ORM's `u
 
 ### Core-confirmed, exploit path untraced: the `Masked<T>` re-seal cluster
 
+> **STATUS (2026-08-16): FIXED.** Restore paths were already safe (`.presealed()` for loaddata; backup binds ciphertext directly). The remaining live vector — an empty/redaction-marker submission re-sealing over the ciphertext on the dynamic UPDATE — is now stripped before validation/seal (`is_masked_no_change` in `normalise_update_body`), mirroring the already-guarded form path (gaps4 #5). Covered by `crates/umbral-core/tests/masked_no_reseal.rs`.
+
 `write.rs:512` `seal_masked_json` seals **unconditionally** — it returns early only for a non-masked column or a JSON `null`, then calls `ambient_seal` on whatever string it's given. It does not check whether the string is already ciphertext, and it does not treat empty as "no change". I verified that central fact. It makes three data-loss/corruption claims very likely real, but each needs its own trace before it's called confirmed:
 
 - **`write.rs:512` (raised CRITICAL):** `dumpdata`/`loaddata` of a `Masked` column double-seals on restore — `dump` writes ciphertext, `load` → `insert_json` → `seal_masked_json` seals it again → `reveal()` returns inner ciphertext, plaintext unrecoverable. The dynamic write path never consults the Rust `Deserialize` REDACTED guard, so that guard can't save it.
@@ -43,6 +47,8 @@ These three are not independent: #1 and the mass-assignment gap are the ORM's `u
 The fix is one-shot and worth it regardless of which paths reach it: `seal_masked_json` must skip an already-sealed value and treat empty-as-unchanged — mirror the `Deserialize` REDACTED contract on the dynamic write path so there is one definition of "don't re-seal", not two.
 
 ## Release recommendation
+
+> **UPDATE (2026-08-16): the three confirmed criticals + the Masked cluster are all fixed** (gaps4 batch + this sweep). The release no longer needs to hold on these findings; remaining items are non-blocking (see per-item marks).
 
 **0.0.10 stays held** — but note the confirmed criticals are **pre-existing in 0.0.9**, not introduced by the 0.0.10 payload. Two paths:
 
