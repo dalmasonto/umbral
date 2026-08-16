@@ -5286,6 +5286,7 @@ dependencies = [
  "rpassword",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sha2",
  "sqlx",
  "tempfile",

@@ -90,8 +90,8 @@ Local evidence anchors used repeatedly:
 14. [tf#227] [MEDIUM] Magic-link/passwordless login is missing.
     Evidence: explicitly out of scope in `docs/decisions/2026-06-28-auth-full-surface.md:165-170`. Recommended fix: add a passwordless flow built on the challenge/reset infrastructure with throttling and replay protection.
 
-15. [tf#228] [MEDIUM] Change-password for authenticated users is missing.
-    Evidence: explicitly out of scope in `docs/decisions/2026-06-28-auth-full-surface.md:165-170`. Recommended fix: add built-in HTML and JSON endpoints, with old-password verification, session rotation, and optional revoke-other-devices behavior.
+15. [tf#228] [MEDIUM] Change-password — HTML + JSON endpoints DONE; session-rotation/revoke-others remain.
+    The `POST {prefix}/change-password` endpoint (authenticated, current-password verification + strength policy + hash rotation) already existed as JSON (gaps3 #20). Now a new `JsonOrForm<T>` extractor (`plugins/umbral-auth/src/auth_routes.rs`) content-negotiates EVERY built-in auth POST body — register/login/change-password/verify-email/resend-verification/password-forgot/password-reset all accept a JSON body (REST) OR an `application/x-www-form-urlencoded` body (a plain HTML `<form>` submit); JSON stays the default so existing clients are unaffected. Test: `plugins/umbral-auth/tests/json_surface.rs::auth_endpoints_accept_form_encoded_bodies`. STILL OPEN: session rotation on password change (invalidate the current cookie's server-side session so a stolen cookie dies) and optional revoke-other-devices (`SessionStore::destroy_user` exists but the handler doesn't yet have the current session token to keep it) — heavier, needs the session-token in the change-password handler.
 
 16. [tf#229] [HIGH] Authorization needs an organization-grade policy model.
     Evidence: permissions/RLS exist, but orgs need ABAC, named policies, auditability, policy simulation, tenant role templates, and admin-editable role assignment with guardrails. Recommended fix: layer a policy engine over permissions/RLS with typed predicates, dry-run explanations, and policy tests.

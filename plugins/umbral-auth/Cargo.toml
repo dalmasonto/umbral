@@ -20,6 +20,10 @@ argon2 = { version = "0.5", features = ["std"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Parse `application/x-www-form-urlencoded` bodies for the `JsonOrForm`
+# extractor, so the built-in auth endpoints serve an HTML <form> POST as well
+# as a JSON REST client.
+serde_urlencoded = "0.7"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
 # tokio's rt for spawn_blocking: the argon2 hash/verify helpers
 # (hash_password_async / verify_password_async) offload their CPU-bound

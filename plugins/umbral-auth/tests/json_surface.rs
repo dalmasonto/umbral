@@ -150,9 +150,65 @@ async fn post_full(router: &Router, uri: &str, body: &str) -> (axum::http::Statu
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
+/// POST an `application/x-www-form-urlencoded` body (an HTML `<form>` submit).
+async fn post_form(router: &Router, uri: &str, body: &str) -> axum::http::StatusCode {
+    use tower::ServiceExt;
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    router.clone().oneshot(req).await.unwrap().status()
+}
+
 // =========================================================================
 // Tests
 // =========================================================================
+
+/// gaps5 #15: the built-in auth endpoints accept an HTML `<form>` POST
+/// (`application/x-www-form-urlencoded`), not just JSON — so a plain server-
+/// rendered form works against the same route a REST client uses.
+#[tokio::test]
+async fn auth_endpoints_accept_form_encoded_bodies() {
+    let (router, _rec) = boot_app_with_recorder().await;
+
+    // Register via a urlencoded form body.
+    assert_eq!(
+        post_form(
+            &router,
+            "/api/auth/register",
+            "username=formuser&email=form@example.test&password=G00d%24Pass%21",
+        )
+        .await,
+        axum::http::StatusCode::CREATED,
+        "register must accept a form body"
+    );
+
+    // Log in via a form body → 200 (same handler a JSON client hits).
+    assert_eq!(
+        post_form(
+            &router,
+            "/api/auth/login",
+            "username=formuser&password=G00d%24Pass%21",
+        )
+        .await,
+        axum::http::StatusCode::OK,
+        "login must accept a form body"
+    );
+
+    // A JSON body still works on the same endpoint (default content type).
+    assert_eq!(
+        post(
+            &router,
+            "/api/auth/login",
+            r#"{"username":"formuser","password":"G00d$Pass!"}"#,
+        )
+        .await,
+        axum::http::StatusCode::OK,
+        "JSON must still work after adding form support"
+    );
+}
 
 /// gaps3 #11: every auth route resolves at BOTH the bare and trailing-slash
 /// form, so a client that follows the REST plugin's trailing-slash convention

@@ -13,6 +13,12 @@
 //! | POST | `<prefix>/login` | `{username, password}` | `{user, token}` and a Set-Cookie |
 //! | POST | `<prefix>/logout` | — | 204 + clear-cookie |
 //! | GET  | `<prefix>/me` | — | the current user (session OR bearer) |
+//! | POST | `<prefix>/change-password` | `{current_password, new_password}` | 204 (authenticated; rotates the hash) |
+//! | POST | `<prefix>/verify-email` / `resend-verification` / `password-forgot` / `password-reset` | see handlers | the email-verification + password-reset flow |
+//!
+//! Every POST body is content-negotiated by [`JsonOrForm`]: a JSON body (REST)
+//! **or** an `application/x-www-form-urlencoded` body (a plain HTML `<form>`
+//! submit) both work against the same route. JSON is the default.
 //!
 //! Prefix defaults to `/api/auth`; override via
 //! [`crate::AuthPlugin::with_default_routes_at`].
@@ -27,16 +33,76 @@
 //!
 //! ## What is deliberately missing
 //!
-//! - Password reset — couples to a mail crate; lands as its own
-//!   plugin when there's a real consumer.
-//! - Throttling / lockout — production hardening; wrong layer.
-//! - Email verification on register — workflow varies per app.
 //! - `/token` (issue / list / revoke) — admin surface, separate.
+//!
+//! (Password reset, email verification, change-password, and login throttling
+//! have since landed — see the table above.)
 
 use crate::token::AuthToken;
 use crate::{AuthUser, OptionalIdentity, auth_user};
 use serde::{Deserialize, Serialize};
 use umbral::web::{HeaderMap, IntoResponse, Json, Response, Router, StatusCode, post};
+
+// =========================================================================
+// JsonOrForm — accept EITHER a JSON body (REST) or an
+// `application/x-www-form-urlencoded` body (an HTML <form> POST).
+// =========================================================================
+
+/// A request-body extractor that deserializes `T` from **either** a JSON body
+/// or a URL-encoded form body, chosen by `Content-Type`. JSON is the default
+/// when no `Content-Type` is set, so existing REST clients are unaffected; a
+/// plain HTML `<form method="post">` posting `x-www-form-urlencoded` now works
+/// against the same built-in auth endpoint. On a malformed body it renders the
+/// same `{error, detail}` envelope the handlers use.
+///
+/// Body-consuming, so it must be the LAST argument in a handler (after any
+/// `FromRequestParts` extractors like `HeaderMap` / `OptionalIdentity`).
+pub(crate) struct JsonOrForm<T>(pub T);
+
+impl<T, S> axum::extract::FromRequest<S> for JsonOrForm<T>
+where
+    T: serde::de::DeserializeOwned + Send + 'static,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: axum::extract::Request, _state: &S) -> Result<Self, Response> {
+        let is_form = req
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| {
+                s.to_ascii_lowercase()
+                    .starts_with("application/x-www-form-urlencoded")
+            })
+            .unwrap_or(false);
+        // Cap the buffered body at 1 MiB — credential payloads are tiny; this is
+        // just a DoS guard on an unauthenticated endpoint.
+        let bytes = match axum::body::to_bytes(req.into_body(), 1024 * 1024).await {
+            Ok(b) => b,
+            Err(_) => {
+                return Err(err(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "payload_too_large",
+                    "request body is too large",
+                ));
+            }
+        };
+        let parsed: Result<T, String> = if is_form {
+            serde_urlencoded::from_bytes(&bytes).map_err(|e| e.to_string())
+        } else {
+            serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+        };
+        match parsed {
+            Ok(v) => Ok(JsonOrForm(v)),
+            Err(detail) => Err(err(
+                StatusCode::BAD_REQUEST,
+                "invalid_body",
+                format!("could not parse request body: {detail}"),
+            )),
+        }
+    }
+}
 
 // =========================================================================
 // Wire-shape DTOs. AuthUser carries password_hash; we never want that
@@ -216,7 +282,7 @@ struct ChangePasswordIn {
 /// `400 weak_password` (policy).
 async fn change_password_h(
     OptionalIdentity(id): OptionalIdentity,
-    Json(body): Json<ChangePasswordIn>,
+    JsonOrForm(body): JsonOrForm<ChangePasswordIn>,
 ) -> Response {
     let Some(id) = id else {
         return err(
@@ -590,7 +656,7 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
 /// `username` / `email` — the `UNIQUE` constraints on those
 /// columns (gap #65) raise a sqlx error containing the keyword
 /// "unique", which this branch translates to the 409 status.
-async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response {
+async fn register(headers: HeaderMap, JsonOrForm(body): JsonOrForm<RegisterIn>) -> Response {
     // Throttle BEFORE any DB work — defends mass automated account creation.
     // Keyed per IP (no username yet at register time). 429 once the IP has
     // burned its budget (default 10 / hour).
@@ -682,7 +748,7 @@ async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response 
 /// `umbral_sessions::login_user_id` for the cookie + session table
 /// and then bumps `auth_user.last_login`. No duplicate session
 /// code lives here.
-async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
+async fn login(headers: HeaderMap, JsonOrForm(body): JsonOrForm<LoginIn>) -> Response {
     // Throttle BEFORE touching the DB — defends credential stuffing / brute
     // force. Keyed per IP + username. The SAME 429 is returned regardless of
     // whether the account exists, so this never leaks account existence. The
@@ -831,7 +897,7 @@ async fn me(OptionalIdentity(id): OptionalIdentity) -> Response {
 /// JSON `{email, code}` → 204 on success; 400 (generic, no enumeration) on
 /// any failure (unknown email, no active challenge, wrong code, attempt cap).
 /// Throttled per IP+email (default 5 / hour) to stop online code-guessing.
-async fn verify_email_h(headers: HeaderMap, Json(b): Json<VerifyEmailIn>) -> Response {
+async fn verify_email_h(headers: HeaderMap, JsonOrForm(b): JsonOrForm<VerifyEmailIn>) -> Response {
     let ip = client_ip(&headers);
     if !crate::email_action_throttle_check(&ip, &b.email) {
         return err(
@@ -856,7 +922,10 @@ async fn verify_email_h(headers: HeaderMap, Json(b): Json<VerifyEmailIn>) -> Res
 /// verified users get the same response as an unverified user who gets the
 /// mail). Fires `start_email_verification` best-effort for unverified users.
 /// Throttled per IP+email (default 5 / hour) to stop email-bombing.
-async fn resend_verification_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -> Response {
+async fn resend_verification_h(
+    headers: HeaderMap,
+    JsonOrForm(b): JsonOrForm<EmailOnlyIn>,
+) -> Response {
     let ip = client_ip(&headers);
     if !crate::email_action_throttle_check(&ip, &b.email) {
         return err(
@@ -890,7 +959,7 @@ async fn resend_verification_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -
 /// reset URL base is built from the request's `Host` /
 /// `X-Forwarded-Proto` headers.
 /// Throttled per IP+email (default 5 / hour) to stop email-bombing.
-async fn password_forgot_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -> Response {
+async fn password_forgot_h(headers: HeaderMap, JsonOrForm(b): JsonOrForm<EmailOnlyIn>) -> Response {
     let ip = client_ip(&headers);
     if !crate::email_action_throttle_check(&ip, &b.email) {
         return err(
@@ -908,7 +977,7 @@ async fn password_forgot_h(headers: HeaderMap, Json(b): Json<EmailOnlyIn>) -> Re
 ///
 /// JSON `{token, new_password}` → 204 on success; 400 (generic) on any
 /// failure (unknown / expired / already-used token, weak password).
-async fn password_reset_h(Json(b): Json<ResetIn>) -> Response {
+async fn password_reset_h(JsonOrForm(b): JsonOrForm<ResetIn>) -> Response {
     match crate::reset_password(&b.token, &b.new_password).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => err(
