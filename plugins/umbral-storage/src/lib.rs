@@ -521,14 +521,11 @@ impl StoragePlugin {
         self
     }
 
-    /// Enforce a hard upload-size cap on the media side (replacing the
-    /// [`DEFAULT_MAX_UPLOAD_SIZE`] default). [`Self::save`] rejects bytes
-    /// longer than this; the streaming path enforces it mid-stream.
     /// Restrict uploads to an allow-list of MIME types (gaps3 #51).
     ///
-    /// The size cap stops a 20 MB file. It does **not** stop a 2 MB `.exe`
-    /// renamed to `avatar.png` from landing in an `ImageField` — nothing did,
-    /// before this.
+    /// Orthogonal to the size cap ([`Self::max_size`]): the size cap stops a
+    /// 20 MB file, but does **not** stop a 2 MB `.exe` renamed to `avatar.png`
+    /// from landing in an `ImageField` — nothing did, before this.
     ///
     /// Enforcement sniffs the **bytes**, not the declared `Content-Type`. A
     /// client-declared type is trivially spoofed, so a policy that only reads the
@@ -554,6 +551,9 @@ impl StoragePlugin {
         self.accept(media::IMAGE_TYPES)
     }
 
+    /// Enforce a hard upload-size cap on the media side (replacing the
+    /// [`DEFAULT_MAX_UPLOAD_SIZE`] default). [`Self::save`] rejects bytes
+    /// longer than this; the streaming path enforces it mid-stream.
     pub fn max_size(mut self, bytes: u64) -> Self {
         if let Some(media) = self.media.as_mut() {
             media.max_size = Some(bytes);
