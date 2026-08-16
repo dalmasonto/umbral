@@ -165,7 +165,7 @@ pub(crate) fn require_staff_decision<T: std::str::FromStr>(
     if !id.is_staff {
         return Err(StaffReject::NotStaff);
     }
-    id.user_pk::<T>().map_err(|_| StaffReject::BadPk)
+    id.pk::<T>().map_err(|_| StaffReject::BadPk)
 }
 
 /// Extractor requiring an authenticated STAFF user; yields their primary key

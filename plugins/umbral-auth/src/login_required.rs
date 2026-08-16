@@ -97,8 +97,10 @@ impl LoginRequired {
         self
     }
 
-    /// Build the rejection response.
-    pub(crate) fn rejection_response(&self, uri: &Uri) -> Response {
+    /// Build the rejection response (401 JSON or 302 redirect). Public so
+    /// sibling plugins (umbral-permissions) reuse the one canonical
+    /// unauthenticated-rejection shape instead of a private copy.
+    pub fn rejection_response(&self, uri: &Uri) -> Response {
         match &self.login_url {
             None => {
                 let body = json!({"error": "authentication required"}).to_string();

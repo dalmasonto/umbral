@@ -104,30 +104,23 @@ impl PermissionRequired {
     }
 
     fn unauth_response(&self, uri: &Uri) -> Response {
-        match &self.login_url {
-            None => {
-                let body = json!({"error": "authentication required"}).to_string();
-                axum::http::Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .header("content-type", "application/json")
-                    .header("www-authenticate", "Bearer")
-                    .body(Body::from(body))
-                    .expect("building 401 response cannot fail")
-                    .into_response()
-            }
+        // Delegate to umbral-auth's canonical unauthenticated-rejection shape
+        // (401 JSON `{"error":"authentication required"}` + `WWW-Authenticate:
+        // Bearer`, or a 302 to `login_url?next=<uri>`) instead of a private
+        // copy — so a change to that contract can't drift between the two
+        // plugins. umbral-permissions already depends on umbral-auth.
+        let login_required = match &self.login_url {
+            None => umbral_auth::LoginRequired::API,
             Some(url) => {
-                let location = match &self.next_param {
-                    Some(param) => format!("{url}?{param}={}", urlencoded(&uri.to_string())),
-                    None => url.clone(),
-                };
-                axum::http::Response::builder()
-                    .status(StatusCode::FOUND)
-                    .header("location", location)
-                    .body(Body::empty())
-                    .expect("building 302 response cannot fail")
-                    .into_response()
+                let lr = umbral_auth::LoginRequired::html(url);
+                if self.next_param.is_none() {
+                    lr.no_next()
+                } else {
+                    lr
+                }
             }
-        }
+        };
+        login_required.rejection_response(uri)
     }
 
     fn forbidden_response(&self) -> Response {
@@ -147,22 +140,6 @@ impl PermissionRequired {
             .expect("building 403 response cannot fail")
             .into_response()
     }
-}
-
-fn urlencoded(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '?' => out.push_str("%3F"),
-            '&' => out.push_str("%26"),
-            '=' => out.push_str("%3D"),
-            '+' => out.push_str("%2B"),
-            '%' => out.push_str("%25"),
-            ' ' => out.push_str("%20"),
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 // =========================================================================
