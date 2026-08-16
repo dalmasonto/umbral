@@ -173,47 +173,22 @@ impl SessionStore for DbStore {
     /// syntax for SQLite (`?N`) vs Postgres (`$N`) and the right
     /// JSON upsert shape for each backend.
     async fn save(&self, token: &str, record: &SessionRecord) -> Result<String, SessionError> {
+        use crate::Session;
         let stored_id = hash_token(token);
-        match umbral::db::pool_dispatched() {
-            umbral::db::DbPool::Sqlite(pool) => {
-                sqlx::query(
-                    r#"
-                    INSERT INTO session (id, user_id, data, created_at, expires_at)
-                    VALUES (?1, ?2, ?3, ?4, ?5)
-                    ON CONFLICT(id) DO UPDATE SET
-                        user_id    = excluded.user_id,
-                        data       = excluded.data,
-                        expires_at = excluded.expires_at
-                    "#,
-                )
-                .bind(&stored_id)
-                .bind(&record.user_id)
-                .bind(&record.data)
-                .bind(record.created_at)
-                .bind(record.expires_at)
-                .execute(pool)
-                .await?;
-            }
-            umbral::db::DbPool::Postgres(pool) => {
-                sqlx::query(
-                    r#"
-                    INSERT INTO session (id, user_id, data, created_at, expires_at)
-                    VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT (id) DO UPDATE SET
-                        user_id    = EXCLUDED.user_id,
-                        data       = EXCLUDED.data,
-                        expires_at = EXCLUDED.expires_at
-                    "#,
-                )
-                .bind(&stored_id)
-                .bind(&record.user_id)
-                .bind(&record.data)
-                .bind(record.created_at)
-                .bind(record.expires_at)
-                .execute(pool)
-                .await?;
-            }
-        }
+        // Route through the ORM's `upsert` (conflicts on the PK, updates every
+        // non-PK column, dispatches SQLite/Postgres itself) instead of two
+        // hand-rolled per-backend `INSERT … ON CONFLICT` blocks. CLAUDE.md:
+        // plugins use the ORM, not raw dialect SQL — and a future upsert fix
+        // now reaches the session table like every other write.
+        Session::objects()
+            .upsert(Session {
+                id: stored_id,
+                user_id: record.user_id.clone(),
+                data: record.data.clone(),
+                created_at: record.created_at,
+                expires_at: record.expires_at,
+            })
+            .await?;
         // Return the raw token unchanged; the cookie value doesn't change
         // on a save (unlike a future CookieStore that encodes the record
         // into the cookie value).
