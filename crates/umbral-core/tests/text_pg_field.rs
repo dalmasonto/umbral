@@ -245,6 +245,7 @@ fn inspect_renders_text_pg_types_as_string() {
 
             unique_together: Vec::new(),
             indexes: Vec::new(),
+            m2m: Vec::new(),
         }],
     };
     let out = render_models(&schema);

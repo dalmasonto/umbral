@@ -310,6 +310,7 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
 
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
+                m2m: Vec::new(),
             },
             IntrospectedTable {
                 table: "blog_post".to_string(),
@@ -329,6 +330,7 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
 
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
+                m2m: Vec::new(),
             },
         ],
     };
@@ -517,6 +519,7 @@ async fn render_models_emits_fromrow_and_skips_option_on_primary_keys() {
 
             unique_together: Vec::new(),
             indexes: Vec::new(),
+            m2m: Vec::new(),
         }],
     };
 
@@ -748,6 +751,71 @@ async fn inspectdb_django_strip_rewrites_composite_index_columns() {
     );
 }
 
+/// A Django M2M join table (`communities_community_software`) is folded into an
+/// `M2M<Software>` field on the owner (`Community`), the join table is NOT
+/// emitted as a plain struct, and the initial migration carries the recovered
+/// junction (m2m_relations + CreateM2MTable).
+#[tokio::test]
+async fn inspectdb_django_folds_m2m_join_tables() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("m2m.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE communities_software (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE communities_category (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE communities_community (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        // Django's auto M2M through tables: id PK + two FKs, nothing else.
+        "CREATE TABLE communities_community_software (\
+            id INTEGER PRIMARY KEY, \
+            community_id INTEGER NOT NULL REFERENCES communities_community(id), \
+            software_id INTEGER NOT NULL REFERENCES communities_software(id))",
+        "CREATE TABLE communities_community_categories (\
+            id INTEGER PRIMARY KEY, \
+            community_id INTEGER NOT NULL REFERENCES communities_community(id), \
+            category_id INTEGER NOT NULL REFERENCES communities_category(id))",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Django),
+        with_table_names: true,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // M2M fields on the owner, target structs app-prefix-stripped. The owner's
+    // `INTEGER` PK is `i32`, so the parent-PK generic is spelled out.
+    assert!(
+        m.contains("pub software: M2M<Software, i32>"),
+        "M2M `software` must be folded onto Community with the i32 parent PK; got:\n{m}"
+    );
+    assert!(
+        m.contains("pub categories: M2M<Category, i32>"),
+        "M2M `categories` must be folded onto Community; got:\n{m}"
+    );
+    // The join tables are NOT emitted as plain structs.
+    assert!(
+        !m.contains("struct CommunityCategories") && !m.contains("struct CommunitySoftware"),
+        "M2M join tables must not render as plain models; got:\n{m}"
+    );
+
+    // The migration carries the junction (m2m_relations + CreateM2MTable).
+    let mig =
+        std::fs::read_to_string(out_dir.path().join("migrations/app/0001_initial.json")).unwrap();
+    assert!(
+        mig.contains("CreateM2MTable") && mig.contains("m2m_relations"),
+        "initial migration must carry the recovered M2M junction; got:\n{mig}"
+    );
+}
+
 /// Regression: the generated models must compile against the real `Model`
 /// trait, which surfaced three bugs on a real Django schema — missing serde
 /// derives, a PK not named `id` left unmarked, and a Rust-keyword column name.
@@ -945,6 +1013,7 @@ fn render_geometry_column_emits_subtype_srid_attribute() {
 
             unique_together: Vec::new(),
             indexes: Vec::new(),
+            m2m: Vec::new(),
         }],
     };
     let out = render_models(&schema);

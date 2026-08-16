@@ -52,6 +52,14 @@ Beyond columns and primary keys, `inspectdb` recovers:
 - **Autoincrement primary keys** need no special handling: an integer PK is
   emitted as a plain `pub id: i64`, and the migration engine already lowers that
   to `BIGSERIAL` on Postgres and `INTEGER … AUTOINCREMENT` on SQLite.
+- **Many-to-many** (`--framework django`): a Django join table
+  (`communities_community_software` — a pure junction of two FK columns plus the
+  surrogate PK) is folded into an `M2M<Software>` field on the owner
+  (`Community`), and the join table is **not** emitted as a plain struct —
+  umbral auto-generates its own junction. The owner is the FK target that
+  prefixes the join-table name; the remainder is the field. A non-`i64` owner PK
+  spells out the parent-PK generic (`M2M<Software, i32>`). The recovered
+  junction lands in the initial migration as a `CreateM2MTable`.
 
 These flow into the generated `0001_initial` migration too, so a re-migrate
 rebuilds them — defaults, autoincrement, and the per-backend timestamp default

@@ -95,6 +95,25 @@ pub struct IntrospectedTable {
     /// `#[umbral(indexes = [[...]])]`. Single-column indexes use the column's
     /// `index` flag.
     pub indexes: Vec<Vec<String>>,
+    /// Many-to-many relations this table OWNS — recovered by folding a Django
+    /// join table (`communities_community_software`) into an `M2M<T>` field on
+    /// the owner (`Community.software`). The join table itself is removed from
+    /// the schema; umbral auto-generates its own junction. See
+    /// [`detect_m2m_relations`].
+    pub m2m: Vec<IntrospectedM2M>,
+}
+
+/// One recovered many-to-many relation, folded from a Django join table onto
+/// the owning model as an `M2M<Target>` field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntrospectedM2M {
+    /// The Rust field name (`software`), from the join table's suffix after the
+    /// owner table name.
+    pub field_name: String,
+    /// The target model's SQL table (`software`).
+    pub target_table: String,
+    /// The target model's resolved struct name (`Software`).
+    pub target_name: String,
 }
 
 /// One introspected column.
@@ -315,6 +334,9 @@ pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport, InspectErr
     if opts.framework == Some(Framework::Django) {
         strip_django_fk_id_suffix(&mut schema);
     }
+    // Fold Django M2M join tables into `M2M<T>` fields on their owner (and drop
+    // the join table — umbral auto-generates its own junction).
+    detect_m2m_relations(&mut schema, opts.framework, opts.with_table_names);
 
     let models_src = render_models_with(&schema, opts.framework, opts.with_table_names);
     let migration = render_initial_migration(&schema);
@@ -359,6 +381,7 @@ pub async fn introspect_pool(pool: &SqlitePool) -> Result<IntrospectedSchema, In
             columns,
             unique_together,
             indexes,
+            m2m: Vec::new(),
         });
     }
 
@@ -402,6 +425,7 @@ pub async fn introspect_pool_pg(pool: &PgPool) -> Result<IntrospectedSchema, Ins
             columns,
             unique_together,
             indexes,
+            m2m: Vec::new(),
         });
     }
 
@@ -1055,27 +1079,24 @@ const DJANGO_USER_STRUCT: &str = "AuthUser";
 /// their real `_id` column — umbral's own idiom. `with_table_names` additionally
 /// strips the `<app>_` prefix off **struct names**, preserving the real table
 /// with a `#[umbral(table)]` macro (emitted in [`render_one_struct`]).
-pub fn render_models_with(
+/// Resolve every table to its final Rust struct name, applying the same rules
+/// the model renderer uses: under Django `auth_user` maps to the external
+/// `AuthUser`; with `--with-table-names` the `<app>_` prefix is stripped (with a
+/// collision fallback to the full pascal name). Shared so the model file, the
+/// migration snapshot, and M2M target resolution all agree on names.
+pub(crate) fn resolve_struct_names(
     schema: &IntrospectedSchema,
     framework: Option<Framework>,
     with_table_names: bool,
-) -> String {
+) -> std::collections::HashMap<String, String> {
     let django = framework == Some(Framework::Django);
-
-    // Detect Django "app labels" — the leading `<app>_` segment shared by the
-    // table names — so both FK fields (`app_category_id` -> `category`) and
-    // struct names (`communities_community` -> `Community`) can shed the app
-    // prefix. Only meaningful under a framework; cheap to always compute.
+    // Django "app labels" — the leading `<app>_` segment shared by table names.
     let app_labels: std::collections::HashSet<String> = schema
         .tables
         .iter()
         .filter_map(|t| t.table.split_once('_').map(|(app, _)| app.to_string()))
         .collect();
 
-    // Resolve every table to its struct name. Under Django the app prefix is
-    // stripped; `auth_user` maps to the external `AuthUser`. If two tables strip
-    // to the SAME name, both keep their full (app-prefixed) name so the file
-    // stays unambiguous.
     let mut struct_names: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
     let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -1083,8 +1104,6 @@ pub fn render_models_with(
         let name = if django && t.table == DJANGO_USER_TABLE {
             DJANGO_USER_STRUCT.to_string()
         } else if with_table_names {
-            // `--with-table-names`: strip the app prefix and let the table
-            // macro (emitted in `render_one_struct`) carry the real table.
             django_struct_name(&t.table, &app_labels)
         } else {
             t.name.clone()
@@ -1100,6 +1119,16 @@ pub fn render_models_with(
             struct_names.insert(t.table.clone(), pascal_case_from_table(&t.table));
         }
     }
+    struct_names
+}
+
+pub fn render_models_with(
+    schema: &IntrospectedSchema,
+    framework: Option<Framework>,
+    with_table_names: bool,
+) -> String {
+    let django = framework == Some(Framework::Django);
+    let struct_names = resolve_struct_names(schema, framework, with_table_names);
 
     // Does the schema reference Django's auth_user (own it, or FK at it)? If so,
     // emit the swap-your-user import.
@@ -1315,6 +1344,108 @@ fn strip_django_fk_id_suffix(schema: &mut IntrospectedSchema) {
     }
 }
 
+/// Pick the owner side of a Django M2M join table. Django names the table
+/// `<owner_table>_<field>`, so the owner is the FK target that prefixes the
+/// join-table name and the remainder is the field. Returns
+/// `(owner_table, field_name, target_table)`, or `None` when neither target
+/// prefixes the name (a non-standard through table we can't safely fold).
+fn pick_m2m_owner(join_table: &str, ta: &str, tb: &str) -> Option<(String, String, String)> {
+    let try_owner = |owner: &str, target: &str| -> Option<(String, String, String)> {
+        join_table
+            .strip_prefix(&format!("{owner}_"))
+            .filter(|field| !field.is_empty())
+            .map(|field| (owner.to_string(), field.to_string(), target.to_string()))
+    };
+    match (try_owner(ta, tb), try_owner(tb, ta)) {
+        // Both targets prefix the name (e.g. one is a prefix of the other, or a
+        // self-M2M) — prefer the longer, more specific owner table.
+        (Some(ra), Some(rb)) => Some(if ta.len() >= tb.len() { ra } else { rb }),
+        (Some(r), None) | (None, Some(r)) => Some(r),
+        (None, None) => None,
+    }
+}
+
+/// Fold Django M2M join tables into `M2M<T>` fields on their owner model. A
+/// pure junction — exactly two FK columns, every other column just the
+/// surrogate PK — named `<owner_table>_<field>` becomes `owner.field:
+/// M2M<Target>`, and the join table is dropped from the schema (umbral
+/// auto-generates its own junction from the field). Django-only: without the
+/// naming convention the field name can't be recovered, so other schemas keep
+/// the join table as a plain model. Skips a table whose owner is `auth_user`
+/// (external, not re-declared) or whose stripped field would collide with an
+/// existing column on the owner.
+fn detect_m2m_relations(
+    schema: &mut IntrospectedSchema,
+    framework: Option<Framework>,
+    with_table_names: bool,
+) {
+    if framework != Some(Framework::Django) {
+        return;
+    }
+    let struct_names = resolve_struct_names(schema, framework, with_table_names);
+    let owner_cols: std::collections::HashMap<String, std::collections::HashSet<String>> = schema
+        .tables
+        .iter()
+        .map(|t| {
+            (
+                t.table.clone(),
+                t.columns.iter().map(|c| c.name.clone()).collect(),
+            )
+        })
+        .collect();
+
+    let mut to_remove: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut additions: Vec<(String, IntrospectedM2M)> = Vec::new();
+    for t in &schema.tables {
+        let fk_cols: Vec<&IntrospectedColumn> =
+            t.columns.iter().filter(|c| c.fk_target.is_some()).collect();
+        // A pure junction: exactly two FKs, everything else just the PK.
+        let is_junction = fk_cols.len() == 2
+            && t.columns
+                .iter()
+                .all(|c| c.fk_target.is_some() || c.primary_key);
+        if !is_junction {
+            continue;
+        }
+        let ta = fk_cols[0].fk_target.as_deref().unwrap();
+        let tb = fk_cols[1].fk_target.as_deref().unwrap();
+        let Some((owner_table, field, target_table)) = pick_m2m_owner(&t.table, ta, tb) else {
+            continue;
+        };
+        // Owner `auth_user` isn't re-declared, so we can't hang a field on it.
+        if owner_table == DJANGO_USER_TABLE {
+            continue;
+        }
+        // Don't shadow a real column on the owner.
+        if owner_cols
+            .get(&owner_table)
+            .is_some_and(|cols| cols.contains(&field))
+        {
+            continue;
+        }
+        let target_name = struct_names
+            .get(&target_table)
+            .cloned()
+            .unwrap_or_else(|| pascal_case_from_table(&target_table));
+        additions.push((
+            owner_table,
+            IntrospectedM2M {
+                field_name: field,
+                target_table,
+                target_name,
+            },
+        ));
+        to_remove.insert(t.table.clone());
+    }
+
+    for (owner_table, m2m) in additions {
+        if let Some(owner) = schema.tables.iter_mut().find(|t| t.table == owner_table) {
+            owner.m2m.push(m2m);
+        }
+    }
+    schema.tables.retain(|t| !to_remove.contains(&t.table));
+}
+
 /// (`blog_post` -> `BlogPost` -> derive computes `"blog_post"`), the
 /// attribute is redundant and is left off. For unusual SQL casings
 /// (`POSTS` -> `Posts` -> derive computes `"posts"` not `"POSTS"`),
@@ -1423,6 +1554,26 @@ fn render_one_struct(
             out.push_str(&format!("    #[sqlx(rename = \"{}\")]\n", column.name));
         }
         out.push_str(&format!("    pub {field_name}: {ty},\n"));
+    }
+    // Many-to-many fields recovered from Django join tables. `M2M<T>` has no
+    // column on this table — umbral auto-generates the junction — so they're
+    // emitted after the real columns. `M2M<T, P>`'s parent-PK generic `P`
+    // defaults to `i64`; a non-i64 owner PK (Django's `i32` AutoField, a UUID /
+    // slug PK) must spell it out or the derive's `set_parent_id(id: P)` won't
+    // typecheck.
+    let parent_pk_ty = table
+        .columns
+        .iter()
+        .find(|c| c.primary_key)
+        .map(|c| render_field_type(c.ty, false));
+    for m2m in &table.m2m {
+        let field = safe_field_ident(&m2m.field_name);
+        let target = resolve_target(&m2m.target_table);
+        let ty = match parent_pk_ty.as_deref() {
+            Some(pk) if pk != "i64" => format!("M2M<{target}, {pk}>"),
+            _ => format!("M2M<{target}>"),
+        };
+        out.push_str(&format!("    pub {field}: {ty},\n"));
     }
     out.push_str("}\n");
     out
@@ -1629,7 +1780,16 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             unique_together: Vec::new(),
             indexes: Vec::new(),
             ordering: Vec::new(),
-            m2m_relations: Vec::new(),
+            // Recovered many-to-many relations; drives the junction snapshot.
+            m2m_relations: t
+                .m2m
+                .iter()
+                .map(|r| crate::migrate::M2MRelation {
+                    field_name: r.field_name.clone(),
+                    target_table: r.target_table.clone(),
+                    target_name: r.target_name.clone(),
+                })
+                .collect(),
             soft_delete: false,
             audited: false,
             // inspectdb introspects TABLES; a view it finds becomes a plain model
@@ -1642,7 +1802,7 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let operations = schema
+    let mut operations: Vec<Operation> = schema
         .tables
         .iter()
         .map(|t| Operation::CreateTable {
@@ -1652,6 +1812,34 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             indexes: t.indexes.clone(),
         })
         .collect();
+
+    // Emit a junction table per recovered M2M relation (the join table it came
+    // from was dropped from the schema). `<parent_table>_<field>` is umbral's
+    // junction naming, matching what `M2M<T>` autogenerates on a re-migrate.
+    let pk_of = |table_name: &str| -> (String, SqlType) {
+        schema
+            .tables
+            .iter()
+            .find(|t| t.table == table_name)
+            .and_then(|t| t.columns.iter().find(|c| c.primary_key))
+            .map(|c| (c.name.clone(), c.ty))
+            .unwrap_or_else(|| ("id".to_string(), SqlType::BigInt))
+    };
+    for t in &schema.tables {
+        for m2m in &t.m2m {
+            let (parent_col, parent_ty) = pk_of(&t.table);
+            let (child_col, child_ty) = pk_of(&m2m.target_table);
+            operations.push(Operation::CreateM2MTable {
+                junction_table: format!("{}_{}", t.table, m2m.field_name),
+                parent_table: t.table.clone(),
+                parent_col,
+                child_table: m2m.target_table.clone(),
+                child_col,
+                parent_ty,
+                child_ty,
+            });
+        }
+    }
 
     MigrationFile {
         id: INITIAL_MIGRATION_ID.to_string(),
@@ -1810,6 +1998,7 @@ mod tests {
 
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
+                m2m: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1834,6 +2023,7 @@ mod tests {
                 columns: vec![col("id", SqlType::BigInt, true, false)],
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
+                m2m: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1855,6 +2045,7 @@ mod tests {
                 columns: vec![col("id", SqlType::BigInt, true, false)],
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
+                m2m: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1874,6 +2065,7 @@ mod tests {
 
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
+                m2m: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1902,6 +2094,7 @@ mod tests {
 
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
+                m2m: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1932,6 +2125,7 @@ mod tests {
                     columns: vec![col("id", SqlType::BigInt, true, false)],
                     unique_together: Vec::new(),
                     indexes: Vec::new(),
+                    m2m: Vec::new(),
                 },
                 IntrospectedTable {
                     table: "antelope".to_string(),
@@ -1939,6 +2133,7 @@ mod tests {
                     columns: vec![col("id", SqlType::BigInt, true, false)],
                     unique_together: Vec::new(),
                     indexes: Vec::new(),
+                    m2m: Vec::new(),
                 },
             ],
         };

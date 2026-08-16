@@ -316,6 +316,7 @@ fn inspect_maps_postgres_network_types() {
 
             unique_together: Vec::new(),
             indexes: Vec::new(),
+            m2m: Vec::new(),
         }],
     };
     let out = render_models(&schema);
