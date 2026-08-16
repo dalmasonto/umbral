@@ -20,6 +20,8 @@
 //! | `__icontains`  | `UPPER(col) LIKE UPPER(%v%)` | strings     |
 //! | `__startswith` | `LIKE v%`       | strings                       |
 //! | `__isnull`     | `IS NULL` / `IS NOT NULL` | nullable columns |
+//! | `__dwithin`    | `ST_DWithin(col, pt, m)`  | geometry/geography (`lon,lat,meters`) |
+//! | `__bbox`       | `col && ST_MakeEnvelope`  | geometry/geography (`minx,miny,maxx,maxy`) |
 //!
 //! ## Why a `sea_query::Condition` and not raw SQL?
 //!
@@ -339,6 +341,9 @@ fn split_key(key: &str) -> (&str, &str) {
         "icontains",
         "startswith",
         "isnull",
+        // Spatial lookups for PostGIS geometry/geography columns.
+        "dwithin",
+        "bbox",
     ];
 
     let mut last = key.len();
@@ -354,6 +359,84 @@ fn split_key(key: &str) -> (&str, &str) {
 
 fn is_range_lookup(lookup: &str) -> bool {
     matches!(lookup, "gte" | "lte" | "gt" | "lt")
+}
+
+/// The PostGIS spatial lookups. `dwithin` = "within N metres of a point";
+/// `bbox` = "bounding box overlaps" (the GiST-accelerated `&&` operator).
+fn is_spatial_lookup(lookup: &str) -> bool {
+    matches!(lookup, "dwithin" | "bbox")
+}
+
+fn is_spatial_type(ty: SqlType) -> bool {
+    matches!(ty, SqlType::Geometry(_) | SqlType::Geography(_))
+}
+
+/// The SRID declared for a spatial column, for building an input geometry that
+/// matches it. Defaults to 4326 (WGS84) for a non-spatial column (unreachable).
+fn spatial_srid(ty: SqlType) -> i32 {
+    match ty {
+        SqlType::Geometry(s) | SqlType::Geography(s) => s.srid,
+        _ => 4326,
+    }
+}
+
+/// Parse a comma-separated list of exactly `n` floats from a spatial filter
+/// value (`dwithin=lon,lat,meters`, `bbox=minx,miny,maxx,maxy`).
+fn parse_f64_csv(value: &str, n: usize, lookup: &str, shape: &str) -> Result<Vec<f64>, ApiError> {
+    let parts: Vec<&str> = value.split(',').collect();
+    if parts.len() != n {
+        return Err(ApiError::BadInput(format!(
+            "`{lookup}` expects {n} comma-separated numbers ({shape}); got `{value}`"
+        )));
+    }
+    parts
+        .iter()
+        .map(|p| {
+            p.trim().parse::<f64>().map_err(|_| {
+                ApiError::BadInput(format!("`{lookup}`: `{p}` is not a number ({shape})"))
+            })
+        })
+        .collect()
+}
+
+/// `<geom>__dwithin=<lon>,<lat>,<meters>` → `ST_DWithin(col::geography, point,
+/// meters)`. The geography cast makes `meters` mean metres on both `geometry`
+/// and `geography` columns — the useful web-filter semantics.
+fn build_dwithin(col: &Column, value: &str) -> Result<SimpleExpr, ApiError> {
+    let p = parse_f64_csv(value, 3, "dwithin", "lon,lat,meters")?;
+    let srid = spatial_srid(col.ty);
+    let sql = format!(
+        "ST_DWithin(\"{}\"::geography, ST_SetSRID(ST_MakePoint($1, $2), {srid})::geography, $3)",
+        col.name.replace('"', "\"\"")
+    );
+    Ok(Expr::cust_with_values(
+        sql,
+        [
+            sea_query::Value::from(p[0]),
+            sea_query::Value::from(p[1]),
+            sea_query::Value::from(p[2]),
+        ],
+    ))
+}
+
+/// `<geom>__bbox=<minx>,<miny>,<maxx>,<maxy>` → `col && ST_MakeEnvelope(...)`,
+/// the index-accelerated bounding-box overlap.
+fn build_bbox(col: &Column, value: &str) -> Result<SimpleExpr, ApiError> {
+    let p = parse_f64_csv(value, 4, "bbox", "minx,miny,maxx,maxy")?;
+    let srid = spatial_srid(col.ty);
+    let sql = format!(
+        "\"{}\" && ST_MakeEnvelope($1, $2, $3, $4, {srid})",
+        col.name.replace('"', "\"\"")
+    );
+    Ok(Expr::cust_with_values(
+        sql,
+        [
+            sea_query::Value::from(p[0]),
+            sea_query::Value::from(p[1]),
+            sea_query::Value::from(p[2]),
+            sea_query::Value::from(p[3]),
+        ],
+    ))
 }
 
 fn is_string_lookup(lookup: &str) -> bool {
@@ -427,6 +510,22 @@ fn validate_lookup(lookup: &str, col: &Column) -> Result<(), ApiError> {
     if lookup == "isnull" && !col.nullable {
         return Err(ApiError::BadInput(format!(
             "`isnull` is not available for field `{}` because the column is NOT NULL",
+            col.name
+        )));
+    }
+    // Spatial lookups apply only to geometry/geography columns, and those
+    // columns accept ONLY the spatial lookups (plus `isnull`) — a plain
+    // `eq`/`gt`/… on a geometry is meaningless and would 400 in `coerce_value`
+    // anyway, but this gives a clearer message.
+    if is_spatial_lookup(lookup) && !is_spatial_type(col.ty) {
+        return Err(ApiError::BadInput(format!(
+            "`{lookup}` is a spatial lookup; field `{}` is not a geometry/geography column",
+            col.name
+        )));
+    }
+    if is_spatial_type(col.ty) && !is_spatial_lookup(lookup) && lookup != "isnull" {
+        return Err(ApiError::BadInput(format!(
+            "field `{}` is a spatial column; it supports only `dwithin`, `bbox`, and `isnull`",
             col.name
         )));
     }
@@ -510,6 +609,8 @@ fn build_predicate(col: &Column, lookup: &str, value: &str) -> Result<SimpleExpr
             }
         }
         "in" => build_in_predicate(col, value),
+        "dwithin" => build_dwithin(col, value),
+        "bbox" => build_bbox(col, value),
         // The contains/icontains/startswith lookups treat `value` as a
         // literal substring, so LIKE wildcards (`%`, `_`) in it must be
         // escaped — otherwise `?name__contains=100%` over-matches (ORM-1).
@@ -945,5 +1046,76 @@ mod choice_validation {
         // raw CSV doesn't map cleanly to a per-value check, so we
         // skip the validator and trust the user knows the CSV shape.
         assert!(validate_choices(&col, "eq", "draft,published").is_ok());
+    }
+
+    // --- spatial filters -------------------------------------------------
+
+    /// A column of the given name/type, reusing `status_col`'s defaults.
+    fn typed_col(name: &str, ty: SqlType) -> Column {
+        let mut c = status_col();
+        c.name = name.into();
+        c.ty = ty;
+        c.choices = Vec::new();
+        c
+    }
+
+    fn geom_col() -> Column {
+        typed_col(
+            "location",
+            SqlType::Geometry(umbral::orm::GeometrySpec {
+                kind: umbral::orm::GeometryKind::Point,
+                srid: 4326,
+            }),
+        )
+    }
+
+    fn render(pred: SimpleExpr) -> String {
+        use sea_query::{PostgresQueryBuilder, Query};
+        let (sql, _) = Query::select()
+            .expr(sea_query::Expr::val(1))
+            .and_where(pred)
+            .build(PostgresQueryBuilder);
+        sql
+    }
+
+    #[test]
+    fn dwithin_builds_st_dwithin_with_srid_and_geography_cast() {
+        let pred = build_predicate(&geom_col(), "dwithin", "36.8172,-1.2864,5000").unwrap();
+        let sql = render(pred);
+        assert!(sql.contains("ST_DWithin"), "got: {sql}");
+        assert!(
+            sql.contains("ST_SetSRID"),
+            "must stamp the SRID; got: {sql}"
+        );
+        assert!(sql.contains("4326"), "must use the column SRID; got: {sql}");
+        assert!(sql.contains("::geography"), "metres semantics; got: {sql}");
+    }
+
+    #[test]
+    fn bbox_builds_make_envelope_overlap() {
+        let pred = build_predicate(&geom_col(), "bbox", "36.6,-1.5,37.1,-1.1").unwrap();
+        let sql = render(pred);
+        assert!(sql.contains("ST_MakeEnvelope"), "got: {sql}");
+        assert!(
+            sql.contains("&&"),
+            "bbox uses the overlap operator; got: {sql}"
+        );
+    }
+
+    #[test]
+    fn spatial_lookups_reject_wrong_arity_and_non_numbers() {
+        assert!(build_predicate(&geom_col(), "dwithin", "36.8,-1.3").is_err());
+        assert!(build_predicate(&geom_col(), "bbox", "a,b,c,d").is_err());
+    }
+
+    #[test]
+    fn validate_lookup_gates_spatial_vs_scalar() {
+        // A spatial lookup on a non-geometry column is rejected.
+        assert!(validate_lookup("dwithin", &typed_col("age", SqlType::Integer)).is_err());
+        // A scalar lookup on a geometry column is rejected (only spatial/isnull).
+        assert!(validate_lookup("eq", &geom_col()).is_err());
+        // The spatial lookups themselves are accepted on a geometry column.
+        assert!(validate_lookup("dwithin", &geom_col()).is_ok());
+        assert!(validate_lookup("bbox", &geom_col()).is_ok());
     }
 }

@@ -81,6 +81,17 @@ let inside = Facility::objects()
 
 Available predicates: `dwithin(other, distance)`, `intersects(other)`, `contains(other)`, `within(other)`, and `bbox_overlaps(other)` (the index-accelerated `&&` bounding-box pre-filter), plus `is_null` / `is_not_null` and ordering.
 
+## Spatial filters over REST
+
+umbral-rest exposes a spatial filter family on geometry columns, so a web client filters without writing SQL:
+
+```
+GET /facilities/?location__dwithin=36.8172,-1.2864,5000   # within 5 km (metres) of a point
+GET /facilities/?location__bbox=36.6,-1.5,37.1,-1.1        # bounding-box overlap (minx,miny,maxx,maxy)
+```
+
+`dwithin` casts to `geography` so the distance is always metres; `bbox` compiles to the GiST-accelerated `&&` operator. A geometry column accepts only these spatial lookups (and `isnull`); a scalar lookup on it returns a clear 400.
+
 ## Design & scope
 
 See the design note [`docs/decisions/2026-08-08-postgis-and-content-types.md`](https://github.com/dalmasonto/umbral) for the full rationale — how spatial types reuse the existing `SqlType` / backend-gating / migration seams rather than bolting on a parallel system. Deferred for v1: raster, 3D/4D coordinates, topology, in-ORM `ST_Transform`, distance-as-annotation, and the interactive admin map picker.
