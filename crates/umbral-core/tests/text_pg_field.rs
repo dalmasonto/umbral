@@ -230,6 +230,9 @@ fn inspect_renders_text_pg_types_as_string() {
                     index: false,
                 },
             ],
+
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
         }],
     };
     let out = render_models(&schema);

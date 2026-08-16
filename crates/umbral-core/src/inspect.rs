@@ -87,6 +87,14 @@ pub struct IntrospectedTable {
     pub name: String,
     /// One descriptor per column, in declaration order.
     pub columns: Vec<IntrospectedColumn>,
+    /// Multi-column UNIQUE constraints / unique indexes, each a column-name
+    /// group. Rendered as `#[umbral(unique_together = [[...]])]`. Single-column
+    /// uniques live on the column's `unique` flag instead.
+    pub unique_together: Vec<Vec<String>>,
+    /// Multi-column (non-unique) indexes, each a column-name group. Rendered as
+    /// `#[umbral(indexes = [[...]])]`. Single-column indexes use the column's
+    /// `index` flag.
+    pub indexes: Vec<Vec<String>>,
 }
 
 /// One introspected column.
@@ -308,10 +316,13 @@ pub async fn introspect_pool(pool: &SqlitePool) -> Result<IntrospectedSchema, In
     for row in table_rows {
         let table: String = row.try_get("name")?;
         let columns = introspect_columns(pool, &table).await?;
+        let (unique_together, indexes) = sqlite_composite_indexes(pool, &table).await?;
         tables.push(IntrospectedTable {
             name: pascal_case_from_table(&table),
             table,
             columns,
+            unique_together,
+            indexes,
         });
     }
 
@@ -348,10 +359,13 @@ pub async fn introspect_pool_pg(pool: &PgPool) -> Result<IntrospectedSchema, Ins
     let mut tables: Vec<IntrospectedTable> = Vec::with_capacity(table_rows.len());
     for (table,) in table_rows {
         let columns = introspect_columns_pg(pool, &table).await?;
+        let (unique_together, indexes) = pg_composite_indexes(pool, &table).await;
         tables.push(IntrospectedTable {
             name: pascal_case_from_table(&table),
             table,
             columns,
+            unique_together,
+            indexes,
         });
     }
 
@@ -545,6 +559,47 @@ async fn introspect_columns_pg(
 /// `umbral::orm::ArrayElement` — chrono types, JSON, network types,
 /// and Postgres-specific types like NUMERIC fall outside Phase 4.1's
 /// array catalogue.
+/// Return `(unique_together, indexes)` — the MULTI-column index groups for a
+/// Postgres table, columns in index order. A composite unique index →
+/// `unique_together`; a composite plain index → `indexes`. Primary-key and
+/// single-column indexes are excluded (the latter ride the per-column flags).
+/// Expression indexes (a column position isn't a plain attribute) are skipped.
+async fn pg_composite_indexes(pool: &PgPool, table: &str) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+    // `indkey` is an int2vector of attribute numbers in index order; unnest it
+    // WITH ORDINALITY to preserve that order, then resolve each to its column
+    // name. `a.attnum > 0` drops system/expression positions.
+    let rows: Vec<(bool, Vec<String>)> = sqlx::query_as(
+        "SELECT ix.indisunique, array_agg(a.attname ORDER BY k.ord) AS cols \
+         FROM pg_index ix \
+         JOIN pg_class t ON t.oid = ix.indrelid \
+         JOIN pg_namespace n ON n.oid = t.relnamespace \
+         JOIN unnest(string_to_array(ix.indkey::text, ' ')::smallint[]) \
+              WITH ORDINALITY AS k(attnum, ord) ON true \
+         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum AND a.attnum > 0 \
+         WHERE n.nspname = 'public' AND t.relname = $1 \
+           AND ix.indnatts > 1 AND NOT ix.indisprimary \
+         GROUP BY ix.indexrelid, ix.indisunique",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let mut uniques = Vec::new();
+    let mut plains = Vec::new();
+    for (is_unique, cols) in rows {
+        if cols.len() < 2 {
+            continue; // a partial/expression index — can't model it
+        }
+        if is_unique {
+            uniques.push(cols);
+        } else {
+            plains.push(cols);
+        }
+    }
+    (uniques, plains)
+}
+
 /// Read PostGIS's `geometry_columns` / `geography_columns` catalog views for
 /// one table, mapping each spatial column to its exact `SqlType::Geometry` /
 /// `Geography` with recovered subtype + SRID. Returns an empty map when the
@@ -810,6 +865,54 @@ async fn sqlite_indexed_columns(
     Ok((unique, plain))
 }
 
+/// Return `(unique_together, indexes)` — the MULTI-column index groups for
+/// `table`. A composite unique index / UNIQUE constraint → `unique_together`; a
+/// composite plain index → `indexes`. The PK's auto-index (`origin = 'pk'`) is
+/// skipped (umbral has no composite PK), and single-column indexes are left to
+/// [`sqlite_indexed_columns`]'s per-column flags.
+async fn sqlite_composite_indexes(
+    pool: &SqlitePool,
+    table: &str,
+) -> Result<(Vec<Vec<String>>, Vec<Vec<String>>), InspectError> {
+    let quoted = table.replace('"', "\"\"");
+    let mut uniques: Vec<Vec<String>> = Vec::new();
+    let mut plains: Vec<Vec<String>> = Vec::new();
+    let index_rows = sqlx::query(&format!("PRAGMA index_list(\"{quoted}\")"))
+        .fetch_all(pool)
+        .await?;
+    for idx in index_rows {
+        let index_name: String = idx.try_get("name")?;
+        let is_unique: i64 = idx.try_get("unique")?;
+        // `origin`: 'c' explicit CREATE INDEX, 'u' UNIQUE constraint, 'pk' the
+        // primary-key auto-index (skip — not a user index).
+        let origin: String = idx.try_get("origin").unwrap_or_default();
+        if origin == "pk" {
+            continue;
+        }
+        let cols_rows = sqlx::query(&format!(
+            "PRAGMA index_info(\"{}\")",
+            index_name.replace('"', "\"\"")
+        ))
+        .fetch_all(pool)
+        .await?;
+        if cols_rows.len() < 2 {
+            continue; // single-column → handled per-column
+        }
+        let mut cols: Vec<(i64, String)> = Vec::new();
+        for c in &cols_rows {
+            cols.push((c.try_get("seqno")?, c.try_get("name")?));
+        }
+        cols.sort_by_key(|(seq, _)| *seq);
+        let group: Vec<String> = cols.into_iter().map(|(_, n)| n).collect();
+        if is_unique != 0 {
+            uniques.push(group);
+        } else {
+            plains.push(group);
+        }
+    }
+    Ok((uniques, plains))
+}
+
 /// Map a raw SQLite type string to the M6 v1 [`SqlType`] catalogue.
 /// Case-insensitive; trailing `(n)` or `(p,s)` width parameters are
 /// stripped before matching so `VARCHAR(255)` and `NUMERIC(10,2)` come
@@ -963,12 +1066,7 @@ pub fn render_models_with(schema: &IntrospectedSchema, framework: Option<Framewo
             continue;
         }
         out.push('\n');
-        out.push_str(&render_one_struct(
-            table,
-            framework,
-            &app_labels,
-            &struct_names,
-        ));
+        out.push_str(&render_one_struct(table, &struct_names));
     }
     out
 }
@@ -996,36 +1094,6 @@ const AUTH_USER_IMPORT: &str = "\
 use umbral_auth::AuthUser;
 ";
 
-/// The Rust field name for a foreign-key column under a framework convention.
-/// Returns `None` when the raw column name should be kept (no framework, or the
-/// convention doesn't apply), so the caller knows whether a `#[sqlx(rename)]`
-/// is needed.
-fn framework_fk_field_name(
-    column: &str,
-    framework: Option<Framework>,
-    app_labels: &std::collections::HashSet<String>,
-) -> Option<String> {
-    match framework {
-        Some(Framework::Django) => {
-            // Django FK columns are `<field>_id`.
-            let stripped = column.strip_suffix("_id")?;
-            if stripped.is_empty() {
-                return None;
-            }
-            // Optionally shed a leading `<app>_` when that segment is a known
-            // app label AND something meaningful remains (`app_category` ->
-            // `category`, but `user` stays `user`).
-            if let Some((head, rest)) = stripped.split_once('_') {
-                if app_labels.contains(head) && !rest.is_empty() {
-                    return Some(rest.to_string());
-                }
-            }
-            Some(stripped.to_string())
-        }
-        None => None,
-    }
-}
-
 /// Two-line module doc plus the single facade import every generated
 /// file needs. Kept as a constant so the empty-schema path emits
 /// exactly the header and nothing else.
@@ -1049,8 +1117,6 @@ use umbral::prelude::*;
 /// attribute parser.
 fn render_one_struct(
     table: &IntrospectedTable,
-    framework: Option<Framework>,
-    app_labels: &std::collections::HashSet<String>,
     struct_names: &std::collections::HashMap<String, String>,
 ) -> String {
     // The resolved struct name for this table (app-prefix-stripped under Django,
@@ -1079,6 +1145,14 @@ fn render_one_struct(
     if to_snake_case(&this_struct) != table.table {
         out.push_str(&format!("#[umbral(table = \"{}\")]\n", table.table));
     }
+    // Struct-level composite index attributes: multi-column UNIQUE constraints
+    // and multi-column indexes recovered from the schema.
+    if let Some(attr) = composite_groups_attr("unique_together", &table.unique_together) {
+        out.push_str(&attr);
+    }
+    if let Some(attr) = composite_groups_attr("indexes", &table.indexes) {
+        out.push_str(&attr);
+    }
     out.push_str(&format!("pub struct {this_struct} {{\n"));
     for column in &table.columns {
         // Per-column attributes recovered from the schema: single-column
@@ -1101,8 +1175,11 @@ fn render_one_struct(
         if let Some(attr) = geometry_attr(column.ty) {
             out.push_str(&format!("    {attr}\n"));
         }
-        // The desired Rust field name: a framework may prettify a FK column
-        // (`author_id` -> `author`); otherwise it's the column name.
+        // A FK field keeps its REAL column name (`author_id`), not a prettified
+        // `author`: umbral uses the field name as the column name, so this
+        // avoids a `#[sqlx(rename)]` on every foreign key and keeps the index /
+        // field reading clearly against the actual column. Only the target
+        // STRUCT name is app-prefix-stripped (`ForeignKey<Author>`).
         let (desired, ty) = match &column.fk_target {
             Some(target) => {
                 let target_struct = resolve_target(target);
@@ -1111,9 +1188,7 @@ fn render_one_struct(
                 } else {
                     format!("ForeignKey<{target_struct}>")
                 };
-                let name = framework_fk_field_name(&column.name, framework, app_labels)
-                    .unwrap_or_else(|| column.name.clone());
-                (name, ty)
+                (column.name.clone(), ty)
             }
             None => (
                 column.name.clone(),
@@ -1187,6 +1262,28 @@ fn is_rust_keyword(s: &str) -> bool {
             | "virtual"
             | "yield"
     )
+}
+
+/// Render a `#[umbral(<name> = [["a","b"], ["c"]])]` struct-level attribute from
+/// a list of column-name groups, or `None` when there are no groups. Used for
+/// `unique_together` and `indexes`.
+fn composite_groups_attr(name: &str, groups: &[Vec<String>]) -> Option<String> {
+    if groups.is_empty() {
+        return None;
+    }
+    let rendered = groups
+        .iter()
+        .map(|g| {
+            let cols = g
+                .iter()
+                .map(|c| format!("\"{c}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{cols}]")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!("#[umbral({name} = [{rendered}])]\n"))
 }
 
 /// The `#[umbral(geometry|geography = "<kind>", srid = N)]` attribute for a
@@ -1332,8 +1429,8 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
         .map(|t| Operation::CreateTable {
             table: t.table.clone(),
             columns: t.columns.iter().map(Column::from).collect(),
-            unique_together: Vec::new(),
-            indexes: Vec::new(),
+            unique_together: t.unique_together.clone(),
+            indexes: t.indexes.clone(),
         })
         .collect();
 
@@ -1484,6 +1581,9 @@ mod tests {
                     col("id", SqlType::BigInt, true, false),
                     col("title", SqlType::Text, false, false),
                 ],
+
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1506,6 +1606,8 @@ mod tests {
                 table: "post".to_string(),
                 name: "Post".to_string(),
                 columns: vec![col("id", SqlType::BigInt, true, false)],
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1525,6 +1627,8 @@ mod tests {
                 table: "POSTS".to_string(),
                 name: "Posts".to_string(),
                 columns: vec![col("id", SqlType::BigInt, true, false)],
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1541,6 +1645,9 @@ mod tests {
                     col("id", SqlType::BigInt, true, false),
                     col("published_at", SqlType::Timestamptz, false, true),
                 ],
+
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1566,6 +1673,9 @@ mod tests {
                     col("at", SqlType::Timestamptz, false, false),
                     col("uid", SqlType::Uuid, false, false),
                 ],
+
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
             }],
         };
         let out = render_models(&schema);
@@ -1594,11 +1704,15 @@ mod tests {
                     table: "zebra".to_string(),
                     name: "Zebra".to_string(),
                     columns: vec![col("id", SqlType::BigInt, true, false)],
+                    unique_together: Vec::new(),
+                    indexes: Vec::new(),
                 },
                 IntrospectedTable {
                     table: "antelope".to_string(),
                     name: "Antelope".to_string(),
                     columns: vec![col("id", SqlType::BigInt, true, false)],
+                    unique_together: Vec::new(),
+                    indexes: Vec::new(),
                 },
             ],
         };

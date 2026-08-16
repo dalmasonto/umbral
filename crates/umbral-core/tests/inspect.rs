@@ -304,6 +304,9 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
                     unique: false,
                     index: false,
                 }],
+
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
             },
             IntrospectedTable {
                 table: "blog_post".to_string(),
@@ -317,6 +320,9 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
                     unique: false,
                     index: false,
                 }],
+
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
             },
         ],
     };
@@ -494,6 +500,9 @@ async fn render_models_emits_fromrow_and_skips_option_on_primary_keys() {
                     index: false,
                 },
             ],
+
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
         }],
     };
 
@@ -622,9 +631,11 @@ async fn inspectdb_recovers_foreign_keys_and_indexes() {
 
 /// `inspectdb --framework django` prettifies FK columns: `author_id` becomes a
 /// clean `author` field bound to the real column via `#[sqlx(rename)]`, and a
-/// leading app-label prefix is shed (`blog_category_id` -> `category`).
+/// FK fields keep their REAL column name (no `#[sqlx(rename)]`) — umbral uses
+/// the field name as the column name, so the index/field reads against the
+/// actual column. Only the FK *target struct* is app-prefix-stripped.
 #[tokio::test]
-async fn inspectdb_django_framework_prettifies_fk_columns() {
+async fn inspectdb_django_fk_keeps_real_column_name_target_stripped() {
     use umbral::inspect::Framework;
     boot().await;
     let src_dir = TempDir::new().expect("temp dir");
@@ -653,17 +664,21 @@ async fn inspectdb_django_framework_prettifies_fk_columns() {
     inspectdb(opts).await.expect("inspectdb --framework django");
     let models = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
 
-    // `author_id` -> pretty `author` + a rename to the real column.
+    // FK field keeps its real column name `author_id`; the TARGET struct is
+    // app-prefix-stripped (blog_author -> Author). No rename.
     assert!(
-        models.contains("#[sqlx(rename = \"author_id\")]")
-            && models.contains("pub author: ForeignKey<Author>"),
-        "django FK `author_id` must become `author` -> ForeignKey<Author> (app prefix stripped from the target struct too); got:\n{models}"
+        models.contains("pub author_id: ForeignKey<Author>"),
+        "FK field must keep the real column name -> ForeignKey<Author>; got:\n{models}"
     );
-    // `blog_category_id` sheds the `blog_` app prefix AND the `_id` -> `category`.
     assert!(
-        models.contains("#[sqlx(rename = \"blog_category_id\")]")
-            && models.contains("pub category: Option<ForeignKey<Category>>"),
-        "django FK `blog_category_id` must become `category` -> ForeignKey<Category>; got:\n{models}"
+        models.contains("pub blog_category_id: Option<ForeignKey<Category>>"),
+        "FK field `blog_category_id` keeps its name -> ForeignKey<Category>; got:\n{models}"
+    );
+    // No sqlx rename on foreign keys.
+    assert!(
+        !models.contains("#[sqlx(rename = \"author_id\")]")
+            && !models.contains("#[sqlx(rename = \"blog_category_id\")]"),
+        "foreign keys must NOT carry #[sqlx(rename)]; got:\n{models}"
     );
 }
 
@@ -806,6 +821,9 @@ fn render_geometry_column_emits_subtype_srid_attribute() {
                     index: false,
                 },
             ],
+
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
         }],
     };
     let out = render_models(&schema);
@@ -816,5 +834,44 @@ fn render_geometry_column_emits_subtype_srid_attribute() {
     assert!(
         out.contains("pub location: umbral::orm::gis::Geometry"),
         "geometry column renders as the gis::Geometry newtype; got:\n{out}"
+    );
+}
+
+/// inspectdb recovers MULTI-column indexes: a composite UNIQUE index becomes a
+/// struct-level `#[umbral(unique_together = [[...]])]` and a composite plain
+/// index `#[umbral(indexes = [[...]])]` (single-column ones stay per-field).
+#[tokio::test]
+async fn inspectdb_recovers_composite_indexes() {
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("compound.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE membership (id INTEGER PRIMARY KEY, org_id INTEGER, user_id INTEGER, role TEXT, joined TEXT)",
+        // composite UNIQUE (one user per org) and a composite plain index.
+        "CREATE UNIQUE INDEX membership_org_user ON membership(org_id, user_id)",
+        "CREATE INDEX membership_role_joined ON membership(role, joined)",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: None,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    assert!(
+        m.contains(r#"#[umbral(unique_together = [["org_id", "user_id"]])]"#),
+        "composite unique index must render unique_together; got:\n{m}"
+    );
+    assert!(
+        m.contains(r#"#[umbral(indexes = [["role", "joined"]])]"#),
+        "composite plain index must render indexes; got:\n{m}"
     );
 }
