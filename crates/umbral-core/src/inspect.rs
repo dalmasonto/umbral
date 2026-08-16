@@ -96,6 +96,15 @@ pub struct IntrospectedColumn {
     pub ty: SqlType,
     pub primary_key: bool,
     pub nullable: bool,
+    /// The referenced table when this column is a foreign key, else `None`.
+    /// Drives rendering the field as `ForeignKey<Target>` rather than a bare
+    /// integer, and populates `Column::fk_target` in the initial migration.
+    pub fk_target: Option<String>,
+    /// A single-column UNIQUE constraint / unique index covers this column.
+    pub unique: bool,
+    /// A single-column (non-unique) index covers this column — rendered as
+    /// `#[umbral(index)]`.
+    pub index: bool,
 }
 
 /// Errors `inspectdb` can produce. Carries enough detail for the CLI
@@ -374,6 +383,53 @@ async fn introspect_columns_pg(
     .fetch_all(pool)
     .await?;
 
+    // Foreign keys: information_schema referential integrity views map a FK
+    // column to its referenced table. One row per FK column.
+    let fk_rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT kcu.column_name, ccu.table_name AS foreign_table \
+         FROM information_schema.table_constraints tc \
+         JOIN information_schema.key_column_usage kcu \
+           ON tc.constraint_name = kcu.constraint_name \
+          AND tc.table_schema = kcu.table_schema \
+         JOIN information_schema.constraint_column_usage ccu \
+           ON ccu.constraint_name = tc.constraint_name \
+          AND ccu.table_schema = tc.table_schema \
+         WHERE tc.constraint_type = 'FOREIGN KEY' \
+           AND tc.table_schema = 'public' \
+           AND tc.table_name = $1",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await?;
+    let fk_map: std::collections::HashMap<String, String> = fk_rows.into_iter().collect();
+
+    // Single-column unique / index coverage from pg_index. `indisunique` marks
+    // a unique index; `indisprimary` PK indexes are excluded (the column is
+    // already the PK). Only single-column (`array_length(indkey) = 1`) indexes
+    // map to a per-column flag.
+    let idx_rows: Vec<(String, bool)> = sqlx::query_as(
+        "SELECT a.attname, ix.indisunique \
+         FROM pg_index ix \
+         JOIN pg_class t ON t.oid = ix.indrelid \
+         JOIN pg_namespace n ON n.oid = t.relnamespace \
+         JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ix.indkey[0] \
+         WHERE n.nspname = 'public' AND t.relname = $1 \
+           AND ix.indnatts = 1 AND NOT ix.indisprimary",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    let mut unique_cols = std::collections::HashSet::new();
+    let mut index_cols = std::collections::HashSet::new();
+    for (col, is_unique) in idx_rows {
+        if is_unique {
+            unique_cols.insert(col);
+        } else {
+            index_cols.insert(col);
+        }
+    }
+
     let mut columns: Vec<IntrospectedColumn> = Vec::with_capacity(column_rows.len());
     for (name, data_type, is_nullable, udt_name) in column_rows {
         let ty = if data_type.eq_ignore_ascii_case("ARRAY") {
@@ -394,6 +450,14 @@ async fn introspect_columns_pg(
                 sql_type: data_type.clone(),
             })?
         };
+        // A FK column renders as `ForeignKey<Target>`; the referenced table is
+        // what makes it one, regardless of the stored integer type.
+        let fk_target = fk_map.get(&name).cloned();
+        let ty = if fk_target.is_some() {
+            SqlType::ForeignKey
+        } else {
+            ty
+        };
         let primary_key = pk_columns.contains(&name);
         // Postgres `is_nullable` is the string "YES" or "NO". A primary
         // key is non-nullable by definition (the server enforces it);
@@ -406,11 +470,16 @@ async fn introspect_columns_pg(
         } else {
             is_nullable.eq_ignore_ascii_case("YES")
         };
+        let unique = !primary_key && unique_cols.contains(&name);
+        let index = !primary_key && !unique && index_cols.contains(&name);
         columns.push(IntrospectedColumn {
             name,
             ty,
             primary_key,
             nullable,
+            fk_target,
+            unique,
+            index,
         });
     }
 
@@ -524,9 +593,19 @@ async fn introspect_columns(
     // The PRAGMA name can't be bound as a parameter, but it also can't
     // contain user-supplied input here: `table` comes from `sqlite_master`
     // and matches an existing table identifier by construction.
-    let sql = format!("PRAGMA table_info(\"{}\")", table.replace('"', "\"\""));
+    let quoted = table.replace('"', "\"\"");
+    let sql = format!("PRAGMA table_info(\"{quoted}\")");
     let mut rows = sqlx::query(&sql).fetch_all(pool).await?;
     rows.sort_by_key(|r| r.try_get::<i64, _>("cid").unwrap_or(0));
+
+    // Foreign keys: `PRAGMA foreign_key_list` gives one row per FK column with
+    // its referenced `table`. Map from-column -> target table so a column that
+    // is a FK renders as `ForeignKey<Target>` instead of a bare integer.
+    let fk_map = sqlite_foreign_keys(pool, &quoted).await?;
+    // Single-column unique / index coverage from `PRAGMA index_list` +
+    // `index_info`. A one-column unique index -> the column is UNIQUE; a
+    // one-column plain index -> `#[umbral(index)]`.
+    let (unique_cols, index_cols) = sqlite_indexed_columns(pool, &quoted).await?;
 
     let mut columns: Vec<IntrospectedColumn> = Vec::with_capacity(rows.len());
     for row in rows {
@@ -534,11 +613,18 @@ async fn introspect_columns(
         let raw_type: String = row.try_get("type")?;
         let notnull: i64 = row.try_get("notnull")?;
         let pk: i64 = row.try_get("pk")?;
-        let ty = map_sqlite_type(&raw_type).ok_or_else(|| InspectError::UnsupportedColumnType {
-            table: table.to_string(),
-            column: name.clone(),
-            sql_type: raw_type.clone(),
-        })?;
+        // A FK column's declared type is whatever SQLite stored (usually
+        // `integer`); the target table is what makes it a foreign key.
+        let fk_target = fk_map.get(&name).cloned();
+        let ty = if fk_target.is_some() {
+            SqlType::ForeignKey
+        } else {
+            map_sqlite_type(&raw_type).ok_or_else(|| InspectError::UnsupportedColumnType {
+                table: table.to_string(),
+                column: name.clone(),
+                sql_type: raw_type.clone(),
+            })?
+        };
         let primary_key = pk != 0;
         // SQLite's `PRAGMA table_info` reports `notnull = 0` for
         // `INTEGER PRIMARY KEY` columns because they're aliases for
@@ -549,14 +635,84 @@ async fn introspect_columns(
         // derive's PK detection requires a non-`Option` PK field)
         // and matches what the database actually enforces.
         let nullable = if primary_key { false } else { notnull == 0 };
+        // A PK column is already indexed/unique implicitly; don't re-emit.
+        let unique = !primary_key && unique_cols.contains(&name);
+        let index = !primary_key && !unique && index_cols.contains(&name);
         columns.push(IntrospectedColumn {
             name,
             ty,
             primary_key,
             nullable,
+            fk_target,
+            unique,
+            index,
         });
     }
     Ok(columns)
+}
+
+/// Map each foreign-key column of `table` to its referenced table, via
+/// `PRAGMA foreign_key_list`. Composite FKs (rare in ORM-generated schemas)
+/// contribute each of their `from` columns pointing at the same target; umbral
+/// models a FK as a single column, so the first mapping per column wins.
+async fn sqlite_foreign_keys(
+    pool: &SqlitePool,
+    quoted_table: &str,
+) -> Result<std::collections::HashMap<String, String>, InspectError> {
+    let rows = sqlx::query(&format!("PRAGMA foreign_key_list(\"{quoted_table}\")"))
+        .fetch_all(pool)
+        .await?;
+    let mut map = std::collections::HashMap::new();
+    for row in rows {
+        let from: String = row.try_get("from")?;
+        let target: String = row.try_get("table")?;
+        map.entry(from).or_insert(target);
+    }
+    Ok(map)
+}
+
+/// Return `(unique_columns, indexed_columns)` for `table`: the columns covered
+/// by a **single-column** unique index and a single-column plain index
+/// respectively. Multi-column indexes are skipped (umbral models per-column
+/// `unique`/`index`; composite `unique_together` recovery is deferred).
+/// SQLite's auto-index for a UNIQUE constraint (`origin = 'u'`) and an explicit
+/// `CREATE UNIQUE INDEX` both surface here as `unique = 1`.
+async fn sqlite_indexed_columns(
+    pool: &SqlitePool,
+    quoted_table: &str,
+) -> Result<
+    (
+        std::collections::HashSet<String>,
+        std::collections::HashSet<String>,
+    ),
+    InspectError,
+> {
+    let mut unique = std::collections::HashSet::new();
+    let mut plain = std::collections::HashSet::new();
+    let index_rows = sqlx::query(&format!("PRAGMA index_list(\"{quoted_table}\")"))
+        .fetch_all(pool)
+        .await?;
+    for idx in index_rows {
+        let index_name: String = idx.try_get("name")?;
+        let is_unique: i64 = idx.try_get("unique")?;
+        let cols = sqlx::query(&format!(
+            "PRAGMA index_info(\"{}\")",
+            index_name.replace('"', "\"\"")
+        ))
+        .fetch_all(pool)
+        .await?;
+        // Only single-column indexes map to a per-column flag.
+        if cols.len() != 1 {
+            continue;
+        }
+        let col: String = cols[0].try_get("name")?;
+        if is_unique != 0 {
+            unique.insert(col);
+        } else {
+            plain.insert(col);
+        }
+    }
+    Ok((unique, plain))
 }
 
 /// Map a raw SQLite type string to the M6 v1 [`SqlType`] catalogue.
@@ -681,11 +837,29 @@ fn render_one_struct(table: &IntrospectedTable) -> String {
     }
     out.push_str(&format!("pub struct {} {{\n", table.name));
     for column in &table.columns {
-        out.push_str(&format!(
-            "    pub {}: {},\n",
-            column.name,
-            render_field_type(column.ty, column.nullable),
-        ));
+        // Per-column attributes recovered from the schema: single-column
+        // UNIQUE / index constraints become `#[umbral(unique)]` /
+        // `#[umbral(index)]` so a re-migrate rebuilds them.
+        if column.unique {
+            out.push_str("    #[umbral(unique)]\n");
+        }
+        if column.index {
+            out.push_str("    #[umbral(index)]\n");
+        }
+        let ty = match &column.fk_target {
+            // A foreign key renders as `ForeignKey<Target>` (nullable → wrapped
+            // in `Option`), pointing at the referenced table's generated struct.
+            Some(target) => {
+                let target_struct = pascal_case_from_table(target);
+                if column.nullable {
+                    format!("Option<ForeignKey<{target_struct}>>")
+                } else {
+                    format!("ForeignKey<{target_struct}>")
+                }
+            }
+            None => render_field_type(column.ty, column.nullable),
+        };
+        out.push_str(&format!("    pub {}: {ty},\n", column.name));
     }
     out.push_str("}\n");
     out
@@ -879,13 +1053,13 @@ impl From<&IntrospectedColumn> for Column {
             ty: c.ty,
             primary_key: c.primary_key,
             nullable: c.nullable,
-            fk_target: None,
+            // Recovered foreign key: the referenced table, so the migration
+            // re-emits `REFERENCES "<target>"("id")`.
+            fk_target: c.fk_target.clone(),
             noform: false,
             privileged: false,
             private: false,
             secret: false,
-            // inspectdb introspects no FK yet (`fk_target: None`), so a
-            // real DB constraint maps to the default `true`.
             db_constraint: true,
             noedit: false,
             is_string_repr: false,
@@ -894,13 +1068,11 @@ impl From<&IntrospectedColumn> for Column {
             choice_labels: Vec::new(),
             default: String::new(),
             is_multichoice: false,
-            // inspectdb does not introspect UNIQUE constraints yet
-            // (gap #65 ships the declare-side first; inspect-side
-            // lands when there's a real porting case that needs it).
-            unique: false,
+            // Recovered single-column UNIQUE / index constraints.
+            unique: c.unique,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
-            index: false,
+            index: c.index,
             auto_now_add: false,
             auto_uuid: false,
             auto_now: false,
@@ -931,6 +1103,9 @@ mod tests {
             ty,
             primary_key,
             nullable,
+            fk_target: None,
+            unique: false,
+            index: false,
         }
     }
 

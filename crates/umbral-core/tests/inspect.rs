@@ -300,6 +300,9 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
                     ty: SqlType::BigInt,
                     primary_key: true,
                     nullable: false,
+                    fk_target: None,
+                    unique: false,
+                    index: false,
                 }],
             },
             IntrospectedTable {
@@ -310,6 +313,9 @@ async fn render_models_omits_table_attribute_when_derive_round_trips() {
                     ty: SqlType::BigInt,
                     primary_key: true,
                     nullable: false,
+                    fk_target: None,
+                    unique: false,
+                    index: false,
                 }],
             },
         ],
@@ -472,12 +478,18 @@ async fn render_models_emits_fromrow_and_skips_option_on_primary_keys() {
                     ty: SqlType::BigInt,
                     primary_key: true,
                     nullable: false,
+                    fk_target: None,
+                    unique: false,
+                    index: false,
                 },
                 IntrospectedColumn {
                     name: "body".to_string(),
                     ty: SqlType::Text,
                     primary_key: false,
                     nullable: true,
+                    fk_target: None,
+                    unique: false,
+                    index: false,
                 },
             ],
         }],
@@ -546,4 +558,60 @@ async fn inspectdb_honors_an_explicit_source_database() {
         "must NOT read the ambient `post` pool when a source is given; got:\n{models}"
     );
     assert_eq!(report.tables, 1, "the source db has exactly one table");
+}
+
+/// `inspectdb` recovers foreign keys (rendered as `ForeignKey<Target>`) and
+/// single-column UNIQUE / index constraints (`#[umbral(unique)]` /
+/// `#[umbral(index)]`) from a SQLite source — the "deeper" introspection.
+#[tokio::test]
+async fn inspectdb_recovers_foreign_keys_and_indexes() {
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir for the source db");
+    let src_path = src_dir.path().join("blog.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url)
+        .await
+        .expect("open source db");
+    // A parent table and a child with an FK, a unique column, and an indexed one.
+    for stmt in [
+        "CREATE TABLE author (id INTEGER PRIMARY KEY, email TEXT NOT NULL)",
+        "CREATE TABLE post (\
+            id INTEGER PRIMARY KEY, \
+            title TEXT NOT NULL, \
+            slug TEXT NOT NULL, \
+            views INTEGER NOT NULL, \
+            author_id INTEGER NOT NULL REFERENCES author(id))",
+        "CREATE UNIQUE INDEX post_slug_uniq ON post(slug)",
+        "CREATE INDEX post_views_idx ON post(views)",
+    ] {
+        sqlx::query(stmt)
+            .execute(&src)
+            .await
+            .expect("seed source schema");
+    }
+
+    let out_dir = TempDir::new().expect("output dir");
+    let opts = InspectOptions {
+        source: Some(url),
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb");
+    let models = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // The FK column renders as ForeignKey<Author> (full column name, no
+    // framework prettification), pointing at the parent's generated struct.
+    assert!(
+        models.contains("pub author_id: ForeignKey<Author>"),
+        "FK column must render as ForeignKey<Author>; got:\n{models}"
+    );
+    // The unique + indexed columns carry their attributes.
+    assert!(
+        models.contains("#[umbral(unique)]"),
+        "single-column unique index must render #[umbral(unique)]; got:\n{models}"
+    );
+    assert!(
+        models.contains("#[umbral(index)]"),
+        "single-column index must render #[umbral(index)]; got:\n{models}"
+    );
 }
