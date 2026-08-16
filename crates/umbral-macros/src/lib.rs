@@ -2849,6 +2849,12 @@ enum FieldKind {
     /// `Option<rust_decimal::Decimal>` — nullable NUMERIC(19, 4). Closes
     /// the nullable half of gaps2 #70.
     NullableDecimal,
+    /// `bigdecimal::BigDecimal` — arbitrary-precision `numeric`. The sibling
+    /// of [`FieldKind::Decimal`] for values past rust_decimal's ~28-digit
+    /// ceiling. Postgres-only.
+    BigDecimal,
+    /// `Option<bigdecimal::BigDecimal>` — nullable arbitrary-precision numeric.
+    NullableBigDecimal,
     /// `umbral::orm::Slug` — TEXT with `[A-Za-z0-9_-]+` validation.
     /// Closes BUG-11. Storage is the inner String; the `text_format`
     /// marker on FieldSpec carries the validator selector.
@@ -2984,6 +2990,9 @@ impl FieldKind {
             FieldKind::Decimal | FieldKind::NullableDecimal => {
                 quote!(::umbral::orm::SqlType::Decimal)
             }
+            FieldKind::BigDecimal | FieldKind::NullableBigDecimal => {
+                quote!(::umbral::orm::SqlType::BigDecimal)
+            }
             // BUG-16: M2M fields have no column on the parent table. They
             // are skipped before reaching this point; the arm exists only
             // to keep the match exhaustive.
@@ -3029,6 +3038,7 @@ impl FieldKind {
                 | FieldKind::NullableImageField
                 | FieldKind::NullableMasked
                 | FieldKind::NullableDecimal
+                | FieldKind::NullableBigDecimal
         )
     }
 
@@ -3165,6 +3175,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if is_tsvector(ty) {
         return FieldKind::FullText;
     }
+    if is_bigdecimal(ty) {
+        return FieldKind::BigDecimal;
+    }
     if is_decimal(ty) {
         return FieldKind::Decimal;
     }
@@ -3271,6 +3284,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         }
         if is_tsvector(inner) {
             return FieldKind::NullableFullText;
+        }
+        if is_bigdecimal(inner) {
+            return FieldKind::NullableBigDecimal;
         }
         if is_decimal(inner) {
             return FieldKind::NullableDecimal;
@@ -3571,6 +3587,15 @@ fn is_decimal(ty: &Type) -> bool {
     is_qualified_leaf(ty, "rust_decimal", "Decimal")
 }
 
+/// True when `ty` is `bigdecimal::BigDecimal` — the arbitrary-precision
+/// numeric sibling of [`is_decimal`]. The `bigdecimal` qualifier is part of
+/// the match so a bare `BigDecimal` from another crate isn't auto-classified.
+/// Checked before `is_decimal` in the classifier so the more-specific
+/// arbitrary-precision type wins.
+fn is_bigdecimal(ty: &Type) -> bool {
+    is_qualified_leaf(ty, "bigdecimal", "BigDecimal")
+}
+
 /// True when `ty` is a path ending in `qualifier::leaf` with no
 /// generic arguments on the leaf. The qualifier check is positional
 /// — the segment immediately before the leaf has to match. Used by
@@ -3837,6 +3862,8 @@ fn col_type_ident(kind: &FieldKind) -> Option<syn::Ident> {
         FieldKind::NullableMasked => format_ident!("NullableStrCol"),
         FieldKind::Decimal => format_ident!("DecimalCol"),
         FieldKind::NullableDecimal => format_ident!("NullableDecimalCol"),
+        FieldKind::BigDecimal => format_ident!("BigDecimalCol"),
+        FieldKind::NullableBigDecimal => format_ident!("NullableBigDecimalCol"),
         // Relations / unsupported own no scalar column const.
         FieldKind::MultiChoice(_)
         | FieldKind::Many2Many(_)

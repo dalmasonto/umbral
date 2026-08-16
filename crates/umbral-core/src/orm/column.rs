@@ -2911,6 +2911,159 @@ impl<T> NullableDecimalCol<T> {
     }
 }
 
+// =============================================================================
+// BigDecimalCol — bigdecimal::BigDecimal / arbitrary-precision NUMERIC columns.
+// =============================================================================
+
+/// An arbitrary-precision `numeric` column carrying `bigdecimal::BigDecimal`.
+/// The [`DecimalCol`] twin for values past `rust_decimal`'s ~28-digit ceiling.
+/// Postgres-only, same predicate surface: comparisons, equality, ordering —
+/// with `bigdecimal::BigDecimal`-flavoured operands so no precision is lost at
+/// the filter boundary.
+pub struct BigDecimalCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> BigDecimalCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// Lookup-style alias for [`Self::le`].
+    pub fn lte(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        self.le(val)
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Lookup-style alias for [`Self::ge`].
+    pub fn gte(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        self.ge(val)
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+// =============================================================================
+// NullableBigDecimalCol — Option<bigdecimal::BigDecimal> / nullable numeric.
+// =============================================================================
+
+/// A nullable arbitrary-precision `numeric` column. Mirrors [`BigDecimalCol`]
+/// with `is_null` / `is_not_null`. Postgres-only.
+pub struct NullableBigDecimalCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableBigDecimalCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// Lookup-style alias for [`Self::le`].
+    pub fn lte(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        self.le(val)
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Lookup-style alias for [`Self::ge`].
+    pub fn gte(&self, val: bigdecimal::BigDecimal) -> Predicate<T> {
+        self.ge(val)
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
 // =========================================================================
 // Gap #24 + #36 — DB-function helpers (`ColExpr<T>`)
 //

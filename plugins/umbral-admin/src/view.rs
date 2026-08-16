@@ -561,7 +561,10 @@ pub(crate) fn validate_form(
             "number" => {
                 let is_float = matches!(
                     col.map(|c| c.ty),
-                    Some(SqlType::Real) | Some(SqlType::Double) | Some(SqlType::Decimal)
+                    Some(SqlType::Real)
+                        | Some(SqlType::Double)
+                        | Some(SqlType::Decimal)
+                        | Some(SqlType::BigDecimal)
                 );
                 let ok = if is_float {
                     value.parse::<f64>().is_ok()
@@ -963,7 +966,7 @@ pub(crate) fn input_kind(col: &umbral::migrate::Column) -> &'static str {
         // numeric input would lose precision via JavaScript's f64.
         // Users type the canonical string form ("19.95"); the REST
         // dynamic path parses it via `rust_decimal::Decimal::from_str`.
-        SqlType::Decimal => "text",
+        SqlType::Decimal | SqlType::BigDecimal => "text",
     }
 }
 
@@ -1017,6 +1020,7 @@ pub(crate) fn sql_type_name(ty: SqlType) -> &'static str {
         SqlType::Xml | SqlType::Ltree | SqlType::Bit => "text",
         SqlType::Bytes => "bytes",
         SqlType::Decimal => "decimal",
+        SqlType::BigDecimal => "bigdecimal",
     }
 }
 

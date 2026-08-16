@@ -55,7 +55,10 @@ async fn decimal_round_trips_on_postgres() {
     let pool = umbral_core::db::connect_postgres(&url)
         .await
         .expect("pg pool");
-    let settings = umbral::Settings::from_env().expect("figment defaults");
+    let mut settings = umbral::Settings::from_env().expect("figment defaults");
+    // The pool is Postgres; align the settings URL so App::build's
+    // backend-consistency check (url_backend vs pool_backend) passes.
+    settings.database_url = url.clone();
     umbral::App::builder()
         .settings(settings)
         .database("default", pool.clone())

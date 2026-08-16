@@ -4674,6 +4674,9 @@ fn postgres_type_name(ty: SqlType) -> &'static str {
         // when the safe-cast diff allows transitioning to/from
         // Decimal.
         Decimal => "numeric(19, 4)",
+        // Arbitrary-precision `numeric` (no dimensions). Mirrors the
+        // unbounded `ColumnType::Decimal(None)` the create path emits.
+        BigDecimal => "numeric",
         // Arrays render as `<inner>[]` in Postgres. The migration
         // engine doesn't model nested element types deeply enough to
         // emit a precise inner type here at v1; fall back to `text[]`

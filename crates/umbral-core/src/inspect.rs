@@ -724,6 +724,13 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         // from Postgres' `information_schema`; the resulting
         // model imports use this exact path.
         SqlType::Decimal => "rust_decimal::Decimal".to_string(),
+        // Arbitrary-precision decimal renders as `bigdecimal::BigDecimal`.
+        // inspectdb never *emits* BigDecimal on its own — it maps every DB
+        // `numeric`/`decimal` column to the friendlier `rust_decimal::Decimal`
+        // (see the type classifier) — so this arm only fires if a snapshot
+        // already carries BigDecimal from a hand-written model. Kept here so
+        // the render stays total over `SqlType`.
+        SqlType::BigDecimal => "bigdecimal::BigDecimal".to_string(),
     };
     let base = base.as_str();
     if nullable {

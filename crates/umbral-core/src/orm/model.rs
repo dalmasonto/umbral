@@ -1249,6 +1249,18 @@ pub enum SqlType {
     /// attribute lands when there's a real consumer that needs
     /// dimensions outside the default.
     Decimal,
+    /// Arbitrary-precision decimal backed by `bigdecimal::BigDecimal`
+    /// (Postgres `numeric`, unbounded). The sibling of [`SqlType::Decimal`]
+    /// for values that overflow `rust_decimal`'s ~28-significant-digit
+    /// ceiling — a `numeric(38, 10)` column, astronomical quantities, or
+    /// exact math that must not round. Same DDL family as `Decimal`
+    /// (`numeric` / `numeric(p, s)`), but the Rust codec is `BigDecimal`,
+    /// which carries as many digits as the value needs.
+    ///
+    /// Postgres-only, exactly like `Decimal`: SQLite has no arbitrary-
+    /// precision numeric type, so the system check rejects a `BigDecimal`
+    /// field against a SQLite backend at boot.
+    BigDecimal,
 }
 
 /// Element types valid inside [`SqlType::Array`].

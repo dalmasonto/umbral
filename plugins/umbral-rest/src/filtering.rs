@@ -666,7 +666,8 @@ fn coerce_value(col: &Column, value: &str) -> Result<sea_query::Value, ApiError>
         | SqlType::Bit
         | SqlType::FullText
         | SqlType::Bytes
-        | SqlType::Decimal => {
+        | SqlType::Decimal
+        | SqlType::BigDecimal => {
             return Err(ApiError::BadInput(format!(
                 "field `{}`: filtering on {:?} columns is not supported",
                 col.name, col.ty

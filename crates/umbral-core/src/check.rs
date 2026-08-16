@@ -1008,6 +1008,9 @@ fn is_postgres_only(ty: crate::orm::SqlType) -> bool {
             // any model with a Decimal column fails the boot
             // check the same way Array does.
             | SqlType::Decimal
+            // BigDecimal is Postgres-only for the same reason — no
+            // arbitrary-precision numeric codec on SQLite.
+            | SqlType::BigDecimal
     )
 }
 

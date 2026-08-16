@@ -49,8 +49,8 @@ clap = { version = "4", features = ["derive", "string"] }
 async-trait = "0.1"
 dotenvy = "0.15"
 figment = { version = "0.10", features = ["env", "toml"] }
-sea-query = { version = "0.32", features = ["with-json", "with-ipnetwork", "with-mac_address", "with-rust_decimal"] }
-sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "sqlx-postgres", "with-chrono", "with-uuid", "with-json", "with-ipnetwork", "with-mac_address", "with-rust_decimal"] }
+sea-query = { version = "0.32", features = ["with-json", "with-ipnetwork", "with-mac_address", "with-rust_decimal", "with-bigdecimal"] }
+sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "sqlx-postgres", "with-chrono", "with-uuid", "with-json", "with-ipnetwork", "with-mac_address", "with-rust_decimal", "with-bigdecimal"] }
 serde = { version = "1", features = ["derive"] }
 # JSON serde for migration files (Snapshot + MigrationFile) and snapshot
 # hashing input.
@@ -63,13 +63,18 @@ serde_urlencoded = "0.7"
 # SHA-256 for snapshot_hash drift detection in the umbral_migrations
 # tracking table.
 sha2 = "0.10"
-sqlx = { version = "0.8", features = ["sqlite", "postgres", "any", "runtime-tokio", "chrono", "uuid", "json", "ipnetwork", "mac_address", "rust_decimal"] }
+sqlx = { version = "0.8", features = ["sqlite", "postgres", "any", "runtime-tokio", "chrono", "uuid", "json", "ipnetwork", "mac_address", "rust_decimal", "bigdecimal"] }
 # BUG-10: NUMERIC field type backed by `rust_decimal::Decimal`. The
 # sqlx + sea-query features above enable Encode/Decode/Type; this
 # direct dep is so user code (and generated `models.rs` from
 # inspectdb) can name the type without going through sqlx's
 # transitive re-export.
 rust_decimal = { version = "1", default-features = false, features = ["serde-with-str"] }
+# Arbitrary-precision decimal (Postgres `numeric`, unbounded) — the sibling
+# of rust_decimal for values past its ~28-digit ceiling. Version tracks what
+# sqlx 0.8 / sea-query 0.32 encode/decode against. Direct dep so user code and
+# inspectdb-generated models can name `bigdecimal::BigDecimal` directly.
+bigdecimal = { version = "0.4", features = ["serde"] }
 # Postgres network address types — Phase 4.4. `ipnetwork::IpNetwork`
 # is the Rust type for both INET and CIDR (the latter is just a
 # constraint-restricted host address). The sqlx ipnetwork feature

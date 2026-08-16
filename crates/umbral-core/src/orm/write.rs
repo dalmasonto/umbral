@@ -612,7 +612,13 @@ pub fn json_to_sea_value(
         }
         SqlType::Time => {
             let s = coerce_string(value, field_name)?;
-            let t = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S")
+            // Accept, in order: a fractional-second form (`%.f` matches
+            // `.123`, `.123456`, `.123456789` — what serde/chrono emit for a
+            // sub-second `NaiveTime`), then whole seconds, then HH:MM. Without
+            // the `%.f` arm a `NaiveTime` carrying microseconds — the default
+            // serde wire shape — could never be written on any backend.
+            let t = chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")
+                .or_else(|_| chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S"))
                 .or_else(|_| chrono::NaiveTime::parse_from_str(&s, "%H:%M"))
                 .map_err(|_| WriteError::TypeMismatch {
                     field: field_name.to_string(),
@@ -721,6 +727,7 @@ pub fn json_to_sea_value(
         // (canonical for money values). Anything else fails the
         // typed coerce.
         SqlType::Decimal => coerce_decimal(value, field_name),
+        SqlType::BigDecimal => coerce_bigdecimal(value, field_name),
     }
 }
 
@@ -741,6 +748,27 @@ fn coerce_decimal(value: &JsonValue, field_name: &str) -> Result<SeaValue, Write
         .ok_or_else(|| WriteError::TypeMismatch {
             field: field_name.to_string(),
             expected: SqlType::Decimal,
+            got: format!("{value:?}"),
+        })
+}
+
+/// The [`coerce_decimal`] twin for arbitrary-precision `numeric`. Parses the
+/// textual JSON form into a `bigdecimal::BigDecimal`, which — unlike
+/// `rust_decimal::Decimal` — carries as many digits as the value needs, so a
+/// 40-digit `numeric` written through the typed path is not silently truncated
+/// to ~28 significant figures.
+fn coerce_bigdecimal(value: &JsonValue, field_name: &str) -> Result<SeaValue, WriteError> {
+    use std::str::FromStr;
+    let parsed: Option<bigdecimal::BigDecimal> = match value {
+        JsonValue::String(s) => bigdecimal::BigDecimal::from_str(s).ok(),
+        JsonValue::Number(n) => bigdecimal::BigDecimal::from_str(&n.to_string()).ok(),
+        _ => None,
+    };
+    parsed
+        .map(|d| SeaValue::BigDecimal(Some(Box::new(d))))
+        .ok_or_else(|| WriteError::TypeMismatch {
+            field: field_name.to_string(),
+            expected: SqlType::BigDecimal,
             got: format!("{value:?}"),
         })
 }
@@ -1068,6 +1096,7 @@ pub(crate) fn null_for(sql_type: SqlType) -> SeaValue {
         | SqlType::FullText => SeaValue::String(None),
         SqlType::Bytes => SeaValue::Bytes(None),
         SqlType::Decimal => SeaValue::Decimal(None),
+        SqlType::BigDecimal => SeaValue::BigDecimal(None),
     }
 }
 
