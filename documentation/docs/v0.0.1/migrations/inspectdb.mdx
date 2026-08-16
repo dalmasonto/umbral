@@ -13,11 +13,53 @@ drops into the same M5 migration loop - no parallel porting code path.
 ## Run it
 
 ```bash
+# Introspect the app's ambient database (UMBRAL_DATABASE_URL):
 cargo run -- inspectdb --output plugins/imported
+
+# ...or point it at a specific database — a URL or a SQLite file path:
+cargo run -- inspectdb ./legacy.sqlite3 --output plugins/imported
 # -> Inspected 12 table(s), 47 column(s)
 # -> Wrote plugins/imported/models.rs
 # -> Wrote plugins/imported/migrations/app/0001_initial.json
 ```
+
+The optional positional database argument accepts a `sqlite://` / `postgres://`
+URL or a bare path to a SQLite file (opened read-only). Omit it to use the
+app's ambient database.
+
+## What it recovers
+
+Beyond columns and primary keys, `inspectdb` recovers **foreign keys** (a
+`<col>` FK column becomes `pub <col>: ForeignKey<Target>`, pointing at the
+referenced table's generated struct) and **single-column unique / index
+constraints** (`#[umbral(unique)]` / `#[umbral(index)]`). These flow into the
+generated `0001_initial` migration too, so a re-migrate rebuilds them.
+
+## Framework-aware naming
+
+Django names a foreign-key column `<field>_id`. Pass `--framework django` to
+undo that, so the generated field is the clean `<field>` bound to the real
+column via `#[sqlx(rename)]`:
+
+```bash
+cargo run -- inspectdb ./django.sqlite3 --framework django --output plugins/imported
+```
+
+```rust
+// blog_post table, author_id + blog_category_id FK columns:
+pub struct BlogPost {
+    pub id: i64,
+    pub title: String,
+    #[sqlx(rename = "author_id")]
+    pub author: ForeignKey<BlogAuthor>,
+    #[sqlx(rename = "blog_category_id")]
+    pub category: Option<ForeignKey<BlogCategory>>, // `blog_` app prefix shed too
+}
+```
+
+Without `--framework`, column names are kept verbatim (`pub author_id:
+ForeignKey<BlogAuthor>`), which round-trips exactly since umbral uses the field
+name as the column name.
 
 The output:
 
