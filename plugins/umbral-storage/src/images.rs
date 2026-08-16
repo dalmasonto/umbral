@@ -92,7 +92,19 @@ pub fn thumbnails(specs: &'static [Thumbnail]) -> Processor {
             let specs_owned: Vec<Thumbnail> = specs.to_vec();
             let variants =
                 tokio::task::spawn_blocking(move || -> Result<Vec<(String, Vec<u8>)>, BoxError> {
-                    let img = image::load_from_memory(&bytes)?;
+                    // Decompression-bomb guard: a small compressed file can
+                    // declare enormous dimensions (e.g. a 15 KB PNG claiming
+                    // 30000x30000 → ~3.6 GB decoded RGBA), and an unbounded
+                    // decode allocates that buffer BEFORE any resize/clamp,
+                    // OOM-killing the process under a small upload burst. Cap
+                    // the decode allocation so an oversized image errors
+                    // cleanly instead.
+                    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
+                        .with_guessed_format()?;
+                    let mut limits = image::Limits::default();
+                    limits.max_alloc = Some(256 * 1024 * 1024); // 256 MiB decode cap
+                    reader.limits(limits);
+                    let img = reader.decode()?;
                     let mut out = Vec::new();
                     let (src_w, src_h) = (
                         image::GenericImageView::width(&img),

@@ -179,6 +179,23 @@ struct MediaSide {
     cleanup: Vec<CleanupSpec>,
 }
 
+/// The media backend with the upload type allow-list applied when one is
+/// configured. The ambient decorator (installed in `on_ready`) covers the
+/// admin/REST/form upload routes, but the plugin's own `save`/`save_stream`/
+/// `save_deferred` methods hold `media.storage` directly — without this they
+/// bypassed `accept`/`accept_images`, storing a disallowed type despite the
+/// allow-list (only the size cap was enforced). Wrapping per call is a cheap
+/// `Arc` clone and keeps the two paths' policy identical.
+fn media_policy_storage(media: &MediaSide) -> Arc<dyn Storage> {
+    match &media.accept {
+        Some(accept) => Arc::new(media::TypeLimitedStorage::new(
+            media.storage.clone(),
+            accept.clone(),
+        )),
+        None => media.storage.clone(),
+    }
+}
+
 impl Default for StoragePlugin {
     fn default() -> Self {
         Self::new()
@@ -691,7 +708,7 @@ impl StoragePlugin {
             .as_ref()
             .expect("save() requires a media side; add .media(..) / .media_with_storage(..)");
         save_through(
-            &media.storage,
+            &media_policy_storage(media),
             media.max_size,
             filename,
             content_type,
@@ -712,7 +729,14 @@ impl StoragePlugin {
         let media = self.media.as_ref().expect(
             "save_stream() requires a media side; add .media(..) / .media_with_storage(..)",
         );
-        save_stream_through(&media.storage, media.max_size, filename, content_type, body).await
+        save_stream_through(
+            &media_policy_storage(media),
+            media.max_size,
+            filename,
+            content_type,
+            body,
+        )
+        .await
     }
 
     /// **Deferred-upload** counterpart of [`save`](StoragePlugin::save) (Mode
@@ -739,7 +763,7 @@ impl StoragePlugin {
             "save_deferred() requires a media side; add .media(..) / .media_with_storage(..)",
         );
         save_deferred_through(
-            &media.storage,
+            &media_policy_storage(media),
             media.max_size,
             filename,
             content_type,
