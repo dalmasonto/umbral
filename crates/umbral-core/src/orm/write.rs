@@ -849,13 +849,49 @@ pub fn apply_slug_from(
     body: &mut serde_json::Map<String, serde_json::Value>,
     is_update: bool,
 ) {
-    for col in fields {
-        let Some(source) = col.slug_from.as_deref() else {
+    apply_slug_core(
+        fields
+            .iter()
+            .map(|c| (c.name.as_str(), c.slug_from.as_deref())),
+        body,
+        is_update,
+    );
+}
+
+/// `FieldSpec` twin of [`apply_slug_from`], for the TYPED write path
+/// (`objects().create()` / `bulk_create()`), which carries
+/// `&[FieldSpec]` rather than the dynamic path's `&[Column]`. Same safe
+/// rule, one shared core — so typed and dynamic writes derive slugs
+/// identically (a column that auto-slugs through REST must auto-slug
+/// through `create()` too; features #83 closed the same split for
+/// `trim`/`lowercase`).
+pub fn apply_slug_from_specs(
+    fields: &[crate::orm::FieldSpec],
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    is_update: bool,
+) {
+    apply_slug_core(
+        fields.iter().map(|f| (f.name, f.slug_from)),
+        body,
+        is_update,
+    );
+}
+
+/// Shared implementation for [`apply_slug_from`] / [`apply_slug_from_specs`].
+/// Takes `(column_name, slug_from_source)` pairs so `Column` (dynamic
+/// path) and `FieldSpec` (typed path) feed the same logic.
+fn apply_slug_core<'a>(
+    cols: impl Iterator<Item = (&'a str, Option<&'a str>)>,
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    is_update: bool,
+) {
+    for (name, slug_from) in cols {
+        let Some(source) = slug_from else {
             continue;
         };
         // Slug already explicitly supplied (non-empty string) — keep it.
         let explicit = body
-            .get(&col.name)
+            .get(name)
             .and_then(|v| v.as_str())
             .map(|s| !s.is_empty())
             .unwrap_or(false);
@@ -863,18 +899,22 @@ pub fn apply_slug_from(
             continue;
         }
         // On update, only regenerate when the source field is in the body.
-        let source_value = body.get(source).and_then(|v| v.as_str()).unwrap_or("");
+        let source_value = body
+            .get(source)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if source_value.is_empty() {
             continue;
         }
         if is_update && !body.contains_key(source) {
             continue;
         }
-        let slug = slugify(source_value);
+        let slug = slugify(&source_value);
         if slug.is_empty() {
             continue;
         }
-        body.insert(col.name.clone(), serde_json::Value::String(slug));
+        body.insert(name.to_string(), serde_json::Value::String(slug));
     }
 }
 

@@ -84,6 +84,18 @@ pub(super) fn build_insert_one_for<T: Model>(
     map: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<sea_query::InsertStatement, crate::orm::write::WriteError> {
     use crate::orm::write::{is_default_pk, json_to_sea_value, now_for_column, user_for_column};
+    // Auto-derive `#[umbral(slug_from = "...")]` columns on the TYPED
+    // create path too, matching REST/admin. Only clone the map when the
+    // model actually declares a slug source — otherwise use it untouched.
+    let derived;
+    let map = if T::FIELDS.iter().any(|f| f.slug_from.is_some()) {
+        let mut m = map.clone();
+        crate::orm::write::apply_slug_from_specs(T::FIELDS, &mut m, false);
+        derived = m;
+        &derived
+    } else {
+        map
+    };
     let mut columns: Vec<Alias> = Vec::new();
     let mut values: Vec<sea_query::SimpleExpr> = Vec::new();
     for field in T::FIELDS {
@@ -196,6 +208,22 @@ pub(super) fn build_insert_many_for<T: Model>(
     maps: &[serde_json::Map<String, serde_json::Value>],
 ) -> Result<sea_query::InsertStatement, crate::orm::write::WriteError> {
     use crate::orm::write::{is_default_pk, json_to_sea_value, now_for_column};
+    // Auto-derive `#[umbral(slug_from = "...")]` per row, matching the
+    // single-row path. Only clone when the model declares a slug source.
+    let derived_maps;
+    let maps = if T::FIELDS.iter().any(|f| f.slug_from.is_some()) {
+        derived_maps = maps
+            .iter()
+            .map(|m| {
+                let mut m = m.clone();
+                crate::orm::write::apply_slug_from_specs(T::FIELDS, &mut m, false);
+                m
+            })
+            .collect::<Vec<_>>();
+        &derived_maps[..]
+    } else {
+        maps
+    };
     // Decide column set from the first row. Subsequent rows MUST
     // produce the same column set — anything else would break the
     // INSERT's columns clause.
