@@ -171,15 +171,33 @@ impl From<sqlx::Error> for BackupError {
     }
 }
 
-/// Dump every registered model's rows to a [`Dump`] value. The
-/// ambient pool (published by `App::build`) is the source.
+/// Resolve the pool a model's rows live in, honouring per-model and
+/// per-plugin `DATABASE` alias routing. This is the same resolution the
+/// migration engine uses (`migrate::table_alias`): the runtime
+/// `MODEL_ALIASES` map (populated at `App::build` from every plugin's
+/// `Plugin::database()` default AND each model's `Model::DATABASE`
+/// override) is the source of truth. A model that isn't routed explicitly
+/// — or a call before the registry is initialised (low-level tests) —
+/// falls back to the default pool, which is what `pool_dispatched`
+/// returns.
+fn pool_for_model(model: &ModelMeta) -> &'static DbPool {
+    match crate::migrate::model_alias(&model.name) {
+        Some(alias) => crate::db::pool_for_dispatched(&alias),
+        None => crate::db::pool_dispatched(),
+    }
+}
+
+/// Dump every registered model's rows to a [`Dump`] value. Each model is
+/// read from its OWN resolved pool (see [`pool_for_model`]), so a model
+/// routed to a non-default `DATABASE` alias is dumped from the right
+/// database rather than the default pool.
 pub async fn dump() -> Result<Dump, BackupError> {
-    let pool = crate::db::pool_dispatched();
     let mut models = crate::migrate::registered_models();
     models.sort_by(|a, b| a.table.cmp(&b.table));
 
     let mut out: Vec<ModelDump> = Vec::with_capacity(models.len());
     for model in models {
+        let pool = pool_for_model(&model);
         out.push(dump_one(pool, &model).await?);
     }
     Ok(Dump {
@@ -206,7 +224,6 @@ pub async fn load(dump: &Dump) -> Result<LoadReport, BackupError> {
             dump.umbral_dump_version.clone(),
         ));
     }
-    let pool = crate::db::pool_dispatched();
     let registered = crate::migrate::registered_models();
     let by_table: std::collections::HashMap<String, ModelMeta> = registered
         .into_iter()
@@ -243,11 +260,29 @@ pub async fn load(dump: &Dump) -> Result<LoadReport, BackupError> {
     // order for the affected nodes rather than erroring.
     let ordered = topo_order_by_fk(resolved);
 
-    // One transaction for the whole restore so a mid-load failure rolls
-    // back cleanly instead of leaving a half-populated database.
-    match pool {
-        DbPool::Sqlite(p) => load_all_sqlite(p, &ordered, &mut report).await?,
-        DbPool::Postgres(p) => load_all_postgres(p, &ordered, &mut report).await?,
+    // Group the ordered tables by their resolved pool alias (per-model /
+    // per-plugin `DATABASE` routing, same resolution as `pool_for_model`),
+    // then run ONE transaction per pool so a mid-load failure rolls that
+    // pool's slice back cleanly. Cross-pool atomicity isn't achievable —
+    // a SQLite / Postgres transaction never spans databases — but FKs
+    // can't cross a database boundary either, so the FK topo order above
+    // is already within-pool; each group loads in that global order. A
+    // single-database app (the common case) produces exactly one group
+    // and the original single-transaction behaviour is preserved.
+    let mut groups: Vec<(String, Vec<ResolvedTable<'_>>)> = Vec::new();
+    for (meta, rows) in ordered {
+        let alias =
+            crate::migrate::model_alias(&meta.name).unwrap_or_else(|| "default".to_string());
+        match groups.iter_mut().find(|(a, _)| a == &alias) {
+            Some((_, tables)) => tables.push((meta, rows)),
+            None => groups.push((alias, vec![(meta, rows)])),
+        }
+    }
+    for (alias, tables) in &groups {
+        match crate::db::pool_for_dispatched(alias) {
+            DbPool::Sqlite(p) => load_all_sqlite(p, tables, &mut report).await?,
+            DbPool::Postgres(p) => load_all_postgres(p, tables, &mut report).await?,
+        }
     }
     Ok(report)
 }
