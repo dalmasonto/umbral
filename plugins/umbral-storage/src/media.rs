@@ -432,19 +432,19 @@ impl Storage for FsStorage {
         _content_type: &str,
         bytes: &[u8],
     ) -> Result<StoredFile, StorageError> {
-        // Sanitise the filename: drop any path separators, NUL bytes, or
-        // control chars a malicious client might submit so we never
-        // escape `dir` (shared helper — see `sanitise_filename`).
-        let safe_name = sanitise_filename(filename);
-        // WEB-4: neutralise active-content extensions. The serving layer
-        // (ServeDir) derives Content-Type from the on-disk extension, so a
-        // stored `x.html` / `x.svg` would be served as `text/html` /
-        // `image/svg+xml` and RENDERED INLINE — running attacker script on
-        // the app's origin (stored XSS), since these uploads are arbitrary
-        // bytes from untrusted clients. Appending `.txt` makes the file
-        // serve as inert `text/plain`; the bytes are preserved and still
-        // retrievable. Images/docs are untouched and still render normally.
-        let safe_name = neutralise_active_content(&safe_name);
+        // Single source of truth for the upload key shape (`<uuid>-<name>`):
+        // `neutralised_upload` sanitises the filename (drops path separators,
+        // NUL bytes, and control chars so we never escape `dir`) AND defangs
+        // active-content extensions. WEB-4: the serving layer (ServeDir)
+        // derives Content-Type from the on-disk extension, so a stored
+        // `x.html` / `x.svg` would be served as `text/html` / `image/svg+xml`
+        // and RENDERED INLINE — running attacker script on the app's origin
+        // (stored XSS), since these uploads are arbitrary bytes from untrusted
+        // clients. Appending `.txt` makes the file serve as inert `text/plain`;
+        // the bytes are preserved and still retrievable. Images/docs are
+        // untouched. The recorded content type it returns is unused here — FS
+        // serving reads the extension, not a stored type.
+        let (safe_name, _) = neutralised_upload(filename, _content_type);
         let key = format!("{}-{safe_name}", uuid::Uuid::new_v4());
         let path = self.path_for(&key);
         if let Some(parent) = path.parent() {
@@ -500,8 +500,10 @@ impl Storage for FsStorage {
         _content_type: &str,
         body: ByteStream,
     ) -> Result<StoredFile, StorageError> {
-        let safe_name = sanitise_filename(filename);
-        let safe_name = neutralise_active_content(&safe_name);
+        // Same key-gen contract as `store` — route through the shared
+        // `neutralised_upload` so the key shape (`<uuid>-<sanitised, defanged
+        // name>`) can't drift between the buffered and streaming paths.
+        let (safe_name, _) = neutralised_upload(filename, _content_type);
         let key = format!("{}-{safe_name}", uuid::Uuid::new_v4());
         let path = self.path_for(&key);
         if let Some(parent) = path.parent() {
