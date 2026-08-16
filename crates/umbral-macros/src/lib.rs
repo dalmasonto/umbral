@@ -294,6 +294,16 @@ struct UmbralFieldAttr {
     /// `#[umbral(bit)]` — on a `String` / `Option<String>` field, declare
     /// it as a Postgres `BIT VARYING` column. gaps2 #70.
     bit: bool,
+    /// `#[umbral(geometry = "point")]` — a PostGIS `geometry(<kind>, <srid>)`
+    /// column. The value is the subtype (`point`, `polygon`, …, or `geometry`
+    /// for the unconstrained base type). gaps5 #22.
+    geometry: Option<String>,
+    /// `#[umbral(geography = "point")]` — a PostGIS `geography` column (metres,
+    /// spheroidal). Mutually exclusive with `geometry`. gaps5 #22.
+    geography: Option<String>,
+    /// `#[umbral(srid = 4326)]` — the SRID for a spatial column. Defaults to
+    /// 4326 (WGS84) when omitted.
+    srid: Option<i32>,
     /// `#[umbral(noform)]` — never show on any form.
     noform: bool,
     /// `#[umbral(signal_skip)]` — strip this field from ORM signal payloads
@@ -517,6 +527,9 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         xml: false,
         ltree: false,
         bit: false,
+        geometry: None,
+        geography: None,
+        srid: None,
         noform: false,
         signal_skip: false,
         privileged: false,
@@ -583,6 +596,21 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
             } else if meta.path.is_ident("bit") {
                 // `#[umbral(bit)]` — declare a String field as Postgres BIT VARYING.
                 parsed.bit = true;
+                Ok(())
+            } else if meta.path.is_ident("geometry") {
+                // `#[umbral(geometry = "point")]` — a PostGIS geometry column.
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                parsed.geometry = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("geography") {
+                // `#[umbral(geography = "point")]` — a PostGIS geography column.
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                parsed.geography = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("srid") {
+                // `#[umbral(srid = 4326)]` — SRID for a spatial column.
+                let lit: syn::LitInt = meta.value()?.parse()?;
+                parsed.srid = Some(lit.base10_parse()?);
                 Ok(())
             } else if meta.path.is_ident("noform") {
                 parsed.noform = true;
@@ -1476,6 +1504,43 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 FieldKind::Str => FieldKind::Bit,
                 FieldKind::NullableStr => FieldKind::NullableBit,
                 other => other,
+            };
+        }
+        // `#[umbral(geometry|geography = "...", srid = N)]` — refine the spatial
+        // subtype + SRID on a `gis::Geometry` field. A single field can't carry
+        // both attributes; `geography` wins if (mis)declared with both, matching
+        // the SqlType variant it selects.
+        if field_attr.geometry.is_some() || field_attr.geography.is_some() {
+            let geography = field_attr.geography.is_some();
+            let modifier_attr = field_attr
+                .geography
+                .clone()
+                .or_else(|| field_attr.geometry.clone())
+                .unwrap_or_default();
+            let modifier = match geom_kind_variant_name(&modifier_attr) {
+                Some(m) => m.to_string(),
+                None => {
+                    return Err(syn::Error::new_spanned(
+                        field,
+                        format!(
+                            "#[umbral(geometry/geography)] unknown subtype `{modifier_attr}`; \
+                             expected one of point, linestring, polygon, multipoint, \
+                             multilinestring, multipolygon, geometrycollection, geometry"
+                        ),
+                    ));
+                }
+            };
+            let spec = GeomSpec {
+                modifier,
+                srid: field_attr.srid.unwrap_or(4326),
+                geography,
+            };
+            kind = match kind {
+                FieldKind::NullableGeometry(_) => FieldKind::NullableGeometry(spec),
+                // A bare (non-Option) gis::Geometry, or any other kind the
+                // attribute is (mis)placed on — the attribute is authoritative
+                // for the spatial classification.
+                _ => FieldKind::Geometry(spec),
             };
         }
         let noform_lit = if field_attr.noform {
@@ -2781,6 +2846,11 @@ enum FieldKind {
     /// boot when this lands on SQLite.
     Array(ArrayElementKind),
     NullableArray(ArrayElementKind),
+    /// `umbral::orm::gis::Geometry` with `#[umbral(geometry|geography = "...")]`
+    /// — a PostGIS spatial column. Carries the subtype + SRID + geometry-vs-
+    /// geography flag. Postgres-only (gated at boot). gaps5 #22.
+    Geometry(GeomSpec),
+    NullableGeometry(GeomSpec),
     /// `ForeignKey<T>` — an i64 FK reference to model `T`'s primary key.
     /// The inner `Type` is the generic argument `T`, used to derive
     /// `T::TABLE` for the `FieldSpec.fk_target` slot.
@@ -2895,6 +2965,17 @@ enum FieldKind {
 /// `umbral::orm::ArrayElement` enum the framework re-exports — the
 /// macro can't reach into `umbral-core` at expand time so the catalogue
 /// is duplicated, with the `sql_type_tokens` body emitting the right
+/// The parsed `#[umbral(geometry|geography = "...", srid = N)]` attributes for
+/// a PostGIS spatial field. `modifier` is the GeometryKind variant *name*
+/// (`Point`, `MultiPolygon`, …, or `Geometry` for unconstrained); `srid`
+/// defaults to 4326; `geography` selects the geography variant over geometry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GeomSpec {
+    modifier: String,
+    srid: i32,
+    geography: bool,
+}
+
 /// `ArrayElement::Foo` for each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArrayElementKind {
@@ -2993,6 +3074,19 @@ impl FieldKind {
             FieldKind::BigDecimal | FieldKind::NullableBigDecimal => {
                 quote!(::umbral::orm::SqlType::BigDecimal)
             }
+            FieldKind::Geometry(g) | FieldKind::NullableGeometry(g) => {
+                let kind_ident = format_ident!("{}", g.modifier);
+                let srid = g.srid;
+                let variant = if g.geography {
+                    format_ident!("Geography")
+                } else {
+                    format_ident!("Geometry")
+                };
+                quote!(::umbral::orm::SqlType::#variant(::umbral::orm::GeometrySpec {
+                    kind: ::umbral::orm::GeometryKind::#kind_ident,
+                    srid: #srid,
+                }))
+            }
             // BUG-16: M2M fields have no column on the parent table. They
             // are skipped before reaching this point; the arm exists only
             // to keep the match exhaustive.
@@ -3039,6 +3133,7 @@ impl FieldKind {
                 | FieldKind::NullableMasked
                 | FieldKind::NullableDecimal
                 | FieldKind::NullableBigDecimal
+                | FieldKind::NullableGeometry(_)
         )
     }
 
@@ -3175,6 +3270,11 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if is_tsvector(ty) {
         return FieldKind::FullText;
     }
+    if is_geometry_type(ty) {
+        // Base kind; the `#[umbral(geometry|geography = ...)]` attribute refines
+        // the subtype/SRID afterwards in the field-processing loop.
+        return FieldKind::Geometry(default_geom_spec());
+    }
     if is_bigdecimal(ty) {
         return FieldKind::BigDecimal;
     }
@@ -3284,6 +3384,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         }
         if is_tsvector(inner) {
             return FieldKind::NullableFullText;
+        }
+        if is_geometry_type(inner) {
+            return FieldKind::NullableGeometry(default_geom_spec());
         }
         if is_bigdecimal(inner) {
             return FieldKind::NullableBigDecimal;
@@ -3596,6 +3699,41 @@ fn is_bigdecimal(ty: &Type) -> bool {
     is_qualified_leaf(ty, "bigdecimal", "BigDecimal")
 }
 
+/// True when `ty` is the PostGIS `umbral::orm::gis::Geometry` newtype — the
+/// segment before the leaf is `gis`. Its subtype + SRID come from the
+/// `#[umbral(geometry|geography = ...)]` attribute, refined after this base
+/// classification.
+fn is_geometry_type(ty: &Type) -> bool {
+    is_qualified_leaf(ty, "gis", "Geometry")
+}
+
+/// The default spatial spec (unconstrained geometry, WGS84) used before the
+/// field attribute refines it.
+fn default_geom_spec() -> GeomSpec {
+    GeomSpec {
+        modifier: "Geometry".to_string(),
+        srid: 4326,
+        geography: false,
+    }
+}
+
+/// Map a `#[umbral(geometry = "point")]` attribute value to the `GeometryKind`
+/// variant *name* used both in the emitted `SqlType` tokens and the DDL.
+/// Returns `None` for an unknown spelling.
+fn geom_kind_variant_name(modifier: &str) -> Option<&'static str> {
+    Some(match modifier.to_ascii_lowercase().as_str() {
+        "geometry" | "" => "Geometry",
+        "point" => "Point",
+        "linestring" => "LineString",
+        "polygon" => "Polygon",
+        "multipoint" => "MultiPoint",
+        "multilinestring" => "MultiLineString",
+        "multipolygon" => "MultiPolygon",
+        "geometrycollection" => "GeometryCollection",
+        _ => return None,
+    })
+}
+
 /// True when `ty` is a path ending in `qualifier::leaf` with no
 /// generic arguments on the leaf. The qualifier check is positional
 /// — the segment immediately before the leaf has to match. Used by
@@ -3863,6 +4001,7 @@ fn col_type_ident(kind: &FieldKind) -> Option<syn::Ident> {
         FieldKind::Decimal => format_ident!("DecimalCol"),
         FieldKind::NullableDecimal => format_ident!("NullableDecimalCol"),
         FieldKind::BigDecimal => format_ident!("BigDecimalCol"),
+        FieldKind::Geometry(_) | FieldKind::NullableGeometry(_) => format_ident!("GeometryCol"),
         FieldKind::NullableBigDecimal => format_ident!("NullableBigDecimalCol"),
         // Relations / unsupported own no scalar column const.
         FieldKind::MultiChoice(_)

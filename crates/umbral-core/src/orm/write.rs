@@ -728,7 +728,48 @@ pub fn json_to_sea_value(
         // typed coerce.
         SqlType::Decimal => coerce_decimal(value, field_name),
         SqlType::BigDecimal => coerce_bigdecimal(value, field_name),
+        // PostGIS: bind an EWKT string (`SRID=4326;POINT(…)`) as text — the
+        // column's text→geometry cast parses it. The GeoJSON→EWKT conversion
+        // lives behind the `postgis` feature (`coerce_geometry`).
+        SqlType::Geometry(spec) | SqlType::Geography(spec) => {
+            coerce_geometry(value, field_name, spec.srid)
+        }
     }
+}
+
+/// Convert a geometry write value to an EWKT `SeaValue::String`. Feature-gated:
+/// the geo codec only compiles with `postgis`.
+#[cfg(feature = "postgis")]
+fn coerce_geometry(value: &JsonValue, field_name: &str, srid: i32) -> Result<SeaValue, WriteError> {
+    let ewkt =
+        crate::orm::gis::coerce_to_ewkt(value, srid).map_err(|e| WriteError::TypeMismatch {
+            field: field_name.to_string(),
+            expected: SqlType::Geometry(crate::orm::GeometrySpec {
+                kind: crate::orm::GeometryKind::Geometry,
+                srid,
+            }),
+            got: e,
+        })?;
+    Ok(SeaValue::String(Some(Box::new(ewkt))))
+}
+
+/// Without the `postgis` feature a geometry column can only arrive from a
+/// snapshot/inspectdb (the `Geometry` field type isn't compiled in), so a write
+/// to one is a configuration error rather than a value error.
+#[cfg(not(feature = "postgis"))]
+fn coerce_geometry(
+    _value: &JsonValue,
+    field_name: &str,
+    srid: i32,
+) -> Result<SeaValue, WriteError> {
+    Err(WriteError::TypeMismatch {
+        field: field_name.to_string(),
+        expected: SqlType::Geometry(crate::orm::GeometrySpec {
+            kind: crate::orm::GeometryKind::Geometry,
+            srid,
+        }),
+        got: "writing a PostGIS geometry requires the `postgis` cargo feature".to_string(),
+    })
 }
 
 fn coerce_decimal(value: &JsonValue, field_name: &str) -> Result<SeaValue, WriteError> {
@@ -1097,6 +1138,8 @@ pub(crate) fn null_for(sql_type: SqlType) -> SeaValue {
         SqlType::Bytes => SeaValue::Bytes(None),
         SqlType::Decimal => SeaValue::Decimal(None),
         SqlType::BigDecimal => SeaValue::BigDecimal(None),
+        // Geometry binds as EWKT text, so its NULL is a NULL text.
+        SqlType::Geometry(_) | SqlType::Geography(_) => SeaValue::String(None),
     }
 }
 

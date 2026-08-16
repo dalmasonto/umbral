@@ -731,6 +731,10 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         // already carries BigDecimal from a hand-written model. Kept here so
         // the render stays total over `SqlType`.
         SqlType::BigDecimal => "bigdecimal::BigDecimal".to_string(),
+        // PostGIS geometry/geography both surface as the `postgis`-feature
+        // `Geometry` newtype; the subtype + SRID ride the `#[umbral(...)]`
+        // attribute the model renderer emits alongside this type.
+        SqlType::Geometry(_) | SqlType::Geography(_) => "umbral::orm::gis::Geometry".to_string(),
     };
     let base = base.as_str();
     if nullable {

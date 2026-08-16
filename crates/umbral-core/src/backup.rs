@@ -708,6 +708,8 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             // BUG-10: Decimal is Postgres-only.
             SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
             SqlType::BigDecimal => unreachable_pg_only(&col.name, "BigDecimal"),
+            SqlType::Geometry(_) => unreachable_pg_only(&col.name, "Geometry"),
+            SqlType::Geography(_) => unreachable_pg_only(&col.name, "Geography"),
         });
     }
     // Non-nullable: same dispatch without the Option layer.
@@ -737,7 +739,53 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         }
         SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
         SqlType::BigDecimal => unreachable_pg_only(&col.name, "BigDecimal"),
+        SqlType::Geometry(_) => unreachable_pg_only(&col.name, "Geometry"),
+        SqlType::Geography(_) => unreachable_pg_only(&col.name, "Geography"),
     })
+}
+
+/// Dump a Postgres geometry cell as a GeoJSON `Value`. Feature-gated: the geo
+/// codec only compiles with `postgis`. `dumpdata` of a geometry column without
+/// the feature is a configuration error, not a data error.
+#[cfg(feature = "postgis")]
+fn pg_geometry_dump(
+    row: &sqlx::postgres::PgRow,
+    name: &str,
+    nullable: bool,
+) -> Result<Value, BackupError> {
+    let geom: Option<crate::orm::gis::Geometry> = if nullable {
+        row.try_get(name)?
+    } else {
+        Some(row.try_get(name)?)
+    };
+    match geom {
+        None => Ok(Value::Null),
+        Some(g) => crate::orm::gis::geometry_to_geojson(&g)
+            .map_err(|e| BackupError::Sqlx(sqlx::Error::Decode(e.into()))),
+    }
+}
+
+#[cfg(not(feature = "postgis"))]
+fn pg_geometry_dump(
+    _row: &sqlx::postgres::PgRow,
+    _name: &str,
+    _nullable: bool,
+) -> Result<Value, BackupError> {
+    Err(BackupError::Sqlx(sqlx::Error::Decode(
+        "dumping a PostGIS geometry requires the `postgis` cargo feature".into(),
+    )))
+}
+
+/// Convert a dumped geometry `Value` (GeoJSON or a WKT/EWKT string) to the EWKT
+/// text that `loaddata` binds into the column, stamped with the column's SRID.
+#[cfg(feature = "postgis")]
+fn geometry_load_ewkt(val: &Value, srid: i32) -> Result<String, String> {
+    crate::orm::gis::coerce_to_ewkt(val, srid)
+}
+
+#[cfg(not(feature = "postgis"))]
+fn geometry_load_ewkt(_val: &Value, _srid: i32) -> Result<String, String> {
+    Err("loading a PostGIS geometry requires the `postgis` cargo feature".to_string())
 }
 
 fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value, BackupError> {
@@ -802,6 +850,7 @@ fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value,
             SqlType::Decimal => row
                 .try_get::<Option<Decimal>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
+            SqlType::Geometry(_) | SqlType::Geography(_) => pg_geometry_dump(row, name, true)?,
             SqlType::BigDecimal => row
                 .try_get::<Option<bigdecimal::BigDecimal>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
@@ -835,6 +884,7 @@ fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value,
         SqlType::BigDecimal => {
             Value::from(row.try_get::<bigdecimal::BigDecimal, _>(name)?.to_string())
         }
+        SqlType::Geometry(_) | SqlType::Geography(_) => pg_geometry_dump(row, name, false)?,
     })
 }
 
@@ -967,6 +1017,8 @@ fn bind_value<'q>(
             SqlType::Bytes => q.bind(None::<Vec<u8>>),
             SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
             SqlType::BigDecimal => unreachable_pg_only(&col.name, "BigDecimal"),
+            SqlType::Geometry(_) => unreachable_pg_only(&col.name, "Geometry"),
+            SqlType::Geography(_) => unreachable_pg_only(&col.name, "Geography"),
         });
     }
     let mismatch = |got: &str| BackupError::TypeMismatch {
@@ -1035,6 +1087,8 @@ fn bind_value<'q>(
         SqlType::Bytes => q.bind(bytes_from_json(table, col, &val)?),
         SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
         SqlType::BigDecimal => unreachable_pg_only(&col.name, "BigDecimal"),
+        SqlType::Geometry(_) => unreachable_pg_only(&col.name, "Geometry"),
+        SqlType::Geography(_) => unreachable_pg_only(&col.name, "Geography"),
     })
 }
 
@@ -1071,6 +1125,8 @@ fn bind_value_pg<'q>(
             SqlType::Bytes => q.bind(None::<Vec<u8>>),
             SqlType::Decimal => q.bind(None::<Decimal>),
             SqlType::BigDecimal => q.bind(None::<bigdecimal::BigDecimal>),
+            // Geometry binds as EWKT text, so its NULL is a NULL text bind.
+            SqlType::Geometry(_) | SqlType::Geography(_) => q.bind(None::<String>),
         });
     }
     let mismatch = |got: &str| BackupError::TypeMismatch {
@@ -1165,6 +1221,13 @@ fn bind_value_pg<'q>(
                 _ => None,
             };
             q.bind(parsed.ok_or_else(|| mismatch(json_type_name(&val)))?)
+        }
+        // Geometry loads from GeoJSON (or a WKT/EWKT string), re-emitted as
+        // EWKT stamped with the column's SRID, then bound as text (the column's
+        // text→geometry cast parses it).
+        SqlType::Geometry(spec) | SqlType::Geography(spec) => {
+            let ewkt = geometry_load_ewkt(&val, spec.srid).map_err(|e| mismatch(&e))?;
+            q.bind(ewkt)
         }
     })
 }

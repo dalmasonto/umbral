@@ -1261,6 +1261,89 @@ pub enum SqlType {
     /// precision numeric type, so the system check rejects a `BigDecimal`
     /// field against a SQLite backend at boot.
     BigDecimal,
+    /// PostGIS `geometry(<kind>, <srid>)` — a planar spatial column.
+    /// Postgres-only, behind the `postgis` cargo feature. The subtype and
+    /// SRID travel inside the [`GeometrySpec`] payload (mirroring how
+    /// `Array(ArrayElement)` nests a `Copy` sub-enum) so `SqlType` stays
+    /// `Copy` and usable in a `const FIELDS` slice, and so the type and its
+    /// SRID stay together the way PostGIS itself models `geometry(Point, 4326)`
+    /// as one column type.
+    Geometry(GeometrySpec),
+    /// PostGIS `geography(<kind>, <srid>)` — a spheroidal spatial column where
+    /// distances are in metres. The spheroidal sibling of [`SqlType::Geometry`].
+    Geography(GeometrySpec),
+}
+
+/// The subtype + SRID of a spatial column ([`SqlType::Geometry`] /
+/// [`SqlType::Geography`]). `Copy` so it nests inside `SqlType` and rides in a
+/// `const FIELDS` slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GeometrySpec {
+    /// The constrained geometry subtype (`Point`, `Polygon`, …), or
+    /// [`GeometryKind::Geometry`] for the unconstrained base type.
+    pub kind: GeometryKind,
+    /// Spatial Reference System Identifier. `4326` (WGS84 lon/lat) is the
+    /// default; `0` means "unspecified SRID" (a `geometry` column with no SRID
+    /// constraint).
+    pub srid: i32,
+}
+
+impl GeometrySpec {
+    /// The common default: unconstrained geometry in WGS84 (SRID 4326).
+    pub const DEFAULT: GeometrySpec = GeometrySpec {
+        kind: GeometryKind::Geometry,
+        srid: 4326,
+    };
+}
+
+/// The PostGIS geometry subtype constraint. `Geometry` is the unconstrained
+/// base type (any subtype allowed); the rest pin the column to one shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum GeometryKind {
+    /// The unconstrained base type — any subtype is accepted.
+    Geometry,
+    Point,
+    LineString,
+    Polygon,
+    MultiPoint,
+    MultiLineString,
+    MultiPolygon,
+    GeometryCollection,
+}
+
+impl GeometryKind {
+    /// The PostGIS type-modifier spelling (`Point`, `MultiPolygon`, …) used
+    /// inside `geometry(<kind>, <srid>)`. `Geometry` (unconstrained) has no
+    /// modifier and renders the bare `geometry` type.
+    pub const fn pg_modifier(self) -> &'static str {
+        match self {
+            GeometryKind::Geometry => "Geometry",
+            GeometryKind::Point => "Point",
+            GeometryKind::LineString => "LineString",
+            GeometryKind::Polygon => "Polygon",
+            GeometryKind::MultiPoint => "MultiPoint",
+            GeometryKind::MultiLineString => "MultiLineString",
+            GeometryKind::MultiPolygon => "MultiPolygon",
+            GeometryKind::GeometryCollection => "GeometryCollection",
+        }
+    }
+
+    /// Parse a `#[umbral(geometry = "...")]` attribute value (case-insensitive)
+    /// into a kind. Returns `None` for an unknown spelling so the macro can
+    /// emit a clear compile error.
+    pub fn from_attr(s: &str) -> Option<GeometryKind> {
+        Some(match s.to_ascii_lowercase().as_str() {
+            "geometry" | "" => GeometryKind::Geometry,
+            "point" => GeometryKind::Point,
+            "linestring" => GeometryKind::LineString,
+            "polygon" => GeometryKind::Polygon,
+            "multipoint" => GeometryKind::MultiPoint,
+            "multilinestring" => GeometryKind::MultiLineString,
+            "multipolygon" => GeometryKind::MultiPolygon,
+            "geometrycollection" => GeometryKind::GeometryCollection,
+            _ => return None,
+        })
+    }
 }
 
 /// Element types valid inside [`SqlType::Array`].

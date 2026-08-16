@@ -1011,6 +1011,9 @@ fn is_postgres_only(ty: crate::orm::SqlType) -> bool {
             // BigDecimal is Postgres-only for the same reason — no
             // arbitrary-precision numeric codec on SQLite.
             | SqlType::BigDecimal
+            // PostGIS spatial types — SQLite has no geometry/geography.
+            | SqlType::Geometry(_)
+            | SqlType::Geography(_)
     )
 }
 

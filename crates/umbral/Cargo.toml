@@ -33,6 +33,12 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 # which native `async fn` in traits is not — hence the macro.
 async-trait = "0.1"
 
+[features]
+# Opt-in PostGIS spatial columns — forwards to `umbral-core/postgis`. Off by
+# default so a non-geo app compiles none of the geo stack. Enable in a consumer
+# with `umbral = { version = "...", features = ["postgis"] }`.
+postgis = ["umbral-core/postgis"]
+
 [dev-dependencies]
 # `tests/models_macro.rs` declares throwaway `#[derive(Model)]`
 # structs to exercise the `models![T, U, V]` macro expansion.

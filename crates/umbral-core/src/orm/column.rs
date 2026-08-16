@@ -3064,6 +3064,89 @@ impl<T> NullableBigDecimalCol<T> {
     }
 }
 
+// =============================================================================
+// GeometryCol — PostGIS geometry / geography columns.
+// =============================================================================
+
+/// A PostGIS spatial column ([`crate::orm::SqlType::Geometry`] /
+/// [`crate::orm::SqlType::Geography`]). The predicate surface is the common
+/// spatial-query vocabulary, rendered as PostGIS `ST_*` calls. Operands are
+/// WKT/EWKT strings (`SRID=4326;POINT(36.8 -1.3)`), bound as text and cast to
+/// `geometry` — so `GeometryCol` itself needs none of the geo stack and stays
+/// available without the `postgis` feature (the feature only gates the value
+/// codec). Spatial columns are Postgres-only, so these render Postgres SQL
+/// only; there is no SQLite variant to reach.
+pub struct GeometryCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> GeometryCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// `ST_DWithin(col, <other>, meters)` — the workhorse "within N of" query.
+    /// On a `geography` column the distance is metres; on `geometry`, SRID
+    /// units. `other` is a WKT/EWKT string.
+    pub fn dwithin(&self, other: &str, distance: f64) -> Predicate<T> {
+        // `$1`/`$2` are sea-query cust placeholders, renumbered globally when
+        // this condition is combined with other filters (the same convention
+        // JsonCol's predicates use). Postgres-only, so no SQLite variant.
+        Predicate::new(Expr::cust_with_values(
+            format!("ST_DWithin(\"{}\", ST_GeomFromEWKT($1), $2)", self.name),
+            [
+                sea_query::Value::from(other.to_string()),
+                sea_query::Value::from(distance),
+            ],
+        ))
+    }
+
+    /// `ST_Intersects(col, <other>)`.
+    pub fn intersects(&self, other: &str) -> Predicate<T> {
+        self.st_binary("ST_Intersects", other)
+    }
+
+    /// `ST_Contains(col, <other>)` — the column's geometry contains `other`.
+    pub fn contains(&self, other: &str) -> Predicate<T> {
+        self.st_binary("ST_Contains", other)
+    }
+
+    /// `ST_Within(col, <other>)` — the column's geometry is within `other`.
+    pub fn within(&self, other: &str) -> Predicate<T> {
+        self.st_binary("ST_Within", other)
+    }
+
+    /// `col && <other>` — the index-accelerated bounding-box overlap operator,
+    /// the cheap pre-filter a GiST index answers directly.
+    pub fn bbox_overlaps(&self, other: &str) -> Predicate<T> {
+        Predicate::new(Expr::cust_with_values(
+            format!("\"{}\" && ST_GeomFromEWKT($1)", self.name),
+            [sea_query::Value::from(other.to_string())],
+        ))
+    }
+
+    fn st_binary(&self, func: &str, other: &str) -> Predicate<T> {
+        Predicate::new(Expr::cust_with_values(
+            format!("{func}(\"{}\", ST_GeomFromEWKT($1))", self.name),
+            [sea_query::Value::from(other.to_string())],
+        ))
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+}
+
 // =========================================================================
 // Gap #24 + #36 — DB-function helpers (`ColExpr<T>`)
 //

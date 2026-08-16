@@ -1,0 +1,86 @@
+---
+title: PostGIS geometry
+description: First-class spatial columns on Postgres — geometry / geography with a subtype and SRID, GiST indexes, GeoJSON serialization, and ST_* spatial predicates in the typed QuerySet.
+sidebar_position: 21
+icon: map-pin
+tags: [orm, postgis, gis, geometry, spatial, postgres]
+---
+
+umbral ships spatial columns as a first-class field type on Postgres, behind the opt-in `postgis` cargo feature. A geometry field carries its subtype and SRID, round-trips as GeoJSON over REST, decodes to [`geo_types`](https://docs.rs/geo-types) in Rust, and gets a GiST index and `ST_*` spatial predicates — the same declare-your-data-and-get-everything loop as the rest of the ORM.
+
+<Callout type="info">
+Spatial types are **Postgres-only**. A geometry field on a SQLite backend fails the boot system check with a clear message, exactly like `ArrayField` and `Decimal`. The geo dependency stack (`geo-types`, `geozero`) compiles **only** when you enable the feature, so a non-geo app pays nothing.
+</Callout>
+
+## Enable the feature
+
+```toml
+# Cargo.toml
+umbral = { version = "0.0.11", features = ["postgis"] }
+```
+
+## Declare a spatial field
+
+The Rust type is always `umbral::orm::gis::Geometry`; the subtype and SRID come from the attribute, because one newtype can't encode them.
+
+```rust
+use umbral::prelude::*;
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Facility {
+    pub id: i64,
+    pub name: String,
+    // A WGS84 point, GiST-indexed for spatial queries.
+    #[umbral(geometry = "point", srid = 4326, index)]
+    pub location: umbral::orm::gis::Geometry,
+}
+```
+
+- `geometry = "..."` selects a **planar** column; `geography = "..."` selects a **spheroidal** one (distances in metres).
+- The subtype is one of `point`, `linestring`, `polygon`, `multipoint`, `multilinestring`, `multipolygon`, `geometrycollection`, or `geometry` for the **unconstrained** base type (accepts any subtype — the right choice when your data mixes `Polygon` and `MultiPolygon`, like most admin boundaries).
+- `srid` defaults to `4326` (WGS84 lon/lat).
+- `#[umbral(index)]` on a spatial column emits a **GiST** index (a B-tree does nothing for spatial predicates), and the migration auto-emits `CREATE EXTENSION IF NOT EXISTS postgis` ahead of the first spatial table.
+
+`makemigrations` renders `location geometry(Point,4326)`, then `migrate` applies it.
+
+## Read and write GeoJSON
+
+The `Geometry` value serialises as a GeoJSON geometry object, so REST clients and Leaflet/Mapbox consume it directly, and writes accept the same shape (or a WKT/EWKT string):
+
+```json
+{ "name": "Kiriari Dispensary", "location": { "type": "Point", "coordinates": [37.47605, -0.3994] } }
+```
+
+In Rust, the column decodes straight into `geo_types`:
+
+```rust
+let f = Facility::objects().get(facility::ID.eq(1)).await?;
+if let geo_types::Geometry::Point(p) = f.location.0 {
+    println!("lon={} lat={}", p.x(), p.y());
+}
+```
+
+## Spatial queries
+
+The generated column constant exposes the common spatial vocabulary. Operands are WKT/EWKT strings (`SRID=4326;POINT(36.8 -1.3)`):
+
+```rust
+// Facilities within 5 km of a point (metres on a `geography` column;
+// SRID units on `geometry`).
+let near = Facility::objects()
+    .filter(facility::LOCATION.dwithin("SRID=4326;POINT(36.8172 -1.2864)", 5000.0))
+    .fetch_pg(&pool)
+    .await?;
+
+// Facilities whose point falls inside a county polygon.
+let inside = Facility::objects()
+    .filter(facility::LOCATION.intersects(county_ewkt))
+    .count()
+    .await?;
+```
+
+Available predicates: `dwithin(other, distance)`, `intersects(other)`, `contains(other)`, `within(other)`, and `bbox_overlaps(other)` (the index-accelerated `&&` bounding-box pre-filter), plus `is_null` / `is_not_null` and ordering.
+
+## Design & scope
+
+See the design note [`docs/decisions/2026-08-08-postgis-and-content-types.md`](https://github.com/dalmasonto/umbral) for the full rationale — how spatial types reuse the existing `SqlType` / backend-gating / migration seams rather than bolting on a parallel system. Deferred for v1: raster, 3D/4D coordinates, topology, in-ORM `ST_Transform`, distance-as-annotation, and the interactive admin map picker.

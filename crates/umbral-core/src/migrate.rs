@@ -1181,6 +1181,23 @@ fn create_gin_index_stmt(table: &str, column: &str) -> String {
     )
 }
 
+/// Build a Postgres `CREATE INDEX ... USING GIST` for a PostGIS spatial
+/// (`SqlType::Geometry` / `SqlType::Geography`) column. Spatial predicates
+/// (`ST_DWithin`, `&&`, …) are only index-accelerated by a GiST index; a plain
+/// B-tree does nothing for them. So an `#[umbral(index)]` on a geometry column
+/// emits GiST rather than the default B-tree. **Postgres-only** — spatial
+/// columns are system-check-gated to Postgres, so this only renders from
+/// `render_operation_postgres`.
+fn create_gist_index_stmt(table: &str, column: &str) -> String {
+    let t = table.replace('"', "\"\"");
+    let c = column.replace('"', "\"\"");
+    format!(
+        "CREATE INDEX IF NOT EXISTS \"idx_{table}_{column}_gist\" ON \"{t}\" USING GIST (\"{c}\")",
+        table = table.replace('"', ""),
+        column = column.replace('"', ""),
+    )
+}
+
 /// Multi-column variant of [`create_index_stmt`]. Closes BUG-7.
 /// Renders `CREATE INDEX IF NOT EXISTS idx_<table>_<col1>_<col2>
 /// ON "<table>" ("<col1>", "<col2>")`. Both backends accept the
@@ -4633,10 +4650,14 @@ fn is_safe_cast(from: SqlType, to: SqlType) -> bool {
 /// would have been created with, not a bare `text` that silently drops the
 /// bound.
 fn postgres_type_sql(col: &Column) -> String {
-    if col.ty == SqlType::Text && col.max_length > 0 {
-        format!("character varying({})", col.max_length)
-    } else {
-        postgres_type_name(col.ty).to_string()
+    match col.ty {
+        SqlType::Text if col.max_length > 0 => format!("character varying({})", col.max_length),
+        // PostGIS spatial types carry their subtype + SRID in the type modifier,
+        // e.g. `geometry(Point,4326)`. Reuse the same renderer the CreateTable
+        // path uses so an ALTER lands on the identical column type.
+        SqlType::Geometry(spec) => crate::backend::pg_spatial_type("geometry", spec),
+        SqlType::Geography(spec) => crate::backend::pg_spatial_type("geography", spec),
+        _ => postgres_type_name(col.ty).to_string(),
     }
 }
 
@@ -4677,6 +4698,11 @@ fn postgres_type_name(ty: SqlType) -> &'static str {
         // Arbitrary-precision `numeric` (no dimensions). Mirrors the
         // unbounded `ColumnType::Decimal(None)` the create path emits.
         BigDecimal => "numeric",
+        // Bare spatial base type. The subtype+SRID-aware form is rendered by
+        // `postgres_type_sql`, which special-cases these before reaching here;
+        // this arm is the unconstrained fallback and keeps the match total.
+        Geometry(_) => "geometry",
+        Geography(_) => "geography",
         // Arrays render as `<inner>[]` in Postgres. The migration
         // engine doesn't model nested element types deeply enough to
         // emit a precise inner type here at v1; fall back to `text[]`
@@ -5148,6 +5174,11 @@ fn should_emit_btree_index(col: &Column) -> bool {
         && (col.index || matches!(col.ty, SqlType::ForeignKey) || col.name == "deleted_at")
 }
 
+/// A PostGIS spatial column — indexed with GiST rather than B-tree.
+fn is_spatial(col: &Column) -> bool {
+    matches!(col.ty, SqlType::Geometry(_) | SqlType::Geography(_))
+}
+
 /// Render one operation against an explicit backend name. The
 /// dispatching seam — the public [`render_operation`] is just
 /// `render_operation_for(op, backend::active().name())`. Splitting
@@ -5489,6 +5520,18 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             {
                 stmts.insert(0, "CREATE EXTENSION IF NOT EXISTS citext".to_string());
             }
+            // gaps5 #22: a spatial column needs the PostGIS extension. Emit the
+            // (idempotent) create BEFORE the table so the `geometry`/`geography`
+            // types resolve — the same pattern as citext. A restricted runtime
+            // role has the operator pre-install it; `IF NOT EXISTS` no-ops then.
+            if columns.iter().any(|c| {
+                matches!(
+                    c.ty,
+                    crate::orm::SqlType::Geometry(_) | crate::orm::SqlType::Geography(_)
+                )
+            }) {
+                stmts.insert(0, "CREATE EXTENSION IF NOT EXISTS postgis".to_string());
+            }
             // `unique_together` as follow-up `CREATE UNIQUE INDEX` (not an
             // inline constraint) so it is droppable by name — see the SQLite
             // render arm for the full rationale.
@@ -5501,6 +5544,11 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
                     // useless for search without one, so the engine never
                     // makes the caller hand-write it.
                     stmts.push(create_gin_index_stmt(table, &col.name));
+                } else if is_spatial(col) && col.index {
+                    // A spatial column marked `#[umbral(index)]` gets a GiST
+                    // index — the only index type spatial predicates use. A
+                    // plain B-tree is meaningless on geometry (gaps5 #22).
+                    stmts.push(create_gist_index_stmt(table, &col.name));
                 } else if should_emit_btree_index(col) {
                     stmts.push(create_index_stmt(table, &col.name));
                 }
@@ -5534,6 +5582,9 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             if matches!(column.ty, crate::orm::SqlType::FullText) {
                 // Auto-GIN for a tsvector column added later (#33).
                 stmts.push(create_gin_index_stmt(table, &column.name));
+            } else if is_spatial(column) && column.index {
+                // GiST for a spatial column added later (gaps5 #22).
+                stmts.push(create_gist_index_stmt(table, &column.name));
             } else if should_emit_btree_index(column) {
                 stmts.push(create_index_stmt(table, &column.name));
             }

@@ -346,6 +346,12 @@ fn ts_type(ty: SqlType) -> String {
         // umbral-rest serialises BYTEA as a JSON array of bytes, not base64.
         SqlType::Bytes => "number[]".to_string(),
         SqlType::Array(element) => format!("{}[]", ts_type(element.to_sql_type())),
+        // PostGIS columns serialise as GeoJSON geometry objects over REST. A
+        // structural type keeps generated clients honest without depending on a
+        // `@types/geojson` import.
+        SqlType::Geometry(_) | SqlType::Geography(_) => {
+            "{ type: string; coordinates: unknown }".to_string()
+        }
         // Unreachable through `push_field`, which resolves an FK to its target's
         // PK type first. Reached only if a caller maps a raw column type; the
         // historical default PK is `i64`.

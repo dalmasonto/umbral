@@ -226,7 +226,26 @@ impl DatabaseBackend for PostgresBackend {
             // as many digits as the value carries. This is the whole point of
             // BigDecimal over the fixed-dimension `Decimal` above.
             SqlType::BigDecimal => ColumnType::Decimal(None),
+            // PostGIS spatial columns render through `custom`, the same escape
+            // hatch `Xml` / `Ltree` / `FullText` use — sea-query has no native
+            // `geometry(Point, 4326)` ColumnType. SRID/kind travel in the spec.
+            SqlType::Geometry(spec) => ColumnType::custom(pg_spatial_type("geometry", spec)),
+            SqlType::Geography(spec) => ColumnType::custom(pg_spatial_type("geography", spec)),
         }
+    }
+}
+
+/// Render a PostGIS spatial type modifier: `geometry(Point,4326)`. The bare
+/// base type (`geometry` / `geography`) is emitted when the column is
+/// unconstrained (`kind == Geometry` and `srid == 0`), matching how PostGIS
+/// itself omits the typmod for an unconstrained column.
+pub(crate) fn pg_spatial_type(base: &str, spec: crate::orm::GeometrySpec) -> String {
+    use crate::orm::GeometryKind;
+    match (spec.kind, spec.srid) {
+        (GeometryKind::Geometry, 0) => base.to_string(),
+        (GeometryKind::Geometry, srid) => format!("{base}(Geometry,{srid})"),
+        (kind, 0) => format!("{base}({})", kind.pg_modifier()),
+        (kind, srid) => format!("{base}({},{srid})", kind.pg_modifier()),
     }
 }
 
@@ -334,6 +353,12 @@ impl DatabaseBackend for SqliteBackend {
             // reason (no arbitrary-precision numeric on SQLite). The
             // field.backend system check should have failed boot before
             // this map runs.
+            // PostGIS geometry/geography are Postgres-only; SQLite has no
+            // spatial types. The field.backend check rejects them at boot.
+            SqlType::Geometry(_) | SqlType::Geography(_) => panic!(
+                "umbral::backend::SqliteBackend::map_type: SqlType::{ty:?} is Postgres-only \
+                 (PostGIS). The field.backend system check should have failed boot."
+            ),
             SqlType::Decimal | SqlType::BigDecimal => panic!(
                 "umbral::backend::SqliteBackend::map_type: SqlType::{ty:?} is Postgres-only. \
                  The field.backend system check should have failed boot."

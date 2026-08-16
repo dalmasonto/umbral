@@ -131,11 +131,30 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 crypto_box = { version = "0.9", features = ["std"] }
 base64 = "0.22"
 rand_core = { version = "0.6", features = ["getrandom"] }
+# PostGIS spatial columns (gaps5 #22 / gaps2 #70) — behind the `postgis`
+# feature so a non-geo app compiles none of the geo stack. `geo-types` is the
+# de-facto Rust geometry value type; `geozero` bridges it to PostGIS's EWKB
+# wire form for sqlx (Encode/Decode) and to GeoJSON (serde). umbral does not
+# reimplement geometry math — the value is the glue into the field system.
+geo-types = { version = "0.7", optional = true }
+geozero = { version = "0.15", default-features = false, features = ["with-geo", "with-geojson", "with-wkb", "with-postgis-sqlx"], optional = true }
+
+[features]
+# Opt-in PostGIS `geometry` / `geography` column types. Pulls the geo codec
+# stack; off by default so the common (non-geo) app pays zero extra packages.
+postgis = ["dep:geo-types", "dep:geozero"]
 
 [dev-dependencies]
 # figment::Jail (for env-var and toml file sandboxing in tests) lives behind
 # the "test" feature.
 figment = { version = "0.10", features = ["test"] }
+# PostGIS end-to-end test (tests/postgis_field.rs, `postgis` feature) reads the
+# real Kenyan GeoJSON datasets — `zip` unpacks the boundaries archive and
+# `geo-types` lets the test assert the decoded `Geometry` is a Point. Integration
+# tests are a separate crate and only see dev-deps, so these are named here even
+# though geo-types is already an optional lib dep under the feature.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+geo-types = "0.7"
 # `stream::iter` to synthesize streams in the streaming-response tests
 # (feature #70). It's also a normal dep, but integration tests are a
 # separate crate and only see dev-deps; the full feature set carries the
