@@ -1015,6 +1015,14 @@ fn filter_parameters(model: &ModelMeta) -> Vec<Value> {
         if col.primary_key {
             continue;
         }
+        // Never advertise a filter parameter for a column hidden from the
+        // response body (secret / private / `.hide()`d): the spec would
+        // publish `password_hash__startswith` etc. as documented filters —
+        // exactly the extraction oracle the REST layer now blocks. Mirrors
+        // the response/search/FK schema helpers, which all guard the same.
+        if umbral_rest::is_hidden(&model.table, &col.name) {
+            continue;
+        }
         let lookups = umbral_rest::filtering::applicable_lookups(col);
         for lookup in lookups {
             let name = if lookup == "eq" {
