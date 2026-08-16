@@ -57,6 +57,11 @@ pub struct Doc {
     pub title: String,
 }
 
+// gaps5 #105: opt into typed column consts for the base-inherited fields,
+// bound to `Note`. This makes `Note::ID` / `Note::CREATED_AT` /
+// `Note::UPDATED_AT` usable in `filter` / `order_by` like own-field consts.
+umbral::mixin_cols!(Note: TimeStamped);
+
 /// The embedded base's columns land in `Note::FIELDS`, in declaration
 /// order (base first, then the model's own fields), each carrying the
 /// attribute it was declared with on the base.
@@ -99,6 +104,24 @@ fn auto_now_attributes_survive_the_flatten() {
         .find(|f| f.name == "updated_at")
         .expect("updated_at inherited from base");
     assert!(updated.auto_now, "updated_at should keep auto_now");
+}
+
+/// `mixin_cols!` generates typed consts for the base-inherited columns
+/// (`Note::ID`, `Note::CREATED_AT`, `Note::UPDATED_AT`), usable in
+/// `filter` / `order_by` exactly like a model's own field consts — closing
+/// the gaps5 #105 gap.
+#[tokio::test]
+async fn mixin_cols_generates_typed_base_column_consts() {
+    boot().await;
+    // If the consts didn't exist or had the wrong Col type, this wouldn't
+    // compile; running it proves the built predicate/order are valid SQL.
+    let _ = Note::objects()
+        .filter(Note::ID.ge(0))
+        .order_by(Note::CREATED_AT.desc())
+        .order_by(Note::UPDATED_AT.asc())
+        .count()
+        .await
+        .expect("query builds and runs with base-column consts");
 }
 
 // --------------------------------------------------------------------- //

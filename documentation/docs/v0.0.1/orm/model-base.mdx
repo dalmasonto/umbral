@@ -111,15 +111,22 @@ When several bases are embedded, at most one may declare the primary key. A base
 
 A base field supports the exact same `#[umbral(...)]` attributes as a model field — `primary_key`, `auto_now_add`, `auto_now`, `unique`, `index`, `default`, `max_length`, `choices`, FK options, and so on. They are resolved on the base's own derive, so the column behaves identically whether it was declared inline or inherited.
 
-<Callout type="warning">
-**Typed column constants for base fields are not generated yet.** A model's *own* fields get typed constants like `article::TITLE` for building `filter` / `order_by` predicates. Base-**inherited** columns don't have them yet, so you can't currently `filter`/`order_by` a base column through the typed `QuerySet` API:
+## Typed column constants for base fields
+
+A model's *own* fields get typed constants (`article::TITLE`, `Article::TITLE`) for building `filter` / `order_by` predicates. Base-**inherited** columns need one opt-in line — `mixin_cols!` — to get the same, bound to your model:
 
 ```rust
-Article::objects().filter(article::TITLE.eq("Hello"))   // own field — works
-// article::CREATED_AT does not exist yet — see the note below
+umbral::mixin_cols!(Article: TimeStamped);   // one line, after the struct
+
+Article::objects()
+    .filter(Article::ID.ge(100))
+    .order_by(Article::CREATED_AT.desc())     // now typed, like an own field
 ```
 
-The columns are fully functional for **migrations, inserts, auto-stamping, and reads** today — this only affects *typed query building* on the inherited columns. If you need to filter or order by a shared column right now, either declare that one column on the model directly, or reach it through the dynamic query API (`DynQuerySet::for_meta`, which the admin/REST layer uses and addresses columns by name). Tracked as planning `gaps5 #105`.
+`mixin_cols!(Model: Base)` generates `Model::ID`, `Model::CREATED_AT`, … for every column the base contributes. Pass several bases (`mixin_cols!(Comment: TimeStamped, SoftDeleteBase)`) to pull consts from each.
+
+<Callout type="info">
+**Same-crate vs. cross-crate.** When the base lives in the **same crate** as the model (the common case), name it as you normally would — `mixin_cols!(Article: TimeStamped)`. When the base comes from **another crate**, spell that crate so the generated-const macro resolves: `mixin_cols!(Article: shared::TimeStamped)`. Without `mixin_cols!` the base columns still fully work for migrations, inserts, auto-stamping and reads — you only lose the typed *query* consts.
 </Callout>
 
 ## See also

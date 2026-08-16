@@ -143,6 +143,83 @@ enum EmitMode {
     Base,
 }
 
+/// `mixin_cols!(Model: Base1, Base2)` — generate the typed column consts
+/// for a model's `#[umbral(flatten)]`-inherited base fields, bound to the
+/// model (gaps5 #105). Emits `impl Model { … }` carrying, per base
+/// column, a `pub const NAME: <Col>Col<Model>` — so `Model::CREATED_AT`
+/// works in `filter` / `order_by`, exactly like a model's own field const.
+///
+/// The consts come from a `macro_rules!` the `#[derive(ModelBase)]` on the
+/// base emitted. That macro is `#[macro_export]` (crate root), so a base
+/// in the same crate is referenced unqualified; a base in another crate
+/// must be spelled with its crate (`mixin_cols!(Model: their_crate::Base)`)
+/// so the macro resolves.
+#[proc_macro]
+pub fn mixin_cols(input: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(input as MixinCols);
+    let model = &parsed.model;
+    let invocations = parsed.bases.iter().map(|base| {
+        let macro_path = base_cols_macro_path(base);
+        quote! { #macro_path!(#model); }
+    });
+    quote! {
+        impl #model {
+            #(#invocations)*
+        }
+    }
+    .into()
+}
+
+/// Parsed form of `mixin_cols!(Model: Base1, Base2 [+ …])`.
+struct MixinCols {
+    model: syn::Type,
+    bases: Vec<syn::TypePath>,
+}
+
+impl syn::parse::Parse for MixinCols {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let model: syn::Type = input.parse()?;
+        input.parse::<syn::Token![:]>()?;
+        let mut bases = Vec::new();
+        loop {
+            bases.push(input.parse::<syn::TypePath>()?);
+            if input.peek(syn::Token![,]) {
+                input.parse::<syn::Token![,]>()?;
+            } else if input.peek(syn::Token![+]) {
+                input.parse::<syn::Token![+]>()?;
+            } else {
+                break;
+            }
+            if input.is_empty() {
+                break;
+            }
+        }
+        Ok(MixinCols { model, bases })
+    }
+}
+
+/// Path to the `__umbral_base_cols_<Base>` macro the base's `ModelBase`
+/// derive emitted. `#[macro_export]` places it at the base crate's ROOT
+/// (not the base's module), so: a base named with a leading foreign-crate
+/// segment resolves as `<crate>::__umbral_base_cols_<Base>`; a same-crate
+/// base (bare, or `crate::`/`self::`/`super::`-prefixed) resolves
+/// unqualified.
+fn base_cols_macro_path(base: &syn::TypePath) -> TokenStream2 {
+    let segs = &base.path.segments;
+    let last = segs.last().expect("a type path has at least one segment");
+    let macro_ident = format_ident!("__umbral_base_cols_{}", last.ident);
+    let first = &segs.first().unwrap().ident;
+    let leading_is_crate = matches!(
+        first.to_string().as_str(),
+        "crate" | "self" | "super" | "Self"
+    );
+    if segs.len() > 1 && !leading_is_crate {
+        quote! { #first::#macro_ident }
+    } else {
+        quote! { #macro_ident }
+    }
+}
+
 /// Parse the struct-level `#[umbral(...)]` attribute. M3.1 ships
 /// `table = "..."` to override the default snake_case-of-struct-name
 /// table name. Gap 30 adds `plugin = "..."` so a plugin-owned model
@@ -2361,6 +2438,27 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                  via `#[umbral(flatten)]` yet — inline the shared fields.",
             ));
         }
+        // gaps5 #105: emit a companion `macro_rules!` that produces the base's
+        // typed column consts (`CREATED_AT`, …) bound to a caller-supplied
+        // model type `$model`. `mixin_cols!(Model: Base)` invokes it inside
+        // `impl Model {}`, so a model embedding this base can opt into
+        // `Model::CREATED_AT` for typed filter/order_by. `#[macro_export]`
+        // hoists it to the crate root (usable unqualified same-crate;
+        // `<crate>::__umbral_base_cols_<Base>!` cross-crate).
+        let mut base_col_consts: Vec<TokenStream2> = Vec::new();
+        for field in fields.iter() {
+            let fname = field.ident.as_ref().unwrap();
+            let fname_str = fname.to_string();
+            let kind = classify_field_type(&field.ty);
+            if let Some(col_ident) = col_type_ident(&kind) {
+                let const_ident = format_ident!("{}", to_screaming_snake_case(&fname_str));
+                base_col_consts.push(quote! {
+                    pub const #const_ident: ::umbral::orm::column::#col_ident<$model> =
+                        ::umbral::orm::column::#col_ident::new(#fname_str);
+                });
+            }
+        }
+        let cols_macro_ident = format_ident!("__umbral_base_cols_{}", struct_name);
         return Ok(quote! {
             impl ::umbral::orm::ModelBase for #struct_name {
                 const BASE_FIELDS: &'static [::umbral::orm::FieldSpec] = &[ #(#field_specs),* ];
@@ -2369,6 +2467,14 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 fn base_primary_key(&self) -> Self::BasePrimaryKey {
                     #primary_key_body
                 }
+            }
+
+            #[macro_export]
+            #[doc(hidden)]
+            macro_rules! #cols_macro_ident {
+                ($model:ty) => {
+                    #(#base_col_consts)*
+                };
             }
         });
     }
@@ -3637,23 +3743,19 @@ fn option_inner(ty: &Type) -> Option<&Type> {
 /// `format_ident!` and spliced into a fully-qualified `::umbral::orm::column::...`
 /// path so the emitted module needs no `use` imports — every plugin or
 /// user crate that derives `Model` gets the same path resolution.
-fn column_const_for(
-    struct_name: &syn::Ident,
-    module_name: &syn::Ident,
-    field_name: &str,
-    field: &Field,
-    kind: &FieldKind,
-) -> (TokenStream2, TokenStream2) {
-    let const_ident = format_ident!("{}", to_screaming_snake_case(field_name));
-    let span = field.ty.span();
-    let col_ident = match kind {
+/// Map a field's `FieldKind` to the query-column type ident
+/// (`IntCol`, `DateTimeCol`, `NullableStrCol`, …) under
+/// `::umbral::orm::column`. Returns `None` for kinds that own no scalar
+/// column const (M2M / reverse relations / unsupported), which the
+/// callers translate into "emit nothing". Shared by `column_const_for`
+/// (a model's own fields) and the `ModelBase` derive's base-cols macro
+/// (gaps5 #105).
+fn col_type_ident(kind: &FieldKind) -> Option<syn::Ident> {
+    let ident = match kind {
         FieldKind::SmallInt | FieldKind::Integer | FieldKind::BigInt => format_ident!("IntCol"),
         FieldKind::Real | FieldKind::Double => format_ident!("F64Col"),
         FieldKind::Bool => format_ident!("BoolCol"),
         FieldKind::Str => format_ident!("StrCol"),
-        // BUG-11/12/13: the validator wrappers expose the same
-        // text-column query surface (`eq`, `ilike`, `contains`,
-        // etc.) as a plain `String` field; reuse `StrCol`.
         FieldKind::Slug | FieldKind::Email | FieldKind::Url => format_ident!("StrCol"),
         FieldKind::Date => format_ident!("DateCol"),
         FieldKind::Time => format_ident!("TimeCol"),
@@ -3691,28 +3793,37 @@ fn column_const_for(
         FieldKind::NullableForeignKey(_) => format_ident!("NullableForeignKeyCol"),
         FieldKind::Bytes => format_ident!("BytesCol"),
         FieldKind::NullableBytes => format_ident!("NullableBytesCol"),
-        // FileField / ImageField are TEXT newtypes — the column const is
-        // a string column, same as a plain `String` field, so filter
-        // chains like `post::COVER.eq("key")` work.
         FieldKind::FileField | FieldKind::ImageField => format_ident!("StrCol"),
         FieldKind::NullableFileField | FieldKind::NullableImageField => {
             format_ident!("NullableStrCol")
         }
-        // Masked is a TEXT column storing ciphertext. The column const is
-        // a string column so the field is referenceable, but note that
-        // filtering by plaintext is meaningless (each seal is distinct).
+        // Masked is a TEXT column storing ciphertext — referenceable as a
+        // string column, though filtering by plaintext is meaningless.
         FieldKind::Masked => format_ident!("StrCol"),
         FieldKind::NullableMasked => format_ident!("NullableStrCol"),
         FieldKind::Decimal => format_ident!("DecimalCol"),
         FieldKind::NullableDecimal => format_ident!("NullableDecimalCol"),
-        // MultiChoice and Many2Many are handled inline by the caller,
-        // so these arms are unreachable in practice. We return an empty
-        // token stream as a defensive default.
-        FieldKind::MultiChoice(_) => return (TokenStream2::new(), TokenStream2::new()),
-        FieldKind::Many2Many(_) => return (TokenStream2::new(), TokenStream2::new()),
-        FieldKind::ReverseSet(_) => return (TokenStream2::new(), TokenStream2::new()),
-        FieldKind::OneToOne(_) => return (TokenStream2::new(), TokenStream2::new()),
-        FieldKind::Unsupported(_) => return (TokenStream2::new(), TokenStream2::new()),
+        // Relations / unsupported own no scalar column const.
+        FieldKind::MultiChoice(_)
+        | FieldKind::Many2Many(_)
+        | FieldKind::ReverseSet(_)
+        | FieldKind::OneToOne(_)
+        | FieldKind::Unsupported(_) => return None,
+    };
+    Some(ident)
+}
+
+fn column_const_for(
+    struct_name: &syn::Ident,
+    module_name: &syn::Ident,
+    field_name: &str,
+    field: &Field,
+    kind: &FieldKind,
+) -> (TokenStream2, TokenStream2) {
+    let const_ident = format_ident!("{}", to_screaming_snake_case(field_name));
+    let span = field.ty.span();
+    let Some(col_ident) = col_type_ident(kind) else {
+        return (TokenStream2::new(), TokenStream2::new());
     };
     // The module-level const (`module::COL`), and its associated-const
     // alias on the struct (`Model::COL`) — gaps2 #38. The alias just points

@@ -27,7 +27,7 @@ The whole design turns on one constraint: **a proc-macro sees only its own struc
 - Mode-flag reuse (not extracting the ~400-line FieldSpec block) keeps a base's attribute support identical to a model's and avoids drift.
 
 ## Pitfalls
-- **Typed column consts for base fields don't exist yet** (`article::CREATED_AT`). Own fields get them; inherited ones must be queried by name (`.order_by("-created_at")`). Reason: same cross-struct-visibility limit; a fix needs a `ModelBase`-exported `macro_rules!` invoked as `mixin_cols!(Model: Base)`, and cross-crate macro resolution is the hard part. Tracked as `gaps5 #105`.
+- **Typed column consts for base fields need one opt-in line** (gaps5 #105, shipped): `umbral::mixin_cols!(Model: Base)` emits `Model::CREATED_AT` etc. into an `impl Model {}` via a `#[macro_export] macro_rules! __umbral_base_cols_<Base>` the `ModelBase` derive generates. It's NOT automatic in `#[derive(Model)]` — an unconditional macro call would break cross-crate flatten with "unresolved macro". Cross-crate: spell the base's crate (`mixin_cols!(Model: shared::Base)`) so the `#[macro_export]`-rooted macro resolves. Note: **there is no string-based `order_by`/filter** — both require a `Col`/`OrderExpr` const, which is why `mixin_cols!` (or declaring the column on the model) is the only way to typed-query a base column.
 - A base cannot itself embed another base via `#[umbral(flatten)]` yet (the derive errors).
 - The user MUST write all three attrs on the field: `#[umbral(flatten)]` (columns) + `#[serde(flatten)]` + `#[sqlx(flatten)]` (values). Missing serde/sqlx flatten → values won't round-trip.
 

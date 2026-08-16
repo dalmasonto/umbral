@@ -59,6 +59,13 @@ pub mod prelude {
 /// `async fn` in a trait is not.
 pub use async_trait::async_trait;
 
+/// `umbral::mixin_cols!(Model: Base)` — generate the typed column consts
+/// (`Model::CREATED_AT`, …) for a model's `#[umbral(flatten)]`-inherited
+/// [`ModelBase`](orm::ModelBase) fields, so they're usable in `filter` /
+/// `order_by` just like a model's own field consts. See the ORM
+/// "reusable model bases" docs.
+pub use umbral_macros::mixin_cols;
+
 /// Resolve a list of `Model` types to their `TABLE` strings.
 /// Use anywhere an API takes table names — admin config, model
 /// allowlists, anywhere — so a `#[umbral(table = "...")]` rename
