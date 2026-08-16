@@ -130,8 +130,7 @@ Local evidence anchors used repeatedly:
 27. [tf#240] [MEDIUM] Data migrations are raw SQL only.
     Evidence: `documentation/docs/v0.0.1/migrations/data-migrations.mdx:11-13` says data migrations are hand-authored `RunSql`. Recommended fix: add `RunCode`/Rust data migration hooks with transaction access, typed model APIs, batching helpers, idempotency helpers, and tenant-aware execution.
 
-28. [tf#241] [MEDIUM] Migration specs are stale.
-    Evidence: `docs/specs/06-migration-engine.md:21-25` still says index ops and `RunSql` are deferred even though code/docs ship them. Recommended fix: run a docs/spec drift audit and make implementation docs trustworthy before external adoption.
+28. [x] [tf#241] Migration specs are stale — FIXED. The spec (`docs/specs/06-migration-engine.md`) was already accurate (its "Shipped since" bullet lists index ops + `RunSql`). The residual drift was a stale doc-comment above `enum Operation` in `crates/umbral-core/src/migrate.rs` claiming `AlterColumn` / index-constraint ops / `RunSql` were deferred — all shipped. Corrected to list what actually shipped (table ops, Add/DropColumn, AlterColumn nullable flips, Add/DropIndex, Rename*, Create/DropView, M2M junctions, SetColumnComment, RunSql) vs still-deferred (AlterColumn type changes, PK flips, RunCode). A full spec drift-audit (the broader #80) remains.
 
 29. [tf#242] [HIGH] Database branching/preview environments are missing.
     Evidence: Supabase has a strong branching/preview workflow; Umbra has migrations and inspectdb but no per-PR database branch workflow. Recommended fix: add CLI recipes for ephemeral DBs, shadow databases, schema diffs, seed data, and teardown.

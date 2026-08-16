@@ -623,10 +623,14 @@ fn hex(bytes: &[u8]) -> String {
 /// map_type`) and runs them in declaration order inside one
 /// transaction per migration file.
 ///
-/// M5 v1 shipped table-level ops; M8 v1 adds `AddColumn` and
-/// `DropColumn`. `AlterColumn`, index / constraint ops, and
-/// `RunSql` / `RunCode` are deferred (see `docs/specs/06-migration-
-/// engine.md`).
+/// Shipped: table-level ops (`CreateTable` / `DropTable`), `AddColumn` /
+/// `DropColumn`, `AlterColumn` (nullable flips), index / constraint ops
+/// (`AddIndex` / `DropIndex`), rename detection (`RenameTable` /
+/// `RenameColumn`), database views (`CreateView` / `DropView`), M2M junction
+/// tables (`CreateM2MTable` / `DropM2MTable`), column comments
+/// (`SetColumnComment`), and the `RunSql` data-migration escape hatch.
+/// Still deferred: `AlterColumn` **type changes**, primary-key flips, and the
+/// `RunCode` Rust data-migration op. See `docs/specs/06-migration-engine.md`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Operation {
