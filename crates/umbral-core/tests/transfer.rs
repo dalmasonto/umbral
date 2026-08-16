@@ -13,6 +13,9 @@ use umbral::transfer::{TransferOptions, fk_topo_order, transfer};
 pub struct Author {
     pub id: i64,
     pub name: String,
+    // Exercises cross-backend coercion: SQLite stores bool as 0/1, Postgres as
+    // a native boolean. Nullable so existing seeds that omit it stay valid.
+    pub active: Option<bool>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
@@ -56,7 +59,7 @@ async fn create_schema(pool: &SqlitePool) {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE author (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+    sqlx::query("CREATE TABLE author (id INTEGER PRIMARY KEY, name TEXT NOT NULL, active BOOLEAN)")
         .execute(pool)
         .await
         .unwrap();
@@ -182,6 +185,96 @@ async fn transfer_copies_m2m_junction_rows() {
     let links: Vec<(i64, i64)> =
         sqlx::query_as("SELECT parent_id, child_id FROM book_tags ORDER BY parent_id, child_id")
             .fetch_all(&target)
+            .await
+            .unwrap();
+    assert_eq!(links, vec![(10, 100), (10, 200)]);
+}
+
+/// Cross-backend: SQLite source -> Postgres target. Proves the backend-
+/// dispatched read/write round-trips ids, a boolean (0/1 -> native bool), a FK,
+/// and an M2M junction across the two engines. Runs only with
+/// `UMBRAL_TEST_POSTGRES_URL` set to a writable Postgres.
+#[tokio::test]
+async fn transfer_sqlite_to_postgres_cross_backend() {
+    let Ok(pg_url) = std::env::var("UMBRAL_TEST_POSTGRES_URL") else {
+        eprintln!("skipping cross-backend test: UMBRAL_TEST_POSTGRES_URL not set");
+        return;
+    };
+    boot().await;
+    let dir = TempDir::new().unwrap();
+    let source = open(&dir.path().join("xb_src.sqlite3")).await;
+    create_schema(&source).await;
+
+    let pg = umbral::db::connect(&pg_url).await.expect("connect pg");
+    let umbral::db::DbPool::Postgres(pgpool) = &pg else {
+        panic!("UMBRAL_TEST_POSTGRES_URL must be a Postgres URL");
+    };
+    for stmt in [
+        "DROP TABLE IF EXISTS book_tags, book, tag, author, umbral_transfer_state CASCADE",
+        "CREATE TABLE author (id BIGINT PRIMARY KEY, name TEXT NOT NULL, active BOOLEAN)",
+        "CREATE TABLE tag (id BIGINT PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE book (id BIGINT PRIMARY KEY, title TEXT NOT NULL, \
+         author_id BIGINT NOT NULL REFERENCES author(id))",
+        "CREATE TABLE book_tags (\
+         parent_id BIGINT NOT NULL REFERENCES book(id) ON DELETE CASCADE, \
+         child_id BIGINT NOT NULL REFERENCES tag(id) ON DELETE CASCADE, \
+         PRIMARY KEY (parent_id, child_id))",
+    ] {
+        sqlx::query(stmt).execute(pgpool).await.expect("pg ddl");
+    }
+
+    // Seed the SQLite source: non-contiguous ids, a boolean (as 0/1), M2M links.
+    sqlx::query("INSERT INTO author (id, name, active) VALUES (5, 'Ada', 1), (9, 'Grace', 0)")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO tag (id, name) VALUES (100, 'rust'), (200, 'db')")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO book (id, title, author_id) VALUES (10, 'A', 5)")
+        .execute(&source)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO book_tags (parent_id, child_id) VALUES (10, 100), (10, 200)")
+        .execute(&source)
+        .await
+        .unwrap();
+
+    let src = umbral::db::DbPool::Sqlite(source);
+    let metas = vec![
+        ModelMeta::for_::<Author>(),
+        ModelMeta::for_::<Tag>(),
+        ModelMeta::for_::<Book>(),
+    ];
+    let report = transfer(&src, &pg, metas, &TransferOptions::default())
+        .await
+        .expect("cross-backend transfer");
+    assert!(report.rows >= 5, "authors+tags+book+links; got {report:?}");
+
+    // PKs + boolean coerced onto native Postgres types.
+    let authors: Vec<(i64, String, Option<bool>)> =
+        sqlx::query_as("SELECT id, name, active FROM author ORDER BY id")
+            .fetch_all(pgpool)
+            .await
+            .unwrap();
+    assert_eq!(
+        authors,
+        vec![
+            (5, "Ada".into(), Some(true)),
+            (9, "Grace".into(), Some(false))
+        ]
+    );
+    // FK preserved.
+    let books: Vec<(i64, i64)> = sqlx::query_as("SELECT id, author_id FROM book")
+        .fetch_all(pgpool)
+        .await
+        .unwrap();
+    assert_eq!(books, vec![(10, 5)]);
+    // M2M junction copied across backends.
+    let links: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT parent_id, child_id FROM book_tags ORDER BY parent_id, child_id")
+            .fetch_all(pgpool)
             .await
             .unwrap();
     assert_eq!(links, vec![(10, 100), (10, 200)]);

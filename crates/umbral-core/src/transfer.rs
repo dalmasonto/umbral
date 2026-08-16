@@ -169,10 +169,49 @@ fn collect_junctions(models: &[ModelMeta]) -> Vec<Junction> {
     out
 }
 
-/// Whether an id column of this type reads/binds as `i64` (vs `String` for
-/// UUID / slug PKs). Junction ids are only ever PK types.
-fn is_int_id(ty: SqlType) -> bool {
-    matches!(ty, SqlType::Integer | SqlType::BigInt | SqlType::SmallInt)
+/// How a junction id column reads and binds. Junction ids are only ever PK
+/// types, so integer, UUID, or a string (slug) PK.
+#[derive(Clone, Copy, PartialEq)]
+enum IdKind {
+    Int,
+    Uuid,
+    Text,
+}
+
+fn id_kind(ty: SqlType) -> IdKind {
+    match ty {
+        SqlType::Integer | SqlType::BigInt | SqlType::SmallInt => IdKind::Int,
+        SqlType::Uuid => IdKind::Uuid,
+        _ => IdKind::Text,
+    }
+}
+
+/// Read one junction id column from a SQLite row into JSON. SQLite stores a UUID
+/// as TEXT, but decoding through `uuid::Uuid` normalises it either way.
+fn read_id_sqlite(
+    row: &sqlx::sqlite::SqliteRow,
+    idx: usize,
+    ty: SqlType,
+) -> Result<serde_json::Value, TransferError> {
+    Ok(match id_kind(ty) {
+        IdKind::Int => serde_json::Value::from(row.try_get::<i64, _>(idx)?),
+        IdKind::Uuid => serde_json::Value::from(row.try_get::<uuid::Uuid, _>(idx)?.to_string()),
+        IdKind::Text => serde_json::Value::from(row.try_get::<String, _>(idx)?),
+    })
+}
+
+/// Read one junction id column from a Postgres row into JSON. A UUID is a native
+/// pg type, so it decodes through `uuid::Uuid` (a `String` read would fail).
+fn read_id_pg(
+    row: &sqlx::postgres::PgRow,
+    idx: usize,
+    ty: SqlType,
+) -> Result<serde_json::Value, TransferError> {
+    Ok(match id_kind(ty) {
+        IdKind::Int => serde_json::Value::from(row.try_get::<i64, _>(idx)?),
+        IdKind::Uuid => serde_json::Value::from(row.try_get::<uuid::Uuid, _>(idx)?.to_string()),
+        IdKind::Text => serde_json::Value::from(row.try_get::<String, _>(idx)?),
+    })
 }
 
 /// A `pk > last` keyset condition. Handles integer and string/uuid PKs (the
@@ -457,14 +496,9 @@ fn decode_pair(v: serde_json::Value) -> Option<(serde_json::Value, serde_json::V
     }
 }
 
-/// A junction id column reads as `i64` or `String` per its PK type; JSON `null`
-/// never occurs (both columns are the composite PK).
-fn id_as_json_i64(v: i64) -> serde_json::Value {
-    serde_json::Value::from(v)
-}
-
 /// Read one keyset page of `(parent_id, child_id)` rows from a source junction,
-/// after `last` in composite order.
+/// after `last` in composite order. Backend + id-kind aware, so a UUID junction
+/// id decodes natively on either end.
 async fn read_junction_batch(
     source: &DbPool,
     jn: &Junction,
@@ -486,29 +520,14 @@ async fn read_junction_batch(
             );
             let mut q = sqlx::query(&sql);
             if let Some((p, c)) = last {
-                q = if is_int_id(jn.parent_ty) {
-                    q.bind(p.as_i64())
-                } else {
-                    q.bind(p.as_str().map(str::to_string))
-                };
-                q = if is_int_id(jn.child_ty) {
-                    q.bind(c.as_i64())
-                } else {
-                    q.bind(c.as_str().map(str::to_string))
-                };
+                q = bind_id_sqlite(q, p, jn.parent_ty);
+                q = bind_id_sqlite(q, c, jn.child_ty);
             }
             for row in q.fetch_all(pool).await? {
-                let p = if is_int_id(jn.parent_ty) {
-                    id_as_json_i64(row.try_get::<i64, _>(0)?)
-                } else {
-                    serde_json::Value::from(row.try_get::<String, _>(0)?)
-                };
-                let c = if is_int_id(jn.child_ty) {
-                    id_as_json_i64(row.try_get::<i64, _>(1)?)
-                } else {
-                    serde_json::Value::from(row.try_get::<String, _>(1)?)
-                };
-                out.push((p, c));
+                out.push((
+                    read_id_sqlite(&row, 0, jn.parent_ty)?,
+                    read_id_sqlite(&row, 1, jn.child_ty)?,
+                ));
             }
         }
         DbPool::Postgres(pool) => {
@@ -523,33 +542,45 @@ async fn read_junction_batch(
             );
             let mut q = sqlx::query(&sql);
             if let Some((p, c)) = last {
-                q = if is_int_id(jn.parent_ty) {
-                    q.bind(p.as_i64())
-                } else {
-                    q.bind(p.as_str().map(str::to_string))
-                };
-                q = if is_int_id(jn.child_ty) {
-                    q.bind(c.as_i64())
-                } else {
-                    q.bind(c.as_str().map(str::to_string))
-                };
+                q = bind_id_pg(q, p, jn.parent_ty);
+                q = bind_id_pg(q, c, jn.child_ty);
             }
             for row in q.fetch_all(pool).await? {
-                let p = if is_int_id(jn.parent_ty) {
-                    id_as_json_i64(row.try_get::<i64, _>(0)?)
-                } else {
-                    serde_json::Value::from(row.try_get::<String, _>(0)?)
-                };
-                let c = if is_int_id(jn.child_ty) {
-                    id_as_json_i64(row.try_get::<i64, _>(1)?)
-                } else {
-                    serde_json::Value::from(row.try_get::<String, _>(1)?)
-                };
-                out.push((p, c));
+                out.push((
+                    read_id_pg(&row, 0, jn.parent_ty)?,
+                    read_id_pg(&row, 1, jn.child_ty)?,
+                ));
             }
         }
     }
     Ok(out)
+}
+
+/// Bind a junction id into a SQLite query per its kind (UUID + slug both bind as
+/// TEXT on SQLite).
+fn bind_id_sqlite<'q>(
+    q: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    v: &serde_json::Value,
+    ty: SqlType,
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+    match id_kind(ty) {
+        IdKind::Int => q.bind(v.as_i64()),
+        _ => q.bind(v.as_str().map(str::to_string)),
+    }
+}
+
+/// Bind a junction id into a Postgres query per its kind — a UUID binds as the
+/// native `uuid::Uuid` (a `String` bind would be rejected by the pg type).
+fn bind_id_pg<'q>(
+    q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    v: &serde_json::Value,
+    ty: SqlType,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    match id_kind(ty) {
+        IdKind::Int => q.bind(v.as_i64()),
+        IdKind::Uuid => q.bind(v.as_str().and_then(|s| uuid::Uuid::parse_str(s).ok())),
+        IdKind::Text => q.bind(v.as_str().map(str::to_string)),
+    }
 }
 
 /// Insert one junction row into the target inside the batch transaction. The
@@ -570,16 +601,8 @@ async fn insert_junction_in_tx(
             );
             let inner = tx.as_sqlite_mut().expect("sqlite backend");
             let mut q = sqlx::query(&sql);
-            q = if is_int_id(jn.parent_ty) {
-                q.bind(p.as_i64())
-            } else {
-                q.bind(p.as_str().map(str::to_string))
-            };
-            q = if is_int_id(jn.child_ty) {
-                q.bind(c.as_i64())
-            } else {
-                q.bind(c.as_str().map(str::to_string))
-            };
+            q = bind_id_sqlite(q, p, jn.parent_ty);
+            q = bind_id_sqlite(q, c, jn.child_ty);
             q.execute(&mut **inner).await?;
         }
         _ => {
@@ -589,16 +612,8 @@ async fn insert_junction_in_tx(
             );
             let inner = tx.as_pg_mut().expect("postgres backend");
             let mut q = sqlx::query(&sql);
-            q = if is_int_id(jn.parent_ty) {
-                q.bind(p.as_i64())
-            } else {
-                q.bind(p.as_str().map(str::to_string))
-            };
-            q = if is_int_id(jn.child_ty) {
-                q.bind(c.as_i64())
-            } else {
-                q.bind(c.as_str().map(str::to_string))
-            };
+            q = bind_id_pg(q, p, jn.parent_ty);
+            q = bind_id_pg(q, c, jn.child_ty);
             q.execute(&mut **inner).await?;
         }
     }

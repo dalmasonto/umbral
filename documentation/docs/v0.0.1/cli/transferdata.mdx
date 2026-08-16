@@ -31,7 +31,11 @@ cargo run -- transferdata \
   --batch 5000
 ```
 
-The source is opened read-only; the target read-write.
+The source is opened read-only; the target read-write. The two ends need not
+share a backend — a **SQLite → Postgres** move works (values coerce to the
+target's native types: SQLite `0`/`1` → a Postgres `boolean`, a UUID id → the
+native `uuid`), which is the typical "upgrade my dev SQLite to production
+Postgres" path.
 
 ## What it guarantees
 
@@ -68,8 +72,9 @@ cargo run -- transferdata --from ./old.sqlite3 --to ./new.sqlite3 --dry-run
 
 ## Not yet
 
-Registered models (single-column PK) and their M2M junction rows are covered.
-Still on the list: cross-backend moves (SQLite → Postgres, where a UUID junction
-id needs the native type), parallel per-table workers, and circular-FK tables
-(mutually-referential pairs need deferred-constraint handling). The design lives
-in `docs/decisions/2026-08-16-data-transfer-engine.md`.
+Registered models (single-column PK), their M2M junction rows, and cross-backend
+moves (SQLite ↔ Postgres) are covered. Still on the list: parallel per-table
+workers, a `--map` layer for reading a foreign-shaped source (reusing
+`inspectdb`'s rename map), and circular-FK tables (mutually-referential pairs
+need deferred-constraint handling). The design lives in
+`docs/decisions/2026-08-16-data-transfer-engine.md`.
