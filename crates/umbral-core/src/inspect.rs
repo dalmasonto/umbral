@@ -308,6 +308,13 @@ pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport, InspectErr
     // initial migration render them consistently.
     let mut schema = schema;
     apply_recovered_conventions(&mut schema, opts.framework);
+    // Django names FK columns `<field>_id`; umbral names them `<field>` (the
+    // field IS the column). Since inspectdb writes a fresh schema, shed the
+    // suffix so a FK reads `pub author: ForeignKey<Author>` / `post.author`,
+    // matching how umbral models are written.
+    if opts.framework == Some(Framework::Django) {
+        strip_django_fk_id_suffix(&mut schema);
+    }
 
     let models_src = render_models_with(&schema, opts.framework, opts.with_table_names);
     let migration = render_initial_migration(&schema);
@@ -1248,6 +1255,60 @@ pub fn apply_recovered_conventions(schema: &mut IntrospectedSchema, framework: O
                         || lower.starts_with("changed"))
                 {
                     col.auto_now = true;
+                }
+            }
+        }
+    }
+}
+
+/// Strip Django's `_id` suffix off foreign-key COLUMNS (`author_id` ->
+/// `author`), matching how umbral models are actually written
+/// (`pub author: ForeignKey<AuthUser>` in `examples/shop`, accessed as
+/// `post.author`). Because inspectdb targets a *fresh* database with fresh
+/// migrations — not the source DB — the new column is simply named `author`,
+/// so no `#[sqlx(rename)]` is needed; umbral maps the field name to the column.
+///
+/// Only real FK columns are touched, and only when the stripped name is free
+/// (no other column already owns it, no two FKs collide on it) so the rename is
+/// always unambiguous. Composite `unique_together` / index groups that
+/// referenced the old `author_id` are rewritten to `author` in lockstep, or the
+/// generated `#[umbral(unique_together = [[...]])]` would name a column that no
+/// longer exists.
+fn strip_django_fk_id_suffix(schema: &mut IntrospectedSchema) {
+    for table in &mut schema.tables {
+        // Propose `old -> new` renames, guarding against collisions.
+        let mut renames: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let existing: std::collections::HashSet<&str> =
+            table.columns.iter().map(|c| c.name.as_str()).collect();
+        let mut claimed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for col in &table.columns {
+            if col.fk_target.is_none() {
+                continue;
+            }
+            if let Some(base) = col.name.strip_suffix("_id") {
+                if !base.is_empty() && !existing.contains(base) && claimed.insert(base.to_string())
+                {
+                    renames.insert(col.name.clone(), base.to_string());
+                }
+            }
+        }
+        if renames.is_empty() {
+            continue;
+        }
+        for col in &mut table.columns {
+            if let Some(new) = renames.get(&col.name) {
+                col.name = new.clone();
+            }
+        }
+        for group in table
+            .unique_together
+            .iter_mut()
+            .chain(table.indexes.iter_mut())
+        {
+            for c in group.iter_mut() {
+                if let Some(new) = renames.get(c) {
+                    *c = new.clone();
                 }
             }
         }

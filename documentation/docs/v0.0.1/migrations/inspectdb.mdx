@@ -90,22 +90,26 @@ cargo run -- inspectdb ./django.sqlite3 --framework django --output plugins/impo
 ```
 
 ```rust
-// blog_post table with author_id + blog_category_id FK columns:
+// blog_post table with author_id + category_id FK columns:
 pub struct BlogPost {                          // ← full struct name (round-trips)
     pub id: i64,
     pub title: String,
     #[umbral(index)]
-    pub author_id: ForeignKey<Author>,         // ← real column name; target stripped
+    pub author: ForeignKey<Author>,            // ← `_id` shed; target stripped
     #[umbral(index)]
-    pub blog_category_id: Option<ForeignKey<Category>>,
+    pub category: Option<ForeignKey<Category>>,
 }
 ```
 
-- **FK field names** keep the **real column name** (`author_id`) — umbral uses
-  the field name as the column name, so no `#[sqlx(rename)]` is needed and the
-  field/index reads clearly against the actual column. This matches umbral's own
-  idiom (`pub user_id: ForeignKey<AuthUser>` in umbral-auth). Only the FK
-  *target struct* is app-prefix-stripped (`ForeignKey<Author>`).
+- **FK field names shed Django's `_id`** (`author_id` → `author`), so a foreign
+  key reads `pub author: ForeignKey<Author>` and traverses as `post.author` —
+  exactly how umbral models are written (`examples/shop`). No `#[sqlx(rename)]`
+  is needed: inspectdb writes a **fresh** schema, so the new column is simply
+  named `author` (umbral maps the field name to the column). Composite
+  `unique_together` / index groups that referenced `author_id` are rewritten to
+  `author` in lockstep. Only real FK columns are touched, and only when the
+  stripped name is free (no collision). The FK *target struct* is
+  app-prefix-stripped too (`ForeignKey<Author>`).
 - **`auth_user` → your user model.** Django's `auth_user` is *not* re-declared;
   umbral-auth already provides `AuthUser` on the same table. FKs to it render
   `ForeignKey<AuthUser>`, and the file opens with an import you can repoint at a

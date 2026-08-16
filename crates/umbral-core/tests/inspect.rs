@@ -645,13 +645,14 @@ async fn inspectdb_recovers_foreign_keys_and_indexes() {
     );
 }
 
-/// `inspectdb --framework django` prettifies FK columns: `author_id` becomes a
-/// clean `author` field bound to the real column via `#[sqlx(rename)]`, and a
-/// FK fields keep their REAL column name (no `#[sqlx(rename)]`) — umbral uses
-/// the field name as the column name, so the index/field reads against the
-/// actual column. Only the FK *target struct* is app-prefix-stripped.
+/// `inspectdb --framework django` sheds Django's `_id` suffix off FK columns:
+/// `author_id` -> a clean `author: ForeignKey<Author>` field, accessed as
+/// `post.author` like every umbral model (`examples/shop`). No `#[sqlx(rename)]`
+/// — inspectdb writes a FRESH schema, so the new column is simply named
+/// `author` (umbral maps field name -> column). The target struct is
+/// app-prefix-stripped too (blog_author -> Author).
 #[tokio::test]
-async fn inspectdb_django_fk_keeps_real_column_name_target_stripped() {
+async fn inspectdb_django_strips_fk_id_suffix() {
     use umbral::inspect::Framework;
     boot().await;
     let src_dir = TempDir::new().expect("temp dir");
@@ -665,7 +666,7 @@ async fn inspectdb_django_fk_keeps_real_column_name_target_stripped() {
             id INTEGER PRIMARY KEY, \
             title TEXT NOT NULL, \
             author_id INTEGER NOT NULL REFERENCES blog_author(id), \
-            blog_category_id INTEGER REFERENCES blog_category(id))",
+            category_id INTEGER REFERENCES blog_category(id))",
     ] {
         sqlx::query(stmt).execute(&src).await.expect("seed");
     }
@@ -681,21 +682,69 @@ async fn inspectdb_django_fk_keeps_real_column_name_target_stripped() {
     inspectdb(opts).await.expect("inspectdb --framework django");
     let models = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
 
-    // FK field keeps its real column name `author_id`; the TARGET struct is
-    // app-prefix-stripped (blog_author -> Author). No rename.
+    // FK column `author_id` -> field `author`; target struct app-prefix-stripped.
     assert!(
-        models.contains("pub author_id: ForeignKey<Author>"),
-        "FK field must keep the real column name -> ForeignKey<Author>; got:\n{models}"
+        models.contains("pub author: ForeignKey<Author>"),
+        "FK `author_id` must strip to `pub author: ForeignKey<Author>`; got:\n{models}"
     );
     assert!(
-        models.contains("pub blog_category_id: Option<ForeignKey<Category>>"),
-        "FK field `blog_category_id` keeps its name -> ForeignKey<Category>; got:\n{models}"
+        models.contains("pub category: Option<ForeignKey<Category>>"),
+        "FK `category_id` must strip to `pub category`; got:\n{models}"
     );
-    // No sqlx rename on foreign keys.
+    // The `_id` suffix is gone entirely, and no rename bridges it.
     assert!(
-        !models.contains("#[sqlx(rename = \"author_id\")]")
-            && !models.contains("#[sqlx(rename = \"blog_category_id\")]"),
-        "foreign keys must NOT carry #[sqlx(rename)]; got:\n{models}"
+        !models.contains("author_id") && !models.contains("category_id"),
+        "no `_id`-suffixed FK field should remain; got:\n{models}"
+    );
+    assert!(
+        !models.contains("#[sqlx(rename"),
+        "stripping needs no #[sqlx(rename)] on a fresh schema; got:\n{models}"
+    );
+}
+
+/// The `_id` strip rewrites composite index groups in lockstep: a
+/// `unique_together` over FK columns must name the stripped fields, not the old
+/// `<fk>_id` columns (which no longer exist on the generated struct).
+#[tokio::test]
+async fn inspectdb_django_strip_rewrites_composite_index_columns() {
+    use umbral::inspect::Framework;
+    boot().await;
+    let src_dir = TempDir::new().expect("temp dir");
+    let src_path = src_dir.path().join("django_idx.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", src_path.display());
+    let src = umbral::db::connect_sqlite(&url).await.expect("open db");
+    for stmt in [
+        "CREATE TABLE app_org (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE app_user (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        "CREATE TABLE app_membership (\
+            id INTEGER PRIMARY KEY, \
+            org_id INTEGER NOT NULL REFERENCES app_org(id), \
+            user_id INTEGER NOT NULL REFERENCES app_user(id))",
+        // one membership per (org, user) — a composite UNIQUE over FK columns.
+        "CREATE UNIQUE INDEX app_membership_org_user ON app_membership(org_id, user_id)",
+    ] {
+        sqlx::query(stmt).execute(&src).await.expect("seed");
+    }
+
+    let out_dir = TempDir::new().expect("out dir");
+    let opts = InspectOptions {
+        source: Some(url),
+        framework: Some(Framework::Django),
+        with_table_names: true,
+        output: out_dir.path().to_path_buf(),
+        mark_applied: false,
+    };
+    inspectdb(opts).await.expect("inspectdb");
+    let m = std::fs::read_to_string(out_dir.path().join("models.rs")).expect("models.rs");
+
+    // The unique_together names the STRIPPED fields, and the FK fields match.
+    assert!(
+        m.contains(r#"#[umbral(unique_together = [["org", "user"]])]"#),
+        "composite unique must use stripped FK names; got:\n{m}"
+    );
+    assert!(
+        m.contains("pub org: ForeignKey<Org>") && m.contains("pub user: ForeignKey<User>"),
+        "FK fields must be the stripped names the index references; got:\n{m}"
     );
 }
 
