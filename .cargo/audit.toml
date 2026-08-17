@@ -29,4 +29,14 @@ ignore = [
     #   yaml-rust — via syntect; parses bundled syntax defs only.
     "RUSTSEC-2025-0141",
     "RUSTSEC-2024-0320",
+
+    # rkyv 0.7 — OOB reads validating archives that contain Rc/Arc. Fixed in
+    # >=0.8.17, but rkyv is an UNUSED optional dependency: rust_decimal declares
+    # it behind an `rkyv` feature that nothing in umbral turns on, so the
+    # vulnerable code is never compiled (`cargo tree -e features -i rkyv` prints
+    # nothing — it's a Cargo.lock phantom, not a linked crate). umbral also never
+    # deserializes an rkyv archive from untrusted bytes. The >=0.8.17 fix can't
+    # resolve anyway: rust_decimal 1.42 (latest) still pins `rkyv ^0.7`. Drop
+    # this the moment rust_decimal moves to rkyv 0.8.
+    "RUSTSEC-2026-0235",
 ]
