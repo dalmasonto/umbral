@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.11...umbral-macros-v0.0.12) - 2026-08-16
+
+### Added
+
+- *(orm)* add NaiveDateTime field type (TIMESTAMP without time zone)
+- *(orm)* honor #[sqlx(rename)] as a field's column name
+- *(orm)* #[umbral(precision, scale)] for numeric(N, M) decimals
+- *(orm)* PostGIS geometry/geography spatial columns (feature-gated)
+- *(orm)* arbitrary-precision BigDecimal + sub-second Time fix + round-trip sweep
+- *(orm)* reusable model bases via #[derive(ModelBase)] + #[umbral(flatten)]
+- *(orm)* #[umbral(auto_uuid)] — generate a public v4 UUID on create
+
+### Fixed
+
+- *(macros)* match serde's kebab rename for edge-case underscores
+
+### Other
+
+- *(readmes)* add the umbralrs.dev website link to every crate + plugin
+- *(worktree-agent-af5489d741ac3423e)* review_3 dedup batch
+- *(macros)* correct Validate/Model attribute-vocabulary claim
+- *(macros)* route inline PascalCase through to_pascal_case
+- *(macros)* lift OneToOne→unique-FK rewrite to one classifier
+
 ## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-macros-v0.0.10...umbral-macros-v0.0.11) - 2026-08-02
 
 ### Added

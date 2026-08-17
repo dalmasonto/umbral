@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.11...umbral-openapi-v0.0.12) - 2026-08-16
+
+### Added
+
+- *(orm)* add NaiveDateTime field type (TIMESTAMP without time zone)
+- *(orm)* #[umbral(precision, scale)] for numeric(N, M) decimals
+- *(orm)* PostGIS geometry/geography spatial columns (feature-gated)
+- *(orm)* arbitrary-precision BigDecimal + sub-second Time fix + round-trip sweep
+- *(orm)* #[umbral(auto_uuid)] — generate a public v4 UUID on create
+
+### Fixed
+
+- *(openapi)* exclude hidden columns from generated filter parameters
+
+### Other
+
+- *(cli)* add an example usage to every plugin command's help
+- *(readmes)* add the umbralrs.dev website link to every crate + plugin
+- *(branding)* retire batteries-included for declarative plus modularity motto
+
 ## [0.0.10](https://github.com/dalmasonto/umbral/compare/umbral-openapi-v0.0.9...umbral-openapi-v0.0.10) - 2026-07-15
 
 ### Other

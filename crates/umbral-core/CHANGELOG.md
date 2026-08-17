@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.11...umbral-core-v0.0.12) - 2026-08-16
+
+### Added
+
+- *(transfer)* accept a custom JSON map file for `--map`
+- *(cli)* blank line between help entries for readability
+- *(cli)* grouped help, richer inspectdb help, and a clear framework-repo guard
+- *(orm)* decode a native Postgres enum column via the dynamic read path
+- *(orm)* add NaiveDateTime field type (TIMESTAMP without time zone)
+- *(orm)* let ForeignKey<T> be a primary key (identifying relations)
+- *(inspect)* recover native Postgres enums as Choices types
+- *(inspect,transfer)* fold Prisma implicit M2M through the port pipeline
+- *(transfer,inspectdb)* per-framework M2M folding (rails/laravel)
+- *(inspectdb)* --framework parity for rails, laravel, prisma
+- *(transfer)* richer --map targets (Rails, Laravel, Prisma)
+- *(migrate)* emit DEFERRABLE Postgres FK constraints
+- *(transfer)* circular-FK deferral (phase 2)
+- *(transfer)* --map django source mapping + parallel workers (phase 2)
+- *(transfer)* cross-backend SQLite<->Postgres copy (phase 2)
+- *(transfer)* copy M2M junction rows (phase 2 start)
+- *(transfer)* resumable PK-preserving data-transfer engine (phase 1)
+- *(inspectdb)* recover Django M2M join tables as M2M<T> fields
+- *(inspectdb)* strip Django FK `_id` suffix, rewrite index refs
+- *(inspectdb)* recover column defaults + auto_now/auto_now_add timestamps
+- *(inspectdb)* gate struct-name stripping behind --with-table-names
+- *(inspectdb)* FK fields keep real column name + recover composite indexes
+- *(inspectdb)* recover PostGIS geometry columns (subtype + SRID)
+- *(inspectdb)* django strips app-prefix from struct names + externalizes auth_user
+- *(orm)* GeometryCol::dwithin_meters — metres via the typed filter
+- *(inspectdb)* --framework django prettifies FK column names
+- *(orm)* honor #[sqlx(rename)] as a field's column name
+- *(inspectdb)* recover foreign keys, unique constraints, and indexes
+- *(inspectdb)* accept a source database argument
+- *(orm)* #[umbral(precision, scale)] for numeric(N, M) decimals
+- *(orm)* PostGIS geometry/geography spatial columns (feature-gated)
+- *(orm)* arbitrary-precision BigDecimal + sub-second Time fix + round-trip sweep
+- *(orm,rest)* .revealed()/.reveal([..]) — authorized reveal of hidden columns
+- *(orm)* typed base-column consts via mixin_cols! (gaps5 #105)
+- *(orm)* auto-derive slug_from on the typed create path
+- *(orm)* reusable model bases via #[derive(ModelBase)] + #[umbral(flatten)]
+- *(orm)* #[umbral(auto_uuid)] — generate a public v4 UUID on create
+
+### Fixed
+
+- *(templates)* point the default 404/500 footer links at real URLs
+- *(inspect)* FK-topologically order the initial migration's CreateTable ops
+- *(inspectdb)* generate models that actually compile (serde, non-id PK, keywords)
+- *(orm)* honor a caller .offset() in try_for_each; audit doc corrections
+- *(web)* CORS segment boundary, JSON-500 passthrough, prod error blanking, safe_url scheme guard
+- *(migrate,db)* squash-aware drift, unique ADD COLUMN on SQLite, RLS gate ordering
+- *(orm)* review_3 ORM correctness batch
+- *(orm)* don't re-seal a no-change Masked submission on JSON update
+- *(inspect)* map unsigned ints and decimal/numeric column types
+
+### Other
+
+- *(readmes)* add the umbralrs.dev website link to every crate + plugin
+- *(migrate)* correct stale 'deferred' doc-comment on Operation (gaps5 #28)
+- *(postgis)* assert location filters return a proper subset on real data
+- *(inspectdb)* fill new IntrospectedColumn fields in fixtures
+- *(review_3)* fix doc-drift/placement items + re-mark closed candidates
+- *(worktree-agent-aef72a6b5271737e3)* review_3 dedup batch
+
 ## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-core-v0.0.10...umbral-core-v0.0.11) - 2026-08-02
 
 ### Added

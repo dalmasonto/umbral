@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.11...umbral-v0.0.12) - 2026-08-16
+
+### Added
+
+- *(transfer)* accept a custom JSON map file for `--map`
+- *(transfer)* circular-FK deferral (phase 2)
+- *(transfer)* --map django source mapping + parallel workers (phase 2)
+- *(transfer)* resumable PK-preserving data-transfer engine (phase 1)
+- *(inspectdb)* recover column defaults + auto_now/auto_now_add timestamps
+- *(inspectdb)* --framework django prettifies FK column names
+- *(orm)* #[umbral(precision, scale)] for numeric(N, M) decimals
+- *(orm)* PostGIS geometry/geography spatial columns (feature-gated)
+- *(orm)* typed base-column consts via mixin_cols! (gaps5 #105)
+- *(orm)* reusable model bases via #[derive(ModelBase)] + #[umbral(flatten)]
+
+### Other
+
+- *(readmes)* add the umbralrs.dev website link to every crate + plugin
+- *(branding)* retire batteries-included for declarative plus modularity motto
+
 ## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-v0.0.10...umbral-v0.0.11) - 2026-08-02
 
 ### Added

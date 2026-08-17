@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.11...umbral-auth-v0.0.12) - 2026-08-16
+
+### Added
+
+- *(auth)* resetforeignpasswords targets the plugin's user model
+- *(auth)* resetforeignpasswords — neutralize unverifiable password hashes
+- *(auth)* built-in auth endpoints accept form bodies too (JsonOrForm)
+- *(auth)* opt-in reverse-FK list traversal in the user template context
+
+### Fixed
+
+- *(auth)* route session resolution through the store-aware helper
+
+### Other
+
+- *(cli)* add an example usage to every plugin command's help
+- *(readmes)* add the umbralrs.dev website link to every crate + plugin
+- *(review_3)* fix doc-drift/placement items + re-mark closed candidates
+- *(permissions,auth)* dedup the unauthenticated-rejection shape
+- *(branding)* retire batteries-included for declarative plus modularity motto
+
 ## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-auth-v0.0.10...umbral-auth-v0.0.11) - 2026-08-02
 
 ### Added

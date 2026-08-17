@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.11...umbral-admin-v0.0.12) - 2026-08-16
+
+### Added
+
+- *(orm)* add NaiveDateTime field type (TIMESTAMP without time zone)
+- *(orm)* #[umbral(precision, scale)] for numeric(N, M) decimals
+- *(orm)* PostGIS geometry/geography spatial columns (feature-gated)
+- *(orm)* arbitrary-precision BigDecimal + sub-second Time fix + round-trip sweep
+- *(orm)* #[umbral(auto_uuid)] — generate a public v4 UUID on create
+
+### Other
+
+- *(readmes)* add the umbralrs.dev website link to every crate + plugin
+- *(admin)* drop dead where_pk=None branch in fetch_rows_filtered
+- *(admin)* dedup action perm-check into permcheck::require_codename
+
 ## [0.0.11](https://github.com/dalmasonto/umbral/compare/umbral-admin-v0.0.10...umbral-admin-v0.0.11) - 2026-08-02
 
 ### Fixed
