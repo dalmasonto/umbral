@@ -194,7 +194,12 @@ impl<T: Model + HydrateRelated> ReverseRelations for T {}
 
 /// Scan `C::FIELDS` for the single FK whose target table is `P::TABLE`.
 /// Zero → `NoForeignKey`; two+ → `Ambiguous` (names every candidate).
-fn discover_single_fk<P: Model, C: Model>() -> Result<&'static str, ReverseError> {
+///
+/// `pub(crate)`: also the discovery step behind
+/// [`crate::orm::queryset::prefetch_map`]'s `QuerySet::prefetch_map::<C>()`
+/// (gap #75) — the batched-load counterpart to this module's per-instance
+/// `.reverse::<C>()`. Same metadata, two callers.
+pub(crate) fn discover_single_fk<P: Model, C: Model>() -> Result<&'static str, ReverseError> {
     let candidates: Vec<&'static str> = C::FIELDS
         .iter()
         .filter(|f| f.fk_target == Some(P::TABLE))

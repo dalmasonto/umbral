@@ -37,11 +37,15 @@ mod backend_pg;
 mod backend_sqlite;
 mod errors;
 pub(crate) mod hydration;
+mod prefetch_map;
+pub(crate) mod relation_filter;
+pub(crate) mod relation_resolve;
 mod tx;
 mod write_helpers;
 
 pub use errors::{GetError, TryForEachError};
 use hydration::{hydrate_prefetch_related, hydrate_select_related};
+pub use prefetch_map::{PrefetchMapQuery, Prefetched};
 pub use tx::QuerySetTx;
 use write_helpers::{
     build_insert_many_for, build_insert_one_for, fk_pk_hint, pk_field, serialize_to_map,
@@ -243,6 +247,41 @@ pub struct QuerySet<T> {
     /// because sea-query won't hand its OFFSET back — `try_for_each` needs it
     /// to start paging from the requested row instead of 0.
     pub(crate) user_offset: Option<u64>,
+    /// A general-purpose poison: a `QuerySet` built in a shape a builder
+    /// couldn't reject at construction time (the builder is infallible so
+    /// chains stay ergonomic), recorded here so every fallible terminal —
+    /// `fetch`/`count`/`explain`/`fetch_annotated`/`values`/`aggregate`/
+    /// `delete`/`update_expr`/`update_values`/`try_for_each`, and the
+    /// `first`/`get`/`exists`/`earliest`/`latest`/`in_bulk` siblings that
+    /// delegate to `fetch` — reports it loudly instead of silently running
+    /// a wrong or nonsensical query. Review round 2: a poisoned QuerySet
+    /// (e.g. `to_many_hop`'s deep-chain branch, which carries NO scoping
+    /// predicate) reaching an unchecked write terminal would otherwise
+    /// mass-delete or mass-update the whole table — every terminal that
+    /// runs its own query must gate on this, not just the read ones.
+    /// Mirrors the same "poison now, fail at the terminal" shape
+    /// `RelatedAnnotation::resolved` already uses for unknown
+    /// `annotate_related` relation names — this is the QuerySet-wide
+    /// sibling for shapes that aren't annotation-specific.
+    /// `check_annotations` (despite the name, predating this field)
+    /// is where both poisons are surfaced.
+    pub(crate) poison: Option<String>,
+    /// Phase 1 Task 4 — leaf-DISTINCT state for a QuerySet produced by a
+    /// deep to-many relation chain (`resolve_leaf_queryset`). `Some((table,
+    /// pk_col))` means the traversal JOINs multiply the leaf rows, so the
+    /// terminal must dedupe by the leaf PK: `build_query_for` applies
+    /// `SELECT DISTINCT`, and `count()` uses `COUNT(DISTINCT <table>.<pk>)`.
+    /// `.with_duplicates()` clears it to expose the raw JOIN multiplicity.
+    /// `None` for every ordinary QuerySet (no crossing-to-many traversal).
+    pub(crate) leaf_distinct: Option<(String, String)>,
+    /// Phase 1 Task 4 — the in-memory relation path this QuerySet was built
+    /// from, when it came out of a to-many relation accessor
+    /// (`to_many_hop`). Carrying it lets a SECOND relation hop extend the
+    /// chain (`to_many_hop`/`to_one_hop` accept a `QuerySet` as a
+    /// `RelationSource`), which is how a deep to-many chain
+    /// (`dev.software_groups().software()`) is composed before the Task-5
+    /// derive lands. `None` for an ordinary `T::objects()` QuerySet.
+    pub(crate) rel_path: Option<crate::orm::relation::RelPath>,
     _phantom: PhantomData<T>,
 }
 
@@ -274,6 +313,9 @@ impl<T> Clone for QuerySet<T> {
             user_limit: self.user_limit,
             user_offset: self.user_offset,
             for_update_skip_locked: self.for_update_skip_locked,
+            poison: self.poison.clone(),
+            leaf_distinct: self.leaf_distinct.clone(),
+            rel_path: self.rel_path.clone(),
             _phantom: PhantomData,
         }
     }
@@ -305,6 +347,8 @@ impl<T> std::fmt::Debug for QuerySet<T> {
             .field("only_cols", &self.only_cols)
             .field("join_related", &self.join_related)
             .field("annotations", &self.annotations)
+            .field("poison", &self.poison)
+            .field("leaf_distinct", &self.leaf_distinct)
             .finish()
     }
 }
@@ -444,8 +488,28 @@ impl<T> QuerySet<T> {
             for_update_skip_locked: false,
             user_limit: None,
             user_offset: None,
+            poison: None,
+            leaf_distinct: None,
+            rel_path: None,
             _phantom: PhantomData,
         }
+    }
+
+    /// Poison this `QuerySet` with a message every fallible terminal —
+    /// reads (`fetch`/`count`/`explain`/`fetch_annotated`/`values`/
+    /// `aggregate`, and their `first`/`get`/`exists`/`earliest`/`latest`/
+    /// `in_bulk` siblings) AND writes (`delete`/`update_expr`/
+    /// `update_values`/`try_for_each`) alike — surfaces as
+    /// `Err(sqlx::Error::Protocol(msg))` (or that error wrapped into the
+    /// terminal's own error type, e.g. `WriteError::Sqlx` /
+    /// `TryForEachError::Sqlx`). For an infallible builder function that
+    /// was handed a shape it can't (yet) resolve — see
+    /// [`crate::orm::relation::to_many_hop`]'s deep-to-many-chain case —
+    /// so misuse fails loudly at the query boundary instead of panicking
+    /// the caller's process OR, worse, running unscoped against every row.
+    pub(crate) fn poisoned(mut self, msg: impl Into<String>) -> Self {
+        self.poison = Some(msg.into());
+        self
     }
 
     /// Feature #72 — include soft-deleted rows in this query. Skips
@@ -748,6 +812,15 @@ impl<T> QuerySet<T> {
                 sea_query::LockBehavior::SkipLocked,
             );
         }
+        // Phase 1 Task 4 — a deep to-many chain JOINs through junction tables,
+        // so a leaf reachable via multiple paths appears once per path. Dedupe
+        // by the leaf PK with `SELECT DISTINCT` (the projection is the leaf's
+        // own columns, so a full-row DISTINCT is exactly a distinct-by-PK).
+        // `.with_duplicates()` clears `leaf_distinct`, restoring raw
+        // multiplicity. `count()` mirrors this with `COUNT(DISTINCT pk)`.
+        if self.leaf_distinct.is_some() {
+            q.distinct();
+        }
         q
     }
 }
@@ -896,9 +969,11 @@ impl<T> QuerySet<T> {
     ///   vs. `select_related`'s `1 + N` batched-IN approach. Wider
     ///   per-row payload; better when round-trip count dominates.
     /// - **`prefetch_related(name)`** — M2M batched loading (one
-    ///   query per declared M2M field). For reverse-FK collections
-    ///   (`prefetch_related("comment_set")`-style) see gap #44 — not
-    ///   yet implemented.
+    ///   query per declared field), and reverse-FK collections via a
+    ///   declared `ReverseSet<C>` field (gap #44,
+    ///   `prefetch_related("comment_set")`-style). For a reverse-FK
+    ///   batch load with NO declared field, see
+    ///   [`Self::prefetch_map`] (gap #75).
     ///
     /// ## Loud errors
     ///
@@ -1057,6 +1132,36 @@ impl<T> QuerySet<T> {
         self
     }
 
+    /// Gap #75 — batch-load a reverse-FK relation to `C` with **no**
+    /// declared `ReverseSet<C>` field on `T`.
+    ///
+    /// `.prefetch_related("comment_set")` needs a `ReverseSet<Comment>`
+    /// field on the parent because it writes its result INTO that
+    /// field; `prefetch_map::<C>()` names the child type at the call
+    /// site instead (same FK-discovery metadata
+    /// [`ReverseRelations::reverse`](crate::orm::ReverseRelations::reverse)
+    /// uses, batched instead of per-row) and hands the batched children
+    /// back explicitly via [`PrefetchMapQuery::fetch`] — no field on
+    /// `T` required, no hidden per-instance cache.
+    ///
+    /// ```rust,ignore
+    /// let prefetched = Developer::objects().prefetch_map::<Achievement>().fetch().await?;
+    /// for dev in &prefetched.parents {
+    ///     for ach in prefetched.children_of(dev) { /* ... */ }
+    /// }
+    /// ```
+    ///
+    /// Use [`PrefetchMapQuery::via`] to name the FK column explicitly
+    /// when `C` has more than one FK to `T`. See [`Prefetched`] and
+    /// [`PrefetchMapQuery`] for the query-budget and scope notes.
+    pub fn prefetch_map<C>(self) -> PrefetchMapQuery<T, C> {
+        PrefetchMapQuery {
+            qs: self,
+            fk_col: None,
+            _c: PhantomData,
+        }
+    }
+
     /// Convert this QuerySet into a [`Subquery`] suitable for use in
     /// an `IN (SELECT ...)` predicate. Projects only the named
     /// column; the accumulated WHERE / ORDER BY survive.
@@ -1125,6 +1230,24 @@ impl<T> QuerySet<T> {
     /// covers most use cases.
     pub fn distinct(mut self) -> Self {
         self.query.distinct();
+        self
+    }
+
+    /// Opt out of the leaf-PK DISTINCT that a deep to-many relation chain
+    /// applies by default (Phase 1 Task 4, spec decision 5).
+    ///
+    /// A chain crossing a to-many hop (`dev.software_groups().software()`)
+    /// resolves to a `QuerySet<Leaf>` whose base query JOINs through the
+    /// junction/child tables, so a leaf reachable via multiple paths would
+    /// appear once per path. By default the terminal dedupes by the leaf PK
+    /// (`SELECT DISTINCT` / `COUNT(DISTINCT pk)`); `.with_duplicates()`
+    /// clears that flag and returns the raw JOIN multiplicity — one leaf row
+    /// per traversal path.
+    ///
+    /// A no-op on an ordinary `QuerySet` (one never carried the leaf-DISTINCT
+    /// flag), so calling it there changes nothing.
+    pub fn with_duplicates(mut self) -> Self {
+        self.leaf_distinct = None;
         self
     }
 }
@@ -1782,6 +1905,7 @@ impl<T: Model> QuerySet<T> {
         if self.only_cols.is_some() {
             return Err(only_with_typed_terminal_error("fetch"));
         }
+        self.check_annotations()?;
         let sr_fields = self.select_related.clone();
         let prefetch_fields = self.prefetch_related.clone();
         let join_reqs = self.join_related.clone();
@@ -1927,6 +2051,7 @@ impl<T: Model> QuerySet<T> {
             + HydrateRelated,
         F: FnMut(T) -> Result<(), E>,
     {
+        self.check_annotations().map_err(TryForEachError::Sqlx)?;
         let chunk_size = chunk_size.max(1);
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         // gaps4 #27: honor a caller `.limit(n)` as a TOTAL cap across the whole
@@ -2159,6 +2284,7 @@ impl<T: Model> QuerySet<T> {
     /// tuple impl rather than the user struct — count() doesn't need
     /// T's FromRow bounds.
     pub async fn count(self) -> Result<i64, sqlx::Error> {
+        self.check_annotations()?;
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let backend = pool.backend_name();
         // Build the dialect-appropriate filtered query first, then
@@ -2167,10 +2293,24 @@ impl<T: Model> QuerySet<T> {
         // rewrite logic across branches.
         let mut rebuilt = self.build_query_for(backend);
         rebuilt.clear_selects();
-        // Postgres rejects `"*"` as a quoted identifier (SQLite tolerates
-        // it); use sea_query's Asterisk token which renders bare `*`
-        // on both backends.
-        rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
+        // Phase 1 Task 4 — a leaf-DISTINCT QuerySet (deep to-many chain) must
+        // count DISTINCT leaf rows, not the JOIN-multiplied row count. A plain
+        // `COUNT(*)` under the traversal JOINs would over-count a leaf reachable
+        // via multiple paths; `COUNT(DISTINCT <leaf>.<pk>)` collapses those.
+        // (`build_query_for` also stamped `SELECT DISTINCT`, which is a harmless
+        // no-op wrapping a single aggregate row.) `.with_duplicates()` clears
+        // `leaf_distinct`, so the raw-multiplicity `COUNT(*)` applies instead.
+        if let Some((table, pk_col)) = &self.leaf_distinct {
+            rebuilt.expr(Func::count_distinct(Expr::col((
+                Alias::new(table.as_str()),
+                Alias::new(pk_col.as_str()),
+            ))));
+        } else {
+            // Postgres rejects `"*"` as a quoted identifier (SQLite tolerates
+            // it); use sea_query's Asterisk token which renders bare `*`
+            // on both backends.
+            rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
+        }
         rebuilt.reset_limit();
         rebuilt.reset_offset();
 
@@ -2308,6 +2448,7 @@ impl<T: Model> QuerySet<T> {
     /// // [ { "id": 3, "title": "c" }, ... ]
     /// ```
     pub async fn values(self, columns: &[&str]) -> Result<Vec<JsonValue>, sqlx::Error> {
+        self.check_annotations()?;
         // Gap #46 follow-up: if any name uses `__` traversal
         // (`author__id`), route to the JOIN-aware path that builds
         // nested per-relation JSON objects. The unbranched path
@@ -2648,6 +2789,7 @@ impl<T: Model> QuerySet<T> {
         self,
         aggs: &[(&str, crate::orm::Aggregate)],
     ) -> Result<JsonValue, sqlx::Error> {
+        self.check_annotations()?;
         let meta = crate::migrate::ModelMeta::for_::<T>();
         // Validate every aggregate's source column exists.
         for (name, agg) in aggs {
@@ -3064,10 +3206,16 @@ impl<T: Model> QuerySet<T> {
         queryset
     }
 
-    /// Loud-failure check for poisoned annotations (unknown relation
-    /// names recorded by the infallible builder). Called by every
-    /// fallible consumer before SQL runs.
+    /// Loud-failure check for BOTH poison kinds an infallible builder can
+    /// record: the general `poison` field, and poisoned annotations
+    /// (unknown relation names from `annotate_related`).
+    /// Called by every fallible consumer — read AND write terminals alike
+    /// — before any SQL runs, so a poisoned `QuerySet` never silently
+    /// executes as an unscoped read or, worse, an unscoped write.
     fn check_annotations(&self) -> Result<(), sqlx::Error> {
+        if let Some(msg) = &self.poison {
+            return Err(sqlx::Error::Protocol(msg.clone()));
+        }
         for ann in &self.annotations {
             if let Err(msg) = &ann.resolved {
                 return Err(sqlx::Error::Protocol(msg.clone()));
@@ -3235,6 +3383,7 @@ impl<T: Model> QuerySet<T> {
     /// auto `WHERE deleted_at IS NULL`). Call `.hard_delete()`
     /// beforehand for a real DELETE (GDPR purge, test cleanup).
     pub async fn delete(self) -> Result<u64, sqlx::Error> {
+        self.check_annotations()?;
         // features #73: a view is read-only. Refuse before any SQL is built, so the
         // error names the model instead of surfacing as the driver's opaque
         // "cannot modify a view".
@@ -3379,6 +3528,7 @@ impl<T: Model> QuerySet<T> {
         expr: FExpr,
     ) -> Result<u64, crate::orm::write::WriteError> {
         use crate::orm::write::WriteError;
+        self.check_annotations()?;
         // features #73: a view is read-only. Refuse before any SQL is built, so the
         // error names the model instead of surfacing as the driver's opaque
         // "cannot modify a view".
@@ -3479,6 +3629,7 @@ impl<T: Model> QuerySet<T> {
         self,
         values: serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
+        self.check_annotations()?;
         // features #73: a view is read-only. Refuse before any SQL is built, so the
         // error names the model instead of surfacing as the driver's opaque
         // "cannot modify a view".
@@ -3781,6 +3932,12 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // Final-review Finding 1: the explicit-Postgres escape hatch must
+        // honor the same poison contract as the ambient terminals — a
+        // poisoned QuerySet (unsupported deep relation chain, unresolved
+        // annotation) must error here too, not fall through to an
+        // unscoped query.
+        self.check_annotations()?;
         // gaps4 #24: refuse a chained hydration feature this low-level terminal
         // would silently drop, rather than hand back un-hydrated rows.
         guard_pg_terminal_unsupported(
@@ -3802,6 +3959,8 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // See fetch_pg: enforce the same poison contract.
+        self.check_annotations()?;
         guard_pg_terminal_unsupported(
             "first_pg",
             &self.select_related,
@@ -3820,9 +3979,22 @@ impl<T: Model> QuerySet<T> {
     /// Run `SELECT COUNT(*)` against an explicit `PgPool`. No FromRow
     /// bound on `T` — the count tuple type is `(i64,)`.
     pub async fn count_pg(self, pool: &sqlx::PgPool) -> Result<i64, sqlx::Error> {
+        // See fetch_pg: enforce the same poison contract.
+        self.check_annotations()?;
         let mut rebuilt = self.build_query_for("postgres");
         rebuilt.clear_selects();
-        rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
+        // Mirror the ambient `count()`'s leaf-DISTINCT branch (Phase 1 Task
+        // 4): a deep to-many chain must count DISTINCT leaf rows, not the
+        // JOIN-multiplied row count, or a poisoned/deep chain reaching this
+        // explicit-Postgres terminal would over-count.
+        if let Some((table, pk_col)) = &self.leaf_distinct {
+            rebuilt.expr(Func::count_distinct(Expr::col((
+                Alias::new(table.as_str()),
+                Alias::new(pk_col.as_str()),
+            ))));
+        } else {
+            rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
+        }
         rebuilt.reset_limit();
         rebuilt.reset_offset();
         let (sql, values) = rebuilt.build_sqlx(PostgresQueryBuilder);
@@ -3837,6 +4009,11 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // See fetch_pg: enforce the same poison contract. Also caught by
+        // the `fetch_pg` call below, but checked explicitly up front so
+        // the contract is visible at every `_pg` terminal, not only the
+        // ones that happen to delegate.
+        self.check_annotations()?;
         let rows = self.limit(1).fetch_pg(pool).await?;
         Ok(!rows.is_empty())
     }
@@ -3847,6 +4024,8 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // See fetch_pg: enforce the same poison contract, up front.
+        self.check_annotations()?;
         let mut rows = self.limit(2).fetch_pg(pool).await.map_err(GetError::Sqlx)?;
         match rows.len() {
             0 => Err(GetError::NotFound),
@@ -3994,6 +4173,11 @@ impl<T: Model> Manager<T> {
     /// See [`QuerySet::prefetch_related_many`].
     pub fn prefetch_related_many(&self, field_names: &[&str]) -> QuerySet<T> {
         self.queryset().prefetch_related_many(field_names)
+    }
+
+    /// See [`QuerySet::prefetch_map`].
+    pub fn prefetch_map<C>(&self) -> PrefetchMapQuery<T, C> {
+        self.queryset().prefetch_map()
     }
 
     /// Feature #72 — see `QuerySet::hard_delete`.

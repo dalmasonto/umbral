@@ -1,0 +1,57 @@
+---
+title: Read-side expand
+description: "?expand=<field> embeds a declared reverse-FK relation as a full child array, and expands a declared M2M field from bare ids to full objects."
+sidebar_position: 14
+icon: expand
+tags: [rest, expand, relations, serializers]
+---
+
+# Reading nested objects back
+
+[Nested writes](./nested) let a `POST` create a parent and its children in one request. `?expand=` is the read-side counterpart: it embeds relations that point *at* your resource (reverse foreign keys) or *through* a junction table (many-to-many) directly in a `GET` response, instead of the caller making a follow-up request per child.
+
+Without `?expand=`, a many-to-many field always serializes as a bare id array (`"favorite_software": [41, 109]`), and a reverse relation (a `Project` that has a foreign key to `Developer`) doesn't appear at all. Declare which relations are expandable, and a caller opts in per request:
+
+```rust
+RestPlugin::default().resource(
+    ResourceConfig::for_::<Developer>()
+        .embed("projects", "project")           // reverse-FK: project.developer -> developer.id
+        .expand_m2m("favorite_software"),        // M2M: expand ids to full objects
+)
+```
+
+```http
+GET /api/developer/7?expand=projects,favorite_software
+```
+
+```json
+{
+  "id": 7,
+  "name": "Ada",
+  "projects": [
+    { "id": 1, "name": "Analytical Engine", "developer": 7 }
+  ],
+  "favorite_software": [
+    { "id": 41, "name": "Rust" },
+    { "id": 109, "name": "PostgreSQL" }
+  ]
+}
+```
+
+Leave off `?expand=` and the response is unchanged: `favorite_software` stays a bare id array, and there is no `projects` key at all.
+
+## Only declared relations expand
+
+Unlike `?include=` — which works against any forward FK the model happens to declare — `?expand=` only honors relations the resource explicitly opted in via `.embed(...)` or `.expand_m2m(...)`. A reverse relation isn't discoverable from the parent's own columns, and letting *any* M2M field balloon into full objects on request would be an uncontrolled response-size surface. Naming an undeclared relation is a `400`, the same loud-on-typo contract `?include=` uses — never a silent no-op.
+
+## Batched, and safe by default
+
+A list request expanding a relation issues **one** extra query per relation across the whole page — an `IN (...)` keyed off every row's primary key, not one query per row. Embedded children go through the same hidden-column stripping as everything else in the response: a `.hide(...)`d column on the child table never leaks just because it arrived nested.
+
+This version does one level solidly: `?expand=projects` embeds `project` rows as-is. A relation declared on `project` itself is not also expanded (`?expand=projects.tasks` isn't supported) — a documented follow-up, not a silent partial result.
+
+## See also
+
+- [Nested writes](./nested): the write-side counterpart — `POST`/`PATCH` a parent and its children in one request.
+- [Model exposure](./exposure): `?include=` for forward-FK expansion, and sparse fieldsets via `?fields=`.
+- `plugins/umbral-rest/src/resource.rs` (`ResourceConfig::embed` / `::expand_m2m`) for the full builder API.

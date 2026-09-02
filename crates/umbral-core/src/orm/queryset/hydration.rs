@@ -159,7 +159,7 @@ fn pk_json_key(v: &JsonValue) -> String {
 /// key. `serde_json::Value` isn't `Hash`, so the standard
 /// sort+dedup doesn't apply. Used for the IN-list dedup in both
 /// `hydrate_select_related` and `hydrate_select_related_nested`.
-fn dedup_by_pk_key(ids: &mut Vec<JsonValue>) {
+pub(super) fn dedup_by_pk_key(ids: &mut Vec<JsonValue>) {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     ids.retain(|v| seen.insert(pk_json_key(v)));
 }
@@ -169,7 +169,7 @@ fn dedup_by_pk_key(ids: &mut Vec<JsonValue>) {
 /// FK-column `IN (...)` list as the right type — so a `Uuid` parent PK
 /// binds as a native `uuid` on Postgres, not text. Falls back to `BigInt`
 /// (the historical i64 default) when the PK column can't be resolved.
-fn parent_pk_sql_type<T: Model>() -> crate::orm::SqlType {
+pub(super) fn parent_pk_sql_type<T: Model>() -> crate::orm::SqlType {
     crate::migrate::ModelMeta::for_::<T>()
         .fields
         .iter()

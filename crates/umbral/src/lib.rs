@@ -21,12 +21,30 @@ pub mod prelude {
     //! on the facade itself rather than in the prelude: for example, the
     //! raw pool accessors are reached as `umbral::db::pool()` so they do
     //! not pollute the prelude with bare names like `pool`.
+    //!
+    //! **Relation traversal (`post.author()`, `dev.software_groups()`, …).**
+    //! The prelude carries the engine type, [`Relation`], because that's a
+    //! name a caller writes by hand (a struct field, a function return
+    //! type). It does NOT carry the per-model `<M>Relations` trait that
+    //! `#[derive(Model)]` generates for each of your models — that trait is
+    //! defined in YOUR crate (the derive expands inside your struct's own
+    //! module), and a facade crate structurally cannot re-export a trait a
+    //! downstream crate hasn't written yet. `#[derive(Model)]` emits
+    //! `pub trait <Model>Relations` as a sibling item at the same module
+    //! scope as the model struct, so the same `use your_crate::models::*;`
+    //! (or whatever glob already brings the model itself into scope) also
+    //! brings its relation trait into scope — no separate hand-`use` per
+    //! model is needed. Built-in models shipped inside `umbral-core` itself
+    //! would be preluded the normal way if any had relation fields; as of
+    //! Phase 1 none do (the only hand-rolled fixture model, `Post`, predates
+    //! `#[derive(Model)]` and has no relations), so there is nothing else to
+    //! re-export here yet.
 
     pub use crate::db::{DatabaseRouter, RouteContext, TenantKey};
     pub use crate::middleware::Middleware;
     pub use crate::orm::{
         ChoiceField, Choices, F, FColExt, FileField, ForeignKey, ImageField, M2M, Masked, Model,
-        MultiChoice, OneToOne, Q, ReverseRelations,
+        MultiChoice, OneToOne, Q, Relation, ReverseRelations,
     };
     pub use crate::plugin::{AppContext, Plugin, StaticDir};
     pub use crate::routes::Routes;
@@ -849,13 +867,14 @@ pub mod orm {
         DynError, DynQuerySet, Email, F, FColExt, FExpr, FieldSpec, FileField, FkAction,
         ForeignKey, GeometryKind, GeometrySpec, GetError, HydrateRelated, ImageField, InsertedPk,
         JoinKind, M2M, M2MRelationSpec, Manager, MaskError, MaskKeyring, Masked, Model, ModelBase,
-        MultiChoice, OneToOne, OneToOneRelationSpec, Post, Predicate, PrimaryKey, Q, QuerySet,
-        QuerySetTx, ReverseError, ReverseFkRelationSpec, ReverseRelations, ReverseSet, Search,
-        SearchHit, Searchable, Slug, SqlType, TryForEachError, TsVector, Url, ValidatorError,
-        column, concat_field_specs, decode_to_string, escape_like_literal, import_table_rows,
+        MultiChoice, OneToOne, OneToOneRelationSpec, Post, Predicate, PrefetchMapQuery, Prefetched,
+        PrimaryKey, Q, QuerySet, QuerySetTx, Relation, ReverseError, ReverseFkRelationSpec,
+        ReverseRelations, ReverseSet, Search, SearchHit, Searchable, Slug, SqlType,
+        TryForEachError, TsVector, Url, ValidatorError, build_dynamic_relation, column,
+        concat_field_specs, decode_to_string, escape_like_literal, import_table_rows,
         load_junction_selection, never_matches, pk_key, set_junction_dynamic,
         set_junction_dynamic_in_tx, set_mask_keyring, typed_cmp_condition, typed_eq_condition,
-        typed_json_value, validate_text_format, write,
+        typed_eq_expr, typed_json_value, validate_text_format, write,
     };
 
     /// PostGIS spatial value type (`postgis` feature). `umbral::orm::gis::Geometry`
@@ -892,6 +911,11 @@ pub mod orm {
     /// types. Pair the enum derive with `#[umbral(choices)]` on the
     /// owning model field. See `umbral::orm::ChoiceField`.
     pub use umbral_macros::Choices;
+
+    /// The relation-traversal handles and their static hop descriptors —
+    /// `to_one_hop`, `HopSpec`, `HopKind`, `JunctionSpec`, `RelationSource`.
+    /// `Relation` itself is also re-exported flat above.
+    pub use umbral_core::orm::relation;
 
     /// The typed column constants for the demo `Post` model.
     ///

@@ -54,3 +54,8 @@ http = "1"
 http-body-util = "0.1"
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
+# gaps4 #72's `expand_read.rs` query-count proof harness (mirrors
+# `crates/umbral-core/tests/query_counts.rs`'s tracing-layer technique) —
+# counts `sqlx::query` tracing events to prove list-page `?expand=` stays
+# batched (flat query count) as the row count grows.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

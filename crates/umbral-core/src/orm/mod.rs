@@ -41,6 +41,7 @@ pub mod nested;
 pub mod one_to_one;
 pub mod post;
 pub mod queryset;
+pub mod relation;
 pub mod reverse_accessor;
 pub mod reverse_set;
 pub mod search;
@@ -128,7 +129,7 @@ impl Subquery {
 pub use choices::ChoiceField;
 pub use dynamic::{
     Cmp, CsvImportReport, DynError, DynQuerySet, InsertedPk, decode_to_string, import_table_rows,
-    never_matches, typed_cmp_condition, typed_eq_condition, typed_json_value,
+    never_matches, typed_cmp_condition, typed_eq_condition, typed_eq_expr, typed_json_value,
 };
 pub use expr::{F, FColExt, FExpr, Q};
 pub use file_field::{FileField, ImageField};
@@ -143,7 +144,16 @@ pub use model::{
 pub use multichoice::MultiChoice;
 pub use one_to_one::OneToOne;
 pub use post::Post;
-pub use queryset::{GetError, JoinKind, Manager, QuerySet, QuerySetTx, TryForEachError};
+/// Registry-driven forward FK/O2O `__` relation-path resolver — the dynamic
+/// (no static `Model` type) counterpart of [`Predicate::related`]. Power-user
+/// surface: `umbral-rest`'s `ResourceConfig::owned_via` (gaps4 #78) is the
+/// intended caller; most application code wants the typed `related` form.
+pub use queryset::relation_filter::build_dynamic_relation;
+pub use queryset::{
+    GetError, JoinKind, Manager, PrefetchMapQuery, Prefetched, QuerySet, QuerySetTx,
+    TryForEachError,
+};
+pub use relation::Relation;
 pub use reverse_accessor::{ReverseError, ReverseRelations};
 pub use reverse_set::ReverseSet;
 pub use search::{Search, SearchHit, SearchSources, Searchable};
@@ -227,6 +237,43 @@ impl<T> Predicate<T> {
                 .unwrap_or_else(|| self.cond.clone()),
             _ => self.cond.clone(),
         }
+    }
+}
+
+impl<T: model::Model> Predicate<T> {
+    /// Django-style forward FK / O2O traversal filter (gaps4 #76).
+    ///
+    /// `path` is a `__`-joined field chain whose leading segments are forward
+    /// foreign-key / one-to-one fields and whose final segment is the leaf
+    /// column to compare — e.g. `"user__username"` filters `T` by its related
+    /// user's username, resolved in ONE query via a nested `IN (SELECT …)`
+    /// subquery (no extra round-trip, no JOIN row-multiplication). A trailing
+    /// recognized lookup selects the operator: `exact`/`eq` (default), `ne`,
+    /// `gt`, `gte`, `lt`, `lte`, `contains`, `icontains`, `startswith`,
+    /// `endswith` — so `"author__name__icontains"` is a case-insensitive
+    /// substring match on the author's name.
+    ///
+    /// Hops resolve against the model registry, so this needs a booted `App`.
+    /// A malformed path (unknown field, a non-FK hop, a missing leaf column, or
+    /// a reverse-FK / M2M segment — those `__` filters are a documented
+    /// follow-up) is a clear `Err`, never a literal-column SQL error. For a
+    /// registry-free, value-type-checked alternative use the typed
+    /// [`ForeignKeyCol::to`](column::ForeignKeyCol::to) form.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // developers whose related user is named "ada", in one query:
+    /// Developer::objects()
+    ///     .filter(Predicate::<Developer>::related("user__username", "ada")?)
+    ///     .first()
+    ///     .await?;
+    /// ```
+    pub fn related(
+        path: &str,
+        value: impl Into<sea_query::Value>,
+    ) -> Result<Predicate<T>, sqlx::Error> {
+        queryset::relation_filter::build_string_relation::<T>(path, value.into())
     }
 }
 

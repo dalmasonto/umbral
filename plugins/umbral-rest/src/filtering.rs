@@ -70,6 +70,10 @@ const RESERVED_KEYS: &[&str] = &[
     // Skipped here so the filter parser doesn't mistake it for a
     // column name and reject as "unknown field".
     "include",
+    // `?expand=field1,field2` (gaps4 #72) — consumed by
+    // lib.rs::parse_expand for declared reverse-FK / M2M read-side
+    // expansion. Same reasoning as `include` above.
+    "expand",
     // `?format=csv` — consumed by the list handler to switch the
     // response serialization (feature #61); not a column filter.
     "format",

@@ -269,6 +269,23 @@ pub enum ScopeDecision {
     /// resource. List returns an empty page; retrieve/update/destroy 404
     /// (a non-owned row is indistinguishable from a missing one — no oracle).
     None,
+    /// Restrict to rows reachable from `value` through a forward FK/O2O
+    /// relation **path** — the multi-hop sibling of [`Self::Restrict`], which
+    /// only covers a column on the resource's OWN table. `path` is a
+    /// Django-style `__`-joined chain, e.g. `"developer__user"` for "this
+    /// row's `developer`'s `user` equals the caller" (gaps4 #78). Built by
+    /// [`ResourceConfig::owned_via`] — resolved via
+    /// [`umbral::orm::build_dynamic_relation`], the same registry-driven
+    /// engine gaps4 #76 added for the filter (`?`-query) side, so no
+    /// hand-written `scope_async` resolver is needed for an ownership chain
+    /// that is more than one hop away.
+    RestrictVia {
+        /// The `__`-joined relation path from this resource to the owner
+        /// column, e.g. `"developer__user"`.
+        path: String,
+        /// The caller id the leaf column must equal.
+        value: String,
+    },
 }
 
 /// A per-request row-scoping hook: maps the caller's [`Identity`] (or `None`
@@ -340,6 +357,21 @@ pub struct ResourceConfig {
     /// then each child (with its FK to the parent set), returning the full
     /// nested object. Declared via [`ResourceConfig::nested`].
     pub(crate) nested: Vec<(String, String)>,
+    /// Read-side reverse-FK relations embeddable via `?expand=<field>`
+    /// (gaps4 #72): `(field, child_table)`. A `GET` naming `field` in
+    /// `?expand=` gets an ARRAY of full child objects — every row in
+    /// `child_table` whose foreign key points back at this row — spliced
+    /// in under `field`. Declared via [`ResourceConfig::embed`]. Distinct
+    /// from `nested` (write-side, POST) so the two can be declared
+    /// independently; a resource that wants both calls both builders.
+    pub(crate) expand_reverse: Vec<(String, String)>,
+    /// Read-side M2M fields expandable via `?expand=<field>` (gaps4 #72).
+    /// Without this the M2M field always serializes as a bare `[id, ...]`
+    /// array (the existing behavior). Naming the field in `?expand=`
+    /// replaces the id array with the full child objects, batched (one
+    /// query per relation regardless of row count). Declared via
+    /// [`ResourceConfig::expand_m2m`].
+    pub(crate) expand_m2m: Vec<String>,
     /// Opt IN to bulk endpoints (gaps2 #82). `false` (the
     /// default) keeps the resource byte-for-byte unchanged: a `POST` with
     /// a JSON array is rejected as a bad single-object body, and no
@@ -408,6 +440,8 @@ impl ResourceConfig {
             search_disabled: false,
             search_fields: None,
             nested: Vec::new(),
+            expand_reverse: Vec::new(),
+            expand_m2m: Vec::new(),
             bulk: false,
             scope: None,
             write_scope: None,
@@ -541,6 +575,50 @@ impl ResourceConfig {
         self.scope_writes(move |identity| match identity {
             Some(id) if id.is_superuser => ScopeDecision::All,
             Some(id) => ScopeDecision::Restrict(vec![(col.clone(), id.user_id.clone())]),
+            None => ScopeDecision::None,
+        })
+    }
+
+    /// The relation-path owner-scope shorthand for [`Self::scope`] (gaps4
+    /// #78): restrict every CRUD/bulk action to rows reachable from the
+    /// caller through a forward FK/O2O chain, when ownership is not a column
+    /// on THIS table but on a table one or more hops away.
+    ///
+    /// `relation` is the `__`-joined chain of forward relation fields from
+    /// this resource to the table that carries `owner_column` — a single
+    /// field for one hop (`"developer"`), or `"a__b"` for two. The two are
+    /// joined into the same Django-style path
+    /// [`umbral::orm::build_dynamic_relation`] resolves for the read side's
+    /// `Predicate::related` (gaps4 #76):
+    ///
+    /// ```ignore
+    /// // "this gig's developer's user must be me" — TWO hops, no
+    /// // hand-written scope_async resolver:
+    /// ResourceConfig::new("gig").owned_via("developer", "user")
+    /// // equivalent path: "developer__user"
+    /// ```
+    ///
+    /// Same fail-closed contract as [`Self::owned_by`]: a superuser sees
+    /// every row ([`ScopeDecision::All`]); everyone else is restricted to
+    /// rows whose `relation`-path leaf equals their id
+    /// ([`ScopeDecision::RestrictVia`]); an anonymous caller sees none
+    /// ([`ScopeDecision::None`]). A create is checked against the SAME chain
+    /// (does the developer named in the body actually belong to the caller?)
+    /// via one `EXISTS` query — see the write-side handling in
+    /// `RestPlugin::object_scope_allows_create`.
+    ///
+    /// **Scope**: forward FK/O2O hops only, to arbitrary depth — the same
+    /// surface [`umbral::orm::Predicate::related`] supports. A reverse-FK or
+    /// M2M hop in the chain (e.g. "the rows any of my teams' members can
+    /// see") is a documented follow-up, not covered here.
+    pub fn owned_via(self, relation: impl Into<String>, owner_column: impl Into<String>) -> Self {
+        let path = format!("{}__{}", relation.into(), owner_column.into());
+        self.scope(move |identity| match identity {
+            Some(id) if id.is_superuser => ScopeDecision::All,
+            Some(id) => ScopeDecision::RestrictVia {
+                path: path.clone(),
+                value: id.user_id.clone(),
+            },
             None => ScopeDecision::None,
         })
     }
@@ -679,6 +757,62 @@ impl ResourceConfig {
     /// ```
     pub fn nested(mut self, json_field: impl Into<String>, child_table: impl Into<String>) -> Self {
         self.nested.push((json_field.into(), child_table.into()));
+        self
+    }
+
+    /// Declare a REVERSE-FK relation embeddable on `GET` via `?expand=<field>`
+    /// (gaps4 #72) — the read-side counterpart to [`Self::nested`]'s write
+    /// side. `child_table` is a table with a foreign key pointing AT this
+    /// resource; `field` is the name under which the full child ARRAY
+    /// appears in the response when the caller asks for it.
+    ///
+    /// ```ignore
+    /// ResourceConfig::for_::<Developer>()
+    ///     .embed("projects", "project")       // reverse-FK: project.developer_id -> developer.id
+    ///     .expand_m2m("favorite_software")     // M2M: expand ids to full objects
+    /// // GET /api/developer/7?expand=projects,favorite_software
+    /// ```
+    ///
+    /// Without `?expand=projects` the response is unchanged — no `projects`
+    /// key at all, exactly like before this method existed. Naming an
+    /// UNDECLARED relation in `?expand=` is a `400`, not a silent no-op —
+    /// same contract as `?include=` for forward FKs.
+    ///
+    /// Batched: a LIST request expanding `field` issues ONE
+    /// `SELECT ... WHERE <fk> IN (...)` across every row on the page, not
+    /// one query per row. Embedded children are scrubbed by their own
+    /// table's `.hide()` / hidden-column rules before they reach the
+    /// response — the same recursion `?include=` already applies to
+    /// forward-FK objects.
+    ///
+    /// **One level.** `?expand=projects` embeds `project` rows as-is; it
+    /// does not also expand a relation declared on `project` itself
+    /// (`?expand=projects.tasks` is not supported in this version — a
+    /// documented follow-up, not silently ignored: it 400s like any other
+    /// unknown name).
+    pub fn embed(mut self, field: impl Into<String>, child_table: impl Into<String>) -> Self {
+        self.expand_reverse.push((field.into(), child_table.into()));
+        self
+    }
+
+    /// Declare an M2M field expandable on `GET` via `?expand=<field>`
+    /// (gaps4 #72). By default every M2M field always serializes as a bare
+    /// `[id, id, ...]` array; naming it here lets a caller ask for the full
+    /// child objects instead via `?expand=<field>` — the id array survives
+    /// unchanged when the caller doesn't ask.
+    ///
+    /// ```ignore
+    /// ResourceConfig::for_::<Developer>().expand_m2m("favorite_software")
+    /// // GET /api/developer/7                     -> favorite_software: [41, 109]
+    /// // GET /api/developer/7?expand=favorite_software -> favorite_software: [{...}, {...}]
+    /// ```
+    ///
+    /// `field` must be a real M2M relation declared on the model
+    /// (`Model::M2M_RELATIONS`) — the target table is discovered from
+    /// there, not passed here. Batched the same way as [`Self::embed`]: one
+    /// query per relation across a whole list page.
+    pub fn expand_m2m(mut self, field: impl Into<String>) -> Self {
+        self.expand_m2m.push(field.into());
         self
     }
 
