@@ -23,7 +23,7 @@ use std::pin::Pin;
 use sea_query::{Alias, Expr, Query, SimpleExpr};
 
 use crate::db::DbPool;
-use crate::orm::queryset::Manager;
+use crate::orm::queryset::{Manager, QuerySet};
 use crate::orm::{HydrateRelated, Model, Predicate};
 
 // =========================================================================
@@ -410,4 +410,67 @@ pub fn to_one_hop<From: Model, To: Model>(
 /// A loud protocol error for an unsupported path shape.
 fn protocol_error(msg: &str) -> sqlx::Error {
     sqlx::Error::Protocol(msg.to_string())
+}
+
+/// Build a chainable, ambient-pooled `QuerySet<To>` for a single to-many
+/// hop (`M2M` or `ReverseFk`) off a `RelationSource` — the general-path
+/// sibling of [`M2M::query`](super::m2m::M2M::query) for callers that only
+/// have a `HopSpec` (the Task-5 derive's M2M/reverse-FK accessors when the
+/// source isn't a hydrated `M2M` field, e.g. a hop off a `Relation<From>`
+/// handle) rather than a materialised `M2M<T>` slot.
+///
+/// Single-hop only: `src` must carry no accumulated hops (a bare object, or
+/// a fresh handle nothing has hopped off yet). Widening a *deep* chain
+/// (hopping to-many after one or more prior hops) needs the same flat-JOIN
+/// treatment [`crate::orm::queryset::relation_resolve`] gives to-one chains
+/// and is Task 4's to-many leaf resolver, not this function's job — calling
+/// this with an already-hopped source panics with a message pointing here.
+///
+/// # Panics
+///
+/// - `hop.kind` is not [`HopKind::M2M`] or [`HopKind::ReverseFk`] (a to-one
+///   kind belongs on [`to_one_hop`], not here).
+/// - `src` already carries one or more hops (deep to-many chains aren't
+///   wired yet — see the note above).
+/// - `hop.kind` is [`HopKind::M2M`] and `hop.junction` is `None` (a
+///   malformed `HopSpec` — every M2M hop must carry its [`JunctionSpec`]).
+pub fn to_many_hop<From: Model, To: Model>(
+    src: impl RelationSource<From>,
+    hop: HopSpec,
+) -> QuerySet<To> {
+    assert!(
+        matches!(hop.kind, HopKind::M2M | HopKind::ReverseFk),
+        "to_many_hop requires a to-many HopKind (M2M or ReverseFk); \
+         to-one kinds resolve through `to_one_hop` instead"
+    );
+    let path = src.into_rel_path();
+    assert!(
+        path.hops.is_empty(),
+        "to_many_hop only resolves a single hop off a bare source; deep \
+         to-many chains (hopping off a source that already carries prior \
+         hops) aren't resolved yet — see Task 4's to-many leaf resolver \
+         in docs/specs/orm-relation-traversal.md"
+    );
+    let PathBase::SinglePk { pk_value, .. } = path.base;
+
+    let predicate: Predicate<To> = match hop.kind {
+        HopKind::ReverseFk => {
+            Predicate::new(Expr::col(Alias::new(hop.fk_column)).eq(SimpleExpr::Value(pk_value)))
+        }
+        HopKind::M2M => {
+            let junction = hop.junction.expect("M2M HopSpec must carry a JunctionSpec");
+            let to_pk_col = pk_column_name::<To>();
+            let mut sub = Query::select();
+            sub.column(Alias::new(junction.target_column))
+                .from(crate::db::router::schema_qualified_table(junction.table))
+                .and_where(
+                    Expr::col(Alias::new(junction.parent_column)).eq(SimpleExpr::Value(pk_value)),
+                );
+            Predicate::new(Expr::col(Alias::new(to_pk_col)).in_subquery(sub))
+        }
+        // Guarded by the leading `assert!` above.
+        _ => unreachable!("to-one HopKind rejected by the leading assert"),
+    };
+
+    Manager::<To>::new().filter(predicate)
 }

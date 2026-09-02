@@ -442,6 +442,42 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
     // phase 3 follow-up.
     // -----------------------------------------------------------------
 
+    /// Build a chainable, ambient-pooled `QuerySet<T>` scoped to this
+    /// parent's M2M relation via a junction subquery — the entry point
+    /// Task 5's generated `dev.software_groups()` accessor delegates to.
+    ///
+    /// `<T.pk> IN (SELECT child_id FROM <junction> WHERE parent_id =
+    /// <parent_id>)`, composed onto a fresh `Manager::<T>::new()` (the
+    /// same starting point `T::objects()` builds) so every existing
+    /// terminal (`filter`/`exclude`/`order_by`/`count`/`aggregate`/
+    /// `fetch`/...) keeps working unchanged — this only ever narrows the
+    /// row set the terminal ultimately sees.
+    ///
+    /// `M2M.parent_id` is populated by the `set_m2m_parent_ids` hook that
+    /// every read terminal (`fetch`/`first`/`get`, and their transaction
+    /// siblings) already runs on freshly materialised rows (see this
+    /// module's top doc) — so `dev.software_groups.query()` works on any
+    /// `dev` fetched through the ORM, no extra wiring required.
+    ///
+    /// Returns an impossible-predicate `QuerySet` (matches no row — the
+    /// same shape [`Self::fetch`] returns as `Ok(Vec::new())`) when the
+    /// M2M slot is unattached (`M2M::empty()` / a parent row that was
+    /// never persisted or fetched). Never silently widens to "every row."
+    pub fn query(&self) -> super::QuerySet<T> {
+        let Some((parent_id, junction)) = self.junction_handle() else {
+            return super::queryset::Manager::<T>::new()
+                .filter(super::Predicate::new(Expr::cust("1 = 0")));
+        };
+        let target_pk_col = child_pk_col::<T>();
+        let mut sub = Query::select();
+        sub.column(Alias::new("child_id"))
+            .from(crate::db::router::schema_qualified_table(junction))
+            .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
+        let predicate =
+            super::Predicate::new(Expr::col(Alias::new(target_pk_col)).in_subquery(sub));
+        super::queryset::Manager::<T>::new().filter(predicate)
+    }
+
     /// "Does any of `parent_ids` hold the junction relation to
     /// `child_pk`?" Returns `Ok(false)` for an empty `parent_ids`
     /// slice. Built as `SELECT 1 FROM <junction> WHERE parent_id
