@@ -60,8 +60,10 @@ pub struct User {
     pub id: i64,
     pub name: String,
     /// Parent-side reverse OneToOne — the back-link to the child `Developer`,
-    /// carries no DB column. The generated `UserRelations::developer()`
-    /// accessor resolves it as a chainable `Relation<Developer>`.
+    /// carries no DB column. Declaring it does NOT emit a `UserRelations`
+    /// accessor; the chainable `user.developer() -> Relation<Developer>` comes
+    /// from the (unified) reverse-O2O machinery driven by `Developer`'s unique
+    /// FK, so there is exactly one such method and no collision.
     #[sqlx(skip)]
     #[serde(skip)]
     pub developer: OneToOne<Developer>,
@@ -75,16 +77,13 @@ pub struct Developer {
     pub name: String,
     /// Child-side of the OneToOne: a UNIQUE FK pointing back at `User`.
     ///
-    /// `#[umbral(no_reverse)]` suppresses the zero-config reverse accessors on
-    /// `User` (`user.developer()` returning `Option<Developer>`, and
-    /// `user.developer_set()`). `User` declares an explicit parent-side
-    /// `developer: OneToOne<Developer>` field, so the chainable Task-5
-    /// `UserRelations::developer() -> Relation<Developer>` is the canonical
-    /// accessor; without `no_reverse` the two `developer()` methods collide
-    /// (ambiguous method call). This is the documented opt-out when you declare
-    /// both ends of a OneToOne.
+    /// No `#[umbral(no_reverse)]` needed: the unique FK generates exactly ONE
+    /// chainable `user.developer() -> Relation<Developer>` accessor (the
+    /// upgraded reverse-O2O machinery), and `User`'s parent-side
+    /// `developer: OneToOne<Developer>` field does NOT emit a second one — so
+    /// there is no collision. That single accessor is what the deep chain and
+    /// `reverse_o2o_object_rooted` below drive.
     #[umbral(unique)]
-    #[umbral(no_reverse)]
     pub user: ForeignKey<User>,
     #[sqlx(skip)]
     #[serde(skip)]
@@ -320,10 +319,34 @@ async fn deep_mixed_chain_reverse_o2o_then_m2m_m2m() {
 }
 
 /// The reverse-O2O accessor on its own resolves to the child object.
+///
+/// The collision-unification proof: `user.developer()` is a SINGLE method (no
+/// `#[umbral(no_reverse)]`, no ambiguity) returning the chainable
+/// `Relation<Developer>`. Awaiting it yields the child (required shape); the
+/// `.get_opt()` terminal yields `Option` (the nullable shape) — the exact
+/// backward-compatible semantics the cross-crate reverse-O2O accessor keeps.
 #[tokio::test]
 async fn reverse_o2o_object_rooted() {
     boot().await;
-    let user = fetch_user("ada").await;
-    let dev = user.developer().get_opt().await.expect("developer query");
+    let ada = fetch_user("ada").await;
+
+    // `.get_opt().await` → Option (nullable shape): present for ada.
+    let dev = ada.developer().get_opt().await.expect("developer query");
     assert_eq!(dev.map(|d| d.name), Some("ada-dev".to_string()));
+
+    // Awaiting the same handle → the child directly (required shape).
+    let dev = ada
+        .developer()
+        .await
+        .expect("developer awaits to the child");
+    assert_eq!(dev.name, "ada-dev");
+
+    // grace has no developer row → `.get_opt()` is None (never an error).
+    let grace = fetch_user("grace").await;
+    let none = grace
+        .developer()
+        .get_opt()
+        .await
+        .expect("no-developer query");
+    assert!(none.is_none(), "grace has no developer");
 }

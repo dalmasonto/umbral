@@ -3,10 +3,18 @@
 //! Mirrors the gap #105 reverse-FK trait trick for the OneToOne
 //! shape: when a child declares `#[umbral(unique)] pub user:
 //! ForeignKey<AuthUser>`, the derive emits a trait + an
-//! `impl ... for AuthUser` so callers can spell
-//! `auth_user.<child>().await?` to get `Option<Child>` directly —
-//! even though `AuthUser` lives in a different crate (umbral-auth)
-//! and we never touch its struct definition.
+//! `impl ... for AuthUser` so callers can spell `auth_user.<child>()`
+//! to get a chainable `Relation<Child>` — even though `AuthUser`
+//! lives in a different crate (umbral-auth) and we never touch its
+//! struct definition.
+//!
+//! As of the Task-5 relation-accessor unification the accessor
+//! returns `Relation<Child>` (was `Future<Option<Child>>`): use
+//! `.get_opt().await?` for the nullable `Option<Child>` shape these
+//! tests assert, or `.await?` for the child directly (erroring if
+//! absent). Same `sqlx::Error`; the reverse O2O is now the ONE
+//! chainable `parent.child()` accessor, with no name collision
+//! against a parent-side `OneToOne` field.
 //!
 //! The cross-crate-ness is implicit in this file's setup:
 //! - `AuthUser` is defined in `umbral-auth` (the foreign crate).
@@ -32,10 +40,11 @@ use umbral_auth::{AuthUser, create_user};
 /// the derive macro picks that up and emits both:
 ///   - the regular reverse-FK accessor `auth_user.customer_profile_set()`
 ///     (returning `QuerySet<CustomerProfile>`)
-///   - the NEW reverse-OneToOne accessor `auth_user.customer_profile().await?`
-///     (returning `Option<CustomerProfile>` directly — the unique
-///     constraint guarantees at most one row, so callers skip the
-///     QuerySet hop)
+///   - the chainable reverse-OneToOne accessor
+///     `auth_user.customer_profile()` returning `Relation<CustomerProfile>`
+///     — `.get_opt().await?` for `Option<CustomerProfile>` (the unique
+///     constraint guarantees at most one row), `.await?` for the child
+///     directly, or continue the traversal off the returned handle
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbral::orm::Model)]
 pub struct CustomerProfile {
     pub id: i64,
@@ -156,7 +165,7 @@ async fn cross_crate_o2o_returns_some_for_matching_child() {
     // AuthUser is in `umbral-auth`. If the macro emitted an inherent
     // impl on AuthUser instead of a trait, this file would not have
     // compiled — so reaching this line at all is half the assertion.
-    let profile = user.customer_profile().await.expect("query ok");
+    let profile = user.customer_profile().get_opt().await.expect("query ok");
     let p = profile.expect("matching child exists");
     assert_eq!(p.bio, "alpha bio");
     assert_eq!(p.user.id(), user.id);
@@ -168,7 +177,7 @@ async fn cross_crate_o2o_returns_none_when_no_child_exists() {
     boot().await;
     let user = make_user("beta-no-child").await;
 
-    let profile = user.customer_profile().await.expect("query ok");
+    let profile = user.customer_profile().get_opt().await.expect("query ok");
     assert!(
         profile.is_none(),
         "no child row inserted → accessor returns None, got {profile:?}"
@@ -190,8 +199,13 @@ async fn cross_crate_o2o_isolates_per_parent_row() {
         .await
         .expect("insert A");
 
-    let from_a = a.customer_profile().await.expect("query A").expect("A has");
-    let from_b = b.customer_profile().await.expect("query B");
+    let from_a = a
+        .customer_profile()
+        .get_opt()
+        .await
+        .expect("query A")
+        .expect("A has");
+    let from_b = b.customer_profile().get_opt().await.expect("query B");
 
     assert_eq!(from_a.bio, "A only");
     assert!(from_b.is_none(), "B has no profile → None, got {from_b:?}");
@@ -210,8 +224,12 @@ async fn two_distinct_children_emit_distinct_method_names() {
     let user = make_user("two-children").await;
 
     // Both methods present, both callable, no name collision.
-    let _ = user.customer_profile().await.expect("o2o on profile");
-    let _ = user.wishlist().await.expect("o2o on wishlist");
+    let _ = user
+        .customer_profile()
+        .get_opt()
+        .await
+        .expect("o2o on profile");
+    let _ = user.wishlist().get_opt().await.expect("o2o on wishlist");
 }
 
 /// Mutation-test the `unique` guard. When the guard is in place,

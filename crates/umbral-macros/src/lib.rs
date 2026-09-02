@@ -2019,7 +2019,9 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     // OneToOne shape). Same trait-impl trick as reverse-FK (gap #105),
     // so `parent.<child_snake>().await? -> Option<Child>` works across
     // crates without touching the parent struct.
-    let mut reverse_o2o_entries: Vec<(syn::Ident, syn::Type)> = Vec::new();
+    // (field ident, parent type, child FK column name). The column is the
+    // reverse-O2O hop's driving column, captured in the child's derive.
+    let mut reverse_o2o_entries: Vec<(syn::Ident, syn::Type, String)> = Vec::new();
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
@@ -2047,13 +2049,21 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 if !field_attr.no_reverse {
                     reverse_fk_entries.push((field_name.clone(), (**inner_ty).clone()));
                     // A UNIQUE FK is a OneToOne in disguise — emit the
-                    // ergonomic `parent.<child>()` accessor in addition
-                    // to `parent.<child>_set()`. The set variant still
-                    // works (at most one row); the o2o variant just
-                    // skips the QuerySet round-trip for callers who
-                    // know cardinality is 1.
+                    // ergonomic chainable `parent.<child>()` accessor in
+                    // addition to `parent.<child>_set()`. The set variant
+                    // still works (at most one row); the o2o variant returns
+                    // a chainable `Relation<Child>` (Task 5) so a traversal
+                    // can continue past the reverse O2O. Capture the child's
+                    // FK column (honouring `#[sqlx(rename)]`) — the reverse
+                    // hop's driving column, known here in the child's derive.
                     if field_attr.unique {
-                        reverse_o2o_entries.push((field_name.clone(), (**inner_ty).clone()));
+                        let o2o_fk_col =
+                            sqlx_rename(&field.attrs).unwrap_or_else(|| field_name.to_string());
+                        reverse_o2o_entries.push((
+                            field_name.clone(),
+                            (**inner_ty).clone(),
+                            o2o_fk_col,
+                        ));
                     }
                 }
                 hydrate_arms.push(quote! {
@@ -2417,23 +2427,36 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
         })
         .collect();
 
-    // Cross-crate reverse-OneToOne accessor — same trait-trick as
-    // reverse-FK (above), but the method returns `Option<Child>`
-    // directly (not a QuerySet) because the UNIQUE constraint
-    // guarantees at most one row. Disambiguation is per-parent-type
-    // among the UNIQUE FKs only, separate from the reverse-FK count
-    // (a child with `user: FK<U> + unique` AND `manager: FK<U>` gets
-    // `customer()` for the o2o and `customer_via_user_set()` +
-    // `customer_via_manager_set()` for the FK reverses).
+    // Cross-crate reverse-OneToOne accessor — same trait-trick as reverse-FK
+    // (above). As of Task 5 the method returns a CHAINABLE `Relation<Child>`
+    // (not a bare `Future<Option<Child>>`), so `parent.child()` composes into a
+    // deeper traversal (`user.developer().software_groups()…`) AND still awaits
+    // to a single child. This UNIFIES the reverse-O2O accessor with Task 5's
+    // parent-side-`OneToOne` accessor: there is now exactly ONE `parent.child()`
+    // method, no name collision, and it works zero-config (no parent-side field
+    // required) for the framework's blessed O2O fixtures.
+    //
+    // Return-shape / backward-compat note: `Relation<T>` awaits (`IntoFuture`)
+    // to `Result<T, sqlx::Error>` — the REQUIRED shape (a missing row is
+    // `Err(RowNotFound)`), NOT `Result<Option<T>>`. A reverse O2O is nullable,
+    // so callers that want the "absent → None" shape use the explicit
+    // `.get_opt().await` terminal (same `sqlx::Error`); `.await` alone yields
+    // the child or errors on absence. This is the single deliberate call-site
+    // change from the pre-Task-5 `Future<Option<Child>>` accessor.
+    //
+    // Disambiguation is per-parent-type among the UNIQUE FKs only, separate
+    // from the reverse-FK count (a child with `user: FK<U> + unique` AND
+    // `manager: FK<U>` gets `customer()` for the o2o and `customer_via_user_set()`
+    // + `customer_via_manager_set()` for the FK reverses).
     let mut o2o_parent_type_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
-    for (_, parent_ty) in &reverse_o2o_entries {
+    for (_, parent_ty, _) in &reverse_o2o_entries {
         let key = quote!(#parent_ty).to_string();
         *o2o_parent_type_counts.entry(key).or_insert(0) += 1;
     }
     let reverse_o2o_impls: Vec<TokenStream2> = reverse_o2o_entries
         .iter()
-        .map(|(field_ident, parent_ty)| {
+        .map(|(field_ident, parent_ty, fk_col)| {
             let key = quote!(#parent_ty).to_string();
             let count = o2o_parent_type_counts.get(&key).copied().unwrap_or(1);
             let accessor_name = if count > 1 {
@@ -2441,49 +2464,41 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             } else {
                 format_ident!("{}", child_snake)
             };
-            let fk_const = format_ident!("{}", to_screaming_snake_case(&field_ident.to_string()));
             let field_pascal = to_pascal_case(&field_ident.to_string());
             let trait_name = format_ident!("{}{}OneToOneReverse", struct_name, field_pascal);
             let trait_doc = format!(
                 "Reverse-OneToOne trait emitted by `#[derive(Model)]` for the \
                  UNIQUE FK `{}::{}`. Importing this trait lets callers spell \
-                 `parent.{}().await?` to get `Option<{}>` filtered to the \
-                 (at-most-one) child whose `{}` FK points at the parent. \
-                 Trait-based emission (mirrors gap #105) sidesteps the orphan \
-                 rule, so the accessor works even when the parent type is \
-                 defined in another crate — the canonical case is a model in \
-                 an app crate declaring `#[umbral(unique)] pub user: \
-                 ForeignKey<AuthUser>`.",
-                struct_name, field_ident, accessor_name, struct_name, field_ident,
+                 `parent.{}()` to get a chainable `Relation<{}>` for the \
+                 (at-most-one) child whose `{}` FK points at the parent — await \
+                 it for the child (`.await?`, erroring if absent) or use \
+                 `.get_opt().await?` for `Option<{}>`, and continue the \
+                 traversal with the child's own relation accessors. Trait-based \
+                 emission (mirrors gap #105) sidesteps the orphan rule, so the \
+                 accessor works even when the parent type is defined in another \
+                 crate — the canonical case is a model in an app crate declaring \
+                 `#[umbral(unique)] pub user: ForeignKey<AuthUser>`.",
+                struct_name, field_ident, accessor_name, struct_name, field_ident, struct_name,
             );
             quote! {
                 #[doc = #trait_doc]
                 pub trait #trait_name {
-                    fn #accessor_name(
-                        &self,
-                    ) -> impl ::core::future::Future<
-                        Output = ::core::result::Result<
-                            ::core::option::Option<#struct_name>,
-                            ::sqlx::Error,
-                        >,
-                    > + ::core::marker::Send;
+                    fn #accessor_name(&self) -> ::umbral::orm::Relation<#struct_name>;
                 }
                 impl #trait_name for #parent_ty {
-                    fn #accessor_name(
-                        &self,
-                    ) -> impl ::core::future::Future<
-                        Output = ::core::result::Result<
-                            ::core::option::Option<#struct_name>,
-                            ::sqlx::Error,
-                        >,
-                    > + ::core::marker::Send {
-                        let __pk = <Self as ::umbral::orm::Model>::primary_key(self);
-                        async move {
-                            #struct_name::objects()
-                                .filter(#module_name::#fk_const.eq(__pk))
-                                .first()
-                                .await
-                        }
+                    fn #accessor_name(&self) -> ::umbral::orm::Relation<#struct_name> {
+                        ::umbral::orm::relation::to_one_hop(
+                            self,
+                            ::umbral::orm::relation::HopSpec {
+                                kind: ::umbral::orm::relation::HopKind::O2OReverse,
+                                from_table: <#parent_ty as ::umbral::orm::Model>::TABLE,
+                                to_table: <#struct_name as ::umbral::orm::Model>::TABLE,
+                                fk_column: #fk_col,
+                                fk_on_from: false,
+                                required: false,
+                                junction: ::core::option::Option::None,
+                            },
+                        )
                     }
                 }
             }
@@ -2496,13 +2511,17 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     // ------------------------------------------------------------------ //
     //
     // One method per FORWARD relation field on this model:
-    //   - forward FK / O2O child-side / reverse-O2O parent-side
+    //   - forward FK / O2O child-side (a unique forward FK)
     //         → fn <field>(&self) -> Relation<Target>   (via `to_one_hop`)
     //   - M2M forward
     //         → fn <field>(&self) -> QuerySet<Target>   (via `to_many_hop`)
     //
-    // Reverse-FK keeps its separate `<child>_set()` accessor (emitted above);
-    // it is NOT re-emitted here. The trait is LOCAL to the defining crate and
+    // The PARENT-side reverse O2O (`user.developer()`) is NOT emitted in this
+    // trait: the upgraded reverse-O2O machinery above (`reverse_o2o_impls`)
+    // owns that chainable accessor so it also covers zero-config / cross-crate
+    // parents. Reverse-FK likewise keeps its separate `<child>_set()` accessor
+    // (emitted above); neither is re-emitted here. The trait is LOCAL to the
+    // defining crate and
     // every impl target carries the local type parameter `Self`, so impl'ing
     // it for the foreign `Relation<M>` / `QuerySet<M>` is orphan-rule-legal
     // (the precedent is the reverse-FK trait trick above). Emitted only in
@@ -2560,26 +2579,6 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 };
                 rel_accessors.push((field_name.clone(), ret, true, hop));
             }
-            FieldKind::OneToOne(inner_ty) if has_sqlx_skip(&field.attrs) => {
-                // Parent-side reverse O2O back-link (`#[sqlx(skip)]`, no DB
-                // column on this side). The driving FK lives on the CHILD; the
-                // parent's derive can't see its column name, so it is resolved
-                // at runtime from the child's `FIELDS` via `back_fk_column`.
-                let target = inner_ty.as_ref();
-                let ret = quote!(::umbral::orm::Relation<#target>);
-                let hop = quote! {
-                    ::umbral::orm::relation::HopSpec {
-                        kind: ::umbral::orm::relation::HopKind::O2OReverse,
-                        from_table: <#struct_name as ::umbral::orm::Model>::TABLE,
-                        to_table: <#target as ::umbral::orm::Model>::TABLE,
-                        fk_column: ::umbral::orm::relation::back_fk_column::<#struct_name, #target>(),
-                        fk_on_from: false,
-                        required: false,
-                        junction: ::core::option::Option::None,
-                    }
-                };
-                rel_accessors.push((field_name.clone(), ret, true, hop));
-            }
             FieldKind::Many2Many(inner_ty) => {
                 // Forward M2M through the auto-generated junction table
                 // `<table>_<field>` with the canonical `parent_id`/`child_id`
@@ -2607,8 +2606,15 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 };
                 rel_accessors.push((field_name.clone(), ret, false, hop));
             }
-            // ReverseSet keeps its existing `<child>_set()`; flatten bases and
-            // scalar fields contribute no forward relation accessor.
+            // A parent-side reverse-O2O back-link (`#[sqlx(skip)] OneToOne<T>`)
+            // is intentionally NOT emitted here: the chainable `parent.child()`
+            // accessor is generated by the UPGRADED reverse-O2O machinery above
+            // (`reverse_o2o_impls`), which returns the same `Relation<Child>`
+            // and works zero-config even when the parent declares no back-link
+            // field (the cross-crate case). Emitting a second `child()` here
+            // would collide with it. `ReverseSet` keeps its existing
+            // `<child>_set()`; flatten bases and scalar fields contribute no
+            // forward relation accessor.
             _ => {}
         }
     }

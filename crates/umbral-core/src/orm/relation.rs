@@ -214,6 +214,13 @@ impl<From: Model> RelationSource<From> for &QuerySet<From> {
 /// reverse relation always has exactly one such anchoring FK; a model that
 /// declares a `OneToOne<Child>` back-link with no forward `ForeignKey<Parent>`
 /// on `Child` is malformed and panics here with a message naming both ends.
+///
+/// Retained as a public helper for type-only reverse resolution (a hand-written
+/// or future accessor that has only the two model types). The derive's own
+/// reverse-O2O accessor does NOT use it: it knows the child's FK field directly,
+/// which is exact even when a child has multiple FKs to the same parent.
+// TODO(orm-traversal): multi-FK-to-same-parent picks the first match — add
+// disambiguation (or take an explicit column) when a type-only caller needs it.
 pub fn back_fk_column<Parent: Model, Child: Model>() -> &'static str {
     Child::FIELDS
         .iter()

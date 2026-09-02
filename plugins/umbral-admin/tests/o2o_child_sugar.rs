@@ -170,8 +170,10 @@ async fn unique_constraint_enforced_on_duplicate_insert() {
 async fn sugar_field_also_emits_cross_crate_reverse_accessor() {
     // The other half of the sugar: BECAUSE the rewritten kind goes
     // through the unique-FK path, the reverse-O2O trait emission
-    // (`auth_user.shopper_profile().await?`) kicks in automatically.
-    // No extra wiring on the user's part.
+    // (`auth_user.shopper_profile()`) kicks in automatically. No extra
+    // wiring on the user's part. Since Task 5 the accessor returns a
+    // chainable `Relation<ShopperProfile>`, so the `Option` shape is read
+    // via `.get_opt().await?` (same `sqlx::Error`).
     boot().await;
     let user = make_user("sugar-rev").await;
     let pool = umbral::db::pool();
@@ -186,6 +188,7 @@ async fn sugar_field_also_emits_cross_crate_reverse_accessor() {
     // The reverse accessor (e.g. user.profile.bio).
     let profile = user
         .shopper_profile()
+        .get_opt()
         .await
         .expect("reverse-o2o query")
         .expect("profile exists");
