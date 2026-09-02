@@ -65,6 +65,51 @@ fn scaffold_project_cargo_toml_references_all_plugins() {
     }
 }
 
+// gaps4 #65 — a scaffolded project's own `sqlx` version must be the SAME
+// major.minor umbral-core itself pins.
+//
+// Why a direct `sqlx` dependency stays here at all: `#[derive(sqlx::FromRow)]`
+// (on the generated `Post` model) hardcodes `::sqlx::...` absolute paths at
+// macro-expansion time — sqlx has no `#[sqlx(crate = "...")]` escape hatch
+// the way serde does — so routing through a re-export (`umbral::sqlx`)
+// cannot remove the need for a direct dependency here. What CAN drift, and
+// what actually caused the gaps4 #65 incident, is the *version* on this
+// line vs. the one umbral-core resolves; this test pins that invariant, and
+// `umbral doctor` (gaps4 #65c) is the runtime safety net for the same
+// drift in a hand-edited or third-party crate this test can't see.
+#[test]
+fn scaffold_project_sqlx_version_matches_umbral_cores_own_pin() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("testapp", tmp.path(), None).unwrap();
+    let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
+
+    let umbral_core_cargo = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../umbral-core/Cargo.toml"
+    ))
+    .expect("read umbral-core/Cargo.toml");
+    let umbral_core_sqlx_line = umbral_core_cargo
+        .lines()
+        .find(|l| l.trim_start().starts_with("sqlx "))
+        .expect("umbral-core/Cargo.toml declares a sqlx dependency");
+    let umbral_core_major_minor = umbral_core_sqlx_line
+        .split("version = \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("umbral-core's sqlx line has a version = \"...\" field");
+
+    let scaffold_sqlx_line = cargo
+        .lines()
+        .find(|l| l.trim_start().starts_with("sqlx "))
+        .expect("scaffolded Cargo.toml declares a sqlx dependency");
+    assert!(
+        scaffold_sqlx_line.contains(&format!("version = \"{umbral_core_major_minor}\"")),
+        "scaffolded project's sqlx version ({scaffold_sqlx_line}) must match \
+         umbral-core's own pin ({umbral_core_major_minor}) — a mismatch is exactly \
+         the gaps4 #65 divergence"
+    );
+}
+
 // features.md #5: every built-in plugin appears in the generated
 // Cargo.toml. The non-default ones are commented out (`# umbral-…`)
 // but listed so the user can discover them by skimming the manifest.
@@ -708,6 +753,42 @@ fn scaffold_plugin_registers_path_dep_in_project_cargo_toml() {
     assert!(
         cargo.contains("widgets = { path = \"plugins/widgets\" }"),
         "project Cargo.toml must list widgets as a path dep; got:\n{cargo}"
+    );
+}
+
+// gaps4 #65 — a scaffolded PLUGIN's `sqlx` version must match umbral-core's
+// own pin too. `startplugin`'s incident is the more direct analogue of the
+// real gaps4 #65 case (a plugin/base crate naming its own divergent sqlx),
+// so this invariant matters here at least as much as on `startproject`.
+#[test]
+fn scaffold_plugin_sqlx_version_matches_umbral_cores_own_pin() {
+    let tmp = TempDir::new().unwrap();
+    scaffold_project("blog", tmp.path(), None).unwrap();
+    let project_root = tmp.path().join("blog");
+
+    let report = scaffold_plugin("widgets", &project_root, None).unwrap();
+    let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
+
+    let umbral_core_cargo = fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../umbral-core/Cargo.toml"
+    ))
+    .expect("read umbral-core/Cargo.toml");
+    let umbral_core_major_minor = umbral_core_cargo
+        .lines()
+        .find(|l| l.trim_start().starts_with("sqlx "))
+        .and_then(|l| l.split("version = \"").nth(1))
+        .and_then(|rest| rest.split('"').next())
+        .expect("umbral-core's sqlx line has a version = \"...\" field");
+
+    let plugin_sqlx_line = cargo
+        .lines()
+        .find(|l| l.trim_start().starts_with("sqlx "))
+        .expect("scaffolded plugin Cargo.toml declares a sqlx dependency");
+    assert!(
+        plugin_sqlx_line.contains(&format!("version = \"{umbral_core_major_minor}\"")),
+        "scaffolded plugin's sqlx version ({plugin_sqlx_line}) must match umbral-core's own \
+         pin ({umbral_core_major_minor}) — a mismatch is exactly the gaps4 #65 divergence"
     );
 }
 

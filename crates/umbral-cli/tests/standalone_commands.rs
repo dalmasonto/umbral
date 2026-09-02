@@ -23,6 +23,28 @@ fn maskkeygen_runs_standalone_without_a_project() {
 }
 
 #[test]
+fn doctor_runs_standalone_without_a_project_build() {
+    assert!(
+        STANDALONE_COMMANDS.contains(&"doctor"),
+        "doctor must be registered as a standalone command (gaps4 #65c) — it reads \
+         Cargo.lock directly and must not depend on the project's App compiling"
+    );
+    // Runs against THIS repo's own Cargo.lock (the test process's cwd is
+    // somewhere under the repo checkout, and `doctor` walks ancestors to
+    // find it). The framework's own lockfile has no duplicated
+    // umbral-critical crate, so this must succeed.
+    let handled = try_run_standalone(&["doctor".to_string()]);
+    assert!(
+        handled.is_some(),
+        "doctor must run standalone, not be forwarded to a project"
+    );
+    assert!(
+        handled.unwrap().is_ok(),
+        "doctor finds no duplicate umbral-critical crate in this repo's own Cargo.lock"
+    );
+}
+
+#[test]
 fn project_and_custom_commands_are_forwarded_not_run_standalone() {
     // Built-in commands that need the compiled App forward (None).
     for cmd in [

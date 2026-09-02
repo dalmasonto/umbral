@@ -539,11 +539,17 @@ umbral-storage  = "{version}"
 # umbral-signals      = "{version}"  # Pre/post save/delete signal dispatch.
 # umbral-livereload   = "{version}"  # Dev-only browser live-reload (SSE push + file watcher). Add `.plugin(LiveReloadPlugin::new())`.
 
-# ----- Third-party + framework runtime deps --------------------------------
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
 serde = {{ version = "1", features = ["derive"] }}
 chrono = {{ version = "0.4", features = ["serde"] }}
+# Pin the SAME `sqlx` version umbral itself resolves (gaps4 #65). `#[derive(sqlx::FromRow)]`
+# needs a direct `sqlx` dependency no matter what — sqlx's derive macro hardcodes
+# `::sqlx::...` paths at expansion time with no `#[sqlx(crate = "...")]` escape hatch
+# (unlike serde), so routing through a re-export can't remove this line. What CAN
+# drift is the *version* on this line vs. the one umbral-core pins — if you ever see
+# a mysterious unsatisfied `FromRow<PgRow>` bound, run `umbral doctor` first; it scans
+# Cargo.lock for exactly this divergence and names both versions.
 sqlx = {{ version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }}
 
 # Once you `umbral startapp <plugin>` or `umbral startplugin <plugin>`, add
@@ -1268,6 +1274,8 @@ pub fn scaffold_app(
 /// ```text
 /// plugins/<name>/
 /// ├── Cargo.toml         — deps: umbral, serde, sqlx, chrono, async-trait
+/// │                        (sqlx version-pinned to match umbral's — gaps4 #65;
+/// │                        `umbral doctor` catches drift)
 /// ├── README.md          — what this plugin does, how to wire it
 /// └── src/
 ///     ├── lib.rs         — Plugin trait impl, glues models + routes
@@ -1321,6 +1329,11 @@ description = "A {crate_name} plugin for umbral."
 [dependencies]
 umbral = "{version}"
 serde = {{ version = "1", features = ["derive"] }}
+# Pin the SAME `sqlx` version umbral itself resolves (gaps4 #65) — the derive
+# macro `#[derive(sqlx::FromRow)]` in src/models.rs needs a direct `sqlx`
+# dependency no matter what (its expansion hardcodes `::sqlx::...` paths with
+# no crate-path override), so the one thing to keep right is this VERSION.
+# `umbral doctor` scans Cargo.lock for exactly this drift if it ever happens.
 sqlx = {{ version = "0.8", default-features = false, features = ["macros", "runtime-tokio"] }}
 chrono = {{ version = "0.4", features = ["serde"] }}
 async-trait = "0.1"

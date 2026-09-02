@@ -26,12 +26,19 @@ serde_json = "1"
 # enum's DB-value vocabulary — gap #71) compiles in user crates without
 # forcing them to declare a direct serde dep.
 serde = "1"
-# Re-exported as `umbral::_sqlx` so macro-generated code from
-# `#[derive(Choices)]` (sqlx::Type / Encode / Decode impls) compiles
-# in user crates without forcing them to declare a direct sqlx dep
-# with matching feature flags. Feature set mirrors umbral-core: native
+# Re-exported as both `umbral::_sqlx` (macro-generated code from
+# `#[derive(Choices)]` — sqlx::Type / Encode / Decode impls) and the
+# public `umbral::sqlx` (gaps4 #65): the single source of the `sqlx`
+# version so a plugin/base crate never has to (and never should) name
+# its own `sqlx` dependency just to get `#[derive(sqlx::FromRow)]`.
+# `derive` pulls in `sqlx-macros/derive`, which is what makes
+# `umbral::sqlx::FromRow` resolve to the actual derive macro rather
+# than only the trait (deliberately not the broader `macros` feature —
+# that also enables the `query!`/`query_as!` compile-time-checked-query
+# macros, which need DATABASE_URL or an offline cache; umbral doesn't
+# need those here). Feature set otherwise mirrors umbral-core: native
 # Sqlite + Postgres + chrono / uuid / json.
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "chrono", "uuid", "json"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "derive", "sqlite", "postgres", "chrono", "uuid", "json"] }
 # Re-exported as `umbral::async_trait` so plugin authors can write
 # `#[umbral::async_trait] impl Middleware for ...` (feature #68) without a
 # direct async-trait dependency. The trait it desugars is dyn-compatible,

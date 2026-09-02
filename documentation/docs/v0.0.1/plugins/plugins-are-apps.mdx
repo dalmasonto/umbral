@@ -35,6 +35,16 @@ A small project that doesn't yet need its own crate can register the
 `Plugin` impl right next to `main.rs`. Both shapes work; the crate split
 matters when you want the plugin to be reusable.
 
+<Callout type="warning">
+  A plugin crate's own `Cargo.toml` needs `sqlx` directly — every `#[derive(Model)]`
+  struct also needs `sqlx::FromRow`, and sqlx's derive macro can't be routed through
+  a re-export. **Pin the same `sqlx` version umbral-core itself resolves.** A second,
+  incompatible `sqlx` major anywhere in the dependency tree produces an inscrutable
+  unsatisfied `FromRow<PgRow>` trait bound rather than an error that names "sqlx" at
+  all. Run [`umbral doctor`](/docs/v0.0.1/cli/doctor) after adding a plugin (yours or
+  a third party's) to catch the drift before it bites.
+</Callout>
+
 ## Why "plugin"
 
 The name says what the unit is: a self-contained, swappable piece that extends the framework. Every capability - whether it ships with umbral or you wrote it - plugs in the same way, through the same trait, with the same `.plugin(...)` call. The plugin contract spec (`docs/specs/02-plugin-contract.md`) makes the requirement explicit from the architecture side: built-ins and third-parties have to be structurally identical, and "plugin" names that contract directly.

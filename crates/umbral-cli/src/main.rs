@@ -15,6 +15,12 @@
 //!   management command (`cargo run -- <name>`), interactively asking
 //!   where it should live, and register it there.
 //!
+//! Two more run right here, standalone, without a project or a build:
+//! `umbral maskkeygen` (a `Masked<T>` keypair) and `umbral doctor` (scans
+//! the current project's `Cargo.lock` for a duplicated umbral-critical
+//! crate — `sqlx`, `serde`, `chrono` — and explains the fix; gaps4 #65).
+//! Both also work as `cargo run -- <cmd>` inside a project.
+//!
 //! Every other (**management**) command — `serve`, `dev`, `migrate`,
 //! `makemigrations`, `inspectdb`, `worker`, … — is **forwarded** to the
 //! current project's binary as `cargo run -- <command>` (those commands

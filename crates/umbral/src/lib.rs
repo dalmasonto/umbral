@@ -170,6 +170,50 @@ pub use umbral_core::_sea_query;
 #[doc(hidden)]
 pub use sqlx as _sqlx;
 
+/// Re-export of `sqlx`, as a first-class (not `#[doc(hidden)]`) power-user
+/// surface — gaps4 #65.
+///
+/// Reach `umbral::sqlx::SqlitePool`, `umbral::sqlx::PgPool`, `umbral::sqlx::Row`,
+/// `umbral::sqlx::Error`, and friends through here so a plugin that only needs
+/// *types* — a function signature naming a pool, matching on a driver error —
+/// never has to declare its own `sqlx` dependency (with its own version, its
+/// own feature flags to keep in sync) just to spell the type. One crate names
+/// the version; every consumer of this re-export shares whatever that
+/// resolves to.
+///
+/// **This does NOT extend to `#[derive(sqlx::FromRow)]`.** That's a hard
+/// Rust/proc-macro limitation, not an oversight: sqlx's derive expands to
+/// code that hardcodes absolute `::sqlx::...` paths (`FromRow`, `Decode`,
+/// `Type`, …), and — unlike serde's `#[serde(crate = "...")]` — sqlx has no
+/// escape hatch to point those paths somewhere else. `::sqlx::` only
+/// resolves when the *deriving crate itself* has `sqlx` as a real, direct
+/// Cargo dependency; writing `#[derive(umbral::sqlx::FromRow)]` in a crate
+/// with no such dependency fails with "cannot find `sqlx` in the crate
+/// root," even though the derive macro itself was found and ran (confirmed
+/// empirically while building this fix — see gaps4 #65's closing note for
+/// the repro). A `use umbral::sqlx;` import doesn't help either: the
+/// generated code's paths are `::`-absolute (crate-root/extern-prelude
+/// lookups), which a local `use` binding can't satisfy.
+///
+/// So the real prevention for a `FromRow`-deriving struct is narrower than
+/// "never name a version": the deriving crate still needs a direct `sqlx`
+/// dependency, but that dependency's *version* should track the one
+/// `umbral-core` itself pins (see that crate's `Cargo.toml` for the current
+/// value). `umbral startproject` / `umbral startplugin` generate exactly
+/// that — a pinned `sqlx = "..."` line matching umbral-core's, with a
+/// comment pointing back here. `umbral doctor` (gaps4 #65c) is the safety
+/// net for when that pin drifts anyway (a hand-edit, a third-party base
+/// crate): it scans `Cargo.lock` for more than one resolved `sqlx` (or
+/// `serde`/`chrono`) version and prints a plain-English diagnosis instead of
+/// leaving the trait-bound error to speak for itself.
+///
+/// A genuine structural fix for the derive case — one where a member crate
+/// truly cannot specify its own `sqlx` version — needs a Cargo workspace
+/// with `[workspace.dependencies]` (`sqlx.workspace = true` in every
+/// member); that's a larger scaffold change tracked separately from this
+/// re-export.
+pub use sqlx;
+
 pub use umbral_core::app::{App, AppBuilder, BuildError, FkEdge};
 pub use umbral_core::settings::{Environment, Settings};
 

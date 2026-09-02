@@ -1,0 +1,41 @@
+---
+title: Diagnosing dependency drift (doctor)
+description: "`umbral doctor` scans your project's Cargo.lock for a duplicated umbral-critical crate — sqlx, serde, chrono — and explains the fix in plain English."
+sidebar_position: 8
+icon: stethoscope
+---
+
+Nothing in Cargo stops a plugin, or a shared base crate, from naming its own version of a crate umbral also depends on directly. Most dangerously: `sqlx`. If your project ever resolves two incompatible `sqlx` majors — say umbral's `0.8.6` next to a base crate's `0.9.0` — the failure doesn't say "sqlx" or "two versions" anywhere. It reads as a mysterious unsatisfied `FromRow<PgRow>` trait bound, because a `FromRow` impl generated against one `sqlx` can't satisfy a bound naming the other.
+
+`umbral doctor` is the diagnostic for exactly this. It reads your `Cargo.lock` — the actual resolved graph, not just your `Cargo.toml` — and flags any of umbral's critical crates (`sqlx`, `serde`, `chrono`) that shows up at more than one version.
+
+```bash
+umbral doctor
+```
+
+Clean output:
+
+```text
+umbral doctor
+=============
+Scanned /path/to/your-project/Cargo.lock
+
+No duplicate versions found for: sqlx, serde, chrono
+```
+
+A drifted project instead names both versions and points at the fix:
+
+```text
+⚠ sqlx: found 2 versions in your dependency tree — 0.8.6 AND 0.9.0
+  Two `sqlx` crates can coexist in the same binary silently: an impl generated
+  against one version cannot satisfy a bound that names the other, ...
+  Fix: grep every `Cargo.toml` under your project for `^sqlx =` ...
+```
+
+It runs standalone — no build, no compiled `App` required (a duplicate `sqlx` is often exactly what's keeping your project from compiling in the first place) — either as `umbral doctor` from anywhere inside your project, or as `cargo run -- doctor`.
+
+## Why `sqlx` still needs a version, not a re-export
+
+`umbral::sqlx` re-exports the exact `sqlx` umbral itself pins, so a plugin that only needs the *types* (`umbral::sqlx::SqlitePool`, `umbral::sqlx::Error`, …) never has to declare its own `sqlx` dependency. That does **not** extend to `#[derive(sqlx::FromRow)]`: sqlx's derive macro expands to code with hardcoded `::sqlx::...` paths and has no `#[sqlx(crate = "...")]` escape hatch the way serde does, so a model struct always needs a direct `sqlx` dependency of its own. What has to stay right is the *version* — match whatever `umbral-core` pins (a fresh `umbral startproject` scaffold already does this). `umbral doctor` is the safety net for when that match slips anyway.
+
+See `planning/gaps4.md` #65 for the incident this closes, and `arch.md` for the ORM's use of `sqlx::FromRow` on every `#[derive(Model)]` struct.

@@ -58,6 +58,7 @@ use umbral::App;
 use umbral::inspect::{InspectError, InspectOptions};
 use umbral::migrate::MigrateError;
 
+pub mod doctor;
 pub mod scaffold;
 
 /// Build the `cargo` argv for forwarding a `umbral <cmd> [args...]`
@@ -321,6 +322,11 @@ enum Command {
     /// and print the two env-var lines (`UMBRAL_MASK_PUBLIC_KEY` /
     /// `UMBRAL_MASK_PRIVATE_KEY`) needed to configure it.
     Maskkeygen,
+    /// Scan Cargo.lock for umbral-critical crates (sqlx, serde, chrono)
+    /// resolved at more than one version, and explain the fix in plain
+    /// English (gaps4 #65). Also runs standalone as `umbral doctor`
+    /// outside any project — see `doctor` module docs.
+    Doctor,
     /// Collapse a plugin's whole migration history into one optimized squash
     /// file, non-destructively (the originals stay on disk). Applying the
     /// squash on a fresh DB builds the schema in one shot; on a DB that already
@@ -384,8 +390,9 @@ fn subcommand_name(argv: &[std::ffi::OsString]) -> Option<String> {
 ///   to the models. Firing hooks that write rows first is backwards: on a fresh
 ///   database they run before a single table exists.
 /// - **Offline utilities.** `typegen` reads the model registry, `maskkeygen`
-///   generates a key, `dev` re-execs the binary under a file watcher (the child
-///   process fires its own hooks). None of them touch application rows.
+///   generates a key, `doctor` reads `Cargo.lock`, `dev` re-execs the binary
+///   under a file watcher (the child process fires its own hooks). None of
+///   them touch application rows.
 /// - **`serve`**, and the bare `umbral` that defaults to it. Handled separately
 ///   so the hooks fire *after* `auto_migrate_on_serve` has applied migrations,
 ///   not before. [`umbral_core::app::App::serve`] calls `ready()` itself.
@@ -408,7 +415,8 @@ fn builtin_needs_ready(subcommand: Option<&str>) -> bool {
         // `on_ready` again. It now declares `needs_ready() -> false` itself.
         Some(
             "serve" | "migrate" | "makemigrations" | "showmigrations" | "checkmigrations"
-            | "squashmigrations" | "inspectdb" | "typegen" | "maskkeygen" | "dev" | "help",
+            | "squashmigrations" | "inspectdb" | "typegen" | "maskkeygen" | "doctor" | "dev"
+            | "help",
         ) => false,
         Some(_) => true,
     }
@@ -583,6 +591,7 @@ pub async fn dispatch_with_argv(
         Command::Importcsv { table, input } => importcsv(table, input).await,
         Command::Dev { watch, run_args } => dev(watch, run_args).await,
         Command::Maskkeygen => maskkeygen(),
+        Command::Doctor => doctor_cmd(),
         Command::Squashmigrations { plugin } => squashmigrations(plugin).await,
     }
 }
@@ -621,7 +630,7 @@ async fn squashmigrations(plugin: String) -> Result<(), Box<dyn std::error::Erro
 /// Keep this in sync with [`try_run_standalone`]. It's a list, not a special
 /// case: add a project-independent utility here and both the global binary and
 /// `cargo run -- <cmd>` pick it up.
-pub const STANDALONE_COMMANDS: &[&str] = &["maskkeygen"];
+pub const STANDALONE_COMMANDS: &[&str] = &["maskkeygen", "doctor"];
 
 /// If `argv` names a [project-independent](STANDALONE_COMMANDS) built-in, run it
 /// and return `Some(result)`. Return `None` otherwise, so the caller (the global
@@ -630,11 +639,18 @@ pub const STANDALONE_COMMANDS: &[&str] = &["maskkeygen"];
 /// This is what lets `umbral maskkeygen` work anywhere — including outside a
 /// project — without a build, while `umbral migrate` / `umbral seed_data` still
 /// forward to the compiled project that actually owns those commands.
+///
+/// `umbral doctor` (gaps4 #65c) belongs here rather than behind
+/// `cargo run -- doctor`: a duplicate-`sqlx`-version tree is often exactly
+/// what's keeping the project's own `App` from compiling in the first place,
+/// so the diagnostic can't depend on that compile succeeding. It reads
+/// `Cargo.lock` directly instead.
 pub fn try_run_standalone(
     argv: &[String],
 ) -> Option<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
     match argv.first().map(String::as_str) {
         Some("maskkeygen") => Some(maskkeygen()),
+        Some("doctor") => Some(doctor_cmd()),
         _ => None,
     }
 }
@@ -658,6 +674,29 @@ fn maskkeygen() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     println!("UMBRAL_MASK_PUBLIC_KEY={public}");
     println!("UMBRAL_MASK_PRIVATE_KEY={secret}");
+    Ok(())
+}
+
+/// `umbral doctor` (gaps4 #65c) — scan the current project's `Cargo.lock`
+/// for umbral-critical crates (`sqlx`, `serde`, `chrono`; see
+/// [`doctor::CRITICAL_CRATES`]) resolved at more than one version, and print
+/// a plain-English diagnosis. See `doctor` module docs for why.
+///
+/// Prints the full report regardless of outcome, then fails (non-zero exit,
+/// via the `Err` the global binary's `error: {e}` line surfaces) only when
+/// duplicates were found — clean output isn't an error.
+fn doctor_cmd() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let cwd = std::env::current_dir()?;
+    let report = doctor::run(&cwd)?;
+    let dup_count = report.duplicates.len();
+    print!("{report}");
+    if dup_count > 0 {
+        return Err(format!(
+            "{dup_count} umbral-critical crate{} resolved at more than one version — see above",
+            if dup_count == 1 { "" } else { "s" }
+        )
+        .into());
+    }
     Ok(())
 }
 
