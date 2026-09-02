@@ -3844,6 +3844,12 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // Final-review Finding 1: the explicit-Postgres escape hatch must
+        // honor the same poison contract as the ambient terminals — a
+        // poisoned QuerySet (unsupported deep relation chain, unresolved
+        // annotation) must error here too, not fall through to an
+        // unscoped query.
+        self.check_annotations()?;
         // gaps4 #24: refuse a chained hydration feature this low-level terminal
         // would silently drop, rather than hand back un-hydrated rows.
         guard_pg_terminal_unsupported(
@@ -3865,6 +3871,8 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // See fetch_pg: enforce the same poison contract.
+        self.check_annotations()?;
         guard_pg_terminal_unsupported(
             "first_pg",
             &self.select_related,
@@ -3883,9 +3891,22 @@ impl<T: Model> QuerySet<T> {
     /// Run `SELECT COUNT(*)` against an explicit `PgPool`. No FromRow
     /// bound on `T` — the count tuple type is `(i64,)`.
     pub async fn count_pg(self, pool: &sqlx::PgPool) -> Result<i64, sqlx::Error> {
+        // See fetch_pg: enforce the same poison contract.
+        self.check_annotations()?;
         let mut rebuilt = self.build_query_for("postgres");
         rebuilt.clear_selects();
-        rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
+        // Mirror the ambient `count()`'s leaf-DISTINCT branch (Phase 1 Task
+        // 4): a deep to-many chain must count DISTINCT leaf rows, not the
+        // JOIN-multiplied row count, or a poisoned/deep chain reaching this
+        // explicit-Postgres terminal would over-count.
+        if let Some((table, pk_col)) = &self.leaf_distinct {
+            rebuilt.expr(Func::count_distinct(Expr::col((
+                Alias::new(table.as_str()),
+                Alias::new(pk_col.as_str()),
+            ))));
+        } else {
+            rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
+        }
         rebuilt.reset_limit();
         rebuilt.reset_offset();
         let (sql, values) = rebuilt.build_sqlx(PostgresQueryBuilder);
@@ -3900,6 +3921,11 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // See fetch_pg: enforce the same poison contract. Also caught by
+        // the `fetch_pg` call below, but checked explicitly up front so
+        // the contract is visible at every `_pg` terminal, not only the
+        // ones that happen to delegate.
+        self.check_annotations()?;
         let rows = self.limit(1).fetch_pg(pool).await?;
         Ok(!rows.is_empty())
     }
@@ -3910,6 +3936,8 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // See fetch_pg: enforce the same poison contract, up front.
+        self.check_annotations()?;
         let mut rows = self.limit(2).fetch_pg(pool).await.map_err(GetError::Sqlx)?;
         match rows.len() {
             0 => Err(GetError::NotFound),

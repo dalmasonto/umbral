@@ -91,10 +91,12 @@ pub struct HopSpec {
     pub fk_on_from: bool,
     /// Whether the hop's target is guaranteed present: a `NOT NULL` forward FK
     /// is `required`; a nullable forward FK or a reverse-O2O (whose parent-side
-    /// row may simply not exist) is not. The derive (Task 5) reads the terminal
-    /// hop's `required` to pick the accessor's return shape — `T` vs
-    /// `Option<T>` — while the resolver itself uses INNER joins either way and
-    /// lets `get()` / `get_opt()` decide how an absent row surfaces.
+    /// row may simply not exist) is not. Descriptive metadata only — reserved
+    /// for a future codegen phase — and not read at runtime today: the
+    /// accessor's return type is uniformly `Relation<T>` regardless of this
+    /// flag, and it is the CALLER's choice of terminal (`get()` for `T`,
+    /// erroring on an absent row, vs `get_opt()` for `Option<T>`) that picks
+    /// the shape, not this field. The resolver uses INNER joins either way.
     pub required: bool,
     /// Junction descriptor for `M2M` hops; `None` for FK/O2O/reverse-FK.
     pub junction: Option<JunctionSpec>,
