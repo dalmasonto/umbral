@@ -2013,7 +2013,10 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     // type doubles as the disambiguation key: two FKs to the same
     // type from this Child get `<child_snake>_via_<field>_set`
     // names instead of a colliding `<child_snake>_set`.
-    let mut reverse_fk_entries: Vec<(syn::Ident, syn::Type)> = Vec::new();
+    // (field ident, parent type, child FK column name — honours
+    // `#[sqlx(rename)]`, needed so the reverse accessor can drive
+    // `to_many_hop`'s `HopKind::ReverseFk` with the real SQL column).
+    let mut reverse_fk_entries: Vec<(syn::Ident, syn::Type, String)> = Vec::new();
     // Cross-crate reverse-OneToOne accessor — parallel collector. Filled
     // only for `#[umbral(unique)] pub <f>: ForeignKey<Parent>` (the
     // OneToOne shape). Same trait-impl trick as reverse-FK (gap #105),
@@ -2047,7 +2050,9 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             }
             FieldKind::ForeignKey(inner_ty) => {
                 if !field_attr.no_reverse {
-                    reverse_fk_entries.push((field_name.clone(), (**inner_ty).clone()));
+                    let fk_col_str =
+                        sqlx_rename(&field.attrs).unwrap_or_else(|| field_name_str.clone());
+                    reverse_fk_entries.push((field_name.clone(), (**inner_ty).clone(), fk_col_str));
                     // A UNIQUE FK is a OneToOne in disguise — emit the
                     // ergonomic chainable `parent.<child>()` accessor in
                     // addition to `parent.<child>_set()`. The set variant
@@ -2385,13 +2390,13 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     // disambiguation decision is local to a single FK target.
     let mut parent_type_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
-    for (_, parent_ty) in &reverse_fk_entries {
+    for (_, parent_ty, _) in &reverse_fk_entries {
         let key = quote!(#parent_ty).to_string();
         *parent_type_counts.entry(key).or_insert(0) += 1;
     }
     let reverse_fk_impls: Vec<TokenStream2> = reverse_fk_entries
         .iter()
-        .map(|(field_ident, parent_ty)| {
+        .map(|(field_ident, parent_ty, fk_col)| {
             let key = quote!(#parent_ty).to_string();
             let count = parent_type_counts.get(&key).copied().unwrap_or(1);
             let accessor_name = if count > 1 {
@@ -2399,7 +2404,6 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             } else {
                 format_ident!("{}_set", child_snake)
             };
-            let fk_const = format_ident!("{}", to_screaming_snake_case(&field_ident.to_string()));
             let field_pascal = to_pascal_case(&field_ident.to_string());
             let trait_name = format_ident!("{}{}Reverse", struct_name, field_pascal);
             let trait_doc = format!(
@@ -2408,9 +2412,25 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                  a `QuerySet<{}>` filtered to children whose `{}` FK points at \
                  the parent. Trait-based emission (gap 105) sidesteps the \
                  orphan rule, so the accessor works even when the parent \
-                 type is defined in another crate.",
+                 type is defined in another crate. Implemented for `{0}`, \
+                 `Relation<{0}>` and `QuerySet<{0}>` (via `to_many_hop`'s \
+                 `HopKind::ReverseFk`) so the accessor also composes as the \
+                 LEAF of a deeper traversal — e.g. `x.a().b().{2}()` — not just \
+                 object-rooted; Phase 1 supports a reverse-FK hop only as the \
+                 final (leaf) hop of a chain, never an inner one.",
                 struct_name, field_ident, accessor_name, struct_name, field_ident,
             );
+            let hop = quote! {
+                ::umbral::orm::relation::HopSpec {
+                    kind: ::umbral::orm::relation::HopKind::ReverseFk,
+                    from_table: <#parent_ty as ::umbral::orm::Model>::TABLE,
+                    to_table: <#struct_name as ::umbral::orm::Model>::TABLE,
+                    fk_column: #fk_col,
+                    fk_on_from: false,
+                    required: false,
+                    junction: ::core::option::Option::None,
+                }
+            };
             quote! {
                 #[doc = #trait_doc]
                 pub trait #trait_name {
@@ -2418,9 +2438,17 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 }
                 impl #trait_name for #parent_ty {
                     fn #accessor_name(&self) -> ::umbral::orm::QuerySet<#struct_name> {
-                        let __pk = <Self as ::umbral::orm::Model>::primary_key(self);
-                        #struct_name::objects()
-                            .filter(#module_name::#fk_const.eq(__pk))
+                        ::umbral::orm::relation::to_many_hop(self, #hop)
+                    }
+                }
+                impl #trait_name for ::umbral::orm::Relation<#parent_ty> {
+                    fn #accessor_name(&self) -> ::umbral::orm::QuerySet<#struct_name> {
+                        ::umbral::orm::relation::to_many_hop(self, #hop)
+                    }
+                }
+                impl #trait_name for ::umbral::orm::QuerySet<#parent_ty> {
+                    fn #accessor_name(&self) -> ::umbral::orm::QuerySet<#struct_name> {
+                        ::umbral::orm::relation::to_many_hop(self, #hop)
                     }
                 }
             }
