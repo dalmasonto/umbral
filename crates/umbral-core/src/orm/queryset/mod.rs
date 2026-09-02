@@ -1429,6 +1429,23 @@ fn warn_right_join_on_sqlite() {
     }
 }
 
+/// Render a predicate's WHERE fragment as a human-readable string, used only on
+/// the cold `get_or_create` / `update_or_create` error paths to NAME the
+/// predicate's columns in a diagnostic (gap69). Values are inlined by
+/// sea-query's `to_string`, which is fine here — this never touches the DB and
+/// only feeds an error message. Falls back to a generic phrase if the render
+/// produces no WHERE clause (an empty predicate).
+fn describe_predicate<T>(predicate: &Predicate<T>) -> String {
+    let mut q = Query::select();
+    q.expr(Expr::val(1i32));
+    q.and_where(predicate.cond_for("sqlite"));
+    let sql = q.to_string(SqliteQueryBuilder);
+    sql.split_once(" WHERE ")
+        .map(|(_, w)| w.trim().to_string())
+        .filter(|w| !w.is_empty())
+        .unwrap_or_else(|| "your predicate".to_string())
+}
+
 /// Terminal methods for every `QuerySet<T>` where `T: Model`.
 ///
 /// Each terminal that materializes `T` carries a FromRow bound on the
@@ -3685,7 +3702,7 @@ impl<T: Model> QuerySet<T> {
         backend_name: &str,
         values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<sea_query::UpdateStatement, crate::orm::write::WriteError> {
-        use crate::orm::write::{WriteError, json_to_sea_value};
+        use crate::orm::write::{WriteError, json_to_sea_value, now_for_column};
         let mut stmt = Query::update();
         stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
         for (col_name, val) in values {
@@ -3704,6 +3721,14 @@ impl<T: Model> QuerySet<T> {
             if field.primary_key {
                 continue;
             }
+            // gap68: `auto_now_add` is INSERT-only. If a caller-supplied map
+            // carries it (e.g. `update_or_create` serializes the whole
+            // `defaults` struct), drop it here so the original creation time
+            // is preserved rather than overwritten with the struct's value.
+            // `auto_now` is handled by the always-refresh pass below.
+            if field.auto_now_add || field.auto_now {
+                continue;
+            }
             // features #83: an UPDATE must normalize too — otherwise a field
             // arrives clean on create and dirty on edit.
             let normalized = crate::orm::write::normalize_json(field.trim, field.lowercase, val);
@@ -3711,6 +3736,15 @@ impl<T: Model> QuerySet<T> {
             let sea_value =
                 json_to_sea_value(field.ty, val, field.nullable, field.name, fk_pk_hint(field))?;
             stmt.value(Alias::new(field.name), sea_value);
+        }
+        // gap68: `auto_now` refreshes to `now()` on EVERY update, whether or not
+        // the caller's map named the column — mirroring the dynamic `update_json`
+        // contract (auto_now fires even when the body omits it). Added once here,
+        // after the caller's columns, so it always wins.
+        for field in T::FIELDS {
+            if field.auto_now && !field.primary_key {
+                stmt.value(Alias::new(field.name), now_for_column(field.ty));
+            }
         }
         for p in &self.predicates {
             stmt.and_where(p.cond_for(backend_name));
@@ -4511,24 +4545,126 @@ impl<T: Model> Manager<T> {
         // write for marginal gain. The UNIQUE-constraint backstop plus this
         // re-fetch gives the same observable guarantee: callers always converge
         // on the same row and never see a spurious UniqueViolation.
+        // Snapshot the defaults as a column map BEFORE the move into `create`,
+        // so the cross-constraint diagnostic (gap69) can look up the colliding
+        // value if the INSERT trips a UNIQUE on a column the predicate doesn't
+        // cover.
+        let defaults_map = serialize_to_map(&defaults)?;
         match self.create(defaults).await {
             Ok(created) => Ok((created, true)),
-            Err(WriteError::UniqueViolation { .. }) => {
+            Err(WriteError::UniqueViolation {
+                field: violated, ..
+            }) => {
                 // A concurrent writer inserted the row between our SELECT and
-                // our INSERT. Re-fetch the now-existing row.
-                let existing = pin_to_pool(self.filter(predicate), &write_pool)
+                // our INSERT. Re-fetch the now-existing row by our predicate.
+                if let Some(existing) = pin_to_pool(self.filter(predicate.clone()), &write_pool)
                     .first()
                     .await
                     .map_err(WriteError::Sqlx)?
-                    .ok_or_else(|| {
-                        WriteError::Sqlx(sqlx::Error::Protocol(
-                            "get_or_create: row vanished after UniqueViolation re-fetch"
-                                .to_string(),
-                        ))
-                    })?;
-                Ok((existing, false))
+                {
+                    return Ok((existing, false));
+                }
+                // gap69: the re-fetch by predicate found nothing. This is NOT
+                // the "row vanished" mystery it used to report — it almost
+                // always means the UNIQUE that fired is a DIFFERENT column than
+                // the predicate (e.g. predicate on `name`, but a non-injective
+                // `slug` collided). Disambiguate cross-constraint collision from
+                // a genuine concurrent delete and name both the constraint and
+                // the predicate.
+                Err(self
+                    .diagnose_upsert_vanish(
+                        "get_or_create",
+                        &violated,
+                        &predicate,
+                        &defaults_map,
+                        &write_pool,
+                    )
+                    .await)
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// Build the disambiguated error for the `get_or_create` /
+    /// `update_or_create` convergence path when the post-`UniqueViolation`
+    /// re-fetch by predicate finds no row (gap69).
+    ///
+    /// Two genuinely different failures used to collapse into one cryptic "row
+    /// vanished after UniqueViolation re-fetch":
+    ///
+    /// 1. **Cross-constraint collision** — the INSERT tripped a UNIQUE on a
+    ///    column the predicate does not cover, so a *different* row owns the
+    ///    colliding value and the predicate can't find it. This is a caller bug
+    ///    (the predicate must correspond to the unique constraint that can
+    ///    collide). We confirm it by checking whether a row still holds the
+    ///    colliding value under the violated column.
+    /// 2. **Concurrent delete** — the violated constraint genuinely is the
+    ///    predicate's, but the racing row was deleted between the failed INSERT
+    ///    and the re-fetch. A real race; kept as a distinct, honest message.
+    async fn diagnose_upsert_vanish(
+        &self,
+        method: &str,
+        violated: &Option<String>,
+        predicate: &Predicate<T>,
+        defaults_map: &serde_json::Map<String, serde_json::Value>,
+        write_pool: &DbPool,
+    ) -> crate::orm::write::WriteError
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
+    {
+        use crate::orm::write::WriteError;
+        let table = T::TABLE;
+        let predicate_desc = describe_predicate(predicate);
+        let Some(col) = violated else {
+            // The driver didn't name the violated constraint (rare — SQLite
+            // always names it; Postgres names it via the `<table>_<col>_key`
+            // convention). We can't point at the column, but we can still be
+            // honest about the two possibilities instead of "row vanished".
+            return WriteError::Sqlx(sqlx::Error::Protocol(format!(
+                "{method}: a UNIQUE constraint fired on `{table}` but the driver did not name it, and no row matches \
+                 your predicate ({predicate_desc}). This is either a collision on a unique column your predicate does \
+                 not cover, or a concurrent delete of the racing row."
+            )));
+        };
+        // Does a row still hold the colliding value under the violated column?
+        // If yes → cross-constraint collision (a different row owns it). If no →
+        // the colliding row was deleted concurrently (a genuine race).
+        let still_present = 'probe: {
+            let Some(spec) = T::FIELDS.iter().find(|f| f.name == col.as_str()) else {
+                break 'probe false;
+            };
+            let Some(value) = defaults_map.get(col.as_str()) else {
+                break 'probe false;
+            };
+            let Ok(sea) = crate::orm::write::json_to_sea_value(
+                spec.ty,
+                value,
+                spec.nullable,
+                spec.name,
+                None,
+            ) else {
+                break 'probe false;
+            };
+            let pred: Predicate<T> = Predicate::new(Expr::col(Alias::new(spec.name)).eq(sea));
+            pin_to_pool(self.filter(pred), write_pool)
+                .first()
+                .await
+                .map(|r| r.is_some())
+                .unwrap_or(false)
+        };
+        if still_present {
+            WriteError::Sqlx(sqlx::Error::Protocol(format!(
+                "{method}: UniqueViolation on `{table}.{col}`, which your predicate ({predicate_desc}) does not cover \
+                 — the predicate must correspond to the unique constraint that can collide. A different row already \
+                 holds this `{col}` value, so re-fetching by your predicate finds nothing."
+            )))
+        } else {
+            WriteError::Sqlx(sqlx::Error::Protocol(format!(
+                "{method}: the row matching your predicate ({predicate_desc}) vanished after a UniqueViolation on \
+                 `{table}.{col}` — the racing row was deleted concurrently between the failed insert and the re-fetch."
+            )))
         }
     }
 
@@ -4663,6 +4799,9 @@ impl<T: Model> Manager<T> {
             return Ok((updated, false));
         }
 
+        // Snapshot the defaults' columns before the move-into-create, for the
+        // gap69 cross-constraint diagnostic on the vanish path below.
+        let defaults_map = serialize_to_map(&defaults)?;
         // Attempt the INSERT. On a UNIQUE violation (concurrent writer won the
         // race between our SELECT and this INSERT), catch the error, re-fetch
         // the now-existing row, and apply the update to it — same convergence
@@ -4676,21 +4815,32 @@ impl<T: Model> Manager<T> {
                 // now a double-emit (and, since gaps3 #54, a double audit row).
                 Ok((created, true))
             }
-            Err(WriteError::UniqueViolation { .. }) => {
+            Err(WriteError::UniqueViolation {
+                field: violated, ..
+            }) => {
                 // A concurrent writer inserted the row between our SELECT and
                 // our INSERT. Re-fetch then update, same as the direct-hit path.
-                let existing = pin_to_pool(self.filter(predicate), &write_pool)
+                if let Some(existing) = pin_to_pool(self.filter(predicate.clone()), &write_pool)
                     .first()
                     .await
                     .map_err(WriteError::Sqlx)?
-                    .ok_or_else(|| {
-                        WriteError::Sqlx(sqlx::Error::Protocol(
-                            "update_or_create: row vanished after UniqueViolation re-fetch"
-                                .to_string(),
-                        ))
-                    })?;
-                let updated = do_update!(existing, defaults);
-                Ok((updated, false))
+                {
+                    let updated = do_update!(existing, defaults);
+                    return Ok((updated, false));
+                }
+                // gap69: predicate re-fetch found nothing — the UNIQUE that
+                // fired is a different column than the predicate (or a genuine
+                // concurrent delete). Name the constraint and the predicate
+                // instead of the old "row vanished" mystery.
+                Err(self
+                    .diagnose_upsert_vanish(
+                        "update_or_create",
+                        &violated,
+                        &predicate,
+                        &defaults_map,
+                        &write_pool,
+                    )
+                    .await)
             }
             Err(e) => Err(e),
         }
@@ -5300,6 +5450,23 @@ impl<T: Model> Manager<T> {
             stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
             for field in T::FIELDS {
                 if field.primary_key {
+                    continue;
+                }
+                // gap68: framework-managed timestamps on the typed UPDATE path.
+                // `auto_now_add` is INSERT-only — it stays frozen at the original
+                // creation time, so it is NOT included in the SET clause (writing
+                // the struct's carried value would clobber the real insert time,
+                // exactly the epoch-sentinel bug this closes). `auto_now` refreshes
+                // to `now()` on every save, ignoring whatever the struct carried.
+                // Mirrors the dynamic `update_json` / `update_form` contract.
+                if field.auto_now_add {
+                    continue;
+                }
+                if field.auto_now {
+                    stmt.value(
+                        Alias::new(field.name),
+                        crate::orm::write::now_for_column(field.ty),
+                    );
                     continue;
                 }
                 let val = map
