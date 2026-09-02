@@ -246,15 +246,21 @@ pub struct QuerySet<T> {
     pub(crate) user_offset: Option<u64>,
     /// A general-purpose poison: a `QuerySet` built in a shape a builder
     /// couldn't reject at construction time (the builder is infallible so
-    /// chains stay ergonomic), recorded here so every fallible terminal
-    /// (`fetch`/`count`/`explain`, and their `first`/`get`/`exists`
-    /// siblings that delegate to `fetch`) reports it loudly instead of
-    /// silently running a wrong or nonsensical query. Mirrors the same
-    /// "poison now, fail at the terminal" shape `RelatedAnnotation::resolved`
-    /// already uses for unknown `annotate_related` relation names — this is
-    /// the QuerySet-wide sibling for shapes that aren't annotation-specific
-    /// (e.g. `relation::to_many_hop`'s not-yet-implemented deep to-many
-    /// chain). `check_annotations` (despite the name, predating this field)
+    /// chains stay ergonomic), recorded here so every fallible terminal —
+    /// `fetch`/`count`/`explain`/`fetch_annotated`/`values`/`aggregate`/
+    /// `delete`/`update_expr`/`update_values`/`try_for_each`, and the
+    /// `first`/`get`/`exists`/`earliest`/`latest`/`in_bulk` siblings that
+    /// delegate to `fetch` — reports it loudly instead of silently running
+    /// a wrong or nonsensical query. Review round 2: a poisoned QuerySet
+    /// (e.g. `to_many_hop`'s deep-chain branch, which carries NO scoping
+    /// predicate) reaching an unchecked write terminal would otherwise
+    /// mass-delete or mass-update the whole table — every terminal that
+    /// runs its own query must gate on this, not just the read ones.
+    /// Mirrors the same "poison now, fail at the terminal" shape
+    /// `RelatedAnnotation::resolved` already uses for unknown
+    /// `annotate_related` relation names — this is the QuerySet-wide
+    /// sibling for shapes that aren't annotation-specific.
+    /// `check_annotations` (despite the name, predating this field)
     /// is where both poisons are surfaced.
     pub(crate) poison: Option<String>,
     _phantom: PhantomData<T>,
@@ -465,13 +471,18 @@ impl<T> QuerySet<T> {
         }
     }
 
-    /// Poison this `QuerySet` with a message every fallible terminal
-    /// (`fetch`/`count`/`explain`, and their `first`/`get`/`exists`
-    /// siblings) surfaces as `Err(sqlx::Error::Protocol(msg))`. For an
-    /// infallible builder function that was handed a shape it can't
-    /// (yet) resolve — see [`crate::orm::relation::to_many_hop`]'s
-    /// deep-to-many-chain case — so misuse fails loudly at the query
-    /// boundary instead of panicking the caller's process.
+    /// Poison this `QuerySet` with a message every fallible terminal —
+    /// reads (`fetch`/`count`/`explain`/`fetch_annotated`/`values`/
+    /// `aggregate`, and their `first`/`get`/`exists`/`earliest`/`latest`/
+    /// `in_bulk` siblings) AND writes (`delete`/`update_expr`/
+    /// `update_values`/`try_for_each`) alike — surfaces as
+    /// `Err(sqlx::Error::Protocol(msg))` (or that error wrapped into the
+    /// terminal's own error type, e.g. `WriteError::Sqlx` /
+    /// `TryForEachError::Sqlx`). For an infallible builder function that
+    /// was handed a shape it can't (yet) resolve — see
+    /// [`crate::orm::relation::to_many_hop`]'s deep-to-many-chain case —
+    /// so misuse fails loudly at the query boundary instead of panicking
+    /// the caller's process OR, worse, running unscoped against every row.
     pub(crate) fn poisoned(mut self, msg: impl Into<String>) -> Self {
         self.poison = Some(msg.into());
         self
@@ -1940,6 +1951,7 @@ impl<T: Model> QuerySet<T> {
             + HydrateRelated,
         F: FnMut(T) -> Result<(), E>,
     {
+        self.check_annotations().map_err(TryForEachError::Sqlx)?;
         let chunk_size = chunk_size.max(1);
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         // gaps4 #27: honor a caller `.limit(n)` as a TOTAL cap across the whole
@@ -2322,6 +2334,7 @@ impl<T: Model> QuerySet<T> {
     /// // [ { "id": 3, "title": "c" }, ... ]
     /// ```
     pub async fn values(self, columns: &[&str]) -> Result<Vec<JsonValue>, sqlx::Error> {
+        self.check_annotations()?;
         // Gap #46 follow-up: if any name uses `__` traversal
         // (`author__id`), route to the JOIN-aware path that builds
         // nested per-relation JSON objects. The unbranched path
@@ -2662,6 +2675,7 @@ impl<T: Model> QuerySet<T> {
         self,
         aggs: &[(&str, crate::orm::Aggregate)],
     ) -> Result<JsonValue, sqlx::Error> {
+        self.check_annotations()?;
         let meta = crate::migrate::ModelMeta::for_::<T>();
         // Validate every aggregate's source column exists.
         for (name, agg) in aggs {
@@ -3078,9 +3092,12 @@ impl<T: Model> QuerySet<T> {
         queryset
     }
 
-    /// Loud-failure check for poisoned annotations (unknown relation
-    /// names recorded by the infallible builder). Called by every
-    /// fallible consumer before SQL runs.
+    /// Loud-failure check for BOTH poison kinds an infallible builder can
+    /// record: the general `poison` field, and poisoned annotations
+    /// (unknown relation names from `annotate_related`).
+    /// Called by every fallible consumer — read AND write terminals alike
+    /// — before any SQL runs, so a poisoned `QuerySet` never silently
+    /// executes as an unscoped read or, worse, an unscoped write.
     fn check_annotations(&self) -> Result<(), sqlx::Error> {
         if let Some(msg) = &self.poison {
             return Err(sqlx::Error::Protocol(msg.clone()));
@@ -3252,6 +3269,7 @@ impl<T: Model> QuerySet<T> {
     /// auto `WHERE deleted_at IS NULL`). Call `.hard_delete()`
     /// beforehand for a real DELETE (GDPR purge, test cleanup).
     pub async fn delete(self) -> Result<u64, sqlx::Error> {
+        self.check_annotations()?;
         // features #73: a view is read-only. Refuse before any SQL is built, so the
         // error names the model instead of surfacing as the driver's opaque
         // "cannot modify a view".
@@ -3396,6 +3414,7 @@ impl<T: Model> QuerySet<T> {
         expr: FExpr,
     ) -> Result<u64, crate::orm::write::WriteError> {
         use crate::orm::write::WriteError;
+        self.check_annotations()?;
         // features #73: a view is read-only. Refuse before any SQL is built, so the
         // error names the model instead of surfacing as the driver's opaque
         // "cannot modify a view".
@@ -3496,6 +3515,7 @@ impl<T: Model> QuerySet<T> {
         self,
         values: serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
+        self.check_annotations()?;
         // features #73: a view is read-only. Refuse before any SQL is built, so the
         // error names the model instead of surfacing as the driver's opaque
         // "cannot modify a view".

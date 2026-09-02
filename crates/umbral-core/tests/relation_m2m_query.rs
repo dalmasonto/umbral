@@ -20,6 +20,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 use umbral::orm::M2M;
+use umbral::orm::QuerySet;
 use umbral::orm::relation::{HopKind, HopSpec, JunctionSpec, to_many_hop, to_one_hop};
 use umbral_core::db;
 
@@ -268,4 +269,78 @@ async fn to_many_hop_deep_chain_is_poisoned_not_panic() {
     .await
     .expect_err("count() must also surface the poison");
     assert!(err2.to_string().contains("Task 4"));
+}
+
+/// Build the same poisoned deep-to-many-chain `QuerySet<SoftwareGroup>` the
+/// tests above construct by hand, factored out so the write-terminal test
+/// below doesn't repeat the hop wiring.
+fn deep_chain_poisoned_queryset(ada: &Developer) -> QuerySet<SoftwareGroup> {
+    let hop1 = HopSpec {
+        kind: HopKind::Fk,
+        from_table: "rmq_developer",
+        to_table: "rmq_software_group",
+        fk_column: "id",
+        fk_on_from: true,
+        required: true,
+        junction: None,
+    };
+    let hop2 = HopSpec {
+        kind: HopKind::M2M,
+        from_table: "rmq_software_group",
+        to_table: "rmq_software_group",
+        fk_column: "",
+        fk_on_from: true,
+        required: false,
+        junction: Some(JunctionSpec {
+            table: "rmq_developer_software_groups",
+            parent_column: "parent_id",
+            target_column: "child_id",
+        }),
+    };
+    to_many_hop::<SoftwareGroup, SoftwareGroup>(
+        to_one_hop::<Developer, SoftwareGroup>(ada, hop1),
+        hop2,
+    )
+}
+
+/// Review fix (round 2) — round 1 closed the panic, but `check_annotations()`
+/// (the poison-surfacing check) was only wired into `fetch`/`count`/`explain`/
+/// `fetch_annotated`. The poisoned deep-chain `QuerySet` carries NO scoping
+/// predicate (`Predicate::new(Expr::cust("1 = 1"))`), so `.delete()` on it
+/// would otherwise silently DELETE EVERY ROW of `rmq_software_group` — the
+/// exact "silently running a wrong query" the poison mechanism claims to
+/// prevent. Proves `.delete()` and `.values()` both refuse instead, and that
+/// the 3 seeded rows survive the attempted delete untouched.
+#[tokio::test]
+async fn to_many_hop_deep_chain_poison_blocks_delete_and_values() {
+    boot().await;
+    let ada = fetch_ada().await;
+
+    let before = SoftwareGroup::objects()
+        .count()
+        .await
+        .expect("count before");
+    assert_eq!(before, 3, "sanity: 3 seeded software_group rows");
+
+    let delete_err = deep_chain_poisoned_queryset(&ada)
+        .delete()
+        .await
+        .expect_err("a poisoned QuerySet must refuse delete(), not mass-delete the table");
+    assert!(
+        delete_err.to_string().contains("Task 4"),
+        "delete() error should name the same deep-to-many-chain gap: {delete_err}"
+    );
+
+    let values_err = deep_chain_poisoned_queryset(&ada)
+        .values(&["id", "name"])
+        .await
+        .expect_err("a poisoned QuerySet must refuse values(), not return every row");
+    assert!(values_err.to_string().contains("Task 4"));
+
+    // The rows must be untouched — the DELETE never reached the database.
+    let after = SoftwareGroup::objects().count().await.expect("count after");
+    assert_eq!(
+        after, before,
+        "delete() on a poisoned QuerySet must not have removed any row"
+    );
 }
