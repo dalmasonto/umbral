@@ -35,17 +35,20 @@ pub async fn staff_only() -> Result<Html<String>, ApiError> {
 }
 
 /// Exercises the cross-crate reverse-OneToOne accessor end-to-end.
-/// `user.customer().await?` is the trait method emitted by
+/// `user.customer()` is the trait method emitted by
 /// `#[derive(Model)]` on Customer because of its
 /// `OneToOne<AuthUser>` field — AuthUser lives in `umbral-auth`,
 /// Customer lives in `examples/shop/plugins/ecommerce`, the
 /// accessor still resolves thanks to the trait-on-foreign-type
-/// emission.
+/// emission. It now returns a chainable `Relation<Customer>`; the
+/// nullable "maybe no customer row" shape is read with
+/// `.get_opt().await?` → `Option<Customer>` (awaiting the handle
+/// directly would instead require the row and error if absent).
 pub async fn me(user: LoggedIn<AuthUser>) -> Result<Html<String>, ApiError> {
     let username = user.0.username().to_string();
     let user_id = user.0.id;
 
-    let customer = user.0.customer().await?;
+    let customer = user.0.customer().get_opt().await?;
 
     let has_customer = customer.is_some();
     let customer_id = customer.as_ref().map(|c| c.id);
