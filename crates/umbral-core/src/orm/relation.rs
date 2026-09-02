@@ -203,6 +203,34 @@ impl<From: Model> RelationSource<From> for &QuerySet<From> {
     }
 }
 
+/// The foreign-key column on `Child` that points back at `Parent::TABLE` — the
+/// driving column of a reverse-O2O (`user.developer()`) or reverse-FK hop.
+///
+/// The parent model's derive can't name this column at macro-expansion time:
+/// the FK lives on the *child*, whose fields are expanded by a different (and
+/// possibly cross-crate) `#[derive(Model)]`. So the Task-5 codegen emits a call
+/// to this helper, which resolves the column at runtime from `Child::FIELDS`
+/// (the first field whose `fk_target` is `Parent::TABLE`). A well-formed
+/// reverse relation always has exactly one such anchoring FK; a model that
+/// declares a `OneToOne<Child>` back-link with no forward `ForeignKey<Parent>`
+/// on `Child` is malformed and panics here with a message naming both ends.
+pub fn back_fk_column<Parent: Model, Child: Model>() -> &'static str {
+    Child::FIELDS
+        .iter()
+        .find(|f| f.fk_target == Some(Parent::TABLE))
+        .map(|f| f.name)
+        .unwrap_or_else(|| {
+            panic!(
+                "reverse relation from `{}` to `{}` has no anchoring foreign key: \
+                 `{}` declares no `ForeignKey<{}>` for the back-link to resolve through",
+                Parent::NAME,
+                Child::NAME,
+                Child::NAME,
+                Parent::NAME,
+            )
+        })
+}
+
 /// The primary-key column name of a model, from its `FIELDS` metadata.
 /// Falls back to `"id"` for the (derive-impossible) no-PK case.
 fn pk_column_name<M: Model>() -> &'static str {
