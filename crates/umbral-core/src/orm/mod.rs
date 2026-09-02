@@ -37,6 +37,7 @@ pub mod m2m;
 pub mod masked;
 pub mod model;
 pub mod multichoice;
+pub mod nested;
 pub mod one_to_one;
 pub mod post;
 pub mod queryset;

@@ -864,6 +864,13 @@ pub mod orm {
     #[cfg(feature = "postgis")]
     pub use umbral_core::orm::gis;
 
+    /// The reusable nested-tree writer (gaps4 #77): hand ONE nested JSON
+    /// document to ONE call and write a parent plus every declared reverse-FK
+    /// child subtree (and any M2M links carried in each node) on ONE
+    /// transaction, callable with no REST plugin / HTTP request. See
+    /// [`umbral::orm::nested`](umbral_core::orm::nested).
+    pub use umbral_core::orm::nested;
+
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the
     /// trait — Rust's type and macro namespaces are separate, so both can
     /// coexist behind one import.

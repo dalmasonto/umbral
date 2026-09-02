@@ -116,6 +116,27 @@ The rule is simple: **a level is written only if its parent's table also declare
 Declaring `.nested()` on a mid-level table (like `OrderItem` above) currently also exposes it as its own `/api/order_item/` resource. If you don't want that, gate it with [permissions](./authentication) for now; a declare-nesting-without-exposing option is on the roadmap.
 </Callout>
 
+## Calling the writer without REST
+
+The tree-write above is not REST-only. The same one-document → one-object-graph writer lives at the ORM layer (`umbral::orm::nested`), so a CLI seeder or an AI-agent object-graph seeder can hand ONE nested JSON document to ONE call — no `RestPlugin`, no HTTP request — and get the parent, its declared reverse-FK children (FKs auto-filled), and any M2M ids carried in the document written on **one transaction**, rolled back whole if any row fails.
+
+```rust
+use umbral::orm::nested::{NestedSpec, write_nested_tree};
+
+// The (json_field → child_table) map REST builds from `.nested(...)`,
+// here built by hand for the seeder.
+let mut spec = NestedSpec::new();
+spec.insert("nw_author".into(), vec![("posts".into(), "nw_post".into())]);
+
+let mut body = /* { "name": "Ada", "posts": [ { "title": "…", "tags": [1, 2] } ] } */;
+
+let mut tx = umbral::db::begin().await?;
+let author = write_nested_tree(&spec, &author_meta, &mut body, &mut tx).await?;
+tx.commit().await?; // nothing is durable until here
+```
+
+The direct caller runs with no security gating (it is trusted). The REST endpoints wrap the same writer with a gate that keeps their per-child security — hidden-field stripping, each child's own create permission, object-scope — fully intact. Pass a [`NestedWriteGate`](https://docs.rs/umbral) to `write_nested_tree_gated` to supply your own.
+
 ## Scope
 
 Arbitrary depth, one `.nested(...)` declaration per level. Declare multiple sibling arrays on the same table by calling `.nested(...)` more than once. The flat create/update paths are unchanged and carry zero overhead when no nested resources are declared.

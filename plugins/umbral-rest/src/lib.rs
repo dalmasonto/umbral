@@ -2903,6 +2903,23 @@ impl From<umbral::orm::write::WriteError> for ApiError {
     }
 }
 
+/// gaps4 #77: the ORM-layer nested-tree writer surfaces its own error enum.
+/// Route each variant to the REST error it maps to — a per-row [`WriteError`]
+/// keeps its structured field map through the existing `WriteError → ApiError`
+/// impl, and the walk's malformed-document / cap errors become `400`s.
+impl From<umbral::orm::nested::NestedError> for ApiError {
+    fn from(e: umbral::orm::nested::NestedError) -> Self {
+        use umbral::orm::nested::NestedError;
+        match e {
+            NestedError::Write(w) => Self::from(w),
+            NestedError::BadInput(m) => Self::BadInput(m),
+            other @ (NestedError::MaxNodes(_) | NestedError::MaxDepth(_)) => {
+                Self::BadInput(other.to_string())
+            }
+        }
+    }
+}
+
 /// `sqlx::Error` isn't `Clone`; we own the WriteError by value
 /// from `?` so we need to recreate the inner sqlx::Error for the
 /// `ApiError::Sqlx(...)` arm. Stringify via Display — we're
@@ -4298,9 +4315,77 @@ impl NestCtx<'_> {
     }
 }
 
+/// The REST security gate for the reusable ORM-layer nested-tree writer
+/// ([`umbral::orm::nested`], gaps4 #77). The tree-orchestration (discover
+/// declared children, inject each child's FK from its parent's just-inserted
+/// PK, recurse on ONE transaction, drive declared M2M links, roll back whole on
+/// error) now lives in `umbral-core`; this adapter re-supplies exactly the
+/// REST-only gating the writer used to have baked in, so the HTTP path keeps
+/// its per-child security intact. A non-REST caller (a CLI seeder / an
+/// AI-agent object-graph seeder) invokes the same core writer with
+/// [`NoGate`](umbral::orm::nested::NoGate) and gets the atomic tree write with
+/// no gating.
+struct RestNestedGate<'a> {
+    cfg: &'a RestPlugin,
+    identity: Option<&'a Identity>,
+}
+
+#[umbral::async_trait]
+impl umbral::orm::nested::NestedWriteGate for RestNestedGate<'_> {
+    type Error = ApiError;
+
+    /// Bound the whole tree to the same ceiling the bulk endpoints use
+    /// (audit_2 plugin-rest H3).
+    fn max_nodes(&self) -> usize {
+        MAX_NEST_NODES
+    }
+
+    /// L-6: a nested child must clear the same block/expose list its own
+    /// `/api/<table>/` endpoint would.
+    fn allow_table(&self, table: &str) -> bool {
+        self.cfg.allow(table)
+    }
+
+    /// H2: strip the child's hidden/denied fields so a parent-writer can't set
+    /// `is_superuser`/`password_hash` on a nested child. Runs BEFORE the FK is
+    /// injected (the writer guarantees this), so the FK survives.
+    fn strip_hidden(&self, table: &str, body: &mut Map<String, Value>) {
+        self.cfg.strip_hidden_for_write(table, self.identity, body);
+    }
+
+    /// H2: enforce the child resource's OWN create permission.
+    fn check_create(&self, table: &str) -> Result<(), ApiError> {
+        match self
+            .cfg
+            .permission_for(table)
+            .check(&Action::Create, self.identity)
+        {
+            Ok(()) => Ok(()),
+            Err(PermissionError::Unauthenticated) => Err(ApiError::Unauthenticated),
+            Err(PermissionError::Forbidden) => Err(ApiError::Forbidden),
+        }
+    }
+
+    /// gaps4 #37: the child table's own create scope, checked AFTER the FK is
+    /// injected so the parent link participates.
+    async fn scope_create(&self, table: &str, body: &Map<String, Value>) -> Result<(), ApiError> {
+        self.cfg
+            .object_scope_allows_create(table, self.identity, body)
+            .await
+    }
+
+    fn apply_overrides(&self, table: &str, row: &mut Map<String, Value>) {
+        self.cfg.apply_overrides(table, row);
+    }
+}
+
 /// Writable nested create (feature #58, recursive since gaps3 #10): insert the
 /// parent and every declared nested subtree — to arbitrary depth — returning
 /// the full nested object.
+///
+/// **gaps4 #77:** the tree walk now lives in [`umbral::orm::nested`] so any
+/// caller (CLI seeder, AI-agent seeder) can invoke it; this REST handler is a
+/// thin wrapper that supplies [`RestNestedGate`] for per-child security.
 ///
 /// **Atomicity (orm_fixes #2):** the whole tree runs on ONE
 /// `umbral::db::Transaction` via `DynQuerySet::insert_json_in_tx`. Every row
@@ -4316,25 +4401,22 @@ async fn create_nested(
 ) -> Result<(StatusCode, Json<Map<String, Value>>), ApiError> {
     // One transaction for the whole tree. Dropping `tx` without committing
     // rolls every insert back — the safety net for any error in the recursion.
+    let gate = RestNestedGate { cfg, identity };
     let mut tx = umbral::db::begin().await?;
-    let mut ctx = NestCtx {
-        cfg,
-        identity,
-        nodes: 0,
-    };
-    let row = insert_nested_tree(&mut ctx, &model, body, &mut tx, 0).await?;
+    let row =
+        umbral::orm::nested::write_nested_tree_gated(&gate, &cfg.nested, &model, body, &mut tx)
+            .await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
-/// Recursively insert a row and every nested subtree declared on its table
-/// (and on its children's tables, to arbitrary depth) on the open `tx`.
-///
-/// The nested arrays are discovered from `cfg.nested`, keyed by table, so a
-/// grandchild is written iff its parent's table *also* declared `.nested(...)`
-/// — one level per declaration, no magic. Each child's FK to its parent is
-/// filled from the parent's just-inserted (still-uncommitted) primary key, so
-/// clients never repeat the parent id down the tree.
+/// Recursively insert a row and every nested subtree declared on its table (and
+/// on its children's tables, to arbitrary depth) on the open `tx`, gated by
+/// REST security. A thin wrapper over the core writer's low-level
+/// [`write_nested_subtree`](umbral::orm::nested::write_nested_subtree), used by
+/// the UPDATE path when it CREATEs a brand-new nested subtree; it threads the
+/// update's tree-wide node budget (`ctx.nodes`) and real `depth` through so the
+/// H3 cap spans the whole update, not just this subtree.
 async fn insert_nested_tree(
     ctx: &mut NestCtx<'_>,
     meta: &ModelMeta,
@@ -4342,89 +4424,21 @@ async fn insert_nested_tree(
     tx: &mut umbral::db::Transaction,
     depth: usize,
 ) -> Result<Map<String, Value>, ApiError> {
-    if depth > MAX_NEST_DEPTH {
-        return Err(ApiError::BadInput(format!(
-            "nested write exceeds the maximum depth of {MAX_NEST_DEPTH}"
-        )));
-    }
-
-    // Split THIS table's declared nested arrays out of the body BEFORE the
-    // insert, so they're never handed to the row insert as unknown columns.
-    let specs = ctx.cfg.nested.get(&meta.table).cloned().unwrap_or_default();
-    let mut pending: Vec<(String, ModelMeta, String, Vec<Value>)> = Vec::new();
-    for (field, child_table) in &specs {
-        let items = match body.remove(field) {
-            Some(Value::Array(a)) => a,
-            None | Some(Value::Null) => Vec::new(),
-            Some(_) => {
-                return Err(ApiError::BadInput(format!(
-                    "nested field `{field}` must be an array"
-                )));
-            }
-        };
-        if items.is_empty() {
-            continue;
-        }
-        let child = meta_for_table(child_table)?;
-        let fk = child_fk_to(&child, &meta.table)?.to_string();
-        pending.push((field.clone(), child, fk, items));
-    }
-
-    // Anything array-shaped still in `body` is an undeclared nested relation —
-    // reject it loudly instead of letting the insert silently drop it.
-    reject_undeclared_nested(meta, body)?;
-
-    // Insert this row on the tx.
-    let mut row = umbral::orm::DynQuerySet::for_meta(meta)
-        .insert_json_in_tx(body, tx)
-        .await?;
-    let pk_name = pk_column(meta)?.name.clone();
-    let pk_value = row
-        .get(&pk_name)
-        .cloned()
-        .ok_or_else(|| ApiError::BadInput("nested: row has no primary key after insert".into()))?;
-    ctx.cfg.apply_overrides(&meta.table, &mut row);
-
-    // Recurse into each declared child array.
-    for (field, child, fk, items) in pending {
-        let mut created = Vec::with_capacity(items.len());
-        for item in items {
-            let Value::Object(mut child_body) = item else {
-                return Err(ApiError::BadInput(format!(
-                    "items in nested `{field}` must be objects"
-                )));
-            };
-            // Per-child security (audit_2 H2/H3): count against the tree cap,
-            // strip the child's hidden/denied fields (so a parent-writer can't
-            // set `is_superuser`/`password_hash` on a nested child), and enforce
-            // the child resource's OWN create permission. Strip runs BEFORE the
-            // FK is injected so the FK survives.
-            ctx.charge_node()?;
-            ctx.cfg
-                .strip_hidden_for_write(&child.table, ctx.identity, &mut child_body);
-            ctx.check_child_perm(&child.table, &Action::Create)?;
-            child_body.insert(fk.clone(), pk_value.clone());
-            // gaps4 #37: the child table's own create scope — checked AFTER
-            // the FK injection so the parent link participates. A nested
-            // payload must not plant a child row into a scope the caller
-            // cannot read, any more than the child's direct endpoint would.
-            ctx.cfg
-                .object_scope_allows_create(&child.table, ctx.identity, &child_body)
-                .await?;
-            // `Box::pin` breaks the otherwise-infinitely-sized async recursion.
-            let crow = Box::pin(insert_nested_tree(
-                ctx,
-                &child,
-                &mut child_body,
-                tx,
-                depth + 1,
-            ))
-            .await?;
-            created.push(Value::Object(crow));
-        }
-        row.insert(field, Value::Array(created));
-    }
-    Ok(row)
+    let cfg = ctx.cfg;
+    let gate = RestNestedGate {
+        cfg,
+        identity: ctx.identity,
+    };
+    umbral::orm::nested::write_nested_subtree(
+        &gate,
+        &cfg.nested,
+        meta,
+        body,
+        tx,
+        depth,
+        &mut ctx.nodes,
+    )
+    .await
 }
 
 /// Resolve a child model's `ModelMeta` by table (no allow-gate — nested
