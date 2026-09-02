@@ -3702,7 +3702,7 @@ impl<T: Model> QuerySet<T> {
         backend_name: &str,
         values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<sea_query::UpdateStatement, crate::orm::write::WriteError> {
-        use crate::orm::write::{WriteError, json_to_sea_value, now_for_column};
+        use crate::orm::write::{WriteError, json_to_sea_value, now_for_column, user_for_column};
         let mut stmt = Query::update();
         stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
         for (col_name, val) in values {
@@ -3729,6 +3729,15 @@ impl<T: Model> QuerySet<T> {
             if field.auto_now_add || field.auto_now {
                 continue;
             }
+            // gaps4 #85: same freeze for the user-stamp twin. `auto_user_add`
+            // is INSERT-only; drop a caller-supplied value here so the
+            // original stamped author is preserved rather than overwritten
+            // (e.g. `update_or_create`'s `defaults` struct serializing the
+            // whole model). `auto_user` is handled by the always-refresh
+            // pass below, mirroring `auto_now`.
+            if field.auto_user_add || field.auto_user {
+                continue;
+            }
             // features #83: an UPDATE must normalize too — otherwise a field
             // arrives clean on create and dirty on edit.
             let normalized = crate::orm::write::normalize_json(field.trim, field.lowercase, val);
@@ -3744,6 +3753,16 @@ impl<T: Model> QuerySet<T> {
         for field in T::FIELDS {
             if field.auto_now && !field.primary_key {
                 stmt.value(Alias::new(field.name), now_for_column(field.ty));
+            }
+        }
+        // gaps4 #85: `auto_user` refreshes to the current ambient caller on
+        // EVERY update, whether or not the caller's map named the column —
+        // mirroring the dynamic `update_json` contract and the `auto_now`
+        // pass just above. Added once here, after the caller's columns, so
+        // it always wins over any (now-dropped) caller-supplied value.
+        for field in T::FIELDS {
+            if field.auto_user && !field.primary_key {
+                stmt.value(Alias::new(field.name), user_for_column(field.ty));
             }
         }
         for p in &self.predicates {
@@ -5466,6 +5485,27 @@ impl<T: Model> Manager<T> {
                     stmt.value(
                         Alias::new(field.name),
                         crate::orm::write::now_for_column(field.ty),
+                    );
+                    continue;
+                }
+                // gaps4 #85: the user-stamp twins of the timestamps above.
+                // `auto_user_add` is INSERT-only — frozen here for the same
+                // reason `auto_now_add` is: the struct's carried value is
+                // whatever was read (or defaulted) when the instance was
+                // loaded, not something a save() should ever overwrite it
+                // with. `auto_user` refreshes to the CURRENT ambient caller
+                // (via `user_for_column`, the same task-local the typed
+                // INSERT path and the dynamic path already read) on every
+                // save, ignoring whatever the struct carried — a client
+                // can't forge authorship by round-tripping someone else's
+                // id back through an update.
+                if field.auto_user_add {
+                    continue;
+                }
+                if field.auto_user {
+                    stmt.value(
+                        Alias::new(field.name),
+                        crate::orm::write::user_for_column(field.ty),
                     );
                     continue;
                 }
