@@ -210,6 +210,52 @@ async fn create_round_trip_stamps_base_and_autoincrements_base_pk() {
     );
 }
 
+/// gaps4 #63(b): `#[derive(ModelBase)]` auto-emits `impl Default` (plus a
+/// `new()` alias) for the base, so construction collapses to
+/// `base: Default::default()` — no more `TimeStamped { id: 0, created_at:
+/// <epoch>, updated_at: <now> }` boilerplate. Proves the sentinel/epoch
+/// `Default` values are overwritten by the real typed INSERT path: the
+/// read-back row carries a real assigned PK and a real (not epoch)
+/// timestamp.
+#[tokio::test]
+async fn base_default_collapses_construction_and_is_overwritten_on_insert() {
+    boot().await;
+
+    let new = Note {
+        base: Default::default(),
+        title: "default-base".into(),
+    };
+    // The `new()` alias is equivalent to `Default::default()`.
+    let _also_default = TimeStamped::new();
+
+    let row = Note::objects().create(new).await.expect("create");
+
+    assert!(
+        row.base.id > 0,
+        "base PK should have been autoincremented over the Default 0 sentinel; got {}",
+        row.base.id
+    );
+    assert!(
+        row.base.created_at.timestamp() > 1_600_000_000,
+        "auto_now_add should have stamped a real created_at over the Default epoch; got {}",
+        row.base.created_at
+    );
+    assert!(
+        row.base.updated_at.timestamp() > 1_600_000_000,
+        "auto_now should have stamped a real updated_at over the Default epoch; got {}",
+        row.base.updated_at
+    );
+
+    let fetched = Note::objects()
+        .filter(note::TITLE.eq("default-base"))
+        .first()
+        .await
+        .expect("query")
+        .expect("row present");
+    assert_eq!(fetched.base.id, row.base.id, "base PK re-hydrates on read");
+    assert!(fetched.base.created_at.timestamp() > 1_600_000_000);
+}
+
 /// A model marked `#[umbral(soft_delete)]` whose `deleted_at` tombstone
 /// column is inherited from an embedded base behaves exactly like an
 /// inline soft-delete model: `delete()` hides the row (default queries

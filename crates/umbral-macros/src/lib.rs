@@ -2673,6 +2673,33 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             }
         }
         let cols_macro_ident = format_ident!("__umbral_base_cols_{}", struct_name);
+
+        // gaps4 #63(b) — cheap win: auto-emit `impl Default` (plus a `new()`
+        // alias) for the base, so a model's construction site collapses
+        // from `base: TimeStamped { id: 0, created_at: <epoch>, updated_at:
+        // <now> }` to `base: Default::default()`. This is safe because the
+        // typed INSERT path (`write_helpers.rs::build_insert_one_for`)
+        // already ALWAYS overwrites the PK sentinel and every
+        // `auto_now_add`/`auto_now`/`auto_uuid`/`auto_user*` column
+        // regardless of what the struct carries — so a field-wise
+        // `Default::default()` value is already a functionally-correct row
+        // at insert time (and, per gaps4 #68/#85, the typed UPDATE path
+        // stamps `auto_now`/`auto_user` columns the same way). If a base
+        // field's type doesn't implement `Default`, this fails loudly with
+        // an ordinary trait-bound error at that field — not silently.
+        //
+        // NOTE: don't ALSO hand-write `#[derive(Default)]` or
+        // `impl Default` on a `#[derive(ModelBase)]` struct — this
+        // generated impl would collide with it (E0119, duplicate trait
+        // impl).
+        let field_default_inits: Vec<TokenStream2> = fields
+            .iter()
+            .map(|f| {
+                let fname = f.ident.as_ref().unwrap();
+                quote! { #fname: ::core::default::Default::default() }
+            })
+            .collect();
+
         return Ok(quote! {
             impl ::umbral::orm::ModelBase for #struct_name {
                 const BASE_FIELDS: &'static [::umbral::orm::FieldSpec] = &[ #(#field_specs),* ];
@@ -2689,6 +2716,28 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                 ($model:ty) => {
                     #(#base_col_consts)*
                 };
+            }
+
+            // gaps4 #63(b): every auto-managed field (PK sentinel,
+            // `auto_now_add`/`auto_now`/`auto_uuid`) is overwritten on
+            // insert regardless of the struct's value, so `Default` is
+            // already a functionally-correct row. `new()` is a discoverable
+            // alias for call sites that read better as a constructor.
+            impl ::core::default::Default for #struct_name {
+                fn default() -> Self {
+                    Self { #(#field_default_inits),* }
+                }
+            }
+
+            impl #struct_name {
+                /// Convenience alias for `Default::default()` (gaps4 #63b) —
+                /// auto-managed fields (PK / `auto_now_add` / `auto_now` /
+                /// `auto_uuid`) are overwritten on insert regardless of the
+                /// value here, so this is already a functionally-correct
+                /// row at insert time.
+                pub fn new() -> Self {
+                    ::core::default::Default::default()
+                }
             }
         });
     }

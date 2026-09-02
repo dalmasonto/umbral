@@ -44,14 +44,18 @@ pub struct Article {
 
 ```rust
 let a = Article::objects().create(Article {
-    base: TimeStamped { id: 0, created_at: epoch, updated_at: epoch },
+    base: Default::default(),   // id: 0, created_at/updated_at: epoch — placeholders only
     title: "Hello".into(),
     slug: "hello".into(),
 }).await?;
 
-assert!(a.base.id > 0);                 // base PK autoincremented
-assert!(a.base.created_at > epoch);     // auto_now_add stamped it
+assert!(a.base.id > 0);                 // base PK autoincremented over the 0 sentinel
+assert!(a.base.created_at > epoch);     // auto_now_add stamped a real timestamp
 ```
+
+<Callout type="info">
+**`#[derive(ModelBase)]` gives the base a `Default` impl (and a `new()` alias) for free**, so construction collapses to `base: Default::default()` — no more spelling out `id: 0, created_at: <epoch>, updated_at: <now>` by hand. This is safe because the typed insert (and update) path always overwrites the primary key and every `auto_now_add` / `auto_now` / `auto_uuid` column, regardless of what the struct carries — the `Default` values are placeholders that never reach the database. Don't also derive or hand-write `Default` on a `#[derive(ModelBase)]` struct; the generated impl will conflict with it.
+</Callout>
 
 <Callout type="info">
 **The base carries the primary key.** When a model has no `id` of its own and embeds exactly one base whose base declares the PK, that column becomes the model's primary key — no extra wiring. A model can still declare its own `id` and use a base purely for non-key columns.
