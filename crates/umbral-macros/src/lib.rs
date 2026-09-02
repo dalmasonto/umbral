@@ -5342,6 +5342,128 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
 }
 
 // =========================================================================
+// `#[umbral::main]` — short async `main`, gaps4 #60.
+// =========================================================================
+
+/// Turn `async fn main` into a real, runnable `main` without spelling out
+/// the tokio bootstrap or the boxed-error return type by hand.
+///
+/// Today, an umbral binary writes:
+///
+/// ```ignore
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+///     // ...
+///     Ok(())
+/// }
+/// ```
+///
+/// `#[umbral::main]` replaces both pieces:
+///
+/// ```ignore
+/// #[umbral::main]
+/// async fn main() -> umbral::Result {
+///     // ...
+///     Ok(())
+/// }
+/// ```
+///
+/// [`umbral::Result`](../umbral/type.Result.html) is
+/// `Result<T = (), Box<dyn std::error::Error + Send + Sync>>` — the same
+/// error type the hand-written signature used, just named instead of
+/// spelled out.
+///
+/// # Shapes accepted
+///
+/// The macro doesn't hardcode a single return type. It rewrites
+/// `async fn main() -> T { body }` into a plain synchronous
+/// `fn main() -> T { /* block on the async body */ }`, so **any** `T`
+/// that `main` is normally allowed to return works, including:
+///
+/// - `umbral::Result` (recommended — matches the pre-existing hand-written
+///   main's error type).
+/// - No return type at all: `#[umbral::main] async fn main() { ... }`.
+/// - Any other `std::process::Termination` type your own code returns
+///   (`std::process::ExitCode`, `anyhow::Result<()>`, a custom error, …).
+///
+/// Whatever `T` is, the outer `main` returns it as-is. A `Result<(), E>`
+/// therefore gets std's normal `Termination` treatment on `Err` — the
+/// `Debug` form is printed to stderr and the process exits non-zero —
+/// which is exactly what `#[tokio::main]` gives you today; nothing about
+/// that behavior changes.
+///
+/// # How it wraps tokio
+///
+/// The generated code does not literally expand to `#[tokio::main]`.
+/// Instead it calls [`umbral_core::rt::block_on_main`] (re-exported
+/// `#[doc(hidden)]` as `umbral::__rt::block_on_main`), which builds a
+/// multi-thread `tokio::runtime::Runtime` with `enable_all()` — the same
+/// defaults `#[tokio::main]` uses — and blocks on the async body. Because
+/// that call goes through the `umbral` facade rather than a bare
+/// `tokio::...` path, **the binary crate does not need its own `tokio`
+/// dependency** for `#[umbral::main]` to work (umbral-core already
+/// depends on tokio with the features this needs).
+///
+/// Runtime-flavor arguments (`flavor = "current_thread"`,
+/// `worker_threads = N`, the way `#[tokio::main]` accepts them) are not
+/// supported yet — `#[umbral::main]` always builds the multi-thread
+/// flavor. Reach for `#[tokio::main]` directly (with a direct `tokio`
+/// dep) if you need `current_thread`.
+///
+/// # Constraints
+///
+/// - Must be `async fn`. A non-async `fn` has no body to block on and
+///   would go straight through unmodified, so the macro rejects it with
+///   a targeted error rather than silently doing nothing.
+/// - No attribute arguments — `#[umbral::main]` takes none today.
+#[proc_macro_attribute]
+pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
+    expand_main(args.into(), input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn expand_main(args: TokenStream2, input: TokenStream2) -> syn::Result<TokenStream2> {
+    if !args.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &args,
+            "#[umbral::main] does not accept arguments yet (no `flavor`/`worker_threads`); \
+             use `#[tokio::main(...)]` directly if you need runtime-flavor control",
+        ));
+    }
+
+    let func: ItemFn = syn::parse2(input.clone())
+        .map_err(|e| syn::Error::new(e.span(), "#[umbral::main] can only be applied to a fn"))?;
+
+    if func.sig.asyncness.is_none() {
+        return Err(syn::Error::new_spanned(
+            func.sig.fn_token,
+            "#[umbral::main] requires an `async fn` — it wraps the body in a tokio \
+             runtime, so a non-async fn has nothing to block on",
+        ));
+    }
+
+    let ItemFn {
+        attrs,
+        vis,
+        mut sig,
+        block,
+    } = func;
+
+    // Strip `async` from the signature: the emitted fn is a plain
+    // synchronous entry point that blocks on the async body itself.
+    sig.asyncness = None;
+
+    let output = quote! {
+        #(#attrs)*
+        #vis #sig {
+            ::umbral::__rt::block_on_main(async move #block)
+        }
+    };
+    Ok(output)
+}
+
+// =========================================================================
 // `#[derive(Choices)]` — closed-set enums as model field types.
 // =========================================================================
 

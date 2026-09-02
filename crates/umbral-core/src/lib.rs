@@ -34,6 +34,7 @@ pub mod pagination;
 pub mod plugin;
 pub mod ratelimit;
 pub mod routes;
+pub mod rt;
 pub mod settings;
 pub mod shutdown;
 pub mod signals;

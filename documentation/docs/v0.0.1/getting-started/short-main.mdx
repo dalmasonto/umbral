@@ -1,0 +1,63 @@
+---
+title: A shorter main
+description: "#[umbral::main] replaces #[tokio::main] plus the boxed-error return type with one short attribute and umbral::Result."
+sidebar_position: 3
+icon: zap
+tags: [getting-started, main, tokio, result]
+---
+
+Every umbral app's `main` starts async, and needs *some* error type its `?`-composed setup code (`Settings::from_env()?`, `connect(...)?`, `App::builder()...build()?`) can flow into. The idiomatic choice is a boxed trait object — but spelling it out gets long fast:
+
+```rust
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // ...
+    Ok(())
+}
+```
+
+`#[umbral::main]` replaces both pieces — the tokio bootstrap and the return type — with one short attribute and a named alias:
+
+```rust
+use umbral::prelude::*;
+
+#[umbral::main]
+async fn main() -> umbral::Result {
+    let settings = umbral::Settings::from_env()?;
+    let pool = umbral::db::connect(&settings.database_url).await?;
+
+    let app = App::builder()
+        .settings(settings)
+        .database("default", pool)
+        .routes(Routes::new().get("/", || async { "hello, umbral" }))
+        .build()?;
+
+    app.serve("127.0.0.1:8000".parse()?).await?;
+    Ok(())
+}
+```
+
+## `umbral::Result`
+
+`umbral::Result<T = ()>` is `Result<T, Box<dyn std::error::Error + Send + Sync>>` — the same boxed-error type the hand-written signature above used. `T` defaults to `()`, so a `main` function writes the bare `umbral::Result`; reach for `umbral::Result<SomeType>` anywhere else a function wants the same "any `Send + Sync + 'static` error" story without threading a concrete error enum through.
+
+<Callout type="note">
+`umbral::Result` isn't in `umbral::prelude` — a bare `Result` re-export there would shadow `std::result::Result` for every file that does `use umbral::prelude::*;`, breaking any handler that returns a plain two-parameter `Result<T, E>`. Reach for it by its full path.
+</Callout>
+
+## What the attribute does
+
+`#[umbral::main]` wraps the function body in a real multi-thread tokio runtime (`enable_all()`) — the same defaults `#[tokio::main]` uses — and blocks on it. It reaches the runtime through the `umbral` facade rather than emitting a bare `tokio::...` path, so **your crate does not need its own `tokio` dependency** just to get an async `main`.
+
+Two shapes are supported:
+
+<CardGrid cols={2}>
+  <Card icon="check" title="With a return type" description={`"async fn main() -> umbral::Result { ... }" — or any other type that implements std::process::Termination.`} />
+  <Card icon="check" title="No return type" description={`"async fn main() { ... }" — for a binary that never fails at the top level.`} />
+</CardGrid>
+
+Whatever the return type, `#[umbral::main]` doesn't hardcode it — it strips `async` and hands the body to the runtime as-is, so a `Result` return keeps std's normal behavior: an `Err` prints its `Debug` form to stderr and exits non-zero, identical to what `#[tokio::main]` already did.
+
+Runtime-flavor arguments (`flavor = "current_thread"`, `worker_threads = N`) aren't supported yet — `#[umbral::main]` always builds the multi-thread flavor. Use `#[tokio::main(...)]` directly (with a direct `tokio` dependency) if you need that control.
+
+See `docs/specs/` and the `#[umbral::main]` doc comment in `umbral-macros` for the full design (gaps4 #60).

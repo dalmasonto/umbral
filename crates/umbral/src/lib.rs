@@ -158,6 +158,39 @@ pub use sqlx as _sqlx;
 pub use umbral_core::app::{App, AppBuilder, BuildError, FkEdge};
 pub use umbral_core::settings::{Environment, Settings};
 
+/// A boxed-error `Result` alias short enough to write as a `main` return
+/// type (gaps4 #60): `-> umbral::Result` instead of
+/// `-> Result<(), Box<dyn std::error::Error + Send + Sync>>`.
+///
+/// Pairs with [`main`] — `#[umbral::main] async fn main() -> umbral::Result
+/// { ... }` is the short form of the hand-written
+/// `#[tokio::main] async fn main() -> Result<(), Box<dyn
+/// std::error::Error + Send + Sync>>` every example wrote before. `T`
+/// defaults to `()`; write `umbral::Result<SomeType>` anywhere else a
+/// function wants the same "any `Send + Sync + 'static` error" story.
+///
+/// Not in the prelude on purpose: a bare `Result` re-export would shadow
+/// `std::result::Result` for every file that does `use
+/// umbral::prelude::*;`, silently breaking every handler that returns a
+/// plain two-parameter `Result<T, E>`. Reach for it by its full path,
+/// `umbral::Result`.
+pub use umbral_core::rt::Result;
+
+/// The `#[umbral::main]` attribute macro (gaps4 #60) — see its doc
+/// comment (in `umbral-macros`, re-exported here) for the accepted
+/// shapes and how it reaches tokio without the calling crate needing a
+/// direct `tokio` dependency.
+pub use umbral_macros::main;
+
+/// Runtime bootstrap `#[umbral::main]` expands to. `#[doc(hidden)]`: an
+/// implementation detail of the macro, not a surface users call by hand
+/// — call sites should apply `#[umbral::main]` to their `async fn main`
+/// instead of calling `block_on_main` directly.
+#[doc(hidden)]
+pub mod __rt {
+    pub use umbral_core::rt::block_on_main;
+}
+
 /// The authentication identity contract (gaps2 #76).
 ///
 /// [`Identity`] and [`Authentication`] live in `umbral-core` so that

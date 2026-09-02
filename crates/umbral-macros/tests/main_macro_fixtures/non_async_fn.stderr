@@ -1,0 +1,5 @@
+error: #[umbral::main] requires an `async fn` — it wraps the body in a tokio runtime, so a non-async fn has nothing to block on
+ --> tests/main_macro_fixtures/non_async_fn.rs:2:1
+  |
+2 | fn not_async() -> umbral::Result {
+  | ^^

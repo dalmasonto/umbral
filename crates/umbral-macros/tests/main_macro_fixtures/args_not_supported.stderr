@@ -1,0 +1,5 @@
+error: #[umbral::main] does not accept arguments yet (no `flavor`/`worker_threads`); use `#[tokio::main(...)]` directly if you need runtime-flavor control
+ --> tests/main_macro_fixtures/args_not_supported.rs:1:16
+  |
+1 | #[umbral::main(flavor = "current_thread")]
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^
