@@ -89,6 +89,13 @@ pub struct HopSpec {
     /// `true` when `fk_column` lives on `from_table` (forward FK/O2O);
     /// `false` when it lives on `to_table` (reverse O2O parent-side).
     pub fk_on_from: bool,
+    /// Whether the hop's target is guaranteed present: a `NOT NULL` forward FK
+    /// is `required`; a nullable forward FK or a reverse-O2O (whose parent-side
+    /// row may simply not exist) is not. The derive (Task 5) reads the terminal
+    /// hop's `required` to pick the accessor's return shape — `T` vs
+    /// `Option<T>` — while the resolver itself uses INNER joins either way and
+    /// lets `get()` / `get_opt()` decide how an absent row surfaces.
+    pub required: bool,
     /// Junction descriptor for `M2M` hops; `None` for FK/O2O/reverse-FK.
     pub junction: Option<JunctionSpec>,
 }
@@ -213,6 +220,37 @@ impl<T: Model> Relation<T> {
         self.explicit_pool = Some(DbPool::Postgres(pool.clone()));
         self
     }
+
+    /// The SQL this relation's terminal would run, for the SQLite builder —
+    /// the `to_sql()` probe surface tests use to assert the shape of the emitted
+    /// query (one flat `SELECT … JOIN … JOIN …`, no nested subqueries). The
+    /// Postgres string is available via [`Self::to_sql_pg`].
+    ///
+    /// This builds the same statement the terminal executes but binds no pool,
+    /// so it works with or without a booted app.
+    pub fn to_sql(&self) -> Result<String, sqlx::Error> {
+        crate::orm::queryset::relation_resolve::to_one_sql::<T>(&self.path, false)
+    }
+
+    /// The Postgres rendering of [`Self::to_sql`].
+    pub fn to_sql_pg(&self) -> Result<String, sqlx::Error> {
+        crate::orm::queryset::relation_resolve::to_one_sql::<T>(&self.path, true)
+    }
+
+    /// Resolve the pool this terminal runs against: the explicit `.on(...)` /
+    /// `.on_pg(...)` override, else the ambient default set at `App::build()`.
+    fn resolve_pool(&self) -> Result<DbPool, sqlx::Error> {
+        match &self.explicit_pool {
+            Some(p) => Ok(p.clone()),
+            None => crate::db::try_pool_dispatched().cloned().ok_or_else(|| {
+                protocol_error(
+                    "no database pool available to resolve a relation — either \
+                     build an App (which sets the ambient pool) or pin one with \
+                     `.on(&pool)` / `.on_pg(&pool)`",
+                )
+            }),
+        }
+    }
 }
 
 impl<T> Relation<T>
@@ -235,20 +273,42 @@ where
 
     /// Resolve a to-one relation, returning `None` when the target row is
     /// absent (the nullable-FK / reverse-O2O shape).
+    ///
+    /// A deep chain (`hops.len() > 1`) resolves in one flat `SELECT … JOIN …
+    /// JOIN … WHERE root.pk = ?` (see [`crate::orm::queryset::relation_resolve`]);
+    /// any NULL / dangling link along the way drops the row and surfaces here as
+    /// `None`. A single forward-FK / reverse-O2O hop keeps the Task-1 subquery
+    /// path, which needs no model registry and so works in a bare `.on(&pool)`
+    /// test without a booted `App`.
     pub async fn get_opt(self) -> Result<Option<T>, sqlx::Error> {
+        if self.path.hops.len() > 1 {
+            let pool = self.resolve_pool()?;
+            return crate::orm::queryset::relation_resolve::resolve_to_one_path::<T>(
+                &self.path, &pool,
+            )
+            .await;
+        }
         self.terminal_queryset()?.first().await
     }
 
-    /// Whether the to-one target row exists, without materialising it.
+    /// Whether the to-one target row exists.
     pub async fn exists(self) -> Result<bool, sqlx::Error> {
+        if self.path.hops.len() > 1 {
+            let pool = self.resolve_pool()?;
+            return Ok(
+                crate::orm::queryset::relation_resolve::resolve_to_one_path::<T>(&self.path, &pool)
+                    .await?
+                    .is_some(),
+            );
+        }
         self.terminal_queryset()?.exists().await
     }
 
-    /// Build the leaf `QuerySet<T>` that selects the traversal target.
+    /// Build the leaf `QuerySet<T>` for a SINGLE to-one hop (Task-1 path).
     ///
-    /// Task 1 resolves a **single** to-one hop. The path→SQL emission for
-    /// deep and to-many chains extends this in later tasks; an unsupported
-    /// shape errors loudly here rather than silently returning wrong rows.
+    /// Deep chains go through the JOIN resolver instead (see [`Self::get_opt`]);
+    /// this stays for the single-hop case because it needs no model registry
+    /// and so resolves in a bare `.on(&pool)` test without a booted `App`.
     fn terminal_queryset(self) -> Result<crate::orm::QuerySet<T>, sqlx::Error> {
         let Relation {
             path,
@@ -258,8 +318,8 @@ where
 
         if path.hops.len() != 1 {
             return Err(protocol_error(
-                "multi-hop relation resolution is not implemented in Phase 1 Task 1 \
-                 (single forward-FK only); deep chains land in a later task",
+                "terminal_queryset resolves a single to-one hop only; deep chains \
+                 route through the JOIN resolver",
             ));
         }
         let hop = path.hops[0];

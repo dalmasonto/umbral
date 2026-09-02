@@ -97,6 +97,7 @@ fn author_hop() -> HopSpec {
         to_table: "author",
         fk_column: "author",
         fk_on_from: true,
+        required: true,
         junction: None,
     }
 }
