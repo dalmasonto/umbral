@@ -399,6 +399,15 @@ pub struct RestPlugin {
     /// a hook restricts every built-in CRUD action to the rows the caller may
     /// access. Merged from `ResourceConfig::scope(...)` / `.owned_by(...)`.
     object_scopes: HashMap<String, crate::resource::ObjectScopeFn>,
+    /// gaps4 #79: WRITE-only object-scope hooks per table, keyed the same way
+    /// as `object_scopes`. A table with an entry here scopes
+    /// `create`/`update`/`delete` (+ bulk) to what the hook returns while
+    /// `list`/`retrieve` stay governed by `object_scopes` alone (unconstrained
+    /// if that map has no entry either) — the "public read, owner-only write"
+    /// shape `object_scopes` alone can't express, because it ANDs the same
+    /// decision into every action. Merged from `ResourceConfig::scope_writes(...)`
+    /// / `.owned_by_for_writes(...)`.
+    object_write_scopes: HashMap<String, crate::resource::ObjectScopeFn>,
     /// gaps3 #16: per-table owner column filled from the identity on create.
     owner_fields: HashMap<String, String>,
     /// gaps3 #29 item 2 — child table -> (parent table, fk column). A table listed
@@ -639,22 +648,48 @@ impl RestPlugin {
         }
     }
 
-    /// Resolve this request's object-level row scope (audit_2 H1/P2). Consults
-    /// the resource's `scope`/`owned_by` hook with the caller's identity and
-    /// turns the [`ScopeDecision`] into an [`ObjectScopeOutcome`] the CRUD
-    /// handlers apply: `Unconstrained` (no hook / `All`), a `Filter` condition
-    /// ANDed into every query, or `DenyAll` (list → empty, detail → 404).
+    /// gaps4 #79: which scope hook governs `action` for `table` — the read
+    /// scope (`object_scopes`) for `List`/`Retrieve`, and the write scope
+    /// (`object_write_scopes`, falling back to `object_scopes`) for everything
+    /// else. The fallback is what keeps a plain `.owned_by(...)`/`.scope(...)`
+    /// resource scoping writes exactly as before: without a `write_scope`
+    /// entry, writes see the SAME hook reads do. A resource that only sets
+    /// `.owned_by_for_writes(...)` has no entry in `object_scopes`, so its
+    /// reads resolve to `None` here (`Unconstrained`) while its writes hit the
+    /// write map — public read, owner-only write.
+    fn effective_scope_hook(
+        &self,
+        table: &str,
+        action: &Action,
+    ) -> Option<&crate::resource::ObjectScopeFn> {
+        let read = self.object_scopes.get(table);
+        match action {
+            Action::List | Action::Retrieve => read,
+            Action::Create | Action::Update | Action::Delete | Action::Custom(_) => {
+                self.object_write_scopes.get(table).or(read)
+            }
+        }
+    }
+
+    /// Resolve this request's object-level row scope (audit_2 H1/P2, gaps4 #79).
+    /// Consults the resource's `scope`/`owned_by` hook (or, for a write
+    /// `action`, the `scope_writes`/`owned_by_for_writes` hook — see
+    /// [`Self::effective_scope_hook`]) with the caller's identity and turns the
+    /// [`ScopeDecision`] into an [`ObjectScopeOutcome`] the CRUD handlers
+    /// apply: `Unconstrained` (no hook / `All`), a `Filter` condition ANDed
+    /// into every query, or `DenyAll` (list → empty, detail → 404).
     async fn object_scope(
         &self,
         table: &str,
         identity: Option<&Identity>,
         parent: Option<&(String, String)>,
+        action: &Action,
     ) -> ObjectScopeOutcome {
         // gaps3 #29 item 2: the parent scope rides the SAME seam as the row-level
         // `scope`/`owned_by` hook, so the two AND together instead of racing. A
         // separate filter applied somewhere else in each handler is how one of the five
         // ends up missing it.
-        let own = self.object_scope_hook(table, identity).await;
+        let own = self.object_scope_hook(table, identity, action).await;
         let Some((fk_column, parent_id)) = parent else {
             return own;
         };
@@ -676,13 +711,15 @@ impl RestPlugin {
         }
     }
 
-    /// The resource's own `scope` / `owned_by` decision, before parent scoping.
+    /// The resource's own `scope`/`owned_by` (or, for a write `action`,
+    /// `scope_writes`/`owned_by_for_writes`) decision, before parent scoping.
     async fn object_scope_hook(
         &self,
         table: &str,
         identity: Option<&Identity>,
+        action: &Action,
     ) -> ObjectScopeOutcome {
-        let Some(hook) = self.object_scopes.get(table) else {
+        let Some(hook) = self.effective_scope_hook(table, action) else {
             return ObjectScopeOutcome::Unconstrained;
         };
         match hook(identity.cloned()).await {
@@ -754,7 +791,11 @@ impl RestPlugin {
         identity: Option<&Identity>,
         body: &serde_json::Map<String, Value>,
     ) -> Result<(), ApiError> {
-        let Some(hook) = self.object_scopes.get(table) else {
+        // gaps4 #79: create is a write, so a `.owned_by_for_writes(...)`-only
+        // resource (no `scope`/`owned_by`) gates its create here exactly as an
+        // `.owned_by(...)` resource always has — only the READ side is
+        // unconstrained for a write-only scope.
+        let Some(hook) = self.effective_scope_hook(table, &Action::Create) else {
             return Ok(());
         };
         let deny = |col: &str| -> ApiError {
@@ -900,6 +941,7 @@ impl RestPlugin {
             nested: HashMap::new(),
             bulk: std::collections::HashSet::new(),
             object_scopes: HashMap::new(),
+            object_write_scopes: HashMap::new(),
             owner_fields: HashMap::new(),
             unders: HashMap::new(),
             base_path: "/api".to_string(),
@@ -1266,6 +1308,7 @@ impl RestPlugin {
             nested,
             bulk,
             scope,
+            write_scope,
             owner_field,
             cache_control,
             under,
@@ -1334,6 +1377,11 @@ impl RestPlugin {
         if let Some(scope) = scope {
             // Last `.resource(...)` wins for the same table (as with permission).
             self.object_scopes.insert(table.clone(), scope);
+        }
+        if let Some(scope) = write_scope {
+            // gaps4 #79: same last-wins rule, kept in its own map so a
+            // write-only scope never bleeds into the read path.
+            self.object_write_scopes.insert(table.clone(), scope);
         }
         if let Some(col) = owner_field {
             // gaps3 #16: last `.resource(...)` wins (as with permission/scope).
@@ -3282,7 +3330,12 @@ async fn list_impl(
     // learn it from the difference between a 403 and a 404.
     let parent_scope = resolve_parent(cfg, &table, parent.as_ref()).await?;
     match cfg
-        .object_scope(&table, identity.as_ref(), parent_scope.as_ref())
+        .object_scope(
+            &table,
+            identity.as_ref(),
+            parent_scope.as_ref(),
+            &Action::List,
+        )
         .await
     {
         ObjectScopeOutcome::Unconstrained => {}
@@ -3525,7 +3578,12 @@ async fn retrieve_impl(
     // learn it from the difference between a 403 and a 404.
     let parent_scope = resolve_parent(cfg, &table, parent.as_ref()).await?;
     let scope_filter = match cfg
-        .object_scope(&table, identity.as_ref(), parent_scope.as_ref())
+        .object_scope(
+            &table,
+            identity.as_ref(),
+            parent_scope.as_ref(),
+            &Action::Retrieve,
+        )
         .await
     {
         ObjectScopeOutcome::DenyAll => {
@@ -3915,7 +3973,10 @@ async fn bulk_update(
     // out-of-scope row was writable by id. Resolve the scope once and attach
     // it to every item — an out-of-scope PK then reads as "no row" (the same
     // no-oracle 404 a nonexistent PK gets).
-    let scope_cond = match cfg.object_scope(&table, identity.as_ref(), None).await {
+    let scope_cond = match cfg
+        .object_scope(&table, identity.as_ref(), None, &Action::Update)
+        .await
+    {
         ObjectScopeOutcome::DenyAll => {
             return Err(ApiError::NotFound(format!("no rows in scope in {table}")));
         }
@@ -4027,7 +4088,10 @@ async fn bulk_delete(
     // gaps4 #37 (same class): scope the bulk delete exactly like the
     // single-object DELETE — an out-of-scope id matches nothing (and is
     // silently skipped, the same behavior a nonexistent id already gets).
-    let scope_cond = match cfg.object_scope(&table, identity.as_ref(), None).await {
+    let scope_cond = match cfg
+        .object_scope(&table, identity.as_ref(), None, &Action::Delete)
+        .await
+    {
         ObjectScopeOutcome::DenyAll => {
             return Err(ApiError::NotFound(format!("no rows in scope in {table}")));
         }
@@ -4694,7 +4758,12 @@ async fn update_impl(
     // learn it from the difference between a 403 and a 404.
     let parent_scope = resolve_parent(cfg, &table, parent.as_ref()).await?;
     let scope_cond = match cfg
-        .object_scope(&table, identity.as_ref(), parent_scope.as_ref())
+        .object_scope(
+            &table,
+            identity.as_ref(),
+            parent_scope.as_ref(),
+            &Action::Update,
+        )
         .await
     {
         ObjectScopeOutcome::DenyAll => {
@@ -4842,7 +4911,12 @@ async fn destroy_impl(
     // learn it from the difference between a 403 and a 404.
     let parent_scope = resolve_parent(cfg, &table, parent.as_ref()).await?;
     let scope_cond = match cfg
-        .object_scope(&table, identity.as_ref(), parent_scope.as_ref())
+        .object_scope(
+            &table,
+            identity.as_ref(),
+            parent_scope.as_ref(),
+            &Action::Delete,
+        )
         .await
     {
         ObjectScopeOutcome::DenyAll => {

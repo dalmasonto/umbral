@@ -84,6 +84,19 @@ ResourceConfig::new("order").scope(|identity| match identity {
 
 **Creates are scoped too.** A `POST` whose body sets the scoped column to a value outside the caller's scope is refused with the same `404` an out-of-scope read gets — a caller who cannot see project Q cannot plant a row into it either (`RestrictIn(col, allowed)` requires the body's `col` ∈ `allowed`; `Restrict(pairs)` requires each pair to match; `None` refuses every create). The check runs after `owner_field` / nested-parent injection, so server-injected values count. The bulk write endpoints (`.bulk()`) apply the scope exactly like their single-object twins.
 
+### Public read, owner-only write
+
+`.scope`/`.owned_by` AND the same decision into *every* CRUD action, reads included — the right shape for "everyone's dashboard shows only their own rows," but wrong for "anyone can view a post, only its author can edit it." For that shape, use `ResourceConfig::owned_by_for_writes` (or the general `scope_writes`/`scope_writes_async`): it scopes only `create`/`update`/`delete` (+ their bulk twins), leaving `list`/`retrieve` unconstrained.
+
+```rust
+use umbral_rest::ResourceConfig;
+
+// Anyone can GET; only the author (or a superuser) can PATCH/DELETE.
+ResourceConfig::new("post").owned_by_for_writes("author_id")
+```
+
+`.scope`/`.owned_by` and `.scope_writes`/`.owned_by_for_writes` can be combined on the same resource — `scope` then governs reads (e.g. hide drafts from non-staff), `scope_writes` governs writes, and each can name a different column.
+
 <Callout type="info">
 Scoping covers the built-in list/retrieve/create/update/delete, their bulk twins, and nested-write children (each child table's own scope runs with the parent FK already injected). Custom `.action(...)` handlers still enforce their own authorization — an action receives `ctx.pk` and `ctx.identity` and should scope its own query.
 </Callout>

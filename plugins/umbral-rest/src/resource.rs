@@ -338,6 +338,16 @@ pub struct ResourceConfig {
     /// CRUD action to the rows the caller may access. Declared via
     /// [`Self::scope`] / [`Self::owned_by`].
     pub(crate) scope: Option<ObjectScopeFn>,
+    /// gaps4 #79: a WRITE-only object scope. `None` means writes fall back to
+    /// [`Self::scope`] (today's behavior, unchanged); `Some(fn)` scopes ONLY
+    /// `create`/`update`/`delete` (and bulk variants) to the rows it returns,
+    /// while `list`/`retrieve` stay governed by `scope` alone (unconstrained
+    /// if `scope` is unset). This is what makes "public read, owner-only
+    /// write" expressible without touching `.scope`/`.owned_by`, which keep
+    /// scoping every action for anyone already relying on that. Declared via
+    /// [`Self::scope_writes`] / [`Self::scope_writes_async`] /
+    /// [`Self::owned_by_for_writes`].
+    pub(crate) write_scope: Option<ObjectScopeFn>,
     /// Per-resource `Cache-Control` override (gaps3 #36). `None` → the plugin
     /// default (`no-store`). Set this on a genuinely cacheable read endpoint.
     pub(crate) cache_control: Option<String>,
@@ -383,6 +393,7 @@ impl ResourceConfig {
             nested: Vec::new(),
             bulk: false,
             scope: None,
+            write_scope: None,
             cache_control: None,
             owner_field: None,
             under: None,
@@ -489,6 +500,67 @@ impl ResourceConfig {
             Some(id) => ScopeDecision::Restrict(vec![(col.clone(), id.user_id.clone())]),
             None => ScopeDecision::None,
         })
+    }
+
+    /// gaps4 #79 — an `IsOwnerOrReadOnly`-shaped object scope: `list`/`retrieve`
+    /// stay UNCONSTRAINED (every row is publicly readable), while
+    /// `create`/`update`/`delete` (and their bulk equivalents) are restricted to
+    /// rows where `owner_column` equals the caller's user id. A superuser may
+    /// write any row.
+    ///
+    /// This is the opt-in twin of [`Self::owned_by`], which scopes EVERY action
+    /// (reads included) — existing `.owned_by(...)` resources are unaffected by
+    /// this method existing; picking one is a per-resource choice, and calling
+    /// both is legal (`scope` still governs reads, `write_scope` governs writes,
+    /// and they can name different columns).
+    ///
+    /// ```ignore
+    /// // Public profile, private editing: anyone can GET, only the owner can
+    /// // PATCH/DELETE.
+    /// ResourceConfig::new("post").owned_by_for_writes("author_id")
+    /// ```
+    pub fn owned_by_for_writes(self, owner_column: impl Into<String>) -> Self {
+        let col = owner_column.into();
+        self.scope_writes(move |identity| match identity {
+            Some(id) if id.is_superuser => ScopeDecision::All,
+            Some(id) => ScopeDecision::Restrict(vec![(col.clone(), id.user_id.clone())]),
+            None => ScopeDecision::None,
+        })
+    }
+
+    /// [`Self::owned_by_for_writes`]'s general form: a caller-supplied
+    /// [`ScopeDecision`] hook that applies ONLY to
+    /// `create`/`update`/`delete` (+ bulk). `list`/`retrieve` are governed by
+    /// [`Self::scope`]/[`Self::owned_by`] alone — unconstrained if neither is
+    /// set on this resource.
+    ///
+    /// ```ignore
+    /// use umbral_rest::{ResourceConfig, ScopeDecision};
+    /// ResourceConfig::new("post").scope_writes(|identity| match identity {
+    ///     Some(id) if id.is_staff => ScopeDecision::All,
+    ///     Some(id) => ScopeDecision::Restrict(vec![("author_id".into(), id.user_id.clone())]),
+    ///     None => ScopeDecision::None,
+    /// });
+    /// ```
+    pub fn scope_writes<F>(self, f: F) -> Self
+    where
+        F: Fn(Option<&Identity>) -> ScopeDecision + Send + Sync + 'static,
+    {
+        self.scope_writes_async(move |identity| {
+            let decision = f(identity.as_ref());
+            std::future::ready(decision)
+        })
+    }
+
+    /// [`Self::scope_writes`] for a decision that needs a database round-trip —
+    /// the write-only twin of [`Self::scope_async`].
+    pub fn scope_writes_async<F, Fut>(mut self, f: F) -> Self
+    where
+        F: Fn(Option<Identity>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ScopeDecision> + Send + 'static,
+    {
+        self.write_scope = Some(Arc::new(move |identity| Box::pin(f(identity))));
+        self
     }
 
     /// Fill `owner_column` from the authenticated identity when a row is
