@@ -115,6 +115,107 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 58. [x] Gated proxy for non-FS media backends — archived (streams gated bytes through the Storage trait, `5c75e937`)
 
 59. [x] umbral-storage `.media_s3` presign wedged the tokio runtime — archived (`url()` now drives presign via `block_in_place` + `Handle::block_on` on the real reactor, not reactor-less `futures_executor::block_on`; 0.0.11 shipped #58)
-60. [ ] I think the main function is long like what is `async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>>` this is a very loong statement that the developer has to recall, of which personally it becomes hard to understand. Fold this into a macro that wrapps both `tokio::main` and produces all this for the developer.
+60. [x] `#[umbral::main]` attribute macro + `umbral::Result` alias fold the long `#[tokio::main] async fn main() -> Result<(), Box<dyn Error+Send+Sync>>` boilerplate into one short signature — archived
 
 61. [ ] **Make the admin frontend as clean as the Supabase dashboard (super-super improvement).** The auto CRUD admin works, but the bar is "a batteries-included admin a real team ships to internal users and never wants to replace" — and today it doesn't feel as clean, considered, or dense-yet-calm as Supabase's dashboard. This is a design/UX overhaul of `umbral-admin`, not new backend features: a refined shell (fixed sidebar nav + slim top bar + roomy content canvas, consistent spacing scale), Supabase-style "table editor" list pages (sticky headers, typed/resizable columns, inline row actions, filter/sort chips, clean pagination, first-class empty states), form/detail pages with clear sections, labels, help-text and inline validation, a ⌘K command palette to jump between models/records, and a proper light/dark theme with an Inter type scale. Stay on the standards we already picked — **ApexCharts** for every chart incl. sparklines, **Lucide** for all icons, **Inter** for type; never hand-roll SVG/icons (see the "don't reimplement what umbral standardized on" rule). Scope: the admin's server-rendered HTML templates + its static CSS/JS assets only — not the ORM, the `AdminView`/widget contract, or the plugin surface. Sequence it as a design pass first (design tokens, spacing, shared components) then a per-page pass (list → detail/form → dashboard → custom views), so each page lands independently reviewable.
+
+---
+
+## MODELBASE ERGONOMICS (surfaced by backend_v2 `accounts` work — 2026-08-21)
+
+> Source project for all four gaps below (#62–#65): `/home/dalmas/E/projects/portifoli/backend_v2`
+> — the umbral consumer app (plugins under `plugins/`, shared base in `common/`).
+
+62. [x] `#[model(base = X)]` attribute macro inlines the base's columns as REAL fields → native `country.id` (not `country.base.id`), closing the flatten-is-a-lie gap — archived
+
+63. [x] Base construction boilerplate relieved — `#[derive(ModelBase)]` now emits `impl Default`+`new()` so a based model builds with `base: Default::default()` (auto-managed fields overwritten on insert). The bigger type-level unlock (a partial/insert shape omitting auto fields, `CountryNew`/builder — #63a) is a logged follow-up (see gaps4 #88) — archived
+
+64. [x] `#[model(base = X)]` collapses the 3-attribute flatten incantation (`#[umbral(flatten)]+#[serde(flatten)]+#[sqlx(flatten)]` + nested field) to ONE attribute — archived
+
+65. [x] sqlx-version divergence: `umbral doctor` flags duplicate sqlx/serde/chrono (Cargo.lock scan, plain-English fix) + scaffold pins sqlx to umbral-core's version + `umbral::sqlx` re-export. Full `[workspace.dependencies]` scaffold split to #90 — archived
+
+---
+
+## CLI HELP DISCOVERABILITY (surfaced by backend_v2 work — 2026-08-21)
+
+> Source project: `/home/dalmas/E/projects/portifoli/backend_v2`
+
+66. [x] `umbral help` now lists the four out-of-band scaffold commands (`startproject`/`startapp`/`startplugin`/`startcommand`) under 'Create a project or plugin' + reserves their names — archived
+
+---
+
+## MODELBASE ERGONOMICS (cont.) — typed columns
+
+> Source project: `/home/dalmas/E/projects/portifoli/backend_v2`. Relates to #62 / #64.
+
+67. [x] Under `#[model(base = X)]` the base columns become the model's OWN fields, so `#[derive(Model)]` emits their typed consts (`Model::CREATED_AT`) automatically — no hand-written `mixin_cols!` — archived
+
+---
+
+## ORM WRITE-PATH & MIGRATION (surfaced by backend_v2 seed work — 2026-08-21)
+
+> Source project: `/home/dalmas/E/projects/portifoli/backend_v2` (`accounts` plugin, `seed_countries` / `seed_timezones`).
+
+68. [x] Typed write path now stamps `auto_now`/`auto_now_add` on UPDATE too (freezes add, refreshes now) — no more caller epoch sentinels persisted as data — archived
+
+69. [x] Cross-constraint UNIQUE collision in `get_or_create`/`update_or_create` now names the violated constraint + predicate instead of "row vanished" — archived
+
+70. [x] Migration `DropColumn` on a UNIQUE/PK/FK/indexed column now routes through the SQLite table-rebuild dance instead of a bare `DROP COLUMN` SQLite rejects — archived
+
+71. [x] Choices `rename_all` now drives serde — a Choices field round-trips the typed write path with ONLY `#[choices(rename_all)]` (no duplicated `#[serde(rename_all)]`, no hand-derived serde) — archived
+
+72. [ ] **REST resources don't embed reverse-FK children or expand M2M-to-objects on READ, so any "full object graph" endpoint must be hand-written.** A `GET /api/<model>/` serializes the model's own columns + M2M as a bare id array (`favorite_software: [41, 109, …]`) + forward-FK as a nested object (`user: {…}`). It does NOT include reverse-FK children (a developer's projects/achievements/education, which FK *into* it), and does NOT expand M2M ids into full child objects. `ResourceConfig::nested(field, child_table)` (`plugins/umbral-rest/src/resource.rs:591`) reads as if it would embed — but it is **write-only**: it accepts a nested POST (parent + children in one body) and echoes them on create; it does not embed on GET. And `?include=` is **forward-FK only** (`?include=projects` → `bad_input: unknown field 'projects' on 'developer'`). Net: the extremely common "give me this record with all its related data" read (the frontend `CompleteDeveloper` shape; the old Django `DEVELOPER_PROFILES/<username>`) has no declarative REST support — backend_v2 hand-wrote a `GET /api/developers/{username}` handler that fetches 7 child collections + `.fetch()`-expands 3 M2M fields and grafts them onto the serialized parent. Fix: a **read-side expand** symmetric to `.nested()`'s write side — either make `.nested(field, child_table)` also embed the child array on detail GET (and expand declared M2M fields to full objects, opt-in via `?expand=favorite_software,projects.software`), or a `ResourceConfig::embed(...)` builder. Bonus symmetry: `.nested()` already does the *write* half of "one JSON ↔ one object graph"; this closes the *read* half. Note `.nested()` writes are also gated by the ReadOnly-by-default permission (a nested POST returns `403 forbidden` until `.permission(...)`/auth is set — correct, just worth documenting alongside). Source: `/home/dalmas/E/projects/portifoli/backend_v2` (`plugins/portfolio/src/handlers.rs::developer_aggregate`). Test: a resource declaring `.nested("projects","project")` returns the project array embedded on `GET /api/<model>/<pk>?expand=projects`.
+
+73. [x] `M2M<T>` / `ReverseSet<C>` without `#[sqlx(skip)]` is now a spanned compile error, not a runtime `ColumnNotFound` on first fetch — archived
+
+74. [x] **No non-superuser `create_user` helper — programmatic user creation only mints superusers.** RESOLVED (verified from backend_v2, 2026-08-23): `umbral_auth` now exposes both `create_user(username, email, plaintext)` (flags `false, false` — ordinary active account) and `create_user_with_flags(username, email, plaintext, is_staff, is_superuser)` for a specific shape (e.g. staff-but-not-superuser), sharing the same low-level `insert_user` path behind `create_superuser` (`plugins/umbral-auth/src/lib.rs:1458`/`:1489`/`:1511`; `hash_password` is public too). Confirmed empirically: backend_v2's `create_test_token` command calls `create_user("test_username", …)` and the row comes back `is_superuser = false` with a login-checkable hash, then mints a bearer token via `AuthToken::create_for` — the AI-agent seeding path no longer forces superusers. Original finding below. — `umbral_auth` exposes `create_superuser(username, email, password)` but no `create_user(...)` for an ordinary account. Any code that seeds users (bulk-importing developers/community members from JSON — the AI-agent seeding use case) is forced to make every seeded account a **superuser** (`is_superuser: 1, is_staff: 1`), which is a privilege-escalation footgun at scale. Real case: backend_v2 `seed_developer` had to call `create_superuser` to satisfy `Developer.user: OneToOne<AuthUser>`, so the seeded dev came back `is_superuser: 1`. Fix: add `umbral_auth::create_user(username, email, password)` (and ideally a variant taking `is_staff`/`is_active` flags) that hashes the password identically but leaves the privilege flags false. Source: `/home/dalmas/E/projects/portifoli/backend_v2` (`plugins/portfolio/src/commands/seed_developer.rs`). Test: `create_user(...)` produces an `AuthUser` with `is_superuser = false` and a valid (login-checkable) password hash.
+
+75. [x] `prefetch_map::<C>()` — batched reverse-FK prefetch with NO declared `ReverseSet` field (typed returned map, one `IN` query) — shipped on feat/orm-relation-traversal (commit 1e8a590e) — archived
+
+76. [x] Forward FK/O2O `__` traversal on the filter/WHERE side (`Predicate::related("user__username", v)` + typed `USER.to(User::USERNAME.eq(..))`) via a self-contained `IN (SELECT..)` subquery — shipped on feat/orm-relation-traversal (commit a366754e) — archived
+
+77. [x] Public reusable nested-tree WRITER lifted to `umbral::orm::nested` (`write_nested_tree` + `NestedWriteGate` trait, `NoGate` default) — parent + reverse-FK children (FKs auto-filled) + declared M2M in ONE tx, callable with NO RestPlugin/HTTP; REST security preserved via a `RestNestedGate` adapter (create_nested now a thin wrapper). UPDATE-reconciliation half deferred → #91 — archived
+
+78. [x] Declarative relation-path owner scope `.owned_via("developer","user")` / dotted `owned_by` (fail-closed, forward FK/O2O), built on #76 — shipped on feat/orm-relation-traversal (commit e37014c1) — archived
+
+79. [x] Action-aware object scopes: new `.owned_by_for_writes(...)` scopes ownership to WRITES only (public read, owner-only write) — opt-in, existing `.owned_by(...)` (scopes all actions) unchanged — archived
+
+80. [x] `.action_by(lookup_field, Method, handler)` — a by-natural-key (slug/username) detail action at `/api/<table>/<value>/` that surfaces in OpenAPI + playground and runs under the resource's permission/scope (GET; boot-time unique-column guard; PK fallback on miss) — archived
+
+---
+
+## AUTH EMAIL DELIVERY (surfaced by backend_v2 password-reset work — 2026-08-24)
+
+> Source project: `/home/dalmas/E/projects/portifoli/backend_v2`
+
+81. [x] Auth email links now honor a first-class `app_url` / `UMBRAL_APP_URL` public base URL (frontend/BFF deploys), falling back to header-derived origin when unset — archived
+
+82. [x] Task-backed + umbral-email-delegating auth mailers — `umbral_tasks::auth_mailer()` (off-request via the queue, retry/backoff) + `umbral_email::auth_mailer()` (provider delegation), composable, both via the existing `AuthPlugin::mailer(...)` seam; adapters live in the depending plugins (a `mailer_via_task()` on AuthPlugin would cycle auth→tasks→admin→auth) — archived
+
+---
+
+## FOLLOW-UP DEBT (surfaced closing the review_3 batch)
+
+83. [x] Choices+serde breaking change documented — CHANGELOG [Unreleased] entry + column-types.mdx Choices note/example fix (must not derive serde alongside Choices) — archived
+
+84. [x] The #73 `#[sqlx(skip)]`-required guard message now notes it is the `sqlx::FromRow` derive's attribute (clarifies the FromRow-less-model edge) — archived
+
+85. [x] Typed UPDATE path now freezes `auto_user_add` + refreshes `auto_user` to the current caller (sibling of #68), via the same ambient `route_context::current_user_id` the dynamic/insert paths use — archived
+
+86. [x] Auth reset link PATH is now operator-configurable via `AuthPlugin::reset_path(...)` (sealed at on_ready, default `/auth/reset`) — companion to #81's app_url origin — archived
+
+---
+
+## BACKGROUND TASKS — SCHEDULED MATCH REMINDERS (surfaced by Kikosi app work — 2026-09-02)
+
+> Source project: `/home/dalmas/E/projects/web3clubs/web3clubs_fc` (the Kikosi football-club app). Filed here at the app owner's request. NOTE: numbered #87 because #86 is already taken (auth reset path, above).
+
+87. [>] **Downstream-app task, NOT a umbral framework change** — deferred/out-of-scope for this repo. The Matchday/web3clubs app's "Match reminders" toggle (`frontend/src/pages/Profile.tsx`) needs wiring to a daily umbral-tasks beat + upgrading the app's umbral pin 0.0.6→current. The FRAMEWORK side (umbral-tasks beat + `#[task]` + autodiscovery) already ships at 0.0.12; the remaining work is entirely in the consumer app (a separate project), so it can't be closed from the umbral repo.
+
+88. [ ] **The type-level partial/insert shape for based models (the #63 "real unlock").** #63(b) shipped `Default`/`new()` on bases (`base: Default::default()`), which relieves the construction boilerplate. The deeper fix — a generated partial/insert shape (Django's `Model.objects.create(name=...)` / a `CountryNew`/builder) that omits auto-managed fields at the TYPE level so the developer never names `id`/`created_at`/`updated_at` at all, and that also fixes `get_or_create`/`update_or_create` taking a FULL `Model` as `defaults` — is deferred as a larger design (pairs with the typed-write auto-stamping already shipped in #68/#85). (Split from #63.)
+
+89. [ ] **Multi-base composition for `#[model(base = X)]` (only single-base ships).** The #62/#64/#67 attribute macro (commit 89c03f84) inlines ONE base's fields. Composing several bases into one struct needs continuation-passing `macro_rules!` (each base's field-splice macro invoking the next) — deferred as non-trivial; today a multi-base struct is rejected with a pointer to the older `#[umbral(flatten)]` mechanism (which still supports it). (Split from #62.)
+
+90. [ ] **Generate a Cargo workspace with `[workspace.dependencies]` in `startproject`/`startplugin` (the structural half of #65).** #65 shipped `umbral doctor` (duplicate-crate diagnostic), the `umbral::sqlx` re-export, and a scaffold that pins sqlx to umbral-core's version (so a generated crate can't diverge by DEFAULT). The fully-structural prevention — a generated workspace root with `[workspace.dependencies]` (sqlx/chrono/serde/umbral-* single-sourced, members `= { workspace = true }`) so a version lives in exactly one place across N plugins — is deferred: it's a larger scaffold rewrite (workspace-root manifest, per-member `.workspace = true`, interaction with `--local`'s path-dep rewriter). NOTE the hard constraint found: `#[derive(sqlx::FromRow)]` hardcodes `::sqlx::` paths (no crate-override), so a model ALWAYS needs sqlx as a direct dep — `umbral::sqlx::FromRow` can't remove it; the workspace-deps approach is the only way to truly single-source the version. (Split from #65.)
+
+91. [ ] **Lift the nested-tree UPDATE reconciliation into `umbral::orm::nested` too (the update half of #77).** #77 lifted the CREATE walk (`write_nested_tree`) into umbral-core; the UPDATE-with-child-reconciliation path (`update_nested`, which diffs existing children via REST-specific `fetch_rows`) stays in umbral-rest. Lifting it to core (same optional `NestedWriteGate`) would give a public `update_nested_tree(...)` for non-REST callers, symmetric with `write_nested_tree`. Its create-subtree branch already routes through the core writer, so this is the reconciliation/diff logic only. (Split from #77.)
