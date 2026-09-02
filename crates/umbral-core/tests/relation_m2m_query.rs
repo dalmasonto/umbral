@@ -20,7 +20,7 @@
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 use umbral::orm::M2M;
-use umbral::orm::relation::{HopKind, HopSpec, JunctionSpec, to_many_hop};
+use umbral::orm::relation::{HopKind, HopSpec, JunctionSpec, to_many_hop, to_one_hop};
 use umbral_core::db;
 
 // =========================================================================
@@ -201,4 +201,71 @@ async fn to_many_hop_m2m_matches_query_result() {
         .expect("fetch via to_many_hop");
     let names: Vec<&str> = groups.iter().map(|g| g.name.as_str()).collect();
     assert_eq!(names, vec!["core", "infra"]);
+}
+
+/// Review fix (round 1) — a deep to-many chain, reached by composing two
+/// PUBLIC calls (`to_one_hop` then `to_many_hop` off the resulting
+/// `Relation`), used to hit an `assert!` in `to_many_hop` and panic the
+/// caller's process. `Relation<T>` implements `RelationSource<T>`, so
+/// nothing in the public API stops a caller from doing exactly this — it
+/// must surface as a loud `Err` at the first fallible terminal instead,
+/// via the same poison-now/fail-at-the-terminal mechanism `QuerySet`
+/// already uses for other builder-time-unrejectable shapes.
+#[tokio::test]
+async fn to_many_hop_deep_chain_is_poisoned_not_panic() {
+    boot().await;
+    let ada = fetch_ada().await;
+
+    // Hop 1 (to-one, hand-built — its exact target never resolves to SQL
+    // here, since the deep-chain shape is caught before any query runs).
+    let hop1 = HopSpec {
+        kind: HopKind::Fk,
+        from_table: "rmq_developer",
+        to_table: "rmq_software_group",
+        fk_column: "id",
+        fk_on_from: true,
+        required: true,
+        junction: None,
+    };
+    let deep = to_one_hop::<Developer, SoftwareGroup>(&ada, hop1);
+
+    // Hop 2 (to-many) off `deep`, which already carries hop1 — the deep
+    // chain `to_many_hop` doesn't resolve yet.
+    let hop2 = HopSpec {
+        kind: HopKind::M2M,
+        from_table: "rmq_software_group",
+        to_table: "rmq_software_group",
+        fk_column: "",
+        fk_on_from: true,
+        required: false,
+        junction: Some(JunctionSpec {
+            table: "rmq_developer_software_groups",
+            parent_column: "parent_id",
+            target_column: "child_id",
+        }),
+    };
+
+    // Building the QuerySet must not panic ...
+    let poisoned = to_many_hop::<SoftwareGroup, SoftwareGroup>(deep, hop2);
+    // ... and the first fallible terminal must report the gap loudly.
+    let err = poisoned
+        .fetch()
+        .await
+        .expect_err("a deep to-many chain must fail loudly, not silently run a wrong query");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Task 4") && msg.contains("deep to-many"),
+        "error should name the deep-to-many-chain gap and point at Task 4: {msg}"
+    );
+
+    // count() must independently surface the same poison — a caller who
+    // only calls .count() (never .fetch()) must not slip through.
+    let err2 = to_many_hop::<SoftwareGroup, SoftwareGroup>(
+        to_one_hop::<Developer, SoftwareGroup>(&ada, hop1),
+        hop2,
+    )
+    .count()
+    .await
+    .expect_err("count() must also surface the poison");
+    assert!(err2.to_string().contains("Task 4"));
 }

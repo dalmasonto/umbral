@@ -244,6 +244,19 @@ pub struct QuerySet<T> {
     /// because sea-query won't hand its OFFSET back — `try_for_each` needs it
     /// to start paging from the requested row instead of 0.
     pub(crate) user_offset: Option<u64>,
+    /// A general-purpose poison: a `QuerySet` built in a shape a builder
+    /// couldn't reject at construction time (the builder is infallible so
+    /// chains stay ergonomic), recorded here so every fallible terminal
+    /// (`fetch`/`count`/`explain`, and their `first`/`get`/`exists`
+    /// siblings that delegate to `fetch`) reports it loudly instead of
+    /// silently running a wrong or nonsensical query. Mirrors the same
+    /// "poison now, fail at the terminal" shape `RelatedAnnotation::resolved`
+    /// already uses for unknown `annotate_related` relation names — this is
+    /// the QuerySet-wide sibling for shapes that aren't annotation-specific
+    /// (e.g. `relation::to_many_hop`'s not-yet-implemented deep to-many
+    /// chain). `check_annotations` (despite the name, predating this field)
+    /// is where both poisons are surfaced.
+    pub(crate) poison: Option<String>,
     _phantom: PhantomData<T>,
 }
 
@@ -275,6 +288,7 @@ impl<T> Clone for QuerySet<T> {
             user_limit: self.user_limit,
             user_offset: self.user_offset,
             for_update_skip_locked: self.for_update_skip_locked,
+            poison: self.poison.clone(),
             _phantom: PhantomData,
         }
     }
@@ -306,6 +320,7 @@ impl<T> std::fmt::Debug for QuerySet<T> {
             .field("only_cols", &self.only_cols)
             .field("join_related", &self.join_related)
             .field("annotations", &self.annotations)
+            .field("poison", &self.poison)
             .finish()
     }
 }
@@ -445,8 +460,21 @@ impl<T> QuerySet<T> {
             for_update_skip_locked: false,
             user_limit: None,
             user_offset: None,
+            poison: None,
             _phantom: PhantomData,
         }
+    }
+
+    /// Poison this `QuerySet` with a message every fallible terminal
+    /// (`fetch`/`count`/`explain`, and their `first`/`get`/`exists`
+    /// siblings) surfaces as `Err(sqlx::Error::Protocol(msg))`. For an
+    /// infallible builder function that was handed a shape it can't
+    /// (yet) resolve — see [`crate::orm::relation::to_many_hop`]'s
+    /// deep-to-many-chain case — so misuse fails loudly at the query
+    /// boundary instead of panicking the caller's process.
+    pub(crate) fn poisoned(mut self, msg: impl Into<String>) -> Self {
+        self.poison = Some(msg.into());
+        self
     }
 
     /// Feature #72 — include soft-deleted rows in this query. Skips
@@ -1766,6 +1794,7 @@ impl<T: Model> QuerySet<T> {
         if self.only_cols.is_some() {
             return Err(only_with_typed_terminal_error("fetch"));
         }
+        self.check_annotations()?;
         let sr_fields = self.select_related.clone();
         let prefetch_fields = self.prefetch_related.clone();
         let join_reqs = self.join_related.clone();
@@ -2143,6 +2172,7 @@ impl<T: Model> QuerySet<T> {
     /// tuple impl rather than the user struct — count() doesn't need
     /// T's FromRow bounds.
     pub async fn count(self) -> Result<i64, sqlx::Error> {
+        self.check_annotations()?;
         let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let backend = pool.backend_name();
         // Build the dialect-appropriate filtered query first, then
@@ -3052,6 +3082,9 @@ impl<T: Model> QuerySet<T> {
     /// names recorded by the infallible builder). Called by every
     /// fallible consumer before SQL runs.
     fn check_annotations(&self) -> Result<(), sqlx::Error> {
+        if let Some(msg) = &self.poison {
+            return Err(sqlx::Error::Protocol(msg.clone()));
+        }
         for ann in &self.annotations {
             if let Err(msg) = &ann.resolved {
                 return Err(sqlx::Error::Protocol(msg.clone()));

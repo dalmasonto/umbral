@@ -421,19 +421,28 @@ fn protocol_error(msg: &str) -> sqlx::Error {
 ///
 /// Single-hop only: `src` must carry no accumulated hops (a bare object, or
 /// a fresh handle nothing has hopped off yet). Widening a *deep* chain
-/// (hopping to-many after one or more prior hops) needs the same flat-JOIN
-/// treatment [`crate::orm::queryset::relation_resolve`] gives to-one chains
-/// and is Task 4's to-many leaf resolver, not this function's job — calling
-/// this with an already-hopped source panics with a message pointing here.
+/// (hopping to-many after one or more prior hops, e.g.
+/// `to_many_hop(to_one_hop(&obj, fk_hop), m2m_hop)`) needs the same
+/// flat-JOIN treatment [`crate::orm::queryset::relation_resolve`] gives
+/// to-one chains and is Task 4's to-many leaf resolver, not this function's
+/// job. That shape IS reachable through this module's public API (`Relation<T>`
+/// implements [`RelationSource`], and nothing stops a caller from hopping a
+/// second time off one), so it can't panic the caller's process — instead
+/// this returns a **poisoned** `QuerySet` (the same "poison now, fail at
+/// the terminal" mechanism `QuerySet` already uses for other builder-time
+/// shapes it can't reject on the spot):
+/// the builder call itself succeeds, and every fallible terminal
+/// (`fetch`/`count`/`explain`, and their `first`/`get`/`exists` siblings)
+/// reports a clear `Err(sqlx::Error::Protocol(_))` naming the gap instead of
+/// running a wrong query.
 ///
 /// # Panics
 ///
 /// - `hop.kind` is not [`HopKind::M2M`] or [`HopKind::ReverseFk`] (a to-one
-///   kind belongs on [`to_one_hop`], not here).
-/// - `src` already carries one or more hops (deep to-many chains aren't
-///   wired yet — see the note above).
-/// - `hop.kind` is [`HopKind::M2M`] and `hop.junction` is `None` (a
-///   malformed `HopSpec` — every M2M hop must carry its [`JunctionSpec`]).
+///   kind belongs on [`to_one_hop`], not here) — a directly-malformed
+///   `HopSpec` argument, not a shape reachable by composing public calls.
+/// - `hop.kind` is [`HopKind::M2M`] and `hop.junction` is `None` (likewise
+///   a malformed `HopSpec` — every M2M hop must carry its [`JunctionSpec`]).
 pub fn to_many_hop<From: Model, To: Model>(
     src: impl RelationSource<From>,
     hop: HopSpec,
@@ -444,13 +453,19 @@ pub fn to_many_hop<From: Model, To: Model>(
          to-one kinds resolve through `to_one_hop` instead"
     );
     let path = src.into_rel_path();
-    assert!(
-        path.hops.is_empty(),
-        "to_many_hop only resolves a single hop off a bare source; deep \
-         to-many chains (hopping off a source that already carries prior \
-         hops) aren't resolved yet — see Task 4's to-many leaf resolver \
-         in docs/specs/orm-relation-traversal.md"
-    );
+    if !path.hops.is_empty() {
+        // Reachable via `to_many_hop(to_one_hop(&obj, hop1), hop2)` — poison
+        // rather than panic (see the doc comment above).
+        return Manager::<To>::new()
+            .filter(Predicate::new(Expr::cust("1 = 1")))
+            .poisoned(
+                "to_many_hop only resolves a single hop off a bare source; \
+                 deep to-many chains (hopping to-many after one or more \
+                 prior hops) aren't resolved yet — Task 4's to-many leaf \
+                 resolver (docs/specs/orm-relation-traversal.md) will add \
+                 multi-hop to-many support",
+            );
+    }
     let PathBase::SinglePk { pk_value, .. } = path.base;
 
     let predicate: Predicate<To> = match hop.kind {
