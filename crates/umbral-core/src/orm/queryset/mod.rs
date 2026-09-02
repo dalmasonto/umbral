@@ -37,6 +37,7 @@ mod backend_pg;
 mod backend_sqlite;
 mod errors;
 pub(crate) mod hydration;
+mod prefetch_map;
 pub(crate) mod relation_filter;
 pub(crate) mod relation_resolve;
 mod tx;
@@ -44,6 +45,7 @@ mod write_helpers;
 
 pub use errors::{GetError, TryForEachError};
 use hydration::{hydrate_prefetch_related, hydrate_select_related};
+pub use prefetch_map::{PrefetchMapQuery, Prefetched};
 pub use tx::QuerySetTx;
 use write_helpers::{
     build_insert_many_for, build_insert_one_for, fk_pk_hint, pk_field, serialize_to_map,
@@ -967,9 +969,11 @@ impl<T> QuerySet<T> {
     ///   vs. `select_related`'s `1 + N` batched-IN approach. Wider
     ///   per-row payload; better when round-trip count dominates.
     /// - **`prefetch_related(name)`** — M2M batched loading (one
-    ///   query per declared M2M field). For reverse-FK collections
-    ///   (`prefetch_related("comment_set")`-style) see gap #44 — not
-    ///   yet implemented.
+    ///   query per declared field), and reverse-FK collections via a
+    ///   declared `ReverseSet<C>` field (gap #44,
+    ///   `prefetch_related("comment_set")`-style). For a reverse-FK
+    ///   batch load with NO declared field, see
+    ///   [`Self::prefetch_map`] (gap #75).
     ///
     /// ## Loud errors
     ///
@@ -1126,6 +1130,36 @@ impl<T> QuerySet<T> {
             self.prefetch_related.push(name.to_string());
         }
         self
+    }
+
+    /// Gap #75 — batch-load a reverse-FK relation to `C` with **no**
+    /// declared `ReverseSet<C>` field on `T`.
+    ///
+    /// `.prefetch_related("comment_set")` needs a `ReverseSet<Comment>`
+    /// field on the parent because it writes its result INTO that
+    /// field; `prefetch_map::<C>()` names the child type at the call
+    /// site instead (same FK-discovery metadata
+    /// [`ReverseRelations::reverse`](crate::orm::ReverseRelations::reverse)
+    /// uses, batched instead of per-row) and hands the batched children
+    /// back explicitly via [`PrefetchMapQuery::fetch`] — no field on
+    /// `T` required, no hidden per-instance cache.
+    ///
+    /// ```rust,ignore
+    /// let prefetched = Developer::objects().prefetch_map::<Achievement>().fetch().await?;
+    /// for dev in &prefetched.parents {
+    ///     for ach in prefetched.children_of(dev) { /* ... */ }
+    /// }
+    /// ```
+    ///
+    /// Use [`PrefetchMapQuery::via`] to name the FK column explicitly
+    /// when `C` has more than one FK to `T`. See [`Prefetched`] and
+    /// [`PrefetchMapQuery`] for the query-budget and scope notes.
+    pub fn prefetch_map<C>(self) -> PrefetchMapQuery<T, C> {
+        PrefetchMapQuery {
+            qs: self,
+            fk_col: None,
+            _c: PhantomData,
+        }
     }
 
     /// Convert this QuerySet into a [`Subquery`] suitable for use in
@@ -4086,6 +4120,11 @@ impl<T: Model> Manager<T> {
     /// See [`QuerySet::prefetch_related_many`].
     pub fn prefetch_related_many(&self, field_names: &[&str]) -> QuerySet<T> {
         self.queryset().prefetch_related_many(field_names)
+    }
+
+    /// See [`QuerySet::prefetch_map`].
+    pub fn prefetch_map<C>(&self) -> PrefetchMapQuery<T, C> {
+        self.queryset().prefetch_map()
     }
 
     /// Feature #72 — see `QuerySet::hard_delete`.

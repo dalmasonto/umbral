@@ -143,7 +143,10 @@ pub use model::{
 pub use multichoice::MultiChoice;
 pub use one_to_one::OneToOne;
 pub use post::Post;
-pub use queryset::{GetError, JoinKind, Manager, QuerySet, QuerySetTx, TryForEachError};
+pub use queryset::{
+    GetError, JoinKind, Manager, PrefetchMapQuery, Prefetched, QuerySet, QuerySetTx,
+    TryForEachError,
+};
 pub use relation::Relation;
 pub use reverse_accessor::{ReverseError, ReverseRelations};
 pub use reverse_set::ReverseSet;

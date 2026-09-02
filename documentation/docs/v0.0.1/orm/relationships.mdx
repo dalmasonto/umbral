@@ -622,6 +622,49 @@ let authored = user.reverse_via::<Comment>("author")?.fetch().await?;
 
 `reverse_via` validates that the named column exists on `C` and is an FK to this parent's table. The parent PK is bound through the same JSON-to-SQL coercion as the rest of the relation machinery, so `i64`, `String`, and `Uuid` PKs all work; a PK that genuinely can't be read or bound surfaces as a clean `ReverseError::NonI64Pk` rather than mis-binding.
 
+### Batched reverse-FK with no declared field: `prefetch_map::<Child>()`
+
+`.prefetch_related("child_set")` needs the `ReverseSet<Child>` field above because it writes its batched result **into** that field — there's nowhere else on the struct to put it. `prefetch_map::<Child>()` is the batched counterpart of `reverse::<Child>()`: it names the child type at the call site instead of a string field name, so it needs **no declared field on the parent at all**, and hands the batched children back explicitly instead of mutating a struct field:
+
+```rust
+use umbral::orm::ForeignKey;
+
+// Developer has NO ReverseSet<Achievement> field.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+pub struct Developer { pub id: i64, pub name: String }
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbral::orm::Model)]
+pub struct Achievement {
+    pub id: i64,
+    pub title: String,
+    pub developer: ForeignKey<Developer>,
+}
+
+// One query for the developers, ONE batched query for ALL their achievements.
+let prefetched = Developer::objects()
+    .prefetch_map::<Achievement>()
+    .fetch()
+    .await?;
+
+for dev in &prefetched.parents {
+    for ach in prefetched.children_of(dev) {
+        println!("{}: {}", dev.name, ach.title);
+    }
+}
+```
+
+`prefetched.children_of(&dev)` reads a `&[Achievement]` slice — empty (not an error) for a childless parent. `Prefetched<T, C>` owns both `parents: Vec<T>` and the batched children keyed by parent PK; there's no hidden global or per-instance cache, and it composes with the rest of the chain (`.filter(...).order_by(...).prefetch_map::<C>()` still costs exactly one parent query + one child query). When `Child` has more than one FK back to the parent, name it explicitly with `.via(...)`, mirroring `reverse_via`:
+
+```rust
+let via_mentor = Developer::objects()
+    .prefetch_map::<Pairing>()
+    .via("mentor")
+    .fetch()
+    .await?;
+```
+
+Scope: reverse-FK only, matching `reverse::<C>()`. An M2M or reverse-O2O relation without a declared field isn't covered by `prefetch_map` yet.
+
 ## prefetch_related for M2M batching
 
 The M2M counterpart of `select_related` for FKs. After the main query returns N parent rows, `prefetch_related("tags")` issues **one** batched join through the junction table for all parents, groups results by `parent_id`, and populates each parent's `M2M.resolved` slot.
