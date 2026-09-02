@@ -223,11 +223,23 @@ fn accepted(detail: &'static str) -> Response {
 // Router construction
 // =========================================================================
 
-/// The path component of the password-reset confirmation page. Owned by the
-/// HTML auth surface (Task 14); the emailed reset link points here so the user
-/// clicks through to the confirmation form. Joined onto either the configured
-/// `settings.app_url` or the request-derived origin.
+/// The default path component of the password-reset confirmation page. Owned
+/// by the HTML auth surface (Task 14); the emailed reset link points here so
+/// the user clicks through to the confirmation form. Joined onto either the
+/// configured `settings.app_url` or the request-derived origin.
+///
+/// Operator-overridable via [`crate::AuthPlugin::reset_path`] (gaps4 #86) —
+/// this const remains the value used when the builder is left at its
+/// default, so nothing changes for an app that never calls the method.
 pub(crate) const RESET_PATH: &str = "/auth/reset";
+
+/// Ambient home for an operator-configured reset path override, sealed by
+/// [`crate::AuthPlugin::on_ready`] when [`crate::AuthPlugin::reset_path`] was
+/// called. Mirrors the `REQUIRE_VERIFIED` / `HASH_CONCURRENCY` ambient-config
+/// pattern elsewhere in this crate: a free function (`reset_url_base`) has no
+/// `&self` to read a builder field from, so the value crosses that gap
+/// through a `OnceLock` sealed once at boot (first boot wins).
+pub(crate) static RESET_PATH_OVERRIDE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Build the base URL the emailed password-reset link hangs off.
 ///
@@ -269,21 +281,47 @@ pub(crate) fn reset_url_base(headers: &HeaderMap) -> String {
     // plugin reads settings — `umbral::settings::get_opt()` (non-panicking; it
     // may run before `App::build` in tests / route-builder helpers).
     let app_url = umbral::settings::get_opt().and_then(|s| s.app_url.clone());
-    reset_url_base_with(app_url.as_deref(), headers)
+    // Resolve the ambient reset-path override (gaps4 #86, `AuthPlugin::reset_path`),
+    // falling back to the historical `RESET_PATH` const when unconfigured.
+    let reset_path = RESET_PATH_OVERRIDE
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or(RESET_PATH);
+    reset_url_base_with_path(app_url.as_deref(), headers, reset_path)
 }
 
 /// Pure core of [`reset_url_base`] — independent of ambient settings so both
 /// branches (configured `app_url` vs. header-derived) are unit-testable
-/// without touching the process-global settings `OnceLock`.
+/// without touching the process-global settings `OnceLock`. Always uses the
+/// default [`RESET_PATH`]; use [`reset_url_base_with_path`] to also exercise
+/// the operator-overridable path (gaps4 #86).
 ///
 /// - `app_url = Some(base)` (non-empty after trimming): returns
 ///   `{base sans trailing slash}/auth/reset`.
 /// - otherwise: the header-derived origin, or the bare `"/auth/reset"` path.
 pub fn reset_url_base_with(app_url: Option<&str>, headers: &HeaderMap) -> String {
+    reset_url_base_with_path(app_url, headers, RESET_PATH)
+}
+
+/// Pure core shared by [`reset_url_base`] and [`reset_url_base_with`], with
+/// the path component ([`RESET_PATH`] by default, operator-overridable via
+/// [`crate::AuthPlugin::reset_path`], gaps4 #86) taken as a parameter so both
+/// the default and a configured path are unit-testable without touching any
+/// process-global `OnceLock`.
+///
+/// - `app_url = Some(base)` (non-empty after trimming): returns
+///   `{base sans trailing slash}{reset_path}`.
+/// - otherwise: the header-derived origin joined with `reset_path`, or the
+///   bare `reset_path` when no `Host` header is present.
+pub fn reset_url_base_with_path(
+    app_url: Option<&str>,
+    headers: &HeaderMap,
+    reset_path: &str,
+) -> String {
     if let Some(base) = app_url {
         let base = base.trim().trim_end_matches('/');
         if !base.is_empty() {
-            return format!("{base}{RESET_PATH}");
+            return format!("{base}{reset_path}");
         }
     }
     let host = headers
@@ -291,14 +329,14 @@ pub fn reset_url_base_with(app_url: Option<&str>, headers: &HeaderMap) -> String
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim());
     let Some(host) = host else {
-        return RESET_PATH.to_string();
+        return reset_path.to_string();
     };
     let proto = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim())
         .unwrap_or("https");
-    format!("{proto}://{host}{RESET_PATH}")
+    format!("{proto}://{host}{reset_path}")
 }
 
 #[derive(serde::Deserialize)]

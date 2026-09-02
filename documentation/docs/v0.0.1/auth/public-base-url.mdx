@@ -35,6 +35,8 @@ With it set, a `POST /api/auth/password-forgot` emails a link at `https://app.ex
 `app_url` is optional. When it is unset (the default) nothing changes: links stay header-derived exactly as before, so this is a pure opt-in with no behaviour change for apps that don't need it.
 </Callout>
 
+`app_url` only changes the **origin**. If your frontend's reset-confirmation page also lives at a different **path** than `/auth/reset` (e.g. `/account/reset-password`), override the path separately with `AuthPlugin::reset_path("/account/reset-password")` on the builder - the two combine, so the emitted link becomes `{app_url}{reset_path}`. Leaving it unset keeps the default `/auth/reset` path.
+
 ## When you need it
 
 - A frontend/BFF forwards auth requests to the backend server-side.

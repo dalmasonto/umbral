@@ -479,6 +479,15 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// #4). `None` uses the framework default — machine parallelism (min 2),
     /// or the `UMBRAL_AUTH_HASH_CONCURRENCY` env var. Sealed at `on_ready`.
     hash_concurrency: Option<usize>,
+    /// Optional override for the path component of the emailed
+    /// password-reset link (gaps4 #86). `None` keeps the historical
+    /// `auth_routes::RESET_PATH` (`/auth/reset`). Set via
+    /// [`AuthPlugin::reset_path`] for an app whose frontend reset page lives
+    /// at a different path (e.g. `/account/reset-password`); combine with
+    /// `settings.app_url` (gap 81) to also redirect the host/scheme to a
+    /// separate frontend. Sealed into the ambient `RESET_PATH_OVERRIDE`
+    /// `OnceLock` at `on_ready`, first boot wins.
+    reset_path: Option<String>,
     _u: PhantomData<U>,
 }
 
@@ -502,6 +511,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
             mailer: MailerSlot(std::sync::Mutex::new(None)),
             require_verified: false,
             hash_concurrency: None,
+            reset_path: None,
             _u: PhantomData,
         }
     }
@@ -710,6 +720,38 @@ impl<U: UserModel> AuthPlugin<U> {
     /// ignored (the default applies).
     pub fn hash_concurrency(mut self, cap: usize) -> Self {
         self.hash_concurrency = Some(cap);
+        self
+    }
+
+    /// Override the path component of the emailed password-reset link
+    /// (gaps4 #86, closing a gap in #81). Default `/auth/reset`
+    /// ([`auth_routes::RESET_PATH`]). Set this when the app's frontend serves
+    /// its reset-confirmation page at a different path, e.g.:
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default()
+    ///     .reset_path("/account/reset-password")
+    /// ```
+    ///
+    /// This changes only the path segment of the emitted **link** — combine
+    /// with `settings.app_url` (gap 81, `UMBRAL_APP_URL`) to also point the
+    /// host/scheme at a separate frontend rather than the backend's own
+    /// `Host` header. This crate never mounts a GET page at `/auth/reset` (or
+    /// any configured override) — only `POST {prefix}/password-reset`, which
+    /// *consumes* the token once the user submits the confirmation form. The
+    /// reset **page** itself is the consuming app's responsibility, whether
+    /// that's a template the app renders under its own routing or, per the
+    /// #81 BFF scenario, a page on an entirely separate frontend. So there is
+    /// no mounted route for this setting to move: it only changes the value
+    /// embedded in the link sent by `password-forgot`, which the app's own
+    /// page then reads the token from and posts to `password-reset`.
+    ///
+    /// A leading `/` is expected but not enforced; pass the value as you want
+    /// it to appear after the origin. Sealed into the ambient
+    /// `RESET_PATH_OVERRIDE` at `on_ready` — first boot wins, matching every
+    /// other ambient-config field on this plugin.
+    pub fn reset_path(mut self, path: impl Into<String>) -> Self {
+        self.reset_path = Some(path.into());
         self
     }
 
@@ -1058,6 +1100,11 @@ where
         // (machine parallelism / env var) applies.
         if let Some(n) = self.hash_concurrency.filter(|&n| n > 0) {
             let _ = HASH_CONCURRENCY.set(n);
+        }
+        // Seal the reset-path override (gaps4 #86). Unset → the
+        // `reset_url_base` free function falls back to `RESET_PATH`.
+        if let Some(path) = &self.reset_path {
+            let _ = auth_routes::RESET_PATH_OVERRIDE.set(path.clone());
         }
         Ok(())
     }
