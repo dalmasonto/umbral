@@ -31,14 +31,20 @@
 //! See `docs/specs/orm-relation-traversal.md`.
 
 // TODO(orm-traversal, deferred): unify hop->JOIN SQL with resolve_join_hops /
-// apply_join_related — 3 parallel builders today; see
-// docs/specs/orm-relation-traversal.md "Risks and open questions".
+// apply_join_related — the CROSS-MODULE walker in `queryset/mod.rs` stays a
+// separate builder; see docs/specs/orm-relation-traversal.md "Risks and open
+// questions".
 // (The `pk_of` registry lookup below duplicates the inline PK lookup inside
 // `resolve_join_hops`; a shared helper was NOT extracted because that walker
 // clones owned `String` names from a fresh registry snapshot while this module
 // borrows `&str` from a snapshot it owns — the lifetimes differ, and the lookup
 // is fused into the walker's loop, so extraction is non-trivial and would touch
 // the tested select_related/join_related paths. Folded into the unification.)
+//
+// WITHIN this module the forward-JOIN walk is now unified: both
+// `build_to_one_select` (deep to-one) and `build_prefix_pivot_subquery` (the
+// to-one prefix of a crossing-to-many chain, Task 4) call the single
+// `walk_forward_joins` helper — no local duplication remains.
 
 use sea_query::{
     Alias, Expr, JoinType, PostgresQueryBuilder, Query, SelectStatement, SimpleExpr,
@@ -49,7 +55,7 @@ use sea_query_binder::SqlxBinder;
 use crate::db::DbPool;
 use crate::migrate::{ModelMeta, registered_models_opt};
 use crate::orm::queryset::{Manager, QuerySet};
-use crate::orm::relation::{HopKind, PathBase, RelPath};
+use crate::orm::relation::{HopKind, HopSpec, PathBase, RelPath};
 use crate::orm::{Model, Predicate};
 
 /// Per-level table alias (`__rel_0` is the root, `__rel_1` the first hop's
@@ -69,6 +75,59 @@ fn pk_of<'a>(registered: &'a [ModelMeta], table: &str) -> Option<&'a str> {
         .iter()
         .find(|c| c.primary_key)
         .map(|c| c.name.as_str())
+}
+
+/// Walk an all-to-one hop chain, appending one INNER JOIN per hop onto
+/// `select` and returning the final (leaf-most) table alias.
+///
+/// The single forward-JOIN builder shared by [`build_to_one_select`] (the
+/// deep to-one resolver) and [`build_prefix_pivot_subquery`] (the to-one
+/// prefix of a crossing-to-many chain). The caller must already have added
+/// the root table to `select` under `root_alias` (which must equal
+/// `level_alias(0)`, since intermediate targets are aliased `level_alias(idx
+/// + 1)`); the caller owns the final projection and `WHERE` afterward. The
+/// two `fk_on_from` directions are driven exactly as the module doc
+/// describes: forward FK/O2O joins `near.<fk> = far.<pk>`, reverse O2O joins
+/// `near.<pk> = far.<fk>`.
+fn walk_forward_joins(
+    select: &mut SelectStatement,
+    hops: &[HopSpec],
+    root_alias: Alias,
+    registered: &[ModelMeta],
+) -> Result<Alias, sqlx::Error> {
+    let mut near_alias = root_alias;
+    for (idx, hop) in hops.iter().enumerate() {
+        let far_alias = level_alias(idx + 1);
+        let on = if hop.fk_on_from {
+            // Forward FK / O2O: FK column on the NEAR table -> FAR pk.
+            let far_pk = pk_of(registered, hop.to_table).ok_or_else(|| {
+                protocol_error(&format!(
+                    "cannot resolve primary key of `{}` (is the model registered?)",
+                    hop.to_table
+                ))
+            })?;
+            Expr::col((near_alias.clone(), Alias::new(hop.fk_column)))
+                .equals((far_alias.clone(), Alias::new(far_pk)))
+        } else {
+            // Reverse O2O (parent side): FK column on the FAR table -> NEAR pk.
+            let near_pk = pk_of(registered, hop.from_table).ok_or_else(|| {
+                protocol_error(&format!(
+                    "cannot resolve primary key of `{}` (is the model registered?)",
+                    hop.from_table
+                ))
+            })?;
+            Expr::col((near_alias.clone(), Alias::new(near_pk)))
+                .equals((far_alias.clone(), Alias::new(hop.fk_column)))
+        };
+        select.join_as(
+            JoinType::InnerJoin,
+            crate::db::router::schema_qualified_table(hop.to_table),
+            far_alias.clone(),
+            on,
+        );
+        near_alias = far_alias;
+    }
+    Ok(near_alias)
 }
 
 /// Build the single flat `SELECT <leaf.*> FROM <root> JOIN … WHERE root.pk = ?`
@@ -118,38 +177,7 @@ pub(crate) fn build_to_one_select<Leaf: Model>(
     );
 
     // Walk the hops, joining each target onto the previous level's alias.
-    let mut near_alias = root_alias.clone();
-    for (idx, hop) in path.hops.iter().enumerate() {
-        let far_alias = level_alias(idx + 1);
-        let on = if hop.fk_on_from {
-            // Forward FK / O2O: FK column on the NEAR table -> FAR pk.
-            let far_pk = pk_of(&registered, hop.to_table).ok_or_else(|| {
-                protocol_error(&format!(
-                    "cannot resolve primary key of `{}` (is the model registered?)",
-                    hop.to_table
-                ))
-            })?;
-            Expr::col((near_alias.clone(), Alias::new(hop.fk_column)))
-                .equals((far_alias.clone(), Alias::new(far_pk)))
-        } else {
-            // Reverse O2O (parent side): FK column on the FAR table -> NEAR pk.
-            let near_pk = pk_of(&registered, hop.from_table).ok_or_else(|| {
-                protocol_error(&format!(
-                    "cannot resolve primary key of `{}` (is the model registered?)",
-                    hop.from_table
-                ))
-            })?;
-            Expr::col((near_alias.clone(), Alias::new(near_pk)))
-                .equals((far_alias.clone(), Alias::new(hop.fk_column)))
-        };
-        q.join_as(
-            JoinType::InnerJoin,
-            crate::db::router::schema_qualified_table(hop.to_table),
-            far_alias.clone(),
-            on,
-        );
-        near_alias = far_alias;
-    }
+    let near_alias = walk_forward_joins(&mut q, &path.hops, root_alias.clone(), &registered)?;
 
     // Project the leaf's own columns, aliased to their bare names so `Leaf`'s
     // `FromRow` reads them by field name regardless of the JOIN aliasing.
@@ -418,36 +446,10 @@ fn build_prefix_pivot_subquery(
         crate::db::router::schema_qualified_table(base_table),
         root_alias.clone(),
     );
-    let mut near_alias = root_alias.clone();
-    for (idx, hop) in prefix.iter().enumerate() {
-        let far_alias = level_alias(idx + 1);
-        let on = if hop.fk_on_from {
-            let far_pk = pk_of(registered, hop.to_table).ok_or_else(|| {
-                format!(
-                    "cannot resolve primary key of `{}` (is the model registered?)",
-                    hop.to_table
-                )
-            })?;
-            Expr::col((near_alias.clone(), Alias::new(hop.fk_column)))
-                .equals((far_alias.clone(), Alias::new(far_pk)))
-        } else {
-            let near_pk = pk_of(registered, hop.from_table).ok_or_else(|| {
-                format!(
-                    "cannot resolve primary key of `{}` (is the model registered?)",
-                    hop.from_table
-                )
-            })?;
-            Expr::col((near_alias.clone(), Alias::new(near_pk)))
-                .equals((far_alias.clone(), Alias::new(hop.fk_column)))
-        };
-        q.join_as(
-            JoinType::InnerJoin,
-            crate::db::router::schema_qualified_table(hop.to_table),
-            far_alias.clone(),
-            on,
-        );
-        near_alias = far_alias;
-    }
+    // Shared forward-JOIN walk; map its `sqlx::Error` to this builder's
+    // `String` error channel (the `resolve_leaf_queryset` poison text).
+    let near_alias = walk_forward_joins(&mut q, prefix, root_alias.clone(), registered)
+        .map_err(|e| e.to_string())?;
     // Project the pivot's PK (the last prefix target's PK).
     let pivot_table = prefix.last().expect("prefix is non-empty").to_table;
     let pivot_pk = pk_of(registered, pivot_table).ok_or_else(|| {
