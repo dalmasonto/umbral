@@ -1,6 +1,6 @@
 ---
 title: Reusable model bases
-description: "#[derive(ModelBase)] declares shared columns once (id, created_at, updated_at, ...) and any model embeds them with #[umbral(flatten)] — the Django abstract-base-model pattern."
+description: "#[derive(ModelBase)] declares shared columns once (id, created_at, updated_at, ...); a model embeds them flat with a single #[model(base = ...)] — the Django abstract-base-model pattern, native fields and all."
 sidebar_position: 16
 icon: layers
 tags: [orm, models, inheritance, dry, timestamps]
@@ -25,7 +25,56 @@ pub struct TimeStamped {
 }
 ```
 
-Then embed it into any model as a nested field. The three attributes on the field are what make it work — `#[umbral(flatten)]` splices the base's **columns** into the model, and `#[serde(flatten)]` + `#[sqlx(flatten)]` flatten its **values** on write and read:
+## The flat way: `#[model(base = ...)]`
+
+For a **single base** — the dominant case, one audit-timestamp mixin — reach for the `#[model(base = ...)]` attribute. One line embeds the base as **real, flat fields**: you access `article.id` and `article.created_at` natively, never `article.base.id`.
+
+```rust
+#[model(base = TimeStamped)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, sqlx::FromRow, Model)]
+#[umbral(table = "article")]
+pub struct Article {
+    pub title: String,
+    #[umbral(unique)] pub slug: String,
+}
+```
+
+That's the whole declaration. `Article` gains `id`, `created_at`, `updated_at` as top-level fields spliced in ahead of `title` / `slug`, so:
+
+```rust
+let a = Article::objects().create(Article {
+    title: "Hello".into(),
+    slug: "hello".into(),
+    ..Default::default()          // fills the base's id/created_at/updated_at placeholders
+}).await?;
+
+assert!(a.id > 0);                // native — no `.base.`
+assert!(a.created_at > epoch);    // auto_now_add stamped it
+
+Article::objects()
+    .filter(Article::CREATED_AT.gt(cutoff))   // typed const, no mixin_cols! line
+    .order_by(Article::ID.desc());
+```
+
+<Callout type="warning">
+**Write `#[model(base = ...)]` ABOVE the `#[derive(...)]` line.** Attribute macros expand top-to-bottom, and this one has to splice the base's fields in *before* the derives read the struct — the same rule as `serde_with::serde_as`. Put it below the derives and you get a clear error telling you to flip the order.
+</Callout>
+
+What the single attribute buys you, versus the nested-field form below:
+
+- **Native field access** — `article.id`, not `article.base.id`.
+- **One attribute, not four** — no nested `base` field and no `#[umbral(flatten)] #[serde(flatten)] #[sqlx(flatten)]` trio.
+- **Typed column consts for free** — `Article::CREATED_AT` works immediately, with no `mixin_cols!` line (the inherited columns are the model's own fields, so `#[derive(Model)]` emits their consts like any other).
+
+The DB schema and JSON shape are **identical** to the nested-field form — same columns, same flat JSON — so the two mechanisms coexist and you can move a model between them without a migration.
+
+<Callout type="info">
+**Single base per model, for now.** `#[model(base = ...)]` takes exactly one base today. A model that composes **several** bases uses the nested `#[umbral(flatten)]` form below (see [Composing several bases](#composing-several-bases)) — multi-base support for `#[model(...)]` is planned.
+</Callout>
+
+## The nested-field way: `#[umbral(flatten)]`
+
+The original form embeds a base as a **nested field**, and is still the way to compose **several** bases into one model. The three attributes on the field are what make it work — `#[umbral(flatten)]` splices the base's **columns** into the model, and `#[serde(flatten)]` + `#[sqlx(flatten)]` flatten its **values** on write and read:
 
 ```rust
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow, Model)]
@@ -117,7 +166,11 @@ A base field supports the exact same `#[umbral(...)]` attributes as a model fiel
 
 ## Typed column constants for base fields
 
-A model's *own* fields get typed constants (`article::TITLE`, `Article::TITLE`) for building `filter` / `order_by` predicates. Base-**inherited** columns need one opt-in line — `mixin_cols!` — to get the same, bound to your model:
+<Callout type="info">
+This section applies to the **nested-field** `#[umbral(flatten)]` form only. With `#[model(base = ...)]` the inherited columns are already the model's own fields, so `Article::CREATED_AT` and friends are generated automatically — no `mixin_cols!` line needed.
+</Callout>
+
+A model's *own* fields get typed constants (`article::TITLE`, `Article::TITLE`) for building `filter` / `order_by` predicates. With the nested-field form, base-**inherited** columns need one opt-in line — `mixin_cols!` — to get the same, bound to your model:
 
 ```rust
 umbral::mixin_cols!(Article: TimeStamped);   // one line, after the struct
