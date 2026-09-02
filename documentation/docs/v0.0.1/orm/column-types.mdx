@@ -356,10 +356,9 @@ The third macro is `#[umbral::task]`, an attribute macro on `async fn`. It emits
 A Rust enum can be used directly as a model field via `#[umbral(choices)]`. The framework stores the variant as TEXT in the database, lifts the variant list into the admin form (renders a `<select>`), and emits a Postgres `CHECK (col IN (...))` constraint so a third-party process writing directly to the database can't insert a value the enum can't model.
 
 ```rust
-use serde::{Deserialize, Serialize};
 use umbral::prelude::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "lowercase")]
 pub enum PostStatus {
     Draft,
@@ -378,6 +377,10 @@ pub struct Post {
     pub status: PostStatus,
 }
 ```
+
+<Callout type="info">
+`#[derive(Choices)]` emits its own `serde::Serialize` / `Deserialize` (matching `rename_all`), so the enum must **not** also derive `Serialize` / `Deserialize` or carry `#[serde(...)]` attributes — doing both is a conflicting-implementation error. This single-sources the JSON/wire form with the stored DB value, so a Choices field round-trips the typed write path (`create` / `get_or_create` / `update_or_create`) with only `#[choices(rename_all = "...")]` — no duplicated `#[serde(rename_all)]`.
+</Callout>
 
 That's the whole setup. `Post { status: PostStatus::Draft, .. }` round-trips through `INSERT` / `SELECT` as `'draft'`. The admin's create / edit sheet shows a `<select>` with the four variants. The migration engine emits `status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'review', 'published', 'archived'))` on Postgres; SQLite gets plain `TEXT DEFAULT 'draft'` (SQLite's CHECK syntax differs and `CHECK` adds friction more than safety on a column the Rust enum already constrains).
 

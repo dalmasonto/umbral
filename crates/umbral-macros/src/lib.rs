@@ -1408,7 +1408,9 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                      attribute. M2M stores no column on this table, so without `#[sqlx(skip)]` \
                      the `#[derive(sqlx::FromRow)]` decoder tries to read it as a real column \
                      and the first fetch fails at RUNTIME with `ColumnNotFound`. \
-                     Add `#[sqlx(skip)]` above this field.",
+                     Add `#[sqlx(skip)]` above this field (it is the `sqlx::FromRow` derive's \
+                     attribute, which any model with an `M2M` field also derives in order to \
+                     be fetchable).",
                 );
                 field_specs.push(err.to_compile_error());
                 continue;
@@ -1446,7 +1448,9 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                      `#[sqlx(skip)]` attribute. ReverseSet stores no column on this table, so \
                      without `#[sqlx(skip)]` the `#[derive(sqlx::FromRow)]` decoder tries to \
                      read it as a real column and the first fetch fails at RUNTIME with \
-                     `ColumnNotFound`. Add `#[sqlx(skip)]` above this field.",
+                     `ColumnNotFound`. Add `#[sqlx(skip)]` above this field (it is the \
+                     `sqlx::FromRow` derive's attribute, which any model with a `ReverseSet` \
+                     field also derives in order to be fetchable).",
                 );
                 field_specs.push(err.to_compile_error());
                 continue;

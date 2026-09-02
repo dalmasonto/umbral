@@ -14,6 +14,10 @@ under `crates/*` and `plugins/*`.
 
 ## [Unreleased]
 
+### Changed
+
+- **`#[derive(Choices)]` now emits its own `serde::Serialize` / `Deserialize`.** A Choices enum's `#[choices(rename_all = "...")]` casing now single-sources the serde/JSON wire form with the stored DB value / `CHECK` / validator, so a Choices field round-trips the typed write path (`create` / `get_or_create` / `update_or_create`) with only `#[choices(rename_all = "...")]` — no duplicated `#[serde(rename_all)]` needed. **Breaking:** a `#[derive(Choices)]` enum must **no longer** also derive `serde::Serialize` / `Deserialize` or carry `#[serde(...)]` attributes — the derive now owns those impls, so doing both is a conflicting-implementation error. On upgrade, remove the redundant `#[derive(Serialize, Deserialize)]` and `#[serde(...)]` from Choices enums.
+
 ## [0.0.12] - 2026-08-17
 
 The database-porting release: a full `inspectdb` → `migrate` → `transferdata`

@@ -196,9 +196,9 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 
 ## FOLLOW-UP DEBT (surfaced closing the review_3 batch)
 
-83. [ ] **Choices + serde are now mutually exclusive (breaking on upgrade).** Since `#[derive(Choices)]` now emits its own `serde::Serialize`/`Deserialize` (closing #71), any enum that ALSO derives serde or carries a `#[serde(...)]` attr hits a conflicting-impl / orphaned-helper-attribute error. Intended new contract (same posture as the sqlx impls Choices already emits), but a breaking change for external users upgrading — needs a CHANGELOG entry and a note on the Choices doc page. In-tree call sites were already migrated when #71 shipped. (Surfaced closing #71.)
+83. [x] Choices+serde breaking change documented — CHANGELOG [Unreleased] entry + column-types.mdx Choices note/example fix (must not derive serde alongside Choices) — archived
 
-84. [ ] **The `#[sqlx(skip)]`-required guard (#73) assumes the sibling `sqlx::FromRow` derive exists.** A model that derives `Model` with an `M2M`/`ReverseSet` field but NOT `FromRow` is now told to add `#[sqlx(skip)]` — an unregistered helper attribute without a sqlx derive, so it would get a confusing secondary error. No in-tree model hits this (every `M2M`/`ReverseSet` model derives `FromRow`); a fetch-less model is the only rough edge. Low priority. (Surfaced closing #73.)
+84. [x] The #73 `#[sqlx(skip)]`-required guard message now notes it is the `sqlx::FromRow` derive's attribute (clarifies the FromRow-less-model edge) — archived
 
 85. [x] Typed UPDATE path now freezes `auto_user_add` + refreshes `auto_user` to the current caller (sibling of #68), via the same ambient `route_context::current_user_id` the dynamic/insert paths use — archived
 
