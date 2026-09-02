@@ -30,6 +30,16 @@
 //!
 //! See `docs/specs/orm-relation-traversal.md`.
 
+// TODO(orm-traversal, deferred): unify hop->JOIN SQL with resolve_join_hops /
+// apply_join_related — 3 parallel builders today; see
+// docs/specs/orm-relation-traversal.md "Risks and open questions".
+// (The `pk_of` registry lookup below duplicates the inline PK lookup inside
+// `resolve_join_hops`; a shared helper was NOT extracted because that walker
+// clones owned `String` names from a fresh registry snapshot while this module
+// borrows `&str` from a snapshot it owns — the lifetimes differ, and the lookup
+// is fused into the walker's loop, so extraction is non-trivial and would touch
+// the tested select_related/join_related paths. Folded into the unification.)
+
 use sea_query::{
     Alias, Expr, JoinType, PostgresQueryBuilder, Query, SelectStatement, SimpleExpr,
     SqliteQueryBuilder,
@@ -37,7 +47,7 @@ use sea_query::{
 use sea_query_binder::SqlxBinder;
 
 use crate::db::DbPool;
-use crate::migrate::{ModelMeta, registered_models};
+use crate::migrate::{ModelMeta, registered_models_opt};
 use crate::orm::Model;
 use crate::orm::relation::{PathBase, RelPath};
 
@@ -82,7 +92,17 @@ pub(crate) fn build_to_one_select<Leaf: Model>(
         ));
     }
 
-    let registered = registered_models();
+    // Pre-boot-safe: a >=2-hop chain needs the registry for intermediate PKs.
+    // Use the non-panicking accessor so a deep path resolved with `.on(&pool)`
+    // and no booted App surfaces as a clean `Err`, matching this module's
+    // "errors loudly, never a wrong query / panic" contract.
+    let registered = registered_models_opt().ok_or_else(|| {
+        protocol_error(
+            "no model registry available to resolve a multi-hop relation — build \
+             an App (which registers models) before resolving a deep chain, or \
+             use a single-hop relation (which needs no registry)",
+        )
+    })?;
     let PathBase::SinglePk {
         table: base_table,
         pk_column: base_pk_column,
