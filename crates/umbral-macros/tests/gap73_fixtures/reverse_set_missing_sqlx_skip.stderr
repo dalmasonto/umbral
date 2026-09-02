@@ -1,0 +1,7 @@
+error: an `#[umbral(reverse_fk = ...)] ReverseSet<C>` field needs a sibling `#[sqlx(skip)]` attribute. ReverseSet stores no column on this table, so without `#[sqlx(skip)]` the `#[derive(sqlx::FromRow)]` decoder tries to read it as a real column and the first fetch fails at RUNTIME with `ColumnNotFound`. Add `#[sqlx(skip)]` above this field.
+  --> tests/gap73_fixtures/reverse_set_missing_sqlx_skip.rs:12:5
+   |
+12 | /     #[umbral(reverse_fk = "post")]
+13 | |     #[serde(skip)]
+14 | |     comment_set: ReverseSet<Comment>,
+   | |____________________________________^

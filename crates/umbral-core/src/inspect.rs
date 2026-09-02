@@ -1300,8 +1300,11 @@ fn choices_enum_name(enum_type: &str) -> String {
 /// DB value as `to_snake_case(variant).to_uppercase()` — a single enum-level
 /// `rename_all` keeps the variants clean. When a label wouldn't round-trip that
 /// way (a lowercase or mixed-case enum), each variant pins its exact DB string
-/// with `#[choices(value = "...")]` (and the matching `#[serde(rename)]`) so the
-/// generated column always round-trips, whatever the label casing.
+/// with `#[choices(value = "...")]` so the generated column always round-trips,
+/// whatever the label casing. No `#[serde(...)]` is emitted: `#[derive(Choices)]`
+/// supplies its own `Serialize`/`Deserialize` that speak the same DB-value
+/// vocabulary (gap #71), so a duplicate serde attribute would be redundant (and
+/// on a hand-written serde impl, an orphaned helper attribute that won't compile).
 fn render_choices_enum(rust_name: &str, labels: &[String]) -> String {
     let variants: Vec<String> = labels
         .iter()
@@ -1323,19 +1326,15 @@ fn render_choices_enum(rust_name: &str, labels: &[String]) -> String {
         .all(|(v, l)| to_snake_case(v).to_ascii_uppercase() == *l);
 
     let mut out = String::new();
-    out.push_str(
-        "#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Choices)]\n",
-    );
+    out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]\n");
     if screaming_round_trips {
         out.push_str("#[choices(rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
-        out.push_str("#[serde(rename_all = \"SCREAMING_SNAKE_CASE\")]\n");
     }
     out.push_str(&format!("pub enum {rust_name} {{\n"));
     for (variant, label) in variants.iter().zip(labels) {
         if !screaming_round_trips {
             let escaped = label.replace('\\', "\\\\").replace('"', "\\\"");
             out.push_str(&format!("    #[choices(value = \"{escaped}\")]\n"));
-            out.push_str(&format!("    #[serde(rename = \"{escaped}\")]\n"));
         }
         out.push_str(&format!("    {variant},\n"));
     }

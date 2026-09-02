@@ -54,6 +54,7 @@ pub struct Post {
     pub title: String,
     /// M2M to Tag — junction table `atomtx_post_tags` (intentionally NOT
     /// created, so the junction write fails after the parent write).
+    #[sqlx(skip)]
     #[umbral(m2m = "atomtx_tag")]
     pub tags: M2M<Tag>,
 }

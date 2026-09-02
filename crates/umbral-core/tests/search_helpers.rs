@@ -4,17 +4,7 @@
 //! helpers are power-user surface, not necessarily on the facade.
 use umbral_core::orm::search::{default_body, default_pk_column, default_title};
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    serde::Serialize,
-    serde::Deserialize,
-    umbral::orm::Choices,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, umbral::orm::Choices)]
 #[choices(rename_all = "lowercase")]
 pub enum DocStatus {
     #[default]

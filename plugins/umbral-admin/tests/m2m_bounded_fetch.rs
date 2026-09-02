@@ -54,6 +54,7 @@ pub struct Group {
     #[umbral(string)]
     pub title: String,
     /// Junction table will be `m2mb_group_items`.
+    #[sqlx(skip)]
     #[umbral(m2m = "m2mb_item")]
     pub items: M2M<Item>,
 }

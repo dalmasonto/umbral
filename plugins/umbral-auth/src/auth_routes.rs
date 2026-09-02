@@ -223,17 +223,27 @@ fn accepted(detail: &'static str) -> Response {
 // Router construction
 // =========================================================================
 
-/// Build the request origin's reset URL base from reverse-proxy headers.
+/// The path component of the password-reset confirmation page. Owned by the
+/// HTML auth surface (Task 14); the emailed reset link points here so the user
+/// clicks through to the confirmation form. Joined onto either the configured
+/// `settings.app_url` or the request-derived origin.
+pub(crate) const RESET_PATH: &str = "/auth/reset";
+
+/// Build the base URL the emailed password-reset link hangs off.
 ///
-/// Prefers `X-Forwarded-Proto` (default `"https"`) + the `Host` header to
-/// build `{proto}://{host}/auth/reset`. The `/auth/reset` page is owned by
-/// the HTML auth surface (Task 14); the JSON password-forgot endpoint points
-/// the email there so the user clicks through to the confirmation form.
+/// Prefers the operator-configured **public base URL** (`settings.app_url`,
+/// gap 81) when set: the reset link is then `{app_url}/auth/reset`, built from
+/// the user-facing origin regardless of what `Host` the backend actually saw.
+/// This is the correct behaviour whenever a separate frontend/BFF forwards the
+/// request server-side — the backend sees an internal `Host`
+/// (`localhost:8000`) that must NOT end up in a link the user clicks.
 ///
-/// Falls back to the relative path `"/auth/reset"` when the `Host` header is
-/// absent (e.g. a test client that doesn't set it).
+/// When `app_url` is unset (the default), falls back to the historical
+/// header-derived origin: `X-Forwarded-Proto` (default `"https"`) + the `Host`
+/// header → `{proto}://{host}/auth/reset`, or the relative path `"/auth/reset"`
+/// when no `Host` header is present (e.g. a bare test client).
 ///
-/// ## Security: why trusting `Host` is safe here
+/// ## Security: why trusting `Host` is safe on the fallback path
 ///
 /// Reading the `Host` header to build an absolute URL is normally a
 /// *host-header injection* / *password-reset poisoning* risk (CWE-640): an
@@ -247,26 +257,48 @@ fn accepted(detail: &'static str) -> Response {
 /// with HTTP 400 before any handler runs. By the time execution reaches
 /// `password_forgot_h` → `reset_url_base`, the `Host` value has already been
 /// validated against the operator-configured allowlist, so embedding it in the
-/// reset URL is safe.
+/// reset URL is safe. Setting `app_url` sidesteps the header entirely and is
+/// the recommended posture for any deploy behind a reverse frontend.
 ///
 /// In **non-production** (dev) mode, host validation is intentionally disabled
 /// so that `localhost` and `127.0.0.1` work without any extra configuration.
 /// The reset URL will reflect whatever `Host` the client sends — acceptable in
 /// a local dev environment where the only callers are the developer themselves.
 pub(crate) fn reset_url_base(headers: &HeaderMap) -> String {
+    // Resolve the ambient public base URL the same way the rest of the auth
+    // plugin reads settings — `umbral::settings::get_opt()` (non-panicking; it
+    // may run before `App::build` in tests / route-builder helpers).
+    let app_url = umbral::settings::get_opt().and_then(|s| s.app_url.clone());
+    reset_url_base_with(app_url.as_deref(), headers)
+}
+
+/// Pure core of [`reset_url_base`] — independent of ambient settings so both
+/// branches (configured `app_url` vs. header-derived) are unit-testable
+/// without touching the process-global settings `OnceLock`.
+///
+/// - `app_url = Some(base)` (non-empty after trimming): returns
+///   `{base sans trailing slash}/auth/reset`.
+/// - otherwise: the header-derived origin, or the bare `"/auth/reset"` path.
+pub fn reset_url_base_with(app_url: Option<&str>, headers: &HeaderMap) -> String {
+    if let Some(base) = app_url {
+        let base = base.trim().trim_end_matches('/');
+        if !base.is_empty() {
+            return format!("{base}{RESET_PATH}");
+        }
+    }
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim());
     let Some(host) = host else {
-        return "/auth/reset".to_string();
+        return RESET_PATH.to_string();
     };
     let proto = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim())
         .unwrap_or("https");
-    format!("{proto}://{host}/auth/reset")
+    format!("{proto}://{host}{RESET_PATH}")
 }
 
 #[derive(serde::Deserialize)]
@@ -956,8 +988,8 @@ async fn resend_verification_h(
 ///
 /// JSON `{email}` → always 202 (no enumeration: unknown emails get the same
 /// response as known ones). Fires `start_password_reset` best-effort; the
-/// reset URL base is built from the request's `Host` /
-/// `X-Forwarded-Proto` headers.
+/// reset URL base is the configured `settings.app_url` when set (gap 81),
+/// falling back to the request's `Host` / `X-Forwarded-Proto` headers.
 /// Throttled per IP+email (default 5 / hour) to stop email-bombing.
 async fn password_forgot_h(headers: HeaderMap, JsonOrForm(b): JsonOrForm<EmailOnlyIn>) -> Response {
     let ip = client_ip(&headers);

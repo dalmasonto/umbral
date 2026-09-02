@@ -1,0 +1,47 @@
+---
+title: Public base URL
+description: Set app_url so email links (like the password-reset link) point at your user-facing origin instead of the internal Host the backend actually received.
+sidebar_position: 9
+icon: link
+tags: [auth, email, deploy, config]
+---
+
+By default, the absolute links umbral-auth puts in email - the **password-reset link** especially - are built from the incoming request's `Host` and `X-Forwarded-Proto` headers. That works when the browser talks straight to the umbral backend, but it breaks the moment a separate frontend or BFF (a Next.js server, say) forwards the request server-side: the backend then sees an internal `Host` like `localhost:8000` and emits `https://localhost:8000/auth/reset?token=...`, while the reset **page** actually lives on the frontend at `http://localhost:3000/auth/reset`. Wrong host, wrong scheme, and no header the operator can fix.
+
+`settings.app_url` fixes it. Set it to your **user-facing origin** and every email link origin is built from that value instead, regardless of what `Host` the backend received.
+
+## Set it
+
+<Tabs>
+<Tab title="Environment">
+
+```bash
+UMBRAL_APP_URL=https://app.example.com
+```
+
+</Tab>
+<Tab title="umbral.toml">
+
+```toml
+app_url = "https://app.example.com"
+```
+
+</Tab>
+</Tabs>
+
+With it set, a `POST /api/auth/password-forgot` emails a link at `https://app.example.com/auth/reset?token=...` no matter what `Host` the request carried. A path prefix is preserved (`https://example.com/app` produces `.../app/auth/reset`), and a trailing slash is normalised.
+
+<Callout type="note">
+`app_url` is optional. When it is unset (the default) nothing changes: links stay header-derived exactly as before, so this is a pure opt-in with no behaviour change for apps that don't need it.
+</Callout>
+
+## When you need it
+
+- A frontend/BFF forwards auth requests to the backend server-side.
+- The public origin differs from the address the backend binds to.
+- The app is reached over HTTPS but terminates TLS at a proxy that forwards plain HTTP without `X-Forwarded-Proto`.
+
+## See also
+
+- [Password reset](/docs/v0.0.1/auth/password-reset) - the flow whose link this configures.
+- Settings design and the full field list live in the framework spec: `arch.md` and `crates/umbral-core/src/settings.rs`.

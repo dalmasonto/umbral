@@ -22,17 +22,7 @@ use umbral::{App, BuildError, Environment, Settings};
 /// A choices enum with `rename_all = "lowercase"`, so the stored DB
 /// values are `["happy", "sad", "neutral"]` — and the Rust path
 /// `Mood::Sad` lowers its tail to the valid literal `"sad"`.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    umbral::orm::Choices,
-    serde::Serialize,
-    serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, umbral::orm::Choices)]
 #[choices(rename_all = "lowercase")]
 pub enum Mood {
     #[default]
@@ -74,6 +64,7 @@ fn make_settings() -> Settings {
         bind_addr: "127.0.0.1:8000".to_string(),
         trusted_proxy_hops: 0,
         time_zone: None,
+        app_url: None,
         static_url: "/static/".to_string(),
         static_root: "staticfiles/".to_string(),
         extra: HashMap::new(),

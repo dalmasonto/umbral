@@ -1494,7 +1494,7 @@ pub struct {pascal}Item {{
 /// Lifecycle state for [`{pascal}Item`]. The `Choices` derive teaches the
 /// ORM the closed set; `rename_all` controls how variants serialize to the
 /// stored string (`Draft` → `"draft"`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, umbral::orm::Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, umbral::orm::Choices)]
 #[choices(rename_all = "lowercase")]
 pub enum {pascal}Status {{
     Draft,

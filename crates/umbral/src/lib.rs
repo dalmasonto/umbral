@@ -126,6 +126,18 @@ macro_rules! discovered_models {
 #[doc(hidden)]
 pub use serde_json as _serde_json;
 
+/// Re-export of `serde` for use in macro-generated code.
+///
+/// `#[derive(Choices)]` emits `serde::Serialize` / `serde::Deserialize`
+/// impls (behind `::umbral::_serde::*`) that (de)serialize the enum as its
+/// canonical DB string — the SAME value `ChoiceField::as_str` /
+/// `#[choices(rename_all = …)]` produce — so serde stays single-sourced with
+/// the stored/validated vocabulary. Routing through this re-export means user
+/// crates don't need their own direct `serde` dep for the generated code to
+/// compile.
+#[doc(hidden)]
+pub use serde as _serde;
+
 /// Re-export of `sea_query` for use in macro-generated code.
 ///
 /// The `#[derive(Model)]` macro emits `::umbral::_sea_query::Value` in the

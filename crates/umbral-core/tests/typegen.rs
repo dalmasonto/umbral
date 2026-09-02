@@ -18,17 +18,7 @@ use uuid::Uuid;
 // PK *value*, so `TgPost.author` must type as `string`, not `number`.
 // ---------------------------------------------------------------------------
 
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    umbral::orm::Choices,
-    serde::Serialize,
-    serde::Deserialize,
-)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, umbral::orm::Choices)]
 #[choices(rename_all = "lowercase")]
 pub enum TgStatus {
     #[default]
@@ -67,6 +57,7 @@ pub struct TgPost {
     pub score: Option<f64>,
     pub public_id: Uuid,
     pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[sqlx(skip)]
     #[umbral(m2m = "tg_tag")]
     pub tags: M2M<TgTag>,
 }

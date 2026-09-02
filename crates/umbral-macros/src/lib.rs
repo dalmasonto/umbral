@@ -1392,6 +1392,27 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
         // Skip them for FIELDS/column_consts and collect them into
         // M2M_RELATIONS instead.
         if let FieldKind::Many2Many(ref inner_ty) = kind {
+            // Gap #73: an `M2M<T>` field stores no column on the parent
+            // table, but this derive can't inject `#[sqlx(skip)]` for the
+            // SIBLING `#[derive(sqlx::FromRow)]`. Without that attribute
+            // FromRow generates a decoder that reads `<field>` as a real
+            // column, so the FIRST fetch fails at RUNTIME with
+            // `Sqlx(ColumnNotFound("<field>"))` — it compiles clean and only
+            // blows up on read. Detect the mismatch here (the derive DOES see
+            // every field's full attribute list) and turn the runtime crash
+            // into a spanned compile error that names the fix.
+            if !has_sqlx_skip(&field.attrs) {
+                let err = syn::Error::new_spanned(
+                    field,
+                    "an `#[umbral(m2m = ...)] M2M<T>` field needs a sibling `#[sqlx(skip)]` \
+                     attribute. M2M stores no column on this table, so without `#[sqlx(skip)]` \
+                     the `#[derive(sqlx::FromRow)]` decoder tries to read it as a real column \
+                     and the first fetch fails at RUNTIME with `ColumnNotFound`. \
+                     Add `#[sqlx(skip)]` above this field.",
+                );
+                field_specs.push(err.to_compile_error());
+                continue;
+            }
             let inner = inner_ty.as_ref();
             m2m_specs.push(quote! {
                 ::umbral::orm::M2MRelationSpec {
@@ -1412,6 +1433,24 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
         // name to filter children on. Emit a compile-error if
         // missing so the failure surfaces at the right span.
         if let FieldKind::ReverseSet(ref inner_ty) = kind {
+            // Gap #73: same runtime `ColumnNotFound` hazard as `M2M<T>`.
+            // A `ReverseSet<C>` stores no column on the parent table, so the
+            // sibling `#[derive(sqlx::FromRow)]` needs `#[sqlx(skip)]` or the
+            // first fetch panics at RUNTIME. The derive can't inject the attr
+            // for FromRow, so require it and fail at compile time with a
+            // spanned message instead.
+            if !has_sqlx_skip(&field.attrs) {
+                let err = syn::Error::new_spanned(
+                    field,
+                    "an `#[umbral(reverse_fk = ...)] ReverseSet<C>` field needs a sibling \
+                     `#[sqlx(skip)]` attribute. ReverseSet stores no column on this table, so \
+                     without `#[sqlx(skip)]` the `#[derive(sqlx::FromRow)]` decoder tries to \
+                     read it as a real column and the first fetch fails at RUNTIME with \
+                     `ColumnNotFound`. Add `#[sqlx(skip)]` above this field.",
+                );
+                field_specs.push(err.to_compile_error());
+                continue;
+            }
             let inner = inner_ty.as_ref();
             let field_attr = match parse_umbral_field_attr(&field.attrs) {
                 Ok(a) => a,
@@ -5514,6 +5553,47 @@ fn expand_choices(input: DeriveInput) -> syn::Result<TokenStream2> {
                 ::std::string::String::from(
                     <#enum_name as ::umbral::orm::ChoiceField>::as_str(&v),
                 )
+            }
+        }
+
+        // Gap #71 — serde (de)serialize through the SAME `ChoiceField`
+        // vocabulary the DB value / CHECK constraint / validator use, so a
+        // Choices field round-trips the typed write path (which serializes the
+        // model with serde: `serde_json::to_value(instance)`) with ONLY
+        // `#[choices(rename_all = …)]` present. Without these, serde's stock
+        // derive emits the PascalCase variant name (`"Other"`), the validator
+        // only accepts the renamed value (`"other"`), and the insert is
+        // rejected. The Choices derive OWNS the serde impls now — do NOT also
+        // `#[derive(Serialize, Deserialize)]` on a Choices enum, or you get a
+        // conflicting-implementation error (same as the sqlx impls above).
+        impl ::umbral::_serde::Serialize for #enum_name {
+            fn serialize<__S>(
+                &self,
+                serializer: __S,
+            ) -> ::core::result::Result<__S::Ok, __S::Error>
+            where
+                __S: ::umbral::_serde::Serializer,
+            {
+                serializer.serialize_str(
+                    <Self as ::umbral::orm::ChoiceField>::as_str(self),
+                )
+            }
+        }
+        impl<'de> ::umbral::_serde::Deserialize<'de> for #enum_name {
+            fn deserialize<__D>(
+                deserializer: __D,
+            ) -> ::core::result::Result<Self, __D::Error>
+            where
+                __D: ::umbral::_serde::Deserializer<'de>,
+            {
+                let s = <::std::string::String as ::umbral::_serde::Deserialize>::deserialize(
+                    deserializer,
+                )?;
+                <Self as ::umbral::orm::ChoiceField>::from_str_ok(&s).ok_or_else(|| {
+                    <__D::Error as ::umbral::_serde::de::Error>::custom(
+                        ::std::format!("{}: `{}`", #invalid_msg, s),
+                    )
+                })
             }
         }
 

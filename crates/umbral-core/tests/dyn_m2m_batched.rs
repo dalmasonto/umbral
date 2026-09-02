@@ -28,6 +28,7 @@ pub struct Post {
     #[umbral(string)]
     pub title: String,
     /// M2M to Tag — junction table `m2mb_post_tags`.
+    #[sqlx(skip)]
     #[umbral(m2m = "m2mb_tag")]
     pub tags: M2M<Tag>,
 }

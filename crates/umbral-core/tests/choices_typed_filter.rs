@@ -11,9 +11,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
 use umbral_core::db;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, umbral::orm::Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, umbral::orm::Choices)]
 #[choices(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
 pub enum TicketStatus {
     Todo,
     InProgress,

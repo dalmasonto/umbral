@@ -28,6 +28,7 @@ pub struct Post {
     pub title: String,
     /// M2M to Tag. The derive emits the junction table name
     /// `fm2m_post_tags` (parent_table + "_" + field_name).
+    #[sqlx(skip)]
     #[umbral(m2m = "fm2m_tag")]
     pub tags: umbral::orm::M2M<Tag>,
 }

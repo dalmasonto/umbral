@@ -475,6 +475,25 @@ pub struct Settings {
     )]
     pub static_url: String,
 
+    /// Public base URL the app is reached at from a browser — scheme +
+    /// host (+ optional port/path prefix), no trailing slash required.
+    ///
+    /// `None` (default) keeps the historical behaviour: absolute links in
+    /// framework-sent email (e.g. the password-reset link) are derived from
+    /// the request's `Host` + `X-Forwarded-Proto` headers. That breaks the
+    /// moment the app sits behind a separate frontend/BFF that forwards
+    /// requests server-side: the backend then sees the internal `Host`
+    /// (`localhost:8000`) and emits a link pointing at itself, not at the
+    /// user-facing origin (`https://app.example.com`).
+    ///
+    /// Set this to the user-facing origin — `UMBRAL_APP_URL=https://app.example.com`
+    /// or `app_url = "https://app.example.com"` in `umbral.toml` — and every
+    /// email link origin is built from it instead, regardless of what `Host`
+    /// the backend actually received. When unset, the header-derived path is
+    /// used unchanged (no behaviour change for anyone who doesn't set it).
+    #[serde(default)]
+    pub app_url: Option<String>,
+
     /// On-disk directory collected static assets live under in
     /// production.
     ///
@@ -574,6 +593,7 @@ impl std::fmt::Debug for Settings {
             .field("log_level", &self.log_level)
             .field("bind_addr", &self.bind_addr)
             .field("time_zone", &self.time_zone)
+            .field("app_url", &self.app_url)
             .field("static_url", &self.static_url)
             .field("static_root", &self.static_root)
             .field("extra", &RedactedExtra(&self.extra))
@@ -704,6 +724,7 @@ const KNOWN_SETTINGS_KEYS: &[&str] = &[
     "log_level",
     "bind_addr",
     "time_zone",
+    "app_url",
     "static_url",
     "static_root",
 ];
@@ -1182,6 +1203,7 @@ mod tests {
             bind_addr: "127.0.0.1:8000".to_string(),
             trusted_proxy_hops: 0,
             time_zone: None,
+            app_url: None,
             static_url: "/static/".to_string(),
             static_root: "staticfiles/".to_string(),
             extra,

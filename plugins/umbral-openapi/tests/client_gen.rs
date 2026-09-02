@@ -20,9 +20,7 @@ use serde::{Deserialize, Serialize};
 use umbral::migrate::ModelMeta;
 use umbral_openapi::client_gen::GeneratedClient;
 
-#[derive(
-    Debug, Default, Clone, Copy, PartialEq, Eq, umbral::orm::Choices, Serialize, Deserialize,
-)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, umbral::orm::Choices)]
 #[choices(rename_all = "lowercase")]
 pub enum CgStatus {
     #[default]

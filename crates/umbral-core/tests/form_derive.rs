@@ -357,17 +357,7 @@ fn reverse_relations_absent_from_fields() {
 // checked at validate time (no DB); out-of-set is a field error.        //
 // --------------------------------------------------------------------- //
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Default,
-    umbral::orm::Choices,
-    serde::Serialize,
-    serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, umbral::orm::Choices)]
 #[choices(rename_all = "lowercase")]
 enum Mood {
     #[default]

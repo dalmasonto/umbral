@@ -14,9 +14,8 @@ use umbral::migrate::ModelMeta;
 use umbral::orm::DynQuerySet;
 use umbral::prelude::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "SCREAMING_SNAKE_CASE")]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EnsKind {
     Alias,
     EnsName,

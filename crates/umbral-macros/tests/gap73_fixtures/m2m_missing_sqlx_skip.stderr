@@ -1,0 +1,7 @@
+error: an `#[umbral(m2m = ...)] M2M<T>` field needs a sibling `#[sqlx(skip)]` attribute. M2M stores no column on this table, so without `#[sqlx(skip)]` the `#[derive(sqlx::FromRow)]` decoder tries to read it as a real column and the first fetch fails at RUNTIME with `ColumnNotFound`. Add `#[sqlx(skip)]` above this field.
+  --> tests/gap73_fixtures/m2m_missing_sqlx_skip.rs:18:5
+   |
+18 | /     #[umbral(m2m = "tag")]
+19 | |     #[serde(skip)]
+20 | |     tags: M2M<Tag>,
+   | |__________________^
