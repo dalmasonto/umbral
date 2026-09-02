@@ -84,6 +84,19 @@ ResourceConfig::new("order").scope(|identity| match identity {
 
 **Creates are scoped too.** A `POST` whose body sets the scoped column to a value outside the caller's scope is refused with the same `404` an out-of-scope read gets — a caller who cannot see project Q cannot plant a row into it either (`RestrictIn(col, allowed)` requires the body's `col` ∈ `allowed`; `Restrict(pairs)` requires each pair to match; `None` refuses every create). The check runs after `owner_field` / nested-parent injection, so server-injected values count. The bulk write endpoints (`.bulk()`) apply the scope exactly like their single-object twins.
 
+### Ownership two (or more) hops away: `owned_via`
+
+`owned_by` covers a column on the resource's *own* table. Sometimes the owner is further away: a `gig` belongs to a `developer`, and the `developer` belongs to a `user` — the owning `user` is not a column on `gig` at all. `owned_via` scopes through that chain declaratively, with no hand-written `scope_async` resolver:
+
+```rust
+use umbral_rest::ResourceConfig;
+
+// "this gig's developer's user must be me" — two hops, one line.
+ResourceConfig::new("gig").owned_via("developer", "user")
+```
+
+This resolves through the same registry-driven `__` relation-path engine the query-string filter side uses (`?developer__user=...`, see [Relation traversal](/docs/v0.0.1/orm/relation-traversal)) — `umbral::orm::build_dynamic_relation`. It supports forward FK / one-to-one hops to arbitrary depth (`"a__b"` for a three-table chain), and carries the identical fail-closed contract as `owned_by`: a superuser sees every row, everyone else is restricted to rows whose relation-path leaf equals their id, and an anonymous caller sees none. A create is checked against the same chain with one `EXISTS` query — does the `developer` named in the body actually belong to the caller? — before the row is allowed to land. A reverse-FK or M2M hop in the chain is not yet supported.
+
 <Callout type="info">
 Scoping covers the built-in list/retrieve/create/update/delete, their bulk twins, and nested-write children (each child table's own scope runs with the parent FK already injected). Custom `.action(...)` handlers still enforce their own authorization — an action receives `ctx.pk` and `ctx.identity` and should scope its own query.
 </Callout>

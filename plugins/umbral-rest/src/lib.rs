@@ -724,6 +724,17 @@ impl RestPlugin {
                 };
                 ObjectScopeOutcome::Filter(cond)
             }
+            crate::resource::ScopeDecision::RestrictVia { path, value } => {
+                // Fail closed on a bad path (unknown field, non-FK hop, a
+                // value that doesn't fit the leaf column's type, or the
+                // registry not being available) — never fall through to
+                // "no constraint", which would hand back every row on a
+                // misconfigured `owned_via`.
+                match umbral::orm::build_dynamic_relation(table, &path, &value) {
+                    Ok(expr) => ObjectScopeOutcome::Filter(sea_query::Condition::all().add(expr)),
+                    Err(_) => ObjectScopeOutcome::DenyAll,
+                }
+            }
         }
     }
 
@@ -799,7 +810,87 @@ impl RestPlugin {
                 };
                 if in_scope { Ok(()) } else { Err(deny(&col)) }
             }
+            crate::resource::ScopeDecision::RestrictVia { path, value } => {
+                self.object_scope_allows_create_via(table, &path, &value, body)
+                    .await
+            }
         }
+    }
+
+    /// [`Self::object_scope_allows_create`]'s handling of
+    /// [`crate::resource::ScopeDecision::RestrictVia`] (gaps4 #78).
+    ///
+    /// There is no row yet to filter, so the read side's "AND this
+    /// relation-path predicate into the query" doesn't apply directly.
+    /// Instead this checks, with ONE `EXISTS` query through the ORM, whether
+    /// the row the body's first hop names actually chains down to the
+    /// caller: for `path = "developer__user"` and a body carrying
+    /// `developer: 5`, it asks "does developer #5's `user` equal me?" —
+    /// `SELECT 1 FROM developer WHERE id = 5 AND user = <caller>`. Deeper
+    /// chains (`"a__b__user"`) recurse the SAME way: the first hop's target
+    /// table plus the REST of the path is exactly what
+    /// [`umbral::orm::build_dynamic_relation`] already resolves for the read
+    /// side, so no second bespoke resolver is needed for the write side
+    /// either.
+    async fn object_scope_allows_create_via(
+        &self,
+        table: &str,
+        path: &str,
+        value: &str,
+        body: &serde_json::Map<String, Value>,
+    ) -> Result<(), ApiError> {
+        let deny = || -> ApiError {
+            ApiError::NotFound(format!("no `{path}` in scope for a create in {table}"))
+        };
+        // `path` is always `owned_via`'s own `"{relation}__{owner_column}"`,
+        // so it always carries at least one `__` hop separator.
+        let Some((hop0_field, rest_path)) = path.split_once("__") else {
+            return Err(deny());
+        };
+        let Some(child_meta) = umbral::migrate::model_meta_for_table(table) else {
+            return Err(deny());
+        };
+        let Some(hop0_col) = child_meta.fields.iter().find(|c| c.name == hop0_field) else {
+            return Err(deny());
+        };
+        let Some(hop0_target_table) = hop0_col.fk_target.clone() else {
+            return Err(deny());
+        };
+        let Some(hop0_target_meta) = umbral::migrate::model_meta_for_table(&hop0_target_table)
+        else {
+            return Err(deny());
+        };
+        let Some(pk_col) = hop0_target_meta.fields.iter().find(|c| c.primary_key) else {
+            return Err(deny());
+        };
+        // The body must actually name the hop-0 relation — the same "no
+        // oracle" shape as `Restrict`/`RestrictIn`: an absent or foreign
+        // value is refused, not silently treated as "no constraint".
+        let Some(hop0_value) = body.get(hop0_field).and_then(json_pk_to_string) else {
+            return Err(deny());
+        };
+        let Some(pk_expr) = umbral::orm::typed_eq_expr(pk_col, &hop0_value) else {
+            return Err(deny());
+        };
+        let rest_cond =
+            match umbral::orm::build_dynamic_relation(&hop0_target_table, rest_path, value) {
+                Ok(expr) => expr,
+                Err(_) => return Err(deny()),
+            };
+        let cond = sea_query::Condition::all().add(pk_expr).add(rest_cond);
+        let exists = umbral::orm::DynQuerySet::for_meta(&hop0_target_meta)
+            .filter_condition(cond)
+            .exists()
+            .await
+            .unwrap_or_else(|e| {
+                // A DB error on the ownership check must deny, never permit —
+                // the same fail-closed contract as every other scope arm. Log
+                // it: an operator debugging "why do all my creates 404" needs
+                // to see this was a query failure, not a real ownership miss.
+                tracing::error!(error = %e, %table, %path, "REST: owned_via existence check failed");
+                false
+            });
+        if exists { Ok(()) } else { Err(deny()) }
     }
 
     /// Run every applicable throttle for `(table, action)` after auth has

@@ -128,7 +128,7 @@ impl Subquery {
 pub use choices::ChoiceField;
 pub use dynamic::{
     Cmp, CsvImportReport, DynError, DynQuerySet, InsertedPk, decode_to_string, import_table_rows,
-    never_matches, typed_cmp_condition, typed_eq_condition, typed_json_value,
+    never_matches, typed_cmp_condition, typed_eq_condition, typed_eq_expr, typed_json_value,
 };
 pub use expr::{F, FColExt, FExpr, Q};
 pub use file_field::{FileField, ImageField};
@@ -143,6 +143,11 @@ pub use model::{
 pub use multichoice::MultiChoice;
 pub use one_to_one::OneToOne;
 pub use post::Post;
+/// Registry-driven forward FK/O2O `__` relation-path resolver — the dynamic
+/// (no static `Model` type) counterpart of [`Predicate::related`]. Power-user
+/// surface: `umbral-rest`'s `ResourceConfig::owned_via` (gaps4 #78) is the
+/// intended caller; most application code wants the typed `related` form.
+pub use queryset::relation_filter::build_dynamic_relation;
 pub use queryset::{
     GetError, JoinKind, Manager, PrefetchMapQuery, Prefetched, QuerySet, QuerySetTx,
     TryForEachError,

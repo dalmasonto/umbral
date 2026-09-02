@@ -55,6 +55,7 @@
 use sea_query::{Alias, Expr, ExprTrait, Query, SelectStatement, SimpleExpr, Value};
 
 use crate::migrate::registered_models_opt;
+use crate::orm::dynamic::typed_eq_expr;
 use crate::orm::{Model, Predicate};
 
 /// One resolved forward hop: the FK column on the *previous* table, the table
@@ -265,6 +266,135 @@ pub(crate) fn build_string_relation<T: Model>(
     let leaf_cond = build_leaf_cond(leaf_col, lookup, value)?;
     let cond = build_forward_in_subquery(&hops, leaf_cond);
     Ok(Predicate::new(cond))
+}
+
+/// Registry-only counterpart of [`build_string_relation`] for a caller that
+/// has no compile-time `Model` type — just the table's NAME (gaps4 #78, the
+/// engine behind `ResourceConfig::owned_via`). `umbral-rest`'s dynamic
+/// dispatch (`DynQuerySet` / `ScopeDecision`) works off `ModelMeta` at request
+/// time, so it cannot call [`Predicate::<T>::related`], which needs a
+/// concrete `T: Model` for hop 0.
+///
+/// Same resolution as `build_string_relation` — a `__`-joined forward FK/O2O
+/// path resolves to a nested `IN (SELECT …)` chain — except EVERY hop
+/// (including hop 0) reads the model registry by table name, and the leaf
+/// comparison is always equality with the value coerced to the leaf column's
+/// declared type (via [`typed_eq_expr`]) rather than a caller-supplied
+/// [`Value`] — REST only ever has a `String` (a caller id, a query param), so
+/// the coercion has to happen here instead of at the call site.
+///
+/// `path` is `"<relation>[__<relation>...]__<owner_column>"` — every segment
+/// but the last must be a forward FK/O2O field; the last is the leaf column
+/// compared to `value`. A single segment (no `__`) is a plain local-column
+/// equality, validated against the registry the same way.
+pub fn build_dynamic_relation(
+    root_table: &str,
+    path: &str,
+    value: &str,
+) -> Result<SimpleExpr, sqlx::Error> {
+    let raw: Vec<&str> = path.split("__").filter(|s| !s.is_empty()).collect();
+    let (leaf_col, hop_segs) = raw
+        .split_last()
+        .ok_or_else(|| protocol("umbral_rest::owned_via: empty relation path"))?;
+
+    let registered = registered_models_opt().ok_or_else(|| {
+        protocol(
+            "umbral_rest::owned_via: no model registry available to resolve a relation-path \
+             owner scope — build an App (which registers models) first",
+        )
+    })?;
+
+    let root_meta = registered
+        .iter()
+        .find(|m| m.table == root_table)
+        .ok_or_else(|| {
+            protocol(&format!(
+                "umbral_rest::owned_via: table `{root_table}` is not registered"
+            ))
+        })?;
+
+    let mut hops: Vec<RelHop> = Vec::with_capacity(hop_segs.len());
+    let mut current_table = root_table.to_string();
+    for seg in hop_segs {
+        let meta = registered
+            .iter()
+            .find(|m| m.table == current_table)
+            .ok_or_else(|| {
+                protocol(&format!(
+                    "umbral_rest::owned_via: intermediate table `{current_table}` is not \
+                 registered (in path `{path}`)"
+                ))
+            })?;
+        let col = meta.fields.iter().find(|c| c.name == *seg).ok_or_else(|| {
+            protocol(&format!(
+                "umbral_rest::owned_via: unknown field `{seg}` on `{current_table}` \
+                 (in path `{path}`)"
+            ))
+        })?;
+        let target_table = col.fk_target.clone().ok_or_else(|| {
+            protocol(&format!(
+                "umbral_rest::owned_via: field `{seg}` on `{current_table}` is not a forward \
+                 relation (FK / O2O) — `owned_via` supports forward FK/O2O hops only \
+                 (in path `{path}`)"
+            ))
+        })?;
+        let tmeta = registered
+            .iter()
+            .find(|m| m.table == target_table)
+            .ok_or_else(|| {
+                protocol(&format!(
+                    "umbral_rest::owned_via: target model `{target_table}` is not registered \
+                 (in path `{path}`)"
+                ))
+            })?;
+        let pk = tmeta.fields.iter().find(|c| c.primary_key).ok_or_else(|| {
+            protocol(&format!(
+                "umbral_rest::owned_via: target model `{target_table}` has no primary key"
+            ))
+        })?;
+        hops.push(RelHop {
+            fk_column: col.name.clone(),
+            target_table: target_table.clone(),
+            target_pk: pk.name.clone(),
+        });
+        current_table = target_table;
+    }
+
+    // The leaf column lives on `current_table` (root_table itself when there
+    // were no hops); resolve it against that table's registered meta so the
+    // value coerces by the OWNER column's real type (a String/Uuid owner
+    // column must not be forced through the BigInt arm).
+    let leaf_meta = if hops.is_empty() {
+        root_meta
+    } else {
+        registered
+            .iter()
+            .find(|m| m.table == current_table)
+            .ok_or_else(|| {
+                protocol(&format!(
+                    "umbral_rest::owned_via: leaf table `{current_table}` is not registered \
+                 (in path `{path}`)"
+                ))
+            })?
+    };
+    let leaf_meta_col = leaf_meta
+        .fields
+        .iter()
+        .find(|c| c.name == *leaf_col)
+        .ok_or_else(|| {
+            protocol(&format!(
+                "umbral_rest::owned_via: leaf column `{leaf_col}` not found on `{current_table}` \
+             (in path `{path}`)"
+            ))
+        })?;
+    let leaf_expr = typed_eq_expr(leaf_meta_col, value).ok_or_else(|| {
+        protocol(&format!(
+            "umbral_rest::owned_via: value `{value}` does not fit the type of leaf column \
+             `{leaf_col}` on `{current_table}` (in path `{path}`)"
+        ))
+    })?;
+
+    Ok(build_forward_in_subquery(&hops, leaf_expr))
 }
 
 /// The supported trailing lookups for the string form. Comparison lookups take

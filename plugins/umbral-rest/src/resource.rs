@@ -252,6 +252,23 @@ pub enum ScopeDecision {
     /// resource. List returns an empty page; retrieve/update/destroy 404
     /// (a non-owned row is indistinguishable from a missing one — no oracle).
     None,
+    /// Restrict to rows reachable from `value` through a forward FK/O2O
+    /// relation **path** — the multi-hop sibling of [`Self::Restrict`], which
+    /// only covers a column on the resource's OWN table. `path` is a
+    /// Django-style `__`-joined chain, e.g. `"developer__user"` for "this
+    /// row's `developer`'s `user` equals the caller" (gaps4 #78). Built by
+    /// [`ResourceConfig::owned_via`] — resolved via
+    /// [`umbral::orm::build_dynamic_relation`], the same registry-driven
+    /// engine gaps4 #76 added for the filter (`?`-query) side, so no
+    /// hand-written `scope_async` resolver is needed for an ownership chain
+    /// that is more than one hop away.
+    RestrictVia {
+        /// The `__`-joined relation path from this resource to the owner
+        /// column, e.g. `"developer__user"`.
+        path: String,
+        /// The caller id the leaf column must equal.
+        value: String,
+    },
 }
 
 /// A per-request row-scoping hook: maps the caller's [`Identity`] (or `None`
@@ -487,6 +504,50 @@ impl ResourceConfig {
         self.scope(move |identity| match identity {
             Some(id) if id.is_superuser => ScopeDecision::All,
             Some(id) => ScopeDecision::Restrict(vec![(col.clone(), id.user_id.clone())]),
+            None => ScopeDecision::None,
+        })
+    }
+
+    /// The relation-path owner-scope shorthand for [`Self::scope`] (gaps4
+    /// #78): restrict every CRUD/bulk action to rows reachable from the
+    /// caller through a forward FK/O2O chain, when ownership is not a column
+    /// on THIS table but on a table one or more hops away.
+    ///
+    /// `relation` is the `__`-joined chain of forward relation fields from
+    /// this resource to the table that carries `owner_column` — a single
+    /// field for one hop (`"developer"`), or `"a__b"` for two. The two are
+    /// joined into the same Django-style path
+    /// [`umbral::orm::build_dynamic_relation`] resolves for the read side's
+    /// `Predicate::related` (gaps4 #76):
+    ///
+    /// ```ignore
+    /// // "this gig's developer's user must be me" — TWO hops, no
+    /// // hand-written scope_async resolver:
+    /// ResourceConfig::new("gig").owned_via("developer", "user")
+    /// // equivalent path: "developer__user"
+    /// ```
+    ///
+    /// Same fail-closed contract as [`Self::owned_by`]: a superuser sees
+    /// every row ([`ScopeDecision::All`]); everyone else is restricted to
+    /// rows whose `relation`-path leaf equals their id
+    /// ([`ScopeDecision::RestrictVia`]); an anonymous caller sees none
+    /// ([`ScopeDecision::None`]). A create is checked against the SAME chain
+    /// (does the developer named in the body actually belong to the caller?)
+    /// via one `EXISTS` query — see the write-side handling in
+    /// `RestPlugin::object_scope_allows_create`.
+    ///
+    /// **Scope**: forward FK/O2O hops only, to arbitrary depth — the same
+    /// surface [`umbral::orm::Predicate::related`] supports. A reverse-FK or
+    /// M2M hop in the chain (e.g. "the rows any of my teams' members can
+    /// see") is a documented follow-up, not covered here.
+    pub fn owned_via(self, relation: impl Into<String>, owner_column: impl Into<String>) -> Self {
+        let path = format!("{}__{}", relation.into(), owner_column.into());
+        self.scope(move |identity| match identity {
+            Some(id) if id.is_superuser => ScopeDecision::All,
+            Some(id) => ScopeDecision::RestrictVia {
+                path: path.clone(),
+                value: id.user_id.clone(),
+            },
             None => ScopeDecision::None,
         })
     }

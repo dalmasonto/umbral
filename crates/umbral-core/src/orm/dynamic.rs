@@ -244,10 +244,24 @@ pub fn never_matches() -> Condition {
 /// a by-id lookup into a whole-table scan, and a by-id DELETE into a whole-table DELETE.
 pub fn typed_eq_condition(meta: &ModelMeta, col: &str, value: &str) -> Option<Condition> {
     let meta_col = meta.fields.iter().find(|c| c.name == col)?;
-    let expr = Expr::col(Alias::new(col));
+    typed_eq_expr(meta_col, value).map(|p| Condition::all().add(p))
+}
+
+/// The coercion core of [`typed_eq_condition`], factored out so a caller that
+/// already holds the target `Column` (e.g. a leaf column resolved off the END
+/// of a relation-path traversal — see
+/// [`crate::orm::queryset::relation_filter::build_dynamic_relation`], gaps4
+/// #78) can build the same typed `col = value` comparison without a
+/// `ModelMeta` lookup by name.
+///
+/// Returns `None` when the string cannot be that column's type at all — same
+/// contract as `typed_eq_condition`: the caller must turn that into "no rows
+/// match" (a 400/404), never fall through to an unfiltered query.
+pub fn typed_eq_expr(meta_col: &Column, value: &str) -> Option<sea_query::SimpleExpr> {
+    let expr = Expr::col(Alias::new(&meta_col.name));
     // FK-to-non-i64-target columns resolve to their target PK type, so a String/Uuid FK
     // matches the `_` arm and binds the raw string.
-    let predicate = match crate::migrate::fk_effective_type(meta_col) {
+    match crate::migrate::fk_effective_type(meta_col) {
         SqlType::SmallInt | SqlType::Integer => value.parse::<i32>().ok().map(|v| expr.eq(v)),
         SqlType::BigInt | SqlType::ForeignKey => value.parse::<i64>().ok().map(|v| expr.eq(v)),
         SqlType::Real | SqlType::Double => value.parse::<f64>().ok().map(|v| expr.eq(v)),
@@ -259,8 +273,7 @@ pub fn typed_eq_condition(meta: &ModelMeta, col: &str, value: &str) -> Option<Co
         // sea-query-binder emits a blob bind that matches the row.
         SqlType::Uuid => uuid::Uuid::parse_str(value).ok().map(|u| expr.eq(u)),
         _ => Some(expr.eq(value.to_string())),
-    };
-    predicate.map(|p| Condition::all().add(p))
+    }
 }
 
 /// Which way a [`typed_cmp_condition`] points.
