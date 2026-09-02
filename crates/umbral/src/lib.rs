@@ -21,12 +21,30 @@ pub mod prelude {
     //! on the facade itself rather than in the prelude: for example, the
     //! raw pool accessors are reached as `umbral::db::pool()` so they do
     //! not pollute the prelude with bare names like `pool`.
+    //!
+    //! **Relation traversal (`post.author()`, `dev.software_groups()`, …).**
+    //! The prelude carries the engine type, [`Relation`], because that's a
+    //! name a caller writes by hand (a struct field, a function return
+    //! type). It does NOT carry the per-model `<M>Relations` trait that
+    //! `#[derive(Model)]` generates for each of your models — that trait is
+    //! defined in YOUR crate (the derive expands inside your struct's own
+    //! module), and a facade crate structurally cannot re-export a trait a
+    //! downstream crate hasn't written yet. `#[derive(Model)]` emits
+    //! `pub trait <Model>Relations` as a sibling item at the same module
+    //! scope as the model struct, so the same `use your_crate::models::*;`
+    //! (or whatever glob already brings the model itself into scope) also
+    //! brings its relation trait into scope — no separate hand-`use` per
+    //! model is needed. Built-in models shipped inside `umbral-core` itself
+    //! would be preluded the normal way if any had relation fields; as of
+    //! Phase 1 none do (the only hand-rolled fixture model, `Post`, predates
+    //! `#[derive(Model)]` and has no relations), so there is nothing else to
+    //! re-export here yet.
 
     pub use crate::db::{DatabaseRouter, RouteContext, TenantKey};
     pub use crate::middleware::Middleware;
     pub use crate::orm::{
         ChoiceField, Choices, F, FColExt, FileField, ForeignKey, ImageField, M2M, Masked, Model,
-        MultiChoice, OneToOne, Q, ReverseRelations,
+        MultiChoice, OneToOne, Q, Relation, ReverseRelations,
     };
     pub use crate::plugin::{AppContext, Plugin, StaticDir};
     pub use crate::routes::Routes;

@@ -3033,9 +3033,13 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
         #(#reverse_fk_impls)*
 
         // Cross-crate reverse-OneToOne accessors emitted on each
-        // UNIQUE FK target. Like the reverse-FK accessors above but
-        // returns `Option<Child>` directly because the UNIQUE
-        // constraint guarantees at most one row.
+        // UNIQUE FK target. Like the reverse-FK accessors above, but
+        // for the UNIQUE FK case: returns a chainable `Relation<Child>`
+        // (Phase 1 Task 5), not `Option<Child>` directly — awaiting it
+        // resolves to `Result<Child>` (errors on an absent row), and
+        // `.get_opt()` gives the `Result<Option<Child>>` shape. The
+        // UNIQUE constraint still guarantees at most one row; it no
+        // longer buys a bare `Option` return type.
         #(#reverse_o2o_impls)*
 
         // Task 5: chainable forward-relation accessors — the `<M>Relations`
