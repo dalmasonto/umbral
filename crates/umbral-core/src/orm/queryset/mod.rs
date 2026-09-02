@@ -37,6 +37,7 @@ mod backend_pg;
 mod backend_sqlite;
 mod errors;
 pub(crate) mod hydration;
+pub(crate) mod relation_filter;
 pub(crate) mod relation_resolve;
 mod tx;
 mod write_helpers;

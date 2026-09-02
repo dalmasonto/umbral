@@ -231,6 +231,43 @@ impl<T> Predicate<T> {
     }
 }
 
+impl<T: model::Model> Predicate<T> {
+    /// Django-style forward FK / O2O traversal filter (gaps4 #76).
+    ///
+    /// `path` is a `__`-joined field chain whose leading segments are forward
+    /// foreign-key / one-to-one fields and whose final segment is the leaf
+    /// column to compare — e.g. `"user__username"` filters `T` by its related
+    /// user's username, resolved in ONE query via a nested `IN (SELECT …)`
+    /// subquery (no extra round-trip, no JOIN row-multiplication). A trailing
+    /// recognized lookup selects the operator: `exact`/`eq` (default), `ne`,
+    /// `gt`, `gte`, `lt`, `lte`, `contains`, `icontains`, `startswith`,
+    /// `endswith` — so `"author__name__icontains"` is a case-insensitive
+    /// substring match on the author's name.
+    ///
+    /// Hops resolve against the model registry, so this needs a booted `App`.
+    /// A malformed path (unknown field, a non-FK hop, a missing leaf column, or
+    /// a reverse-FK / M2M segment — those `__` filters are a documented
+    /// follow-up) is a clear `Err`, never a literal-column SQL error. For a
+    /// registry-free, value-type-checked alternative use the typed
+    /// [`ForeignKeyCol::to`](column::ForeignKeyCol::to) form.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // developers whose related user is named "ada", in one query:
+    /// Developer::objects()
+    ///     .filter(Predicate::<Developer>::related("user__username", "ada")?)
+    ///     .first()
+    ///     .await?;
+    /// ```
+    pub fn related(
+        path: &str,
+        value: impl Into<sea_query::Value>,
+    ) -> Result<Predicate<T>, sqlx::Error> {
+        queryset::relation_filter::build_string_relation::<T>(path, value.into())
+    }
+}
+
 /// Manual `Clone` for `Predicate<T>`.
 ///
 /// `sea_query::SimpleExpr` is `Clone` regardless of `T`, so we implement the

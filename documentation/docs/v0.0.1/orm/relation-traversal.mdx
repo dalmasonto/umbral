@@ -80,9 +80,48 @@ let with_repeats = dev
 
 The generated `<Model>Relations` trait needs to be in scope for its methods to resolve, same as any Rust trait method. `use <your model module>::*;` (the same glob you likely already have for the model's column constants) brings it in; you don't hand-`use` each relation trait individually.
 
+## Filtering across relations (`__`)
+
+The traversal accessors above start from a *loaded* object. To go the other way — **find** the rows whose related record matches some field, without loading anything first — filter across the relation inside `.filter(...)`. This is Django's `Developer.objects.filter(user__username="ada")`, and it resolves in **one query** (a correlated `IN (SELECT …)` subquery on the related table — no JOIN row-multiplication, no second round-trip). Two equivalent surfaces:
+
+**String form** — Django-style `__` path, resolved against the model registry:
+
+```rust
+// developers whose related user is named "ada"
+let devs = Developer::objects()
+    .filter(Predicate::<Developer>::related("user__username", "ada")?)
+    .fetch()
+    .await?;
+
+// arbitrary forward depth, with a trailing lookup
+Developer::objects()
+    .filter(Predicate::<Developer>::related("user__company__name__icontains", "acme")?)
+    .count()
+    .await?;
+```
+
+The leading segments are forward FK / O2O fields; the last is the leaf column. A trailing lookup picks the operator: `exact`/`eq` (default), `ne`, `gt`, `gte`, `lt`, `lte`, `contains`, `icontains`, `startswith`, `endswith`. A malformed path (unknown field, a non-FK hop, a missing leaf) is a clear `Err`, never a broken query.
+
+**Typed form** — the leaf predicate is built from the target model's own column constants, so its value type is compile-checked, and it needs no registry (works in a bare `.on(&pool)` test):
+
+```rust
+Developer::objects()
+    .filter(Developer::USER.to(User::USERNAME.eq("ada")))
+    .fetch()
+    .await?;
+
+// deeper chains nest — each `.to(...)` is one forward hop
+Developer::objects()
+    .filter(Developer::USER.to(User::COMPANY.to(Company::NAME.eq("acme"))))
+    .first()
+    .await?;
+```
+
+Both forms cover **forward FK / O2O** hops to arbitrary depth. Reverse-FK / M2M `__` filters on the WHERE side (a to-*many* relation, which widens to an `EXISTS`) are a documented follow-up; a to-many segment in the string form errors clearly rather than emitting a wrong query.
+
 ## Scope for this phase
 
-Phase 1 supports an all-to-one prefix followed by to-many hops (`.to_one().to_one().to_many().to_many()...`). The reverse ordering — a to-one hop *after* a to-many hop in the same chain — isn't wired up yet; call `.all()` (or another terminal) on the to-many `QuerySet` first, then traverse further from the returned rows. Cross-relation `__` filters inside `.filter(...)` (e.g. filtering `Developer` by a field on `SoftwareGroup`) are also a later phase — Phase 1 is the traversal accessors and their SQL resolution, not the WHERE-side.
+Phase 1 supports an all-to-one prefix followed by to-many hops (`.to_one().to_one().to_many().to_many()...`). The reverse ordering — a to-one hop *after* a to-many hop in the same chain — isn't wired up yet; call `.all()` (or another terminal) on the to-many `QuerySet` first, then traverse further from the returned rows. Cross-relation `__` filters inside `.filter(...)` are shipped for **forward FK / O2O** hops (see [Filtering across relations](#filtering-across-relations-__) above); the to-many WHERE-side (filtering by a field on an M2M or reverse-FK relation) is the remaining follow-up.
 
 ## See also
 

@@ -2775,6 +2775,36 @@ impl<T> ForeignKeyCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).in_subquery(sub.into_statement()))
     }
 
+    /// Typed forward FK / O2O `__`-traversal filter (gaps4 #76).
+    ///
+    /// Filter this column's owning model by a predicate on the *related*
+    /// model reached through this foreign key. `leaf` is any `Predicate` built
+    /// from the target model's own typed columns, so its value type is
+    /// compile-checked. The whole thing resolves in ONE query via a nested
+    /// `IN (SELECT …)` subquery (no extra round-trip, no JOIN fan-out), and —
+    /// unlike the string form — needs **no** model registry, so it works in a
+    /// bare `.on(&pool)` test.
+    ///
+    /// Deeper chains nest: the leaf may itself be another `.to(...)`, so
+    /// `A::FK.to(B::FK.to(C::LEAF.eq(v)))` traverses two hops.
+    ///
+    /// The referenced model `Target` is inferred from `leaf`; it is your
+    /// responsibility that this FK actually targets `Target` (the leaf column
+    /// itself is fully type-checked against `Target`).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // developers whose related user is named "ada":
+    /// Developer::objects()
+    ///     .filter(Developer::USER.to(AuthUser::USERNAME.eq("ada")))
+    ///     .first()
+    ///     .await?;
+    /// ```
+    pub fn to<Target: crate::orm::Model>(&self, leaf: Predicate<Target>) -> Predicate<T> {
+        crate::orm::queryset::relation_filter::typed_forward_hop::<T, Target>(self.name, leaf)
+    }
+
     /// SQL `ORDER BY ... ASC`.
     pub fn asc(&self) -> OrderExpr<T> {
         OrderExpr::new(self.name, false)
@@ -2823,6 +2853,14 @@ impl<T> NullableForeignKeyCol<T> {
     /// SQL `IS NOT NULL`.
     pub fn is_not_null(&self) -> Predicate<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// Typed forward FK / O2O `__`-traversal filter (gaps4 #76). Identical to
+    /// [`ForeignKeyCol::to`] for the nullable-FK shape: rows whose FK is NULL
+    /// simply don't match the `IN (SELECT …)`, so they're excluded (Django's
+    /// `field__related=…` semantics).
+    pub fn to<Target: crate::orm::Model>(&self, leaf: Predicate<Target>) -> Predicate<T> {
+        crate::orm::queryset::relation_filter::typed_forward_hop::<T, Target>(self.name, leaf)
     }
 
     /// SQL `ORDER BY ... ASC`.
