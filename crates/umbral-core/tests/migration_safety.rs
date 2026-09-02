@@ -108,6 +108,9 @@ fn drops_are_unsafe() {
     let drop_col = Operation::DropColumn {
         table: "invoice".into(),
         column: "old_total".into(),
+        new_columns: None,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     let s = classify_operation(&drop_col);
     assert!(s.is_unsafe());

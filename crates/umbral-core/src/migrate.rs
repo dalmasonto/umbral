@@ -681,10 +681,47 @@ pub enum Operation {
     /// the `#[umbral(default = ...)]` attribute lands.
     AddColumn { table: String, column: Column },
     /// Drop a column from an existing table. Rendered as
-    /// `ALTER TABLE x DROP COLUMN y`. SQLite 3.35+ and Postgres
-    /// support this natively; older SQLite would need a table-
-    /// recreation dance the engine doesn't implement.
-    DropColumn { table: String, column: String },
+    /// `ALTER TABLE x DROP COLUMN y` on Postgres (which handles a
+    /// constrained column fine) and on SQLite when the column is
+    /// unconstrained.
+    ///
+    /// gap 70: SQLite's `ALTER TABLE DROP COLUMN` REFUSES to drop a
+    /// column that participates in a UNIQUE / PRIMARY KEY / FOREIGN KEY
+    /// / CHECK constraint, or is indexed (`cannot drop UNIQUE column`
+    /// and friends). So when the OUTGOING column is constrained, the
+    /// diff engine populates `new_columns` with the POST-drop schema
+    /// (every surviving column, in order) and carries the table's
+    /// surviving composite `unique_together` / `indexes` groups. On
+    /// SQLite that routes the drop through the same table-recreation
+    /// dance `AlterColumn` uses — create a new table without the
+    /// column, `INSERT ... SELECT` the survivors, drop the old, rename
+    /// — which is the general SQLite-correct path for every
+    /// constrained-column case. `new_columns: None` (the default, and
+    /// every pre-gap-70 migration on disk) means the column is
+    /// unconstrained and the bare `ALTER TABLE DROP COLUMN` is safe.
+    /// Postgres ignores `new_columns` / the constraint groups entirely
+    /// and always emits the native `DROP COLUMN`.
+    DropColumn {
+        table: String,
+        column: String,
+        /// Post-drop column list (the survivors, in declaration order).
+        /// `Some` only when the outgoing column is constrained and the
+        /// SQLite renderer must rebuild the table rather than emit a
+        /// bare `DROP COLUMN`. `serde(default)` keeps older on-disk
+        /// migrations deserialising to `None` (bare drop).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_columns: Option<Vec<Column>>,
+        /// Surviving composite UNIQUE groups, re-created by the SQLite
+        /// rebuild so dropping a constrained column doesn't silently
+        /// drop the table's OTHER composite UNIQUE constraints. Ignored
+        /// on Postgres and when `new_columns` is `None`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unique_together: Vec<Vec<String>>,
+        /// Surviving composite index groups, re-created by the SQLite
+        /// rebuild for the same reason as `unique_together`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        indexes: Vec<Vec<String>>,
+    },
     /// Alter a column's nullable flag (the only safe in-place change
     /// the engine ships at M5.1). Self-contained: carries the full
     /// new column list so the SQLite table-recreation dance can
@@ -2404,9 +2441,20 @@ async fn apply_sqlite_migration_tx(
 ) -> Result<(), MigrateError> {
     use sqlx::Acquire as _;
 
-    let needs_fk_off = ops
-        .iter()
-        .any(|op| matches!(op, Operation::AlterColumn { .. }));
+    // gap 70: a `DropColumn` carrying `new_columns` renders the SAME
+    // table-recreation dance as `AlterColumn` (it drops+recreates the table),
+    // so it needs the identical `foreign_keys=OFF` bracketing, or step 3's
+    // `DROP TABLE` on a table with inbound FKs trips error 787.
+    let needs_fk_off = ops.iter().any(|op| {
+        matches!(op, Operation::AlterColumn { .. })
+            || matches!(
+                op,
+                Operation::DropColumn {
+                    new_columns: Some(_),
+                    ..
+                }
+            )
+    });
 
     let mut conn = pool.acquire().await?;
     if needs_fk_off {
@@ -3680,7 +3728,7 @@ pub fn classify_operation(op: &Operation) -> OpSafety {
         Operation::DropM2MTable { junction_table } => OpSafety::Unsafe(format!(
             "drops join table `{junction_table}` and every row in it — irreversible"
         )),
-        Operation::DropColumn { table, column } => OpSafety::Unsafe(format!(
+        Operation::DropColumn { table, column, .. } => OpSafety::Unsafe(format!(
             "drops column `{table}.{column}` and its data — old code reading it breaks. Expand-contract: stop writing it, deploy, then drop"
         )),
 
@@ -4993,13 +5041,52 @@ fn diff_columns(
     }
 
     // Drops first so a same-position add can reuse the column slot.
+    //
+    // gap 70: SQLite's `ALTER TABLE DROP COLUMN` refuses a column that is
+    // part of a UNIQUE / PK / FK constraint or is indexed
+    // (`cannot drop UNIQUE column`). When the outgoing column is
+    // constrained, carry the POST-drop schema plus the surviving composite
+    // constraint groups so the SQLite renderer routes the drop through the
+    // same table-recreation dance `AlterColumn` uses, instead of emitting a
+    // bare `DROP COLUMN` that SQLite rejects at apply time. Postgres ignores
+    // the extra payload and drops the column natively.
+    //
+    // The rebuild's `new_columns` is the copy-SOURCE shape: the previous
+    // table's columns (already reshaped to CURRENT defs for any survivor an
+    // `AlterColumn` reshaped, via the `new_columns` local above), minus every
+    // column already removed by an earlier drop in this same op sequence and
+    // minus this one. It must NOT be `current.fields` — a same-diff ADDED
+    // column isn't in the old table yet, so the dance's `INSERT ... SELECT`
+    // would hit "no such column". A `removed` set tracks the columns each
+    // successive drop has taken out so a later rebuild's SELECT never names a
+    // gone column.
+    let mut removed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for col in &dropped {
         if Some(col.name.as_str()) == paired_drop {
             continue;
         }
+        let needs_rebuild = drop_requires_rebuild_sqlite(col, current, previous);
+        let (new_columns, unique_together, indexes) = if needs_rebuild {
+            let survivors: Vec<Column> = new_columns
+                .iter()
+                .filter(|c| c.name != col.name && !removed.contains(&c.name))
+                .cloned()
+                .collect();
+            (
+                Some(survivors),
+                current.unique_together.clone(),
+                current.indexes.clone(),
+            )
+        } else {
+            (None, Vec::new(), Vec::new())
+        };
+        removed.insert(col.name.clone());
         ops.push(Operation::DropColumn {
             table: current.table.clone(),
             column: col.name.clone(),
+            new_columns,
+            unique_together,
+            indexes,
         });
     }
 
@@ -5041,6 +5128,41 @@ fn diff_columns(
     }
 
     Ok(ops)
+}
+
+/// gap 70: does dropping `col` from the OLD table (`previous`) require the
+/// SQLite table-recreation dance rather than a bare `ALTER TABLE DROP COLUMN`?
+///
+/// SQLite refuses `DROP COLUMN` when the column participates in a UNIQUE /
+/// PRIMARY KEY / FOREIGN KEY constraint, or is indexed (the same set the
+/// recreation dance handles by rebuilding the table without the column). We
+/// detect every one of those from the outgoing column's own flags plus the
+/// composite groups on the OLD table:
+///
+/// - `primary_key` / `unique`: single-column PK or UNIQUE constraint.
+/// - a physical FK (`fk_target` set AND `db_constraint`): a logical-only FK
+///   (`db_constraint = false`) emits no `REFERENCES`, so a bare drop is fine.
+/// - `should_emit_btree_index`: the column carries a single-column index
+///   (`#[umbral(index)]`, an FK's implicit index, or the `deleted_at`
+///   soft-delete index) — SQLite refuses to drop an indexed column.
+/// - membership in a composite `unique_together` or `indexes` group on the
+///   old table.
+///
+/// Postgres never calls this — its native `DROP COLUMN` cascades constraints
+/// and indexes on its own. `current` is passed for parity / future use; the
+/// decision reads only the outgoing column and the old table's groups.
+fn drop_requires_rebuild_sqlite(col: &Column, _current: &ModelMeta, previous: &ModelMeta) -> bool {
+    let in_group = |groups: &[Vec<String>]| {
+        groups
+            .iter()
+            .any(|g| g.iter().any(|name| name == &col.name))
+    };
+    col.primary_key
+        || col.unique
+        || (col.fk_target.is_some() && col.db_constraint)
+        || should_emit_btree_index(col)
+        || in_group(&previous.unique_together)
+        || in_group(&previous.indexes)
 }
 
 /// Gap 88 helper: compare two column snapshots for shape identity (every
@@ -5086,7 +5208,7 @@ fn suffix_for(ops: &[Operation]) -> String {
             Operation::CreateView { name: created, .. },
         ] if dropped == created => format!("update_view_{created}"),
         [Operation::AddColumn { table, column }] => format!("add_{}_{}", table, column.name),
-        [Operation::DropColumn { table, column }] => format!("drop_{table}_{column}"),
+        [Operation::DropColumn { table, column, .. }] => format!("drop_{table}_{column}"),
         [Operation::AlterColumn { table, column, .. }] => format!("alter_{table}_{column}"),
         [Operation::RenameTable { from, to }] => format!("rename_{from}_to_{to}"),
         [
@@ -5368,12 +5490,34 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             }
             stmts
         }
-        Operation::DropColumn { table, column } => vec![
-            Table::alter()
-                .table(Alias::new(table))
-                .drop_column(Alias::new(column))
-                .build(SqliteQueryBuilder),
-        ],
+        Operation::DropColumn {
+            table,
+            column,
+            new_columns,
+            unique_together,
+            indexes,
+        } => {
+            // gap 70: SQLite's `ALTER TABLE DROP COLUMN` refuses a column that
+            // is part of a UNIQUE / PK / FK constraint or is indexed. When the
+            // diff engine detected such a column it carries the post-drop
+            // schema in `new_columns`, and we route the drop through the SAME
+            // table-recreation dance `AlterColumn` uses — create a new table
+            // without the column, copy the survivors, drop the old, rename —
+            // which handles every constrained-column case. For an
+            // unconstrained column `new_columns` is `None` and the bare
+            // `DROP COLUMN` (native since SQLite 3.35) is correct and cheaper.
+            match new_columns {
+                Some(cols) => {
+                    render_alter_column_dance_sqlite(table, cols, unique_together, indexes)
+                }
+                None => vec![
+                    Table::alter()
+                        .table(Alias::new(table))
+                        .drop_column(Alias::new(column))
+                        .build(SqliteQueryBuilder),
+                ],
+            }
+        }
         // gaps3 #43: SQLite has no `COMMENT` statement — no column comments, no
         // table comments, nothing. Rendering zero statements is the whole
         // implementation. This is not a silent divergence of the kind the raw-SQL
@@ -5620,7 +5764,10 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             column,
             comment,
         } => vec![comment_on_column_stmt(table, column, comment)],
-        Operation::DropColumn { table, column } => vec![
+        // gap 70: Postgres's native `DROP COLUMN` handles a constrained column
+        // (UNIQUE / PK / FK / index) on its own, so the `new_columns` rebuild
+        // payload the SQLite renderer needs is ignored here.
+        Operation::DropColumn { table, column, .. } => vec![
             Table::alter()
                 .table(Alias::new(table))
                 .drop_column(Alias::new(column))

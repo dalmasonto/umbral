@@ -371,6 +371,9 @@ fn drop_column_on_postgres_double_quotes_identifier() {
     let op = Operation::DropColumn {
         table: "post".to_string(),
         column: "body".to_string(),
+        new_columns: None,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");

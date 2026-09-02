@@ -977,7 +977,7 @@ fn diff_emits_drop_column_for_a_removed_field() {
         "one removed field should produce exactly one op; got {ops:?}",
     );
     match &ops[0] {
-        Operation::DropColumn { table, column } => {
+        Operation::DropColumn { table, column, .. } => {
             assert_eq!(table, "post");
             assert_eq!(column, "body");
         }
@@ -1756,6 +1756,9 @@ async fn check_pending_safety_classifies_a_pending_migration_off_disk() {
             Operation::DropColumn {
                 table: "post".to_string(),
                 column: "legacy_field".to_string(),
+                new_columns: None,
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
             },
         ],
         snapshot_after: Snapshot::default(),
