@@ -16,6 +16,8 @@ under `crates/*` and `plugins/*`.
 
 ### Changed
 
+- **`#[derive(ModelBase)]` now auto-emits `impl Default` + an inherent `new()`** so a based model constructs with `base: Default::default()` (the auto-managed PK / `auto_now`* columns are overwritten on insert anyway). **Potentially breaking:** a base struct that ALSO derives or hand-implements `Default` now hits a conflicting-impl error (E0119) — drop the redundant `#[derive(Default)]` / `impl Default` from `#[derive(ModelBase)]` structs on upgrade.
+
 - **`#[derive(Choices)]` now emits its own `serde::Serialize` / `Deserialize`.** A Choices enum's `#[choices(rename_all = "...")]` casing now single-sources the serde/JSON wire form with the stored DB value / `CHECK` / validator, so a Choices field round-trips the typed write path (`create` / `get_or_create` / `update_or_create`) with only `#[choices(rename_all = "...")]` — no duplicated `#[serde(rename_all)]` needed. **Breaking:** a `#[derive(Choices)]` enum must **no longer** also derive `serde::Serialize` / `Deserialize` or carry `#[serde(...)]` attributes — the derive now owns those impls, so doing both is a conflicting-implementation error. On upgrade, remove the redundant `#[derive(Serialize, Deserialize)]` and `#[serde(...)]` from Choices enums.
 
 ## [0.0.12] - 2026-08-17
