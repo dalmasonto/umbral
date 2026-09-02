@@ -263,6 +263,22 @@ pub struct QuerySet<T> {
     /// `check_annotations` (despite the name, predating this field)
     /// is where both poisons are surfaced.
     pub(crate) poison: Option<String>,
+    /// Phase 1 Task 4 — leaf-DISTINCT state for a QuerySet produced by a
+    /// deep to-many relation chain (`resolve_leaf_queryset`). `Some((table,
+    /// pk_col))` means the traversal JOINs multiply the leaf rows, so the
+    /// terminal must dedupe by the leaf PK: `build_query_for` applies
+    /// `SELECT DISTINCT`, and `count()` uses `COUNT(DISTINCT <table>.<pk>)`.
+    /// `.with_duplicates()` clears it to expose the raw JOIN multiplicity.
+    /// `None` for every ordinary QuerySet (no crossing-to-many traversal).
+    pub(crate) leaf_distinct: Option<(String, String)>,
+    /// Phase 1 Task 4 — the in-memory relation path this QuerySet was built
+    /// from, when it came out of a to-many relation accessor
+    /// (`to_many_hop`). Carrying it lets a SECOND relation hop extend the
+    /// chain (`to_many_hop`/`to_one_hop` accept a `QuerySet` as a
+    /// `RelationSource`), which is how a deep to-many chain
+    /// (`dev.software_groups().software()`) is composed before the Task-5
+    /// derive lands. `None` for an ordinary `T::objects()` QuerySet.
+    pub(crate) rel_path: Option<crate::orm::relation::RelPath>,
     _phantom: PhantomData<T>,
 }
 
@@ -295,6 +311,8 @@ impl<T> Clone for QuerySet<T> {
             user_offset: self.user_offset,
             for_update_skip_locked: self.for_update_skip_locked,
             poison: self.poison.clone(),
+            leaf_distinct: self.leaf_distinct.clone(),
+            rel_path: self.rel_path.clone(),
             _phantom: PhantomData,
         }
     }
@@ -327,6 +345,7 @@ impl<T> std::fmt::Debug for QuerySet<T> {
             .field("join_related", &self.join_related)
             .field("annotations", &self.annotations)
             .field("poison", &self.poison)
+            .field("leaf_distinct", &self.leaf_distinct)
             .finish()
     }
 }
@@ -467,6 +486,8 @@ impl<T> QuerySet<T> {
             user_limit: None,
             user_offset: None,
             poison: None,
+            leaf_distinct: None,
+            rel_path: None,
             _phantom: PhantomData,
         }
     }
@@ -787,6 +808,15 @@ impl<T> QuerySet<T> {
                 sea_query::LockType::Update,
                 sea_query::LockBehavior::SkipLocked,
             );
+        }
+        // Phase 1 Task 4 — a deep to-many chain JOINs through junction tables,
+        // so a leaf reachable via multiple paths appears once per path. Dedupe
+        // by the leaf PK with `SELECT DISTINCT` (the projection is the leaf's
+        // own columns, so a full-row DISTINCT is exactly a distinct-by-PK).
+        // `.with_duplicates()` clears `leaf_distinct`, restoring raw
+        // multiplicity. `count()` mirrors this with `COUNT(DISTINCT pk)`.
+        if self.leaf_distinct.is_some() {
+            q.distinct();
         }
         q
     }
@@ -1165,6 +1195,24 @@ impl<T> QuerySet<T> {
     /// covers most use cases.
     pub fn distinct(mut self) -> Self {
         self.query.distinct();
+        self
+    }
+
+    /// Opt out of the leaf-PK DISTINCT that a deep to-many relation chain
+    /// applies by default (Phase 1 Task 4, spec decision 5).
+    ///
+    /// A chain crossing a to-many hop (`dev.software_groups().software()`)
+    /// resolves to a `QuerySet<Leaf>` whose base query JOINs through the
+    /// junction/child tables, so a leaf reachable via multiple paths would
+    /// appear once per path. By default the terminal dedupes by the leaf PK
+    /// (`SELECT DISTINCT` / `COUNT(DISTINCT pk)`); `.with_duplicates()`
+    /// clears that flag and returns the raw JOIN multiplicity — one leaf row
+    /// per traversal path.
+    ///
+    /// A no-op on an ordinary `QuerySet` (one never carried the leaf-DISTINCT
+    /// flag), so calling it there changes nothing.
+    pub fn with_duplicates(mut self) -> Self {
+        self.leaf_distinct = None;
         self
     }
 }
@@ -2193,10 +2241,24 @@ impl<T: Model> QuerySet<T> {
         // rewrite logic across branches.
         let mut rebuilt = self.build_query_for(backend);
         rebuilt.clear_selects();
-        // Postgres rejects `"*"` as a quoted identifier (SQLite tolerates
-        // it); use sea_query's Asterisk token which renders bare `*`
-        // on both backends.
-        rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
+        // Phase 1 Task 4 — a leaf-DISTINCT QuerySet (deep to-many chain) must
+        // count DISTINCT leaf rows, not the JOIN-multiplied row count. A plain
+        // `COUNT(*)` under the traversal JOINs would over-count a leaf reachable
+        // via multiple paths; `COUNT(DISTINCT <leaf>.<pk>)` collapses those.
+        // (`build_query_for` also stamped `SELECT DISTINCT`, which is a harmless
+        // no-op wrapping a single aggregate row.) `.with_duplicates()` clears
+        // `leaf_distinct`, so the raw-multiplicity `COUNT(*)` applies instead.
+        if let Some((table, pk_col)) = &self.leaf_distinct {
+            rebuilt.expr(Func::count_distinct(Expr::col((
+                Alias::new(table.as_str()),
+                Alias::new(pk_col.as_str()),
+            ))));
+        } else {
+            // Postgres rejects `"*"` as a quoted identifier (SQLite tolerates
+            // it); use sea_query's Asterisk token which renders bare `*`
+            // on both backends.
+            rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
+        }
         rebuilt.reset_limit();
         rebuilt.reset_offset();
 

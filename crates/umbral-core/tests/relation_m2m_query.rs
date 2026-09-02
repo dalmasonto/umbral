@@ -204,87 +204,72 @@ async fn to_many_hop_m2m_matches_query_result() {
     assert_eq!(names, vec!["core", "infra"]);
 }
 
-/// Review fix (round 1) — a deep to-many chain, reached by composing two
-/// PUBLIC calls (`to_one_hop` then `to_many_hop` off the resulting
-/// `Relation`), used to hit an `assert!` in `to_many_hop` and panic the
-/// caller's process. `Relation<T>` implements `RelationSource<T>`, so
-/// nothing in the public API stops a caller from doing exactly this — it
-/// must surface as a loud `Err` at the first fallible terminal instead,
-/// via the same poison-now/fail-at-the-terminal mechanism `QuerySet`
-/// already uses for other builder-time-unrejectable shapes.
+/// Task 4 repoint — the deep chain shape the Task-3 poison tests originally
+/// targeted (a to-ONE prefix then a to-MANY hop) now RESOLVES via the
+/// crossing-to-many leaf resolver, so these tests were repointed to the shape
+/// Phase 1 still defers: a to-ONE hop AFTER a to-MANY hop (the per-row-JOIN
+/// fan-out). It is reachable by composing public calls — `to_many_hop` then
+/// `to_one_hop` (both `QuerySet<T>` and `Relation<T>` implement
+/// `RelationSource<T>`) then `to_many_hop` again (so the chain ends in a
+/// to-many and comes back as a `QuerySet`). It must surface as a loud `Err`
+/// at the first fallible terminal, never a wrong query.
 #[tokio::test]
 async fn to_many_hop_deep_chain_is_poisoned_not_panic() {
     boot().await;
     let ada = fetch_ada().await;
 
-    // Hop 1 (to-one, hand-built — its exact target never resolves to SQL
-    // here, since the deep-chain shape is caught before any query runs).
-    let hop1 = HopSpec {
-        kind: HopKind::Fk,
-        from_table: "rmq_developer",
-        to_table: "rmq_software_group",
-        fk_column: "id",
-        fk_on_from: true,
-        required: true,
-        junction: None,
-    };
-    let deep = to_one_hop::<Developer, SoftwareGroup>(&ada, hop1);
-
-    // Hop 2 (to-many) off `deep`, which already carries hop1 — the deep
-    // chain `to_many_hop` doesn't resolve yet.
-    let hop2 = HopSpec {
-        kind: HopKind::M2M,
-        from_table: "rmq_software_group",
-        to_table: "rmq_software_group",
-        fk_column: "",
-        fk_on_from: true,
-        required: false,
-        junction: Some(JunctionSpec {
-            table: "rmq_developer_software_groups",
-            parent_column: "parent_id",
-            target_column: "child_id",
-        }),
-    };
-
     // Building the QuerySet must not panic ...
-    let poisoned = to_many_hop::<SoftwareGroup, SoftwareGroup>(deep, hop2);
+    let poisoned = deep_chain_poisoned_queryset(&ada);
     // ... and the first fallible terminal must report the gap loudly.
     let err = poisoned
         .fetch()
         .await
-        .expect_err("a deep to-many chain must fail loudly, not silently run a wrong query");
+        .expect_err("a deferred deep to-many shape must fail loudly, not run a wrong query");
     let msg = err.to_string();
     assert!(
-        msg.contains("Task 4") && msg.contains("deep to-many"),
-        "error should name the deep-to-many-chain gap and point at Task 4: {msg}"
+        msg.contains("to-one") && msg.contains("to-many"),
+        "error should name the deferred to-one-after-to-many shape: {msg}"
     );
 
     // count() must independently surface the same poison — a caller who
     // only calls .count() (never .fetch()) must not slip through.
-    let err2 = to_many_hop::<SoftwareGroup, SoftwareGroup>(
-        to_one_hop::<Developer, SoftwareGroup>(&ada, hop1),
-        hop2,
-    )
-    .count()
-    .await
-    .expect_err("count() must also surface the poison");
-    assert!(err2.to_string().contains("Task 4"));
+    let err2 = deep_chain_poisoned_queryset(&ada)
+        .count()
+        .await
+        .expect_err("count() must also surface the poison");
+    assert!(err2.to_string().contains("to-one"));
 }
 
-/// Build the same poisoned deep-to-many-chain `QuerySet<SoftwareGroup>` the
-/// tests above construct by hand, factored out so the write-terminal test
-/// below doesn't repeat the hop wiring.
+/// Build a poisoned deep-chain `QuerySet<SoftwareGroup>` in a shape Phase 1
+/// defers — a to-one hop wedged BETWEEN two to-many hops — factored out so the
+/// write-terminal test below doesn't repeat the hop wiring. The hop targets
+/// are contrived: the shape is rejected before any SQL runs, so they never
+/// resolve to real tables.
 fn deep_chain_poisoned_queryset(ada: &Developer) -> QuerySet<SoftwareGroup> {
-    let hop1 = HopSpec {
-        kind: HopKind::Fk,
+    let m2m1 = HopSpec {
+        kind: HopKind::M2M,
         from_table: "rmq_developer",
+        to_table: "rmq_software_group",
+        fk_column: "",
+        fk_on_from: true,
+        required: false,
+        junction: Some(JunctionSpec {
+            table: "rmq_developer_software_groups",
+            parent_column: "parent_id",
+            target_column: "child_id",
+        }),
+    };
+    // A to-ONE hop AFTER the to-many `m2m1` — the deferred per-row-JOIN shape.
+    let fk_after = HopSpec {
+        kind: HopKind::Fk,
+        from_table: "rmq_software_group",
         to_table: "rmq_software_group",
         fk_column: "id",
         fk_on_from: true,
         required: true,
         junction: None,
     };
-    let hop2 = HopSpec {
+    let m2m2 = HopSpec {
         kind: HopKind::M2M,
         from_table: "rmq_software_group",
         to_table: "rmq_software_group",
@@ -297,10 +282,11 @@ fn deep_chain_poisoned_queryset(ada: &Developer) -> QuerySet<SoftwareGroup> {
             target_column: "child_id",
         }),
     };
-    to_many_hop::<SoftwareGroup, SoftwareGroup>(
-        to_one_hop::<Developer, SoftwareGroup>(ada, hop1),
-        hop2,
-    )
+    let via_to_one = to_one_hop::<SoftwareGroup, SoftwareGroup>(
+        to_many_hop::<Developer, SoftwareGroup>(ada, m2m1),
+        fk_after,
+    );
+    to_many_hop::<SoftwareGroup, SoftwareGroup>(via_to_one, m2m2)
 }
 
 /// Review fix (round 2) — round 1 closed the panic, but `check_annotations()`
@@ -327,15 +313,15 @@ async fn to_many_hop_deep_chain_poison_blocks_delete_and_values() {
         .await
         .expect_err("a poisoned QuerySet must refuse delete(), not mass-delete the table");
     assert!(
-        delete_err.to_string().contains("Task 4"),
-        "delete() error should name the same deep-to-many-chain gap: {delete_err}"
+        delete_err.to_string().contains("to-one") && delete_err.to_string().contains("to-many"),
+        "delete() error should name the same deferred deep-to-many-chain gap: {delete_err}"
     );
 
     let values_err = deep_chain_poisoned_queryset(&ada)
         .values(&["id", "name"])
         .await
         .expect_err("a poisoned QuerySet must refuse values(), not return every row");
-    assert!(values_err.to_string().contains("Task 4"));
+    assert!(values_err.to_string().contains("to-one"));
 
     // The rows must be untouched — the DELETE never reached the database.
     let after = SoftwareGroup::objects().count().await.expect("count after");

@@ -176,6 +176,33 @@ impl<From: Model> RelationSource<From> for &Relation<From> {
     }
 }
 
+/// A `QuerySet` produced by a to-many relation accessor ([`to_many_hop`])
+/// carries the [`RelPath`] it was built from, so a SECOND hop can extend the
+/// chain — this is how a deep to-many chain (`dev.software_groups().software()`)
+/// is composed by nesting `to_many_hop`/`to_one_hop` before the Task-5 derive
+/// generates the accessors. An ordinary `T::objects()` QuerySet carries no
+/// path; hopping off it is a programming error (like passing a to-one
+/// [`HopKind`] to `to_many_hop`) and panics with a clear message.
+impl<From: Model> RelationSource<From> for QuerySet<From> {
+    fn into_rel_path(self) -> RelPath {
+        self.rel_path.clone().expect(
+            "to_many_hop / to_one_hop off a QuerySet requires a QuerySet produced by a \
+             relation accessor (it carries the RelPath); a bare `T::objects()` QuerySet \
+             has no relation path to extend",
+        )
+    }
+}
+
+impl<From: Model> RelationSource<From> for &QuerySet<From> {
+    fn into_rel_path(self) -> RelPath {
+        self.rel_path.clone().expect(
+            "to_many_hop / to_one_hop off a QuerySet requires a QuerySet produced by a \
+             relation accessor (it carries the RelPath); a bare `T::objects()` QuerySet \
+             has no relation path to extend",
+        )
+    }
+}
+
 /// The primary-key column name of a model, from its `FIELDS` metadata.
 /// Falls back to `"id"` for the (derive-impossible) no-PK case.
 fn pk_column_name<M: Model>() -> &'static str {
@@ -412,29 +439,29 @@ fn protocol_error(msg: &str) -> sqlx::Error {
     sqlx::Error::Protocol(msg.to_string())
 }
 
-/// Build a chainable, ambient-pooled `QuerySet<To>` for a single to-many
-/// hop (`M2M` or `ReverseFk`) off a `RelationSource` — the general-path
-/// sibling of [`M2M::query`](super::m2m::M2M::query) for callers that only
-/// have a `HopSpec` (the Task-5 derive's M2M/reverse-FK accessors when the
-/// source isn't a hydrated `M2M` field, e.g. a hop off a `Relation<From>`
-/// handle) rather than a materialised `M2M<T>` slot.
+/// Build a chainable, ambient-pooled `QuerySet<To>` for a to-many hop
+/// (`M2M` or `ReverseFk`) off a `RelationSource` — the general-path sibling
+/// of [`M2M::query`](super::m2m::M2M::query) for callers that only have a
+/// `HopSpec` (the Task-5 derive's M2M/reverse-FK accessors when the source
+/// isn't a hydrated `M2M<T>` slot).
 ///
-/// Single-hop only: `src` must carry no accumulated hops (a bare object, or
-/// a fresh handle nothing has hopped off yet). Widening a *deep* chain
-/// (hopping to-many after one or more prior hops, e.g.
-/// `to_many_hop(to_one_hop(&obj, fk_hop), m2m_hop)`) needs the same
-/// flat-JOIN treatment [`crate::orm::queryset::relation_resolve`] gives
-/// to-one chains and is Task 4's to-many leaf resolver, not this function's
-/// job. That shape IS reachable through this module's public API (`Relation<T>`
-/// implements [`RelationSource`], and nothing stops a caller from hopping a
-/// second time off one), so it can't panic the caller's process — instead
-/// this returns a **poisoned** `QuerySet` (the same "poison now, fail at
-/// the terminal" mechanism `QuerySet` already uses for other builder-time
-/// shapes it can't reject on the spot):
-/// the builder call itself succeeds, and every fallible terminal
-/// (`fetch`/`count`/`explain`, and their `first`/`get`/`exists` siblings)
-/// reports a clear `Err(sqlx::Error::Protocol(_))` naming the gap instead of
-/// running a wrong query.
+/// - **Single hop off a bare source** (a `&From` object, or a fresh handle
+///   nothing has hopped off yet): the lighter junction-subquery (`M2M`) /
+///   reverse-FK-predicate (`ReverseFk`) form, which needs no model registry
+///   and so resolves in a bare `.on(&pool)` test without a booted App.
+/// - **Deep chain** (this hop follows one or more prior hops, reached by
+///   composing public calls — `Relation<T>` and `QuerySet<T>` both implement
+///   [`RelationSource`]): the whole traversal resolves to the leaf via the
+///   crossing-to-many resolver ([`crate::orm::queryset::relation_resolve::resolve_leaf_queryset`],
+///   Task 4) — an all-to-one prefix + one-or-more to-many hops, `SELECT
+///   DISTINCT` on the leaf PK by default, `.with_duplicates()` to opt out.
+///
+/// Either way the returned `QuerySet` carries the [`RelPath`] so a further
+/// hop can extend it. A shape Phase 1 does NOT resolve (a to-one hop after a
+/// to-many, or an inner reverse-FK) comes back **poisoned** — the builder
+/// succeeds but every fallible terminal reports a clear
+/// `Err(sqlx::Error::Protocol(_))` naming the deferred shape, never a wrong
+/// query.
 ///
 /// # Panics
 ///
@@ -452,26 +479,32 @@ pub fn to_many_hop<From: Model, To: Model>(
         "to_many_hop requires a to-many HopKind (M2M or ReverseFk); \
          to-one kinds resolve through `to_one_hop` instead"
     );
-    let path = src.into_rel_path();
-    if !path.hops.is_empty() {
-        // Reachable via `to_many_hop(to_one_hop(&obj, hop1), hop2)` — poison
-        // rather than panic (see the doc comment above).
-        return Manager::<To>::new()
-            .filter(Predicate::new(Expr::cust("1 = 1")))
-            .poisoned(
-                "to_many_hop only resolves a single hop off a bare source; \
-                 deep to-many chains (hopping to-many after one or more \
-                 prior hops) aren't resolved yet — Task 4's to-many leaf \
-                 resolver (docs/specs/orm-relation-traversal.md) will add \
-                 multi-hop to-many support",
-            );
-    }
-    let PathBase::SinglePk { pk_value, .. } = path.base;
+    let path = src.into_rel_path().push(hop);
 
+    // A deep chain (this hop follows one or more prior hops) resolves the
+    // whole traversal to the leaf via the crossing-to-many resolver (Task 4);
+    // a single hop off a bare source keeps the lighter junction-subquery /
+    // reverse-FK-predicate form (which needs no model registry, so it works
+    // in a bare `.on(&pool)` test without a booted App). Either way the
+    // returned QuerySet carries the `RelPath` so a further hop can extend it.
+    let mut qs = if path.hops.len() > 1 {
+        crate::orm::queryset::relation_resolve::resolve_leaf_queryset::<To>(&path)
+    } else {
+        single_to_many_queryset::<To>(&path.base, &hop)
+    };
+    qs.rel_path = Some(path);
+    qs
+}
+
+/// Build the `QuerySet<To>` for a SINGLE to-many hop off a bare source — the
+/// junction subquery (`M2M`) or reverse-FK predicate (`ReverseFk`) form. Kept
+/// registry-free so it resolves in a bare `.on(&pool)` test.
+fn single_to_many_queryset<To: Model>(base: &PathBase, hop: &HopSpec) -> QuerySet<To> {
+    let PathBase::SinglePk { pk_value, .. } = base;
     let predicate: Predicate<To> = match hop.kind {
-        HopKind::ReverseFk => {
-            Predicate::new(Expr::col(Alias::new(hop.fk_column)).eq(SimpleExpr::Value(pk_value)))
-        }
+        HopKind::ReverseFk => Predicate::new(
+            Expr::col(Alias::new(hop.fk_column)).eq(SimpleExpr::Value(pk_value.clone())),
+        ),
         HopKind::M2M => {
             let junction = hop.junction.expect("M2M HopSpec must carry a JunctionSpec");
             let to_pk_col = pk_column_name::<To>();
@@ -479,13 +512,13 @@ pub fn to_many_hop<From: Model, To: Model>(
             sub.column(Alias::new(junction.target_column))
                 .from(crate::db::router::schema_qualified_table(junction.table))
                 .and_where(
-                    Expr::col(Alias::new(junction.parent_column)).eq(SimpleExpr::Value(pk_value)),
+                    Expr::col(Alias::new(junction.parent_column))
+                        .eq(SimpleExpr::Value(pk_value.clone())),
                 );
             Predicate::new(Expr::col(Alias::new(to_pk_col)).in_subquery(sub))
         }
-        // Guarded by the leading `assert!` above.
+        // Guarded by the leading `assert!` in `to_many_hop`.
         _ => unreachable!("to-one HopKind rejected by the leading assert"),
     };
-
     Manager::<To>::new().filter(predicate)
 }

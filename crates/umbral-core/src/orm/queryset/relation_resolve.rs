@@ -48,8 +48,9 @@ use sea_query_binder::SqlxBinder;
 
 use crate::db::DbPool;
 use crate::migrate::{ModelMeta, registered_models_opt};
-use crate::orm::Model;
-use crate::orm::relation::{PathBase, RelPath};
+use crate::orm::queryset::{Manager, QuerySet};
+use crate::orm::relation::{HopKind, PathBase, RelPath};
+use crate::orm::{Model, Predicate};
 
 /// Per-level table alias (`__rel_0` is the root, `__rel_1` the first hop's
 /// target, …). Distinct from `join_related`'s `__j_*` aliases so the two
@@ -215,4 +216,246 @@ where
 /// A loud protocol error for an unsupported / unresolvable path shape.
 fn protocol_error(msg: &str) -> sqlx::Error {
     sqlx::Error::Protocol(msg.to_string())
+}
+
+// =========================================================================
+// Phase 1, Task 4 — crossing-to-many leaf resolution.
+// =========================================================================
+
+/// The primary-key column name of a `Model` from its `FIELDS`. Falls back to
+/// `"id"` for the (derive-impossible) no-PK case, matching `relation.rs`.
+fn leaf_pk_col<M: Model>() -> &'static str {
+    M::FIELDS
+        .iter()
+        .find(|f| f.primary_key)
+        .map(|f| f.name)
+        .unwrap_or("id")
+}
+
+/// Resolve a [`RelPath`] that crosses a to-many hop into a chainable
+/// `QuerySet<Leaf>` whose base query expresses the whole traversal as
+/// junction JOINs rooted at the starting PK.
+///
+/// # Supported shapes (Phase 1)
+///
+/// An all-to-one prefix (0+ forward-FK / O2O hops) followed by one or more
+/// to-many hops (M2M, or a single reverse-FK as the leaf hop) to the leaf:
+///
+/// ```text
+/// SELECT [DISTINCT] <leaf.*>
+/// FROM   <leaf>
+/// JOIN   <junction_k> ON junction_k.child = leaf.pk
+/// JOIN   <junction_{k-1}> ON junction_{k-1}.child = junction_k.parent
+/// …
+/// WHERE  <outermost link> = <pivot pk>          -- pivot = root pk, or an
+///                                               -- IN (…) subquery over the
+///                                               -- to-one prefix
+/// ```
+///
+/// The leaf is the query root (its own table, unaliased) so a later
+/// `.filter(leaf::COL.eq(…))` binds unambiguously to the leaf — every other
+/// table in the query is either a junction (only `parent`/`child` id columns)
+/// or lives inside a subquery, so no data column collides with the leaf's.
+/// `SELECT DISTINCT` on the leaf columns dedupes a leaf reachable via
+/// multiple paths (spec decision 5); `.with_duplicates()` drops it.
+///
+/// # Deferred shapes (returned POISONED, fail loudly at the terminal)
+///
+/// - A to-one hop AFTER a to-many hop (the per-row-JOIN fan-out the spec
+///   defers past Phase 1).
+/// - A reverse-FK hop that is not the leaf hop (reading its FK column would
+///   force an intermediate data table into the FROM, risking predicate
+///   ambiguity) — deferred.
+///
+/// Infallible (returns a `QuerySet`, never `Result`) to match
+/// [`crate::orm::relation::to_many_hop`]'s builder contract: an unsupported
+/// or unresolvable shape becomes a **poisoned** `QuerySet` that errors at
+/// every fallible terminal instead of running a wrong query.
+pub(crate) fn resolve_leaf_queryset<Leaf: Model>(path: &RelPath) -> QuerySet<Leaf> {
+    match build_leaf_select::<Leaf>(path) {
+        Ok((query, leaf_pk_col)) => {
+            let mut qs = QuerySet::new(query);
+            qs.default_ordering = Leaf::ORDERING.to_vec();
+            qs.soft_delete_active = Leaf::SOFT_DELETE;
+            qs.leaf_distinct = Some((Leaf::TABLE.to_string(), leaf_pk_col));
+            qs
+        }
+        Err(msg) => Manager::<Leaf>::new()
+            .filter(Predicate::new(Expr::cust("1 = 1")))
+            .poisoned(msg),
+    }
+}
+
+/// Build the leaf `SELECT` for a crossing-to-many [`RelPath`]. Returns the
+/// statement plus the leaf PK column name (for the `COUNT(DISTINCT pk)` path).
+/// `Err(msg)` for an unsupported / unresolvable shape — the caller poisons.
+fn build_leaf_select<Leaf: Model>(path: &RelPath) -> Result<(SelectStatement, String), String> {
+    if path.hops.is_empty() {
+        return Err("relation path has no hops — nothing to resolve".to_string());
+    }
+    // Split into the all-to-one prefix and the to-many segment.
+    let first_to_many = path
+        .hops
+        .iter()
+        .position(|h| !h.kind.is_to_one())
+        .ok_or_else(|| {
+            "an all-to-one path resolves to a single row via the to-one resolver, \
+             not the crossing-to-many leaf resolver"
+                .to_string()
+        })?;
+    let prefix = &path.hops[..first_to_many];
+    let to_many = &path.hops[first_to_many..];
+
+    // Every hop in the to-many segment must be to-many; a to-one hop AFTER a
+    // to-many is the deferred per-row-JOIN fan-out.
+    if to_many.iter().any(|h| h.kind.is_to_one()) {
+        return Err(
+            "a to-one hop after a to-many hop (per-row JOIN fan-out) is not \
+                    supported in Phase 1 — this deep to-many chain shape is deferred \
+                    (docs/specs/orm-relation-traversal.md, crossing semantics)"
+                .to_string(),
+        );
+    }
+    // A reverse-FK hop is only supported as the leaf (last) hop; an inner
+    // reverse-FK would force its child data table into the FROM.
+    for (i, h) in to_many.iter().enumerate() {
+        if h.kind == HopKind::ReverseFk && i != to_many.len() - 1 {
+            return Err(
+                "an inner reverse-FK hop in a deep to-many chain is not supported \
+                        in Phase 1 (only a reverse-FK as the final leaf hop is) — this \
+                        deep to-many chain shape is deferred"
+                    .to_string(),
+            );
+        }
+    }
+
+    let registered = registered_models_opt().ok_or_else(|| {
+        "no model registry available to resolve a deep relation — build an App \
+         (which registers models) before resolving a crossing-to-many chain"
+            .to_string()
+    })?;
+
+    let PathBase::SinglePk {
+        table: base_table,
+        pk_column: base_pk_column,
+        pk_value,
+    } = &path.base;
+
+    let leaf_table = Leaf::TABLE;
+    let leaf_pk = leaf_pk_col::<Leaf>();
+
+    let mut q = Query::select();
+    q.from(crate::db::router::schema_qualified_table(leaf_table));
+    // Project the leaf's own columns (bare names) so `Leaf`'s `FromRow` reads
+    // them; never pull a junction's id columns into the row.
+    for f in Leaf::FIELDS {
+        q.expr_as(
+            Expr::col((Alias::new(leaf_table), Alias::new(f.name))),
+            Alias::new(f.name),
+        );
+    }
+
+    // Backward walk the to-many segment (leaf-adjacent hop first). `link_expr`
+    // is the PK expression the current hop's child side must equal; it starts
+    // as the leaf PK and, after each hop, becomes the parent-side PK the NEXT
+    // (inner) hop connects to.
+    let mut link_expr: Expr = Expr::col((Alias::new(leaf_table), Alias::new(leaf_pk)));
+    for (rev_i, hop) in to_many.iter().enumerate().rev() {
+        match hop.kind {
+            HopKind::M2M => {
+                let junction = hop
+                    .junction
+                    .ok_or_else(|| "M2M hop is missing its JunctionSpec".to_string())?;
+                let jalias = Alias::new(format!("__ldm_{rev_i}"));
+                q.join_as(
+                    JoinType::InnerJoin,
+                    crate::db::router::schema_qualified_table(junction.table),
+                    jalias.clone(),
+                    Expr::col((jalias.clone(), Alias::new(junction.target_column)))
+                        .eq(link_expr.clone()),
+                );
+                link_expr = Expr::col((jalias, Alias::new(junction.parent_column)));
+            }
+            HopKind::ReverseFk => {
+                // Guaranteed the leaf hop by the position check above: the FK
+                // column lives on the leaf and points back at the parent PK,
+                // so the parent-side link is simply `leaf.<fk_column>`.
+                link_expr = Expr::col((Alias::new(leaf_table), Alias::new(hop.fk_column)));
+            }
+            // The segment was validated to be all to-many above.
+            _ => unreachable!("to-one hop in the to-many segment was rejected"),
+        }
+    }
+
+    // Anchor the outermost link at the pivot: the root PK directly (no prefix)
+    // or an `IN (…)` subquery resolving the all-to-one prefix to the pivot PK.
+    if prefix.is_empty() {
+        q.and_where(link_expr.eq(SimpleExpr::Value(pk_value.clone())));
+    } else {
+        let pivot_sub =
+            build_prefix_pivot_subquery(&registered, base_table, base_pk_column, pk_value, prefix)?;
+        q.and_where(link_expr.in_subquery(pivot_sub));
+    }
+
+    Ok((q, leaf_pk.to_string()))
+}
+
+/// Build the `SELECT <pivot.pk> FROM <root> JOIN … WHERE root.pk = ?`
+/// subquery that resolves an all-to-one prefix to the single pivot PK the
+/// first to-many hop hangs off. The pivot table is the prefix's last target
+/// (= the first to-many hop's `from_table`); only prefix tables appear here,
+/// all inside this subquery, so none collide with the outer leaf.
+fn build_prefix_pivot_subquery(
+    registered: &[ModelMeta],
+    base_table: &str,
+    base_pk_column: &str,
+    pk_value: &sea_query::Value,
+    prefix: &[crate::orm::relation::HopSpec],
+) -> Result<SelectStatement, String> {
+    let mut q = Query::select();
+    let root_alias = level_alias(0);
+    q.from_as(
+        crate::db::router::schema_qualified_table(base_table),
+        root_alias.clone(),
+    );
+    let mut near_alias = root_alias.clone();
+    for (idx, hop) in prefix.iter().enumerate() {
+        let far_alias = level_alias(idx + 1);
+        let on = if hop.fk_on_from {
+            let far_pk = pk_of(registered, hop.to_table).ok_or_else(|| {
+                format!(
+                    "cannot resolve primary key of `{}` (is the model registered?)",
+                    hop.to_table
+                )
+            })?;
+            Expr::col((near_alias.clone(), Alias::new(hop.fk_column)))
+                .equals((far_alias.clone(), Alias::new(far_pk)))
+        } else {
+            let near_pk = pk_of(registered, hop.from_table).ok_or_else(|| {
+                format!(
+                    "cannot resolve primary key of `{}` (is the model registered?)",
+                    hop.from_table
+                )
+            })?;
+            Expr::col((near_alias.clone(), Alias::new(near_pk)))
+                .equals((far_alias.clone(), Alias::new(hop.fk_column)))
+        };
+        q.join_as(
+            JoinType::InnerJoin,
+            crate::db::router::schema_qualified_table(hop.to_table),
+            far_alias.clone(),
+            on,
+        );
+        near_alias = far_alias;
+    }
+    // Project the pivot's PK (the last prefix target's PK).
+    let pivot_table = prefix.last().expect("prefix is non-empty").to_table;
+    let pivot_pk = pk_of(registered, pivot_table).ok_or_else(|| {
+        format!("cannot resolve primary key of pivot `{pivot_table}` (is the model registered?)")
+    })?;
+    q.column((near_alias, Alias::new(pivot_pk)));
+    q.and_where(
+        Expr::col((root_alias, Alias::new(base_pk_column))).eq(SimpleExpr::Value(pk_value.clone())),
+    );
+    Ok(q)
 }
