@@ -1,0 +1,7 @@
+error: `#[model(base = ...)]` found no `#[derive(..., Model)]` on the struct below it. `#[model(...)]` must be written ABOVE `#[derive(...)]` (attribute macros expand top-to-bottom and this one has to run first) — check the attribute order. (If you use a renamed import such as `use umbral::orm::Model as Mdl;`, this heuristic can't see it — spell the derive `Model` or ignore this note.)
+ --> tests/model_attr_fixtures/no_model_derive.rs:5:1
+  |
+5 | #[umbral::model(base = TimeStamped)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `umbral::model` (in Nightly builds, run with -Z macro-backtrace for more info)

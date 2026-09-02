@@ -66,6 +66,21 @@ pub use async_trait::async_trait;
 /// "reusable model bases" docs.
 pub use umbral_macros::mixin_cols;
 
+/// `#[umbral::model(base = TimeStamped)]` — embed a [`ModelBase`](orm::ModelBase)
+/// as REAL, flat fields on a model, so inherited columns read natively
+/// (`country.id`, `country.created_at`, never `country.base.id`) — gaps4 #62.
+/// One attribute replaces the old `#[umbral(flatten)] #[serde(flatten)]
+/// #[sqlx(flatten)]` trio on a nested field (gaps4 #64) AND auto-generates the
+/// base's typed column consts, so `Country::CREATED_AT` works with no
+/// hand-written `mixin_cols!` line (gaps4 #67).
+///
+/// Write it ABOVE the `#[derive(Model, …)]` line (attribute macros expand
+/// top-to-bottom; this one has to run before the derives see the struct —
+/// the same rule as `serde_with::serde_as`). Single base per model for now;
+/// use `#[umbral(flatten)]` for multi-base composition. Also re-exported in
+/// the prelude as a bare `#[model(base = …)]`.
+pub use umbral_macros::model;
+
 /// Resolve a list of `Model` types to their `TABLE` strings.
 /// Use anywhere an API takes table names — admin config, model
 /// allowlists, anywhere — so a `#[umbral(table = "...")]` rename
@@ -815,6 +830,12 @@ pub mod orm {
     /// `#[umbral(flatten)] #[serde(flatten)] #[sqlx(flatten)]`. Shares the
     /// `ModelBase` name with the trait.
     pub use umbral_macros::ModelBase;
+
+    /// The `#[model(base = …)]` attribute macro — the recommended way to embed
+    /// a single [`ModelBase`](super::orm::ModelBase) as flat, native fields
+    /// (gaps4 #62/#64/#67). Write it ABOVE the `#[derive(Model, …)]` line. See
+    /// [`umbral::model`](super::model) for the full contract.
+    pub use umbral_macros::model;
 
     /// The `#[derive(Choices)]` proc macro for closed-set enum field
     /// types. Pair the enum derive with `#[umbral(choices)]` on the

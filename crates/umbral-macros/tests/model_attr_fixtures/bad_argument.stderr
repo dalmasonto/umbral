@@ -1,0 +1,5 @@
+error: unknown `#[model(...)]` argument `nonsense`; expected `base = <Base>`
+ --> tests/model_attr_fixtures/bad_argument.rs:3:17
+  |
+3 | #[umbral::model(nonsense)]
+  |                 ^^^^^^^^

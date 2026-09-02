@@ -170,6 +170,143 @@ pub fn mixin_cols(input: TokenStream) -> TokenStream {
     .into()
 }
 
+/// `#[model(base = TimeStamped)]` — embed a `#[derive(ModelBase)]` base as
+/// REAL, top-level fields, so a based model reads and writes flat: `country.id`
+/// and `country.created_at`, never `country.base.id` (gaps4 #62). A single
+/// `#[model(base = …)]` replaces the old three-attribute incantation
+/// (`#[umbral(flatten)] #[serde(flatten)] #[sqlx(flatten)]` on a nested field —
+/// gaps4 #64), and the base's typed column consts (`Country::CREATED_AT`) come
+/// for free with no hand-written `mixin_cols!` line (gaps4 #67).
+///
+/// # Ordering: this MUST sit ABOVE the `#[derive(...)]` line
+///
+/// Attribute macros on an item expand top-to-bottom, so `#[model(base = …)]`
+/// has to run *before* `#[derive(Model, …)]` sees the struct — it splices the
+/// base's fields in first, then hands the now-flat struct to the derives. Write
+/// it above the derive line, exactly like `serde_with::serde_as`:
+///
+/// ```ignore
+/// #[model(base = TimeStamped)]
+/// #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow, umbral::orm::Model)]
+/// #[umbral(table = "country")]
+/// pub struct Country {
+///     pub name: String,
+/// }
+/// ```
+///
+/// # How it works
+///
+/// The macro does almost nothing itself: it repackages the untouched struct
+/// tokens as the argument to `__umbral_base_fields_<Base>!`, a companion
+/// `macro_rules!` the base's own `#[derive(ModelBase)]` exported. That macro
+/// pattern-matches `struct $name { $fields }` and re-emits the struct with the
+/// base's real field declarations inlined ahead of the user's own, then
+/// auto-invokes the base's `mixin_cols!`. The result is an ordinary flat struct
+/// with an ordinary `#[derive(Model, …)]` — the derive's existing `flatten_bases`
+/// path never triggers, so this is purely additive and coexists with the old
+/// `#[umbral(flatten)]` mechanism (still used for multi-base models).
+///
+/// # Single base only (phase 1)
+///
+/// Composing N bases through this lever needs a continuation-passing
+/// `macro_rules!` (a base's field-splice macro can't have another invocation
+/// nested in its argument — macro expansion isn't eager). Until that lands, a
+/// model needing more than one base keeps using the old `#[umbral(flatten)]`
+/// mechanism, which has no such limitation.
+#[proc_macro_attribute]
+pub fn model(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = match syn::parse::<ModelAttrArgs>(attr) {
+        Ok(a) => a,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    let item2: TokenStream2 = item.into();
+
+    // Cheap ordering safety net (see doc above). The tokens below
+    // `#[model(...)]` should carry a `#[derive(..., Model)]`. If a
+    // well-formed struct parses but names no `Model` derive, the most
+    // likely cause is `#[model(...)]` written BELOW the derive line, or the
+    // derive omitted entirely — turn that into a clear message rather than a
+    // downstream "no primary key" / trait-bound error.
+    if !derives_mention_model(&item2) {
+        let msg = "`#[model(base = ...)]` found no `#[derive(..., Model)]` on the struct \
+                   below it. `#[model(...)]` must be written ABOVE `#[derive(...)]` \
+                   (attribute macros expand top-to-bottom and this one has to run first) — \
+                   check the attribute order. (If you use a renamed import such as \
+                   `use umbral::orm::Model as Mdl;`, this heuristic can't see it — spell the \
+                   derive `Model` or ignore this note.)";
+        return syn::Error::new(proc_macro2::Span::call_site(), msg)
+            .to_compile_error()
+            .into();
+    }
+
+    let macro_path = base_fields_macro_path(&args.base);
+    quote! { #macro_path! { #item2 } }.into()
+}
+
+/// Parsed form of `#[model(base = <TypePath>)]` — single base for phase 1.
+struct ModelAttrArgs {
+    base: syn::TypePath,
+}
+
+impl syn::parse::Parse for ModelAttrArgs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let key: syn::Ident = input.parse().map_err(|_| {
+            syn::Error::new(
+                input.span(),
+                "expected `#[model(base = <Base>)]` — a single `#[derive(ModelBase)]` base",
+            )
+        })?;
+        if key != "base" {
+            return Err(syn::Error::new(
+                key.span(),
+                format!("unknown `#[model(...)]` argument `{key}`; expected `base = <Base>`"),
+            ));
+        }
+        input.parse::<syn::Token![=]>()?;
+        let base: syn::TypePath = input.parse()?;
+        if !input.is_empty() {
+            return Err(syn::Error::new(
+                input.span(),
+                "`#[model(...)]` takes a single `base = <Base>` for now — multiple bases via \
+                 one `#[model(...)]` are not supported yet; keep using `#[umbral(flatten)]` for \
+                 additional bases",
+            ));
+        }
+        Ok(ModelAttrArgs { base })
+    }
+}
+
+/// Best-effort check that the struct below `#[model(base = …)]` carries a
+/// `#[derive(..., Model)]`. Returns `true` (don't block) when the tokens
+/// don't parse as a struct — the downstream expansion will surface any real
+/// error. Only a well-formed struct with no `Model`-naming derive returns
+/// `false`, driving the ordering-hint error in `model`.
+fn derives_mention_model(item: &TokenStream2) -> bool {
+    let Ok(di) = syn::parse2::<DeriveInput>(item.clone()) else {
+        return true;
+    };
+    for attr in &di.attrs {
+        if attr.path().is_ident("derive") {
+            let mut found = false;
+            let _ = attr.parse_nested_meta(|meta| {
+                if meta
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|s| s.ident == "Model")
+                {
+                    found = true;
+                }
+                Ok(())
+            });
+            if found {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Parsed form of `mixin_cols!(Model: Base1, Base2 [+ …])`.
 struct MixinCols {
     model: syn::Type,
@@ -205,9 +342,26 @@ impl syn::parse::Parse for MixinCols {
 /// base (bare, or `crate::`/`self::`/`super::`-prefixed) resolves
 /// unqualified.
 fn base_cols_macro_path(base: &syn::TypePath) -> TokenStream2 {
+    base_companion_macro_path(base, "__umbral_base_cols_")
+}
+
+/// Path to the `__umbral_base_fields_<Base>` macro the base's `ModelBase`
+/// derive emits (gaps4 #62/#64/#67) — the sibling of the `__umbral_base_cols_`
+/// resolver, sharing the identical same-crate/cross-crate spelling rule.
+fn base_fields_macro_path(base: &syn::TypePath) -> TokenStream2 {
+    base_companion_macro_path(base, "__umbral_base_fields_")
+}
+
+/// Shared same-crate/cross-crate resolver for a base's `#[macro_export]`
+/// companion macros (`__umbral_base_cols_<Base>`, `__umbral_base_fields_
+/// <Base>`). `#[macro_export]` hoists the macro to the base crate's ROOT,
+/// so a base named with a leading foreign-crate segment resolves as
+/// `<crate>::<prefix><Base>`; a same-crate base (bare, or `crate::` /
+/// `self::` / `super::`-prefixed) resolves unqualified.
+fn base_companion_macro_path(base: &syn::TypePath, prefix: &str) -> TokenStream2 {
     let segs = &base.path.segments;
     let last = segs.last().expect("a type path has at least one segment");
-    let macro_ident = format_ident!("__umbral_base_cols_{}", last.ident);
+    let macro_ident = format_ident!("{}{}", prefix, last.ident);
     let first = &segs.first().unwrap().ident;
     let leading_is_crate = matches!(
         first.to_string().as_str(),
@@ -2674,6 +2828,51 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
         }
         let cols_macro_ident = format_ident!("__umbral_base_cols_{}", struct_name);
 
+        // gaps4 #62/#64/#67 — the field-splice companion macro. Alongside the
+        // column-const macro above, collect each field's RAW token form
+        // (`quote!{ #field }` reproduces `#[attr] vis name: Ty` verbatim,
+        // attributes included) and emit a second `#[macro_export]` macro that
+        // pattern-matches `struct $name { $user_fields }` and re-emits the
+        // struct with these base fields inlined AHEAD of the user's own.
+        // `#[model(base = <Base>)]` (the proc-macro attribute) is the only
+        // thing that invokes it; the developer never types the macro name.
+        //
+        // #67 falls out for FREE here: because the base's columns become the
+        // model's OWN fields, the model's `#[derive(Model)]` auto-emits their
+        // typed consts (`Country::CREATED_AT`) exactly like any own field — no
+        // `mixin_cols!` needed (and auto-invoking one would double-define the
+        // consts). That's why this macro emits ONLY the flat struct, unlike the
+        // old `#[umbral(flatten)]` path where the base is a nested value and
+        // `mixin_cols!` is the only way to surface the consts.
+        //
+        // Single base only: N-base composition through this lever needs a
+        // continuation-passing macro (a nested `__umbral_base_fields_B!{…}`
+        // inside `__umbral_base_fields_A!`'s argument is NOT pre-expanded, so
+        // A's matcher can't see B's fields). Multi-base models keep using the
+        // derive-based `#[umbral(flatten)]` path, which has no such limit.
+        let raw_field_tokens: Vec<TokenStream2> =
+            fields.iter().map(|field| quote! { #field }).collect();
+        let fields_macro_ident = format_ident!("__umbral_base_fields_{}", struct_name);
+        // A literal `#` for the macro_rules matcher/body: quote! reserves `#`
+        // for interpolation, so a standalone pound is interpolated in.
+        let pound = proc_macro2::Punct::new('#', proc_macro2::Spacing::Alone);
+        let fields_macro = quote! {
+            #[macro_export]
+            #[doc(hidden)]
+            macro_rules! #fields_macro_ident {
+                (
+                    $( #pound [ $struct_attr:meta ] )*
+                    $vis:vis struct $name:ident { $( $user_fields:tt )* }
+                ) => {
+                    $( #pound [ $struct_attr ] )*
+                    $vis struct $name {
+                        #( #raw_field_tokens , )*
+                        $( $user_fields )*
+                    }
+                };
+            }
+        };
+
         // gaps4 #63(b) — cheap win: auto-emit `impl Default` (plus a `new()`
         // alias) for the base, so a model's construction site collapses
         // from `base: TimeStamped { id: 0, created_at: <epoch>, updated_at:
@@ -2717,6 +2916,8 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                     #(#base_col_consts)*
                 };
             }
+
+            #fields_macro
 
             // gaps4 #63(b): every auto-managed field (PK sentinel,
             // `auto_now_add`/`auto_now`/`auto_uuid`) is overwritten on
