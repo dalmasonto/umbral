@@ -1,0 +1,92 @@
+---
+title: Relation traversal
+description: Chain forward FK/O2O, reverse O2O, M2M, and reverse-FK accessors from any loaded object, deep and mixed, then filter/order/aggregate the result.
+sidebar_position: 22
+icon: git-branch
+tags: [orm, relations, traversal, foreign-key, m2m, one-to-one]
+---
+
+Once you've loaded an object, you often want to walk its relationship graph without a fresh `.filter(...)` for every hop: `post.author()`, `dev.software_groups().software()`, `user.developer().software_groups()`. Relation traversal generates one accessor method per relation on `#[derive(Model)]` — forward FK, forward and reverse one-to-one, many-to-many, and reverse FK — so you can chain arbitrarily deep (5+ hops, mixed kinds) and land on either a single object or a `QuerySet` you can further `.filter()` / `.order_by()` / `.aggregate()`. The ORM resolves the whole chain to as few round-trips as correctness allows: an all-to-one prefix compiles to one JOIN query, and crossing into a to-many relation resolves the leaf through a JOIN or an `IN`-subquery, deduplicated by primary key by default.
+
+## Why the accessors are awaited methods
+
+Rust has no lazy attribute access — there's no way for `post.author` to secretly run a query the way Django's descriptor protocol does. Every accessor is instead an `async` method you call and (eventually) `.await`, and the framework threads the ambient pool through so you never pass one by hand.
+
+## The accessors
+
+| Relation kind | Accessor returns |
+|---|---|
+| Forward FK, forward O2O, reverse O2O | `Relation<T>` |
+| M2M, reverse FK | `QuerySet<T>` (reverse FK keeps its existing `<child>_set()` name) |
+
+Both types come from the same generated trait, `<Model>Relations`, emitted by `#[derive(Model)]` for every model with a relation — nothing to declare beyond the field itself.
+
+## `Relation<T>`: awaiting is required, `.get_opt()` is the "maybe" read
+
+`Relation<T>` is chainable *and* awaitable. Awaiting it directly (`.await?`, equivalent to `.get().await?`) resolves to `Result<T>` — this is a **required** read: if the target row is missing, it errors (`sqlx::Error::RowNotFound`) rather than returning `None`. That's correct for a required forward FK, where a missing target means referential integrity is already broken.
+
+When absence is legitimate — a nullable forward FK, or a reverse one-to-one that may not exist yet — call `.get_opt().await?` instead, which resolves to `Result<Option<T>>`.
+
+```rust
+// Forward FK, NOT NULL — errors if the author row is somehow gone.
+let author = post.author().await?;
+
+// Reverse O2O — a user may not have a profile yet, so read it as Option.
+let profile = user.profile().get_opt().await?;
+```
+
+<Callout type="warning">
+Don't `.await?` a nullable or reverse-O2O relation expecting `None` on a missing row — it returns `Err`, not `Ok(None)`. Use `.get_opt().await?` whenever absence is a normal outcome.
+</Callout>
+
+## To-many accessors return a `QuerySet<T>`
+
+M2M and reverse-FK accessors return the existing chainable `QuerySet<T>`, so every terminal you already use — `.filter()`, `.order_by()`, `.count()`, `.fetch()`, `.aggregate()` — composes directly:
+
+```rust
+let active_groups = dev
+    .software_groups()
+    .filter(software_group::ACTIVE.eq(true))
+    .count()
+    .await?;
+```
+
+## Deep, mixed chains
+
+Accessors keep composing across relation kinds without forcing a mid-chain `.await`. A chain that stays all-to-one (FK/O2O hops only) resolves to a single JOIN query at the terminal; the first to-many hop widens the chain to a `QuerySet`, and everything after that fans out from the leaf:
+
+```rust
+// to-one → to-many → to-many, one JOIN/IN-subquery chain to the leaf
+let software = user
+    .developer()          // Relation<Developer>  (reverse O2O)
+    .software_groups()    // QuerySet<SoftwareGroup>  (M2M)
+    .software()           // QuerySet<Software>  (M2M)
+    .all()
+    .await?;
+```
+
+Leaf rows reached through more than one path are deduplicated by primary key by default. Call `.with_duplicates()` before the terminal to see the raw JOIN multiplicity instead:
+
+```rust
+let with_repeats = dev
+    .software_groups()
+    .software()
+    .with_duplicates()
+    .all()
+    .await?;
+```
+
+## Bringing the accessors into scope
+
+The generated `<Model>Relations` trait needs to be in scope for its methods to resolve, same as any Rust trait method. `use <your model module>::*;` (the same glob you likely already have for the model's column constants) brings it in; you don't hand-`use` each relation trait individually.
+
+## Scope for this phase
+
+Phase 1 supports an all-to-one prefix followed by to-many hops (`.to_one().to_one().to_many().to_many()...`). The reverse ordering — a to-one hop *after* a to-many hop in the same chain — isn't wired up yet; call `.all()` (or another terminal) on the to-many `QuerySet` first, then traverse further from the returned rows. Cross-relation `__` filters inside `.filter(...)` (e.g. filtering `Developer` by a field on `SoftwareGroup`) are also a later phase — Phase 1 is the traversal accessors and their SQL resolution, not the WHERE-side.
+
+## See also
+
+- [Relationships](./relationships) — declaring `ForeignKey<T>`, `OneToOne<T>`, `M2M<T>`, `.resolve()`, `select_related`, `prefetch_related`.
+- [Joins](./joins) — `join_related` for folding relations into the main SELECT with JOIN control.
+- [Aggregates and annotate](./aggregates) — `.aggregate()` / `.annotate()` on the `QuerySet` a to-many accessor returns.
+- `docs/specs/orm-relation-traversal.md` in the repository — the full design doc: the `Relation<T>` / `IntoFuture` mechanics, the path-to-SQL resolver, and the phasing plan for cross-relation WHERE filters and beyond.
