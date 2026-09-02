@@ -202,7 +202,7 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 
 85. [x] Typed UPDATE path now freezes `auto_user_add` + refreshes `auto_user` to the current caller (sibling of #68), via the same ambient `route_context::current_user_id` the dynamic/insert paths use — archived
 
-86. [ ] **The auth reset PATH (`/auth/reset`) is not operator-configurable — only the whole origin (via `app_url`, #81).** An app whose frontend reset route differs from `/auth/reset` (e.g. `/account/reset-password`) can point the origin at the frontend but can't change the path segment. The path is a `pub(crate) const RESET_PATH` in `plugins/umbral-auth/src/auth_routes.rs`. Making it settable belongs on an `AuthPlugin` builder or an auth-scoped setting (not core `Settings`), which is more than the small change #81 was scoped to. Low-medium priority. (Surfaced closing #81.)
+86. [x] Auth reset link PATH is now operator-configurable via `AuthPlugin::reset_path(...)` (sealed at on_ready, default `/auth/reset`) — companion to #81's app_url origin — archived
 
 ---
 
