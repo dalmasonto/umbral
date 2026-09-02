@@ -61,6 +61,32 @@
 //! - Login / logout / password-reset HTTP flows. Needs the full
 //!   `umbral-sessions` session middleware wired end-to-end.
 //! - Periodic session cleanup via `umbral-tasks`.
+//!
+//! ## Task-backed and umbral-email-delegating mailers (gaps4 #82)
+//!
+//! `active_mailer().send(...)` runs inline in the request path by default,
+//! and the default mailer ([`ConsoleMailer`]) only prints. umbral-auth itself
+//! stays dependency-free of both `umbral-tasks` and `umbral-email` (a
+//! REST-only or admin-only app must not compile a mail stack or a task
+//! queue it never uses), so both upgrades are adapters that live in the
+//! OTHER crate and plug into the existing [`AuthPlugin::mailer`] seam:
+//!
+//! - `umbral_tasks::auth_mailer()` (behind umbral-tasks' `auth-mailer`
+//!   feature): enqueues each [`OutgoingMail`] as a background task instead
+//!   of sending inline, so a slow/failing send gets the queue's
+//!   retry/backoff off the request path.
+//! - `umbral_email::auth_mailer()` (behind umbral-email's `auth` feature):
+//!   delegates to `umbral_email::send`, so `UMBRAL_EMAIL_BACKEND` + one
+//!   provider config covers auth mail too.
+//! - Combine both: `umbral_tasks::auth_mailer_with(umbral_email::auth_mailer())`
+//!   — task-backed delivery through umbral-email's configured backend.
+//!
+//! See the `auth/mailer` doc page and
+//! `docs/decisions/2026-06-28-auth-full-surface.md` for the acyclic-dependency
+//! rationale (a plugin-to-plugin dependency is fine as long as the arrow
+//! doesn't loop back — `umbral-tasks` optionally depends on `umbral-admin`,
+//! which depends on `umbral-auth`, so the reverse `umbral-auth -> umbral-tasks`
+//! edge would cycle).
 
 pub mod auth_routes;
 pub mod bearer_auth;

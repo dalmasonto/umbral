@@ -1079,6 +1079,71 @@ pub fn render_email_body<C: Serialize>(
 }
 
 // =========================================================================
+// umbral-auth adapter (gaps4 #82b, optional `auth` feature)
+// =========================================================================
+//
+// This is the ACYCLIC direction of the email/auth pairing: umbral-email
+// depends on umbral-auth (optionally), never the other way round.
+// `umbral-auth` deliberately has no dependency on `umbral-email` — a REST
+// API that never sends auth mail must not compile a mail stack (see
+// docs/decisions/2026-06-28-auth-full-surface.md). The delegation adapter
+// therefore lives HERE, gated behind this crate's own optional `auth`
+// feature, so an app with no `umbral-auth` dependency never compiles it in
+// either.
+#[cfg(feature = "auth")]
+mod auth_adapter {
+    use super::EmailMessage;
+
+    /// [`umbral_auth::AuthMailer`] adapter that delegates every
+    /// verification / password-reset email to this plugin's configured
+    /// backend (console in dev, SMTP or the HTTP API in production per
+    /// `UMBRAL_EMAIL_BACKEND` + the usual settings keys — see the module
+    /// docs). Build with [`super::auth_mailer`]; there is no state to
+    /// configure on the adapter itself.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct AuthEmailMailer;
+
+    #[async_trait::async_trait]
+    impl umbral_auth::AuthMailer for AuthEmailMailer {
+        async fn send(
+            &self,
+            mail: umbral_auth::OutgoingMail,
+        ) -> Result<(), umbral_auth::AuthMailError> {
+            // `from` is left unset: `crate::send` resolves it from the
+            // `email_default_from` setting, matching every other message
+            // sent through this plugin — an auth email isn't special-cased.
+            let mut msg = EmailMessage::new(mail.subject, vec![mail.to]).text_body(mail.text);
+            if !mail.html.is_empty() {
+                msg = msg.html_body(mail.html);
+            }
+            super::send(&msg)
+                .await
+                .map_err(|e| umbral_auth::AuthMailError::Send(e.to_string()))
+        }
+    }
+}
+
+#[cfg(feature = "auth")]
+pub use auth_adapter::AuthEmailMailer;
+
+/// One-line `AuthMailer` that routes umbral-auth's verification and
+/// password-reset emails through THIS plugin's configured backend, so
+/// `UMBRAL_EMAIL_BACKEND` + one provider config covers auth mail too —
+/// no separate SMTP/API wiring for auth. Requires this crate's `auth`
+/// cargo feature.
+///
+/// ```ignore
+/// AuthPlugin::<AuthUser>::default().mailer(umbral_email::auth_mailer());
+///
+/// // Or combine with the task-backed mailer (gaps4 #82a) for retry/backoff:
+/// AuthPlugin::<AuthUser>::default().mailer_via_task_with(umbral_email::auth_mailer());
+/// ```
+#[cfg(feature = "auth")]
+pub fn auth_mailer() -> AuthEmailMailer {
+    AuthEmailMailer
+}
+
+// =========================================================================
 // Test-only helpers
 // =========================================================================
 

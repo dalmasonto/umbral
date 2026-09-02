@@ -68,6 +68,18 @@ tracing = "0.1"
 # calling into umbral-sessions for the row + cookie primitives. No
 # cycle: sessions is now user-agnostic.
 umbral-sessions = { path = "../umbral-sessions", version = "0.0.12" }
+# NOTE (gaps4 #82): umbral-auth deliberately takes NO optional dependency on
+# either umbral-tasks or umbral-email, even feature-gated. umbral-email is
+# excluded on purpose — a REST API that never sends auth mail must not
+# compile a mail stack (docs/decisions/2026-06-28-auth-full-surface.md).
+# umbral-tasks is excluded because it would be a structural cycle: cargo
+# treats an optional dependency as a graph edge regardless of feature
+# activation, and umbral-tasks already optionally depends on umbral-admin,
+# which unconditionally depends on umbral-auth (auth -> tasks -> admin ->
+# auth). Both adapters therefore live on the OTHER side, in the acyclic
+# direction: `umbral_email::auth_mailer()` and `umbral_tasks::auth_mailer()`
+# each implement `AuthMailer` and are wired with the plain `.mailer(...)`
+# builder already below — no new builder method needed here.
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }

@@ -16,6 +16,15 @@ umbral = { path = "../../crates/umbral", version = "0.0.12" }
 # Feature-gated so a tasks-only app (no admin) compiles without pulling the
 # admin into its dependency graph.
 umbral-admin = { path = "../umbral-admin", version = "0.0.12", optional = true }
+# `auth_mailer()` / `auth_mailer_with()` (gaps4 #82a): an `AuthMailer`
+# adapter that enqueues umbral-auth's verification/password-reset emails as
+# a task instead of sending them inline. Optional and off by default so a
+# tasks-only app (no umbral-auth dependency) never compiles it in. The
+# arrow runs tasks -> auth, not the reverse: umbral-auth cannot depend on
+# umbral-tasks without cycling back through `umbral-admin` (which
+# unconditionally depends on umbral-auth) — see the note on
+# plugins/umbral-auth/Cargo.toml and docs/decisions/2026-06-28-auth-full-surface.md.
+umbral-auth = { path = "../umbral-auth", version = "0.0.12", optional = true, default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -32,6 +41,10 @@ default = ["admin"]
 # admin is a built-in; turn it off (`default-features = false`) for a slim
 # tasks-only build that doesn't pull the admin into its dependency graph.
 admin = ["dep:umbral-admin"]
+# `auth_mailer()` / `auth_mailer_with()`: the task-backed `AuthMailer`
+# adapter (gaps4 #82a). Off by default — pulls in umbral-auth only when an
+# app actually wants queued auth email.
+auth-mailer = ["dep:umbral-auth"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }

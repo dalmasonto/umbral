@@ -2041,3 +2041,159 @@ pub fn periodic_admin_model() -> umbral_admin::AdminModel {
             "created_at",
         ])
 }
+
+// =========================================================================
+// Task-backed auth mailer (gaps4 #82a, optional `auth-mailer` feature).
+// =========================================================================
+//
+// umbral-auth's `active_mailer().send(...)` runs INLINE in the request path
+// (`password-forgot`, `verify-email`, ...): a slow or failing SMTP/provider
+// call blocks the HTTP response, with no retry/backoff. This adapter fixes
+// that by implementing `umbral_auth::AuthMailer` as "enqueue a task"
+// instead of "send now" — the request returns as soon as the row is
+// written, and the queue's retry/backoff covers the real delivery, which
+// runs off-request in whichever process runs `tasks-worker`.
+//
+// This lives HERE, not in umbral-auth, because of the dependency direction:
+// umbral-auth cannot depend on umbral-tasks without creating a cycle
+// (umbral-tasks optionally depends on umbral-admin, which unconditionally
+// depends on umbral-auth — cargo counts an optional dependency as a graph
+// edge regardless of whether its feature is active, so
+// `auth -> tasks -> admin -> auth` would cycle no matter which features are
+// on). `umbral-tasks -> umbral-auth` is the acyclic direction, matching the
+// `umbral_email::auth_mailer()` adapter's own reasoning
+// (docs/decisions/2026-06-28-auth-full-surface.md).
+//
+// The `#[umbral::task]` proc-macro itself isn't used here: its generated
+// code references `::umbral_tasks::...` (a global path requiring
+// `umbral_tasks` in the extern prelude), which doesn't resolve from INSIDE
+// the umbral_tasks crate itself without an `extern crate self as
+// umbral_tasks;` declaration. Hand-writing the same shape the macro
+// generates (a `Task` marker + `register_handler` + an `inventory::submit!`
+// for gaps4 #40 autodiscovery) sidesteps that and keeps this file free of
+// crate-self-reference tricks.
+#[cfg(feature = "auth-mailer")]
+mod auth_mailer {
+    use std::sync::{Arc, OnceLock};
+    use umbral_auth::{AuthMailError, AuthMailer, ConsoleMailer, OutgoingMail};
+
+    /// The queue name every [`AuthTaskMailer`] enqueue rides, and the
+    /// handler name the built-in task body registers under.
+    pub const SEND_AUTH_EMAIL_TASK: &str = "umbral_auth::send_email";
+
+    /// The mailer the built-in task body actually delivers through once
+    /// dequeued. `None` (the default — nothing installed by
+    /// [`auth_mailer`]/[`auth_mailer_with`]) falls back to
+    /// [`ConsoleMailer`], the same zero-config default umbral-auth itself
+    /// uses for the inline path.
+    static DELIVERY: OnceLock<Arc<dyn AuthMailer>> = OnceLock::new();
+
+    fn delivery_mailer() -> Arc<dyn AuthMailer> {
+        DELIVERY
+            .get()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(ConsoleMailer))
+    }
+
+    /// The task-backed [`AuthMailer`]. Carries no state itself — the real
+    /// delivery mailer lives in the [`DELIVERY`] static, set separately by
+    /// [`auth_mailer_with`], so this same unit type works whichever process
+    /// (the web server enqueuing, or `tasks-worker` delivering) is running.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct AuthTaskMailer;
+
+    #[async_trait::async_trait]
+    impl AuthMailer for AuthTaskMailer {
+        async fn send(&self, mail: OutgoingMail) -> Result<(), AuthMailError> {
+            crate::enqueue(SEND_AUTH_EMAIL_TASK, mail, crate::EnqueueOptions::default())
+                .await
+                .map(|_id| ())
+                .map_err(|e| AuthMailError::Send(format!("umbral-tasks enqueue failed: {e}")))
+        }
+    }
+
+    /// The default task body: dequeues an [`OutgoingMail`] and hands it to
+    /// [`delivery_mailer`] — [`ConsoleMailer`] unless [`auth_mailer_with`]
+    /// installed something else. Registered under [`SEND_AUTH_EMAIL_TASK`],
+    /// same shape `#[umbral::task]` would generate: a `payload deserialise
+    /// error` on a bad payload, `Ok`/`Err` from the inner send otherwise.
+    async fn deliver(payload_json: &str) -> Result<(), String> {
+        let mail: OutgoingMail = serde_json::from_str(payload_json)
+            .map_err(|e| format!("payload deserialise error: {e}"))?;
+        delivery_mailer()
+            .send(mail)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    fn register() {
+        crate::register_handler(SEND_AUTH_EMAIL_TASK, |payload_json: &str| {
+            let owned = payload_json.to_owned();
+            async move { deliver(&owned).await }
+        });
+    }
+
+    // gaps4 #40: self-register into the link-time task slice, exactly like
+    // `#[umbral::task]`-generated code does, so `register_discovered()`
+    // (called by `TasksPlugin::on_ready` and by the `tasks-worker` /
+    // `tasks-beat` commands) finds this handler with no manual wiring, as
+    // long as this crate was built with `auth-mailer` and `TasksPlugin` is
+    // registered in the same binary.
+    crate::inventory::submit! {
+        crate::TaskRegistration {
+            name: SEND_AUTH_EMAIL_TASK,
+            register,
+        }
+    }
+
+    /// Install the mailer [`deliver`] actually sends through. First call
+    /// wins (mirrors every other ambient seal in this codebase); called by
+    /// [`super::auth_mailer_with`].
+    pub(crate) fn install_delivery(inner: Arc<dyn AuthMailer>) {
+        let _ = DELIVERY.set(inner);
+    }
+}
+
+#[cfg(feature = "auth-mailer")]
+pub use auth_mailer::{AuthTaskMailer, SEND_AUTH_EMAIL_TASK};
+
+/// A task-backed [`umbral_auth::AuthMailer`] (gaps4 #82a): sending an auth
+/// email enqueues it instead of delivering it inline, so a slow/failing
+/// send doesn't block the request — the queue's retry/backoff covers
+/// delivery, which runs off-request wherever `tasks-worker` runs. Delivery
+/// itself defaults to `umbral_auth::ConsoleMailer` (stderr) — the same
+/// zero-config dev default umbral-auth uses inline. Requires `TasksPlugin`
+/// registered in the SAME binary (the web process AND any separate
+/// `tasks-worker` process) — otherwise the enqueued row has no handler and
+/// the worker marks it `failed` with `HandlerNotFound`, or it sits
+/// `pending` forever if no worker runs at all.
+///
+/// ```ignore
+/// App::builder()
+///     .plugin(umbral_tasks::TasksPlugin::default())
+///     .plugin(AuthPlugin::<AuthUser>::default().mailer(umbral_tasks::auth_mailer()))
+///     .build()?
+/// ```
+#[cfg(feature = "auth-mailer")]
+pub fn auth_mailer() -> AuthTaskMailer {
+    AuthTaskMailer
+}
+
+/// Same as [`auth_mailer`], but `inner` is the mailer the queued task
+/// actually delivers through instead of `ConsoleMailer` — the override
+/// point for reaching a real transport (SMTP, an external provider,
+/// [`umbral_email::auth_mailer()`](../umbral_email/fn.auth_mailer.html))
+/// WITHOUT umbral-auth ever knowing tasks or email exist. Every auth email
+/// still rides the queue for retry/backoff; only the final delivery step
+/// changes.
+///
+/// ```ignore
+/// // Task-backed AND delegated to umbral-email's configured backend:
+/// AuthPlugin::<AuthUser>::default()
+///     .mailer(umbral_tasks::auth_mailer_with(umbral_email::auth_mailer()))
+/// ```
+#[cfg(feature = "auth-mailer")]
+pub fn auth_mailer_with(inner: impl umbral_auth::AuthMailer + 'static) -> AuthTaskMailer {
+    auth_mailer::install_delivery(std::sync::Arc::new(inner));
+    AuthTaskMailer
+}

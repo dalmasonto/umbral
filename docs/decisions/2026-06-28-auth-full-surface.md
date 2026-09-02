@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Approved, pre-implementation |
 | **Date** | 2026-06-28 |
-| **Touches** | `plugins/umbral-auth`, `crates/umbral-core` (one new ambient), `plugins/umbral-rest` (publishes base path), `plugins/umbral-email` (optional adapter), `documentation/docs/v0.0.1/auth/` |
+| **Touches** | `plugins/umbral-auth`, `crates/umbral-core` (one new ambient), `plugins/umbral-rest` (publishes base path), `plugins/umbral-email` (optional adapter), `plugins/umbral-tasks` (optional task-backed adapter, gaps4 #82a), `documentation/docs/v0.0.1/auth/` |
 | **Companions** | `docs/specs/outlines/auth-and-sessions.md`, `docs/specs/outlines/email.md`, `docs/specs/02-plugin-contract.md` |
 
 ## Purpose
@@ -167,7 +167,7 @@ Each: purpose, one example, link back to this design note.
 - Authenticated `change-password` (distinct from forgot/reset).
 - Magic-link / passwordless login.
 - TOTP / 2FA.
-- Durable retry queue for mail (belongs to an `umbral-email` + `umbral-tasks` integration).
+- ~~Durable retry queue for mail (belongs to an `umbral-email` + `umbral-tasks` integration).~~ Shipped for auth specifically as `umbral_tasks::auth_mailer()` / `auth_mailer_with(...)` (gaps4 #82a) — enqueue-then-deliver with the queue's retry/backoff, wired via the same `.mailer(...)` seam. The general-purpose `umbral-email`-wide durable send (`send_durable`, an `email_send` task, an outbox `Destination`, delivery-status tracking) is a separate, larger, unratified design — see `docs/decisions/2026-08-08-email-retry-providers-and-notifications.md` #53.
 
 These are natural follow-ups; each can be its own spec.
 

@@ -3,6 +3,7 @@
 //! (default: print to stderr). Keeps auth decoupled from any mail crate.
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::{Arc, OnceLock};
 
@@ -15,7 +16,7 @@ use std::sync::{Arc, OnceLock};
 /// Marked `#[non_exhaustive]`: future auth flows (magic links, custom-action
 /// notifications, …) add variants, so always include a `_ => { … }` arm when
 /// you match on it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum MailKind {
     /// Email-address verification. `code` is the plaintext 6-digit one-time
@@ -35,7 +36,11 @@ pub enum MailKind {
 /// control can ignore them and build its own message from `kind`, `to`, and
 /// `username` (e.g. call a transactional-email provider with a template id and
 /// the verification code as a merge variable).
-#[derive(Debug, Clone)]
+///
+/// `Serialize`/`Deserialize` (gaps4 #82a): so it can ride a task payload for
+/// `umbral_tasks::auth_mailer()`'s task-backed [`AuthMailer`] — the queue
+/// persists it as JSON between enqueue and the worker picking it up.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutgoingMail {
     /// Recipient email address.
     pub to: String,
@@ -156,3 +161,16 @@ pub(crate) fn active_mailer() -> Arc<dyn AuthMailer> {
 pub(crate) fn install_mailer(m: Arc<dyn AuthMailer>) {
     let _ = MAILER.set(m);
 }
+
+// NOTE (gaps4 #82a): a task-backed `AuthMailer` (enqueue instead of sending
+// inline) is NOT implemented in this crate. `umbral-auth` cannot take a
+// dependency on `umbral-tasks` — even optional, even feature-gated — without
+// creating a structural cycle: `umbral-tasks` optionally depends on
+// `umbral-admin`, which unconditionally depends on `umbral-auth`, so
+// `auth -> tasks -> admin -> auth` cycles regardless of which features are
+// active (cargo treats an optional dependency as a graph edge whether or not
+// its feature is enabled). The task-backed mailer lives on the acyclic side
+// instead: `umbral_tasks::auth_mailer()` implements this crate's
+// [`AuthMailer`] trait and is wired with the plain `.mailer(...)` builder
+// below, e.g. `AuthPlugin::default().mailer(umbral_tasks::auth_mailer())`.
+// See that function's doc comment for the enqueue/deliver split.

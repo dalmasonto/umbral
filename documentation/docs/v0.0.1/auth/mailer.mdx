@@ -34,29 +34,39 @@ pub enum MailKind {
 
 <Callout type="info">`MailKind` is `#[non_exhaustive]` - future auth flows (magic links, custom-action notifications) will add variants, so always include a `_ => { ... }` arm when you match on it.</Callout>
 
-## The simplest wiring: forward the rendered body
+## The simplest wiring: `umbral_email::auth_mailer()`
 
-If you just want delivery and are happy with the default email wording, ignore `kind` and send the rendered `subject`/`html`/`text`. This one-liner delegates to the umbral-email plugin:
+If you just want delivery and are happy with the default email wording, delegate to the umbral-email plugin with its one-line adapter — enable that plugin's `auth` cargo feature and wire it in:
 
 ```rust
-use umbral_auth::{AuthPlugin, AuthUser, OutgoingMail, AuthMailError};
+use umbral_auth::{AuthPlugin, AuthUser};
 
 AuthPlugin::new()
     .with_default_routes()
     .require_verified_email()
-    .mailer(|m: OutgoingMail| async move {
-        umbral_email::send(
-            umbral_email::EmailMessage::new(m.subject, vec![m.to])
-                .html_body(m.html)
-                .text_body(m.text),
-        )
-        .await
-        .map(|_| ())
-        .map_err(|e| AuthMailError::Send(e.to_string()))
-    });
+    .mailer(umbral_email::auth_mailer());
 ```
 
-`AuthPlugin::mailer` accepts any async closure `Fn(OutgoingMail) -> Future<Output = Result<(), AuthMailError>>`, or any type that implements [`AuthMailer`].
+`auth_mailer()` forwards the rendered `subject`/`html`/`text` through `umbral_email::send`, so `UMBRAL_EMAIL_BACKEND` (console / SMTP / API) and the usual `email_*` settings cover auth mail too — one provider config for every framework email, not a separate wire-up per plugin.
+
+<Callout type="info">`umbral-auth` itself has no dependency on `umbral-email` (see [Why the adapter lives in umbral-email](#why-the-adapter-lives-in-umbral-email-not-umbral-auth) below) — the adapter only appears once you enable umbral-email's `auth` feature.</Callout>
+
+You can still hand `AuthPlugin::mailer` a plain async closure instead — it accepts any `Fn(OutgoingMail) -> Future<Output = Result<(), AuthMailError>>`, or any type implementing [`AuthMailer`]:
+
+```rust
+use umbral_auth::{AuthPlugin, AuthUser, OutgoingMail, AuthMailError};
+
+AuthPlugin::new().mailer(|m: OutgoingMail| async move {
+    umbral_email::send(
+        &umbral_email::EmailMessage::new(m.subject, vec![m.to])
+            .html_body(m.html)
+            .text_body(m.text),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| AuthMailError::Send(e.to_string()))
+});
+```
 
 ## Full control: build each email yourself
 
@@ -134,6 +144,37 @@ impl AuthMailer for SmtpMailer {
 
 AuthPlugin::new().mailer(SmtpMailer { /* ... */ });
 ```
+
+## Sending off-request with `umbral_tasks::auth_mailer()`
+
+Every mailer above runs **inline**: the request handler awaits `AuthMailer::send` directly, so a slow or failing SMTP/provider call blocks the HTTP response, with no retry. Enable umbral-tasks' `auth-mailer` cargo feature and wire its adapter instead to send through the task queue:
+
+```rust
+use umbral_auth::{AuthPlugin, AuthUser};
+use umbral_tasks::TasksPlugin;
+
+App::builder()
+    .plugin(TasksPlugin::default())
+    .plugin(
+        AuthPlugin::<AuthUser>::default()
+            .mailer(umbral_tasks::auth_mailer()),
+    )
+    .build()?;
+```
+
+`.mailer(umbral_tasks::auth_mailer())` makes `AuthMailer::send` **enqueue** the `OutgoingMail` as a task and return immediately — the request finishes as soon as the row is written. A built-in task, run by the `tasks-worker` process, dequeues it and does the real delivery, with the queue's retries and backoff. Delivery defaults to `ConsoleMailer` (the same zero-config dev default); pass a real mailer to `auth_mailer_with` to pick what it delivers through instead, without touching umbral-auth at all:
+
+```rust
+// Task-backed AND delegated to umbral-email's configured backend:
+AuthPlugin::<AuthUser>::default()
+    .mailer(umbral_tasks::auth_mailer_with(umbral_email::auth_mailer()))
+```
+
+<Callout type="warning">Requires `TasksPlugin` registered in the SAME binary as `AuthPlugin` — both the web process and any separate `tasks-worker` process. Without it the enqueued row has no handler: the worker marks it `failed`, or (with no worker running at all) it just sits `pending` — queued, never delivered.</Callout>
+
+## Why the adapter lives in umbral-email, not umbral-auth
+
+Both `umbral_email::auth_mailer()` and `umbral_tasks::auth_mailer()` live in the *other* plugin, not in umbral-auth. This is deliberate, not an oversight: `umbral-auth` takes no Cargo dependency (not even an optional, feature-gated one) on either `umbral-email` or `umbral-tasks`, so a REST-only or admin-only app never compiles a mail stack or a task queue it never uses. `umbral-tasks` specifically *cannot* depend back on `umbral-auth` — `umbral-tasks` already optionally depends on `umbral-admin`, which unconditionally depends on `umbral-auth`, so the reverse edge would cycle (cargo counts an optional dependency as a graph edge whether or not its feature is active). Each adapter crate depends on `umbral-auth` instead, behind its own optional feature (`umbral-email`'s `auth`, `umbral-tasks`' `auth-mailer`), and plugs into the plain `AuthPlugin::mailer(...)` seam like any other `AuthMailer`.
 
 ## Development default
 

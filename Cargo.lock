@@ -5397,6 +5397,7 @@ dependencies = [
 name = "umbral-email"
 version = "0.0.12"
 dependencies = [
+ "async-trait",
  "base64",
  "chrono",
  "lettre",
@@ -5407,6 +5408,7 @@ dependencies = [
  "tokio",
  "tracing",
  "umbral",
+ "umbral-auth",
 ]
 
 [[package]]
@@ -5759,6 +5761,7 @@ dependencies = [
  "tracing",
  "umbral",
  "umbral-admin",
+ "umbral-auth",
 ]
 
 [[package]]
