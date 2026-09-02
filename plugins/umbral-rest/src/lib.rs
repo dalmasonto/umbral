@@ -2124,6 +2124,11 @@ pub struct ActionSchema {
     pub base_path: String,
     pub input_schema: Option<serde_json::Value>,
     pub output_schema: Option<serde_json::Value>,
+    /// **gaps4 #80.** `Some(column)` for a `.action_by(...)` registration —
+    /// `umbral-openapi` uses this to emit `/api/<table>/{<column>}/` (no
+    /// `/<name>/` suffix, and the path parameter named after the column
+    /// rather than `id`) instead of the plain `.action()` path shape.
+    pub lookup_field: Option<String>,
 }
 
 /// Public read: every custom `@action` registered on any resource. Used by
@@ -2152,6 +2157,7 @@ pub fn registered_action_schemas() -> Vec<ActionSchema> {
                 base_path: cfg.base_path.clone(),
                 input_schema: d.input_schema.clone(),
                 output_schema: d.output_schema.clone(),
+                lookup_field: d.lookup_field.clone(),
             });
         }
     }
@@ -2475,6 +2481,13 @@ impl Plugin for RestPlugin {
             // segments and looks the closure back out of CONFIG.
             for (table, action_list) in &self.actions {
                 for def in action_list {
+                    // `.action_by(...)` registrations mount on a wholly
+                    // different literal shape (no `/<name>/` suffix, keyed
+                    // by a column value instead of the PK) — handled in the
+                    // dedicated block below, once per table.
+                    if def.lookup_field.is_some() {
+                        continue;
+                    }
                     let path = match def.scope {
                         ActionScope::Collection => {
                             format!("{base}/{}/{}", q_seg(table), q_seg(&def.name))
@@ -2495,6 +2508,70 @@ impl Plugin for RestPlugin {
                         axum::routing::on(method_filter(&def.method), custom_action_dispatch),
                     );
                 }
+            }
+
+            // Mount `.action_by(...)` detail routes (gaps4 #80): literal
+            // `/api/<table>/{id}/` — the SAME shape as the standard
+            // PK-based detail route, but under table's OWN literal branch
+            // (like the plain `@action`s above) rather than the generic
+            // `/api/{table}/{id}`. matchit's "static beats param at the
+            // same level" rule means a request to `/api/<table>/<anything>`
+            // resolves to THIS branch for tables that declared
+            // `.action_by`, never to the generic one — so the mounted
+            // method router has to cover the whole detail surface itself
+            // (GET/PUT/PATCH/DELETE/OPTIONS), not just GET, or PUT/PATCH/
+            // DELETE on this table would 405 instead of falling through.
+            // The inner param is named `{id}` (not `{value}`) on purpose:
+            // a table that ALSO registers a Detail-scope `.action()` (e.g.
+            // `/api/<table>/{id}/publish`) already claims a `{id}` node at
+            // this exact trie position, and matchit panics at router-build
+            // time if two route templates disagree on a shared param's
+            // name. Reusing `{id}` keeps the two mounts compatible.
+            let mut lookup_tables: Vec<&str> = Vec::new();
+            for (table, action_list) in &self.actions {
+                let Some(def) = action_list.iter().find(|d| d.lookup_field.is_some()) else {
+                    continue;
+                };
+                let field = def.lookup_field.as_deref().expect("checked above");
+                // Boot-time system check (arch.md: "backend mismatches caught
+                // at boot, not in prod"), transplanted to resource config: a
+                // typo'd or non-unique lookup column is a programming error,
+                // not a 500 waiting to happen at request time.
+                let meta = model_meta(table).unwrap_or_else(|| {
+                    panic!(
+                        "ResourceConfig::action_by({field:?}, ...): no registered model backs \
+                         table `{table}`"
+                    )
+                });
+                let col = meta
+                    .fields
+                    .iter()
+                    .find(|c| c.name == field)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "ResourceConfig::action_by({field:?}, ...): `{table}` has no column \
+                         named `{field}`"
+                        )
+                    });
+                assert!(
+                    col.unique || col.primary_key,
+                    "ResourceConfig::action_by({field:?}, ...): `{table}.{field}` must be \
+                     #[umbral(unique)] (or the primary key) — a non-unique lookup column could \
+                     match more than one row, and there's no well-defined \"first match\" \
+                     semantic for a public API endpoint"
+                );
+                if !lookup_tables.contains(&table.as_str()) {
+                    lookup_tables.push(table.as_str());
+                }
+            }
+            for table in lookup_tables {
+                let path = format!("{base}/{}/{{id}}", q_seg(table));
+                router = router.route(&path, action_by_method_router(table.to_string()));
+                // Trailing-slash mirror, same as every other detail route.
+                router = router.route(
+                    &format!("{path}/"),
+                    action_by_method_router(table.to_string()),
+                );
             }
         }
 
@@ -2532,9 +2609,18 @@ impl Plugin for RestPlugin {
         }
         for (table, action_list) in &self.actions {
             for def in action_list {
-                let path = match def.scope {
-                    ActionScope::Collection => format!("{base}/{table}/{}", def.name),
-                    ActionScope::Detail => format!("{base}/{table}/{{id}}/{}", def.name),
+                let path = if let Some(field) = &def.lookup_field {
+                    // gaps4 #80: `.action_by(...)` — no `/<name>/` suffix,
+                    // keyed by the lookup column's value (displayed here by
+                    // column name for clarity; the mounted axum route
+                    // itself names the param `{id}`, see `action_by_method_
+                    // router`'s doc comment for why).
+                    format!("{base}/{table}/{{{field}}}")
+                } else {
+                    match def.scope {
+                        ActionScope::Collection => format!("{base}/{table}/{}", def.name),
+                        ActionScope::Detail => format!("{base}/{table}/{{id}}/{}", def.name),
+                    }
                 };
                 // The action's registered method name is the only one
                 // it accepts. `http::Method` stringifies as the
@@ -5026,6 +5112,7 @@ async fn custom_action_dispatch(
         body,
         query,
         version,
+        resolved_row: None,
     };
 
     // Validate the request body against the action's declared input schema
@@ -5039,6 +5126,153 @@ async fn custom_action_dispatch(
             )));
         }
     }
+
+    let result = (def.handler)(ctx).await;
+    match result {
+        Ok(v) => Ok(Json(v)),
+        Err(ActionError::BadInput(m)) => Err(ApiError::BadInput(m)),
+        Err(ActionError::NotFound(m)) => Err(ApiError::NotFound(m)),
+        Err(ActionError::Unauthenticated) => Err(ApiError::Unauthenticated),
+        Err(ActionError::Forbidden) => Err(ApiError::Forbidden),
+        Err(ActionError::Internal(m)) => Err(ApiError::Sqlx(sqlx::Error::Protocol(m))),
+    }
+}
+
+// =========================================================================
+// `.action_by(...)` dispatch (gaps4 #80). See the doc comment on
+// `ResourceConfig::action_by` for the full contract; the short version:
+// GET `/api/<table>/<value>/` first tries `lookup_field = <value>`, runs
+// the resource's own `Permission::check` with `Action::Custom(lookup_field)`
+// (same gate a plain `.action()` gets) and calls the handler with the
+// resolved row on success; when no row matches the lookup column it falls
+// back to the ordinary PK-based `retrieve_impl`, so a resource that adds
+// `.action_by` doesn't lose its normal `GET /api/<table>/<id>` behaviour.
+// =========================================================================
+
+/// Builds the method router mounted at `/api/<table>/{id}/` for a table
+/// that declared `.action_by(...)`. GET is the by-field dispatch (with the
+/// PK fallback above); PUT/PATCH/DELETE/OPTIONS are untouched — they proxy
+/// straight to the same `_impl` functions the generic `/api/{table}/{id}`
+/// route calls, so the resource's ordinary write verbs keep working at
+/// this URL exactly as before `.action_by` was added.
+fn action_by_method_router(table: String) -> axum::routing::MethodRouter {
+    let get_table = table.clone();
+    let put_table = table.clone();
+    let patch_table = table.clone();
+    let delete_table = table.clone();
+    let options_table = table;
+    get(
+        move |Path(value): Path<String>,
+              uri: axum::http::Uri,
+              Query(params): Query<HashMap<String, String>>,
+              headers: umbral::web::HeaderMap| {
+            let table = get_table.clone();
+            async move { action_by_dispatch(table, value, uri, params, headers).await }
+        },
+    )
+    .put(
+        move |Path(value): Path<String>,
+              uri: axum::http::Uri,
+              headers: umbral::web::HeaderMap,
+              Json(body): Json<Map<String, Value>>| {
+            let table = put_table.clone();
+            async move { update_impl(table, value, None, uri, headers, body).await }
+        },
+    )
+    .patch(
+        move |Path(value): Path<String>,
+              uri: axum::http::Uri,
+              headers: umbral::web::HeaderMap,
+              Json(body): Json<Map<String, Value>>| {
+            let table = patch_table.clone();
+            async move { update_impl(table, value, None, uri, headers, body).await }
+        },
+    )
+    .delete(
+        move |Path(value): Path<String>, uri: axum::http::Uri, headers: umbral::web::HeaderMap| {
+            let table = delete_table.clone();
+            async move { destroy_impl(table, value, None, uri, headers).await }
+        },
+    )
+    .options(move |Path(value): Path<String>| {
+        let table = options_table.clone();
+        async move { detail_options(Path((table, value))).await }
+    })
+}
+
+/// GET dispatch for a `.action_by(...)` route. `value` is whatever segment
+/// the client sent at `/api/<table>/<value>/` — resolved first against the
+/// registered lookup column, then (on a miss) against the primary key via
+/// the standard `retrieve_impl`.
+async fn action_by_dispatch(
+    table: String,
+    value: String,
+    uri: axum::http::Uri,
+    params: HashMap<String, String>,
+    headers: umbral::web::HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    // Re-check the block-list at dispatch (L-7), exactly like
+    // `custom_action_dispatch` and every CRUD handler.
+    let model = allowed_model(&table)?;
+    let Some(def) = cfg.actions.get(&table).and_then(|list| {
+        list.iter()
+            .find(|d| d.method == axum::http::Method::GET && d.lookup_field.is_some())
+    }) else {
+        // The route only mounts when such a def exists, so this is
+        // unreachable in practice — fall back to the plain retrieve rather
+        // than panic on a request.
+        return retrieve_impl(table, value, None, uri, params, headers)
+            .await
+            .map(|Json(m)| Json(Value::Object(m)));
+    };
+    let lookup_field = def.lookup_field.clone().expect("checked in the find above");
+
+    let version = cfg.resolve_version(uri.path(), &headers)?;
+    let mut rows = fetch_rows(
+        &model,
+        Some((&lookup_field, &value)),
+        None,
+        &FilterClause::default(),
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .await?;
+
+    let Some(row) = rows.pop() else {
+        // `value` doesn't match any row on the lookup column — treat it as
+        // the primary key instead, so the standard detail route keeps
+        // working at this URL (see the collision note on `action_by`).
+        return retrieve_impl(table, value, None, uri, params, headers)
+            .await
+            .map(|Json(m)| Json(Value::Object(m)));
+    };
+
+    let identity = cfg.authentication.authenticate(&headers).await;
+    let custom = Action::Custom(lookup_field.clone());
+    cfg.gate(&table, &custom, EndpointKind::Detail, identity.as_ref())?;
+    cfg.gate_throttle(
+        &table,
+        &custom,
+        identity.as_ref(),
+        throttle_client_ip(&headers).as_deref(),
+    )?;
+
+    let pk = pk_column(&model)?;
+    let pk_value = row.get(&pk.name).and_then(json_pk_to_string);
+    let query = parse_query_string(uri.query().unwrap_or(""));
+    let ctx = ActionContext {
+        table: table.clone(),
+        name: lookup_field,
+        pk: pk_value,
+        identity,
+        body: Value::Null,
+        query,
+        version,
+        resolved_row: Some(Value::Object(row)),
+    };
 
     let result = (def.handler)(ctx).await;
     match result {

@@ -114,6 +114,13 @@ pub struct ActionContext {
     /// versioning is off (the default) / the request carried none.
     /// See [`RestPlugin::versioning`](crate::RestPlugin::versioning).
     pub version: Option<String>,
+    /// **`.action_by(...)` only** (gaps4 #80): the full row the lookup
+    /// column resolved to, as a JSON object — `None` for every ordinary
+    /// `.action(...)`. Saves the handler a round-trip: the dispatch already
+    /// fetched the row to confirm it exists (and to read `pk` off it), so it
+    /// hands the row over rather than making the handler re-query for data
+    /// it's already holding.
+    pub resolved_row: Option<Value>,
 }
 
 /// Per-request context the built-in CRUD handlers resolve before
@@ -213,6 +220,15 @@ pub(crate) struct ActionDef {
     /// Optional JSON Schema for the 200 response — published into OpenAPI
     /// (the playground reads it). Not validated at runtime.
     pub(crate) output_schema: Option<Value>,
+    /// **gaps4 #80.** `Some(column)` marks this as a `.action_by(...)`
+    /// registration: a detail action keyed by a `#[umbral(unique)]` (or
+    /// primary-key) column instead of the PK, mounted at
+    /// `/api/<table>/<value>/` with no `/<name>/` suffix. `None` for a
+    /// plain `.action(...)`, which keeps the `/<name>/`-suffixed shape.
+    /// `name` doubles as the column name for a by-field action (used to
+    /// key `.action_input_schema`/`.action_output_schema` and to label the
+    /// OpenAPI operation), since there's no separate action name in the URL.
+    pub(crate) lookup_field: Option<String>,
 }
 
 impl std::fmt::Debug for ActionDef {
@@ -221,6 +237,7 @@ impl std::fmt::Debug for ActionDef {
             .field("name", &self.name)
             .field("method", &self.method)
             .field("scope", &self.scope)
+            .field("lookup_field", &self.lookup_field)
             .finish()
     }
 }
@@ -963,6 +980,97 @@ impl ResourceConfig {
             handler,
             input_schema: None,
             output_schema: None,
+            lookup_field: None,
+        });
+        self
+    }
+
+    /// Register a by-natural-key detail action (gaps4 #80): a `.action()`
+    /// keyed by a real column instead of the primary key, mounted at
+    /// `/api/<table>/<value>/` with **no** trailing `/<name>/` segment —
+    /// the shape `.action()` can't express (its detail form is always
+    /// `/api/<table>/<id>/<name>/`, keyed by the PK).
+    ///
+    /// This is the fix for "give me this record at a clean, natural-key URL"
+    /// — `/api/communities/<slug>`, `/api/developers/<username>` — as a
+    /// first-class REST citizen: it reuses the `.action()` machinery end to
+    /// end, so it shows up in the OpenAPI spec and the playground for free,
+    /// runs under the resource's `Permission::check` with `Action::Custom
+    /// (lookup_field)` (same gate a plain `.action()` gets), and accepts
+    /// `.action_input_schema` / `.action_output_schema` keyed by
+    /// `lookup_field` exactly like a named action.
+    ///
+    /// ```ignore
+    /// use http::Method;
+    /// use umbral_rest::ResourceConfig;
+    /// use serde_json::json;
+    ///
+    /// ResourceConfig::new("community")
+    ///     // GET /api/community/{slug}/ — read the row keyed by its slug.
+    ///     .action_by("slug", Method::GET, |ctx| async move {
+    ///         let row = ctx.resolved_row.expect("action_by always resolves a row");
+    ///         Ok(json!({ "community": row }))
+    ///     })
+    /// ```
+    ///
+    /// The handler's [`ActionContext`] carries the resolved row
+    /// (`ctx.resolved_row`, the whole row as JSON) and its primary key
+    /// (`ctx.pk`) — the dispatch already looked the row up by `lookup_field`
+    /// to confirm it exists, so the handler doesn't need to re-query.
+    ///
+    /// **Column requirement.** `lookup_field` must name a real column on
+    /// this table that is `#[umbral(unique)]` or the primary key — a
+    /// non-unique lookup could match more than one row, and there is no
+    /// well-defined "first match" semantic for a public API endpoint.
+    /// `RestPlugin::routes()` panics at boot with a clear message if the
+    /// column is missing or not unique, the same "caught at boot, not in
+    /// prod" posture the framework uses for backend/field mismatches.
+    ///
+    /// **Route collision with the PK-based detail route.** Only ONE literal
+    /// route can live at `/api/<table>/<value>/`, so declaring `.action_by`
+    /// on a table replaces that table's plain `/api/<table>/<id>/` mount
+    /// with a combined one: **GET** first tries `lookup_field = <value>`,
+    /// and — since the intended use is a human-facing key like a slug —
+    /// falls back to the ordinary PK-based `retrieve` when no row matches
+    /// the lookup column (so `GET /api/community/42` still works exactly
+    /// as before when `42` isn't a valid slug). **PUT / PATCH / DELETE /
+    /// OPTIONS at that URL are untouched** — they keep using the standard
+    /// PK-based `update` / `destroy` / `options` handlers, unaffected by
+    /// `.action_by`. The one sharp edge: a lookup value that is ALSO a
+    /// valid PK for some other row (e.g. a purely numeric slug) resolves to
+    /// the slug match first, never to that other row's plain retrieve — an
+    /// acceptable, documented trade-off for the natural-key use case this
+    /// exists for.
+    ///
+    /// **Only `Method::GET` is supported today** — `.action_by` is a
+    /// read-oriented endpoint (the PK-lookup fallback above is meaningful
+    /// only for GET); the builder panics on any other method. Extending
+    /// to write verbs is a straightforward but unneeded generalization for
+    /// now (no fallback rule to define — YAGNI until a real use case shows
+    /// up).
+    pub fn action_by<F, Fut>(mut self, lookup_field: &str, method: Method, f: F) -> Self
+    where
+        F: Fn(ActionContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Value, ActionError>> + Send + 'static,
+    {
+        assert!(
+            !lookup_field.is_empty() && lookup_field.chars().all(is_action_name_char),
+            "ResourceConfig::action_by: lookup_field {lookup_field:?} must be ASCII [a-z0-9_-]"
+        );
+        assert!(
+            method == Method::GET,
+            "ResourceConfig::action_by({lookup_field:?}, ...): only Method::GET is supported \
+             today — a by-field lookup has a well-defined PK-lookup fallback only for reads"
+        );
+        let handler: ActionHandler = Arc::new(move |ctx| Box::pin(f(ctx)));
+        self.actions.push(ActionDef {
+            name: lookup_field.to_string(),
+            method,
+            scope: ActionScope::Detail,
+            handler,
+            input_schema: None,
+            output_schema: None,
+            lookup_field: Some(lookup_field.to_string()),
         });
         self
     }

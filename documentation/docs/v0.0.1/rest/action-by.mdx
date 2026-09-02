@@ -1,0 +1,55 @@
+---
+title: Natural-key actions
+description: Serve a record at a clean, natural-key URL (a slug or username) instead of the primary key — self-documenting in OpenAPI and the playground.
+sidebar_position: 7
+tags: [rest, actions, openapi]
+---
+
+# Natural-key actions
+
+A plain [`.action(...)`](./actions) reads or writes at `/api/<table>/<id>/<name>/` — always keyed by the primary key, always with a trailing action name. That shape doesn't fit the common "give me this record at a clean URL" endpoint: `/api/communities/<slug>`, `/api/developers/<username>`. Before `action_by`, the only way to serve that shape was a hand-mounted `Plugin::routes()` handler — which works, but is invisible in the OpenAPI spec and the `/api/playground`.
+
+`ResourceConfig::action_by(lookup_field, method, handler)` closes that gap: a detail action keyed by a real column (typically `#[umbral(unique)]`, like a slug) instead of the PK, mounted with **no** `/<name>/` suffix.
+
+<Callout type="info">
+Only `Method::GET` is supported today — `action_by` is a read-oriented endpoint. The builder panics at call time on any other method.
+</Callout>
+
+## Declaring one
+
+```rust
+use http::Method;
+use umbral_rest::ResourceConfig;
+use serde_json::json;
+
+let communities = ResourceConfig::new("community")
+    // GET /api/community/{slug}/ — no `/<name>/` suffix.
+    .action_by("slug", Method::GET, |ctx| async move {
+        let row = ctx.resolved_row.expect("action_by always resolves a row");
+        Ok(json!({ "community": row }))
+    });
+```
+
+`lookup_field` must name a real column on the table, and it must be `#[umbral(unique)]` (or the primary key) — a non-unique column could match more than one row, and there's no well-defined "first match" for a public endpoint. `RestPlugin::routes()` panics at boot with a clear message if the column is missing or not unique, the same "caught at boot, not in prod" posture the framework uses for backend/field mismatches.
+
+## What the handler gets
+
+The `ActionContext` the handler receives carries the row the dispatch already looked up:
+
+- `ctx.resolved_row` — the whole row as JSON, so the handler doesn't need to re-query for data it's already holding.
+- `ctx.pk` — the row's primary key, for handlers that need it.
+- `ctx.name` — the lookup column's name (there's no separate action name in the URL).
+
+## The PK route keeps working
+
+Declaring `action_by` on a table replaces its plain `/api/<table>/<id>/` mount with a combined one: **GET** tries the lookup column first, and falls back to the ordinary PK-based retrieve when the value doesn't match any row — so `GET /api/community/42` still works even after adding a slug lookup, as long as `42` isn't itself a slug. `PUT`/`PATCH`/`DELETE`/`OPTIONS` at that URL are untouched.
+
+## Same gate, same OpenAPI registry
+
+`action_by` reuses the `.action()` machinery end to end: it runs under the resource's `Permission::check` with `Action::Custom(lookup_field)` — the same gate a plain `.action()` gets — and it registers in `umbral_rest::registered_action_schemas()`, so `umbral-openapi` emits `/api/<table>/{<lookup_field>}/` as its own path item with no extra wiring. `.action_input_schema` / `.action_output_schema` still key by the lookup field's name.
+
+## See also
+
+- [Action schemas](./actions): typed request/response shapes for any `@action`, including `action_by`.
+- `plugins/umbral-rest/src/resource.rs` (`ResourceConfig::action_by`) for the full contract and the route-collision rule.
+- `planning/gaps4.md` entry #80 for the design rationale.

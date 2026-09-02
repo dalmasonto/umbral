@@ -418,7 +418,11 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
     // #60) are inlined; a schemaless action (e.g. `get_price_at`) still
     // appears, with a generic 200 response.
     for action in umbral_rest::registered_action_schemas() {
-        let path = if action.detail {
+        let path = if let Some(field) = &action.lookup_field {
+            // gaps4 #80: `.action_by(...)` — no `/<name>/` suffix, keyed by
+            // the lookup column's value instead of `{id}`.
+            format!("{}/{}/{{{}}}/", action.base_path, action.table, field)
+        } else if action.detail {
             format!(
                 "{}/{}/{{id}}/{}/",
                 action.base_path, action.table, action.name
@@ -475,19 +479,37 @@ fn action_path_item(a: &umbral_rest::ActionSchema) -> Value {
         Value::String(format!("{}_{}", a.table, a.name)),
     );
     op.insert("tags".into(), json!([a.table]));
-    op.insert(
-        "summary".into(),
-        Value::String(format!("`{}` action on {}", a.name, a.table)),
-    );
-    if a.detail {
+    if let Some(field) = &a.lookup_field {
+        // gaps4 #80: `.action_by(...)` — describe the lookup, not a
+        // generic "action named `<field>`" (there's no separate action
+        // name in the URL; `a.name` doubles as the column name here).
+        op.insert(
+            "summary".into(),
+            Value::String(format!("Get {} by `{field}`", a.table)),
+        );
         op.insert(
             "parameters".into(),
             json!([{
-                "name": "id", "in": "path", "required": true,
+                "name": field, "in": "path", "required": true,
                 "schema": { "type": "string" },
-                "description": "Primary key of the target row"
+                "description": format!("Value of the `{field}` column")
             }]),
         );
+    } else {
+        op.insert(
+            "summary".into(),
+            Value::String(format!("`{}` action on {}", a.name, a.table)),
+        );
+        if a.detail {
+            op.insert(
+                "parameters".into(),
+                json!([{
+                    "name": "id", "in": "path", "required": true,
+                    "schema": { "type": "string" },
+                    "description": "Primary key of the target row"
+                }]),
+            );
+        }
     }
     if let Some(input) = &a.input_schema {
         op.insert(
