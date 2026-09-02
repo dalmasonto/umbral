@@ -387,6 +387,14 @@ pub struct RestPlugin {
     /// child_table)]`. Merged from `ResourceConfig::nested(...)`; read by
     /// the create handler to insert children alongside the parent.
     nested: HashMap<String, Vec<(String, String)>>,
+    /// Read-side reverse-FK relations embeddable via `?expand=<field>`
+    /// (gaps4 #72), keyed by table: `table -> [(field, child_table)]`.
+    /// Merged from `ResourceConfig::embed(...)`. Distinct from `nested`
+    /// (write-side) — a field can be declared for one, the other, or both.
+    expand_reverse: HashMap<String, Vec<(String, String)>>,
+    /// Read-side M2M fields expandable via `?expand=<field>` (gaps4 #72),
+    /// keyed by table. Merged from `ResourceConfig::expand_m2m(...)`.
+    expand_m2m: HashMap<String, Vec<String>>,
     /// Tables that opted IN to bulk endpoints via `ResourceConfig::bulk()`
     /// (gaps2 #82). A table NOT in this set keeps the original behaviour:
     /// `POST` of a JSON array is rejected, and no collection-level
@@ -989,6 +997,8 @@ impl RestPlugin {
             search_disabled: std::collections::HashSet::new(),
             search_fields: HashMap::new(),
             nested: HashMap::new(),
+            expand_reverse: HashMap::new(),
+            expand_m2m: HashMap::new(),
             bulk: std::collections::HashSet::new(),
             object_scopes: HashMap::new(),
             owner_fields: HashMap::new(),
@@ -1355,6 +1365,8 @@ impl RestPlugin {
             search_disabled,
             search_fields,
             nested,
+            expand_reverse,
+            expand_m2m,
             bulk,
             scope,
             owner_field,
@@ -1418,6 +1430,18 @@ impl RestPlugin {
         }
         if !nested.is_empty() {
             self.nested.entry(table.clone()).or_default().extend(nested);
+        }
+        if !expand_reverse.is_empty() {
+            self.expand_reverse
+                .entry(table.clone())
+                .or_default()
+                .extend(expand_reverse);
+        }
+        if !expand_m2m.is_empty() {
+            self.expand_m2m
+                .entry(table.clone())
+                .or_default()
+                .extend(expand_m2m);
         }
         if bulk {
             self.bulk.insert(table.clone());
@@ -1656,6 +1680,47 @@ impl RestPlugin {
                         // means `apply_overrides_depth` falls back to
                         // `model_meta_for_table` for that FK's table.
                         self.apply_overrides_depth(fk_target, None, nested, depth + 1);
+                    }
+                }
+
+                // gaps4 #72: an M2M field named in `?expand=` was already
+                // replaced (by `apply_expand`, before this runs) with an array
+                // of full child OBJECTS instead of the default bare id array.
+                // Scrub each embedded child by the M2M target's own
+                // hide/transform/computed rules — same reasoning as the FK
+                // recursion above: a hidden column on the child must not leak
+                // just because it arrived nested. A field that was NOT
+                // `?expand=`'d still holds bare ids/strings, so `Value::Object`
+                // never matches and this loop is a no-op for it.
+                for rel in &meta.m2m_relations {
+                    if let Some(Value::Array(items)) = row.get_mut(&rel.field_name) {
+                        for item in items.iter_mut() {
+                            if let Value::Object(child) = item {
+                                self.apply_overrides_depth(
+                                    &rel.target_table,
+                                    None,
+                                    child,
+                                    depth + 1,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // gaps4 #72: reverse-FK relations embedded via `?expand=` — declared
+            // per RESOURCE (`ResourceConfig::embed`), not on `ModelMeta`, since a
+            // reverse relation isn't a field on the parent model. Each embedded
+            // child in the array is scrubbed by ITS OWN table's overrides, exactly
+            // like the forward-FK and M2M recursion above.
+            if let Some(specs) = self.expand_reverse.get(table) {
+                for (field, child_table) in specs {
+                    if let Some(Value::Array(items)) = row.get_mut(field) {
+                        for item in items.iter_mut() {
+                            if let Value::Object(child) = item {
+                                self.apply_overrides_depth(child_table, None, child, depth + 1);
+                            }
+                        }
                     }
                 }
             }
@@ -3399,6 +3464,13 @@ async fn list_impl(
     // get loud feedback on typos instead of a silently-unexpanded
     // response that looks fine until they check it.
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
+    // `?expand=projects,favorite_software` — gaps4 #72. Only relations the
+    // resource explicitly declared via `ResourceConfig::embed` (reverse-FK)
+    // or `.expand_m2m` (M2M) are honored; see `parse_expand`. Not wired into
+    // the `?format=csv` branch below — CSV is a flat row format and an
+    // embedded array/object has no sane cell representation, so `?expand=`
+    // is validated (a typo still 400s) but has no effect on the CSV output.
+    let expand = parse_expand(params.get("expand").map(|s| s.as_str()), cfg, &table)?;
     let fields_param = params.get("fields").map(|s| s.as_str());
 
     // Resolve the ModelMeta once for the whole response — shared by both
@@ -3450,6 +3522,12 @@ async fn list_impl(
         &cfg.revealed_cols(&model.table, identity.as_ref()),
     )
     .await?;
+    // gaps4 #72: embed every `?expand=`'d relation ACROSS THE WHOLE PAGE in one
+    // shot — one `IN (...)` query per relation, not one per row — before the
+    // per-row override loop below, so the loop's hidden-column recursion (see
+    // `apply_overrides_depth`) scrubs the embedded children same as it already
+    // does for `?include=`.
+    apply_expand(cfg, &model, &expand, &mut rows).await?;
     for row in &mut rows {
         if let Some(ref meta) = list_meta {
             cfg.apply_overrides_with_meta(&table, meta, row);
@@ -3633,6 +3711,10 @@ async fn retrieve_impl(
     // its `user` FK expanded to the full AuthUser object. Same
     // parser, same 400-on-bad-name semantics.
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
+    // `?expand=` works the same on the retrieve path (gaps4 #72) — `GET
+    // /api/developer/7?expand=projects,favorite_software` returns the
+    // developer with its declared reverse-FK / M2M relations embedded.
+    let expand = parse_expand(params.get("expand").map(|s| s.as_str()), cfg, &table)?;
     let mut rows = fetch_rows(
         &model,
         Some((&pk.name, &id)),
@@ -3650,6 +3732,7 @@ async fn retrieve_impl(
             pk.name, id, table
         )));
     };
+    apply_expand(cfg, &model, &expand, std::slice::from_mut(&mut row)).await?;
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     cfg.apply_overrides(&table, &mut row);
     RestPlugin::apply_sparse_fields(&mut row, params.get("fields").map(|s| s.as_str()));
@@ -5325,6 +5408,180 @@ fn parse_include(raw: Option<&str>, model: &ModelMeta) -> Result<Vec<String>, Ap
         }
     }
     Ok(out)
+}
+
+/// Parse `?expand=a,b,c` against the relations THIS RESOURCE declared
+/// expandable (gaps4 #72) — `ResourceConfig::embed` (reverse-FK) and
+/// `ResourceConfig::expand_m2m` (M2M). Unlike `?include=`, which works
+/// against ANY forward FK the model happens to declare, `?expand=` only
+/// honors names the resource explicitly opted in: a reverse relation isn't
+/// discoverable from the parent's own columns, and even where it is (M2M),
+/// always-returning full objects would be a silent, uncontrollable response
+/// -size blowup. An unknown name is a `400`, the same loud-on-typo contract
+/// as `?include=` — never a silent no-op.
+fn parse_expand(raw: Option<&str>, cfg: &RestPlugin, table: &str) -> Result<Vec<String>, ApiError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let reverse = cfg.expand_reverse.get(table);
+    let m2m = cfg.expand_m2m.get(table);
+    let mut out: Vec<String> = Vec::new();
+    for token in raw.split(',') {
+        let name = token.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let is_reverse = reverse.is_some_and(|specs| specs.iter().any(|(f, _)| f == name));
+        let is_m2m = m2m.is_some_and(|fields| fields.iter().any(|f| f == name));
+        if !is_reverse && !is_m2m {
+            return Err(ApiError::BadInput(format!(
+                "?expand=: `{name}` is not a declared expandable relation on `{table}` — \
+                 declare a reverse-FK relation with \
+                 `ResourceConfig::embed(\"{name}\", \"<child_table>\")` or an M2M relation with \
+                 `ResourceConfig::expand_m2m(\"{name}\")`"
+            )));
+        }
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// Stringify a scalar JSON value (a PK or FK id) for `filter_in_strings` /
+/// grouping-key use. `None` for anything that isn't a bare scalar (an
+/// already-hydrated object, `null`, etc.) — callers skip those.
+fn json_scalar_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// Batch-embed every `?expand=`'d relation into already-fetched rows
+/// (gaps4 #72). Runs AFTER the main `fetch_rows` query and BEFORE
+/// `RestPlugin::apply_overrides`, so the override pass's recursion (see
+/// `apply_overrides_depth`) scrubs hidden columns from the embedded
+/// children exactly like it already does for `?include=`'d forward FKs.
+///
+/// No N+1: each declared relation costs exactly one extra query — an `IN
+/// (...)` over every distinct id collected across ALL rows in `rows` — no
+/// matter how many rows are being expanded. Mirrors the batching
+/// `hydrate_m2m_batched` / `hydrate_select_related_into` already use inside
+/// the ORM for `?include=`, built here from the same public
+/// `DynQuerySet::filter_in_strings` + `fetch_as_json` primitives every
+/// other REST handler in this file already calls.
+async fn apply_expand(
+    cfg: &RestPlugin,
+    model: &ModelMeta,
+    expand: &[String],
+    rows: &mut [Map<String, Value>],
+) -> Result<(), ApiError> {
+    if expand.is_empty() || rows.is_empty() {
+        return Ok(());
+    }
+    let pk_name = pk_column(model)?.name.clone();
+
+    // --- Reverse-FK: `(field, child_table)` pairs declared via `.embed()`. ---
+    if let Some(specs) = cfg.expand_reverse.get(&model.table) {
+        for (field, child_table) in specs {
+            if !expand.iter().any(|e| e == field) {
+                continue;
+            }
+            let child = meta_for_table(child_table)?;
+            let fk_col = child_fk_to(&child, &model.table)?.to_string();
+
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let parent_ids: Vec<String> = rows
+                .iter()
+                .filter_map(|r| r.get(&pk_name).and_then(json_scalar_to_string))
+                .filter(|v| seen.insert(v.clone()))
+                .collect();
+            // Always set the key — even to `[]` — so a parent with no
+            // matching children still gets a consistent shape, the same
+            // "always echo the key" contract `hydrate_m2m_batched` upholds
+            // for the id-array case.
+            for row in rows.iter_mut() {
+                row.insert(field.clone(), Value::Array(Vec::new()));
+            }
+            if parent_ids.is_empty() {
+                continue;
+            }
+            let children = umbral::orm::DynQuerySet::for_meta(&child)
+                .filter_in_strings(&fk_col, &parent_ids)
+                .fetch_as_json()
+                .await?;
+            let mut by_parent: HashMap<String, Vec<Value>> = HashMap::new();
+            for c in children {
+                if let Some(key) = c.get(&fk_col).and_then(json_scalar_to_string) {
+                    by_parent.entry(key).or_default().push(Value::Object(c));
+                }
+            }
+            for row in rows.iter_mut() {
+                let Some(key) = row.get(&pk_name).and_then(json_scalar_to_string) else {
+                    continue;
+                };
+                if let Some(children) = by_parent.remove(&key) {
+                    row.insert(field.clone(), Value::Array(children));
+                }
+            }
+        }
+    }
+
+    // --- M2M: field already carries `[id, id, ...]` from `hydrate_m2m_batched`
+    // (inside `fetch_rows`'s `fetch_as_json` call); replace it with full
+    // objects for every declared + requested field. ---
+    if let Some(fields) = cfg.expand_m2m.get(&model.table) {
+        for field in fields {
+            if !expand.iter().any(|e| e == field) {
+                continue;
+            }
+            let Some(rel) = model.m2m_relations.iter().find(|r| &r.field_name == field) else {
+                continue;
+            };
+            let target = meta_for_table(&rel.target_table)?;
+            let target_pk = pk_column(&target)?.name.clone();
+
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let all_ids: Vec<String> = rows
+                .iter()
+                .filter_map(|r| r.get(field))
+                .filter_map(|v| v.as_array())
+                .flatten()
+                .filter_map(json_scalar_to_string)
+                .filter(|v| seen.insert(v.clone()))
+                .collect();
+            if all_ids.is_empty() {
+                continue;
+            }
+            let children = umbral::orm::DynQuerySet::for_meta(&target)
+                .filter_in_strings(&target_pk, &all_ids)
+                .fetch_as_json()
+                .await?;
+            let by_pk: HashMap<String, Value> = children
+                .into_iter()
+                .filter_map(|c| {
+                    c.get(&target_pk)
+                        .and_then(json_scalar_to_string)
+                        .map(|k| (k, Value::Object(c)))
+                })
+                .collect();
+            for row in rows.iter_mut() {
+                let Some(Value::Array(ids)) = row.get(field).cloned() else {
+                    continue;
+                };
+                let expanded: Vec<Value> = ids
+                    .iter()
+                    .filter_map(json_scalar_to_string)
+                    .filter_map(|id| by_pk.get(&id).cloned())
+                    .collect();
+                row.insert(field.clone(), Value::Array(expanded));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// `SELECT COUNT(*)` for the given model, respecting any active

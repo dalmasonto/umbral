@@ -5632,6 +5632,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "tracing-subscriber",
  "umbral",
  "uuid",
 ]
