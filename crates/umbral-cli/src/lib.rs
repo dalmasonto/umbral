@@ -687,8 +687,47 @@ fn unknown_token(argv: &[std::ffi::OsString]) -> Option<String> {
         .map(|a| a.to_string_lossy().into_owned())
 }
 
+/// The four scaffolding commands dispatched **out-of-band** by the global
+/// `umbral` binary (`src/main.rs`): `startproject` / `startapp` / `startplugin`
+/// / `startcommand`. They run WITHOUT a built `App` — `startproject` has no
+/// project yet — so they are intercepted before this crate's `dispatch` builds
+/// the derived `Cli` parser, are NOT subcommands of it, and clap never sees
+/// them. That means `full_catalog` (which reads the parser) never lists them,
+/// and the "Create a project or plugin" group `render_help` reserves for them
+/// (`umbral-core/src/cli.rs`) renders empty and its header vanishes (gap 66).
+///
+/// This static supplies their `(name, about)` rows so the unified help lists
+/// them under that group, and so [`builtin_command_names`] reserves their names
+/// against an app/plugin command shadowing them. Dispatch stays out-of-band —
+/// this only makes help list them.
+///
+/// The `about` for each is the first line of the matching `Command` variant's
+/// doc comment in `src/main.rs` (which is what clap would render as its
+/// `about`). Keep the two in sync.
+pub fn scaffold_command_catalog() -> Vec<(String, Option<String>)> {
+    [
+        ("startproject", "Create a new umbral project in ./<name>/."),
+        (
+            "startapp",
+            "Deprecated alias of startplugin. Generates the same plugin crate.",
+        ),
+        (
+            "startplugin",
+            "Create a plugin crate in <project>/plugins/<name>/.",
+        ),
+        (
+            "startcommand",
+            "Create a management command (cargo run -- <name>).",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, about)| (name.to_string(), Some(about.to_string())))
+    .collect()
+}
+
 /// Build the merged `(name, about)` catalog: every built-in subcommand
-/// (read off the derived clap `Command` via `CommandFactory`), then the
+/// (read off the derived clap `Command` via `CommandFactory`), the
+/// out-of-band scaffolders ([`scaffold_command_catalog`]), then the
 /// project's own `AppBuilder::command` registrations, then every
 /// plugin-contributed command. Built-ins are placed first so they win a
 /// name clash in [`umbral_core::cli::render_help`]'s dedup.
@@ -701,6 +740,10 @@ fn full_catalog(app: &App) -> Vec<(String, Option<String>)> {
             sub.get_about().map(|s| s.to_string()),
         ));
     }
+    // The out-of-band scaffolders aren't subcommands of `Cli`, so the loop
+    // above misses them. Supply their rows so the reserved "Create a project or
+    // plugin" help group has content and renders (gap 66).
+    catalog.extend(scaffold_command_catalog());
     let builtins = builtin_command_names();
     let reserved: Vec<&str> = builtins.iter().map(String::as_str).collect();
     catalog.extend(umbral_core::cli::command_catalog_with_app_commands(
@@ -726,6 +769,11 @@ pub fn builtin_command_names() -> Vec<String> {
         .map(|s| s.get_name().to_string())
         .collect();
     names.push("help".to_string());
+    // The out-of-band scaffolders (`startproject` / `startapp` / `startplugin`
+    // / `startcommand`) aren't subcommands of this parser, but they're still
+    // umbral commands — reserve their names so an app/plugin command can't
+    // shadow them (gap 66).
+    names.extend(scaffold_command_catalog().into_iter().map(|(name, _)| name));
     names
 }
 
@@ -1537,6 +1585,33 @@ mod tests {
             out.contains("tasks-worker") && out.contains("Run the task worker"),
             "plugin command missing:\n{out}"
         );
+        // gap 66: the out-of-band scaffolders must be listed too — a developer
+        // inside a project can't discover `startplugin` / `startcommand`
+        // otherwise. The reserved "Create a project or plugin" group header
+        // renders now that the catalog supplies its rows.
+        assert!(
+            out.contains("Create a project or plugin"),
+            "scaffold group header missing:\n{out}"
+        );
+        for (name, about) in scaffold_command_catalog() {
+            let about = about.unwrap();
+            assert!(
+                out.contains(&name),
+                "scaffold command `{name}` missing:\n{out}"
+            );
+            assert!(
+                out.contains(&about),
+                "scaffold command `{name}` about missing:\n{out}"
+            );
+        }
+        // Those names are reserved so an app/plugin command can't shadow them.
+        let reserved = builtin_command_names();
+        for (name, _) in scaffold_command_catalog() {
+            assert!(
+                reserved.contains(&name),
+                "scaffold command `{name}` not reserved:\n{reserved:?}"
+            );
+        }
         // Column alignment: built-in and plugin descriptions start at the
         // same offset on their respective lines.
         let mig_line = out
