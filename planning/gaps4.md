@@ -214,7 +214,7 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 
 88. [x] Type-level partial/insert shape shipped: `#[derive(New)]` generates `<Model>New` (omits auto-managed fields + column-less relations); `create`/`get_or_create`/`update_or_create` take `impl Into<T>` so the shape works as `defaults` too — archived
 
-89. [ ] **Multi-base composition for `#[model(base = X)]` (only single-base ships).** The #62/#64/#67 attribute macro (commit 89c03f84) inlines ONE base's fields. Composing several bases into one struct needs continuation-passing `macro_rules!` (each base's field-splice macro invoking the next) — deferred as non-trivial; today a multi-base struct is rejected with a pointer to the older `#[umbral(flatten)]` mechanism (which still supports it). (Split from #62.)
+89. [x] Multi-base composition shipped: `#[model(base = A, B, …)]` splices N bases as flat native fields (declaration order) via continuation-passing `@compose` arms on the base companion macros — archived
 
 90. [x] `startproject` generates a Cargo workspace with `[workspace.dependencies]` (single-sourced versions, members inherit via `.workspace = true`); `startplugin` inherits when inside one, pins standalone otherwise — archived
 

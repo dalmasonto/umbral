@@ -327,15 +327,18 @@ pub fn mixin_cols(input: TokenStream) -> TokenStream {
 /// auto-invokes the base's `mixin_cols!`. The result is an ordinary flat struct
 /// with an ordinary `#[derive(Model, …)]` — the derive's existing `flatten_bases`
 /// path never triggers, so this is purely additive and coexists with the old
-/// `#[umbral(flatten)]` mechanism (still used for multi-base models).
+/// `#[umbral(flatten)]` mechanism.
 ///
-/// # Single base only (phase 1)
+/// # Multiple bases (gaps4 #89)
 ///
-/// Composing N bases through this lever needs a continuation-passing
-/// `macro_rules!` (a base's field-splice macro can't have another invocation
-/// nested in its argument — macro expansion isn't eager). Until that lands, a
-/// model needing more than one base keeps using the old `#[umbral(flatten)]`
-/// mechanism, which has no such limitation.
+/// `#[model(base = A, B, …)]` composes several bases: their fields splice in as
+/// flat, native fields in declaration order (A's, then B's, then the model's
+/// own). A naive nesting `A!{ B!{ struct } }` can't work — a macro's arguments
+/// aren't pre-expanded, so `A`'s matcher would see B's unexpanded invocation
+/// rather than a struct. Instead each base companion macro carries `@compose`
+/// arms that re-invoke the NEXT base's macro (drawn from a queue this attribute
+/// seeds) after prepending its own fields; the last (queue-empty) emits the flat
+/// struct. Single-base still uses the direct splice arm unchanged.
 #[proc_macro_attribute]
 pub fn model(attr: TokenStream, item: TokenStream) -> TokenStream {
     let args = match syn::parse::<ModelAttrArgs>(attr) {
@@ -362,13 +365,36 @@ pub fn model(attr: TokenStream, item: TokenStream) -> TokenStream {
             .into();
     }
 
-    let macro_path = base_fields_macro_path(&args.base);
-    quote! { #macro_path! { #item2 } }.into()
+    // gaps4 #89: single base uses the direct splice arm (unchanged); N bases use
+    // the continuation-passing `@compose` arms so each base's fields are spliced
+    // in turn — a nested `A!{ B!{…} }` can't work (macro args aren't
+    // pre-expanded), so each base re-invokes the NEXT from a queue and the last
+    // (queue-empty) emits the flat struct, in declaration order.
+    if args.bases.len() == 1 {
+        let macro_path = base_fields_macro_path(&args.bases[0]);
+        return quote! { #macro_path! { #item2 } }.into();
+    }
+    // Nest so the FIRST-declared base ends up first in the struct: the outermost
+    // call is the LAST base, and it re-invokes the remaining bases in reverse
+    // (each `@compose` arm PREPENDS its own fields), so the innermost is the
+    // first-declared base and emits the final struct.
+    let (last, rest) = args.bases.split_last().expect("len >= 2 checked above");
+    let outer = base_fields_macro_path(last);
+    let queue: Vec<TokenStream2> = rest
+        .iter()
+        .rev()
+        .map(|b| {
+            let p = base_fields_macro_path(b);
+            quote! { [ #p ! ] }
+        })
+        .collect();
+    quote! { #outer! { @compose q[ #(#queue)* ] #item2 } }.into()
 }
 
-/// Parsed form of `#[model(base = <TypePath>)]` — single base for phase 1.
+/// Parsed form of `#[model(base = A)]` or `#[model(base = A, B, …)]` — one or
+/// more `#[derive(ModelBase)]` bases spliced in as flat, native fields.
 struct ModelAttrArgs {
-    base: syn::TypePath,
+    bases: Vec<syn::TypePath>,
 }
 
 impl syn::parse::Parse for ModelAttrArgs {
@@ -376,26 +402,36 @@ impl syn::parse::Parse for ModelAttrArgs {
         let key: syn::Ident = input.parse().map_err(|_| {
             syn::Error::new(
                 input.span(),
-                "expected `#[model(base = <Base>)]` — a single `#[derive(ModelBase)]` base",
+                "expected `#[model(base = <Base>)]` — one or more `#[derive(ModelBase)]` bases",
             )
         })?;
         if key != "base" {
             return Err(syn::Error::new(
                 key.span(),
-                format!("unknown `#[model(...)]` argument `{key}`; expected `base = <Base>`"),
+                format!(
+                    "unknown `#[model(...)]` argument `{key}`; expected `base = <Base>` \
+                     (or `base = A, B, …` for several)"
+                ),
             ));
         }
         input.parse::<syn::Token![=]>()?;
-        let base: syn::TypePath = input.parse()?;
+        // A comma-separated list of base type paths: `A` or `A, B, C`.
+        let mut bases = vec![input.parse::<syn::TypePath>()?];
+        while input.peek(syn::Token![,]) {
+            input.parse::<syn::Token![,]>()?;
+            if input.is_empty() {
+                break; // tolerate a trailing comma
+            }
+            bases.push(input.parse::<syn::TypePath>()?);
+        }
         if !input.is_empty() {
             return Err(syn::Error::new(
                 input.span(),
-                "`#[model(...)]` takes a single `base = <Base>` for now — multiple bases via \
-                 one `#[model(...)]` are not supported yet; keep using `#[umbral(flatten)]` for \
-                 additional bases",
+                "`#[model(base = …)]` expects one base or a comma-separated list \
+                 (`base = A, B`) — unexpected trailing tokens",
             ));
         }
-        Ok(ModelAttrArgs { base })
+        Ok(ModelAttrArgs { bases })
     }
 }
 
@@ -3205,11 +3241,11 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
         // old `#[umbral(flatten)]` path where the base is a nested value and
         // `mixin_cols!` is the only way to surface the consts.
         //
-        // Single base only: N-base composition through this lever needs a
-        // continuation-passing macro (a nested `__umbral_base_fields_B!{…}`
-        // inside `__umbral_base_fields_A!`'s argument is NOT pre-expanded, so
-        // A's matcher can't see B's fields). Multi-base models keep using the
-        // derive-based `#[umbral(flatten)]` path, which has no such limit.
+        // gaps4 #89: this macro also carries continuation-passing `@compose`
+        // arms (added below) so `#[model(base = A, B, …)]` can compose N bases —
+        // a nested `__umbral_base_fields_B!{…}` inside A's argument is NOT
+        // pre-expanded, so instead each base re-invokes the NEXT base's macro
+        // (from a queue the attribute seeds) after prepending its own fields.
         let raw_field_tokens: Vec<TokenStream2> =
             fields.iter().map(|field| quote! { #field }).collect();
         let fields_macro_ident = format_ident!("__umbral_base_fields_{}", struct_name);
@@ -3228,6 +3264,39 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
                     $vis struct $name {
                         #( #raw_field_tokens , )*
                         $( $user_fields )*
+                    }
+                };
+                // gaps4 #89 — continuation-passing arms for multi-base
+                // composition. `#[model(base = A, B, …)]` seeds this: each arm
+                // PREPENDS this base's fields to the struct-in-progress, then a
+                // non-empty queue re-invokes the NEXT base's field macro (whose
+                // `Name !` tokens are the head bracket group) while an empty
+                // queue emits the final flat struct. Because the spliced base
+                // columns become the model's OWN fields, no `mixin_cols!` is
+                // needed (the derive emits their consts) — same as the arm above.
+                (
+                    @compose q[ [ $( $next:tt )* ] $( $rest:tt )* ]
+                    $( #pound [ $ca:meta ] )*
+                    $cvis:vis struct $cname:ident { $( $cbody:tt )* }
+                ) => {
+                    $( $next )* {
+                        @compose q[ $( $rest )* ]
+                        $( #pound [ $ca ] )*
+                        $cvis struct $cname {
+                            #( #raw_field_tokens , )*
+                            $( $cbody )*
+                        }
+                    }
+                };
+                (
+                    @compose q[ ]
+                    $( #pound [ $ca:meta ] )*
+                    $cvis:vis struct $cname:ident { $( $cbody:tt )* }
+                ) => {
+                    $( #pound [ $ca ] )*
+                    $cvis struct $cname {
+                        #( #raw_field_tokens , )*
+                        $( $cbody )*
                     }
                 };
             }

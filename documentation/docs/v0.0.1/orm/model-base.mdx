@@ -69,7 +69,7 @@ What the single attribute buys you, versus the nested-field form below:
 The DB schema and JSON shape are **identical** to the nested-field form — same columns, same flat JSON — so the two mechanisms coexist and you can move a model between them without a migration.
 
 <Callout type="info">
-**Single base per model, for now.** `#[model(base = ...)]` takes exactly one base today. A model that composes **several** bases uses the nested `#[umbral(flatten)]` form below (see [Composing several bases](#composing-several-bases)) — multi-base support for `#[model(...)]` is planned.
+**Several bases compose too.** `#[model(base = A, B, …)]` splices multiple bases in as flat, native fields in declaration order — `#[model(base = TimeStamped, SoftDelete)]` gives you `article.id`, `article.created_at` *and* `article.deleted_at`, all top-level. At most one base may declare the primary key. See [Composing several bases](#composing-several-bases).
 </Callout>
 
 ## The nested-field way: `#[umbral(flatten)]`
@@ -144,7 +144,22 @@ Document::objects().with_deleted().count().await?;   // includes them
 
 ## Composing several bases
 
-Embed more than one base — each `#[umbral(flatten)]` field contributes its columns in declaration order:
+**The flat way — `#[model(base = A, B, …)]`.** List the bases; their columns splice in as flat, native fields in declaration order (A's, then B's, then the model's own):
+
+```rust
+#[model(base = TimeStamped, SoftDelete)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, sqlx::FromRow, Model)]
+#[umbral(table = "article")]
+pub struct Article {
+    pub title: String,
+}
+// article.id, article.created_at, article.updated_at (TimeStamped),
+// article.deleted_at (SoftDelete), article.title — all top-level.
+```
+
+At most one base may declare the primary key; a base contributing only non-key columns (a bare `deleted_at`) simply omits `#[umbral(primary_key)]`. The typed consts (`Article::CREATED_AT`, `Article::DELETED_AT`) are generated for every base's columns automatically — no `mixin_cols!` needed.
+
+**The nested-field way — `#[umbral(flatten)]`.** The older form embeds each base as a nested field (accessed as `comment.audit.id`, not `comment.id`); still supported:
 
 ```rust
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow, Model)]
@@ -157,8 +172,6 @@ pub struct Comment {
     pub body: String,
 }
 ```
-
-When several bases are embedded, at most one may declare the primary key. A base that contributes only non-key columns (like a bare `deleted_at`) simply omits `#[umbral(primary_key)]`.
 
 ## Every attribute works on the base
 
