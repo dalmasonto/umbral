@@ -12,18 +12,16 @@ use umbral_auth::AuthUser;
 // Choice enums
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum PostStatus {
     Draft,
     Published,
     Scheduled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices, Default)]
 #[choices(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum ContactStatus {
     /// gaps2 #19 follow-up: `New` is the default so `ContactMessage`
     /// can `#[derive(Default)]` — which the Form derive relies on
@@ -37,17 +35,15 @@ pub enum ContactStatus {
     Closed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
 pub enum RedirectCode {
     MovedPermanently,
     Found,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
 pub enum PageTemplate {
     Default,
     FullWidth,

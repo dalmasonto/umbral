@@ -14,18 +14,16 @@ use uuid::Uuid;
 // Choice enums
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum ProductStatus {
     Draft,
     Active,
     Archived,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum Currency {
     Usd,
     Eur,
@@ -33,9 +31,8 @@ pub enum Currency {
     Kes,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum OrderStatus {
     Pending,
     Paid,
@@ -46,9 +43,8 @@ pub enum OrderStatus {
     Refunded,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum PaymentMethod {
     Card,
     Mpesa,
@@ -57,9 +53,8 @@ pub enum PaymentMethod {
     Cod,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum PaymentStatus {
     Pending,
     Authorized,
@@ -68,17 +63,15 @@ pub enum PaymentStatus {
     Refunded,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
 pub enum AddressType {
     Billing,
     Shipping,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
 #[choices(rename_all = "snake_case")]
-#[serde(rename_all = "snake_case")]
 pub enum DiscountType {
     Percentage,
     FixedAmount,
