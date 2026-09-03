@@ -72,6 +72,44 @@ subscribe_async("post_delete:post", |payload| async move {
 
 Handlers stack in registration order. Multiple handlers per name all run.
 
+## Transactional hooks: atomic "create A ⇒ B exists"
+
+`subscribe` / `subscribe_async` handlers run **after** the write commits and **cannot fail it** — perfect for cache invalidation or an outgoing webhook, wrong for an invariant like "every `AuthUser` must have a `Profile`". If that handler runs post-commit and its own insert fails (or the process restarts first), you get a user with no profile, and nothing surfaces it.
+
+`subscribe_txn` closes that gap. A transactional handler runs **inside the creating transaction**, receives `&mut Transaction` so it can write dependent rows on the *same* tx, and returns a `Result` — an `Err` **rolls the whole create back**. So either the parent and its dependents all commit, or none do.
+
+```rust
+use umbral::signals::subscribe_txn;
+
+// Every AuthUser create also creates its Profile — atomically.
+subscribe_txn("post_save:auth_user", |payload, tx| Box::pin(async move {
+    let uid = payload["instance"]["id"].clone();
+    let mut body = serde_json::Map::new();
+    body.insert("user_id".into(), uid);
+    umbral::orm::DynQuerySet::for_meta(&profile_meta)
+        .insert_json_in_tx(&body, tx)
+        .await?;      // an Err here rolls the AuthUser create back too
+    Ok(())
+}));
+```
+
+The typed form lives on `on_model` (from `umbral-signals`), which hands you the decoded instance and derives the signal name:
+
+```rust
+use umbral_signals::on_model;
+
+on_model::<AuthUser>().post_create_txn(|user, tx| Box::pin(async move {
+    Profile::objects().on_tx(tx).create(Profile { user_id: user.id, ..Default::default() }).await?;
+    Ok(())
+}));
+```
+
+Because the future has to borrow the transaction, the handler returns a `Box::pin(async move { … })` rather than being a bare async closure. The `post_save` async subscribers above still fire (post-commit) as well — a model can have both.
+
+<Callout type="info">
+Fires from the typed `Manager::create` path (gaps4 #92). A model with a `subscribe_txn` handler runs its create in a transaction; models without one keep the fast, no-extra-transaction path. M2M links set on the created instance flush after commit, so they aren't inside the atomic hook window yet.
+</Callout>
+
 ## The actor envelope
 
 Every signal payload carries an `"actor"` key whose value is whatever JSON the nearest enclosing `with_actor(...)` scope set. With no scope active, the value is `Value::Null`. This is how an audit-log plugin learns who triggered a write without each plugin reinventing the same middleware.

@@ -220,6 +220,60 @@ where
         });
     }
 
+    /// Register a **transactional** after-create hook for this model (gaps4
+    /// #92) — the typed form of [`umbral::signals::subscribe_txn`]. Unlike
+    /// [`post_save`](Self::post_save) (async, post-commit, can't fail the
+    /// write), this runs INSIDE the creating transaction: it receives the
+    /// created instance (owned) plus `&mut Transaction`, so it can write a
+    /// dependent row on the same tx, and returning `Err` ROLLS THE CREATE BACK.
+    /// This makes "when an `M` is created, a related row exists" an atomic
+    /// invariant instead of a racy async fire-and-forget.
+    ///
+    /// Write the handler returning a boxed future (the borrow of the
+    /// transaction can't be an ordinary async closure):
+    ///
+    /// ```ignore
+    /// on_model::<AuthUser>().post_create_txn(|user, tx| Box::pin(async move {
+    ///     Profile::objects().on_tx(tx).create(Profile { user_id: user.id, ..Default::default() }).await?;
+    ///     Ok(())
+    /// }));
+    /// ```
+    ///
+    /// Signal name: `post_save:<M::TABLE>` (the transactional handler set).
+    pub fn post_create_txn<F>(&self, handler: F)
+    where
+        F: for<'a> Fn(
+                M,
+                &'a mut umbral::db::Transaction,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<(), umbral::orm::WriteError>>
+                        + Send
+                        + 'a,
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    {
+        let name = format!("post_save:{}", M::TABLE);
+        let handler = std::sync::Arc::new(handler);
+        umbral::signals::subscribe_txn(&name, move |payload, tx| {
+            let handler = handler.clone();
+            let decoded = decode_instance::<M>(payload);
+            Box::pin(async move {
+                match decoded {
+                    Some(instance) => handler(instance, tx).await,
+                    None => Err(umbral::orm::WriteError::Sqlx(
+                        umbral::sqlx::Error::Protocol(format!(
+                            "post_create_txn:{}: could not decode instance from the signal payload",
+                            M::TABLE
+                        )),
+                    )),
+                }
+            })
+        });
+    }
+
     /// Register a handler called **before** an UPDATE for this model
     /// (gaps2 #92). Fires ONLY on UPDATE — never INSERT.
     ///

@@ -140,9 +140,30 @@ pub(crate) type AsyncHandler = std::sync::Arc<
         + 'static,
 >;
 
+/// A TRANSACTIONAL handler (gaps4 #92): runs INSIDE the emitting write's
+/// transaction, borrowing `&mut Transaction` so it can write dependent rows on
+/// the SAME tx, and returns a `Result` — an `Err` aborts the write (the caller
+/// rolls the tx back), making "create A ⇒ B exists" atomic. The `for<'a>` HRTB
+/// is what lets the returned future borrow the transaction for the call's
+/// duration; register via [`subscribe_txn`], fire via [`emit_txn`].
+pub(crate) type TxnHandler = std::sync::Arc<
+    dyn for<'a> Fn(
+            &'a Value,
+            &'a mut crate::db::Transaction,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<(), crate::orm::write::WriteError>>
+                    + Send
+                    + 'a,
+            >,
+        > + Send
+        + Sync,
+>;
+
 struct Registry {
     sync: HashMap<String, Vec<SyncHandler>>,
     r#async: HashMap<String, Vec<AsyncHandler>>,
+    txn: HashMap<String, Vec<TxnHandler>>,
 }
 
 impl Registry {
@@ -150,6 +171,7 @@ impl Registry {
         Self {
             sync: HashMap::new(),
             r#async: HashMap::new(),
+            txn: HashMap::new(),
         }
     }
 }
@@ -204,6 +226,49 @@ where
         .entry(name.to_string())
         .or_default()
         .push(wrapped);
+}
+
+/// Register a TRANSACTIONAL handler for `name` (gaps4 #92) — the ORM's
+/// synchronous, in-transaction post-write hook. Unlike [`subscribe`] /
+/// [`subscribe_async`] (which run AFTER the write commits and cannot fail it),
+/// a txn handler runs INSIDE the write's transaction, receives `&mut
+/// Transaction` so it can write dependent rows on the same tx, and returns a
+/// `Result` whose `Err` ROLLS THE WHOLE WRITE BACK. This is how a plugin makes
+/// "when an `AuthUser` is created, a `Profile` exists" an atomic invariant
+/// instead of a racy async fire-and-forget with swallowed errors.
+///
+/// Handlers stack per name in registration order and run in series; the first
+/// `Err` short-circuits and aborts the write. Write the handler returning a
+/// boxed future (the `for<'a>` borrow of the transaction can't be an ordinary
+/// async closure):
+///
+/// ```ignore
+/// subscribe_txn("post_save:auth_user", |payload, tx| Box::pin(async move {
+///     let uid = payload["instance"]["id"].clone();
+///     Profile::objects().on_tx(tx).create(Profile { user: uid, ..Default::default() }).await?;
+///     Ok(())
+/// }));
+/// ```
+pub fn subscribe_txn<F>(name: &str, handler: F)
+where
+    F: for<'a> Fn(
+            &'a Value,
+            &'a mut crate::db::Transaction,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<(), crate::orm::write::WriteError>>
+                    + Send
+                    + 'a,
+            >,
+        > + Send
+        + Sync
+        + 'static,
+{
+    let mut reg = lock_registry();
+    reg.txn
+        .entry(name.to_string())
+        .or_default()
+        .push(std::sync::Arc::new(handler));
 }
 
 /// Emit a named signal. Runs every sync handler then awaits every
@@ -327,6 +392,36 @@ where
 ///
 /// Called by `Manager::save` before INSERT (created=true) or UPDATE
 /// (created=false). Per-row bulk paths fire [`emit_bulk_post_save`] instead.
+/// Fire the TRANSACTIONAL handlers for `name`, in series, on the open
+/// transaction `tx` (gaps4 #92). Runs BEFORE the write commits; the first
+/// handler `Err` short-circuits and returns it, so the caller rolls the tx back
+/// and the whole write is aborted atomically. The sync/async handlers
+/// ([`subscribe`] / [`subscribe_async`]) are NOT run here — they still fire
+/// post-commit via [`emit`]. Returns the count of handlers that ran.
+///
+/// A panicking txn handler is deliberately NOT caught: it unwinds through the
+/// caller, dropping (and rolling back) the transaction — a loud abort rather
+/// than a swallowed one.
+pub async fn emit_txn(
+    name: &str,
+    payload: Value,
+    tx: &mut crate::db::Transaction,
+) -> Result<usize, crate::orm::write::WriteError> {
+    let payload = with_payload_actor(payload);
+    // Clone the handler list under the lock, then drop the guard before any
+    // `.await` (same discipline as `emit`): a txn handler that re-enters the
+    // signals API must not deadlock on the non-reentrant mutex.
+    let handlers: Vec<TxnHandler> = {
+        let reg = lock_registry();
+        reg.txn.get(name).cloned().unwrap_or_default()
+    };
+    let count = handlers.len();
+    for h in &handlers {
+        h(&payload, tx).await?;
+    }
+    Ok(count)
+}
+
 pub async fn emit_pre_save<M>(instance: &M, created: bool)
 where
     M: crate::orm::Model + serde::Serialize,
@@ -565,6 +660,15 @@ pub fn has_subscribers(name: &str) -> bool {
         || reg.r#async.get(name).is_some_and(|h| !h.is_empty())
 }
 
+/// Whether `name` has at least one TRANSACTIONAL handler ([`subscribe_txn`]).
+/// The create path calls this to decide whether to wrap the INSERT in a
+/// transaction — no txn subscriber → the fast, no-extra-tx path is unchanged
+/// (gaps4 #92).
+pub fn has_txn_subscribers(name: &str) -> bool {
+    let reg = lock_registry();
+    reg.txn.get(name).is_some_and(|h| !h.is_empty())
+}
+
 /// Fire the ORM `pre_update` signal for model `M`.
 ///
 /// Payload: `{ "previous": <old row JSON>, "instance": <new row JSON>,
@@ -635,4 +739,5 @@ pub fn clear_for_tests() {
     let mut reg = lock_registry();
     reg.sync.clear();
     reg.r#async.clear();
+    reg.txn.clear();
 }

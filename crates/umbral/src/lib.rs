@@ -814,7 +814,8 @@ pub mod signals {
     //! directly only for application-defined (non-model-tied) signals.
 
     pub use umbral_core::signals::{
-        clear_for_tests, current_actor, emit, subscribe, subscribe_async, with_actor,
+        clear_for_tests, current_actor, emit, emit_txn, has_txn_subscribers, subscribe,
+        subscribe_async, subscribe_txn, with_actor,
     };
 }
 

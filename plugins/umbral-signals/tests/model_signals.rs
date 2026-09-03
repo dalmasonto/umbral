@@ -400,3 +400,72 @@ async fn bulk_queryset_delete_does_not_fire_any_signal() {
         "bulk QuerySet::delete must not fire delete signals"
     );
 }
+
+// ---------------------------------------------------------------------------
+// gaps4 #92 — transactional after-create hooks (typed `post_create_txn`)
+// ---------------------------------------------------------------------------
+
+/// The typed hook runs INSIDE the create's transaction, receiving the decoded
+/// instance (with its assigned PK), and the create succeeds when it returns Ok.
+#[tokio::test]
+async fn post_create_txn_runs_in_transaction_with_the_decoded_instance() {
+    let _guard = test_lock().lock().await;
+    reset().await;
+
+    let ran = Arc::new(AtomicUsize::new(0));
+    {
+        let r = ran.clone();
+        on_model::<SigPost>().post_create_txn(move |post, _tx| {
+            let r = r.clone();
+            Box::pin(async move {
+                assert_eq!(post.title, "txn-hook", "hook received the decoded instance");
+                assert!(post.id > 0, "PK is assigned before the hook runs");
+                r.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        });
+    }
+
+    let saved = SigPost::objects()
+        .create(SigPost {
+            id: 0,
+            title: "txn-hook".into(),
+        })
+        .await
+        .expect("create with typed txn hook");
+    assert!(saved.id > 0);
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "the transactional hook ran exactly once, in the create's tx"
+    );
+}
+
+/// A typed hook that returns `Err` rolls the whole create back.
+#[tokio::test]
+async fn failing_post_create_txn_rolls_the_create_back() {
+    let _guard = test_lock().lock().await;
+    reset().await;
+
+    let before = SigPost::objects().count().await.unwrap();
+    on_model::<SigPost>().post_create_txn(|_post, _tx| {
+        Box::pin(async move {
+            Err(umbral::orm::WriteError::Sqlx(
+                umbral::sqlx::Error::Protocol("hook rejected".into()),
+            ))
+        })
+    });
+
+    let res = SigPost::objects()
+        .create(SigPost {
+            id: 0,
+            title: "doomed".into(),
+        })
+        .await;
+    assert!(res.is_err(), "a failing typed txn hook aborts the create");
+    assert_eq!(
+        SigPost::objects().count().await.unwrap(),
+        before,
+        "the create was rolled back — nothing persisted"
+    );
+}

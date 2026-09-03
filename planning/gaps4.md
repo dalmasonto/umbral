@@ -219,3 +219,11 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 90. [x] `startproject` generates a Cargo workspace with `[workspace.dependencies]` (single-sourced versions, members inherit via `.workspace = true`); `startplugin` inherits when inside one, pins standalone otherwise — archived
 
 91. [x] Nested-tree UPDATE reconciliation lifted to `umbral::orm::nested` (`update_nested_tree`/`_gated`, symmetric with #77's writer) — archived
+
+---
+
+## SIGNALS — SYNCHRONOUS / TRANSACTIONAL POST-CREATE HOOK (surfaced by backend_v2 profile-on-user-create work — 2026-09-03)
+
+> Source project: `/home/dalmas/E/projects/portifoli/backend_v2`
+
+92. [x] Synchronous/transactional after-create hook shipped: `subscribe_txn`/`emit_txn` + typed `on_model::<M>().post_create_txn` run inside the create's transaction and can fail (roll back) the create — atomic "create A ⇒ B exists" — archived

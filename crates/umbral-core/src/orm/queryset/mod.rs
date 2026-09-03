@@ -4423,6 +4423,84 @@ impl<T: Model> Manager<T> {
         let pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
         let backend = pool.backend_name();
         let stmt = build_insert_one_for::<T>(backend, &map)?;
+
+        // gaps4 #92: transactional after-create hooks. When a subscriber
+        // registered an IN-TRANSACTION hook for this model's post_save signal,
+        // run the INSERT and every hook on ONE transaction so a dependent-row
+        // failure rolls the parent back — "create A ⇒ B exists" becomes atomic
+        // instead of a racy async fire-and-forget. Only models with such a
+        // subscriber take this path; everything else keeps the fast path below
+        // unchanged (zero extra transaction).
+        let txn_signal = format!("post_save:{}", T::TABLE);
+        if crate::signals::has_txn_subscribers(&txn_signal) {
+            // Begin on the model's ROUTED write pool (not the default) so a
+            // multi-DB model's hooks run on the right database.
+            let mut tx = match &pool {
+                DbPool::Sqlite(p) => crate::db::begin_sqlite(p).await,
+                DbPool::Postgres(p) => crate::db::begin_pg(p).await,
+            }
+            .map_err(WriteError::Sqlx)?;
+            // Insert the parent on the tx (still uncommitted).
+            let insert_res = match &pool {
+                DbPool::Sqlite(_) => {
+                    let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                    let t = tx.as_sqlite_mut().expect("sqlite tx just begun");
+                    sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                        .fetch_one(&mut **t)
+                        .await
+                }
+                DbPool::Postgres(_) => {
+                    let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                    let t = tx.as_pg_mut().expect("postgres tx just begun");
+                    sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                        .fetch_one(&mut **t)
+                        .await
+                }
+            };
+            let mut row = insert_res.map_err(|e| {
+                crate::orm::validation::classify_sql_error(&e, &map).unwrap_or(WriteError::Sqlx(e))
+            })?;
+            row.set_m2m_parent_ids();
+            // Run the in-transaction hooks. The first `Err` short-circuits;
+            // `tx` is then dropped un-committed, so the DB rolls the parent (and
+            // anything a prior hook wrote on this tx) back — nothing persists.
+            let payload = serde_json::json!({
+                "instance": serde_json::to_value(&row).map_err(|e| {
+                    WriteError::Sqlx(sqlx::Error::Protocol(format!(
+                        "post_save payload serialize: {e}"
+                    )))
+                })?,
+                "created": true,
+            });
+            crate::signals::emit_txn(&txn_signal, payload, &mut tx).await?;
+            tx.commit().await.map_err(WriteError::Sqlx)?;
+            // Post-commit tail, mirroring the fast path. (M2M pending on the
+            // parent flushes post-commit here too, so it is NOT inside the
+            // atomic hook window in this version — the #92 case has no M2M.)
+            instance.take_pending_m2m_into(&mut row);
+            row.write_pending_m2m().await?;
+            crate::signals::emit_post_save::<T>(&row, true).await;
+            crate::orm::audit::record(
+                &crate::migrate::ModelMeta::for_::<T>(),
+                &serde_json::to_value(&row)
+                    .ok()
+                    .and_then(|v| {
+                        v.as_object().map(|o| {
+                            crate::orm::audit::pk_of(&crate::migrate::ModelMeta::for_::<T>(), o)
+                        })
+                    })
+                    .unwrap_or_default(),
+                crate::orm::audit::CREATE,
+                None,
+                serde_json::to_value(&row)
+                    .ok()
+                    .and_then(|v| v.as_object().cloned())
+                    .as_ref(),
+            )
+            .await;
+            return Ok(row);
+        }
+
         let atomic = self.should_atomic_wrap();
         // Post-execution SQL classification: turns the DB's
         // UNIQUE / FK / NOT NULL / CHECK violations into the
