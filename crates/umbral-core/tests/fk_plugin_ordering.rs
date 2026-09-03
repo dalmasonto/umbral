@@ -135,6 +135,7 @@ impl Plugin for FkPlugin {
             table: self.table.to_string(),
             fields,
             display: format!("{}Model", self.name),
+            str_template: None,
             icon: "database".to_string(),
             database: None,
             singleton: false,

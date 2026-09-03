@@ -349,6 +349,12 @@ pub struct ModelMeta {
     /// `Model::NAME` when no `#[umbral(display = "...")]` is present.
     #[serde(default)]
     pub display: String,
+    /// Per-instance display template from `Model::STR_TEMPLATE` (Django's
+    /// `__str__`): a `"{field} …"` format string rendered against a row to
+    /// produce a human label. `None` when no `#[umbral(str = "...")]` is set.
+    /// `#[serde(default)]` so snapshots written before this field deserialize.
+    #[serde(default)]
+    pub str_template: Option<String>,
     /// Lucide icon slug from `Model::ICON`. Defaults to `"database"`.
     #[serde(default = "default_icon")]
     pub icon: String,
@@ -426,6 +432,7 @@ impl Default for ModelMeta {
             table: String::new(),
             fields: Vec::new(),
             display: String::new(),
+            str_template: None,
             icon: default_icon(),
             database: None,
             singleton: false,
@@ -533,6 +540,7 @@ impl ModelMeta {
             table: T::TABLE.to_string(),
             fields: T::FIELDS.iter().map(Column::from).collect(),
             display: T::DISPLAY.to_string(),
+            str_template: T::STR_TEMPLATE.map(|s| s.to_string()),
             icon: T::ICON.to_string(),
             database: T::DATABASE.map(|s| s.to_string()),
             singleton: T::SINGLETON,
@@ -563,6 +571,61 @@ impl ModelMeta {
             app_label: T::APP_LABEL.to_string(),
         }
     }
+
+    /// Render this model's per-instance display string (the `__str__` of
+    /// `#[umbral(str = "{a} {b}")]`) for one row's JSON. Each `{field}`
+    /// placeholder is substituted with the row's value (strings verbatim,
+    /// numbers/bools stringified, null/absent → empty); `{{`/`}}` are literal
+    /// braces. Returns `None` when the model declares no template, so a caller
+    /// falls back to its own label (a `#[umbral(string)]` column, then the PK).
+    pub fn render_str(&self, row: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+        let tmpl = self.str_template.as_deref()?;
+        Some(render_str_template(tmpl, row))
+    }
+}
+
+/// Substitute `{field}` placeholders in `tmpl` with `row`'s values. `{{` and
+/// `}}` emit literal braces; an unterminated `{` or an unknown field is left as
+/// close to verbatim as is useful (unknown field → empty, matching Django's
+/// tolerance for a missing attribute being falsy in a template).
+fn render_str_template(tmpl: &str, row: &serde_json::Map<String, serde_json::Value>) -> String {
+    let mut out = String::with_capacity(tmpl.len());
+    let mut chars = tmpl.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' if chars.peek() == Some(&'{') => {
+                chars.next();
+                out.push('{');
+            }
+            '}' if chars.peek() == Some(&'}') => {
+                chars.next();
+                out.push('}');
+            }
+            '{' => {
+                let mut key = String::new();
+                let mut closed = false;
+                for c2 in chars.by_ref() {
+                    if c2 == '}' {
+                        closed = true;
+                        break;
+                    }
+                    key.push(c2);
+                }
+                if !closed {
+                    out.push('{');
+                    out.push_str(&key);
+                    continue;
+                }
+                match row.get(key.trim()) {
+                    Some(serde_json::Value::String(s)) => out.push_str(s),
+                    Some(serde_json::Value::Null) | None => {}
+                    Some(v) => out.push_str(&v.to_string()),
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// A snapshot of every registered model at a point in time.
@@ -6795,6 +6858,7 @@ mod tests {
                 table: "zeta".to_string(),
                 fields: Vec::new(),
                 display: "ZetaModel".to_string(),
+                str_template: None,
                 icon: "database".to_string(),
                 database: None,
                 singleton: false,
@@ -6816,6 +6880,7 @@ mod tests {
                 table: "alpha".to_string(),
                 fields: Vec::new(),
                 display: "AlphaModel".to_string(),
+                str_template: None,
                 icon: "database".to_string(),
                 database: None,
                 singleton: false,
@@ -7218,6 +7283,7 @@ mod tests {
                 table: "m".into(),
                 fields: vec![col],
                 display: "M".into(),
+                str_template: None,
                 icon: "database".into(),
                 database: None,
                 singleton: false,

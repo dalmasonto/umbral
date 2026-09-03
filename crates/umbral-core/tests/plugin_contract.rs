@@ -105,6 +105,7 @@ impl Plugin for TestPlugin {
             view: None,
             materialized: false,
             display: model_name.clone(),
+            str_template: None,
             icon: "database".to_string(),
             database: None,
             singleton: false,

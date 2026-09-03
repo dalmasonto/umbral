@@ -72,6 +72,7 @@ fn meta(cols: Vec<Column>) -> ModelMeta {
         table: "acct".to_string(),
         fields: cols,
         display: "Account".to_string(),
+        str_template: None,
         icon: "database".to_string(),
         database: None,
         singleton: false,

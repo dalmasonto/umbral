@@ -31,6 +31,7 @@ fn make_meta(name: &str, table: &str, cols: Vec<Column>) -> ModelMeta {
         table: table.to_string(),
         fields: cols,
         display: name.to_string(),
+        str_template: None,
         icon: "database".to_string(),
         database: None,
         singleton: false,

@@ -73,6 +73,7 @@ fn meta(unique_together: Vec<Vec<String>>, indexes: Vec<Vec<String>>) -> ModelMe
             col("status", SqlType::Text),
         ],
         display: "Membership".to_string(),
+        str_template: None,
         icon: "database".to_string(),
         database: None,
         singleton: false,

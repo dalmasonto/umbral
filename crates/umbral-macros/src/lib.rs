@@ -549,6 +549,11 @@ struct UmbralStructAttr {
     table: Option<String>,
     plugin: Option<String>,
     display: Option<String>,
+    /// `#[umbral(str = "{a} {b}")]` — the per-INSTANCE display template
+    /// (Django's `__str__`): a format string whose `{field}` placeholders are
+    /// substituted with a row's values to produce a human label. Distinct from
+    /// `display`, which is the model's human NAME (verbose_name).
+    str_template: Option<String>,
     icon: Option<String>,
     database: Option<String>,
     /// `#[umbral(singleton)]` — single-row model marker.
@@ -1330,6 +1335,7 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
         table: None,
         plugin: None,
         display: None,
+        str_template: None,
         icon: None,
         database: None,
         singleton: false,
@@ -1360,6 +1366,16 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
                 let value = meta.value()?;
                 let lit: syn::LitStr = value.parse()?;
                 parsed.display = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("str") {
+                // `#[umbral(str = "{first_name} {last_name}")]` — the
+                // per-instance display template (Django's `__str__`). `{field}`
+                // placeholders are substituted with a row's values wherever the
+                // framework needs a human label (admin FK chips, list column,
+                // page titles). Distinct from `display` (the model's name).
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.str_template = Some(lit.value());
                 Ok(())
             } else if meta.path.is_ident("icon") {
                 let value = meta.value()?;
@@ -1449,7 +1465,7 @@ fn parse_umbral_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralStruc
             } else {
                 Err(meta.error(
                     "umbral::Model derive accepts struct-level `table = \"...\"`, `plugin = \"...\"`, \
-                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`, `soft_delete`, `audited`, \
+                     `display = \"...\"`, `str = \"{field} …\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`, `soft_delete`, `audited`, \
                      `view = \"SELECT ...\"`, `materialized_view = \"SELECT ...\"`, \
                      `unique_together = [[...]]`, `indexes = [[...]]`, `ordering = [\"-col\", \"col\"]`; \
                      and field-level `noform` and `noedit`. \
@@ -1587,6 +1603,10 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     let display_lit = struct_attr
         .display
         .unwrap_or_else(|| struct_name.to_string());
+    let str_template_tokens = match &struct_attr.str_template {
+        Some(tmpl) => quote! { ::core::option::Option::Some(#tmpl) },
+        None => quote! { ::core::option::Option::None },
+    };
     let icon_lit = struct_attr.icon.unwrap_or_else(|| "database".to_string());
     let database_tokens = match struct_attr.database {
         Some(alias) => quote! { ::core::option::Option::Some(#alias) },
@@ -3427,6 +3447,7 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             const APP_LABEL: &'static str = #app_label_lit;
             const FIELDS: &'static [::umbral::orm::FieldSpec] = #fields_const_tokens;
             const DISPLAY: &'static str = #display_lit;
+            const STR_TEMPLATE: ::core::option::Option<&'static str> = #str_template_tokens;
             const ICON: &'static str = #icon_lit;
             const DATABASE: ::core::option::Option<&'static str> = #database_tokens;
             const SINGLETON: bool = #singleton_lit;

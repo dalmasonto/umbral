@@ -371,6 +371,7 @@ mod readonly_set_tests {
             table: "m".into(),
             fields,
             display: "M".into(),
+            str_template: None,
             icon: "database".into(),
             database: None,
             singleton: false,

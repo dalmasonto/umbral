@@ -174,6 +174,7 @@ fn default_router_allow_migrate_is_permissive_for_assigned_alias() {
         database: None, // → resolves to "default"
         fields: vec![],
         display: String::new(),
+        str_template: None,
         icon: "database".to_string(),
         singleton: false,
         unique_together: vec![],

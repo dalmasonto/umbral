@@ -787,6 +787,7 @@ mod tests {
             table: "test".into(),
             fields: cols,
             display: "Test".into(),
+            str_template: None,
             icon: "database".into(),
             database: None,
             singleton: false,

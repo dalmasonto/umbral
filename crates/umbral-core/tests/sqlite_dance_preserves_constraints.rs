@@ -70,6 +70,7 @@ fn meta(status_nullable: bool) -> ModelMeta {
             col("status", SqlType::Text, status_nullable),
         ],
         display: "Membership".to_string(),
+        str_template: None,
         icon: "database".to_string(),
         database: None,
         singleton: false,

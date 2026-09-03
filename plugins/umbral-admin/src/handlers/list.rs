@@ -50,21 +50,38 @@ async fn resolve_fk_label(
     };
     let (_, related) = find_model(&related_table)?;
     let pk = related.fields.iter().find(|c| c.primary_key)?;
+    // Fetch the row as JSON (all columns) so a `#[umbral(str = "{a} {b}")]`
+    // template — the model's `__str__` — can reference ANY field, not just one.
+    let row = DynQuerySet::for_meta(&related)
+        .filter_eq_string(&pk.name, raw_id)
+        .limit(1)
+        .fetch_as_json()
+        .await
+        .ok()?
+        .into_iter()
+        .next()?;
+    // 1) The model's own multi-field display template, if it declared one.
+    if let Some(s) = related.render_str(&row) {
+        return Some(s);
+    }
+    // 2) Else the `#[umbral(string)]` column, then the first non-PK Text column
+    //    — the legacy single-field behaviour (now also honouring the `string`
+    //    marker, which the previous first-Text-only path ignored).
     let label_col = related
         .fields
         .iter()
-        .find(|c| !c.primary_key && matches!(c.ty, SqlType::Text))
-        .map(|c| c.name.clone())?;
-    let rows = DynQuerySet::for_meta(&related)
-        .select_cols(&[label_col.clone()])
-        .filter_eq_string(&pk.name, raw_id)
-        .limit(1)
-        .fetch_as_strings()
-        .await
-        .ok()?;
-    rows.into_iter()
-        .next()
-        .and_then(|r| r.get(&label_col).cloned())
+        .find(|c| c.is_string_repr && !c.primary_key)
+        .or_else(|| {
+            related
+                .fields
+                .iter()
+                .find(|c| !c.primary_key && matches!(c.ty, SqlType::Text))
+        })?;
+    match row.get(&label_col.name)? {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Null => None,
+        other => Some(other.to_string()),
+    }
 }
 
 /// Build the template-facing `active_filters` JSON list, resolving FK

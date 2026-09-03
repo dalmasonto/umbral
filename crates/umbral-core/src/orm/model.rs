@@ -240,6 +240,17 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// Override via `#[umbral(display = "Users")]` on the struct.
     const DISPLAY: &'static str = Self::NAME;
 
+    /// Per-INSTANCE display template — the ORM's answer to Django's `__str__`.
+    /// A format string whose `{field}` placeholders are substituted with a
+    /// row's values to produce a human label (e.g. `"{first_name} {last_name}"`
+    /// → `"Ada Lovelace"`). The admin uses it wherever it labels a single row:
+    /// FK/M2M chips, related-object pickers, page titles. `None` (the default)
+    /// falls back to the model's `#[umbral(string)]` column, then the PK.
+    ///
+    /// Override via `#[umbral(str = "{first_name} {last_name}")]` on the struct.
+    /// Distinct from [`DISPLAY`](Model::DISPLAY), which names the model TYPE.
+    const STR_TEMPLATE: ::core::option::Option<&'static str> = ::core::option::Option::None;
+
     /// Lucide icon slug shown next to this model in the admin sidebar.
     /// Defaults to `"database"`. Any valid Lucide icon name works; unknown
     /// names are silently ignored by Lucide at render time.

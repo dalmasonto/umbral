@@ -66,6 +66,7 @@ fn meta(status_nullable: bool, status_default: &str) -> ModelMeta {
             col("status", SqlType::Text, status_nullable, status_default),
         ],
         display: "Widget".to_string(),
+        str_template: None,
         icon: "database".to_string(),
         database: None,
         singleton: false,

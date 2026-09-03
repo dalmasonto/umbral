@@ -2092,6 +2092,7 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             table: t.table.clone(),
             fields: t.columns.iter().map(Column::from).collect(),
             display: t.name.clone(),
+            str_template: None,
             icon: "database".to_string(),
             database: None,
             singleton: false,

@@ -1,0 +1,42 @@
+---
+title: Instance labels (str)
+description: "#[umbral(str = \"{first_name} {last_name}\")] is the ORM's __str__: a template that concatenates a row's fields into a human label the admin uses for FK chips, pickers, and titles."
+sidebar_position: 24
+icon: tag
+tags: [orm, admin, display, str]
+badge: new
+---
+
+# Per-row labels with `#[umbral(str = "...")]`
+
+Django models have `__str__` — the one method that turns a row into a human string (`"Ada Lovelace"`, not `User #7`). umbral's equivalent is a **struct-level template**:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+#[umbral(table = "person", str = "{first_name} {last_name}")]
+pub struct Person {
+    pub id: i64,
+    pub first_name: String,
+    pub last_name: String,
+}
+```
+
+Each `{field}` placeholder is substituted with that row's value, so a `Person` row renders as `"Ada Lovelace"`. The admin uses it wherever it labels a **single** object — foreign-key and many-to-many chips, related-object pickers, and detail titles — so a `ForeignKey<Person>` shows the name instead of a bare id.
+
+## The rules
+
+- Any field name works: `str = "{title} ({year})"`, `str = "#{id} — {name}"`.
+- Numbers and booleans stringify; a null or absent field becomes empty.
+- `{{` and `}}` are literal braces.
+
+<Callout type="info">
+**`str` vs `display`.** `#[umbral(str = "...")]` labels an **instance** (a row) — Django's `__str__`. `#[umbral(display = "...")]` names the **model type** — Django's `verbose_name` (the "Blog Posts" sidebar label). They're independent.
+</Callout>
+
+## Fallback when there's no template
+
+Without `#[umbral(str = ...)]`, the admin falls back — in order — to the field marked `#[umbral(string)]`, then the first text column, then the primary key. So a single-field label is still just `#[umbral(string)]` on that field; reach for `str` when a label needs **more than one** field concatenated.
+
+## Using it yourself
+
+`ModelMeta::render_str(&row)` renders the template against a JSON row (returning `None` when the model declares no template), so any code holding a `ModelMeta` and a row can produce the same label the admin does.

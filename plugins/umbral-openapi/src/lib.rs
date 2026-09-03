@@ -1718,6 +1718,7 @@ mod tests {
                 published_at,
             ],
             display: "Note".to_string(),
+            str_template: None,
             icon: "database".to_string(),
             database: None,
             singleton: false,

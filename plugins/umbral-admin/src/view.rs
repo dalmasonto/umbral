@@ -1189,6 +1189,7 @@ mod tests {
             table: table.to_string(),
             fields,
             display: table.to_string(),
+            str_template: None,
             icon: "database".to_string(),
             database: None,
             singleton: false,

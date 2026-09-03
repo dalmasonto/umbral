@@ -71,6 +71,7 @@ fn meta(name: &str, table: &str) -> ModelMeta {
             col("title", SqlType::Text, false),
         ],
         display: name.to_string(),
+        str_template: None,
         icon: "database".to_string(),
         database: None,
         singleton: false,

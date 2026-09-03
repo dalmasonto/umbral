@@ -75,6 +75,7 @@ fn meta(cols: Vec<Column>) -> ModelMeta {
         table: "article".to_string(),
         fields: cols,
         display: "Article".to_string(),
+        str_template: None,
         icon: "database".to_string(),
         database: None,
         singleton: false,
