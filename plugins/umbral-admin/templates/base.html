@@ -104,6 +104,38 @@
         font-size: 13px;
         line-height: 18px;
     }
+    /* Sidebar nav — active + hover states, centralized on aria-current.
+       Previously each of the three link blocks (dashboard / plugin models
+       / custom views) inlined the same {% if active %}…{% endif %} class
+       soup. Moving the look here de-duplicates it and lets the markup
+       carry the semantic aria-current="page" (screen readers announce the
+       current page). A left accent bar in --primary gives a clear,
+       considered active marker even though the active fill sits only ~2%
+       lightness above the sidebar surface — the fill alone was nearly
+       invisible in light mode. */
+    .sidebar-link {
+        position: relative;
+    }
+    .sidebar-link[aria-current="page"] {
+        background: var(--primary-container);
+        color: var(--on-primary-container);
+        font-weight: 500;
+    }
+    .sidebar-link[aria-current="page"]::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 3px;
+        height: 18px;
+        border-radius: 0 9999px 9999px 0;
+        background: var(--primary);
+    }
+    .sidebar-link:not([aria-current="page"]):hover {
+        background: var(--surface-container-high);
+        color: var(--on-surface);
+    }
 </style>
 {% endblock %} {% block body_attrs %}class="bg-background text-on-background
 antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body %}
@@ -138,7 +170,7 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
                 {{ site_title }}
             </h2>
             <p
-                class="sidebar-meta text-[10px] text-outline tracking-widest uppercase mt-0.5 truncate"
+                class="sidebar-meta text-[11px] text-on-surface-variant mt-0.5 truncate"
             >
                 {% if site_description %}{{ site_description }}{% elif admin_version %}{{ admin_version }}{% endif %}
             </p>
@@ -187,7 +219,8 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
             <div class="space-y-1 px-md">
                 <a
                     href="{{ admin_base }}/{% if restore_last_path %}?dashboard=1{% endif %}"
-                    class="sidebar-link sidebar-model-link flex items-center gap-2 px-sm py-1.5 rounded-xl border border-transparent {% if active_table == '' %}bg-primary-container text-on-primary-container{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+                    class="sidebar-link sidebar-model-link flex items-center gap-sm px-sm py-1.5 rounded-xl text-on-surface-variant font-body-sm transition-all"
+                    {% if active_table == '' %}aria-current="page"{% endif %}
                     data-model-name="dashboard"
                     data-sidebar-tooltip="Dashboard"
                     aria-label="Dashboard"
@@ -213,7 +246,8 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
                 {%- for reg in app.models %}
                 <a
                     href="{{ admin_base }}/{{ reg.table }}/"
-                    class="sidebar-link sidebar-model-link flex items-center gap-2 px-sm py-1.5 rounded-xl border border-transparent {% if active_table == reg.table %}bg-primary-container text-on-primary-container{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+                    class="sidebar-link sidebar-model-link flex items-center gap-sm px-sm py-1.5 rounded-xl text-on-surface-variant font-body-sm transition-all"
+                    {% if active_table == reg.table %}aria-current="page"{% endif %}
                     data-model-name="{{ reg.label | lower }}"
                     data-sidebar-tooltip="{{ reg.label }}"
                     aria-label="{{ reg.label }}"
@@ -237,7 +271,8 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
                 {%- for v in vg.views %}
                 <a
                     href="{{ v.href | safe }}"
-                    class="sidebar-link sidebar-model-link flex items-center gap-2 px-sm py-1.5 rounded-xl border border-transparent {% if active_view is defined and active_view == v.slug %}bg-primary-container text-on-primary-container{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+                    class="sidebar-link sidebar-model-link flex items-center gap-sm px-sm py-1.5 rounded-xl text-on-surface-variant font-body-sm transition-all"
+                    {% if active_view is defined and active_view == v.slug %}aria-current="page"{% endif %}
                     data-sidebar-tooltip="{{ v.label }}"
                     aria-label="{{ v.label }}"
                 >
@@ -256,7 +291,7 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
     >
         <a
             href="{{ admin_base }}/logout"
-            class="sidebar-link flex items-center gap-3 px-md py-2 rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-body-sm transition-all"
+            class="sidebar-link flex items-center gap-sm px-sm py-1.5 rounded-xl text-on-surface-variant font-body-sm transition-all"
             data-sidebar-tooltip="Sign out"
             aria-label="Sign out"
         >
@@ -303,7 +338,7 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
                 class="w-[14px] h-[14px] text-outline"
             ></i>
             {%- if loop.last %}
-            <span class="text-primary font-semibold">{{ crumb.label }}</span>
+            <span class="text-on-surface font-medium">{{ crumb.label }}</span>
             {%- else %}
             <a
                 href="{{ crumb.url }}"
@@ -318,7 +353,7 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
         <button
             id="cmd-palette-trigger"
             aria-label="Open command palette (Ctrl+K)"
-            class="hidden md:flex bg-surface-container-high border border-transparent px-md py-1.5 rounded-xl items-center gap-xl hover:bg-surface-container-highest transition-colors min-w-[260px]"
+            class="hidden md:flex h-9 bg-surface-container-high border border-transparent px-md rounded-xl items-center justify-between gap-md hover:bg-surface-container-highest transition-colors min-w-[260px]"
             onclick="
                 htmx.ajax('GET', '{{ admin_base }}/api/palette', {
                     target: '#umbral-palette-slot',
@@ -337,7 +372,7 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
                 >
             </div>
             <span
-                class="ml-sm inline-flex items-center gap-1 text-[10px] text-outline"
+                class="inline-flex items-center gap-1 text-[10px] text-outline"
                 aria-hidden="true"
             >
                 <kbd
@@ -377,7 +412,7 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
 
             <!-- User menu -->
             <div
-                class="hidden sm:flex items-center gap-3 cursor-pointer group"
+                class="hidden sm:flex items-center gap-sm cursor-pointer group"
                 role="button"
                 tabindex="0"
                 aria-label="User menu"
@@ -390,7 +425,7 @@ antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body
                         {{ user }}
                     </p>
                     <p
-                        class="text-[10px] text-outline uppercase tracking-wider mt-0.5"
+                        class="text-[11px] text-outline mt-0.5"
                     >
                         Staff
                     </p>
