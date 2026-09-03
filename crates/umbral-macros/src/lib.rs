@@ -143,6 +143,129 @@ enum EmitMode {
     Base,
 }
 
+/// `#[derive(New)]` — generate a partial "insert shape" companion struct
+/// `<Model>New` that OMITS the fields the ORM manages on write, so a caller
+/// constructs a row by naming ONLY the data it must supply — Django's
+/// `Model.objects.create(name=…)` at the type level (gaps4 #88).
+///
+/// Omitted (and filled with `Default::default()` in the generated `From`, which
+/// the typed write path then overwrites on insert):
+/// - an **autoincrement** primary key (an integer `id` / `#[umbral(primary_key)]`
+///   field); a user-supplied PK (`String`/`Uuid` without `auto_uuid`) stays,
+/// - `#[umbral(auto_now_add | auto_now | auto_uuid | auto_user_add | auto_user)]`,
+/// - relation fields that own no column: `M2M<T>`, `ReverseSet<T>`, `OneToOne<T>`.
+///
+/// Everything else — scalar columns and `ForeignKey<T>` (the caller must set the
+/// link) — is kept. Emits `From<<Model>New> for <Model>`, so with the
+/// `impl Into<T>` arguments on `create` / `get_or_create` / `update_or_create`,
+/// `Model::objects().create(<Model>New { … })` just works.
+///
+/// Opt-in and additive: a model without `#[derive(New)]` is untouched. Not yet
+/// supported on `#[model(base = …)]` / `#[umbral(flatten)]` models (a clear
+/// compile error points here).
+#[proc_macro_derive(New, attributes(umbral))]
+pub fn derive_new(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_new(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+fn expand_new(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let struct_name = &input.ident;
+    let new_name = format_ident!("{}New", struct_name);
+    let vis = &input.vis;
+
+    let fields = match &input.data {
+        syn::Data::Struct(syn::DataStruct {
+            fields: syn::Fields::Named(f),
+            ..
+        }) => &f.named,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                struct_name,
+                "#[derive(New)] only works on structs with named fields",
+            ));
+        }
+    };
+
+    // PK resolution mirrors the Model derive: an explicit `#[umbral(primary_key)]`
+    // wins, else the field literally named `id`.
+    let mut pk_ident: Option<&syn::Ident> = None;
+    for f in fields.iter() {
+        if parse_umbral_field_attr(&f.attrs)?.primary_key {
+            pk_ident = f.ident.as_ref();
+            break;
+        }
+    }
+    if pk_ident.is_none() {
+        pk_ident = fields
+            .iter()
+            .find(|f| f.ident.as_ref().is_some_and(|i| i == "id"))
+            .and_then(|f| f.ident.as_ref());
+    }
+
+    let mut new_fields = Vec::new(); // `vis name: ty` for kept fields
+    let mut from_inits = Vec::new(); // `name: n.name` or `name: Default::default()`
+
+    for field in fields.iter() {
+        let ident = field.ident.as_ref().unwrap();
+        let ty = &field.ty;
+        let field_vis = &field.vis;
+        let attr = parse_umbral_field_attr(&field.attrs)?;
+
+        if attr.flatten {
+            return Err(syn::Error::new_spanned(
+                field,
+                "#[derive(New)] does not yet support `#[umbral(flatten)]` / \
+                 `#[model(base = …)]` models — construct the based model directly \
+                 with `..Default::default()` for now (gaps4 #88; multi-base is #89)",
+            ));
+        }
+
+        let (kind, _) = classify_model_field(field);
+        let is_pk = pk_ident.is_some_and(|p| p == ident);
+        let is_autoincrement_pk = is_pk
+            && matches!(
+                kind,
+                FieldKind::SmallInt | FieldKind::Integer | FieldKind::BigInt
+            );
+        let is_relation_only = matches!(
+            kind,
+            FieldKind::Many2Many(_) | FieldKind::ReverseSet(_) | FieldKind::OneToOne(_)
+        );
+        let omit = is_autoincrement_pk
+            || is_relation_only
+            || attr.auto_now_add
+            || attr.auto_now
+            || attr.auto_uuid
+            || attr.auto_user_add
+            || attr.auto_user;
+
+        if omit {
+            from_inits.push(quote! { #ident: ::core::default::Default::default() });
+        } else {
+            new_fields.push(quote! { #field_vis #ident: #ty });
+            from_inits.push(quote! { #ident: n.#ident });
+        }
+    }
+
+    Ok(quote! {
+        #[derive(Debug, Clone)]
+        #vis struct #new_name {
+            #(#new_fields,)*
+        }
+
+        impl ::core::convert::From<#new_name> for #struct_name {
+            fn from(n: #new_name) -> Self {
+                Self {
+                    #(#from_inits,)*
+                }
+            }
+        }
+    })
+}
+
 /// `mixin_cols!(Model: Base1, Base2)` — generate the typed column consts
 /// for a model's `#[umbral(flatten)]`-inherited base fields, bound to the
 /// model (gaps5 #105). Emits `impl Model { … }` carrying, per base

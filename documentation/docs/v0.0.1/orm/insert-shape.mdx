@@ -1,0 +1,63 @@
+---
+title: Insert shapes (New)
+description: "#[derive(New)] generates a <Model>New struct that omits ORM-managed fields (autoincrement PK, auto timestamps, uuid/user stamps, and column-less relations), so create() names only the data you supply — Django's Model.objects.create(name=…) at the type level."
+sidebar_position: 23
+icon: plus
+tags: [orm, create, ergonomics, boilerplate]
+badge: new
+---
+
+# Insert shapes with `#[derive(New)]`
+
+When you create a row, some fields are the ORM's job, not yours: an autoincrement primary key, `auto_now_add` / `auto_now` timestamps, `auto_uuid` public ids, `auto_user*` stamps, and relations that own no column (`M2M`, `ReverseSet`, `OneToOne`). Constructing a full model literal just to insert one forces you to name all of them anyway (`id: 0`, `created_at: Default::default()`, …).
+
+`#[derive(New)]` generates a companion **insert shape** — `<Model>New` — that omits exactly those fields, so you name only the data you actually supply. It's the type-level version of Django's `Model.objects.create(name=…)`.
+
+<Callout type="info">
+Opt-in and additive: add `New` to a model's derive list to get its `<Model>New`. Models without it are unchanged. Not yet supported on `#[model(base = …)]` models (a clear compile error says so). See `arch.md` / `docs/specs` and gaps4 #88.
+</Callout>
+
+## One example
+
+```rust
+use umbral::prelude::*;
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model, New)]
+#[umbral(table = "widget")]
+pub struct Widget {
+    pub id: i64,                       // autoincrement — omitted from WidgetNew
+    #[umbral(string)]
+    pub name: String,                  // yours — kept
+    #[umbral(auto_now_add)]
+    pub created_at: DateTime<Utc>,     // stamped on insert — omitted
+    #[umbral(auto_now)]
+    pub updated_at: DateTime<Utc>,     // stamped on write — omitted
+}
+
+// Name only what you supply — no id, no timestamps.
+let w = Widget::objects()
+    .create(WidgetNew { name: "gizmo".into() })
+    .await?;
+assert!(w.id > 0);                     // PK assigned, timestamps stamped
+```
+
+`create`, `get_or_create`, and `update_or_create` all take `impl Into<T>`, so a `<Model>New` works everywhere a full model does — and, because `T: Into<T>` is identity, passing a full model still works unchanged:
+
+```rust
+// get_or_create / update_or_create accept the insert shape as `defaults`:
+let (w, created) = Widget::objects()
+    .get_or_create(widget::NAME.eq("gizmo"), WidgetNew { name: "gizmo".into() })
+    .await?;
+```
+
+## What's kept vs. omitted
+
+| Kept in `<Model>New` | Omitted (filled by the write path) |
+|---|---|
+| Scalar columns you set | Autoincrement integer PK |
+| `ForeignKey<T>` (you set the link) | `auto_now_add` / `auto_now` |
+| A user-supplied PK (`String`/`Uuid` without `auto_uuid`) | `auto_uuid`, `auto_user_add`, `auto_user` |
+| | `M2M<T>`, `ReverseSet<T>`, `OneToOne<T>` (no column) |
+
+The generated `From<<Model>New> for <Model>` fills the omitted fields with `Default::default()`; the typed write path then overwrites the PK sentinel and every auto column on insert, so the row is correct. See also [Reusable model bases](./model-base) for the `..Default::default()` construction shortcut on based models.

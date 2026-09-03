@@ -44,7 +44,7 @@ pub mod prelude {
     pub use crate::middleware::Middleware;
     pub use crate::orm::{
         ChoiceField, Choices, F, FColExt, FileField, ForeignKey, ImageField, M2M, Masked, Model,
-        MultiChoice, OneToOne, Q, Relation, ReverseRelations,
+        MultiChoice, New, OneToOne, Q, Relation, ReverseRelations,
     };
     pub use crate::plugin::{AppContext, Plugin, StaticDir};
     pub use crate::routes::Routes;
@@ -900,6 +900,15 @@ pub mod orm {
     /// `#[umbral(flatten)] #[serde(flatten)] #[sqlx(flatten)]`. Shares the
     /// `ModelBase` name with the trait.
     pub use umbral_macros::ModelBase;
+
+    /// The `#[derive(New)]` proc macro — a partial "insert shape" companion
+    /// struct `<Model>New` that omits ORM-auto-managed fields (autoincrement
+    /// PK, `auto_now`/`auto_now_add`/`auto_uuid`/`auto_user*`) and column-less
+    /// relations (`M2M`/`ReverseSet`/`OneToOne`), so a caller names only the
+    /// data it must supply — Django's `create(name=…)` at the type level. With
+    /// the `impl Into<T>` arguments on `create`/`get_or_create`/`update_or_create`,
+    /// `Model::objects().create(<Model>New { … })` works (gaps4 #88).
+    pub use umbral_macros::New;
 
     /// The `#[model(base = …)]` attribute macro — the recommended way to embed
     /// a single [`ModelBase`](super::orm::ModelBase) as flat, native fields

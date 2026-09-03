@@ -4381,7 +4381,7 @@ impl<T: Model> Manager<T> {
     /// INSERT one row, return the row as it now exists in the
     /// database (with any autoincrement PK populated). Uses the
     /// ambient pool via `Manager::queryset().resolve_pool`.
-    pub async fn create(&self, mut instance: T) -> Result<T, crate::orm::write::WriteError>
+    pub async fn create(&self, instance: impl Into<T>) -> Result<T, crate::orm::write::WriteError>
     where
         T: serde::Serialize
             + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
@@ -4397,6 +4397,9 @@ impl<T: Model> Manager<T> {
                 table: T::TABLE.to_string(),
             });
         }
+        // gaps4 #88: accept a partial insert shape (`<Model>New`) as well as a
+        // full `T` — `T: Into<T>` is identity, so existing calls are unchanged.
+        let mut instance: T = instance.into();
         let map = serialize_to_map(&instance)?;
 
         // Same pre-DB validation pipeline the dynamic
@@ -4712,7 +4715,7 @@ impl<T: Model> Manager<T> {
     pub async fn get_or_create(
         &self,
         predicate: Predicate<T>,
-        defaults: T,
+        defaults: impl Into<T>,
     ) -> Result<(T, bool), crate::orm::write::WriteError>
     where
         T: serde::Serialize
@@ -4721,6 +4724,9 @@ impl<T: Model> Manager<T> {
             + HydrateRelated,
     {
         use crate::orm::write::WriteError;
+        // gaps4 #88: `defaults` accepts a partial insert shape (`<Model>New`)
+        // as well as a full `T` — `T: Into<T>` is identity for existing calls.
+        let defaults: T = defaults.into();
 
         // Read-your-writes: probe for the existing row on the WRITE database,
         // not a (possibly lagging) read replica — otherwise a read/write-split
@@ -4898,7 +4904,7 @@ impl<T: Model> Manager<T> {
     pub async fn update_or_create(
         &self,
         predicate: Predicate<T>,
-        defaults: T,
+        defaults: impl Into<T>,
     ) -> Result<(T, bool), crate::orm::write::WriteError>
     where
         T: serde::Serialize
@@ -4908,6 +4914,9 @@ impl<T: Model> Manager<T> {
             + HydrateRelated,
     {
         use crate::orm::write::WriteError;
+        // gaps4 #88: `defaults` accepts a partial insert shape (`<Model>New`)
+        // as well as a full `T` — `T: Into<T>` is identity for existing calls.
+        let defaults: T = defaults.into();
         let pk = pk_field::<T>().ok_or_else(|| {
             WriteError::Sqlx(sqlx::Error::Protocol(
                 "update_or_create: model has no primary key".to_string(),

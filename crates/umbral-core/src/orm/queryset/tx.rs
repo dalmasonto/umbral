@@ -316,13 +316,16 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
     ///
     /// This is the `Manager::create_in_tx` equivalent called through the
     /// QuerySet API: `Post::objects().on_tx(tx).create(instance).await?`.
-    pub async fn create(self, instance: T) -> Result<T, crate::orm::write::WriteError>
+    pub async fn create(self, instance: impl Into<T>) -> Result<T, crate::orm::write::WriteError>
     where
         T: serde::Serialize
             + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
     {
+        // gaps4 #88: accept a partial insert shape (`<Model>New`) as well as a
+        // full `T` — `T: Into<T>` is identity, so existing calls are unchanged.
+        let instance: T = instance.into();
         let map = serialize_to_map(&instance)?;
         let stmt = build_insert_one_for::<T>(self.tx.backend_name(), &map)?;
         match self.tx.backend_name() {
