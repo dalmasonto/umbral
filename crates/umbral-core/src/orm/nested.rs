@@ -33,7 +33,7 @@ use serde_json::{Map, Value};
 
 use crate::db::Transaction;
 use crate::migrate::{Column, ModelMeta};
-use crate::orm::dynamic::DynQuerySet;
+use crate::orm::dynamic::{DynError, DynQuerySet};
 use crate::orm::write::WriteError;
 
 /// Max writable-nesting depth. A cyclic `.nested()` declaration (A→B→A) or a
@@ -65,6 +65,11 @@ pub enum NestedError {
     /// not an array, an item was not an object, a child table is unknown or has
     /// no/ambiguous FK to its parent, a row lacked a PK after insert, …).
     BadInput(String),
+    /// An UPDATE (upsert) targeted a row that does not exist, or that exists
+    /// but does not belong to the parent named in the tree — the cross-parent
+    /// ownership guard. Kept distinct from [`BadInput`](NestedError::BadInput)
+    /// so a gate (REST) can map it to a 404 rather than a 400.
+    NotFound(String),
     /// The tree exceeded the node budget ([`DEFAULT_MAX_NEST_NODES`] or the
     /// gate's override).
     MaxNodes(usize),
@@ -79,6 +84,7 @@ impl std::fmt::Display for NestedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NestedError::BadInput(m) => write!(f, "{m}"),
+            NestedError::NotFound(m) => write!(f, "{m}"),
             NestedError::MaxNodes(n) => {
                 write!(f, "nested write exceeds the maximum of {n} child rows")
             }
@@ -95,6 +101,19 @@ impl std::error::Error for NestedError {}
 impl From<WriteError> for NestedError {
     fn from(e: WriteError) -> Self {
         NestedError::Write(e)
+    }
+}
+
+impl From<DynError> for NestedError {
+    /// Preserve the structured [`WriteError`] so a gate (REST) keeps its
+    /// per-field validation map all the way to the response — a raw
+    /// `sqlx::Error` lifts into `WriteError::Sqlx` (a 500 on the REST side),
+    /// matching how `DynError` itself routes.
+    fn from(e: DynError) -> Self {
+        match e {
+            DynError::Write(w) => NestedError::Write(w),
+            DynError::Sqlx(s) => NestedError::Write(WriteError::from(s)),
+        }
     }
 }
 
@@ -137,6 +156,14 @@ pub trait NestedWriteGate: Send + Sync {
 
     /// Enforce this child's OWN create permission. Default: allow.
     fn check_create(&self, table: &str) -> Result<(), Self::Error> {
+        let _ = table;
+        Ok(())
+    }
+
+    /// Enforce this child's OWN update permission — the upsert path's UPDATE
+    /// branch (an item that carries its primary key). Runs before the
+    /// ownership read. Default: allow.
+    fn check_update(&self, table: &str) -> Result<(), Self::Error> {
         let _ = table;
         Ok(())
     }
@@ -413,4 +440,323 @@ fn pk_column(meta: &ModelMeta) -> Result<&Column, NestedError> {
             meta.table
         ))
     })
+}
+
+// ── UPDATE (reconciliation) — gaps4 #91 ────────────────────────────────────
+//
+// The sibling of the CREATE walk above: update a parent row, then upsert every
+// declared nested subtree on the SAME transaction. Lifted out of umbral-rest
+// (the update half of #77) so a non-REST caller gets the same atomic
+// reconciliation. REST re-supplies its per-child security via the same
+// `NestedWriteGate` (now with `check_update`).
+//
+// **Reconciliation policy — upsert, no implicit deletes.** At every level, a
+// nested item carrying the row's primary key UPDATES that row, scoped to its
+// parent via the FK so one parent's payload can never mutate another parent's
+// child (a cross-parent id is a [`NestedError::NotFound`]). An item WITHOUT the
+// pk is CREATED (its whole subtree inserted, via [`insert_tree`]) with its FK
+// set to the parent. Rows absent from the payload are left untouched.
+
+/// The parent anchor threaded down one nesting level during an update.
+struct NestAnchor<'a> {
+    /// Column on the child that FKs back to this parent.
+    fk_col: &'a str,
+    /// Parent pk as a typed `Value` — set as the child's FK on a CREATE.
+    pk_value: &'a Value,
+    /// Parent pk as a `String` — scopes an UPDATE's ownership check.
+    pk_str: &'a str,
+}
+
+/// Update a parent row plus every declared reverse-FK child subtree (upsert) on
+/// the open transaction `tx`, with NO security gating — the direct-caller entry
+/// point, symmetric with [`write_nested_tree`].
+///
+/// `pk_name`/`id` identify the parent row to update; `body` is the nested
+/// document (mutated in place as declared child arrays are split out). The
+/// caller owns the transaction (see [`write_nested_tree`] for the commit/rollback
+/// contract). Returns the parent object with each child array hydrated with the
+/// rows just upserted.
+pub async fn update_nested_tree(
+    spec: &NestedSpec,
+    meta: &ModelMeta,
+    pk_name: &str,
+    id: &str,
+    body: &mut Map<String, Value>,
+    tx: &mut Transaction,
+) -> Result<Map<String, Value>, NestedError> {
+    update_nested_tree_gated(&NoGate, spec, meta, pk_name, id, body, tx).await
+}
+
+/// Gated variant of [`update_nested_tree`]: the same atomic upsert walk, but
+/// every child passes through `gate` (create/update permission, hidden-strip,
+/// object-scope on newly-created subtrees, overrides) and the returned error
+/// type is the gate's. This is the seam umbral-rest wraps to keep its REST
+/// security intact while the reconciliation lives here.
+pub async fn update_nested_tree_gated<G: NestedWriteGate>(
+    gate: &G,
+    spec: &NestedSpec,
+    meta: &ModelMeta,
+    pk_name: &str,
+    id: &str,
+    body: &mut Map<String, Value>,
+    tx: &mut Transaction,
+) -> Result<Map<String, Value>, G::Error> {
+    // Split the parent's declared nested arrays out of the body.
+    let specs = spec.get(&meta.table).cloned().unwrap_or_default();
+    let mut pending: Vec<(String, ModelMeta, String, Vec<Value>)> = Vec::new();
+    for (field, child_table) in &specs {
+        let items = match body.remove(field) {
+            Some(Value::Array(a)) => a,
+            None | Some(Value::Null) => Vec::new(),
+            Some(_) => {
+                return Err(NestedError::BadInput(format!(
+                    "nested field `{field}` must be an array"
+                ))
+                .into());
+            }
+        };
+        if items.is_empty() {
+            continue;
+        }
+        let child = resolve_child_meta(gate, child_table)?;
+        let fk = child_fk_to(&child, &meta.table)?.to_string();
+        pending.push((field.clone(), child, fk, items));
+    }
+
+    // Anything array-shaped left in `body` is an undeclared nested relation.
+    reject_undeclared_nested(meta, body)?;
+
+    // Update the parent's own columns on the tx. A body with only nested arrays
+    // (no scalar columns) is a safe no-op — `update_json_in_tx` returns 0
+    // rather than emitting an UPDATE with no SET clause.
+    DynQuerySet::for_meta(meta)
+        .filter_eq_string(pk_name, id)
+        .update_json_in_tx(body, tx)
+        .await?;
+
+    // The parent's typed pk value, read on the tx — used as the FK when
+    // CREATING a child (so an i64 FK gets a number, not the stringified id).
+    let pk_value = {
+        let parent = fetch_one_in_tx(meta, pk_name, id, tx).await?;
+        parent
+            .get(pk_name)
+            .cloned()
+            .ok_or_else(|| NestedError::BadInput("nested: parent row has no primary key".into()))?
+    };
+
+    // Upsert each child subtree on the same tx, threading ONE tree-wide node
+    // budget across every child (H3 spans the whole update, not one subtree).
+    let mut nodes: usize = 0;
+    let ctx = Upsert { gate, spec };
+    let mut results: Vec<(String, Vec<Value>)> = Vec::new();
+    for (field, child, fk, items) in pending {
+        let mut upserted = Vec::with_capacity(items.len());
+        for item in items {
+            let Value::Object(child_body) = item else {
+                return Err(NestedError::BadInput(format!(
+                    "items in nested `{field}` must be objects"
+                ))
+                .into());
+            };
+            let crow = upsert_child(
+                &ctx,
+                &child,
+                child_body,
+                &NestAnchor {
+                    fk_col: &fk,
+                    pk_value: &pk_value,
+                    pk_str: id,
+                },
+                tx,
+                1,
+                &mut nodes,
+            )
+            .await?;
+            upserted.push(Value::Object(crow));
+        }
+        results.push((field, upserted));
+    }
+
+    // Read the parent back and attach the upserted children (the same shape
+    // `write_nested_tree` returns: only the children in the payload, hydrated).
+    let mut parent = fetch_one_in_tx(meta, pk_name, id, tx).await?;
+    gate.apply_overrides(&meta.table, &mut parent);
+    for (field, children) in results {
+        parent.insert(field, Value::Array(children));
+    }
+    Ok(parent)
+}
+
+/// Recursively upsert one nested item (and its own subtree) during an update.
+///
+/// The `anchor` carries the FK column plus the parent pk in both typed form
+/// (set as the child's FK on a CREATE) and string form (scopes the ownership
+/// check on an UPDATE). An item WITH its primary key UPDATES that row — but only
+/// if it belongs to this parent (`FK == parent pk`), else [`NestedError::NotFound`]
+/// — then recurses into its own declared nested arrays (upserting grandchildren).
+/// An item WITHOUT a pk CREATEs the whole subtree via [`insert_tree`].
+/// The invariants threaded unchanged through the upsert recursion (the gate and
+/// the full nested spec don't vary level to level) — bundled so the recursive
+/// [`upsert_child`] stays within the argument-count budget, mirroring how the
+/// REST wrapper bundled the same into its `NestCtx`.
+struct Upsert<'a, G: NestedWriteGate> {
+    gate: &'a G,
+    spec: &'a NestedSpec,
+}
+
+async fn upsert_child<G: NestedWriteGate>(
+    ctx: &Upsert<'_, G>,
+    meta: &ModelMeta,
+    mut body: Map<String, Value>,
+    anchor: &NestAnchor<'_>,
+    tx: &mut Transaction,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<Map<String, Value>, G::Error> {
+    let gate = ctx.gate;
+    let spec = ctx.spec;
+    if depth > MAX_NEST_DEPTH {
+        return Err(NestedError::MaxDepth(MAX_NEST_DEPTH).into());
+    }
+    // Count this child row against the whole-tree cap.
+    *nodes += 1;
+    if *nodes > gate.max_nodes() {
+        return Err(NestedError::MaxNodes(gate.max_nodes()).into());
+    }
+
+    let pk_col = pk_column(meta)?.name.clone();
+    let supplied_pk = body.get(&pk_col).filter(|v| !v.is_null()).cloned();
+
+    let Some(pk_json) = supplied_pk else {
+        // CREATE — strip denied fields + own create permission, set the FK,
+        // then insert the whole subtree. `insert_tree` gates the descendants
+        // (strip/create/scope) as it recurses; the root gating is here so the
+        // create branch matches the top-level create walk.
+        gate.strip_hidden(&meta.table, &mut body);
+        gate.check_create(&meta.table)?;
+        body.insert(anchor.fk_col.to_string(), anchor.pk_value.clone());
+        return Box::pin(insert_tree(gate, spec, meta, &mut body, tx, depth, nodes)).await;
+    };
+
+    // UPDATE — enforce this child's own update permission before any read.
+    let pk_str = json_pk_to_string(&pk_json).ok_or_else(|| {
+        NestedError::BadInput(format!("nested `{}`: invalid primary key", meta.table))
+    })?;
+    gate.check_update(&meta.table)?;
+
+    // Ownership gate: the row must exist AND belong to THIS parent. Checked as
+    // an explicit read (not via the update's affected count) so the not-found
+    // can name the cross-parent case, and so a body with no scalar columns
+    // still verifies ownership before recursing into grandchildren.
+    let owned = DynQuerySet::for_meta(meta)
+        .filter_eq_string(&pk_col, &pk_str)
+        .filter_eq_string(anchor.fk_col, anchor.pk_str)
+        .fetch_one_json_in_tx(tx)
+        .await
+        .map_err(NestedError::from)?;
+    if owned.is_none() {
+        return Err(NestedError::NotFound(format!(
+            "nested `{}`: no row with {} = {} belonging to this parent",
+            meta.table, pk_col, pk_str
+        ))
+        .into());
+    }
+
+    // Split this row's own nested arrays out before the scalar update.
+    let specs = spec.get(&meta.table).cloned().unwrap_or_default();
+    let mut pending: Vec<(String, ModelMeta, String, Vec<Value>)> = Vec::new();
+    for (field, gc_table) in &specs {
+        let items = match body.remove(field) {
+            Some(Value::Array(a)) => a,
+            None | Some(Value::Null) => Vec::new(),
+            Some(_) => {
+                return Err(NestedError::BadInput(format!(
+                    "nested field `{field}` must be an array"
+                ))
+                .into());
+            }
+        };
+        if items.is_empty() {
+            continue;
+        }
+        let gc = resolve_child_meta(gate, gc_table)?;
+        let gc_fk = child_fk_to(&gc, &meta.table)?.to_string();
+        pending.push((field.clone(), gc, gc_fk, items));
+    }
+
+    // The pk is the WHERE key; the FK anchors ownership — never let the payload
+    // rewrite either via the SET clause. Then strip the child's hidden/denied
+    // fields so a nested UPDATE can't set them either.
+    body.remove(&pk_col);
+    body.remove(anchor.fk_col);
+    gate.strip_hidden(&meta.table, &mut body);
+    // Anything array-shaped still here is an undeclared nested relation.
+    reject_undeclared_nested(meta, &body)?;
+    DynQuerySet::for_meta(meta)
+        .filter_eq_string(&pk_col, &pk_str)
+        .update_json_in_tx(&body, tx)
+        .await?;
+    let mut row = fetch_one_in_tx(meta, &pk_col, &pk_str, tx).await?;
+    let this_pk_value = row
+        .get(&pk_col)
+        .cloned()
+        .ok_or_else(|| NestedError::BadInput("nested: row has no primary key".into()))?;
+    gate.apply_overrides(&meta.table, &mut row);
+
+    // Recurse into grandchildren (upsert), scoped to this row.
+    for (field, gc, gc_fk, items) in pending {
+        let mut out = Vec::with_capacity(items.len());
+        for item in items {
+            let Value::Object(gc_body) = item else {
+                return Err(NestedError::BadInput(format!(
+                    "items in nested `{field}` must be objects"
+                ))
+                .into());
+            };
+            let grow = Box::pin(upsert_child(
+                ctx,
+                &gc,
+                gc_body,
+                &NestAnchor {
+                    fk_col: &gc_fk,
+                    pk_value: &this_pk_value,
+                    pk_str: &pk_str,
+                },
+                tx,
+                depth + 1,
+                nodes,
+            ))
+            .await?;
+            out.push(Value::Object(grow));
+        }
+        row.insert(field, Value::Array(out));
+    }
+    Ok(row)
+}
+
+/// Read one row back on the open transaction (so an upsert's response reflects
+/// its own uncommitted writes), erroring if it vanished.
+async fn fetch_one_in_tx(
+    meta: &ModelMeta,
+    pk: &str,
+    pk_str: &str,
+    tx: &mut Transaction,
+) -> Result<Map<String, Value>, NestedError> {
+    DynQuerySet::for_meta(meta)
+        .filter_eq_string(pk, pk_str)
+        .fetch_one_json_in_tx(tx)
+        .await?
+        .ok_or_else(|| {
+            NestedError::BadInput("nested: row updated but disappeared on read-back".into())
+        })
+}
+
+/// Stringify a JSON primary-key value (number or string) for a
+/// `filter_eq_string` lookup. Any other JSON shape is not a valid pk.
+fn json_pk_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
 }

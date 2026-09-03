@@ -137,6 +137,18 @@ tx.commit().await?; // nothing is durable until here
 
 The direct caller runs with no security gating (it is trusted). The REST endpoints wrap the same writer with a gate that keeps their per-child security — hidden-field stripping, each child's own create permission, object-scope — fully intact. Pass a [`NestedWriteGate`](https://docs.rs/umbral) to `write_nested_tree_gated` to supply your own.
 
+The **update** half is symmetric. `update_nested_tree(&spec, &meta, "id", &id, &mut body, &mut tx)` reconciles the same one-document tree against an existing parent: a child item carrying its primary key is UPDATED in place (scoped to its parent via the FK, so one parent's payload can never touch another's child — a cross-parent id is a `NestedError::NotFound`), an item without a pk is CREATED with its FK set, and a child absent from the payload is left untouched (upsert, no implicit deletes). Same one transaction, same whole-tree rollback, same optional [`NestedWriteGate`](https://docs.rs/umbral) (via `update_nested_tree_gated`) — so a CLI/agent reconciler gets the exact behavior REST's `PATCH` does, without an HTTP request.
+
+```rust
+use umbral::orm::nested::{NestedSpec, update_nested_tree};
+
+let mut body = /* { "name": "Ada Lovelace", "posts": [ { "id": 7, "title": "…" }, { "title": "new" } ] } */;
+
+let mut tx = umbral::db::begin().await?;
+let author = update_nested_tree(&spec, &author_meta, "id", "3", &mut body, &mut tx).await?;
+tx.commit().await?; // the whole reconciliation is durable only here
+```
+
 ## Scope
 
 Arbitrary depth, one `.nested(...)` declaration per level. Declare multiple sibling arrays on the same table by calling `.nested(...)` more than once. The flat create/update paths are unchanged and carry zero overhead when no nested resources are declared.

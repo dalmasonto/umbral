@@ -3069,6 +3069,9 @@ impl From<umbral::orm::nested::NestedError> for ApiError {
         match e {
             NestedError::Write(w) => Self::from(w),
             NestedError::BadInput(m) => Self::BadInput(m),
+            // gaps4 #91: the nested UPDATE's cross-parent ownership guard —
+            // an item's pk that belongs to a different parent — is a 404.
+            NestedError::NotFound(m) => Self::NotFound(m),
             other @ (NestedError::MaxNodes(_) | NestedError::MaxDepth(_)) => {
                 Self::BadInput(other.to_string())
             }
@@ -4444,50 +4447,12 @@ async fn fetch_one_in_tx(
     row.ok_or_else(|| ApiError::BadInput("row updated but disappeared on read-back".into()))
 }
 
-/// Max writable-nesting depth. A cyclic `.nested()` declaration (A→B→A) or a
-/// self-referential one would otherwise recurse without bound; hitting this
-/// returns a 400 rather than blowing the stack.
-const MAX_NEST_DEPTH: usize = 16;
-
 /// Total child rows a single nested write may create/update across the whole
 /// tree. Mirrors the bulk ceiling ([`MAX_BULK_ITEMS`]) so a nested payload can
 /// never expand to an unbounded number of statements on one transaction
-/// (audit_2 plugin-rest H3). Depth is bounded separately by [`MAX_NEST_DEPTH`].
+/// (audit_2 plugin-rest H3). Depth is bounded separately by the core walk's
+/// `MAX_NEST_DEPTH` (in `umbral::orm::nested`).
 const MAX_NEST_NODES: usize = MAX_BULK_ITEMS;
-
-/// Cross-cutting state threaded through the nested-write recursion: the plugin
-/// config, the request identity (so each child row is checked against its own
-/// resource's permission class), and a running count of child rows written
-/// (bounded by [`MAX_NEST_NODES`]).
-struct NestCtx<'a> {
-    cfg: &'a RestPlugin,
-    identity: Option<&'a Identity>,
-    nodes: usize,
-}
-
-impl NestCtx<'_> {
-    /// Count one child row about to be written; reject past the cap (H3).
-    fn charge_node(&mut self) -> Result<(), ApiError> {
-        self.nodes += 1;
-        if self.nodes > MAX_NEST_NODES {
-            return Err(ApiError::BadInput(format!(
-                "nested write exceeds the maximum of {MAX_NEST_NODES} child rows"
-            )));
-        }
-        Ok(())
-    }
-
-    /// Enforce a nested child's OWN resource permission for `action` (H2).
-    /// Mirrors [`RestPlugin::gate`]'s permission-error translation, but without
-    /// the exposure check — a nested child need not be a routed resource.
-    fn check_child_perm(&self, table: &str, action: &Action) -> Result<(), ApiError> {
-        match self.cfg.permission_for(table).check(action, self.identity) {
-            Ok(()) => Ok(()),
-            Err(PermissionError::Unauthenticated) => Err(ApiError::Unauthenticated),
-            Err(PermissionError::Forbidden) => Err(ApiError::Forbidden),
-        }
-    }
-}
 
 /// The REST security gate for the reusable ORM-layer nested-tree writer
 /// ([`umbral::orm::nested`], gaps4 #77). The tree-orchestration (discover
@@ -4582,37 +4547,6 @@ async fn create_nested(
             .await?;
     tx.commit().await?;
     Ok((StatusCode::CREATED, Json(row)))
-}
-
-/// Recursively insert a row and every nested subtree declared on its table (and
-/// on its children's tables, to arbitrary depth) on the open `tx`, gated by
-/// REST security. A thin wrapper over the core writer's low-level
-/// [`write_nested_subtree`](umbral::orm::nested::write_nested_subtree), used by
-/// the UPDATE path when it CREATEs a brand-new nested subtree; it threads the
-/// update's tree-wide node budget (`ctx.nodes`) and real `depth` through so the
-/// H3 cap spans the whole update, not just this subtree.
-async fn insert_nested_tree(
-    ctx: &mut NestCtx<'_>,
-    meta: &ModelMeta,
-    body: &mut Map<String, Value>,
-    tx: &mut umbral::db::Transaction,
-    depth: usize,
-) -> Result<Map<String, Value>, ApiError> {
-    let cfg = ctx.cfg;
-    let gate = RestNestedGate {
-        cfg,
-        identity: ctx.identity,
-    };
-    umbral::orm::nested::write_nested_subtree(
-        &gate,
-        &cfg.nested,
-        meta,
-        body,
-        tx,
-        depth,
-        &mut ctx.nodes,
-    )
-    .await
 }
 
 /// Resolve a child model's `ModelMeta` by table (no allow-gate — nested
@@ -4720,251 +4654,26 @@ async fn update_nested(
     body: &mut Map<String, Value>,
     identity: Option<&Identity>,
 ) -> Result<Map<String, Value>, ApiError> {
-    // Split the parent's declared nested arrays out of the body.
-    let specs = cfg.nested.get(table).cloned().unwrap_or_default();
-    let mut pending: Vec<(String, ModelMeta, String, Vec<Value>)> = Vec::new();
-    for (field, child_table) in &specs {
-        let items = match body.remove(field) {
-            Some(Value::Array(a)) => a,
-            None | Some(Value::Null) => Vec::new(),
-            Some(_) => {
-                return Err(ApiError::BadInput(format!(
-                    "nested field `{field}` must be an array"
-                )));
-            }
-        };
-        if items.is_empty() {
-            continue;
-        }
-        let child = meta_for_table(child_table)?;
-        let fk = child_fk_to(&child, table)?.to_string();
-        pending.push((field.clone(), child, fk, items));
-    }
-
-    // Anything array-shaped left in `body` is an undeclared nested relation.
-    reject_undeclared_nested(&model, body)?;
-
-    // One transaction for the parent update + every nested upsert.
+    // gaps4 #91: the upsert reconciliation now lives in `umbral::orm::nested`
+    // (the UPDATE half of #77), so this handler is a thin wrapper — exactly
+    // like `create_nested` — that supplies `RestNestedGate` for per-child
+    // security (create/update permission, hidden-strip, object-scope, revealed
+    // overrides) and owns the transaction. The parent table is `model.table`
+    // inside the core walk.
+    let _ = table;
+    let gate = RestNestedGate { cfg, identity };
     let mut tx = umbral::db::begin().await?;
-
-    // Update the parent's own columns on the tx. A body with only nested
-    // arrays (no scalar columns) is a safe no-op — `update_json_in_tx`
-    // returns 0 rather than emitting an UPDATE with no SET clause.
-    umbral::orm::DynQuerySet::for_meta(&model)
-        .filter_eq_string(pk_name, id)
-        .update_json_in_tx(body, &mut tx)
-        .await?;
-
-    // The parent's typed pk value, read on the tx — used as the FK when
-    // CREATING a child (so an i64 FK gets a number, not the stringified id).
-    let pk_value = {
-        let parent = fetch_one_in_tx(&model, pk_name, id, &mut tx).await?;
-        parent
-            .get(pk_name)
-            .cloned()
-            .ok_or_else(|| ApiError::BadInput("nested: parent row has no primary key".into()))?
-    };
-
-    // Upsert each child subtree on the same tx. The parent itself was already
-    // gated + hidden-stripped by the `update` handler; `ctx` carries the
-    // identity + node budget so each CHILD is checked and counted (H2/H3).
-    let mut ctx = NestCtx {
-        cfg,
-        identity,
-        nodes: 0,
-    };
-    let mut results: Vec<(String, Vec<Value>)> = Vec::new();
-    for (field, child, fk, items) in pending {
-        let mut upserted = Vec::with_capacity(items.len());
-        for item in items {
-            let Value::Object(child_body) = item else {
-                return Err(ApiError::BadInput(format!(
-                    "items in nested `{field}` must be objects"
-                )));
-            };
-            let crow = upsert_nested_child(
-                &mut ctx,
-                &child,
-                child_body,
-                &NestAnchor {
-                    fk_col: &fk,
-                    pk_value: &pk_value,
-                    pk_str: id,
-                },
-                &mut tx,
-                1,
-            )
-            .await?;
-            upserted.push(Value::Object(crow));
-        }
-        results.push((field, upserted));
-    }
-
-    // Commit only after every write succeeded.
-    tx.commit().await?;
-
-    // Read the parent back and attach the upserted children (the same shape
-    // `create_nested` returns: only the children in the payload, hydrated).
-    let no_filter = FilterClause::default();
-    let mut rows = fetch_rows(
+    let row = umbral::orm::nested::update_nested_tree_gated(
+        &gate,
+        &cfg.nested,
         &model,
-        Some((pk_name, id)),
-        None,
-        &no_filter,
-        &[],
-        &[],
-        &cfg.unlocked_private(&model.table, identity),
-        &cfg.revealed_cols(&model.table, identity),
+        pk_name,
+        id,
+        body,
+        &mut tx,
     )
     .await?;
-    let mut parent = rows
-        .pop()
-        .ok_or_else(|| ApiError::BadInput("row updated but disappeared on read-back".into()))?;
-    cfg.apply_overrides(table, &mut parent);
-    for (field, children) in results {
-        parent.insert(field, Value::Array(children));
-    }
-    Ok(parent)
-}
-
-/// The parent anchor threaded down one nesting level.
-struct NestAnchor<'a> {
-    /// Column on the child that FKs back to this parent.
-    fk_col: &'a str,
-    /// Parent pk as a typed `Value` — set as the child's FK on a CREATE.
-    pk_value: &'a Value,
-    /// Parent pk as a `String` — scopes an UPDATE's ownership check.
-    pk_str: &'a str,
-}
-
-/// Recursively upsert one nested item (and its own subtree) during an update.
-///
-/// The `parent` anchor carries the FK column plus the parent pk in both the
-/// typed form (set as the child's FK on a CREATE) and string form (scopes the
-/// ownership check on an UPDATE).
-///
-/// An item WITH its primary key UPDATES that row, but only if it belongs to
-/// this parent (`FK == parent pk`), else `404`; it then recurses into its own
-/// declared nested arrays (upserting grandchildren). An item WITHOUT a pk
-/// CREATEs the whole subtree via [`insert_nested_tree`].
-async fn upsert_nested_child(
-    ctx: &mut NestCtx<'_>,
-    meta: &ModelMeta,
-    mut body: Map<String, Value>,
-    parent: &NestAnchor<'_>,
-    tx: &mut umbral::db::Transaction,
-    depth: usize,
-) -> Result<Map<String, Value>, ApiError> {
-    if depth > MAX_NEST_DEPTH {
-        return Err(ApiError::BadInput(format!(
-            "nested write exceeds the maximum depth of {MAX_NEST_DEPTH}"
-        )));
-    }
-    // Count this child row against the whole-tree cap (H3).
-    ctx.charge_node()?;
-
-    let pk_col = pk_column(meta)?.name.clone();
-    let supplied_pk = body.get(&pk_col).filter(|v| !v.is_null()).cloned();
-
-    let Some(pk_json) = supplied_pk else {
-        // CREATE — enforce this child's own hidden-field denylist + create
-        // permission (H2), set the FK, then insert the whole subtree.
-        ctx.cfg
-            .strip_hidden_for_write(&meta.table, ctx.identity, &mut body);
-        ctx.check_child_perm(&meta.table, &Action::Create)?;
-        body.insert(parent.fk_col.to_string(), parent.pk_value.clone());
-        return Box::pin(insert_nested_tree(ctx, meta, &mut body, tx, depth)).await;
-    };
-
-    // UPDATE — enforce this child's own update permission (H2) before any read.
-    let pk_str = json_pk_to_string(&pk_json).ok_or_else(|| {
-        ApiError::BadInput(format!("nested `{}`: invalid primary key", meta.table))
-    })?;
-    ctx.check_child_perm(&meta.table, &Action::Update)?;
-
-    // Ownership gate: the row must exist AND belong to THIS parent. Checked
-    // as an explicit read (not via the update's affected count) so the 404
-    // can name the cross-parent case, and so a body with no scalar columns
-    // still verifies ownership before recursing into grandchildren.
-    let owned = umbral::orm::DynQuerySet::for_meta(meta)
-        .filter_eq_string(&pk_col, &pk_str)
-        .filter_eq_string(parent.fk_col, parent.pk_str)
-        .fetch_one_json_in_tx(tx)
-        .await?;
-    if owned.is_none() {
-        return Err(ApiError::NotFound(format!(
-            "nested `{}`: no row with {} = {} belonging to this parent",
-            meta.table, pk_col, pk_str
-        )));
-    }
-
-    // Split this row's own nested arrays out before the scalar update.
-    let specs = ctx.cfg.nested.get(&meta.table).cloned().unwrap_or_default();
-    let mut pending: Vec<(String, ModelMeta, String, Vec<Value>)> = Vec::new();
-    for (field, gc_table) in &specs {
-        let items = match body.remove(field) {
-            Some(Value::Array(a)) => a,
-            None | Some(Value::Null) => Vec::new(),
-            Some(_) => {
-                return Err(ApiError::BadInput(format!(
-                    "nested field `{field}` must be an array"
-                )));
-            }
-        };
-        if items.is_empty() {
-            continue;
-        }
-        let gc = meta_for_table(gc_table)?;
-        let gc_fk = child_fk_to(&gc, &meta.table)?.to_string();
-        pending.push((field.clone(), gc, gc_fk, items));
-    }
-
-    // The pk is the WHERE key; the FK anchors ownership — never let the
-    // payload rewrite either via the SET clause. Then strip the child's
-    // hidden/denied fields so a nested UPDATE can't set them either (H2).
-    body.remove(&pk_col);
-    body.remove(parent.fk_col);
-    ctx.cfg
-        .strip_hidden_for_write(&meta.table, ctx.identity, &mut body);
-    // Anything array-shaped still here is an undeclared nested relation.
-    reject_undeclared_nested(meta, &body)?;
-    umbral::orm::DynQuerySet::for_meta(meta)
-        .filter_eq_string(&pk_col, &pk_str)
-        .update_json_in_tx(&body, tx)
-        .await?;
-    let mut row = fetch_one_in_tx(meta, &pk_col, &pk_str, tx).await?;
-    let this_pk_value = row
-        .get(&pk_col)
-        .cloned()
-        .ok_or_else(|| ApiError::BadInput("nested: row has no primary key".into()))?;
-    ctx.cfg.apply_overrides(&meta.table, &mut row);
-
-    // Recurse into grandchildren (upsert), scoped to this row.
-    for (field, gc, gc_fk, items) in pending {
-        let mut out = Vec::with_capacity(items.len());
-        for item in items {
-            let Value::Object(gc_body) = item else {
-                return Err(ApiError::BadInput(format!(
-                    "items in nested `{field}` must be objects"
-                )));
-            };
-            let grow = Box::pin(upsert_nested_child(
-                ctx,
-                &gc,
-                gc_body,
-                &NestAnchor {
-                    fk_col: &gc_fk,
-                    pk_value: &this_pk_value,
-                    pk_str: &pk_str,
-                },
-                tx,
-                depth + 1,
-            ))
-            .await?;
-            out.push(Value::Object(grow));
-        }
-        row.insert(field, Value::Array(out));
-    }
+    tx.commit().await?;
     Ok(row)
 }
 
