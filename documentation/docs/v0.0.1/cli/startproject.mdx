@@ -81,7 +81,7 @@ The layout follows the **per-concern convention** the framework dogfoods in `exa
 
 ```
 myblog/
-├── Cargo.toml          # umbral + all built-in plugins + tokio
+├── Cargo.toml          # Cargo WORKSPACE root: [workspace.dependencies] + the app package
 ├── src/
 │   ├── main.rs         # App builder + route table + boot helpers
 │   ├── views/          # HTTP handlers, one file per resource grouping
@@ -112,6 +112,31 @@ myblog/
 <Callout type="info">
 These directories are a **recommended convention, not a requirement**. The runtime reads `main.rs` directly and doesn't care whether handlers live in `views/`, `handlers/`, or inline. Restructure freely - the scaffold just hands you a shape that already scales.
 </Callout>
+
+### One workspace, one version of each dependency
+
+The generated `Cargo.toml` is a **Cargo workspace** (a root package plus `members = ["plugins/*"]`). Every shared dependency — `umbral`, each built-in plugin, `sqlx`, `serde`, `chrono`, `tokio` — is pinned once in `[workspace.dependencies]`, and both the app and every plugin you scaffold inherit it by writing `<crate>.workspace = true`:
+
+```toml
+[workspace]
+members = ["plugins/*"]
+
+[workspace.dependencies]
+umbral = "x.y.z"
+sqlx   = { version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }
+# …every built-in + third-party dep, single-sourced
+
+[package]
+name = "myblog"
+# …
+
+[dependencies]
+umbral.workspace = true
+sqlx.workspace   = true
+# …
+```
+
+Why this matters: `#[derive(sqlx::FromRow)]` forces **every** crate that declares a model to depend on `sqlx` directly (its expansion hardcodes `::sqlx::` paths — no `#[sqlx(crate = "…")]` escape hatch), so a multi-plugin project has many `sqlx` deps. With `[workspace.dependencies]` there is exactly **one** version to change, and a plugin can never drift from the app — the class of bug [`umbral doctor`](./doctor) exists to catch (gaps4 #90/#65). A plugin generated **outside** a workspace still gets explicit version pins, so it builds standalone.
 
 ### What the scaffold demonstrates
 
@@ -196,7 +221,7 @@ Generates:
 
 ```
 plugins/widgets/
-├── Cargo.toml              # real deps: umbral, serde, sqlx, chrono, async-trait
+├── Cargo.toml              # deps inherited from the workspace (umbral/serde/sqlx/chrono/async-trait .workspace = true)
 ├── README.md               # file-structure tour + wiring instructions
 └── src/
     ├── lib.rs              # WidgetsPlugin with the full Plugin impl

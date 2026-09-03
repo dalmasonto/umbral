@@ -769,26 +769,81 @@ fn scaffold_plugin_sqlx_version_matches_umbral_cores_own_pin() {
     let report = scaffold_plugin("widgets", &project_root, None).unwrap();
     let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
 
-    let umbral_core_cargo = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../umbral-core/Cargo.toml"
-    ))
-    .expect("read umbral-core/Cargo.toml");
-    let umbral_core_major_minor = umbral_core_cargo
-        .lines()
-        .find(|l| l.trim_start().starts_with("sqlx "))
-        .and_then(|l| l.split("version = \"").nth(1))
-        .and_then(|rest| rest.split('"').next())
-        .expect("umbral-core's sqlx line has a version = \"...\" field");
-
-    let plugin_sqlx_line = cargo
-        .lines()
-        .find(|l| l.trim_start().starts_with("sqlx "))
-        .expect("scaffolded plugin Cargo.toml declares a sqlx dependency");
+    // gaps4 #90: a plugin generated INTO the workspace project inherits sqlx
+    // (and every shared dep) from the root's [workspace.dependencies] via
+    // `sqlx.workspace = true`, so its version CANNOT diverge from the app's —
+    // the #65 invariant is now structural rather than a value to keep in sync.
+    // The root's own sqlx version match against umbral-core's pin is covered by
+    // `scaffold_project_sqlx_version_matches_umbral_cores_own_pin`.
     assert!(
-        plugin_sqlx_line.contains(&format!("version = \"{umbral_core_major_minor}\"")),
-        "scaffolded plugin's sqlx version ({plugin_sqlx_line}) must match umbral-core's own \
-         pin ({umbral_core_major_minor}) — a mismatch is exactly the gaps4 #65 divergence"
+        cargo.lines().any(|l| l.trim() == "sqlx.workspace = true"),
+        "a plugin scaffolded into the workspace must inherit sqlx from the root \
+         ([workspace.dependencies]) via `sqlx.workspace = true`; got:\n{cargo}"
+    );
+    assert!(
+        !cargo.contains("sqlx = {"),
+        "a workspace plugin must NOT carry its own sqlx version pin — that would \
+         reintroduce exactly the gaps4 #65 divergence #90 eliminates:\n{cargo}"
+    );
+}
+
+/// gaps4 #90: `startproject` generates a Cargo WORKSPACE — a root-package
+/// manifest with `[workspace]` + `[workspace.dependencies]` (the single source
+/// of every shared version) and app deps that inherit with `.workspace = true`,
+/// plus `members = ["plugins/*"]` so scaffolded plugins join automatically.
+#[test]
+fn scaffold_project_is_a_workspace_single_sourcing_deps() {
+    let tmp = TempDir::new().unwrap();
+    scaffold_project("shopfront", tmp.path(), None).unwrap();
+    let cargo = fs::read_to_string(tmp.path().join("shopfront").join("Cargo.toml")).unwrap();
+
+    assert!(
+        cargo.contains("[workspace]"),
+        "root is a workspace:\n{cargo}"
+    );
+    assert!(
+        cargo.contains("[workspace.dependencies]"),
+        "versions are single-sourced in [workspace.dependencies]:\n{cargo}"
+    );
+    assert!(
+        cargo.contains(r#"members = ["plugins/*"]"#),
+        "scaffolded plugins join the workspace via the plugins/* glob:\n{cargo}"
+    );
+    // The app inherits its shared deps rather than re-pinning them (tolerant of
+    // the manifest's column alignment).
+    for dep in ["umbral", "sqlx"] {
+        let want = format!("{dep}.workspace = true");
+        assert!(
+            cargo
+                .lines()
+                .any(|l| l.split_whitespace().collect::<Vec<_>>().join(" ") == want),
+            "the app must inherit `{want}` from the workspace:\n{cargo}"
+        );
+    }
+    // sqlx's version lives once, in the workspace table (not in [dependencies]).
+    assert!(
+        cargo.contains(r#"sqlx = { version = "0.8""#),
+        "the sqlx version is pinned once in [workspace.dependencies]:\n{cargo}"
+    );
+}
+
+/// gaps4 #90: a plugin generated OUTSIDE a workspace (no project `[workspace]`)
+/// stays self-contained — explicit version pins, not `.workspace = true` — so it
+/// still builds on its own.
+#[test]
+fn scaffold_plugin_standalone_pins_explicit_versions() {
+    let tmp = TempDir::new().unwrap();
+    // No project scaffolded here: the plugin's parent has no Cargo.toml at all.
+    let report = scaffold_plugin("widgets", tmp.path(), None).unwrap();
+    let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
+
+    assert!(
+        cargo.contains(r#"sqlx = { version = "0.8""#),
+        "a standalone plugin pins sqlx explicitly (no workspace to inherit from):\n{cargo}"
+    );
+    assert!(
+        !cargo.contains(".workspace = true"),
+        "a standalone plugin must not reference a workspace it isn't part of:\n{cargo}"
     );
 }
 

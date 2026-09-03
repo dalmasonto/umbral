@@ -494,7 +494,65 @@ pub fn scaffold_project(
     // ------------------------------------------------------------------ //
     let version = env!("CARGO_PKG_VERSION");
     let cargo_toml = format!(
-        r#"[package]
+        r#"# gaps4 #90: this project is a Cargo WORKSPACE. Every dependency version +
+# feature set lives in ONE place — `[workspace.dependencies]` below — and each
+# member (this app plus every `plugins/*` crate you scaffold) pins a shared
+# crate by writing `<crate>.workspace = true`. So the `sqlx` (etc.) version can
+# never drift between the app and a plugin: there is exactly one line to change.
+[workspace]
+members = ["plugins/*"]
+
+[workspace.dependencies]
+
+# ----- Framework core ------------------------------------------------------
+umbral         = "{version}"
+umbral-cli     = "{version}"
+
+# ----- Built-in plugins ----------------------------------------------------
+# The full menu, single-sourced. An entry here is inert until a member opts in
+# with `<crate>.workspace = true`; enabling one is a single uncomment in a
+# member's own `[dependencies]` (see this app's below). Add a feature by editing
+# the entry here, e.g. `umbral-logs = {{ version = "{version}", features = ["otel"] }}`
+# to also export OpenTelemetry traces over OTLP.
+umbral-auth        = "{version}"
+umbral-sessions    = "{version}"
+umbral-admin       = "{version}"
+umbral-rest        = "{version}"
+umbral-openapi     = "{version}"
+umbral-security    = "{version}"
+umbral-logs        = "{version}"
+umbral-storage     = "{version}"
+umbral-playground  = "{version}"
+umbral-health      = "{version}"
+umbral-tasks       = "{version}"
+umbral-graphql     = "{version}"
+umbral-realtime    = "{version}"
+umbral-oauth       = "{version}"
+umbral-permissions = "{version}"
+umbral-tenants     = "{version}"
+umbral-rls         = "{version}"
+umbral-cache       = "{version}"
+umbral-email       = "{version}"
+umbral-analytics   = "{version}"
+umbral-signals     = "{version}"
+umbral-livereload  = "{version}"
+
+# ----- Third-party ---------------------------------------------------------
+tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
+tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
+serde = {{ version = "1", features = ["derive"] }}
+chrono = {{ version = "0.4", features = ["serde"] }}
+# Shared with scaffolded plugins (their generated handlers use an async trait).
+async-trait = "0.1"
+# The `sqlx` version umbral itself resolves (gaps4 #65). `#[derive(sqlx::FromRow)]`
+# needs a direct `sqlx` dependency in every member no matter what — sqlx's derive
+# hardcodes `::sqlx::...` paths with no `#[sqlx(crate = "...")]` escape hatch — but
+# with the version pinned HERE and members writing `sqlx.workspace = true`, it can't
+# diverge. If you ever see a mysterious unsatisfied `FromRow<PgRow>` bound anyway,
+# run `umbral doctor`; it scans Cargo.lock for exactly this divergence.
+sqlx = {{ version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }}
+
+[package]
 name = "{name}"
 version = "0.1.0"
 edition = "2024"
@@ -502,58 +560,50 @@ edition = "2024"
 [dependencies]
 
 # ----- Framework core (always required) ------------------------------------
-umbral         = "{version}"
-umbral-cli     = "{version}"
+umbral.workspace     = true
+umbral-cli.workspace = true
 
 # ----- Active by default ---------------------------------------------------
-# What the generated `src/main.rs` wires in. Comment any of these out only
-# if you also remove the matching `.plugin(...)` line.
-umbral-auth     = "{version}"
-umbral-sessions = "{version}"
-umbral-admin    = "{version}"
-umbral-rest     = "{version}"
-umbral-openapi  = "{version}"
-umbral-security = "{version}"
-# Observability init helper (structured JSON logging). Enable the `otel`
-# feature to ALSO export OpenTelemetry traces over OTLP to a collector
-# (Jaeger/Tempo/Honeycomb): `umbral-logs = {{ version = "{version}", features = ["otel"] }}`.
-umbral-logs     = "{version}"
-# Serves ./static at /static — including the compiled Tailwind bundle this
-# project ships. Not optional: the SecurityPlugin's CSP blocks third-party
-# script/style CDNs, so an app must serve its own assets.
-umbral-storage  = "{version}"
+# What the generated `src/main.rs` wires in. Comment any of these out only if
+# you also remove the matching `.plugin(...)` line.
+umbral-auth.workspace     = true
+umbral-sessions.workspace = true
+umbral-admin.workspace    = true
+umbral-rest.workspace     = true
+umbral-openapi.workspace  = true
+umbral-security.workspace = true
+# Observability init helper (structured JSON logging; add the `otel` feature in
+# [workspace.dependencies] to also export OTLP traces).
+umbral-logs.workspace     = true
+# Serves ./static at /static — including the compiled Tailwind bundle. Not
+# optional: the SecurityPlugin's CSP blocks third-party CDNs, so an app serves
+# its own assets.
+umbral-storage.workspace  = true
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
-# umbral-playground   = "{version}"  # Interactive API playground UI (think mini-Postman) at /playground/.
-# umbral-health       = "{version}"  # Liveness + readiness probes at /healthz and /ready. Zero config.
-# umbral-tasks        = "{version}"  # DB-backed background task queue with a worker process.
-# umbral-graphql      = "{version}"  # A real GraphQL API derived from your models. Expose per model.
-# umbral-realtime     = "{version}"  # Server-Sent Events + WebSocket push, with model-change subscriptions.
-# umbral-oauth        = "{version}"  # Social login / account connection (Google, GitHub). See auth/oauth docs.
-# umbral-permissions  = "{version}"  # ContentType + Group + Permission model.
-# umbral-tenants      = "{version}"  # Multi-tenant schema routing (Postgres).
-# umbral-rls          = "{version}"  # Postgres row-level security policy registration.
-# umbral-cache        = "{version}"  # Per-request caching helper.
-# umbral-email        = "{version}"  # SMTP + MIME email composer + sender.
-# umbral-analytics    = "{version}"  # Pageview / event analytics (needs an API key).
-# umbral-signals      = "{version}"  # Pre/post save/delete signal dispatch.
-# umbral-livereload   = "{version}"  # Dev-only browser live-reload (SSE push + file watcher). Add `.plugin(LiveReloadPlugin::new())`.
+# umbral-playground.workspace  = true  # Interactive API playground UI at /playground/.
+# umbral-health.workspace      = true  # Liveness + readiness probes at /healthz and /ready.
+# umbral-tasks.workspace       = true  # DB-backed background task queue with a worker process.
+# umbral-graphql.workspace     = true  # A real GraphQL API derived from your models.
+# umbral-realtime.workspace    = true  # SSE + WebSocket push, with model-change subscriptions.
+# umbral-oauth.workspace       = true  # Social login / account connection (Google, GitHub).
+# umbral-permissions.workspace = true  # ContentType + Group + Permission model.
+# umbral-tenants.workspace     = true  # Multi-tenant schema routing (Postgres).
+# umbral-rls.workspace         = true  # Postgres row-level security policy registration.
+# umbral-cache.workspace       = true  # Per-request caching helper.
+# umbral-email.workspace       = true  # SMTP + MIME email composer + sender.
+# umbral-analytics.workspace   = true  # Pageview / event analytics (needs an API key).
+# umbral-signals.workspace     = true  # Pre/post save/delete signal dispatch.
+# umbral-livereload.workspace  = true  # Dev-only browser live-reload. Add `.plugin(LiveReloadPlugin::new())`.
 
-tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
-tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
-serde = {{ version = "1", features = ["derive"] }}
-chrono = {{ version = "0.4", features = ["serde"] }}
-# Pin the SAME `sqlx` version umbral itself resolves (gaps4 #65). `#[derive(sqlx::FromRow)]`
-# needs a direct `sqlx` dependency no matter what — sqlx's derive macro hardcodes
-# `::sqlx::...` paths at expansion time with no `#[sqlx(crate = "...")]` escape hatch
-# (unlike serde), so routing through a re-export can't remove this line. What CAN
-# drift is the *version* on this line vs. the one umbral-core pins — if you ever see
-# a mysterious unsatisfied `FromRow<PgRow>` bound, run `umbral doctor` first; it scans
-# Cargo.lock for exactly this divergence and names both versions.
-sqlx = {{ version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }}
+tokio.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+chrono.workspace = true
+sqlx.workspace = true
 
-# Once you `umbral startapp <plugin>` or `umbral startplugin <plugin>`, add
-# the plugin crate here:
+# Once you `umbral startplugin <plugin>`, the crate is registered here as a path
+# dep (and picked up as a workspace member via `plugins/*` above):
 # {crate_name}-posts = {{ path = "plugins/posts" }}
 "#
     );
@@ -1319,8 +1369,38 @@ pub fn scaffold_plugin(
     // and most plugins grow async work quickly. Cheap to ship now,
     // saves the user a Cargo.toml edit later.
     let version = env!("CARGO_PKG_VERSION");
-    let cargo_toml = format!(
-        r#"[package]
+    // gaps4 #90: when this plugin is scaffolded INTO a workspace project (the
+    // one `umbral startproject` now generates), inherit every shared dependency
+    // from the workspace root with `<crate>.workspace = true` so its version can
+    // never drift from the app's. A plugin generated standalone (no `[workspace]`
+    // in the project root, or none at all) keeps explicit, self-contained
+    // version pins so it still builds on its own.
+    let in_workspace = std::fs::read_to_string(project_root.join("Cargo.toml"))
+        .map(|s| s.contains("[workspace]"))
+        .unwrap_or(false);
+    let cargo_toml = if in_workspace {
+        format!(
+            r#"[package]
+name = "{name}"
+version = "0.1.0"
+edition = "2024"
+description = "A {crate_name} plugin for umbral."
+
+[dependencies]
+# Versions are single-sourced in the workspace root's [workspace.dependencies]
+# (gaps4 #90) — including `sqlx`, which `#[derive(sqlx::FromRow)]` in
+# src/models.rs requires as a direct dep. `sqlx.workspace = true` pins the
+# SAME version the app resolves, so the two can never diverge.
+umbral.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+"#
+        )
+    } else {
+        format!(
+            r#"[package]
 name = "{name}"
 version = "0.1.0"
 edition = "2024"
@@ -1338,10 +1418,13 @@ sqlx = {{ version = "0.8", default-features = false, features = ["macros", "runt
 chrono = {{ version = "0.4", features = ["serde"] }}
 async-trait = "0.1"
 "#
-    );
+        )
+    };
+    // Only the standalone form carries localizable version specs; the
+    // workspace form inherits path/version from the (already-localized) root.
     let cargo_toml = match local_umbral_repo {
-        Some(repo) => localize_deps(&cargo_toml, repo),
-        None => cargo_toml,
+        Some(repo) if !in_workspace => localize_deps(&cargo_toml, repo),
+        _ => cargo_toml,
     };
     write_file(&root, "Cargo.toml", &cargo_toml, &mut files)?;
 
