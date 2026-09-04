@@ -52,6 +52,14 @@ pub(crate) fn pk_column(model: &ModelMeta) -> Option<&Column> {
 ///    stays at the legacy "show all fields" default, so adding the
 ///    derive doesn't silently rewrite existing changelists.
 pub(crate) fn default_list_display(model: &ModelMeta) -> Vec<String> {
+    // gaps4 #95: a model can declare its list_display once (via per-field
+    // `#[umbral(list_display)]`), so the admin auto-derives it with no
+    // per-model wiring in the app. An explicit `AdminModel::new(..)
+    // .list_display(..)` still wins (this fallback only runs when the admin
+    // config left list_display empty).
+    if !model.list_display.is_empty() {
+        return model.list_display.clone();
+    }
     let str_field_idx = model
         .fields
         .iter()

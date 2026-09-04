@@ -146,6 +146,7 @@ impl Plugin for FkPlugin {
             soft_delete: false,
             audited: false,
             app_label: self.name.to_string(),
+            ..Default::default()
         }]
     }
 }

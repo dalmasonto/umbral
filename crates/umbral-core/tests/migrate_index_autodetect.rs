@@ -84,6 +84,7 @@ fn meta(unique_together: Vec<Vec<String>>, indexes: Vec<Vec<String>>) -> ModelMe
         soft_delete: false,
         audited: false,
         app_label: "app".to_string(),
+        ..Default::default()
     }
 }
 

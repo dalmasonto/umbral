@@ -250,18 +250,7 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 
 > Source project: `/home/dalmas/E/projects/portifoli/backend_v2`
 
-95. [ ] **Let a model declare its presentation/query metadata once (on the model), so any plugin — admin, rest, … — can discover it, with per-plugin override still available.** Today `list_display`, a human `__str__`/display label, `inline_edit_fields`, `list_filter`, `search_fields`, `readonly_fields` are specified **per plugin**, disconnected from the model — e.g. in the app's `main.rs` via `AdminModel::new("partner").list_display(...).inline_edit_fields(...).list_filter(...).search_fields(...)`, repeated for Community, Developer, etc. Nothing on the model itself says "these are my display columns / searchable columns / how I render as a label", so:
-    - **Duplication + drift:** every model that wants an admin (and there are many) hand-lists its columns in `main.rs`, far from the field definitions; add a field and you edit two places.
-    - **No cross-plugin sharing:** the REST plugin can't know a model's `search_fields` to power `?search=`, and FK/relation dropdowns / API "label" fields have no `__str__` to call — each plugin reinvents it.
-    - **No discoverability:** a new plugin can't ask "what are this model's display/searchable/filterable fields?" because that knowledge lives in whatever `AdminModel` the app happened to build.
-
-    **Ask:** carry these as **model-level metadata** on `ModelMeta` (populated from `#[umbral(...)]` field/struct attributes or a small derived trait), e.g.:
-    - field attrs like `#[umbral(list_display, search, list_filter, inline_edit, readonly)]`, and a struct-level `#[umbral(str = "...")]` / a `Display`-style `fn label(&self)` for the human label (Django's `__str__` equivalent);
-    - `admin` then **auto-derives** its `AdminModel` from that metadata (list_display, str, list_filter, search_fields, inline_edit, readonly) with zero per-model wiring, and `AdminModel::new(...).list_display(...)` remains as an explicit **override**;
-    - `rest` **inherits** `search_fields` (and filterable columns) so `?search=` / `?<field>=` work without per-`ResourceConfig` setup, again overridable;
-    - FK/relation rendering (admin dropdowns, REST FK labels) uses the model's `str`/label.
-
-    Net: declare display+query intent once on the model, every plugin reads it, users still override per plugin. Removes the bulk of the admin boilerplate in `main.rs` and makes plugins interoperate through shared model metadata. Complements `discovered_models!()` (models are already discoverable; their *presentation/query* metadata should be too).
+95. [x] Model-level presentation/query metadata shared across plugins — archived (per-field `#[umbral(list_display|search|list_filter|inline_edit|readonly)]` → `Model` consts + `ModelMeta`; admin auto-derives its changelist, REST inherits `?search=`; per-plugin override still wins; `orm/model-metadata.mdx`)
 
 ---
 

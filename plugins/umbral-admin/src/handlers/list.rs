@@ -593,11 +593,15 @@ pub(crate) async fn list(
         0
     };
 
+    // gaps4 #95: list filters come from the explicit AdminModel config, else
+    // the model's own declared LIST_FILTER (`#[umbral(list_filter)]`).
     let mut facets: Vec<FilterFacet> = Vec::new();
-    if let Some(c) = cfg {
-        for field in &c.list_filter {
-            facets.push(build_facet(&model, field).await);
-        }
+    let filter_fields: &[String] = match cfg.map(|c| c.list_filter.as_slice()) {
+        Some(f) if !f.is_empty() => f,
+        _ => model.list_filter.as_slice(),
+    };
+    for field in filter_fields {
+        facets.push(build_facet(&model, field).await);
     }
 
     // gaps2 #35: in trash view, swap the configured actions for the
@@ -609,7 +613,10 @@ pub(crate) async fn list(
     let effective = crate::config::effective_actions(configured_actions, soft_delete, trash);
     let action_names: Vec<serde_json::Value> = handlers::descriptors_for(&effective);
 
-    let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
+    // gaps4 #95: the search box shows when the admin config declares search
+    // fields OR the model itself declares them (`#[umbral(search)]`).
+    let has_search =
+        cfg.is_some_and(|c| !c.search_fields.is_empty()) || !model.search_fields.is_empty();
     let search_val = search_term.unwrap_or_default();
     let active_filter_list = build_active_filter_list(&model, &active_filters).await;
     let filter_qs = build_filter_qs(&active_filters);
@@ -634,9 +641,12 @@ pub(crate) async fn list(
         })
         .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-    let inline_edit_fields: Vec<String> = cfg
-        .map(|c| c.inline_edit_fields.clone())
-        .unwrap_or_default();
+    // gaps4 #95: inline-editable columns from the AdminModel config, else the
+    // model's declared INLINE_EDIT_FIELDS (`#[umbral(inline_edit)]`).
+    let inline_edit_fields: Vec<String> = match cfg.map(|c| c.inline_edit_fields.clone()) {
+        Some(f) if !f.is_empty() => f,
+        _ => model.inline_edit_fields.clone(),
+    };
 
     let initial_theme = user_theme(&user).await;
 
@@ -803,9 +813,12 @@ pub(crate) async fn rows_fragment(
     let effective = crate::config::effective_actions(configured_actions, soft_delete, trash);
     let action_names: Vec<serde_json::Value> = handlers::descriptors_for(&effective);
 
-    let inline_edit_fields: Vec<String> = cfg
-        .map(|c| c.inline_edit_fields.clone())
-        .unwrap_or_default();
+    // gaps4 #95: inline-editable columns from the AdminModel config, else the
+    // model's declared INLINE_EDIT_FIELDS (`#[umbral(inline_edit)]`).
+    let inline_edit_fields: Vec<String> = match cfg.map(|c| c.inline_edit_fields.clone()) {
+        Some(f) if !f.is_empty() => f,
+        _ => model.inline_edit_fields.clone(),
+    };
 
     match render(
         "admin/rows_fragment.html",

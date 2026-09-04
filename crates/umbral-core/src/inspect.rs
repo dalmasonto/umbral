@@ -2117,6 +2117,13 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             materialized: false,
             // inspectdb has no plugin attribute to read; default to "app".
             app_label: "app".to_string(),
+            // inspectdb doesn't recover presentation/query metadata (gaps4 #95);
+            // a ported model starts with none and the app declares it.
+            list_display: Vec::new(),
+            search_fields: Vec::new(),
+            list_filter: Vec::new(),
+            inline_edit_fields: Vec::new(),
+            readonly_fields: Vec::new(),
         })
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));

@@ -798,6 +798,7 @@ mod tests {
             soft_delete: false,
             audited: false,
             app_label: "app".into(),
+            ..Default::default()
         }
     }
 

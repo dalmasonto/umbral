@@ -362,6 +362,38 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// flips to DESC). Closes BUG-8. Default empty.
     const ORDERING: &'static [(&'static str, bool)] = &[];
 
+    // ── Model-level presentation / query metadata (gaps4 #95) ──────────
+    //
+    // Declared once on the model (via per-field `#[umbral(list_display)]`,
+    // `#[umbral(search)]`, `#[umbral(list_filter)]`, `#[umbral(inline_edit)]`,
+    // `#[umbral(readonly)]` markers, aggregated by `#[derive(Model)]` into
+    // these column-name arrays), so any plugin — admin, rest — reads the same
+    // intent instead of the app re-listing columns per plugin in `main.rs`.
+    // Each stays overridable per plugin (an explicit `AdminModel::new(..)
+    // .list_display(..)` / `ResourceConfig` wins). Empty = "not declared";
+    // consumers fall back to their own defaults.
+
+    /// Columns to show in a list/table view, in this order. Admin's
+    /// `list_display` falls back to this when not explicitly configured.
+    /// Set per field via `#[umbral(list_display)]`.
+    const LIST_DISPLAY: &'static [&'static str] = &[];
+
+    /// Columns that power a text search (`?search=` in REST, the admin list
+    /// search box). Set per field via `#[umbral(search)]`.
+    const SEARCH_FIELDS: &'static [&'static str] = &[];
+
+    /// Columns offered as list filters / facets. Set per field via
+    /// `#[umbral(list_filter)]`.
+    const LIST_FILTER: &'static [&'static str] = &[];
+
+    /// Columns editable inline in the admin list. Set per field via
+    /// `#[umbral(inline_edit)]`.
+    const INLINE_EDIT_FIELDS: &'static [&'static str] = &[];
+
+    /// Columns rendered read-only in forms. Set per field via
+    /// `#[umbral(readonly)]`.
+    const READONLY_FIELDS: &'static [&'static str] = &[];
+
     /// Field names to STRIP from signal payloads (audit_2 core-app-config #10).
     /// Set per-field via `#[umbral(signal_skip)]`. The ORM signal emitters
     /// (`pre/post_save`, `pre/post_delete`, `pre/post_update`) serialize the

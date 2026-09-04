@@ -1,0 +1,79 @@
+---
+title: Model presentation metadata
+description: "Declare a model's list_display, search, list_filter, inline_edit and readonly columns ONCE on the model with #[umbral(...)] markers, and every plugin — admin, REST — reads them, with per-plugin overrides still available."
+sidebar_position: 25
+icon: table-properties
+tags: [orm, admin, rest, metadata]
+badge: new
+---
+
+# Model presentation metadata
+
+A model's display and query intent — which columns show in a list, which are searchable, which are filters — used to be declared **per plugin**, far from the fields. You listed columns again in `AdminModel::new(...).list_display(...).search_fields(...)` for every model, and the REST plugin couldn't see any of it. Add a field and you edit two places.
+
+Declare it **once on the model** instead. Per-field `#[umbral(...)]` markers are aggregated by `#[derive(Model)]` into model-level metadata that any plugin reads:
+
+```rust
+#[derive(Model, sqlx::FromRow, Serialize, Deserialize)]
+#[umbral(table = "software")]
+struct Software {
+    id: i64,
+
+    #[umbral(string, list_display, search)]
+    name: String,
+
+    #[umbral(list_display, list_filter)]
+    category: String,
+
+    #[umbral(search)]
+    description: String,
+
+    #[umbral(readonly)]
+    slug: String,
+}
+```
+
+## The markers
+
+| Marker | Declares | Read by |
+|---|---|---|
+| `#[umbral(list_display)]` | Columns to show in a list/table view, in field order | Admin changelist columns |
+| `#[umbral(search)]` | Columns a free-text search matches | Admin search box, REST `?search=` |
+| `#[umbral(list_filter)]` | Columns offered as list filters / facets | Admin filter dialog |
+| `#[umbral(inline_edit)]` | Columns editable inline in the list | Admin inline edit |
+| `#[umbral(readonly)]` | Columns rendered read-only in forms | Admin write guard |
+
+The label side — a human `__str__` for FK chips and titles — is the separate [`#[umbral(str = "...")]`](str-display) template.
+
+## Plugins read it automatically
+
+<CardGrid>
+<Card title="Admin auto-derives its config">
+With no `AdminModel` registered (or one that leaves a list empty), the admin builds the changelist from the model's metadata: `list_display` columns, a search box when any `search` field exists, `list_filter` facets, inline-edit and readonly columns. Zero per-model wiring in `main.rs`.
+</Card>
+<Card title="REST inherits searchable columns">
+`?search=` restricts to the model's declared `search` fields with no `ResourceConfig` setup. A hidden column named as searchable is dropped (visibility rules still apply), so this never widens what a caller can probe.
+</Card>
+</CardGrid>
+
+## Override per plugin
+
+Model metadata is the default, not a mandate. An explicit plugin config always wins:
+
+```rust
+// This admin config overrides the model's declared list_display / search.
+AdminModel::new("software")
+    .list_display(&["name", "category", "slug"])
+    .search_fields(&["name"])
+```
+
+```rust
+// And REST's ResourceConfig::search_fields overrides the inherited set.
+ResourceConfig::new("software").search_fields(&["name", "description"])
+```
+
+<Callout type="tip">
+The aggregated arrays carry the **column** name (honoring `#[sqlx(rename = "...")]`), so the metadata matches what a plugin queries and renders. An empty array means "not declared" — the consumer falls back to its own default (e.g. the admin's `#[umbral(string)]`-based `list_display` heuristic).
+</Callout>
+
+See the design rationale in `planning/gaps4.md` #95.

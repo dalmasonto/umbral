@@ -58,6 +58,19 @@ fn apply_active_filters<'a>(
     qs
 }
 
+/// The columns a changelist search restricts to: an explicit
+/// `AdminModel::search_fields(..)` wins; else the model's own declared
+/// `SEARCH_FIELDS` (gaps4 #95 — `#[umbral(search)]` markers); else an empty
+/// slice, which `DynQuerySet::search` treats as "every searchable column".
+/// So a model that declares its searchable columns powers the admin search
+/// box with zero per-model admin wiring, still overridable per admin config.
+fn effective_search_fields<'a>(cfg: Option<&'a AdminConfig>, model: &'a ModelMeta) -> &'a [String] {
+    match cfg.map(|c| c.search_fields.as_slice()) {
+        Some(s) if !s.is_empty() => s,
+        _ => model.search_fields.as_slice(),
+    }
+}
+
 /// COUNT(*) for one filtered changelist query. Returns the total so
 /// the Pagination footer can compute total_pages.
 ///
@@ -80,7 +93,7 @@ pub(crate) async fn count_rows_filtered(
     if let Some(term) = search_term {
         // Pass cfg.search_fields when present; empty slice means
         // "search every searchable column" (DynQuerySet::search default).
-        let restrict: &[String] = cfg.map(|c| c.search_fields.as_slice()).unwrap_or(&[]);
+        let restrict = effective_search_fields(cfg, model);
         qs = qs.search(restrict, term);
     }
     qs = apply_active_filters(qs, model, active_filters);
@@ -114,7 +127,7 @@ pub(crate) async fn fetch_rows_paged(
         qs = qs.only_deleted();
     }
     if let Some(term) = search_term {
-        let restrict: &[String] = cfg.map(|c| c.search_fields.as_slice()).unwrap_or(&[]);
+        let restrict = effective_search_fields(cfg, model);
         qs = qs.search(restrict, term);
     }
     qs = apply_active_filters(qs, model, active_filters);
@@ -297,6 +310,16 @@ fn readonly_set(model: &ModelMeta, cfg: Option<&AdminConfig>) -> Vec<String> {
             .map(|s| s.to_string())
             .collect()
     };
+    // gaps4 #95: the model can declare its own READONLY_FIELDS
+    // (`#[umbral(readonly)]`), read by every plugin. Fold them into the set so
+    // a column marked readonly on the model is enforced in the admin with no
+    // per-model admin config. (Explicit config readonly_fields already merged
+    // above; this adds the model-declared ones.)
+    for col in &model.readonly_fields {
+        if !set.iter().any(|s| s == col) {
+            set.push(col.clone());
+        }
+    }
     // Model-level write guards hold regardless of admin config. The
     // form-building layer only *hides* these columns; without echoing
     // them into the write skip-set a crafted POST writes them anyway —
@@ -382,6 +405,7 @@ mod readonly_set_tests {
             soft_delete: false,
             audited: false,
             app_label: "app".into(),
+            ..Default::default()
         }
     }
 

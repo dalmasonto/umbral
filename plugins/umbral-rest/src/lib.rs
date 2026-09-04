@@ -3576,7 +3576,17 @@ async fn list_impl(
     // `search_fields`, only the named subset participates.
     if !cfg.search_disabled.contains(&table) {
         if let Some(term) = params.get("search") {
-            let restrict = cfg.search_fields.get(&table).map(|v| v.as_slice());
+            // gaps4 #95: the ResourceConfig's explicit search_fields win; else
+            // inherit the model's own declared SEARCH_FIELDS
+            // (`#[umbral(search)]`), so `?search=` restricts to the model's
+            // intended columns with no per-ResourceConfig setup. A hidden
+            // column named there is dropped by `parse_search` (it only sees
+            // `queryable_fields`), so this can't widen the extraction surface.
+            let restrict: Option<&[String]> = match cfg.search_fields.get(&table) {
+                Some(v) => Some(v.as_slice()),
+                None if !model.search_fields.is_empty() => Some(model.search_fields.as_slice()),
+                None => None,
+            };
             if let Some(search_cond) = parse_search(term, &queryable_fields, restrict) {
                 filter = filter.and(search_cond);
             }

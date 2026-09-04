@@ -683,6 +683,23 @@ struct UmbralFieldAttr {
     /// human label instead of every column. Only meaningful on
     /// `String`-typed fields.
     is_string_repr: bool,
+    /// Model-level presentation / query metadata markers (gaps4 #95).
+    /// Each aggregates this field's column name into a struct-level const
+    /// (`Model::LIST_DISPLAY` / `SEARCH_FIELDS` / `LIST_FILTER` /
+    /// `INLINE_EDIT_FIELDS` / `READONLY_FIELDS`) so any plugin — admin, rest —
+    /// reads the model's declared display+query intent from one place.
+    /// `#[umbral(list_display)]`.
+    list_display: bool,
+    /// `#[umbral(search)]`.
+    search: bool,
+    /// `#[umbral(list_filter)]`.
+    list_filter: bool,
+    /// `#[umbral(inline_edit)]`.
+    inline_edit: bool,
+    /// `#[umbral(readonly)]` — render read-only in forms (distinct from
+    /// `noedit`, which is a form-render detail; this feeds the model's
+    /// declared `READONLY_FIELDS` metadata that plugins read).
+    readonly: bool,
     /// `#[umbral(max_length = N)]` — soft limit. The admin truncates
     /// the value at this many characters in `list_display` so a long
     /// body doesn't blow out a column. `0` means no truncation.
@@ -898,6 +915,11 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
         primary_key: false,
         no_reverse: false,
         is_string_repr: false,
+        list_display: false,
+        search: false,
+        list_filter: false,
+        inline_edit: false,
+        readonly: false,
         max_length: 0,
         choices_ty: None,
         default: None,
@@ -1036,6 +1058,28 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                 } else {
                     parsed.is_string_repr = true;
                 }
+                Ok(())
+            } else if meta.path.is_ident("list_display") {
+                // gaps4 #95 — include this column in the model's declared
+                // list_display (admin table columns), in field order.
+                parsed.list_display = true;
+                Ok(())
+            } else if meta.path.is_ident("search") {
+                // gaps4 #95 — mark this column searchable (REST ?search=,
+                // admin list search).
+                parsed.search = true;
+                Ok(())
+            } else if meta.path.is_ident("list_filter") {
+                // gaps4 #95 — offer this column as a list filter / facet.
+                parsed.list_filter = true;
+                Ok(())
+            } else if meta.path.is_ident("inline_edit") {
+                // gaps4 #95 — allow inline editing of this column in the list.
+                parsed.inline_edit = true;
+                Ok(())
+            } else if meta.path.is_ident("readonly") {
+                // gaps4 #95 — render this column read-only in forms.
+                parsed.readonly = true;
                 Ok(())
             } else if meta.path.is_ident("max_length") {
                 let value = meta.value()?;
@@ -1205,6 +1249,7 @@ fn parse_umbral_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbralFieldA
                      `db_constraint = false`, `noedit`, \
                      `primary_key`, `no_reverse`, \
                      `string` (or `string = true`), \
+                     `list_display`, `search`, `list_filter`, `inline_edit`, `readonly`, \
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
@@ -1646,6 +1691,54 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
     } else {
         quote!(&[#(#ordering_pairs),*])
     };
+
+    // gaps4 #95: aggregate the per-field presentation/query markers
+    // (`#[umbral(list_display|search|list_filter|inline_edit|readonly)]`) into
+    // struct-level `&[&str]` consts of COLUMN names (honoring `#[sqlx(rename)]`,
+    // so the arrays match what a plugin queries/renders), in field-declaration
+    // order. Re-parsing the field attrs here (cheap, and done elsewhere in this
+    // macro too) keeps this self-contained instead of threading five vectors
+    // through the main field loop.
+    let mut list_display_cols: Vec<String> = Vec::new();
+    let mut search_cols: Vec<String> = Vec::new();
+    let mut list_filter_cols: Vec<String> = Vec::new();
+    let mut inline_edit_cols: Vec<String> = Vec::new();
+    let mut readonly_cols: Vec<String> = Vec::new();
+    for field in fields.iter() {
+        let Some(ident) = field.ident.as_ref() else {
+            continue;
+        };
+        let col = sqlx_rename(&field.attrs).unwrap_or_else(|| ident.to_string());
+        let fa = parse_umbral_field_attr(&field.attrs).unwrap_or_default();
+        if fa.list_display {
+            list_display_cols.push(col.clone());
+        }
+        if fa.search {
+            search_cols.push(col.clone());
+        }
+        if fa.list_filter {
+            list_filter_cols.push(col.clone());
+        }
+        if fa.inline_edit {
+            inline_edit_cols.push(col.clone());
+        }
+        if fa.readonly {
+            readonly_cols.push(col.clone());
+        }
+    }
+    let render_str_slice = |cols: &[String]| -> TokenStream2 {
+        if cols.is_empty() {
+            quote!(&[])
+        } else {
+            quote!(&[#(#cols),*])
+        }
+    };
+    let list_display_tokens = render_str_slice(&list_display_cols);
+    let search_fields_tokens = render_str_slice(&search_cols);
+    let list_filter_tokens = render_str_slice(&list_filter_cols);
+    let inline_edit_tokens = render_str_slice(&inline_edit_cols);
+    let readonly_tokens = render_str_slice(&readonly_cols);
+
     // The sibling column module's identifier is always snake_case of
     // the struct name (the user-facing path is `<snake_struct>::FIELD`).
     // Leaving it untouched keeps existing user code working when a
@@ -3458,6 +3551,14 @@ fn expand_model(input: DeriveInput, mode: EmitMode) -> syn::Result<TokenStream2>
             const UNIQUE_TOGETHER: &'static [&'static [&'static str]] = #unique_together_tokens;
             const INDEXES: &'static [&'static [&'static str]] = #indexes_tokens;
             const ORDERING: &'static [(&'static str, bool)] = #ordering_tokens;
+            // gaps4 #95 — model-level presentation/query metadata, aggregated
+            // from per-field `#[umbral(list_display|search|list_filter|
+            // inline_edit|readonly)]` markers into column-name slices.
+            const LIST_DISPLAY: &'static [&'static str] = #list_display_tokens;
+            const SEARCH_FIELDS: &'static [&'static str] = #search_fields_tokens;
+            const LIST_FILTER: &'static [&'static str] = #list_filter_tokens;
+            const INLINE_EDIT_FIELDS: &'static [&'static str] = #inline_edit_tokens;
+            const READONLY_FIELDS: &'static [&'static str] = #readonly_tokens;
             const SIGNAL_SKIP_FIELDS: &'static [&'static str] = #signal_skip_tokens;
             const M2M_RELATIONS: &'static [::umbral::orm::M2MRelationSpec] = &[
                 #(#m2m_specs),*

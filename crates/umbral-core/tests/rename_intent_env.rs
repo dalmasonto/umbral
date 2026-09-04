@@ -82,6 +82,7 @@ fn meta(name: &str, table: &str) -> ModelMeta {
         soft_delete: false,
         audited: false,
         app_label: "app".to_string(),
+        ..Default::default()
     }
 }
 

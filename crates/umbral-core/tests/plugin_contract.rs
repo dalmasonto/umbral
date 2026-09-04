@@ -157,6 +157,7 @@ impl Plugin for TestPlugin {
                 text_format: ::core::option::Option::None,
                 slug_from: ::core::option::Option::None,
             }],
+            ..Default::default()
         }]
     }
 

@@ -419,6 +419,29 @@ pub struct ModelMeta {
     /// `#[serde(default)]` keeps pre-#80g snapshot JSON round-tripping.
     #[serde(default = "default_app_label")]
     pub app_label: String,
+
+    // ── Model-level presentation / query metadata (gaps4 #95) ──────────
+    // Mirror the `Model::LIST_DISPLAY` / `SEARCH_FIELDS` / `LIST_FILTER` /
+    // `INLINE_EDIT_FIELDS` / `READONLY_FIELDS` consts so any plugin reads the
+    // model's declared display+query intent from ONE place instead of the app
+    // re-listing columns per plugin. Empty = not declared (consumer falls back
+    // to its own default). All `#[serde(default)]` so older snapshots
+    // round-trip; they don't affect the schema, so they're skipped when empty.
+    /// Mirrors `Model::LIST_DISPLAY`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub list_display: Vec<String>,
+    /// Mirrors `Model::SEARCH_FIELDS`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search_fields: Vec<String>,
+    /// Mirrors `Model::LIST_FILTER`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub list_filter: Vec<String>,
+    /// Mirrors `Model::INLINE_EDIT_FIELDS`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inline_edit_fields: Vec<String>,
+    /// Mirrors `Model::READONLY_FIELDS`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub readonly_fields: Vec<String>,
 }
 
 fn default_app_label() -> String {
@@ -445,6 +468,11 @@ impl Default for ModelMeta {
             view: None,
             materialized: false,
             app_label: default_app_label(),
+            list_display: Vec::new(),
+            search_fields: Vec::new(),
+            list_filter: Vec::new(),
+            inline_edit_fields: Vec::new(),
+            readonly_fields: Vec::new(),
         }
     }
 }
@@ -569,6 +597,14 @@ impl ModelMeta {
             view: T::VIEW.map(|s| s.to_string()),
             materialized: T::MATERIALIZED,
             app_label: T::APP_LABEL.to_string(),
+            list_display: T::LIST_DISPLAY.iter().map(|s| s.to_string()).collect(),
+            search_fields: T::SEARCH_FIELDS.iter().map(|s| s.to_string()).collect(),
+            list_filter: T::LIST_FILTER.iter().map(|s| s.to_string()).collect(),
+            inline_edit_fields: T::INLINE_EDIT_FIELDS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            readonly_fields: T::READONLY_FIELDS.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -6869,6 +6905,11 @@ mod tests {
                 soft_delete: false,
                 audited: false,
                 app_label: "app".to_string(),
+                list_display: Vec::new(),
+                search_fields: Vec::new(),
+                list_filter: Vec::new(),
+                inline_edit_fields: Vec::new(),
+                readonly_fields: Vec::new(),
             }],
         );
         per_plugin.insert(
@@ -6891,6 +6932,11 @@ mod tests {
                 soft_delete: false,
                 audited: false,
                 app_label: "app".to_string(),
+                list_display: Vec::new(),
+                search_fields: Vec::new(),
+                list_filter: Vec::new(),
+                inline_edit_fields: Vec::new(),
+                readonly_fields: Vec::new(),
             }],
         );
         init_plugins(per_plugin);
@@ -7294,6 +7340,11 @@ mod tests {
                 soft_delete: false,
                 audited: false,
                 app_label: "app".into(),
+                list_display: Vec::new(),
+                search_fields: Vec::new(),
+                list_filter: Vec::new(),
+                inline_edit_fields: Vec::new(),
+                readonly_fields: Vec::new(),
             }
         }
         let prev = meta_with(baseline());

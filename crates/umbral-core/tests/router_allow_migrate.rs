@@ -184,6 +184,7 @@ fn default_router_allow_migrate_is_permissive_for_assigned_alias() {
         soft_delete: false,
         audited: false,
         app_label: "app".to_string(),
+        ..Default::default()
     };
 
     let router = DefaultRouter;
