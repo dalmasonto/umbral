@@ -30,7 +30,7 @@
 <div class="table-widget h-full flex flex-col">
   {# Header: title (left) + View all link (right) ============== #}
   <div class="px-md pt-md pb-sm flex-shrink-0 flex items-center justify-between gap-sm">
-    <p class="text-label-sm text-outline uppercase tracking-wider truncate">{{ title }}</p>
+    <p class="text-label-sm text-outline truncate">{{ title }}</p>
     {% if payload.view_all_url %}
     <a
       href="{{ payload.view_all_url }}"
@@ -53,7 +53,7 @@
           {% for col in payload.columns %}
           <th
             scope="col"
-            class="px-md py-sm font-label-md text-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap"
+            class="px-md py-sm font-label-md text-label-md text-on-surface-variant whitespace-nowrap"
           >{{ col.label }}</th>
           {% endfor %}
         </tr>

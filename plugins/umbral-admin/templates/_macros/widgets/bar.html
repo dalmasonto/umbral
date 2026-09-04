@@ -23,7 +23,7 @@
 
 {% macro bar_widget(title, payload) %}
 <div class="bar-widget h-full flex flex-col p-md">
-  <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
+  <p class="text-label-sm text-outline mb-sm flex-shrink-0">{{ title }}</p>
   {% if payload.series and payload.series | length > 0 %}
     {%- set series = payload.series[0] -%}
     {%- set points = series.points -%}

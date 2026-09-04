@@ -8,7 +8,7 @@
 {% macro feed_widget(title, payload) %}
 <div class="feed-widget h-full flex flex-col p-md">
   <div class="flex items-center justify-between gap-sm mb-sm flex-shrink-0">
-    <p class="text-label-sm text-outline uppercase tracking-wider truncate">{{ title }}</p>
+    <p class="text-label-sm text-outline truncate">{{ title }}</p>
     {% if payload.view_all_url %}
     <a
       href="{{ payload.view_all_url }}"
