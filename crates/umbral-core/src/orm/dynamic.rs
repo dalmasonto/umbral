@@ -3770,6 +3770,28 @@ fn json_pk_to_sea(v: &serde_json::Value) -> Option<sea_query::Value> {
     }
 }
 
+/// Bind a JSON id value against the referenced PK column's *actual*
+/// `SqlType`, not the JSON value's runtime shape. This is the M2M-junction
+/// twin of the FK-column fix (gaps2 #42) and closes gaps4 #94: an admin form
+/// or REST `PATCH` sends M2M child ids as JSON **strings** (`["5","6"]`), and
+/// the shape-only [`json_pk_to_sea`] bound each as `Value::String` → a `text`
+/// parameter. SQLite silently coerces `text`↔`bigint`, but Postgres rejects
+/// it (`column "child_id" is of type bigint but expression is of type text`),
+/// so every live M2M edit 500'd on Postgres.
+///
+/// With the referenced PK type in hand we route through
+/// [`crate::orm::write::json_to_sea_value`], the same coercion the typed and
+/// FK write paths use: a numeric-PK target coerces the string `"5"` →
+/// `BigInt(5)`, a `Text` PK binds text, a `Uuid` PK parses + binds a UUID.
+/// Falls back to the shape-only bind when the type can't be resolved (e.g. a
+/// hand-built `ModelMeta` whose target model isn't registered).
+fn json_id_to_sea_typed(v: &serde_json::Value, pk_ty: Option<SqlType>) -> Option<sea_query::Value> {
+    match pk_ty {
+        Some(ty) => crate::orm::write::json_to_sea_value(ty, v, false, "id", None).ok(),
+        None => json_pk_to_sea(v),
+    }
+}
+
 /// Read every M2M relation off its junction table and attach
 /// the resulting `child_id` arrays to `out` under each relation's
 /// field name. Called from `insert_json` / `update_json`'s read-
@@ -4504,7 +4526,12 @@ async fn write_m2m_junctions_in_tx(
     if meta.m2m_relations.is_empty() {
         return Ok(());
     }
-    let Some(parent_pk_value) = parent_pk_json.and_then(json_pk_to_sea) else {
+    // Bind the parent id against the parent's OWN PK type; a text/uuid-PK
+    // parent's id must not bind as an integer, and an integer-PK parent's id
+    // arriving as a string must bind BigInt (gaps4 #94).
+    let parent_pk_ty = meta.pk_column().map(|c| c.ty);
+    let Some(parent_pk_value) = parent_pk_json.and_then(|v| json_id_to_sea_typed(v, parent_pk_ty))
+    else {
         return Ok(());
     };
     for rel in &meta.m2m_relations {
@@ -4514,12 +4541,16 @@ async fn write_m2m_junctions_in_tx(
         let Some(items) = value.as_array() else {
             continue;
         };
+        // Resolve the CHILD PK type from the target model so a string id binds
+        // against the junction's `child_id` column type (bigint on the common
+        // integer-PK case) rather than TEXT — the gaps4 #94 fix.
+        let child_pk_ty = crate::migrate::pk_meta_for_table(&rel.target_table).map(|(_, ty)| ty);
         let mut child_ids: Vec<sea_query::Value> = Vec::with_capacity(items.len());
         for item in items {
             if item.is_null() {
                 continue;
             }
-            if let Some(v) = json_pk_to_sea(item) {
+            if let Some(v) = json_id_to_sea_typed(item, child_pk_ty) {
                 child_ids.push(v);
             }
         }
@@ -4770,6 +4801,62 @@ mod tests {
             value,
             SeaValue::BigInt(None),
             "blank nullable integer-backed FK should bind SQL NULL"
+        );
+    }
+
+    // gaps4 #94: an admin form / REST PATCH sends M2M child ids as JSON
+    // strings. Against an integer-PK child the junction's `child_id` is
+    // `bigint`; the id MUST bind BigInt, not TEXT, or Postgres rejects the
+    // junction write ("column child_id is of type bigint but expression is of
+    // type text"). SQLite coerced it silently, hiding the bug until a live
+    // Postgres M2M edit.
+    #[test]
+    fn m2m_child_id_string_binds_against_bigint_child_pk() {
+        use serde_json::json;
+
+        let as_string = super::json_id_to_sea_typed(&json!("5"), Some(SqlType::BigInt))
+            .expect("string id coerces");
+        assert_eq!(
+            as_string,
+            SeaValue::BigInt(Some(5)),
+            "a stringified M2M child id must bind BigInt against an integer child PK"
+        );
+
+        let as_number =
+            super::json_id_to_sea_typed(&json!(5), Some(SqlType::BigInt)).expect("numeric id");
+        assert_eq!(as_number, SeaValue::BigInt(Some(5)));
+    }
+
+    #[test]
+    fn m2m_child_id_binds_against_text_and_uuid_child_pk() {
+        use serde_json::json;
+
+        let text = super::json_id_to_sea_typed(&json!("rust"), Some(SqlType::Text))
+            .expect("text-PK child id");
+        assert_eq!(text, SeaValue::String(Some(Box::new("rust".to_string()))));
+
+        let u = "550e8400-e29b-41d4-a716-446655440000";
+        let uuid =
+            super::json_id_to_sea_typed(&json!(u), Some(SqlType::Uuid)).expect("uuid-PK child id");
+        assert_eq!(
+            uuid,
+            SeaValue::Uuid(Some(Box::new(uuid::Uuid::parse_str(u).unwrap())))
+        );
+    }
+
+    // Fallback: with no resolvable target type, keep the shape-only bind so a
+    // hand-built ModelMeta (unregistered target) still writes as before.
+    #[test]
+    fn m2m_child_id_unresolved_type_falls_back_to_shape() {
+        use serde_json::json;
+
+        assert_eq!(
+            super::json_id_to_sea_typed(&json!(7), None),
+            Some(SeaValue::BigInt(Some(7)))
+        );
+        assert_eq!(
+            super::json_id_to_sea_typed(&json!("7"), None),
+            Some(SeaValue::String(Some(Box::new("7".to_string()))))
         );
     }
 }

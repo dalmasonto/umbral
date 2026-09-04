@@ -227,3 +227,60 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 > Source project: `/home/dalmas/E/projects/portifoli/backend_v2`
 
 92. [x] Synchronous/transactional after-create hook shipped: `subscribe_txn`/`emit_txn` + typed `on_model::<M>().post_create_txn` run inside the create's transaction and can fail (roll back) the create — atomic "create A ⇒ B exists" — archived
+
+---
+
+## OAUTH / SOCIAL LOGIN — SPA + FULLSTACK WIRING IS HECTIC (surfaced by backend_v2 + frontend_v2 Google/GitHub setup — 2026-09-04)
+
+> Source project: `/home/dalmas/E/projects/portifoli/backend_v2` (+ its Next.js SPA `frontend_v2`)
+
+93. [ ] **`umbral-oauth` end-to-end social login has too many silent, non-obvious traps; the SPA token handoff has to be reinvented in every app.** Wiring Google+GitHub for a separate-origin Next.js SPA took many iterations because each failure was silent or cryptic. The traps, in the order they bit:
+
+    1. **Missing mask keyring → the callback 500s with a generic message.** The OAuth callback writes the provider tokens into a `Masked<T>` column (`SocialAccount`), which is the FIRST masked write most apps ever do. With no keyring set it fails: `serialize: no mask keyring configured (set UMBRAL_MASK_PUBLIC_KEY ...)`, surfaced to the user as the generic "something went wrong / error logged server-side" 500. Nothing at boot warns that OAuth is enabled but no mask keyring exists. **Ask:** a boot-time system check — "OAuthPlugin registered providers but no mask keyring; social login will 500 on callback (set UMBRAL_MASK_PUBLIC_KEY / run maskkeygen)". Bonus: mention maskkeygen in the OAuth setup docs.
+
+    2. **The bearer token is only minted when the login was started with an allowlisted `?next`.** `GET /oauth/{p}/login` with NO `?next` → the callback redirects to `login_redirect` with **no token** (it only mints+appends `#token=` when `flow.return_to.is_some()`). A separate-origin SPA that just links to `/oauth/{p}/login` gets bounced back empty and looks "logged in on the backend but not the SPA." Non-obvious that `?next` is mandatory for the SPA/token flow. **Ask:** document this loudly, and/or a per-provider "always mint a token for login flows" mode, or a warning when a login flow completes with no `return_to` in an SPA-configured app.
+
+    3. **`allow_return` is builder-only (`.allow_return("https://app")`), not settings/env-driven.** Changing the SPA origin (dev→prod) needs a recompile. Every other deploy knob (`oauth_redirect_base`, `oauth_login_redirect`, client id/secret) is env-driven; this one isn't. **Ask:** read an `oauth_allow_return` / `UMBRAL_OAUTH_ALLOW_RETURN` (comma-separated) setting like the rest, so the return allowlist is env-configurable.
+
+    4. **The token→session handoff for an SPA is undocumented and left to the app.** umbral hands the token back in the URL **fragment** (`#token=<bearer>&token_type=Bearer`) at the return URL; a separate-origin SPA must (a) read the fragment client-side, (b) POST it to its own BFF, (c) validate it (`GET /api/auth/me` with the bearer), (d) set its own httpOnly cookie. There's no helper or reference for this; the generated frontend even had a `// how the token gets back into the cookie is not yet wired up` TODO. **Ask:** ship a documented recipe (and ideally a tiny helper / scaffold route) for the SPA handoff.
+
+    **Two distinct modes to document explicitly (the split is the crux):**
+    - **umbral as fullstack (same-origin app + API):** simplest path — set `oauth_redirect_base`, `oauth_login_redirect`, client id/secret, **and a mask keyring**; the callback's `login_user_id(...)` already sets the session cookie on the same origin, so no `?next`, no fragment token, no BFF handoff needed. Just link to `/oauth/{p}/login` and land on `login_redirect`. Document this as the happy path.
+    - **umbral API + separate-origin SPA (Next.js, etc.):** the token-mode flow — allowlist the SPA origin (`allow_return`), SPA starts login with `?next=<spa-origin>/oauth-callback`, callback appends `#token`, SPA reads the fragment and exchanges it for its own session cookie via a BFF route. Document the full sequence + the mask-keyring + env requirements as one checklist.
+
+    Downstream mitigation in backend_v2/frontend_v2: set the mask keyring, made `allow_return` env-driven (`OAUTH_ALLOW_RETURN`), frontend passes `?next=.../auth/oauth-callback`, and added `/auth/oauth-callback` + `/api/auth/oauth-session` (validate `/api/auth/me`, set the httpOnly cookie). Works, but every umbral+SPA app will re-derive this.
+
+---
+
+## ORM — M2M JUNCTION WRITE BINDS child_id AS TEXT → 500 ON POSTGRES (surfaced by backend_v2 Postgres migration — 2026-09-04)
+
+> Source project: `/home/dalmas/E/projects/portifoli/backend_v2` (SQLite → Postgres)
+
+94. [x] M2M junction writes bound the child/parent id as TEXT → 500 on Postgres — archived (dynamic junction writer now coerces each id to the referenced PK's `SqlType` via `json_id_to_sea_typed`, the M2M twin of the FK fix gaps2 #42; unit + gated Postgres round-trip tests; drops the downstream `CREATE CAST (text AS bigint)` workaround)
+
+---
+
+## ORM — MODEL-LEVEL PRESENTATION/QUERY METADATA SHARED ACROSS PLUGINS (surfaced by backend_v2 admin + rest config duplication — 2026-09-04)
+
+> Source project: `/home/dalmas/E/projects/portifoli/backend_v2`
+
+95. [ ] **Let a model declare its presentation/query metadata once (on the model), so any plugin — admin, rest, … — can discover it, with per-plugin override still available.** Today `list_display`, a human `__str__`/display label, `inline_edit_fields`, `list_filter`, `search_fields`, `readonly_fields` are specified **per plugin**, disconnected from the model — e.g. in the app's `main.rs` via `AdminModel::new("partner").list_display(...).inline_edit_fields(...).list_filter(...).search_fields(...)`, repeated for Community, Developer, etc. Nothing on the model itself says "these are my display columns / searchable columns / how I render as a label", so:
+    - **Duplication + drift:** every model that wants an admin (and there are many) hand-lists its columns in `main.rs`, far from the field definitions; add a field and you edit two places.
+    - **No cross-plugin sharing:** the REST plugin can't know a model's `search_fields` to power `?search=`, and FK/relation dropdowns / API "label" fields have no `__str__` to call — each plugin reinvents it.
+    - **No discoverability:** a new plugin can't ask "what are this model's display/searchable/filterable fields?" because that knowledge lives in whatever `AdminModel` the app happened to build.
+
+    **Ask:** carry these as **model-level metadata** on `ModelMeta` (populated from `#[umbral(...)]` field/struct attributes or a small derived trait), e.g.:
+    - field attrs like `#[umbral(list_display, search, list_filter, inline_edit, readonly)]`, and a struct-level `#[umbral(str = "...")]` / a `Display`-style `fn label(&self)` for the human label (Django's `__str__` equivalent);
+    - `admin` then **auto-derives** its `AdminModel` from that metadata (list_display, str, list_filter, search_fields, inline_edit, readonly) with zero per-model wiring, and `AdminModel::new(...).list_display(...)` remains as an explicit **override**;
+    - `rest` **inherits** `search_fields` (and filterable columns) so `?search=` / `?<field>=` work without per-`ResourceConfig` setup, again overridable;
+    - FK/relation rendering (admin dropdowns, REST FK labels) uses the model's `str`/label.
+
+    Net: declare display+query intent once on the model, every plugin reads it, users still override per plugin. Removes the bulk of the admin boilerplate in `main.rs` and makes plugins interoperate through shared model metadata. Complements `discovered_models!()` (models are already discoverable; their *presentation/query* metadata should be too).
+
+---
+
+## ADMIN — LIST SEARCH FIRES PER KEYSTROKE (NO DEBOUNCE) → LAGGY INPUT + URL/HISTORY CHURN (surfaced by backend_v2 admin use — 2026-09-04)
+
+> Source project: `/home/dalmas/E/projects/portifoli/backend_v2`
+
+96. [ ] **The admin list search submits/navigates on every keystroke, so the input lags behind and the URL churns.** Typing in the admin list search box (e.g. `https://api.craftfolio.dev/admin/software/?search=djan&sort=&order=asc&page_size=25`) updates `?search=` and re-navigates/re-fetches on EACH character. Each keystroke triggers a round-trip + re-render, so the input visibly lags (characters appear late, the caret jumps, fast typing drops/reorders), and the URL/history flip-flops on every letter. **Ask:** debounce the search input (~250-300ms idle) before updating the URL / fetching; keep the `<input>` client-controlled and focused so typing stays smooth regardless of in-flight requests; use history `replace` (not `push`) for search updates so back-button isn't polluted with one entry per character. Ideally the list rows refresh via a debounced fetch without a full page navigation at all.

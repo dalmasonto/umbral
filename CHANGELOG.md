@@ -14,6 +14,10 @@ under `crates/*` and `plugins/*`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dynamic M2M writes now bind junction ids against the referenced PK type, not the JSON shape (gaps4 #94).** An admin form or REST `PATCH` of a many-to-many field sends child ids as JSON strings (`["1","2"]`); the dynamic junction writer bound each as a TEXT parameter. SQLite coerced `text`↔`bigint` silently, but Postgres rejected it (`column "child_id" is of type bigint but expression is of type text`), so **every live M2M edit 500'd on Postgres**. Junction `parent_id`/`child_id` now coerce to the referenced PK's actual `SqlType` (integer PK → `BigInt`, `Text`/`Uuid` PK bind accordingly), matching the FK-column fix. No API change; a Postgres regression test covers the string-id write.
+
 ### Changed
 
 - **`#[derive(ModelBase)]` now auto-emits `impl Default` + an inherent `new()`** so a based model constructs with `base: Default::default()` (the auto-managed PK / `auto_now`* columns are overwritten on insert anyway). **Potentially breaking:** a base struct that ALSO derives or hand-implements `Default` now hits a conflicting-impl error (E0119) — drop the redundant `#[derive(Default)]` / `impl Default` from `#[derive(ModelBase)]` structs on upgrade.
