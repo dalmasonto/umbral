@@ -136,6 +136,62 @@
         background: var(--surface-container-high);
         color: var(--on-surface);
     }
+    /* ============================================================
+       Table editor (gaps4 #61, pass 3) — the changelist reads as a
+       real data grid rather than a list: faint vertical column
+       rules, a tight-but-calm vertical rhythm, a spreadsheet-style
+       sticky header, and a hover tint that's actually visible.
+       Scoped to #dt-table so it styles BOTH the initial server
+       render AND every HTMX-swapped row (the /rows fragment lands
+       inside this table's tbody) from one place — no duplicated
+       markup, and it never touches the #dt-* ids / .dt-row / .dt-col
+       / .row-cb hooks the inline datatable JS is coupled to. Inline
+       here (not css/input.css) because dev serves the Tailwind CDN
+       and never loads the compiled stylesheet — same reason the
+       scrollbar rules above live inline. ID+class specificity wins
+       over the Tailwind utilities already on the cells. */
+    #dt-table {
+        font-variant-numeric: tabular-nums;
+    }
+    /* Cell rhythm: 10px top/bottom reads as dense-yet-calm — tighter
+       than the old py-md (16px), roomier than a cramped grid. Only
+       real data rows (.dt-row) and headers are touched, so the
+       empty-state and pagination rows inside the same tbody keep
+       their own spacing. The density toggle still wins: compact sets
+       an inline 6px, comfortable clears the inline value back to
+       this default. */
+    #dt-table thead th,
+    #dt-table tbody tr.dt-row > td {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        vertical-align: middle;
+    }
+    /* Vertical column hairlines — the spreadsheet-grid signature.
+       Every cell except the sticky Actions gutter (the last child)
+       gets a right rule; with the tbody's existing horizontal
+       divides this completes the grid. `:not(:last-child)` counts
+       DOM position, so a column hidden via the visibility menu
+       (display:none) drops out cleanly and the Actions gutter never
+       gets a rule. */
+    #dt-table thead th:not(:last-child),
+    #dt-table tbody tr.dt-row > td:not(:last-child) {
+        border-right: 1px solid var(--outline-variant);
+    }
+    /* Header cells keep their labels on one line so the grid frame
+       stays crisp. (The thead already handles stickiness + its own
+       opaque background — this only tunes the header, not how it
+       sticks.) */
+    #dt-table thead th {
+        white-space: nowrap;
+    }
+    /* Row hover — a calm but genuinely visible tint. The old
+       `surface-container-lowest` equals `surface` in light mode, so
+       the hover was invisible; `surface-container` is a gentle ~3%
+       darken. Covers the sticky Actions cell too so the row highlights
+       as one band. */
+    #dt-table tbody tr.dt-row:hover > td {
+        background: var(--surface-container);
+    }
 </style>
 {% endblock %} {% block body_attrs %}class="bg-background text-on-background
 antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body %}

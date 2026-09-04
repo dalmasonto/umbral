@@ -332,7 +332,7 @@
           {# Data column headers #}
           {% for col in columns %}
           <th
-            class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col"
+            class="px-md py-md font-label-sm text-label-sm text-on-surface-variant {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col"
             data-col="{{ col.name }}"
           >
             {#
@@ -364,7 +364,7 @@
           {% endfor %}
 
           {# Actions column header (sticky right) #}
-          <th class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider sticky right-0 bg-surface-container-low text-right">
+          <th class="px-md py-md font-label-sm text-label-sm text-on-surface-variant sticky right-0 bg-surface-container-low text-right">
             Actions
           </th>
         </tr>
