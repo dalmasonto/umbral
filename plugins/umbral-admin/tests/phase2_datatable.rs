@@ -302,6 +302,64 @@ async fn test_changelist_search_returns_matching_rows() {
     );
 }
 
+// gaps4 #96: search-as-you-type must REPLACE the history entry (one entry per
+// keystroke would pollute the back button), while discrete navigation
+// (pagination, page-size, chip removes) still PUSHes a real entry. The server
+// keys off HTMX's `HX-Trigger` request header naming the search input.
+#[tokio::test]
+async fn test_search_keystroke_replaces_history_not_push() {
+    let router = boot().await.clone();
+    let session = own_staff_cookie(router.clone(), "u_test_search_replace_history").await;
+
+    // A request triggered by the live search input → HX-Replace-Url, no push.
+    let req = Request::builder()
+        .uri("/admin/post/rows?search=alp&page_size=25")
+        .header(header::COOKIE, format!("umbral_session={session}"))
+        .header("hx-request", "true")
+        .header("hx-trigger", "dt-search")
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, _body) = send_full(router.clone(), req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers.contains_key("HX-Replace-Url"),
+        "search keystroke must set HX-Replace-Url"
+    );
+    assert!(
+        !headers.contains_key("HX-Push-Url"),
+        "search keystroke must NOT push a history entry"
+    );
+    assert_eq!(
+        headers.get("HX-Replace-Url").unwrap(),
+        "/admin/post/?search=alp&page_size=25",
+        "the replaced URL reflects the changelist page, not the /rows partial"
+    );
+}
+
+#[tokio::test]
+async fn test_discrete_navigation_pushes_history() {
+    let router = boot().await.clone();
+    let session = own_staff_cookie(router.clone(), "u_test_discrete_nav_pushes").await;
+
+    // A pagination request (no dt-search trigger) → HX-Push-Url, a real entry.
+    let req = Request::builder()
+        .uri("/admin/post/rows?page=2&page_size=1")
+        .header(header::COOKIE, format!("umbral_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, _body) = send_full(router, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers.contains_key("HX-Push-Url"),
+        "discrete navigation must push a history entry"
+    );
+    assert!(
+        !headers.contains_key("HX-Replace-Url"),
+        "discrete navigation must not replace"
+    );
+}
+
 #[tokio::test]
 async fn test_changelist_sort_order_desc() {
     let router = boot().await.clone();

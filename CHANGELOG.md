@@ -16,6 +16,8 @@ under `crates/*` and `plugins/*`.
 
 ### Fixed
 
+- **Admin list search no longer pollutes browser history (gaps4 #96).** Search-as-you-type in the admin table editor pushed one history entry per keystroke, so the back button had to be pressed once per character to escape a search. The server now sends `HX-Replace-Url` (not `HX-Push-Url`) when a `/rows` request is triggered by the live search input, so a keystroke replaces the current history entry; discrete navigation — pagination, page-size, filter-chip removal — still pushes a real entry. (The 300ms input debounce and partial-tbody swap that keep typing smooth were already in place.)
+
 - **Dynamic M2M writes now bind junction ids against the referenced PK type, not the JSON shape (gaps4 #94).** An admin form or REST `PATCH` of a many-to-many field sends child ids as JSON strings (`["1","2"]`); the dynamic junction writer bound each as a TEXT parameter. SQLite coerced `text`↔`bigint` silently, but Postgres rejected it (`column "child_id" is of type bigint but expression is of type text`), so **every live M2M edit 500'd on Postgres**. Junction `parent_id`/`child_id` now coerce to the referenced PK's actual `SqlType` (integer PK → `BigInt`, `Text`/`Uuid` PK bind accordingly), matching the FK-column fix. No API change; a Postgres regression test covers the string-id write.
 
 ### Changed

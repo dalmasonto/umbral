@@ -830,15 +830,29 @@ pub(crate) async fn rows_fragment(
     ) {
         Ok(html) => {
             let mut response = html.into_response();
-            // Push the changelist URL (not this /rows partial URL) so the
-            // browser bar reflects the page a user would refresh into.
-            // Overrides any client-side `hx-push-url="true"` on the
-            // pagination buttons, chip remove links, and the page-size
-            // select — one fix covers every request that lands here.
+            // Reflect the changelist URL (not this /rows partial URL) in the
+            // browser bar so a refresh lands on the page the user is looking
+            // at. Overrides any client-side `hx-*-url` on the pagination
+            // buttons, chip remove links, the page-size select, and the
+            // search input — one fix covers every request that lands here.
+            //
+            // gaps4 #96: search-as-you-type must not push one history entry
+            // per keystroke. When the request was triggered by the live
+            // search input we REPLACE the current history entry; discrete
+            // navigation (pagination, chip removes, page-size) still PUSHes a
+            // real entry so the back button steps through those. HTMX names
+            // the triggering element in the `HX-Trigger` request header.
+            let triggered_by_search =
+                headers.get("HX-Trigger").and_then(|v| v.to_str().ok()) == Some("dt-search");
+            let header_name = if triggered_by_search {
+                "HX-Replace-Url"
+            } else {
+                "HX-Push-Url"
+            };
             let query = serde_urlencoded::to_string(&params).unwrap_or_default();
-            let push_url = format!("{}/{table}/?{query}", crate::branding::current().base_path);
-            if let Ok(v) = axum::http::HeaderValue::from_str(&push_url) {
-                response.headers_mut().insert("HX-Push-Url", v);
+            let nav_url = format!("{}/{table}/?{query}", crate::branding::current().base_path);
+            if let Ok(v) = axum::http::HeaderValue::from_str(&nav_url) {
+                response.headers_mut().insert(header_name, v);
             }
             response
         }

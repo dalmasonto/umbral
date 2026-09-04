@@ -184,7 +184,11 @@
         hx-target="#table-body"
         hx-swap="innerHTML"
         hx-include="#dt-search, #dt-page-size, #dt-active-filters input, [name=sort], [name=order]"
-        hx-push-url="true"
+        {# gaps4 #96: search-as-you-type replaces the history entry (the
+           server sends HX-Replace-Url for this trigger) so the back button
+           isn't polluted with one entry per keystroke; discrete nav still
+           pushes. #}
+        hx-replace-url="true"
         class="w-full bg-surface-container-lowest border border-outline-variant rounded-xl pl-9 pr-md py-sm font-body-md text-body-md text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50"
       />
     </div>
