@@ -267,7 +267,7 @@ async fn unique_violation_on_create_renders_error_under_slug_field() {
 
     // The per-field error marker must be present in the rendered HTML.
     assert!(
-        html.contains("class=\"field-error\""),
+        html.contains("field-error"),
         "expected a field-error element in the form; body:\n{html}"
     );
 
@@ -294,7 +294,7 @@ async fn unique_violation_on_create_renders_error_under_slug_field() {
         .find(r#"name="slug""#)
         .expect("slug input must be in form");
     let field_error_pos = html
-        .find("class=\"field-error\"")
+        .find("field-error")
         .expect("field-error must be in form after the fix");
 
     assert!(
@@ -356,7 +356,7 @@ async fn unique_violation_on_update_renders_error_under_slug_field() {
     );
 
     assert!(
-        html.contains("class=\"field-error\""),
+        html.contains("field-error"),
         "expected a field-error element in the edit form; body:\n{html}"
     );
 
@@ -370,7 +370,7 @@ async fn unique_violation_on_update_renders_error_under_slug_field() {
         .find(r#"name="slug""#)
         .expect("slug input must be in edit form");
     let field_error_pos = html
-        .find("class=\"field-error\"")
+        .find("field-error")
         .expect("field-error must be in edit form after the fix");
 
     assert!(

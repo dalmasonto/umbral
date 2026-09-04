@@ -16,6 +16,12 @@
   The "Add another" JS is scoped per-formset and re-binds on every
   render (it keys off `data-inline-bound` so an HTMX-swapped sheet that
   re-loads the partial wires the buttons exactly once).
+
+  gaps4 #61 pass 5: restyled off raw `style=` + #ddd/#eee hex onto umbra-dusk
+  tokens. The field NAMES, the `.inline-group` class, and every `data-*` hook
+  the JS + crud.rs parser read are unchanged — only presentation moved. The
+  blank-row `<template>` is tokenized identically to the live rows so a cloned
+  row matches.
 #}
 
 {# Per-field input widget for one inline cell. `idx` may be a real index
@@ -26,32 +32,33 @@
   {% set fname = "inline-" ~ name ~ "-" ~ idx ~ "-" ~ f.name %}
   {% set fval = "" if blank else f.value %}
   {% if f.kind == "bool" %}
-    <input type="checkbox" name="{{ fname }}" value="true"{% if fval == "true" %} checked{% endif %}{% if f.readonly %} disabled{% endif %}>
+    <input type="checkbox" name="{{ fname }}" value="true"{% if fval == "true" %} checked{% endif %}{% if f.readonly %} disabled{% endif %} class="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer">
   {% elif f.kind == "select" %}
-    <select name="{{ fname }}"{% if f.readonly %} disabled{% endif %} style="width:100%;padding:4px;">
+    <select name="{{ fname }}"{% if f.readonly %} disabled{% endif %} class="w-full bg-surface-container-low border border-outline-variant rounded-lg px-sm py-xs text-on-surface text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all">
       {% if f.nullable %}<option value="">—</option>{% endif %}
       {% for opt in f.choices %}<option value="{{ opt.value }}"{% if fval == opt.value %} selected{% endif %}>{{ opt.label }}</option>{% endfor %}
     </select>
   {% elif f.kind == "textarea" or f.kind == "json" %}
-    <textarea name="{{ fname }}" rows="2"{% if f.readonly %} readonly{% endif %} style="width:100%;padding:4px;">{{ fval }}</textarea>
+    <textarea name="{{ fname }}" rows="2"{% if f.readonly %} readonly{% endif %} class="w-full bg-surface-container-low border border-outline-variant rounded-lg px-sm py-xs text-on-surface text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all{% if f.kind == 'json' %} font-data-mono{% endif %}">{{ fval }}</textarea>
   {% else %}
-    <input type="{% if f.kind == "number" %}number{% elif f.kind == "date" %}date{% elif f.kind == "time" %}time{% elif f.kind == "datetime-local" %}datetime-local{% else %}text{% endif %}" name="{{ fname }}" value="{{ fval }}"{% if f.readonly %} readonly{% endif %} style="width:100%;padding:4px;">
+    <input type="{% if f.kind == "number" %}number{% elif f.kind == "date" %}date{% elif f.kind == "time" %}time{% elif f.kind == "datetime-local" %}datetime-local{% else %}text{% endif %}" name="{{ fname }}" value="{{ fval }}"{% if f.readonly %} readonly{% endif %} class="w-full bg-surface-container-low border border-outline-variant rounded-lg px-sm py-xs text-on-surface text-body-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all">
   {% endif %}
 {% endmacro %}
 
 {% macro inline_formset(inlines) %}
 {% if inlines %}
   {% for inline in inlines %}
-    <fieldset class="inline-group" data-inline="{{ inline.name }}" style="margin:1.25rem 0;border:1px solid #ddd;border-radius:8px;padding:0.75rem 1rem;">
-      <legend style="font-weight:600;padding:0 0.4rem;">{{ inline.label }}</legend>
+    <fieldset class="inline-group my-lg rounded-xl border border-outline-variant p-md" data-inline="{{ inline.name }}">
+      <legend class="font-label-md text-label-md text-on-surface font-semibold px-xs">{{ inline.label }}</legend>
       <input type="hidden" name="inline-{{ inline.name }}-TOTAL" value="{{ inline.total }}" data-inline-total>
 
       {% if inline.kind == "tabular" %}
-        <table class="inline-table" style="width:100%;border-collapse:collapse;">
+        <div class="overflow-x-auto">
+        <table class="inline-table w-full border-collapse">
           <thead>
-            <tr>
-              {% for f in inline.fields %}<th style="text-align:left;padding:0.3rem;font-size:0.85rem;">{{ f.name }}</th>{% endfor %}
-              {% if inline.can_delete %}<th style="padding:0.3rem;font-size:0.85rem;">Delete</th>{% endif %}
+            <tr class="border-b border-outline-variant">
+              {% for f in inline.fields %}<th class="text-left px-xs py-xs font-label-sm text-label-sm text-on-surface-variant">{{ f.name | replace("_", " ") | title }}</th>{% endfor %}
+              {% if inline.can_delete %}<th class="px-xs py-xs font-label-sm text-label-sm text-on-surface-variant">Delete</th>{% endif %}
             </tr>
           </thead>
           <tbody data-inline-body>
@@ -60,31 +67,32 @@
             <tr data-inline-row data-index="{{ row_idx }}">
               <input type="hidden" name="inline-{{ inline.name }}-{{ row_idx }}-id" value="{{ r.id }}">
               {% for f in r.fields %}
-              <td style="padding:0.3rem;">{{ inline_field_input(inline.name, row_idx, f) }}</td>
+              <td class="px-xs py-xs align-top">{{ inline_field_input(inline.name, row_idx, f) }}</td>
               {% endfor %}
               {% if inline.can_delete %}
-              <td style="padding:0.3rem;text-align:center;">
-                {% if r.id %}<input type="checkbox" name="inline-{{ inline.name }}-{{ row_idx }}-DELETE" value="on">{% endif %}
+              <td class="px-xs py-xs text-center align-middle">
+                {% if r.id %}<input type="checkbox" name="inline-{{ inline.name }}-{{ row_idx }}-DELETE" value="on" class="w-4 h-4 rounded border-outline-variant text-error focus:ring-error cursor-pointer">{% endif %}
               </td>
               {% endif %}
             </tr>
             {% endfor %}
           </tbody>
         </table>
+        </div>
       {% else %}
         <div data-inline-body>
           {% for r in inline.rows %}
           {% set row_idx = loop.index0 %}
-          <div data-inline-row data-index="{{ row_idx }}" style="border:1px solid #eee;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.5rem;">
+          <div data-inline-row data-index="{{ row_idx }}" class="border border-outline-variant rounded-lg p-sm mb-sm">
             <input type="hidden" name="inline-{{ inline.name }}-{{ row_idx }}-id" value="{{ r.id }}">
             {% for f in r.fields %}
-            <div class="field" style="margin-bottom:0.5rem;">
-              <label style="display:block;font-size:0.85rem;">{{ f.name }}</label>
+            <div class="mb-sm">
+              <label class="block font-label-sm text-label-sm text-on-surface-variant mb-xs">{{ f.name | replace("_", " ") | title }}</label>
               {{ inline_field_input(inline.name, row_idx, f) }}
             </div>
             {% endfor %}
             {% if inline.can_delete and r.id %}
-            <label style="font-size:0.85rem;"><input type="checkbox" name="inline-{{ inline.name }}-{{ row_idx }}-DELETE" value="on"> Delete</label>
+            <label class="inline-flex items-center gap-xs font-label-sm text-label-sm text-on-surface-variant cursor-pointer"><input type="checkbox" name="inline-{{ inline.name }}-{{ row_idx }}-DELETE" value="on" class="w-4 h-4 rounded border-outline-variant text-error focus:ring-error"> Delete</label>
             {% endif %}
           </div>
           {% endfor %}
@@ -92,22 +100,23 @@
       {% endif %}
 
       {# Blank-row template for the "Add another" JS. Index placeholder
-         __IDX__ is substituted on clone. #}
+         __IDX__ is substituted on clone. Kept token-identical to the live
+         rows above so a cloned row matches. #}
       <template data-inline-template>
         {% if inline.kind == "tabular" %}
         <tr data-inline-row>
           <input type="hidden" name="inline-{{ inline.name }}-__IDX__-id" value="">
           {% for f in inline.fields %}
-          <td style="padding:0.3rem;">{{ inline_field_input(inline.name, "__IDX__", f, true) }}</td>
+          <td class="px-xs py-xs align-top">{{ inline_field_input(inline.name, "__IDX__", f, true) }}</td>
           {% endfor %}
           {% if inline.can_delete %}<td></td>{% endif %}
         </tr>
         {% else %}
-        <div data-inline-row style="border:1px solid #eee;border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.5rem;">
+        <div data-inline-row class="border border-outline-variant rounded-lg p-sm mb-sm">
           <input type="hidden" name="inline-{{ inline.name }}-__IDX__-id" value="">
           {% for f in inline.fields %}
-          <div class="field" style="margin-bottom:0.5rem;">
-            <label style="display:block;font-size:0.85rem;">{{ f.name }}</label>
+          <div class="mb-sm">
+            <label class="block font-label-sm text-label-sm text-on-surface-variant mb-xs">{{ f.name | replace("_", " ") | title }}</label>
             {{ inline_field_input(inline.name, "__IDX__", f, true) }}
           </div>
           {% endfor %}
@@ -115,7 +124,9 @@
         {% endif %}
       </template>
 
-      <button type="button" class="btn" data-inline-add style="margin-top:0.5rem;">+ Add another {{ inline.label }}</button>
+      <button type="button" data-inline-add class="mt-sm inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant text-body-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-low transition-colors">
+        <i data-lucide="plus" class="w-4 h-4"></i> Add another {{ inline.label }}
+      </button>
     </fieldset>
   {% endfor %}
 
@@ -141,6 +152,7 @@
         var node = wrap.firstElementChild;
         body.appendChild(node);
         totalInput.value = String(idx + 1);
+        if (window.lucide) lucide.createIcons();
       });
     });
   })();

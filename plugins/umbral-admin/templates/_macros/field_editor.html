@@ -389,8 +389,12 @@
   {% endif %}
 
   {# --- Inline validation error --- #}
+  {# `field-error` is a stable, unstyled hook: this macro is the single
+     source of per-field errors for BOTH the sheet and the full-page form, so
+     the class lets either surface be asserted on (and any future error styling
+     lives in one place). #}
   {% if error %}
-  <p class="text-body-sm text-error mt-0.5 flex items-center gap-xs">
+  <p class="field-error text-body-sm text-error mt-0.5 flex items-center gap-xs">
     <i data-lucide="alert-circle" class="w-[14px] h-[14px] flex-shrink-0"></i>
     {{ error }}
   </p>

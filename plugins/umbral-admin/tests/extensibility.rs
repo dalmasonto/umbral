@@ -475,7 +475,7 @@ async fn custom_action_runs_and_returns_flash() {
 }
 
 // =========================================================================
-// 6. readonly_fields: form renders <input ... readonly> for those fields.
+// 6. readonly_fields: form renders a non-editable input for those fields.
 // =========================================================================
 
 #[tokio::test]
@@ -492,9 +492,15 @@ async fn readonly_fields_render_readonly_input() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "edit form body:\n{body}");
+    // gaps4 #61 pass 5: the full-page form now renders through the shared
+    // `field_editor` macro (the same one the slide-over sheet uses), which
+    // renders a readonly field as `disabled` — a non-editable state that
+    // works for every input type (a `<select>` has no `readonly`). Either
+    // attribute means "the user can't change this"; the server's readonly-set
+    // blocks the write regardless.
     assert!(
-        body.contains("readonly"),
-        "readonly attribute missing from form:\n{body}"
+        body.contains("disabled") || body.contains("readonly"),
+        "readonly field should render as a non-editable (disabled/readonly) input:\n{body}"
     );
 }
 

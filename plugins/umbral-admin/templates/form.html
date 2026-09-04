@@ -1,201 +1,118 @@
 {% extends "admin/base.html" %}
 {% from "admin/_macros/inlines.html" import inline_formset %}
+{% from "admin/_macros/field_editor.html" import field_editor %}
 {% block title %}{{ verb }} {{ model.name }} — {{ site_title }}{% endblock %}
 {% block content %}
-  <div class="breadcrumb">
-    <a href="{{ admin_base }}">admin</a> / <a href="{{ admin_base }}/{{ model.table }}/">{{ model.name }}</a> / {{ verb }}
-  </div>
-  <div class="panel">
-    <h2>{{ verb }} {{ model.name }}{% if row %} #{{ row[pk] }}{% endif %}</h2>
-    {% if error %}<p style="color:#b8453d">{{ error }}</p>{% endif %}
-    {# Wave 4: switch to multipart only when a file/image field is on the
-       form, so plain admin forms keep the default urlencoded encoding
-       (and work without a Storage backend wired). #}
+{#
+  Full-page create/edit form (gaps4 #61 pass 5). Reached by a direct
+  GET /{table}/new or /{table}/{id}/edit (and the non-HTMX POST fallback) — a
+  changelist row-click opens the slide-over sheet instead.
+
+  This used to inline its OWN copy of every field widget in raw `style=` +
+  hex colors, a strictly-worse duplicate of the shared `field_editor` macro.
+  It now renders through that ONE macro (the same one the sheet uses), so both
+  surfaces share every tokenized, accessible widget and any field improvement
+  lands in both at once. Chrome + the M2M section are on umbra-dusk tokens.
+#}
+<div class="max-w-3xl mx-auto py-lg px-md">
+  <nav class="flex items-center gap-xs font-body-sm text-body-sm text-on-surface-variant mb-md">
+    <a href="{{ admin_base }}" class="hover:text-on-surface transition-colors">Admin</a>
+    <span class="text-outline">/</span>
+    <a href="{{ admin_base }}/{{ model.table }}/" class="hover:text-on-surface transition-colors">{{ model.name }}</a>
+    <span class="text-outline">/</span>
+    <span class="text-on-surface">{{ verb }}</span>
+  </nav>
+
+  <div class="bg-surface border border-outline-variant rounded-xl overflow-hidden">
+    <div class="px-lg py-md border-b border-outline-variant bg-surface-container-low">
+      <h1 class="font-h3 text-h3 text-on-surface">{{ verb }} {{ model.name }}{% if row %} <span class="text-on-surface-variant tabular-nums">#{{ row[pk] }}</span>{% endif %}</h1>
+    </div>
+
+    {% if error %}
+    <div class="mx-lg mt-lg bg-error-container/10 border border-error/20 rounded-xl px-md py-sm flex items-start gap-xs text-error text-body-sm">
+      <i data-lucide="alert-circle" class="w-4 h-4 flex-shrink-0 mt-0.5"></i>
+      <span>{{ error }}</span>
+    </div>
+    {% endif %}
+
+    {# Switch to multipart only when a file/image field is on the form, so
+       plain admin forms keep the default urlencoded encoding (and work
+       without a Storage backend wired). #}
     {% set _enc = namespace(file=false) %}
     {% for field in fields %}{% if field.kind == "file" or field.kind == "image" %}{% set _enc.file = true %}{% endif %}{% endfor %}
-    <form method="post" action="{{ action }}"{% if _enc.file %} enctype="multipart/form-data"{% endif %}>
+    <form method="post" action="{{ action }}"{% if _enc.file %} enctype="multipart/form-data"{% endif %} class="px-lg py-lg">
+      {# One shared widget macro — same as the sheet. Handles label, help
+         (between label and input), required/Optional, every field kind, and
+         the inline per-field error. Do NOT re-render field.error here. #}
       {% for field in fields %}
-        <div class="field">
-          <label for="f_{{ field.name }}">
-            {{ field.name }}{% if field.nullable %} <span class="meta">(nullable)</span>{% endif %}
-          </label>
-
-          {% if field.kind == "bool" %}
-            <div class="checkbox-row">
-              <input type="checkbox" id="f_{{ field.name }}" name="{{ field.name }}" value="true"{% if field.value == "true" %} checked{% endif %}>
-              <label for="f_{{ field.name }}">{{ field.name }}</label>
-            </div>
-
-          {% elif field.kind == "select" %}
-            <select id="f_{{ field.name }}" name="{{ field.name }}">
-              {% if field.nullable %}<option value="">—</option>{% endif %}
-              {% for opt in field.choices %}
-              <option value="{{ opt.value }}"{% if field.value == opt.value %} selected{% endif %}>{{ opt.label }}</option>
-              {% endfor %}
-            </select>
-
-          {% elif field.kind == "fk" %}
-            {% set fk_table = field.fk_table | default("") %}
-            <div class="fk-picker relative" data-field="{{ field.name }}" data-fk-table="{{ fk_table }}">
-              <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}" />
-              <div
-                data-fk-active
-                class="{% if not field.value %}hidden {% endif %}mb-xs rounded-xl border border-primary/20 bg-primary-container px-md py-sm"
-              >
-                <div class="flex items-start justify-between gap-sm">
-                  <div class="min-w-0">
-                    <p class="text-label-sm text-on-primary-container uppercase tracking-wider">Selected</p>
-                    <p class="text-body-sm font-medium text-on-primary-container truncate" data-fk-active-label>
-                      {% if field.value %}Loading selected option{% else %}Selected option{% endif %}
-                    </p>
-                    <p class="text-[11px] text-on-primary-container tabular-nums" data-fk-active-value>{% if field.value %}#{{ field.value }}{% endif %}</p>
-                  </div>
-                  {% if field.nullable %}
-                  <button type="button" data-fk-clear class="flex-shrink-0 inline-flex items-center gap-xs rounded-lg border border-primary/20 bg-surface-container px-sm py-xs text-label-sm text-on-surface-variant hover:text-on-surface transition-colors">Clear</button>
-                  {% endif %}
-                </div>
-              </div>
-              <input type="text" id="fk_text_{{ field.name }}" placeholder="{% if field.value %}Search to replace{% else %}Search{% endif %}..." autocomplete="off" value=""
-                hx-get="{{ admin_base }}/api/{{ model.table }}/{{ field.name }}/options"
-                hx-trigger="input changed delay:250ms, focus"
-                hx-target="#fk_options_{{ field.name }}"
-                hx-swap="innerHTML"
-                hx-include="this"
-                name="search"
-                style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
-              />
-              {% if field.value %}
-              <span id="fk_resolve_{{ field.name }}"
-                hx-get="{{ admin_base }}/api/{{ model.table }}/{{ field.name }}/options/resolve?ids={{ field.value }}"
-                hx-trigger="load"
-                hx-swap="none"
-                hx-on:htmx:after-request="if(window.umbral&&umbral.fkResolve)umbral.fkResolve('{{ field.name }}', event)"
-              ></span>
-              {% endif %}
-              <div id="fk_options_{{ field.name }}" class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-64 overflow-y-auto">
-              </div>
-            </div>
-
-          {% elif field.kind == "password" %}
-            <input type="password" id="f_{{ field.name }}" name="{{ field.name }}" placeholder="New password" required autocomplete="new-password" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 8px;" />
-            <input type="password" name="{{ field.name }}_confirm" placeholder="Confirm password" required autocomplete="new-password" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;" />
-
-          {% elif field.kind == "textarea" %}
-            <textarea id="f_{{ field.name }}" name="{{ field.name }}" rows="4" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">{{ field.value }}</textarea>
-
-          {% elif field.kind == "json" %}
-            <textarea id="f_{{ field.name }}" name="{{ field.name }}" rows="5" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace;">{{ field.value }}</textarea>
-
-          {% elif field.kind == "file" %}
-            {% if field.value %}
-              <p class="meta">Current: <a href="{{ field.value_url }}" target="_blank" rel="noopener">{{ field.value }}</a></p>
-            {% endif %}
-            <input type="file" id="f_{{ field.name }}" name="{{ field.name }}"{% if not field.nullable and not field.value and not field.readonly %} required{% endif %}{% if field.readonly %} disabled{% endif %} style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;" />
-
-          {% elif field.kind == "image" %}
-            {% if field.value %}
-              <div style="margin-bottom:8px">
-                <img src="{{ field.value_url }}" alt="{{ field.name }}" style="max-height:160px; width:auto; border:1px solid #ccc; border-radius:8px; display:block;" />
-                <p class="meta"><a href="{{ field.value_url }}" target="_blank" rel="noopener">View full image</a></p>
-              </div>
-            {% endif %}
-            <input type="file" id="f_{{ field.name }}" name="{{ field.name }}" accept="image/*"{% if not field.nullable and not field.value and not field.readonly %} required{% endif %}{% if field.readonly %} disabled{% endif %} style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;" />
-
-          {% elif field.kind == "multiselect" %}
-            <div class="multichoice-picker" data-field="{{ field.name }}">
-              <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}" />
-              {% set selected_csv = "," ~ field.value ~ "," %}
-              <div style="display:flex; flex-wrap:wrap; gap:4px;">
-                {% for opt in field.choices %}
-                {% set marker = "," ~ opt.value ~ "," %}
-                {% set is_selected = marker in selected_csv %}
-                <label style="display:inline-flex; align-items:center; gap:4px; padding:4px 8px; border:1px solid #ccc; border-radius:12px; cursor:pointer;{% if is_selected %} background:#e0f2fe; border-color:#0284c7;{% endif %}">
-                  <input type="checkbox" data-mc-value="{{ opt.value }}" {% if is_selected %}checked{% endif %} />
-                  <span>{{ opt.label }}</span>
-                </label>
-                {% endfor %}
-              </div>
-            </div>
-
-          {% else %}
-            <input
-              type="{% if field.kind == "number" %}number{% elif field.kind == "date" %}date{% elif field.kind == "time" %}time{% elif field.kind == "datetime-local" %}datetime-local{% else %}text{% endif %}"
-              id="f_{{ field.name }}"
-              name="{{ field.name }}"
-              value="{{ field.value }}"
-              {% if not field.nullable %}required{% endif %}
-              {% if field.readonly %}readonly{% endif %}
-              style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
-            >
-          {% endif %}
-          {% if field.error %}<p class="field-error" style="color:#b8453d; margin-top:4px; font-size:13px;">{{ field.error }}</p>{% endif %}
-        </div>
+        {{ field_editor(field, field.value, model.table, field.readonly, field.error) }}
       {% endfor %}
 
-      {# BUG-16 admin: M2M selections. One section per
-         `Model::M2M_RELATIONS` entry; renders a checkbox list of
-         every candidate child with currently-selected ones
-         pre-checked. The POST handler reads back `m2m_<field>`
-         repeated values and writes them through
+      {# M2M selections. One section per `Model::M2M_RELATIONS` entry; a
+         searchable, paged checkbox list of every candidate child with the
+         currently-selected ones pre-checked. The POST handler reads back
+         `m2m_<field>` repeated values and writes them through
          `set_junction_dynamic`. #}
       {% if m2m_fields %}
         {% for m in m2m_fields %}
-          <div class="field m2m-field-picker" data-page-size="12">
-            <label>{{ m.label }} <span class="meta">({{ m.candidates | length }} available)</span></label>
-            <div class="rounded-xl border border-outline-variant bg-surface-container-low p-sm mb-sm">
+          <div class="space-y-1.5 mb-md m2m-field-picker" data-page-size="12">
+            <div class="flex items-center gap-xs">
+              <label class="font-label-md text-label-md text-on-surface-variant select-none">{{ m.label }}</label>
+              <span class="font-label-sm text-label-sm text-outline/80">{{ m.candidates | length }} available</span>
+            </div>
+            <div class="rounded-xl border border-outline-variant bg-surface-container-low p-sm">
               <div class="flex items-center justify-between gap-sm mb-xs">
-                <span class="text-label-sm text-outline uppercase tracking-wider">Active selection</span>
-                <span class="text-label-sm text-outline" data-m2m-count>{{ m.selected_values | length }} selected</span>
+                <span class="font-label-sm text-label-sm text-on-surface-variant">Active selection</span>
+                <span class="font-label-sm text-label-sm text-on-surface-variant" data-m2m-count>{{ m.selected_values | length }} selected</span>
               </div>
               <div class="flex flex-wrap gap-xs min-h-7" data-m2m-selected></div>
-              <p class="text-body-sm text-outline py-xs" data-m2m-selected-empty>No rows selected.</p>
+              <p class="text-body-sm text-on-surface-variant py-xs" data-m2m-selected-empty>No rows selected.</p>
             </div>
             {% if not m.candidates %}
-              <p class="meta">No candidate rows in the target table.</p>
+              <p class="text-body-sm text-on-surface-variant">No candidate rows in the target table.</p>
             {% else %}
-              <input type="text" data-m2m-search placeholder="Search {{ m.label | replace('_', ' ') | title }}" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 8px;" />
-              <div class="m2m-checkbox-list" style="max-height: 220px; overflow-y: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px;">
+              <input type="text" data-m2m-search placeholder="Search {{ m.label | replace('_', ' ') | title }}"
+                     class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50" />
+              <div class="m2m-checkbox-list max-h-56 overflow-y-auto border border-outline-variant rounded-xl p-sm">
                 {% for opt in m.candidates %}
                   {% set is_selected = opt.value in m.selected_values %}
-                  <label data-m2m-option data-label="{{ opt.label }}" style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
-                    <input type="checkbox"
-                           name="m2m_{{ m.name }}"
-                           value="{{ opt.value }}"
-                           {% if is_selected %}checked{% endif %} />
+                  <label data-m2m-option data-label="{{ opt.label }}" class="flex items-center gap-sm py-xs cursor-pointer text-on-surface text-body-md">
+                    <input type="checkbox" name="m2m_{{ m.name }}" value="{{ opt.value }}" {% if is_selected %}checked{% endif %}
+                           class="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary" />
                     <span>{{ opt.label }}</span>
                   </label>
                 {% endfor %}
-                <p class="hidden meta" data-m2m-empty>No matching rows.</p>
+                <p class="hidden text-body-sm text-on-surface-variant" data-m2m-empty>No matching rows.</p>
               </div>
               <div class="flex items-center justify-between gap-sm mt-sm">
-                <button type="button" data-m2m-prev class="btn">Previous</button>
-                <span class="text-label-sm text-outline tabular-nums" data-m2m-page>Page 1</span>
-                <button type="button" data-m2m-next class="btn">Next</button>
+                <button type="button" data-m2m-prev class="px-sm py-xs rounded-lg border border-outline-variant text-body-sm text-on-surface-variant hover:text-on-surface transition-colors">Previous</button>
+                <span class="font-label-sm text-label-sm text-on-surface-variant tabular-nums" data-m2m-page>Page 1</span>
+                <button type="button" data-m2m-next class="px-sm py-xs rounded-lg border border-outline-variant text-body-sm text-on-surface-variant hover:text-on-surface transition-colors">Next</button>
               </div>
             {% endif %}
           </div>
         {% endfor %}
       {% endif %}
 
-      {# Inlines: edit reverse-FK children right on the parent change
-         form. The formset markup is the ONE shared `inline_formset`
-         macro (also used by the slide-over sheet) so the field names
-         the `crud::create` / `crud::update` handler parses are
-         byte-identical in both surfaces. #}
+      {# Inlines: edit reverse-FK children right on the parent change form. The
+         formset markup is the ONE shared `inline_formset` macro (also used by
+         the slide-over sheet) so the field names `crud::create` /
+         `crud::update` parses are byte-identical in both surfaces. #}
       {{ inline_formset(inlines) }}
 
-      <div class="actions">
-        {# Save is gated on the relevant verb: a new-row form needs
-           can_add, an existing-row form needs can_change. The handler
-           re-validates either way; this hides the affordance. #}
+      <div class="flex items-center gap-sm pt-md mt-lg border-t border-outline-variant">
+        {# Save is gated on the relevant verb: a new-row form needs can_add, an
+           existing-row form needs can_change. The handler re-validates either
+           way; this hides the affordance. #}
         {% set _save_ok = (perms is undefined)
           or (verb == "Create" and perms.can_add)
           or (verb != "Create" and perms.can_change) %}
         {% if _save_ok %}
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="inline-flex items-center gap-xs px-md py-sm rounded-lg bg-primary text-on-primary font-body-md hover:opacity-90 transition-opacity">Save</button>
         {% endif %}
-        <a class="btn" href="{{ admin_base }}/{{ model.table }}/">Cancel</a>
+        <a href="{{ admin_base }}/{{ model.table }}/" class="px-md py-sm rounded-lg text-on-surface-variant font-body-md hover:text-on-surface transition-colors">Cancel</a>
       </div>
     </form>
   </div>
+</div>
 {% endblock %}
