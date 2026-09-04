@@ -90,6 +90,77 @@ impl Plugin for EmailPlugin {
 }
 
 // =========================================================================
+// Custom backend seam (gaps4 #91)
+// =========================================================================
+
+/// A pluggable email transport. Implement this to send through your OWN
+/// client — a SaaS API (Resend, Postmark, SES), an in-house relay, or a test
+/// spy — instead of the built-in Console / SMTP / API backends, without
+/// forking the plugin.
+///
+/// Register it with [`EmailPlugin::with_backend`]; once registered it takes
+/// over [`send`] for the whole app. `deliver` receives a fully-resolved
+/// [`EmailMessage`] — its `from` is filled in and every header value has
+/// already been validated against SMTP/CRLF injection — so an implementer
+/// just builds and sends its provider's request.
+///
+/// ```ignore
+/// use std::sync::Arc;
+/// use umbral_email::{EmailBackend, EmailError, EmailMessage, EmailPlugin};
+///
+/// struct ResendClient { key: String }
+///
+/// #[async_trait::async_trait]
+/// impl EmailBackend for ResendClient {
+///     async fn deliver(&self, message: &EmailMessage) -> Result<(), EmailError> {
+///         // POST message.to / subject / html_body to your provider here,
+///         // mapping any failure to EmailError::Backend(...).
+///         Ok(())
+///     }
+/// }
+///
+/// App::builder().plugin(EmailPlugin::with_backend(ResendClient { key }));
+/// ```
+#[async_trait::async_trait]
+pub trait EmailBackend: Send + Sync + 'static {
+    /// Deliver one fully-resolved message. Return `Ok(())` once it has been
+    /// handed to your transport; map any failure to [`EmailError::Backend`]
+    /// (or another `EmailError` variant).
+    async fn deliver(&self, message: &EmailMessage) -> Result<(), EmailError>;
+}
+
+/// Process-wide custom backend. Set-once, read ambiently by [`send`] — the
+/// same intentional-global shape as the resolved [`EmailConfig`] below.
+static CUSTOM_BACKEND: OnceLock<std::sync::Arc<dyn EmailBackend>> = OnceLock::new();
+
+/// Register a process-wide custom [`EmailBackend`]. Prefer
+/// [`EmailPlugin::with_backend`], which calls this for you. Registration is
+/// set-once: a second call keeps the first backend and logs a warning.
+pub fn register_backend(backend: std::sync::Arc<dyn EmailBackend>) {
+    if CUSTOM_BACKEND.set(backend).is_err() {
+        tracing::warn!(
+            "umbral-email: a custom EmailBackend is already registered; ignoring the later one"
+        );
+    }
+}
+
+impl EmailPlugin {
+    /// Install the email plugin with a custom transport (see [`EmailBackend`]).
+    /// The returned plugin registers as normal; your backend then takes over
+    /// [`send`] for the whole app, bypassing the settings-driven
+    /// Console / SMTP / API backends. A custom sender is a struct + one trait
+    /// impl + this one call — no fork.
+    ///
+    /// ```ignore
+    /// App::builder().plugin(EmailPlugin::with_backend(MyResendClient::new(key)));
+    /// ```
+    pub fn with_backend<B: EmailBackend>(backend: B) -> Self {
+        register_backend(std::sync::Arc::new(backend));
+        EmailPlugin
+    }
+}
+
+// =========================================================================
 // Message
 // =========================================================================
 
@@ -301,6 +372,11 @@ pub enum EmailError {
     /// set `UMBRAL_EMAIL_BACKEND=console` explicitly if you understand
     /// the risk and are intentionally forcing console mode.
     ConsoleBackendInProduction,
+    /// A user-supplied [`EmailBackend`] (registered via
+    /// [`EmailPlugin::with_backend`]) failed to deliver. Carries the
+    /// implementer's own error message. Use this from a custom backend to
+    /// report a transport / provider failure.
+    Backend(String),
 }
 
 impl std::fmt::Display for EmailError {
@@ -354,6 +430,7 @@ impl std::fmt::Display for EmailError {
                  leaks secrets to log aggregators. Configure `email_smtp_host` for \
                  production, or set `UMBRAL_EMAIL_BACKEND=console` to opt in explicitly.",
             ),
+            EmailError::Backend(e) => write!(f, "umbral-email: backend: {e}"),
         }
     }
 }
@@ -590,6 +667,27 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
     } else {
         return Err(EmailError::MissingFrom);
     };
+
+    // A user-supplied backend (EmailPlugin::with_backend) takes over delivery
+    // for the whole app, bypassing the settings-driven Console/SMTP/API
+    // dispatch below. It receives the high-level EmailMessage (its `from`
+    // resolved) rather than a composed MIME blob, so it can build its own
+    // provider request. We still run the header-injection guard first — a
+    // custom transport must never be handed unvalidated header values
+    // (gaps4 #91).
+    if let Some(backend) = CUSTOM_BACKEND.get() {
+        validate_header_value("subject", &message.subject)?;
+        validate_header_value("from", &from)?;
+        if let Some(reply_to) = &message.reply_to {
+            validate_header_value("reply_to", reply_to)?;
+        }
+        for recipient in &message.to {
+            validate_header_value("to", recipient)?;
+        }
+        let mut resolved = message.clone();
+        resolved.from = from;
+        return backend.deliver(&resolved).await;
+    }
 
     // The API backend builds its own JSON body from the EmailMessage —
     // it never goes through lettre's MIME composition. Validate the

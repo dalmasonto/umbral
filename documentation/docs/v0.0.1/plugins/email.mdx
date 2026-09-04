@@ -51,7 +51,7 @@ models.
 | `UMBRAL_EMAIL_BACKEND=api` | Forces the HTTP API backend (still needs `email_api_provider` + `email_api_key`). |
 | `UMBRAL_EMAIL_BACKEND=console` | Forces the console backend even when SMTP / API keys exist. Useful in CI / tests. |
 
-**Selection order:** `UMBRAL_EMAIL_BACKEND=console` wins above everything (the safety valve). Otherwise: API (env-forced, or both `email_api_provider` + `email_api_key` set) → SMTP (`email_smtp_host` set) → console.
+**Selection order:** a custom backend registered with [`EmailPlugin::with_backend`](#bring-your-own-sender) overrides all of this. Otherwise `UMBRAL_EMAIL_BACKEND=console` wins (the safety valve), then: API (env-forced, or both `email_api_provider` + `email_api_key` set) → SMTP (`email_smtp_host` set) → console.
 
 SMTP settings (all read from `UMBRAL_<KEY>` env vars or `umbral.toml`):
 
@@ -116,6 +116,39 @@ Both authenticate with `Authorization: Bearer <email_api_key>`. The `email_defau
 
 <Callout type="warning">
 Without the `api` feature, `umbral-email` compiles exactly as before (SMTP + console only) and pulls in no HTTP client. Selecting the API backend without the feature enabled returns an error at send time pointing you at `--features api` rather than failing to compile.
+</Callout>
+
+## Bring your own sender
+
+The built-in Console / SMTP / API backends cover most apps, but you can send through **your own transport** — a provider's SDK, an in-house relay, a queue, or a test spy — without forking the plugin. Implement the `EmailBackend` trait and register it with `EmailPlugin::with_backend(...)`. Once registered, your backend takes over `send()` for the whole app.
+
+```rust
+use std::sync::Arc;
+use umbral_email::{EmailBackend, EmailError, EmailMessage, EmailPlugin};
+
+struct ResendClient { key: String }
+
+#[async_trait::async_trait]
+impl EmailBackend for ResendClient {
+    async fn deliver(&self, message: &EmailMessage) -> Result<(), EmailError> {
+        // message.from is already resolved and every header value has been
+        // validated against CRLF/header injection. Build and POST your
+        // provider's request here; map any failure to EmailError::Backend(..).
+        // reqwest::Client::new().post("https://api.resend.com/emails")...
+        Ok(())
+    }
+}
+
+App::builder()
+    .plugin(EmailPlugin::with_backend(ResendClient { key: api_key }))
+    // ...
+    .build()?;
+```
+
+That's the whole contract: a struct, one `deliver` method, one builder call. `deliver` receives the high-level `EmailMessage` (its `from` filled in), so you compose whatever shape your provider wants.
+
+<Callout type="info">
+Your backend fully replaces the settings-driven dispatch — a bare app still gets Console in dev / SMTP in prod with zero code, but once you register a custom backend it is used everywhere `send()` is called. The header-injection guard still runs first, so a custom transport is never handed an unvalidated subject or recipient. Report failures with `EmailError::Backend(String)`.
 </Callout>
 
 ## Building messages

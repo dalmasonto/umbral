@@ -22,15 +22,15 @@ api = ["dep:reqwest"]
 # email/auth pairing — umbral-auth does NOT gain a reciprocal dep on
 # umbral-email (see docs/decisions/2026-06-28-auth-full-surface.md and the
 # note on umbral-auth's Cargo.toml).
-auth = ["dep:umbral-auth", "dep:async-trait"]
+auth = ["dep:umbral-auth"]
 
 [dependencies]
 umbral = { path = "../../crates/umbral", version = "0.0.12" }
 # Optional adapter target for `auth_mailer()`. See the `auth` feature above.
 umbral-auth = { path = "../umbral-auth", version = "0.0.12", optional = true, default-features = false }
-# Only needed to implement `umbral_auth::AuthMailer` (an async-trait trait)
-# for the `auth` feature's adapter.
-async-trait = { version = "0.1", optional = true }
+# Powers the public `EmailBackend` trait (custom senders) and the `auth`
+# feature's `umbral_auth::AuthMailer` adapter.
+async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
