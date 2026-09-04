@@ -234,21 +234,7 @@ Numbers are identifiers within this file. Dedup note: claude C2 == codex #21 (sa
 
 > Source project: `/home/dalmas/E/projects/portifoli/backend_v2` (+ its Next.js SPA `frontend_v2`)
 
-93. [ ] **`umbral-oauth` end-to-end social login has too many silent, non-obvious traps; the SPA token handoff has to be reinvented in every app.** Wiring Google+GitHub for a separate-origin Next.js SPA took many iterations because each failure was silent or cryptic. The traps, in the order they bit:
-
-    1. **Missing mask keyring → the callback 500s with a generic message.** The OAuth callback writes the provider tokens into a `Masked<T>` column (`SocialAccount`), which is the FIRST masked write most apps ever do. With no keyring set it fails: `serialize: no mask keyring configured (set UMBRAL_MASK_PUBLIC_KEY ...)`, surfaced to the user as the generic "something went wrong / error logged server-side" 500. Nothing at boot warns that OAuth is enabled but no mask keyring exists. **Ask:** a boot-time system check — "OAuthPlugin registered providers but no mask keyring; social login will 500 on callback (set UMBRAL_MASK_PUBLIC_KEY / run maskkeygen)". Bonus: mention maskkeygen in the OAuth setup docs.
-
-    2. **The bearer token is only minted when the login was started with an allowlisted `?next`.** `GET /oauth/{p}/login` with NO `?next` → the callback redirects to `login_redirect` with **no token** (it only mints+appends `#token=` when `flow.return_to.is_some()`). A separate-origin SPA that just links to `/oauth/{p}/login` gets bounced back empty and looks "logged in on the backend but not the SPA." Non-obvious that `?next` is mandatory for the SPA/token flow. **Ask:** document this loudly, and/or a per-provider "always mint a token for login flows" mode, or a warning when a login flow completes with no `return_to` in an SPA-configured app.
-
-    3. **`allow_return` is builder-only (`.allow_return("https://app")`), not settings/env-driven.** Changing the SPA origin (dev→prod) needs a recompile. Every other deploy knob (`oauth_redirect_base`, `oauth_login_redirect`, client id/secret) is env-driven; this one isn't. **Ask:** read an `oauth_allow_return` / `UMBRAL_OAUTH_ALLOW_RETURN` (comma-separated) setting like the rest, so the return allowlist is env-configurable.
-
-    4. **The token→session handoff for an SPA is undocumented and left to the app.** umbral hands the token back in the URL **fragment** (`#token=<bearer>&token_type=Bearer`) at the return URL; a separate-origin SPA must (a) read the fragment client-side, (b) POST it to its own BFF, (c) validate it (`GET /api/auth/me` with the bearer), (d) set its own httpOnly cookie. There's no helper or reference for this; the generated frontend even had a `// how the token gets back into the cookie is not yet wired up` TODO. **Ask:** ship a documented recipe (and ideally a tiny helper / scaffold route) for the SPA handoff.
-
-    **Two distinct modes to document explicitly (the split is the crux):**
-    - **umbral as fullstack (same-origin app + API):** simplest path — set `oauth_redirect_base`, `oauth_login_redirect`, client id/secret, **and a mask keyring**; the callback's `login_user_id(...)` already sets the session cookie on the same origin, so no `?next`, no fragment token, no BFF handoff needed. Just link to `/oauth/{p}/login` and land on `login_redirect`. Document this as the happy path.
-    - **umbral API + separate-origin SPA (Next.js, etc.):** the token-mode flow — allowlist the SPA origin (`allow_return`), SPA starts login with `?next=<spa-origin>/oauth-callback`, callback appends `#token`, SPA reads the fragment and exchanges it for its own session cookie via a BFF route. Document the full sequence + the mask-keyring + env requirements as one checklist.
-
-    Downstream mitigation in backend_v2/frontend_v2: set the mask keyring, made `allow_return` env-driven (`OAUTH_ALLOW_RETURN`), frontend passes `?next=.../auth/oauth-callback`, and added `/auth/oauth-callback` + `/api/auth/oauth-session` (validate `/api/auth/me`, set the httpOnly cookie). Works, but every umbral+SPA app will re-derive this.
+93. [x] `umbral-oauth` SPA social-login traps (silent mask-keyring 500, non-env allowlist, invisible token-mode `?next` requirement, undocumented SPA handoff) — archived (boot mask-keyring check + `mask_keyring_configured()`, env-driven `oauth_allow_return`, token-mode boot/runtime warnings, two-modes + BFF-cookie docs)
 
 ---
 

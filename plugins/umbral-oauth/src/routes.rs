@@ -333,6 +333,18 @@ async fn oauth_callback(
             }
             Err(e) => return server_error(&format!("failed to mint login token: {e}")),
         }
+    } else if flow.connect_user.is_none() && !plugin.allowed_returns.is_empty() {
+        // gaps4 #93 trap 2: token mode is configured (an SPA return allowlist
+        // exists) but this login started with no allowlisted `?next`, so no
+        // bearer token is minted — only a same-origin session cookie is set.
+        // A separate-origin SPA that linked straight to `/oauth/{p}/login`
+        // lands back empty and looks "logged in on the backend, not the SPA".
+        // Warn so the missing `?next` is diagnosable instead of silent.
+        tracing::warn!(
+            "oauth: login for provider `{provider}` completed with no allowlisted `?next` while \
+             token mode is enabled — no bearer token was minted, only a same-origin session. A \
+             separate-origin SPA must start login as `/oauth/{provider}/login?next=<allowlisted>`."
+        );
     }
 
     let mut response = Redirect::to(&target).into_response();

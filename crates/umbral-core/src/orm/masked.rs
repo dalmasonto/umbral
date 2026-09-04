@@ -235,6 +235,24 @@ fn keyring() -> Result<Option<&'static MaskKeyring>, &'static MaskError> {
         .map_err(|e| e)
 }
 
+/// Boot-time probe: is a mask keyring available for `Masked<T>` seal/reveal?
+///
+/// Reports `true` when the ambient keyring has already been set explicitly
+/// (via [`set_mask_keyring`]) or previously resolved to a usable key, OR when
+/// `UMBRAL_MASK_PUBLIC_KEY` is present in the environment (the common case).
+/// Crucially it does NOT force the lazy `KEYRING` `OnceLock` to resolve when it
+/// hasn't yet — so a later [`set_mask_keyring`] can still win — which makes it
+/// safe to call from a plugin's `on_ready` startup check. A missing keyring is
+/// what makes the first `Masked<T>` write (e.g. an OAuth callback sealing
+/// provider tokens) fail with `MaskError::NoKeyring`, so a plugin that writes a
+/// masked column can warn about it at boot instead of 500ing at runtime.
+pub fn mask_keyring_configured() -> bool {
+    if let Some(resolved) = KEYRING.get() {
+        return matches!(resolved, Ok(Some(_)));
+    }
+    std::env::var("UMBRAL_MASK_PUBLIC_KEY").is_ok()
+}
+
 /// Seal plaintext with the ambient keyring. `pub(crate)` so the write path
 /// (`orm::write`) can seal a masked column supplied as a raw JSON/form string
 /// on the dynamic REST/admin write paths, not just the typed `Serialize` path.

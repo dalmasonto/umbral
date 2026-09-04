@@ -182,7 +182,7 @@ impl OAuthPlugin {
                 }
             }
         };
-        Self::new(base)
+        let mut plugin = Self::new(base)
             .provider_opt(
                 pair("oauth_google_client_id", "oauth_google_client_secret")
                     .map(|(id, s)| crate::providers::GoogleProvider::new(id, s)),
@@ -190,7 +190,20 @@ impl OAuthPlugin {
             .provider_opt(
                 pair("oauth_github_client_id", "oauth_github_client_secret")
                     .map(|(id, s)| crate::providers::GitHubProvider::new(id, s)),
-            )
+            );
+        // gaps4 #93: the SPA return-URL allowlist is env-driven like every
+        // other deploy knob (redirect base, client id/secret), so moving the
+        // SPA origin dev→prod is a config change, not a recompile. Reads
+        // `oauth_allow_return` (i.e. `UMBRAL_OAUTH_ALLOW_RETURN`), a
+        // comma-separated list of allowed return-URL prefixes. Any prefixes
+        // added later via the builder [`allow_return`](Self::allow_return) are
+        // appended, not replaced.
+        if let Some(csv) = settings.extra_str("oauth_allow_return") {
+            for prefix in csv.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                plugin = plugin.allow_return(prefix);
+            }
+        }
+        plugin
     }
 
     /// The keys of the registered providers, in registration order —
@@ -224,6 +237,14 @@ impl OAuthPlugin {
     pub fn allow_return(mut self, url_prefix: impl Into<String>) -> Self {
         self.allowed_returns.push(url_prefix.into());
         self
+    }
+
+    /// The configured SPA return-URL allowlist prefixes, in the order they
+    /// were added (env-driven ones from [`from_settings`](Self::from_settings)
+    /// first, then any builder [`allow_return`](Self::allow_return) calls). A
+    /// diagnostic surface — a non-empty list means token mode is enabled.
+    pub fn allowed_returns(&self) -> &[String] {
+        &self.allowed_returns
     }
 
     /// Whether `next` is a permitted SPA return URL (prefix match
@@ -355,6 +376,41 @@ impl Plugin for OAuthPlugin {
             );
         } else {
             tracing::info!("oauth: registered providers: {keys:?}");
+
+            // gaps4 #93 trap 1: the OAuth callback seals the provider's access/
+            // refresh tokens into a `Masked<T>` column on `SocialAccount` — for
+            // most apps the FIRST masked write they ever do. With no mask
+            // keyring set that write fails with `MaskError::NoKeyring`, which
+            // the callback surfaces as a generic 500 with nothing pointing at
+            // the cause. A provider is registered, so social login is live;
+            // warn loudly at boot instead of at the first user's sign-in.
+            if !umbral::orm::mask_keyring_configured() {
+                tracing::warn!(
+                    "oauth: providers are registered but no mask keyring is configured \
+                     (UMBRAL_MASK_PUBLIC_KEY). The OAuth callback seals provider tokens into \
+                     a Masked column, so social login will 500 on the callback until a keyring \
+                     is set. Run `umbral maskkeygen` and set UMBRAL_MASK_PUBLIC_KEY \
+                     (+ UMBRAL_MASK_PRIVATE_KEY to read the tokens back)."
+                );
+            }
+
+            // gaps4 #93 trap 2/3: in token mode (an allowlist is set, so a
+            // separate-origin SPA is expected), the callback only mints a
+            // bearer token when the login was started with an allowlisted
+            // `?next=`. Make the split visible at boot: a login WITHOUT `?next`
+            // just establishes a same-origin session and returns no token, so
+            // an SPA that links straight to `/oauth/{p}/login` gets bounced
+            // back empty. Documented at gaps4 #93; the SPA handoff recipe lives
+            // in the auth/oauth docs.
+            if !self.allowed_returns.is_empty() {
+                tracing::info!(
+                    "oauth: token mode enabled ({} allowed return prefix(es)). A separate-origin \
+                     SPA must start login as `GET /oauth/{{provider}}/login?next=<allowlisted-url>` \
+                     — the callback then appends `#token=<bearer>` to that URL. A login with no \
+                     `?next` only sets a same-origin session cookie and returns NO token.",
+                    self.allowed_returns.len()
+                );
+            }
         }
         let _ = REGISTERED_PROVIDERS.set(keys);
         Ok(())

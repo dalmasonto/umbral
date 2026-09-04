@@ -44,6 +44,10 @@ OAuthPlugin::new("https://example.com")
 `SessionsPlugin` is **required**: the flow stores its CSRF `state` token in the session. Without it, every callback fails the state check.
 </Callout>
 
+<Callout type="danger">
+**A mask keyring is required.** The callback encrypts the provider's access/refresh tokens into [`Masked`](../orm/masked) columns on `SocialAccount` — for most apps this is the **first masked write** they ever do. With no keyring configured that write fails and the callback returns a generic **500**. Generate one with `umbral maskkeygen` and set `UMBRAL_MASK_PUBLIC_KEY` (add `UMBRAL_MASK_PRIVATE_KEY` too if you later `.reveal()` the tokens to call the provider's API). When a provider is registered but no keyring is set, the plugin **warns at boot** — `oauth: providers are registered but no mask keyring is configured …` — so you catch it before the first user hits sign-in, not after.
+</Callout>
+
 ## Create the table
 
 `SocialAccount` is a model like any other, so generate and apply its migration:
@@ -142,19 +146,44 @@ A login (or connect) entry point is just a link; `GET` routes need no form:
 If `SecurityPlugin` is mounted (it enforces CSRF on every `POST`) and you omit `{{ csrf_input }}`, the request fails with "CSRF verification failed". This applies to *any* POST form in your app: login, signup, logout, disconnect.
 </Callout>
 
+## Two deployment modes
+
+There are exactly two ways to run social login, and picking the wrong path is the biggest source of confusion. Decide up front which one you're building:
+
+<Tabs>
+<Tab title="Fullstack (same origin)">
+umbral serves both the app **and** the API on one origin. This is the happy path: the callback's `login_user_id(...)` sets the session cookie on that same origin, so there's **no `?next`, no fragment token, no BFF handoff**.
+
+Set `oauth_redirect_base`, `oauth_login_redirect`, the client id/secret, **and a mask keyring** — then just link to `/oauth/{provider}/login` and land on `login_redirect`.
+</Tab>
+<Tab title="API + separate-origin SPA">
+umbral is the API; a Next/Vite SPA on a **different origin** owns the UI. Here you use **token mode**: allowlist the SPA origin, the SPA starts login with `?next=<spa-callback>`, the callback appends `#token=<bearer>` to that URL, and the SPA exchanges it for its own session. This is the flow documented below — every step matters, and skipping one fails silently.
+</Tab>
+</Tabs>
+
 ## SPA login (bearer token)
 
-The flow above ends in a cookie session, perfect for a server-rendered app. A single-page app on a **different origin** (Vite, Next, a mobile client) can use the *same* routes and get back a **bearer token** instead, so it can call the API with `Authorization: Bearer`.
+The fullstack flow above ends in a cookie session, perfect for a server-rendered app. A single-page app on a **different origin** (Vite, Next, a mobile client) can use the *same* routes and get back a **bearer token** instead, so it can call the API with `Authorization: Bearer`.
 
 <Steps>
 <Step title="Allowlist the SPA's return URL">
 Add the URL your SPA handles the callback on. Only URLs starting with an allowlisted prefix are honored; this is the open-redirect / token-theft defense.
 
-```rust
-let oauth = OAuthPlugin::new("https://api.example.com")
-    .allow_return("https://app.example.com/auth/callback")
-    .provider(GoogleProvider::from_env().unwrap());
+The allowlist is **env-driven** like every other OAuth deploy knob — set `oauth_allow_return` (i.e. `UMBRAL_OAUTH_ALLOW_RETURN`), a comma-separated list of prefixes, so moving the SPA origin dev→prod is a config change, not a recompile. `from_settings` reads it automatically:
+
+```bash
+# .env
+UMBRAL_OAUTH_ALLOW_RETURN=https://app.example.com/auth/callback,http://localhost:5173/auth/callback
 ```
+
+The builder form still works (and appends onto any env-driven prefixes) when you want it in code:
+
+```rust
+let oauth = OAuthPlugin::from_settings(&settings)
+    .allow_return("https://app.example.com/auth/callback");
+```
+
+When token mode is enabled (a non-empty allowlist), the plugin logs an info line at boot spelling out the `?next=` requirement.
 </Step>
 <Step title="Send the browser to login with ?next=">
 From the SPA, do a full-page navigation (not `fetch`; OAuth uses redirects):
@@ -163,6 +192,10 @@ From the SPA, do a full-page navigation (not `fetch`; OAuth uses redirects):
 window.location = "https://api.example.com/oauth/google/login"
   + "?next=https://app.example.com/auth/callback";
 ```
+
+<Callout type="warning">
+The `?next=` is **mandatory** for the token flow. A login started with **no** `?next` only establishes a same-origin session and mints **no token** — a separate-origin SPA that links straight to `/oauth/{provider}/login` lands back empty and looks "logged in on the backend but not the SPA." When token mode is on, a login that completes with no allowlisted `?next` is logged as a warning so the missing parameter is diagnosable.
+</Callout>
 </Step>
 <Step title="Read the token from the URL fragment">
 After consent, the callback redirects to `…/auth/callback#token=umbral_…&token_type=Bearer`. The token rides in the URL **fragment**, which browsers never send to a server and proxies never log.
@@ -187,6 +220,10 @@ fetch("https://api.example.com/api/post/", {
 umbral-rest's bearer authentication resolves it: the token is a real `AuthToken` row, so it works everywhere bearer auth does and can be revoked.
 </Step>
 </Steps>
+
+<Callout type="tip">
+**Prefer an httpOnly cookie over `localStorage`?** For a Next.js-style app with a backend-for-frontend (BFF), don't keep the bearer in `localStorage` (readable by any script). Instead, in your SPA callback route read the fragment token, `POST` it to your own BFF endpoint, have the BFF validate it (`GET /api/auth/me` with `Authorization: Bearer <token>`), and on success set an **httpOnly** session cookie the browser can't read. The token never touches client-readable storage; the fragment is scrubbed immediately after the handoff. The four moving parts — read fragment → POST to BFF → validate via `/api/auth/me` → set httpOnly cookie — are the whole recipe.
+</Callout>
 
 <Callout type="warning">
 A `?next=` that doesn't match an `allow_return` prefix is rejected with **400**, so an attacker can't point the flow at their own origin to harvest a freshly minted token. With **no** `allow_return` configured the allowlist is empty, so **any** present `?next=` matches nothing and is likewise rejected with **400** — token mode is off by default, and a plain login (no `?next=`) keeps its server-rendered session behavior (safe by default). Token mode is login-only: a connect flow never mints a token (the user already holds one).

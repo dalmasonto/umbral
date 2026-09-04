@@ -14,6 +14,14 @@ under `crates/*` and `plugins/*`.
 
 ## [Unreleased]
 
+### Added
+
+- **`umbral-oauth` SPA-login ergonomics + boot-time safety checks (gaps4 #93).** Social login for a separate-origin SPA had several silent traps; this closes them:
+  - **Mask-keyring boot check.** The OAuth callback seals provider tokens into a `Masked` column, so a missing keyring made it 500 with a generic message. When a provider is registered but no mask keyring is configured, the plugin now **warns at boot** (pointing at `umbral maskkeygen` / `UMBRAL_MASK_PUBLIC_KEY`) instead of failing at the first sign-in. New public probe `umbral::orm::mask_keyring_configured()`.
+  - **Env-driven return allowlist.** `OAuthPlugin::from_settings` now reads `oauth_allow_return` (`UMBRAL_OAUTH_ALLOW_RETURN`, comma-separated), so the SPA return-URL allowlist is a config change like every other OAuth knob — no recompile to move the SPA origin dev→prod. Builder `.allow_return(...)` still works and appends. New read accessor `OAuthPlugin::allowed_returns()`.
+  - **Token-mode visibility.** With token mode enabled, the plugin logs the `?next=` requirement at boot, and a login that completes with no allowlisted `?next` (so no bearer token is minted) is logged as a warning — the SPA "logged in on the backend but not the SPA" trap is now diagnosable.
+  - Docs (`auth/oauth`) gained an explicit two-modes split (fullstack same-origin vs API + separate-origin SPA), the mask-keyring requirement callout, the env-driven allowlist, and a BFF httpOnly-cookie handoff recipe.
+
 ### Fixed
 
 - **Admin list search no longer pollutes browser history (gaps4 #96).** Search-as-you-type in the admin table editor pushed one history entry per keystroke, so the back button had to be pressed once per character to escape a search. The server now sends `HX-Replace-Url` (not `HX-Push-Url`) when a `/rows` request is triggered by the live search input, so a keystroke replaces the current history entry; discrete navigation — pagination, page-size, filter-chip removal — still pushes a real entry. (The 300ms input debounce and partial-tbody swap that keep typing smooth were already in place.)

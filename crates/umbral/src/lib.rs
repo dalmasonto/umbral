@@ -873,9 +873,9 @@ pub mod orm {
         ReverseRelations, ReverseSet, Search, SearchHit, Searchable, Slug, SqlType,
         TryForEachError, TsVector, Url, ValidatorError, build_dynamic_relation, column,
         concat_field_specs, decode_to_string, escape_like_literal, import_table_rows,
-        load_junction_selection, never_matches, pk_key, set_junction_dynamic,
-        set_junction_dynamic_in_tx, set_mask_keyring, typed_cmp_condition, typed_eq_condition,
-        typed_eq_expr, typed_json_value, validate_text_format, write,
+        load_junction_selection, mask_keyring_configured, never_matches, pk_key,
+        set_junction_dynamic, set_junction_dynamic_in_tx, set_mask_keyring, typed_cmp_condition,
+        typed_eq_condition, typed_eq_expr, typed_json_value, validate_text_format, write,
     };
 
     /// PostGIS spatial value type (`postgis` feature). `umbral::orm::gis::Geometry`
