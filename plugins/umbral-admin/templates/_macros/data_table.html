@@ -332,7 +332,7 @@
           {# Data column headers #}
           {% for col in columns %}
           <th
-            class="px-md py-md font-label-sm text-label-sm text-on-surface-variant {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col"
+            class="relative px-md py-md font-label-sm text-label-sm text-on-surface-variant {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col"
             data-col="{{ col.name }}"
           >
             {#
@@ -360,6 +360,10 @@
                 <i data-lucide="chevrons-up-down" class="w-3 h-3 opacity-30 sort-icon"></i>
               {% endif %}
             </button>
+            {# Column-resize handle (gaps4 #61 pass 7). Drag the right edge to
+               resize; the width persists per-table in localStorage. mousedown
+               stops the sort click. #}
+            <span class="dt-resize" data-col="{{ col.name }}" onmousedown="umbral._startColResize(event, this)" title="Drag to resize column"></span>
           </th>
           {% endfor %}
 
@@ -681,6 +685,68 @@
     }
   });
 
+  // ---- Column resize (persisted per table in localStorage) ----
+  var COL_W_KEY = 'umbral-col-w-' + TABLE_ID;
+
+  // Pin a column to `px` by setting min/max-width on every cell carrying its
+  // data-col (header + body). Under the table's auto layout this fixes the
+  // width WITHOUT table-layout:fixed, so column-hide (display:none), density,
+  // and the sticky Actions column keep working; the CSS clips overflow on any
+  // cell that has a max-width so a long value can't fight the width.
+  function applyColWidth(col, px) {
+    var w = px + 'px';
+    document.querySelectorAll('#dt-table .dt-col[data-col="' + col + '"]').forEach(function(el) {
+      el.style.minWidth = w;
+      el.style.maxWidth = w;
+      el.style.width = w;
+    });
+  }
+
+  function loadColWidths() {
+    var raw;
+    try { raw = localStorage.getItem(COL_W_KEY); } catch (e) { return {}; }
+    if (!raw) return {};
+    try { return JSON.parse(raw) || {}; } catch (e) { return {}; }
+  }
+
+  function saveColWidth(col, px) {
+    var widths = loadColWidths();
+    widths[col] = px;
+    try { localStorage.setItem(COL_W_KEY, JSON.stringify(widths)); } catch (e) {}
+  }
+
+  // Reapply saved widths — on load AND after every HTMX rows swap (the new
+  // tds come back without the inline width, so the header alone wouldn't hold
+  // the column under auto layout).
+  umbral._restoreColWidths = function() {
+    var widths = loadColWidths();
+    Object.keys(widths).forEach(function(col) { applyColWidth(col, widths[col]); });
+  };
+  umbral._restoreColWidths();
+
+  umbral._startColResize = function(ev, handle) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    var col = handle.getAttribute('data-col');
+    var th = handle.closest('th');
+    if (!th) return;
+    var startX = ev.clientX;
+    var startW = th.offsetWidth;
+    var table = document.getElementById('dt-table');
+    if (table) table.classList.add('dt-col-resizing');
+    function onMove(e) {
+      applyColWidth(col, Math.max(60, startW + (e.clientX - startX)));
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (table) table.classList.remove('dt-col-resizing');
+      saveColWidth(col, Math.max(60, th.offsetWidth));
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
   // ---- Row selection + bulk toolbar ---
   umbral.selectAllRows = function(checked) {
     document.querySelectorAll('.row-cb').forEach(function(cb) {
@@ -932,6 +998,9 @@
           JSON.parse(raw2).forEach(function(col) { applyColVisibility(col, false); });
         } catch(e2) {}
       }
+      // Re-apply resized column widths: the new tds come back without the
+      // inline width, so re-pin them from localStorage after every swap.
+      if (umbral._restoreColWidths) umbral._restoreColWidths();
       // Sync the persistent hidden inputs from the current URL so that the
       // page-size <select> (which uses hx-include on these inputs) always
       // carries the latest sort/filter/search state — even after a sort swap

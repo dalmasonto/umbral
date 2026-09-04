@@ -192,6 +192,50 @@
     #dt-table tbody tr.dt-row:hover > td {
         background: var(--surface-container);
     }
+    /* Column-resize handle (gaps4 #61 pass 7): a thin grab strip on each
+       header cell's right edge. A 1px accent line appears on hover / while
+       dragging. Resize pins the column via min/max-width on its cells (JS),
+       so it coexists with column-hide, density, and the sticky column — no
+       table-layout:fixed needed. */
+    .dt-resize {
+        position: absolute;
+        top: 0;
+        right: -4px;
+        width: 8px;
+        height: 100%;
+        cursor: col-resize;
+        z-index: 12;
+        user-select: none;
+        touch-action: none;
+    }
+    .dt-resize::after {
+        content: "";
+        position: absolute;
+        top: 25%;
+        right: 4px;
+        width: 1px;
+        height: 50%;
+        background: transparent;
+        transition: background 0.12s;
+    }
+    .dt-resize:hover::after {
+        background: var(--primary);
+    }
+    #dt-table.dt-col-resizing {
+        cursor: col-resize;
+        user-select: none;
+    }
+    #dt-table.dt-col-resizing .dt-resize::after {
+        background: var(--primary);
+    }
+    /* A pinned column clips overflow so a long value can't fight the width.
+       BODY cells only — the header keeps overflow visible so the absolutely
+       positioned resize handle on its right edge stays grabbable. */
+    #dt-table td.dt-col[style*="max-width"] {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 </style>
 {% endblock %} {% block body_attrs %}class="bg-background text-on-background
 antialiased flex admin-shell" id="umbral-admin-body"{% endblock %} {% block body %}
