@@ -34,13 +34,24 @@
     {% if not field.nullable and not is_readonly %}
     <span class="text-error font-label-sm text-label-sm" aria-label="required">*</span>
     {% endif %}
-    {% if field.nullable %}
-    <span class="text-[10px] text-outline bg-surface-container-high px-1.5 py-0.5 rounded font-label-sm">(nullable)</span>
+    {# gaps4 #61 pass 4: "Optional" reads for a human; "(nullable)" was DB
+       jargon. The absence of the required * already signals optional, so this
+       is a quiet muted hint, not a badge. #}
+    {% if field.nullable and not is_readonly %}
+    <span class="font-label-sm text-label-sm text-outline/80 select-none">Optional</span>
     {% endif %}
     {% if is_readonly %}
-    <span class="text-[10px] text-outline bg-surface-container-high px-1.5 py-0.5 rounded font-label-sm">(read-only)</span>
+    <span class="text-[10px] text-outline bg-surface-container-high px-1.5 py-0.5 rounded font-label-sm">Read-only</span>
     {% endif %}
   </div>
+
+  {# --- Help text (#[umbral(help = "...")]) — sits between the label and the
+     input: it describes what the field is, so you read it before filling the
+     field. (Validation errors stay BELOW the input.) The wrapper's space-y
+     handles the gap. gaps4 #61 pass 4. --- #}
+  {% if field.help %}
+  <p class="text-body-sm text-on-surface-variant">{{ field.help }}</p>
+  {% endif %}
 
   {# --- Input by kind --- #}
   {% if field.kind == "password" %}
@@ -375,11 +386,6 @@
       {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     />
-  {% endif %}
-
-  {# --- Help text (#[umbral(help = "...")]) --- #}
-  {% if field.help %}
-  <p class="text-body-sm text-on-surface-variant mt-0.5">{{ field.help }}</p>
   {% endif %}
 
   {# --- Inline validation error --- #}
