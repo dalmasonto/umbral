@@ -1742,11 +1742,41 @@ impl AppBuilder {
         // BEFORE the panic / compression / CORS / host layers so those stay
         // the outermost wrappers (security and content-encoding run before
         // user middleware ever touches the request).
+        //
+        // As the stack is assembled, snapshot the typed middleware into the
+        // introspection registry (task #323) — the middleware analog of the
+        // route registry. Record BEFORE the `Arc`s are consumed by the stack:
+        // app-level middleware under the implicit "app" plugin, then each
+        // plugin's contribution under its name, in the SAME registration order
+        // the stack sees, so `MiddlewareRegistry::effective_order` reproduces
+        // the real chain (equal-`order` ties break by registration order, not
+        // alphabetically). Raw `wrap_router` layers (Phase 5.5 above) are
+        // deliberately NOT recorded: the framework cannot detect a
+        // `wrap_router` override nor enumerate what it added — the documented
+        // drift caveat, mirroring `Routes::with_router`.
+        let mut mw_registry = crate::middleware::MiddlewareRegistry::default();
         let mut middleware_stack = crate::middleware::MiddlewareStack::new();
-        middleware_stack.extend(std::mem::take(&mut self.middleware));
+
+        let app_middleware = std::mem::take(&mut self.middleware);
+        mw_registry.record_plugin(
+            crate::migrate::APP_PLUGIN_NAME,
+            app_middleware
+                .iter()
+                .map(|mw| crate::middleware::MiddlewareSpec::typed(mw.name(), mw.order())),
+        );
+        middleware_stack.extend(app_middleware);
+
         for plugin in &sorted_plugins {
-            middleware_stack.extend(plugin.middleware());
+            let contributed = plugin.middleware();
+            mw_registry.record_plugin(
+                plugin.name(),
+                contributed
+                    .iter()
+                    .map(|mw| crate::middleware::MiddlewareSpec::typed(mw.name(), mw.order())),
+            );
+            middleware_stack.extend(contributed);
         }
+        crate::middleware::init(mw_registry);
         router = middleware_stack.apply(router);
 
         // Slash-redirect layer (see the Phase 5.6 note above). Installed

@@ -1,0 +1,79 @@
+---
+title: Request pipeline
+description: The fixed outer-to-inner order of framework layers every request passes through, and how to introspect the active typed middleware.
+sidebar_position: 8
+tags: [web, middleware, plugins]
+---
+
+# Request pipeline
+
+Every request `App::build` produces runs through a fixed stack of framework layers before it reaches your handler, and back out through them on the way to the response. Most of these layers are opt-in (they only mount when you enable the matching feature), but their *relative order* is fixed: security and transport concerns wrap the outside, your typed `Middleware` runs close to the handler, and a plugin's `wrap_router` layers sit innermost. This page is the map of that order, and how to see what's actually installed.
+
+## The layer stack, outer to inner
+
+Layers are listed outermost first — the outermost layer is the first to see an incoming request and the last to touch the outgoing response. Everything except the tracing span, the host guard, the typed middleware stack, and the plugin `wrap_router` pass is conditional: it mounts only when you enable the corresponding builder option or a plugin contributes it.
+
+```text
+   ┌─ Request tracing span (always)                         ← outermost
+   │  Minimal security headers            (default on)
+   │  Body-size limit (413) + timeout (408)   (opt-in)
+   │  Host-header validation (400, prod)  (default on)
+   │  CORS — global, then path-scoped         (opt-in)
+   │  Response compression (gzip/brotli)      (opt-in)
+   │  Custom error-page render (403/429/…)    (opt-in)
+   │  500 render + panic catch                (opt-in)
+   │  Route-context scope (DatabaseRouter)    (opt-in)
+   │  Trailing-slash redirect                 (opt-in)
+   │  Typed MiddlewareStack  ── your Middleware, sorted by order()
+   │  404 fallback (renders the not-found body)
+   └─ Plugin wrap_router layers (topological plugin order)  ← innermost
+        └─ your route handlers
+```
+
+<Callout type="info">
+The two extension points you write against live near the bottom. Typed [`Middleware`](/docs/v0.0.1/web/middleware) — from `AppBuilder::middleware` or a plugin's `Plugin::middleware` — is collected into one layer (the `MiddlewareStack`) that runs just outside the 404 fallback. A plugin's `wrap_router` layers sit innermost, closest to the handlers, because a plugin wraps the router *after* its own routes were merged in.
+</Callout>
+
+## Where your middleware sits
+
+- **Typed `Middleware`** runs inside the transport/security layers but outside the 404 fallback, so it sees route misses too. Within the stack, middleware runs in `order()` sequence (lower = outer); equal `order` keeps registration order — app-level middleware before plugin middleware, plugins in dependency order. See the [Middleware](/docs/v0.0.1/web/middleware) page for the onion-composition rules.
+- **`wrap_router` layers** are raw tower/axum layers a plugin applies to the whole router. They are the escape hatch for anything the typed trait can't express (timeouts, body limits, tracing spans) and sit innermost.
+
+## Introspecting the active middleware
+
+`App::build` publishes a `MiddlewareRegistry` — the middleware analog of the [route registry](/docs/v0.0.1/web/routes) — snapshotting which typed middleware is active, grouped by the plugin that contributed it. Read it with `umbral::middleware::get()` after the app is built:
+
+```rust
+use umbral::prelude::*;
+
+let app = App::builder()
+    .middleware(RequestId::default())
+    .plugin(SessionsPlugin::default())
+    .build()?;
+
+if let Some(registry) = umbral::middleware::get() {
+    // Total typed middleware across every plugin.
+    println!("{} middleware installed", registry.total());
+
+    // Grouped by plugin (the implicit "app" plugin holds app-level ones).
+    for (plugin, specs) in &registry.by_plugin {
+        for spec in specs {
+            println!("  {plugin}: {} (order {})", spec.name, spec.order);
+        }
+    }
+
+    // The effective chain order — sorted by order(), exactly as it runs.
+    for spec in registry.effective_order() {
+        println!("effective: {}", spec.name);
+    }
+}
+```
+
+<Callout type="warning">
+The registry only enumerates **typed `Middleware`**. Raw `wrap_router` layers are opaque — axum exposes no way to enumerate the layers a plugin applied, so a plugin that contributes only `wrap_router` layers shows up with an empty middleware list. This is the same declared-snapshot drift caveat the route registry carries for `Routes::with_router`: an empty list means "no *enumerable* middleware," not "no behaviour."
+</Callout>
+
+## See also
+
+- [Middleware](/docs/v0.0.1/web/middleware) — the typed `before_request` / `after_response` trait and its composition rules.
+- `arch.md` and `crates/umbral-core/src/app.rs` (the `Phase 5.x` build phases) — the authoritative definition of the layer order.
