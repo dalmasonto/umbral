@@ -105,8 +105,21 @@ pub(crate) fn pk_of<'a>(registered: &'a [ModelMeta], table: &str) -> Option<&'a 
 /// the parent row even when the link is absent — hydration's shape).
 ///
 /// EVERY joined table (intermediate targets AND the M2M junction) is routed
-/// through [`crate::db::router::schema_qualified_table`] — the multi-tenant
-/// isolation guarantee holds for every hop kind, not just the forward case.
+/// through [`crate::db::router::schema_qualified_table`], so the intent is
+/// that the multi-tenant isolation guarantee holds for every hop kind, not
+/// just the forward case. Today only the forward-FK/O2O and reverse-O2O
+/// arms are exercised end-to-end under an installed schema router
+/// (`walk_joins_schema_qualified.rs`); the `M2M` and `ReverseFk` arms'
+/// qualification is correct BY INSPECTION only — no current caller reaches
+/// them through `RelPath::from_path` far enough to build a schema-qualified
+/// M2M/reverse-FK JOIN and execute it. The heavy-relations epic's aggregate
+/// consumer (Plan A/B Task 3) is expected to be the first caller that does;
+/// that's where those two arms' schema-qualification should get their own
+/// executed proof.
+// TODO(orm-heavy-relations): once the aggregate consumer (epic Task 3)
+// drives an M2M/reverse-FK hop through `walk_joins` under a schema router,
+// add a `walk_joins_schema_qualified.rs` case for it alongside the existing
+// forward-FK/O2O one.
 pub(crate) fn walk_joins(
     select: &mut SelectStatement,
     root_alias: Alias,
