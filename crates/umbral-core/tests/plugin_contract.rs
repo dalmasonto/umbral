@@ -179,7 +179,7 @@ impl Plugin for TestPlugin {
         register_check_flag(self.name, self.check_flag.clone());
         vec![SystemCheck {
             id: self.name,
-            run: run_test_check,
+            run: Box::new(run_test_check),
         }]
     }
 

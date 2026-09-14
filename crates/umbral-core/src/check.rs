@@ -65,16 +65,27 @@ const DEFAULT_ALLOWED_HOSTS: &[&str] = &["localhost", "127.0.0.1"];
 /// One named system check.
 ///
 /// Built-in checks live in `framework_checks()`; plugin checks return
-/// from `Plugin::system_checks()` (M7). Each check is a function pointer
+/// from `Plugin::system_checks()` (M7). Each check is an owned closure
 /// that takes the [`CheckContext`] and produces zero or more
 /// [`SystemCheckFinding`]s.
+///
+/// `run` is a boxed closure rather than a bare `fn` pointer so a plugin
+/// can snapshot its own configured state (owned clones of its resource /
+/// policy list) into the closure it returns from
+/// [`crate::plugin::Plugin::system_checks`]. A bare `fn` can read only
+/// the ambient [`CheckContext`], which is why the one existing
+/// cross-plugin check (`plugin.security_missing`) can look only at plugin
+/// *names*. The built-in checks are still plain functions — they just get
+/// wrapped in `Box::new(...)` at construction — so nothing about them
+/// changes.
 pub struct SystemCheck {
     /// Stable identifier, dot-delimited. Used in error reports and so
     /// users can grep for failures: `field.backend`, `settings.required`,
     /// etc.
     pub id: &'static str,
-    /// The check function.
-    pub run: fn(&CheckContext<'_>) -> Vec<SystemCheckFinding>,
+    /// The check closure. Invoked once per `run_all`; may capture owned
+    /// plugin state.
+    pub run: Box<dyn Fn(&CheckContext<'_>) -> Vec<SystemCheckFinding> + Send + Sync>,
 }
 
 /// Context available to a system check at boot.
@@ -108,6 +119,16 @@ pub struct CheckContext<'a> {
     /// make plugin-aware checks that need a specific set of names inert,
     /// or supply the names they want to exercise directly.
     pub registered_plugin_names: &'a [&'a str],
+    /// Strict object-level-authorization mode (spec
+    /// `2026-08-10-idor-object-level-authorization-design`). When `true`,
+    /// the `security.object_scope` checks contributed by REST / GraphQL /
+    /// storage escalate from [`Severity::Warning`] to [`Severity::Error`]
+    /// — an unscoped write surface then blocks boot instead of merely
+    /// logging. Populated by `App::build` from
+    /// [`crate::settings::Settings::strict_object_scope`] (env
+    /// `UMBRAL_STRICT_OBJECT_SCOPE`, default `false`). Tests that build a
+    /// `CheckContext` by hand default this to `false`.
+    pub strict_object_scope: bool,
 }
 
 /// One issue surfaced by a system check.
@@ -173,63 +194,63 @@ pub fn framework_checks() -> Vec<SystemCheck> {
     vec![
         SystemCheck {
             id: "model.soft_delete_cascade",
-            run: soft_delete_cascade_targets,
+            run: Box::new(soft_delete_cascade_targets),
         },
         SystemCheck {
             id: "model.auto_user",
-            run: auto_user_columns_nullable,
+            run: Box::new(auto_user_columns_nullable),
         },
         SystemCheck {
             id: "model.materialized_view",
-            run: materialized_view_backend,
+            run: Box::new(materialized_view_backend),
         },
         SystemCheck {
             id: "settings.required",
-            run: settings_required,
+            run: Box::new(settings_required),
         },
         SystemCheck {
             id: "settings.allowed_hosts",
-            run: settings_allowed_hosts,
+            run: Box::new(settings_allowed_hosts),
         },
         SystemCheck {
             id: "settings.allowed_hosts_wildcard",
-            run: settings_allowed_hosts_wildcard,
+            run: Box::new(settings_allowed_hosts_wildcard),
         },
         SystemCheck {
             id: "settings.sqlite_in_prod",
-            run: settings_sqlite_in_prod,
+            run: Box::new(settings_sqlite_in_prod),
         },
         SystemCheck {
             id: "settings.host_validation",
-            run: settings_host_validation,
+            run: Box::new(settings_host_validation),
         },
         SystemCheck {
             id: "settings.log_level",
-            run: settings_log_level,
+            run: Box::new(settings_log_level),
         },
         SystemCheck {
             id: "backend.url_scheme.matches_active_backend",
-            run: backend_url_scheme_matches_active_backend,
+            run: Box::new(backend_url_scheme_matches_active_backend),
         },
         SystemCheck {
             id: "field.backend",
-            run: field_backend,
+            run: Box::new(field_backend),
         },
         SystemCheck {
             id: "field.storage_backend",
-            run: field_storage_backend,
+            run: Box::new(field_storage_backend),
         },
         SystemCheck {
             id: "field.choices_default",
-            run: field_choices_default,
+            run: Box::new(field_choices_default),
         },
         SystemCheck {
             id: "field.case_insensitive.sqlite_ascii",
-            run: field_case_insensitive_sqlite_ascii,
+            run: Box::new(field_case_insensitive_sqlite_ascii),
         },
         SystemCheck {
             id: "plugin.security_missing",
-            run: plugin_security_missing,
+            run: Box::new(plugin_security_missing),
         },
     ]
 }
