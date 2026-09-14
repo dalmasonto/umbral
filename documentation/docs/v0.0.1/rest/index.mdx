@@ -46,6 +46,22 @@ Authentication defaults to `NoAuthentication` (every request anonymous). Permiss
 The plugin contract itself is documented in `arch.md`; this folder covers the everyday consumer surface.
 
 
+## Validation errors
+
+A rejected write (`POST` / `PUT` / `PATCH`) returns `400 Bad Request` with a JSON body that reports **every** invalid field at once — not one error per round-trip. Field errors are keyed by column name (each an array of messages), and errors that don't belong to a single field land under `non_field_errors`:
+
+```json
+{
+  "code": "validation_error",
+  "price": ["must be >= 0 (got -5)."],
+  "email": ["enter a valid email address."],
+  "non_field_errors": ["..."]
+}
+```
+
+One submit, one response, the whole form's worth of errors — a client can render them all against their inputs in a single pass instead of surfacing them one at a time. Required/blank, choices, foreign-key existence, M2M shape, numeric `min`/`max`, and text-format (`email` / `url` / `slug`) checks all accumulate into the same response.
+
+
 ## Caching
 
 REST responses ship `Cache-Control: no-store` by default.
