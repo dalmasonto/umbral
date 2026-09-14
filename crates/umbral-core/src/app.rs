@@ -1559,6 +1559,7 @@ impl AppBuilder {
             settings: crate::settings::get(),
             provides_storage,
             registered_plugin_names: &plugin_names,
+            strict_object_scope: crate::settings::get().strict_object_scope,
         };
         let mut checks = crate::check::framework_checks();
         for plugin in &sorted_plugins {

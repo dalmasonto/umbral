@@ -393,6 +393,20 @@ pub struct Settings {
     #[serde(default = "default_db_test_before_acquire")]
     pub db_test_before_acquire: bool,
 
+    /// Strict object-level-authorization mode (IDOR design spec
+    /// `2026-08-10-idor-object-level-authorization-design`). Default
+    /// `false`. When `true`, the cross-cutting `security.object_scope`
+    /// boot check escalates from a warning to a boot-blocking error: a
+    /// write-enabled REST resource / GraphQL mutation / media route with
+    /// no object scope and no acknowledgement marker
+    /// (`rls_backed()` / `unscoped_ok(..)` / `media_public()`) then fails
+    /// `App::build()` instead of merely logging. Set via
+    /// `UMBRAL_STRICT_OBJECT_SCOPE` or `strict_object_scope` in
+    /// `umbral.toml`. The future `EnterprisePreset` flips this on; until
+    /// then it is an explicit opt-in.
+    #[serde(default)]
+    pub strict_object_scope: bool,
+
     #[serde(default = "default_secret_key")]
     pub secret_key: String,
 
@@ -587,6 +601,7 @@ impl std::fmt::Debug for Settings {
             .field("db_idle_timeout_secs", &self.db_idle_timeout_secs)
             .field("db_max_lifetime_secs", &self.db_max_lifetime_secs)
             .field("db_test_before_acquire", &self.db_test_before_acquire)
+            .field("strict_object_scope", &self.strict_object_scope)
             .field("secret_key", &"***redacted***")
             .field("environment", &self.environment)
             .field("allowed_hosts", &self.allowed_hosts)
@@ -718,6 +733,7 @@ const KNOWN_SETTINGS_KEYS: &[&str] = &[
     "db_idle_timeout_secs",
     "db_max_lifetime_secs",
     "db_test_before_acquire",
+    "strict_object_scope",
     "secret_key",
     "environment",
     "allowed_hosts",
@@ -1196,6 +1212,7 @@ mod tests {
             db_idle_timeout_secs: Some(600),
             db_max_lifetime_secs: Some(1800),
             db_test_before_acquire: true,
+            strict_object_scope: false,
             secret_key: "SUPERSECRETKEYVALUE-do-not-leak".to_string(),
             environment: Environment::Prod,
             allowed_hosts: vec!["example.com".to_string()],

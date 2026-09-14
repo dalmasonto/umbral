@@ -423,6 +423,17 @@ pub struct RestPlugin {
     /// 404s, because a nested resource that is also reachable flat is not scoped, it
     /// merely has a scoped-looking URL.
     unders: HashMap<String, (String, String)>,
+    /// Tables that had an explicit `ResourceConfig` registered via
+    /// [`Self::resource`] / [`Self::resources`], in registration order
+    /// (deduped at check time). The `security.object_scope` boot check
+    /// walks exactly these — the resources the developer configured — to
+    /// flag any that are write-enabled, unscoped, and un-acknowledged
+    /// (IDOR design spec).
+    configured_resources: Vec<String>,
+    /// Acknowledgement markers per table: `table -> reason`. Merged from
+    /// [`ResourceConfig::unscoped_ok`] / [`ResourceConfig::rls_backed`]. A
+    /// table here is exempt from the `security.object_scope` warning.
+    unscoped_acks: HashMap<String, String>,
     /// Gap 107: base URL prefix for all REST endpoints. Default
     /// `/api`. Set via `RestPlugin::at("/v1")`. Always normalised
     /// to one leading slash, no trailing slash.
@@ -513,6 +524,37 @@ impl RestPlugin {
             }
         }
         false
+    }
+
+    /// `security.object_scope` boot check: does this resource EXPOSE any
+    /// write action (create / update / delete)?
+    ///
+    /// This is action-exposure, not permission (per the IDOR design spec's
+    /// definition of `write_enabled`): a resource with an explicit
+    /// `.views([...])` set (`view_scope`) is write-enabled iff that set
+    /// contains Create / Update / Delete; a resource with NO `view_scope`
+    /// exposes every action under the back-compat default, so it is
+    /// write-enabled. Whether a permission then gates those writes is a
+    /// separate axis the object-scope check deliberately does not fold in —
+    /// permission decides *whether* a caller may write, object scope decides
+    /// *which rows* they may write.
+    fn resource_write_enabled(&self, table: &str) -> bool {
+        match self.view_scope.get(table) {
+            Some(actions) => {
+                actions.contains(&Action::Create)
+                    || actions.contains(&Action::Update)
+                    || actions.contains(&Action::Delete)
+            }
+            None => true,
+        }
+    }
+
+    /// `security.object_scope` boot check: is an object scope registered for
+    /// this table? A read scope (`scope` / `owned_by`) or a write-only scope
+    /// (`scope_writes` / `owned_by_for_writes`) both count — either constrains
+    /// which rows a write can reach.
+    fn resource_object_scoped(&self, table: &str) -> bool {
+        self.object_scopes.contains_key(table) || self.object_write_scopes.contains_key(table)
     }
 
     /// Set the blanket fallback permission for every table that has no
@@ -1045,6 +1087,8 @@ impl RestPlugin {
             object_write_scopes: HashMap::new(),
             owner_fields: HashMap::new(),
             unders: HashMap::new(),
+            configured_resources: Vec::new(),
+            unscoped_acks: HashMap::new(),
             base_path: "/api".to_string(),
             versioning: None,
         }
@@ -1417,7 +1461,14 @@ impl RestPlugin {
             under,
             private_unlocks,
             reveal_unlocks,
+            unscoped_ok,
         } = config;
+        // Record that this table had an explicit ResourceConfig — the
+        // `security.object_scope` check walks exactly these.
+        self.configured_resources.push(table.clone());
+        if let Some(reason) = unscoped_ok {
+            self.unscoped_acks.insert(table.clone(), reason);
+        }
         if let Some(cc) = cache_control {
             self.cache_controls.insert(table.clone(), cc);
         }
@@ -2396,6 +2447,77 @@ fn schema_label(path: &str) -> String {
 impl Plugin for RestPlugin {
     fn name(&self) -> &'static str {
         "rest"
+    }
+
+    /// `security.object_scope` — flag every write-enabled REST resource left
+    /// without an object scope and without an acknowledgement marker (the IDOR
+    /// design spec, gaps5 #101). A write endpoint whose only guard is a
+    /// model-level permission lets any authorized caller mutate ANY row by id;
+    /// an object scope (`scope` / `owned_by` / `scope_writes` / `owned_via`)
+    /// restricts writes to the rows the caller owns. When neither is present
+    /// and the resource isn't marked `rls_backed()` / `unscoped_ok(..)`, warn
+    /// (or error under `strict_object_scope`).
+    ///
+    /// Snapshots the plugin's own configured-resource list, scope maps, and ack
+    /// markers into the returned closure — the whole point of `system_checks`
+    /// taking `&self` and `SystemCheck.run` being an owned closure.
+    fn system_checks(&self) -> Vec<umbral::check::SystemCheck> {
+        // Snapshot everything the check reads: the tables that had an explicit
+        // ResourceConfig, and for each, whether it is write-enabled / scoped /
+        // acked. Computed here (against the fully-merged config) so the closure
+        // captures plain data, not `self`.
+        let base_path = self.base_path().to_string();
+        let mut unscoped: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for table in &self.configured_resources {
+            if !seen.insert(table.as_str()) {
+                continue; // dedupe repeated `.resource(...)` for the same table
+            }
+            // A resource for a table that isn't actually served (blocked /
+            // excluded) exposes nothing — no IDOR surface to flag.
+            if !self.allow(table) {
+                continue;
+            }
+            if self.resource_write_enabled(table)
+                && !self.resource_object_scoped(table)
+                && !self.unscoped_acks.contains_key(table)
+            {
+                unscoped.push(table.clone());
+            }
+        }
+
+        vec![umbral::check::SystemCheck {
+            id: "security.object_scope",
+            run: Box::new(move |ctx: &umbral::check::CheckContext<'_>| {
+                let severity = if ctx.strict_object_scope {
+                    umbral::check::Severity::Error
+                } else {
+                    umbral::check::Severity::Warning
+                };
+                unscoped
+                    .iter()
+                    .map(|table| umbral::check::SystemCheckFinding {
+                        check_id: "security.object_scope",
+                        severity,
+                        location: umbral::check::CheckLocation::Route {
+                            path: format!("{base_path}/{table}/"),
+                        },
+                        message: format!(
+                            "REST resource `{table}` exposes writes (create/update/delete) but has \
+                             no object-level scope — any authorized caller can mutate ANY row by id \
+                             (IDOR). Model-level permission gates WHETHER a caller may write, not \
+                             WHICH rows."
+                        ),
+                        hint: Some(format!(
+                            "add an object scope — `ResourceConfig::new(\"{table}\").owned_by(\"owner_id\")` \
+                             (or `.scope(..)` / `.owned_by_for_writes(..)` / `.owned_via(..)`). If row \
+                             security lives in a Postgres RLS policy, mark it `.rls_backed()`; if the \
+                             rows are intentionally public, `.unscoped_ok(\"<why>\")`."
+                        )),
+                    })
+                    .collect()
+            }),
+        }]
     }
 
     /// The four generators — `startpermission`, `startauthentication`,
